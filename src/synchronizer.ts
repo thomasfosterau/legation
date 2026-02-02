@@ -356,8 +356,12 @@ export const syncResourceToRemote = (
           );
           yield* _(storage.set(remoteResource));
           return remoteResource;
+        } else if (config.conflictStrategy === "local") {
+          // Keep the local version, don't sync to remote
+          // Just ensure it's in storage and return it
+          yield* _(storage.set(resource));
+          return resource;
         }
-        // If "local", continue with the update attempt (will fail again)
       }
       
       return yield* _(Effect.fail(error));
