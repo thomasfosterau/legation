@@ -225,7 +225,7 @@ const myCustomStorage: Storage = {
 };
 ```
 
-###  Custom HTTP Client
+### Custom HTTP Client
 
 You can customize the HTTP client using @effect/platform's layers and middleware:
 
