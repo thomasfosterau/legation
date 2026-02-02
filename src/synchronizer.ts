@@ -173,7 +173,7 @@ export const fetchResource = (
       })
     );
 
-    const response = yield* _(client.execute(request), Effect.scoped);
+    const response = yield* _(Effect.scoped(client.execute(request)));
     const document = yield* _(parseJsonApiResponse(response));
 
     if (!document.data || Array.isArray(document.data)) {
@@ -222,7 +222,7 @@ export const fetchResources = (
       })
     );
 
-    const response = yield* _(client.execute(request), Effect.scoped);
+    const response = yield* _(Effect.scoped(client.execute(request)));
     const document = yield* _(parseJsonApiResponse(response));
 
     if (!document.data || !Array.isArray(document.data)) {
@@ -264,7 +264,7 @@ export const updateResource = (
       HttpClientRequest.bodyUnsafeJson(body)
     );
 
-    const response = yield* _(client.execute(request), Effect.scoped);
+    const response = yield* _(Effect.scoped(client.execute(request)));
 
     if (response.status === 409) {
       return yield* _(
@@ -326,7 +326,7 @@ export const createResource = (
       HttpClientRequest.bodyUnsafeJson(body)
     );
 
-    const response = yield* _(client.execute(request), Effect.scoped);
+    const response = yield* _(Effect.scoped(client.execute(request)));
     const document = yield* _(parseJsonApiResponse(response));
 
     if (!document.data || Array.isArray(document.data)) {
@@ -374,7 +374,7 @@ export const deleteResource = (
       })
     );
 
-    const response = yield* _(client.execute(request), Effect.scoped);
+    const response = yield* _(Effect.scoped(client.execute(request)));
 
     if (response.status === 204 || response.status === 200) {
       return;
