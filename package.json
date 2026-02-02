@@ -4,6 +4,11 @@
   "description": "An Effect-based library for arbitrary synchronization of data following JSON:API principles",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest",
@@ -21,7 +26,8 @@
   "author": "Thomas Foster",
   "license": "MIT",
   "dependencies": {
-    "effect": "^3.10.0"
+    "effect": "^3.10.0",
+    "@effect/platform": "^0.68.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -5,13 +5,12 @@
  */
 
 import { Effect } from "effect";
+import { FetchHttpClient } from "@effect/platform";
 import {
   fetchResource,
   syncResourceFromRemote,
-  HttpClient,
   SyncConfig,
   Storage,
-  makeFetchHttpClient,
   makeInMemoryStorage,
 } from "../src/index";
 import type { SyncConfig as SyncConfigType } from "../src/synchronizer";
@@ -20,14 +19,13 @@ import type { SyncConfig as SyncConfigType } from "../src/synchronizer";
 async function example1() {
   console.log("\n=== Example 1: Fetch a resource ===");
   
-  const httpClient = makeFetchHttpClient();
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
     conflictStrategy: "error",
   };
 
   const program = fetchResource("articles", "1").pipe(
-    Effect.provideService(HttpClient, httpClient),
+    Effect.provide(FetchHttpClient.layer),
     Effect.provideService(SyncConfig, config)
   );
 
@@ -43,7 +41,6 @@ async function example1() {
 async function example2() {
   console.log("\n=== Example 2: Sync resource to local storage ===");
   
-  const httpClient = makeFetchHttpClient();
   const storage = makeInMemoryStorage();
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
@@ -53,7 +50,7 @@ async function example2() {
   const program = syncResourceFromRemote("articles", "1", {
     include: ["author", "comments"],
   }).pipe(
-    Effect.provideService(HttpClient, httpClient),
+    Effect.provide(FetchHttpClient.layer),
     Effect.provideService(SyncConfig, config),
     Effect.provideService(Storage, storage)
   );
@@ -76,17 +73,16 @@ async function example2() {
 async function example3() {
   console.log("\n=== Example 3: Error handling ===");
   
-  const httpClient = makeFetchHttpClient();
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
     conflictStrategy: "error",
   };
 
   const program = fetchResource("articles", "999").pipe(
-    Effect.provideService(HttpClient, httpClient),
+    Effect.provide(FetchHttpClient.layer),
     Effect.provideService(SyncConfig, config),
-    Effect.catchTag("NetworkError", (error) => {
-      console.log("Caught network error:", error.message);
+    Effect.catchTag("HttpClientError", (error) => {
+      console.log("Caught HTTP client error:", error);
       return Effect.succeed(null);
     }),
     Effect.catchTag("ApiError", (error) => {
@@ -109,3 +105,4 @@ async function example3() {
 // example3();
 
 export { example1, example2, example3 };
+

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { Effect, Context } from "effect";
+import { Effect, Layer } from "effect";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
 import {
   fetchResource,
-  HttpClient,
   SyncConfig,
   syncResourceFromRemote,
   syncResourceToRemote,
@@ -10,42 +10,76 @@ import {
 } from "../synchronizer";
 import { makeInMemoryStorage } from "../storage";
 import type { ResourceObject, JsonApiDocument } from "../types";
-import { NetworkError, ConflictError } from "../errors";
 
 describe("Synchronizer", () => {
-  const mockHttpClient: HttpClient = {
-    get: (url: string) => {
-      if (url.includes("/users/1")) {
-        const document: JsonApiDocument = {
-          data: {
-            type: "users",
-            id: "1",
-            attributes: {
-              name: "John Doe",
-              email: "john@example.com",
-            },
-          },
-        };
-        return Effect.succeed({
-          status: 200,
-          json: () => Promise.resolve(document),
-        } as Response);
-      }
-      return Effect.fail(new NetworkError("Not found"));
-    },
-    post: () => Effect.fail(new NetworkError("Not implemented")),
-    patch: () => Effect.fail(new NetworkError("Not implemented")),
-    delete: () => Effect.fail(new NetworkError("Not implemented")),
+  const mockConfig = {
+    baseUrl: "https://api.example.com",
+    conflictStrategy: "error" as const,
   };
 
-  const mockConfig: SyncConfig = {
-    baseUrl: "https://api.example.com",
-    conflictStrategy: "error",
-  };
+  // Create a mock HTTP client layer for testing
+  const mockHttpClientLayer = Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.HttpClient.of({
+      execute: (request: HttpClientRequest.HttpClientRequest) => {
+        const url = HttpClientRequest.getUrl(request);
+        
+        if (url.includes("/users/1") && !url.includes("/users/10")) {
+          const document: JsonApiDocument = {
+            data: {
+              type: "users",
+              id: "1",
+              attributes: {
+                name: "John Doe",
+                email: "john@example.com",
+              },
+            },
+          };
+          
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(document), {
+                status: 200,
+                headers: { "Content-Type": "application/vnd.api+json" },
+              })
+            )
+          );
+        }
+        
+        if (url.includes("/users/404")) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify({ errors: [{ status: "404", title: "Not Found" }] }), {
+                status: 404,
+                headers: { "Content-Type": "application/vnd.api+json" },
+              })
+            )
+          );
+        }
+        
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(null, { status: 500 })
+          )
+        );
+      },
+      executeUrl: () => Effect.die("Not implemented"),
+      get: () => Effect.die("Not implemented"),
+      head: () => Effect.die("Not implemented"),
+      post: () => Effect.die("Not implemented"),
+      put: () => Effect.die("Not implemented"),
+      patch: () => Effect.die("Not implemented"),
+      del: () => Effect.die("Not implemented"),
+      options: () => Effect.die("Not implemented"),
+    } as HttpClient.HttpClient)
+  );
 
   it("should fetch a resource from the API", async () => {
     const program = fetchResource("users", "1").pipe(
-      Effect.provideService(HttpClient, mockHttpClient),
+      Effect.provide(mockHttpClientLayer),
       Effect.provideService(SyncConfig, mockConfig)
     );
 
@@ -60,7 +94,7 @@ describe("Synchronizer", () => {
     const storage = makeInMemoryStorage();
 
     const program = syncResourceFromRemote("users", "1").pipe(
-      Effect.provideService(HttpClient, mockHttpClient),
+      Effect.provide(mockHttpClientLayer),
       Effect.provideService(SyncConfig, mockConfig),
       Effect.provideService(Storage, storage)
     );
@@ -78,9 +112,9 @@ describe("Synchronizer", () => {
     expect(storedResource?.attributes?.name).toBe("John Doe");
   });
 
-  it("should handle network errors gracefully", async () => {
-    const program = fetchResource("users", "999").pipe(
-      Effect.provideService(HttpClient, mockHttpClient),
+  it("should handle HTTP error responses", async () => {
+    const program = fetchResource("users", "404").pipe(
+      Effect.provide(mockHttpClientLayer),
       Effect.provideService(SyncConfig, mockConfig)
     );
 
@@ -89,21 +123,31 @@ describe("Synchronizer", () => {
 
   it("should handle conflicts with local strategy", async () => {
     const storage = makeInMemoryStorage();
-    const conflictConfig: SyncConfig = {
+    const conflictConfig = {
       baseUrl: "https://api.example.com",
-      conflictStrategy: "local",
+      conflictStrategy: "local" as const,
     };
 
-    const conflictHttpClient: HttpClient = {
-      get: (url: string) => Effect.fail(new NetworkError("Not implemented")),
-      post: () => Effect.fail(new NetworkError("Not implemented")),
-      patch: () =>
-        Effect.succeed({
-          status: 409,
-          json: () => Promise.resolve({}),
-        } as Response),
-      delete: () => Effect.fail(new NetworkError("Not implemented")),
-    };
+    const conflictHttpClientLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.HttpClient.of({
+        execute: () =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              HttpClientRequest.get("http://test"),
+              new Response(null, { status: 409 })
+            )
+          ),
+        executeUrl: () => Effect.die("Not implemented"),
+        get: () => Effect.die("Not implemented"),
+        head: () => Effect.die("Not implemented"),
+        post: () => Effect.die("Not implemented"),
+        put: () => Effect.die("Not implemented"),
+        patch: () => Effect.die("Not implemented"),
+        del: () => Effect.die("Not implemented"),
+        options: () => Effect.die("Not implemented"),
+      } as HttpClient.HttpClient)
+    );
 
     const localResource: ResourceObject = {
       type: "users",
@@ -115,7 +159,7 @@ describe("Synchronizer", () => {
     };
 
     const program = syncResourceToRemote(localResource).pipe(
-      Effect.provideService(HttpClient, conflictHttpClient),
+      Effect.provide(conflictHttpClientLayer),
       Effect.provideService(SyncConfig, conflictConfig),
       Effect.provideService(Storage, storage)
     );
@@ -129,36 +173,58 @@ describe("Synchronizer", () => {
 
   it("should handle conflicts with remote strategy", async () => {
     const storage = makeInMemoryStorage();
-    const conflictConfig: SyncConfig = {
+    const conflictConfig = {
       baseUrl: "https://api.example.com",
-      conflictStrategy: "remote",
+      conflictStrategy: "remote" as const,
     };
 
-    const conflictHttpClient: HttpClient = {
-      get: (url: string) => {
-        const document: JsonApiDocument = {
-          data: {
-            type: "users",
-            id: "1",
-            attributes: {
-              name: "Remote User",
-              version: "2",
+    const conflictHttpClientLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.HttpClient.of({
+        execute: (request: HttpClientRequest.HttpClientRequest) => {
+          const method = request.method;
+          
+          if (method === "PATCH") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(null, { status: 409 })
+              )
+            );
+          }
+          
+          // GET request for fetching remote version
+          const document: JsonApiDocument = {
+            data: {
+              type: "users",
+              id: "1",
+              attributes: {
+                name: "Remote User",
+                version: "2",
+              },
             },
-          },
-        };
-        return Effect.succeed({
-          status: 200,
-          json: () => Promise.resolve(document),
-        } as Response);
-      },
-      post: () => Effect.fail(new NetworkError("Not implemented")),
-      patch: () =>
-        Effect.succeed({
-          status: 409,
-          json: () => Promise.resolve({}),
-        } as Response),
-      delete: () => Effect.fail(new NetworkError("Not implemented")),
-    };
+          };
+          
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(document), {
+                status: 200,
+                headers: { "Content-Type": "application/vnd.api+json" },
+              })
+            )
+          );
+        },
+        executeUrl: () => Effect.die("Not implemented"),
+        get: () => Effect.die("Not implemented"),
+        head: () => Effect.die("Not implemented"),
+        post: () => Effect.die("Not implemented"),
+        put: () => Effect.die("Not implemented"),
+        patch: () => Effect.die("Not implemented"),
+        del: () => Effect.die("Not implemented"),
+        options: () => Effect.die("Not implemented"),
+      } as HttpClient.HttpClient)
+    );
 
     const localResource: ResourceObject = {
       type: "users",
@@ -170,7 +236,7 @@ describe("Synchronizer", () => {
     };
 
     const program = syncResourceToRemote(localResource).pipe(
-      Effect.provideService(HttpClient, conflictHttpClient),
+      Effect.provide(conflictHttpClientLayer),
       Effect.provideService(SyncConfig, conflictConfig),
       Effect.provideService(Storage, storage)
     );
@@ -182,3 +248,4 @@ describe("Synchronizer", () => {
     expect(result.attributes?.version).toBe("2");
   });
 });
+

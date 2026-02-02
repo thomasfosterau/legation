@@ -28,7 +28,6 @@ export {
 
 // Export services and functions
 export {
-  HttpClient,
   Storage,
   SyncConfig,
   parseJsonApiResponse,
@@ -42,10 +41,8 @@ export {
   syncResourceToRemote,
 } from "./synchronizer";
 
-export type { HttpClient as HttpClientInterface } from "./synchronizer";
 export type { Storage as StorageInterface } from "./synchronizer";
 export type { SyncConfig as SyncConfigInterface } from "./synchronizer";
 
 // Export implementations
 export { makeInMemoryStorage } from "./storage";
-export { makeFetchHttpClient } from "./client";
