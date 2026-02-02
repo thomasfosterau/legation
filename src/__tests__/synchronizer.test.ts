@@ -22,7 +22,7 @@ describe("Synchronizer", () => {
     HttpClient.HttpClient,
     HttpClient.HttpClient.of({
       execute: (request: HttpClientRequest.HttpClientRequest) => {
-        const url = HttpClientRequest.getUrl(request);
+        const url = request.url;
         
         if (url.includes("/users/1") && !url.includes("/users/10")) {
           const document: JsonApiDocument = {

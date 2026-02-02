@@ -19,25 +19,23 @@ An Effect-based library for arbitrary synchronization of data following JSON:API
 ## Installation
 
 ```bash
-npm install effect-synchronizer effect
+npm install effect-synchronizer effect @effect/platform
 ```
 
 ## Quick Start
 
 ```typescript
 import { Effect } from "effect";
+import { FetchHttpClient } from "@effect/platform";
 import {
   fetchResource,
   syncResourceFromRemote,
-  HttpClient,
   SyncConfig,
   Storage,
-  makeFetchHttpClient,
   makeInMemoryStorage,
 } from "effect-synchronizer";
 
 // Create service implementations
-const httpClient = makeFetchHttpClient();
 const storage = makeInMemoryStorage();
 const config = {
   baseUrl: "https://api.example.com",
@@ -46,13 +44,13 @@ const config = {
 
 // Fetch a resource from the API
 const fetchUser = fetchResource("users", "1").pipe(
-  Effect.provideService(HttpClient, httpClient),
+  Effect.provide(FetchHttpClient.layer),
   Effect.provideService(SyncConfig, config)
 );
 
 // Sync a resource from remote to local storage
 const syncUser = syncResourceFromRemote("users", "1").pipe(
-  Effect.provideService(HttpClient, httpClient),
+  Effect.provide(FetchHttpClient.layer),
   Effect.provideService(SyncConfig, config),
   Effect.provideService(Storage, storage)
 );
@@ -92,11 +90,13 @@ const user: ResourceObject = {
 
 ### Services
 
-The library uses three main services:
+The library uses two main services:
 
-- **HttpClient**: Handles HTTP requests to the JSON:API server
-- **Storage**: Manages local persistence of resources
+- **HttpClient**: Provided by @effect/platform for HTTP requests to the JSON:API server
+- **Storage**: Manages local persistence of resources (custom implementation required or use provided in-memory storage)
 - **SyncConfig**: Configuration for synchronization behavior
+
+The library leverages @effect/platform's `HttpClient` service, which provides platform-agnostic HTTP client capabilities with built-in resource management and error handling.
 
 ### Synchronization Operations
 
@@ -225,29 +225,38 @@ const myCustomStorage: Storage = {
 };
 ```
 
-### Custom HTTP Client
+###  Custom HTTP Client
 
-Implement your own HTTP client with custom headers or authentication:
+You can customize the HTTP client using @effect/platform's layers and middleware:
 
 ```typescript
-import { Effect } from "effect";
-import type { HttpClient } from "effect-synchronizer";
+import { Effect, Layer } from "effect";
+import { HttpClient, HttpClientRequest } from "@effect/platform";
+import { FetchHttpClient } from "@effect/platform";
 
-const myCustomHttpClient: HttpClient = {
-  get: (url, options) =>
-    Effect.tryPromise({
-      try: () =>
-        fetch(url, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${myAuthToken}`,
-            "Content-Type": "application/vnd.api+json",
-          },
-        }),
-      catch: (error) => new NetworkError("GET failed", error),
-    }),
-  // ... implement post, patch, delete
-};
+// Create a custom HTTP client layer with authentication
+const myCustomHttpClientLayer = Layer.effect(
+  HttpClient.HttpClient,
+  Effect.gen(function* (_) {
+    const defaultClient = yield* _(FetchHttpClient.layer);
+    
+    return defaultClient.pipe(
+      HttpClient.mapRequest(
+        HttpClientRequest.prependUrl("https://api.example.com"),
+        HttpClientRequest.setHeaders({
+          Authorization: `Bearer ${myAuthToken}`,
+          "Content-Type": "application/vnd.api+json",
+        })
+      )
+    );
+  })
+);
+
+// Use with the synchronizer
+const program = fetchResource("users", "1").pipe(
+  Effect.provide(myCustomHttpClientLayer),
+  Effect.provideService(SyncConfig, config)
+);
 ```
 
 ## API Reference
@@ -261,8 +270,8 @@ const myCustomHttpClient: HttpClient = {
 
 ### Services
 
-- `HttpClient`: HTTP client service for making API requests
-- `Storage`: Storage service for local persistence
+- `HttpClient`: Provided by @effect/platform - HTTP client service for making API requests
+- `Storage`: Storage service for local persistence (custom implementation or use `makeInMemoryStorage`)
 - `SyncConfig`: Configuration service for synchronization behavior
 
 ### Functions
@@ -278,8 +287,7 @@ const myCustomHttpClient: HttpClient = {
 
 ### Implementations
 
-- `makeFetchHttpClient()`: Create a Fetch API-based HTTP client
-- `makeInMemoryStorage()`: Create an in-memory storage implementation
+- `makeInMemoryStorage()`: Create an in-memory storage implementation for testing/development
 
 ## Contributing
 
