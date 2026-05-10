@@ -1,5 +1,5 @@
 /**
- * effect-synchronizer
+ * effect-chancery
  * 
  * An Effect-based library for arbitrary synchronization of data
  * following JSON:API principles

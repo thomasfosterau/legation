@@ -1,7 +1,7 @@
 /**
  * Example: Basic Usage
  * 
- * This example demonstrates basic usage of the effect-synchronizer library
+ * This example demonstrates basic usage of the effect-chancery library
  */
 
 import { Effect } from "effect";
@@ -18,7 +18,7 @@ import type { SyncConfig as SyncConfigType } from "../src/synchronizer";
 // Example 1: Simple fetch
 async function example1() {
   console.log("\n=== Example 1: Fetch a resource ===");
-  
+
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
     conflictStrategy: "error",
@@ -40,7 +40,7 @@ async function example1() {
 // Example 2: Sync to local storage
 async function example2() {
   console.log("\n=== Example 2: Sync resource to local storage ===");
-  
+
   const storage = makeInMemoryStorage();
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
@@ -58,7 +58,7 @@ async function example2() {
   try {
     const article = await Effect.runPromise(program);
     console.log("Synced article:", article);
-    
+
     // Verify it's in storage
     const storedArticle = await Effect.runPromise(
       storage.get("articles", "1")
@@ -72,7 +72,7 @@ async function example2() {
 // Example 3: Error handling
 async function example3() {
   console.log("\n=== Example 3: Error handling ===");
-  
+
   const config: SyncConfigType = {
     baseUrl: "https://jsonapi-example.com",
     conflictStrategy: "error",

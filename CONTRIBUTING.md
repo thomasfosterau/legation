@@ -1,13 +1,13 @@
-# Contributing to effect-synchronizer
+# Contributing to @thomasfosterau/effect-chancery
 
-Thank you for your interest in contributing to effect-synchronizer! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to @thomasfosterau/effect-chancery! This document provides guidelines for contributing to the project.
 
 ## Development Setup
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/thomasfosterau/effect-synchronizer.git
-cd effect-synchronizer
+git clone https://github.com/thomasfosterau/@thomasfosterau/effect-chancery.git
+cd @thomasfosterau/effect-chancery
 ```
 
 2. Install dependencies:
@@ -28,7 +28,7 @@ npm test
 ## Project Structure
 
 ```
-effect-synchronizer/
+@thomasfosterau/effect-chancery/
 ├── src/
 │   ├── __tests__/       # Test files
 │   ├── types.ts         # JSON:API type definitions
@@ -129,4 +129,4 @@ If you have questions about contributing, feel free to open an issue for discuss
 
 ## License
 
-By contributing to effect-synchronizer, you agree that your contributions will be licensed under the MIT License.
+By contributing to @thomasfosterau/effect-chancery, you agree that your contributions will be licensed under the MIT License.

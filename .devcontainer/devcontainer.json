@@ -1,5 +1,5 @@
 {
-	"name": "Effect-Synchronizer",
+	"name": "Effect-Chancery",
 	"image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
 	"features": {
 		"ghcr.io/devcontainers-extra/features/bun:1": {},

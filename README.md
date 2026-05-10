@@ -1,10 +1,10 @@
-# effect-synchronizer
+# @thomasfosterau/effect-chancery
 
 An Effect-based library for arbitrary synchronization of data following JSON:API principles.
 
 ## Overview
 
-`effect-synchronizer` is a TypeScript library that provides a robust, type-safe synchronization engine for managing data between local storage and remote APIs that follow the [JSON:API specification](https://jsonapi.org/). Built on top of the [Effect](https://effect.website/) library, it leverages functional programming principles to provide composable, testable, and maintainable synchronization logic.
+`@thomasfosterau/effect-chancery` is a TypeScript library that provides a robust, type-safe synchronization engine for managing data between local storage and remote APIs that follow the [JSON:API specification](https://jsonapi.org/). Built on top of the [Effect](https://effect.website/) library, it leverages functional programming principles to provide composable, testable, and maintainable synchronization logic.
 
 ## Features
 
@@ -19,7 +19,7 @@ An Effect-based library for arbitrary synchronization of data following JSON:API
 ## Installation
 
 ```bash
-npm install effect-synchronizer effect @effect/platform
+npm install @thomasfosterau/effect-chancery effect @effect/platform
 ```
 
 ## Quick Start
@@ -33,7 +33,7 @@ import {
   SyncConfig,
   Storage,
   makeInMemoryStorage,
-} from "effect-synchronizer";
+} from "@thomasfosterau/effect-chancery";
 
 // Create service implementations
 const storage = makeInMemoryStorage();
@@ -68,7 +68,7 @@ Effect.runPromise(syncUser)
 Resources follow the JSON:API specification:
 
 ```typescript
-import type { ResourceObject } from "effect-synchronizer";
+import type { ResourceObject } from "@thomasfosterau/effect-chancery";
 
 const user: ResourceObject = {
   type: "users",
@@ -110,7 +110,7 @@ import {
   syncResourceFromRemote,
   syncResourcesFromRemote,
   syncResourceToRemote,
-} from "effect-synchronizer";
+} from "@thomasfosterau/effect-chancery";
 
 // Fetch a single resource
 const user = fetchResource("users", "1", {
@@ -162,7 +162,7 @@ import {
   ParseError,
   ApiError,
   ConflictError,
-} from "effect-synchronizer";
+} from "@thomasfosterau/effect-chancery";
 
 const program = fetchResource("users", "1").pipe(
   Effect.catchTag("NetworkError", (error) => {
@@ -199,7 +199,7 @@ Implement your own storage backend:
 
 ```typescript
 import { Effect } from "effect";
-import type { Storage } from "effect-synchronizer";
+import type { Storage } from "@thomasfosterau/effect-chancery";
 
 const myCustomStorage: Storage = {
   get: (type, id) =>

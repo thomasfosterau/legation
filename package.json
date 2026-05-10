@@ -1,5 +1,5 @@
 {
-  "name": "effect-synchronizer",
+  "name": "@thomasfosterau/effect-chancery",
   "version": "0.1.0",
   "description": "An Effect-based library for arbitrary synchronization of data following JSON:API principles",
   "main": "dist/index.js",
@@ -43,10 +43,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git"
+    "url": "git+https://github.com/thomasfosterau/effect-chancery.git"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/effect-chancery/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer#readme"
+  "homepage": "https://github.com/thomasfosterau/effect-chancery#readme"
 }
