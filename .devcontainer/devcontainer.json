@@ -1,0 +1,24 @@
+{
+	"name": "Effect-Synchronizer",
+	"image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
+	"features": {
+		"ghcr.io/devcontainers-extra/features/bun:1": {},
+		"ghcr.io/devcontainers/features/common-utils:2": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers-extra/features/ripgrep:1": {}
+	},
+	"postCreateCommand": "bun install",
+	"forwardPorts": [
+		8787,
+		8976
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"dbaeumer.vscode-eslint",
+				"esbenp.prettier-vscode"
+			]
+		}
+	},
+	"workspaceFolder": "/workspaces/effect-synchronizer"
+}

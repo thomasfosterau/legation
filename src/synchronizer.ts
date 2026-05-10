@@ -115,10 +115,10 @@ const buildQueryString = (options?: JsonApiRequestOptions): string => {
 export const parseJsonApiResponse = (
   response: HttpClientResponse.HttpClientResponse
 ): Effect.Effect<JsonApiDocument, ParseError | ApiError | HttpClientError.HttpClientError> =>
-  Effect.gen(function* (_) {
+  Effect.gen(function* () {
     // Check HTTP status
     if (response.status < 200 || response.status >= 300) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ApiError(
             `HTTP ${response.status}`,
@@ -128,7 +128,7 @@ export const parseJsonApiResponse = (
       );
     }
 
-    const json = yield* _(
+    const json = yield* (
       response.json.pipe(
         Effect.mapError((error) => new ParseError("Failed to parse JSON", error))
       )
@@ -138,7 +138,7 @@ export const parseJsonApiResponse = (
 
     // Check for API errors
     if (document.errors && document.errors.length > 0) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ApiError("API returned errors", document.errors)
         )
@@ -160,12 +160,12 @@ export const fetchResource = (
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig
 > =>
-  Effect.gen(function* (_) {
-    const config = yield* _(SyncConfig);
-    const client = yield* _(HttpClient.HttpClient);
+  Effect.gen(function* () {
+    const config = yield* SyncConfig;
+    const client = yield* HttpClient.HttpClient;
 
     const url = `${config.baseUrl}/${type}/${id}${buildQueryString(options)}`;
-    
+
     const request = HttpClientRequest.get(url).pipe(
       HttpClientRequest.setHeaders({
         "Content-Type": "application/vnd.api+json",
@@ -173,11 +173,11 @@ export const fetchResource = (
       })
     );
 
-    const response = yield* _(Effect.scoped(client.execute(request)));
-    const document = yield* _(parseJsonApiResponse(response));
+    const response = yield* Effect.scoped(client.execute(request));
+    const document = yield* parseJsonApiResponse(response);
 
     if (!document.data || Array.isArray(document.data)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected single resource, got collection or null")
         )
@@ -185,10 +185,10 @@ export const fetchResource = (
     }
 
     const resource = document.data;
-    
+
     // Validate it's a ResourceObject with type guard
     if (!isResourceObject(resource)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected ResourceObject with attributes, relationships, or links")
         )
@@ -209,12 +209,12 @@ export const fetchResources = (
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig
 > =>
-  Effect.gen(function* (_) {
-    const config = yield* _(SyncConfig);
-    const client = yield* _(HttpClient.HttpClient);
+  Effect.gen(function* () {
+    const config = yield* SyncConfig;
+    const client = yield* HttpClient.HttpClient;
 
     const url = `${config.baseUrl}/${type}${buildQueryString(options)}`;
-    
+
     const request = HttpClientRequest.get(url).pipe(
       HttpClientRequest.setHeaders({
         "Content-Type": "application/vnd.api+json",
@@ -222,11 +222,11 @@ export const fetchResources = (
       })
     );
 
-    const response = yield* _(Effect.scoped(client.execute(request)));
-    const document = yield* _(parseJsonApiResponse(response));
+    const response = yield* Effect.scoped(client.execute(request));
+    const document = yield* parseJsonApiResponse(response);
 
     if (!document.data || !Array.isArray(document.data)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected resource collection, got single or null")
         )
@@ -235,7 +235,7 @@ export const fetchResources = (
 
     // Filter to ensure all items are ResourceObjects
     const resources = document.data.filter(isResourceObject);
-    
+
     return resources;
   });
 
@@ -249,9 +249,9 @@ export const updateResource = (
   ParseError | ApiError | ConflictError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig
 > =>
-  Effect.gen(function* (_) {
-    const config = yield* _(SyncConfig);
-    const client = yield* _(HttpClient.HttpClient);
+  Effect.gen(function* () {
+    const config = yield* SyncConfig;
+    const client = yield* HttpClient.HttpClient;
 
     const url = `${config.baseUrl}/${resource.type}/${resource.id}`;
     const body: JsonApiDocument = { data: resource };
@@ -264,10 +264,10 @@ export const updateResource = (
       HttpClientRequest.bodyUnsafeJson(body)
     );
 
-    const response = yield* _(Effect.scoped(client.execute(request)));
+    const response = yield* Effect.scoped(client.execute(request));
 
     if (response.status === 409) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ConflictError(
             "Resource version conflict",
@@ -278,10 +278,10 @@ export const updateResource = (
       );
     }
 
-    const document = yield* _(parseJsonApiResponse(response));
+    const document = yield* parseJsonApiResponse(response);
 
     if (!document.data || Array.isArray(document.data)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected single resource after update")
         )
@@ -289,9 +289,9 @@ export const updateResource = (
     }
 
     const updatedResource = document.data;
-    
+
     if (!isResourceObject(updatedResource)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected ResourceObject after update")
         )
@@ -311,9 +311,9 @@ export const createResource = (
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig
 > =>
-  Effect.gen(function* (_) {
-    const config = yield* _(SyncConfig);
-    const client = yield* _(HttpClient.HttpClient);
+  Effect.gen(function* () {
+    const config = yield* SyncConfig;
+    const client = yield* HttpClient.HttpClient;
 
     const url = `${config.baseUrl}/${resource.type}`;
     const body: JsonApiDocument = { data: resource as ResourceObject };
@@ -326,11 +326,11 @@ export const createResource = (
       HttpClientRequest.bodyUnsafeJson(body)
     );
 
-    const response = yield* _(Effect.scoped(client.execute(request)));
-    const document = yield* _(parseJsonApiResponse(response));
+    const response = yield* Effect.scoped(client.execute(request));
+    const document = yield* parseJsonApiResponse(response);
 
     if (!document.data || Array.isArray(document.data)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected single resource after creation")
         )
@@ -338,9 +338,9 @@ export const createResource = (
     }
 
     const createdResource = document.data;
-    
+
     if (!isResourceObject(createdResource)) {
-      return yield* _(
+      return yield* (
         Effect.fail(
           new ParseError("Expected ResourceObject after creation")
         )
@@ -361,12 +361,12 @@ export const deleteResource = (
   ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig
 > =>
-  Effect.gen(function* (_) {
-    const config = yield* _(SyncConfig);
-    const client = yield* _(HttpClient.HttpClient);
+  Effect.gen(function* () {
+    const config = yield* SyncConfig;
+    const client = yield* HttpClient.HttpClient;
 
     const url = `${config.baseUrl}/${type}/${id}`;
-    
+
     const request = HttpClientRequest.del(url).pipe(
       HttpClientRequest.setHeaders({
         "Content-Type": "application/vnd.api+json",
@@ -374,13 +374,13 @@ export const deleteResource = (
       })
     );
 
-    const response = yield* _(Effect.scoped(client.execute(request)));
+    const response = yield* Effect.scoped(client.execute(request));
 
     if (response.status === 204 || response.status === 200) {
       return;
     }
 
-    return yield* _(
+    return yield* (
       Effect.fail(
         new ApiError(
           `Failed to delete resource ${type}/${id}, status: ${response.status}`,
@@ -402,15 +402,15 @@ export const syncResourceFromRemote = (
   ParseError | ApiError | SyncError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig | Storage
 > =>
-  Effect.gen(function* (_) {
-    const storage = yield* _(Storage);
-    
+  Effect.gen(function* () {
+    const storage = yield* Storage;
+
     // Fetch from remote
-    const remoteResource = yield* _(fetchResource(type, id, options));
-    
+    const remoteResource = yield* fetchResource(type, id, options);
+
     // Save to local storage
-    yield* _(storage.set(remoteResource));
-    
+    yield* storage.set(remoteResource);
+
     return remoteResource;
   });
 
@@ -425,20 +425,20 @@ export const syncResourcesFromRemote = (
   ParseError | ApiError | SyncError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig | Storage
 > =>
-  Effect.gen(function* (_) {
-    const storage = yield* _(Storage);
-    
+  Effect.gen(function* () {
+    const storage = yield* Storage;
+
     // Fetch from remote
-    const remoteResources = yield* _(fetchResources(type, options));
-    
+    const remoteResources = yield* fetchResources(type, options);
+
     // Save all to local storage
-    yield* _(
+    yield* (
       Effect.all(
         remoteResources.map((resource) => storage.set(resource)),
         { concurrency: 10 }
       )
     );
-    
+
     return remoteResources;
   });
 
@@ -452,48 +452,48 @@ export const syncResourceToRemote = (
   ParseError | ApiError | ConflictError | SyncError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | SyncConfig | Storage
 > =>
-  Effect.gen(function* (_) {
-    const storage = yield* _(Storage);
-    const config = yield* _(SyncConfig);
-    
+  Effect.gen(function* () {
+    const storage = yield* Storage;
+    const config = yield* SyncConfig;
+
     // Try to update the resource on the remote
-    const result = yield* _(
+    const result = yield* (
       Effect.either(updateResource(resource))
     );
-    
+
     if (result._tag === "Left") {
       const error = result.left;
-      
+
       // Handle conflict based on strategy
       if (error._tag === "ConflictError") {
         const strategy = config.conflictStrategy ?? "error";
-        
+
         if (strategy === "error") {
-          return yield* _(Effect.fail(error));
+          return yield* Effect.fail(error);
         } else if (strategy === "remote") {
           // Fetch remote version and use it
-          const remoteResource = yield* _(
+          const remoteResource = yield* (
             fetchResource(resource.type, resource.id)
           );
-          yield* _(storage.set(remoteResource));
+          yield* storage.set(remoteResource);
           return remoteResource;
         } else if (strategy === "local") {
           // Keep the local version, don't sync to remote
           // Just ensure it's in storage and return it
-          yield* _(storage.set(resource));
+          yield* storage.set(resource);
           return resource;
         }
-        
-        return yield* _(Effect.fail(error));
+
+        return yield* Effect.fail(error);
       }
-      
-      return yield* _(Effect.fail(error));
+
+      return yield* Effect.fail(error);
     }
-    
+
     const updatedResource = result.right;
-    
+
     // Update local storage with the server's response
-    yield* _(storage.set(updatedResource));
-    
+    yield* storage.set(updatedResource);
+
     return updatedResource;
   });
