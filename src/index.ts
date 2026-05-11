@@ -1,6 +1,6 @@
 /**
  * effect-chancery
- * 
+ *
  * An Effect-based library for arbitrary synchronization of data
  * following JSON:API principles
  */
@@ -15,16 +15,10 @@ export type {
   JsonApiError,
   JsonApiDocument,
   JsonApiRequestOptions,
-} from "./types";
+} from "./types.js";
 
 // Export errors
-export {
-  SyncError,
-  NetworkError,
-  ParseError,
-  ApiError,
-  ConflictError,
-} from "./errors";
+export { SyncError, NetworkError, ParseError, ApiError, ConflictError } from "./errors.js";
 
 // Export services and functions
 export {
@@ -39,10 +33,10 @@ export {
   syncResourceFromRemote,
   syncResourcesFromRemote,
   syncResourceToRemote,
-} from "./synchronizer";
+} from "./synchronizer.js";
 
-export type { Storage as StorageInterface } from "./synchronizer";
-export type { SyncConfig as SyncConfigInterface } from "./synchronizer";
+export type { Storage as StorageInterface } from "./synchronizer.js";
+export type { SyncConfig as SyncConfigInterface } from "./synchronizer.js";
 
 // Export implementations
-export { makeInMemoryStorage } from "./storage";
+export { makeInMemoryStorage } from "./storage.js";

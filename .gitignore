@@ -47,6 +47,9 @@ web_modules/
 # TypeScript cache
 *.tsbuildinfo
 
+# Fallow local cache
+.fallow/
+
 # Optional npm cache directory
 .npm
 

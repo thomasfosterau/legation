@@ -1,132 +1,77 @@
 # Contributing to @thomasfosterau/effect-chancery
 
-Thank you for your interest in contributing to @thomasfosterau/effect-chancery! This document provides guidelines for contributing to the project.
+Thank you for contributing. This repository uses Bun, TypeScript, Effect v4 beta, Vitest, Oxlint, Prettier, Fallow, and Changesets.
 
-## Development Setup
+## Setup
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/thomasfosterau/@thomasfosterau/effect-chancery.git
-cd @thomasfosterau/effect-chancery
+git clone https://github.com/thomasfosterau/effect-synchronizer.git
+cd effect-synchronizer
+bun ci
 ```
 
-2. Install dependencies:
-```bash
-npm install
-```
+## Common Commands
 
-3. Build the project:
 ```bash
-npm run build
-```
-
-4. Run tests:
-```bash
-npm test
+bun run typecheck       # TypeScript checks
+bun run build           # Build ESM output and declarations
+bun run test:run        # Run tests once
+bun run test:coverage   # Run tests with coverage
+bun run lint            # Oxlint
+bun run lint:fix        # Oxlint safe fixes
+bun run format:check    # Check Prettier formatting
+bun run format          # Apply Prettier formatting
+bun run analyze:audit   # Fallow CI audit
 ```
 
 ## Project Structure
 
-```
-@thomasfosterau/effect-chancery/
-├── src/
-│   ├── __tests__/       # Test files
-│   ├── types.ts         # JSON:API type definitions
-│   ├── errors.ts        # Error types
-│   ├── synchronizer.ts  # Core synchronizer logic
-│   ├── storage.ts       # In-memory storage implementation
-│   ├── client.ts        # HTTP client implementation
-│   └── index.ts         # Public API exports
-├── examples/            # Usage examples
-├── dist/                # Compiled output (gitignored)
-└── package.json
+```text
+src/
+  __tests__/       Vitest tests
+  errors.ts        Typed errors
+  index.ts         Public API exports
+  storage.ts       In-memory storage implementation
+  synchronizer.ts  Core JSON:API synchronization logic
+  types.ts         JSON:API type definitions
+examples/          Usage examples
+.github/workflows/ CI and release automation
+.changeset/        Changesets release configuration
 ```
 
 ## Development Workflow
 
-1. **Create a feature branch:**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
+1. Create a feature branch.
+2. Make focused changes.
+3. Run the quality gates locally.
+4. Add or update tests when behavior changes.
+5. Add a changeset for user-facing or package-impacting changes.
+6. Open a pull request.
 
-2. **Make your changes** following the coding standards below
-
-3. **Run tests** to ensure everything works:
-   ```bash
-   npm test
-   ```
-
-4. **Build the project** to check for TypeScript errors:
-   ```bash
-   npm run build
-   ```
-
-5. **Commit your changes** with a clear message:
-   ```bash
-   git commit -m "Add feature: description"
-   ```
-
-6. **Push and create a pull request:**
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-## Coding Standards
-
-- **TypeScript**: All code must be written in TypeScript with strict type checking
-- **Effect**: Use Effect for all side effects and error handling
-- **Naming**: Use descriptive names for functions, variables, and types
-- **Comments**: Add JSDoc comments for public APIs
-- **Testing**: Write tests for new features and bug fixes
-- **Formatting**: Code will be automatically formatted (when prettier is configured)
-
-## Testing
-
-- Write unit tests for all new functionality
-- Ensure tests are deterministic and don't rely on external services
-- Use the in-memory implementations for testing
-- Test both success and error cases
-
-Example test structure:
-```typescript
-import { describe, it, expect } from "vitest";
-import { Effect } from "effect";
-import { yourFunction } from "../your-module";
-
-describe("YourModule", () => {
-  it("should do something", async () => {
-    const result = await Effect.runPromise(yourFunction());
-    expect(result).toBe(expected);
-  });
-});
+```bash
+bun run changeset
 ```
 
-## Adding New Features
+Changesets updates the package version and changelog through an automated version PR. Do not manually edit the package version for normal releases.
 
-When adding new features:
+## Effect Code
 
-1. Ensure they follow JSON:API principles
-2. Use Effect for all side effects
-3. Provide proper error handling with typed errors
-4. Add comprehensive tests
-5. Update the README with usage examples
-6. Add examples to the `examples/` directory
+Use Effect for side effects, dependency injection, and typed failures. Repository instructions require consulting `effect-solutions` before writing Effect code; if the local tool is unavailable, use the official Effect docs and mention the missing local guide in the PR notes.
+
+The library currently uses Effect v4 beta HTTP modules from `effect/unstable/http/*`.
+
+## Fallow
+
+Fallow is used for codebase analysis and regression gating. The local `.fallow/` cache is ignored. Committed baselines should live outside `.fallow/`, under `fallow-baselines/`, so CI can be configured to fail only new issues.
+
+## Release Process
+
+Merges to `main` run the release workflow. Changesets will either open/update a version PR or publish when a version PR is merged. Publishing requires the `NPM_TOKEN` repository secret.
 
 ## Reporting Issues
 
-When reporting issues, please include:
-
-- A clear description of the problem
-- Steps to reproduce the issue
-- Expected behavior
-- Actual behavior
-- Your environment (Node version, TypeScript version, etc.)
-- Any relevant code samples
-
-## Questions?
-
-If you have questions about contributing, feel free to open an issue for discussion.
+Please include a clear description, reproduction steps, expected behavior, actual behavior, environment details, and a small code sample when possible.
 
 ## License
 
-By contributing to @thomasfosterau/effect-chancery, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be licensed under the MIT License.

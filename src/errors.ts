@@ -1,17 +1,20 @@
 /**
  * Synchronizer Errors
- * 
+ *
  * Error types for the synchronizer operations
  */
 
-import type { JsonApiError } from "./types";
+import type { JsonApiError } from "./types.js";
 
 /**
  * Base error for synchronizer operations
  */
 export class SyncError {
   readonly _tag = "SyncError";
-  constructor(readonly message: string, readonly cause?: unknown) {}
+  constructor(
+    readonly message: string,
+    readonly cause?: unknown
+  ) { }
 }
 
 /**
@@ -19,7 +22,10 @@ export class SyncError {
  */
 export class NetworkError {
   readonly _tag = "NetworkError";
-  constructor(readonly message: string, readonly cause?: unknown) {}
+  constructor(
+    readonly message: string,
+    readonly cause?: unknown
+  ) { }
 }
 
 /**
@@ -27,7 +33,10 @@ export class NetworkError {
  */
 export class ParseError {
   readonly _tag = "ParseError";
-  constructor(readonly message: string, readonly cause?: unknown) {}
+  constructor(
+    readonly message: string,
+    readonly cause?: unknown
+  ) { }
 }
 
 /**
@@ -38,7 +47,7 @@ export class ApiError {
   constructor(
     readonly message: string,
     readonly errors: JsonApiError[]
-  ) {}
+  ) { }
 }
 
 /**
@@ -50,5 +59,5 @@ export class ConflictError {
     readonly message: string,
     readonly localVersion?: string,
     readonly remoteVersion?: string
-  ) {}
+  ) { }
 }

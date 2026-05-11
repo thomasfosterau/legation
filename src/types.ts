@@ -1,6 +1,6 @@
 /**
  * JSON:API Types
- * 
+ *
  * Core type definitions following the JSON:API v1.1 specification
  * https://jsonapi.org/format/
  */

@@ -1,19 +1,19 @@
 /**
  * Example: Basic Usage
- * 
+ *
  * This example demonstrates basic usage of the effect-chancery library
  */
 
 import { Effect } from "effect";
-import { FetchHttpClient } from "@effect/platform";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import {
   fetchResource,
   syncResourceFromRemote,
   SyncConfig,
   Storage,
   makeInMemoryStorage,
-} from "../src/index";
-import type { SyncConfig as SyncConfigType } from "../src/synchronizer";
+} from "../src/index.js";
+import type { SyncConfig as SyncConfigType } from "../src/synchronizer.js";
 
 // Example 1: Simple fetch
 async function example1() {
@@ -60,9 +60,7 @@ async function example2() {
     console.log("Synced article:", article);
 
     // Verify it's in storage
-    const storedArticle = await Effect.runPromise(
-      storage.get("articles", "1")
-    );
+    const storedArticle = await Effect.runPromise(storage.get("articles", "1"));
     console.log("Stored article:", storedArticle);
   } catch (error) {
     console.error("Failed to sync article:", error);
@@ -105,4 +103,3 @@ async function example3() {
 // example3();
 
 export { example1, example2, example3 };
-

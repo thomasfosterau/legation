@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Effect } from "effect";
-import { makeInMemoryStorage } from "../storage";
-import type { ResourceObject } from "../types";
+import { makeInMemoryStorage } from "../storage.js";
+import type { ResourceObject } from "../types.js";
 
 describe("InMemoryStorage", () => {
   it("should store and retrieve a resource", async () => {

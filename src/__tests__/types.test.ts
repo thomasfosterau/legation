@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type {
-  JsonApiDocument,
-  ResourceObject,
-  JsonApiError,
-} from "../types";
+import type { JsonApiDocument, ResourceObject, JsonApiError } from "../types.js";
 
 describe("JSON:API Types", () => {
   it("should create a valid resource object", () => {

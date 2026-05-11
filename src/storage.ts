@@ -1,20 +1,20 @@
 /**
  * In-Memory Storage Implementation
- * 
+ *
  * A simple in-memory storage implementation for testing and development
  */
 
 import { Effect } from "effect";
-import type { ResourceObject } from "./types";
-import type { Storage } from "./synchronizer";
+import type { ResourceObject } from "./types.js";
+import type { Storage } from "./synchronizer.js";
+
+const makeKey = (type: string, id: string): string => `${type}:${id}`;
 
 /**
  * Create an in-memory storage implementation
  */
 export const makeInMemoryStorage = (): Storage => {
   const store = new Map<string, ResourceObject>();
-
-  const makeKey = (type: string, id: string): string => `${type}:${id}`;
 
   return {
     get: (type: string, id: string) =>
