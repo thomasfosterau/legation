@@ -56,10 +56,12 @@ yield *
 
 Each WebSocket **text** message is exactly one JSON-encoded protocol message:
 
-- incoming frames are parsed with `JSON.parse` into a core `ClientMessage`;
+- incoming frames are schema-validated by core's `ProtocolSchema.parseClientMessage` into a
+  core `ClientMessage`;
 - outgoing frames are serialized with `JSON.stringify` from a core `ServerMessage`.
 
-Binary frames and frames that are not valid JSON protocol messages are ignored.
+Binary frames and frames that fail schema validation are logged and skipped (they do not
+crash the connection).
 
 ## Connecting clients
 

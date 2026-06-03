@@ -22,8 +22,8 @@
  * terminates every live client connection.
  */
 
-import { Deferred, Effect, Queue, Scope, Stream } from "effect";
-import { TransportError, type StoreError } from "@thomasfosterau/effect-sync-core";
+import { Cause, Deferred, Effect, Queue, Scope, Stream } from "effect";
+import { ProtocolSchema, TransportError, type StoreError } from "@thomasfosterau/effect-sync-core";
 import { Protocol, SyncHub, type Transport } from "@thomasfosterau/effect-sync-core";
 import { WebSocketServer as WsServer, type WebSocket as WsSocket } from "ws";
 
@@ -61,37 +61,56 @@ let sessionCounter = 0;
 /**
  * Wrap a single `ws` socket as a core `ServerConnection`.
  *
- * The socket's lifetime events drive a per-connection queue of incoming
- * `ClientMessage`s: each text frame is parsed and offered to the queue; a
- * "close" or "error" event shuts the queue down (ending the `messages`
- * stream); unparseable frames are skipped. Because these handlers run outside
- * of the Effect runtime, the queue is driven with the `*Unsafe` operations.
+ * Bridging is done the Effect-native way, with zero `Effect.runFork` inside
+ * the `ws` event callbacks:
+ *
+ * - A "raw" queue receives the text of each incoming frame synchronously via
+ *   `Queue.offerUnsafe`; a "close"/"error" event ends that queue with
+ *   `Queue.endUnsafe`.
+ * - A single forked fiber drains the raw queue, schema-validates each frame
+ *   with `ProtocolSchema.parseClientMessage`, and offers valid messages to the
+ *   per-connection `inbound` queue of `ClientMessage`s. Invalid frames are
+ *   logged and skipped. When the raw queue ends, the fiber shuts the `inbound`
+ *   queue down, ending the `messages` stream.
  */
-const makeServerConnection = (socket: WsSocket): Effect.Effect<Transport.ServerConnection> =>
+const makeServerConnection = (
+  socket: WsSocket
+): Effect.Effect<Transport.ServerConnection, never, Scope.Scope> =>
   Effect.gen(function* () {
     const inbound = yield* Queue.unbounded<Protocol.ClientMessage>();
+    // Raw frame text, fed synchronously from the `ws` callbacks. `Cause.Done`
+    // in the error type lets a "close"/"error" event end the queue.
+    const rawFrames = yield* Queue.unbounded<string, Cause.Done>();
 
     sessionCounter += 1;
     const sessionId = `ws-${sessionCounter}`;
 
     socket.on("message", (data: unknown, isBinary: boolean) => {
       if (isBinary) return;
-      try {
-        const text = Array.isArray(data)
-          ? Buffer.concat(data as ReadonlyArray<Buffer>).toString("utf8")
-          : String(data);
-        const message = JSON.parse(text) as Protocol.ClientMessage;
-        Queue.offerUnsafe(inbound, message);
-      } catch {
-        // Skip frames that are not valid JSON protocol messages.
-      }
+      const text = Array.isArray(data)
+        ? Buffer.concat(data as ReadonlyArray<Buffer>).toString("utf8")
+        : String(data);
+      Queue.offerUnsafe(rawFrames, text);
     });
     socket.on("close", () => {
-      Effect.runFork(Queue.shutdown(inbound));
+      Queue.endUnsafe(rawFrames);
     });
     socket.on("error", () => {
-      Effect.runFork(Queue.shutdown(inbound));
+      Queue.endUnsafe(rawFrames);
     });
+
+    // Drain raw frames, validate, and forward valid messages. When `rawFrames`
+    // ends (socket closed/errored), shut `inbound` down to end the stream.
+    yield* Effect.forkScoped(
+      Stream.runForEach(Stream.fromQueue(rawFrames), (text) =>
+        ProtocolSchema.parseClientMessage(text).pipe(
+          Effect.flatMap((message) => Effect.sync(() => Queue.offerUnsafe(inbound, message))),
+          Effect.catchTag("ProtocolError", (error) =>
+            Effect.logWarning("Skipping malformed client frame", error)
+          )
+        )
+      ).pipe(Effect.andThen(Queue.shutdown(inbound)))
+    );
 
     const send = (message: Protocol.ServerMessage): Effect.Effect<void, TransportError> =>
       Effect.callback<void, TransportError>((resume) => {
@@ -130,6 +149,10 @@ export const make = (
   Effect.gen(function* () {
     const host = options.host ?? "0.0.0.0";
     const connectionQueue = yield* Queue.unbounded<Transport.ServerConnection>();
+    // Raw accepted sockets, fed synchronously from the "connection" callback. A
+    // forked fiber wraps each into a `ServerConnection` (which needs the Effect
+    // runtime / a scope) and offers it to `connectionQueue`.
+    const acceptedSockets = yield* Queue.unbounded<WsSocket>();
     const listening = yield* Deferred.make<BoundAddress, TransportError>();
 
     const wss = yield* Effect.acquireRelease(
@@ -140,37 +163,43 @@ export const make = (
             client.terminate();
           }
           server.close();
-        }).pipe(Effect.andThen(Effect.asVoid(Queue.shutdown(connectionQueue))))
+        }).pipe(
+          Effect.andThen(Effect.asVoid(Queue.shutdown(connectionQueue))),
+          Effect.andThen(Effect.asVoid(Queue.shutdown(acceptedSockets)))
+        )
     );
 
     wss.on("listening", () => {
       const address = wss.address();
-      if (typeof address === "object" && address !== null) {
-        Effect.runFork(Deferred.succeed(listening, address));
-      } else {
-        Effect.runFork(
-          Deferred.fail(
-            listening,
-            new TransportError({ message: "WebSocket server bound to a non-network address" })
-          )
-        );
-      }
+      Deferred.doneUnsafe(
+        listening,
+        typeof address === "object" && address !== null
+          ? Effect.succeed(address)
+          : Effect.fail(
+              new TransportError({ message: "WebSocket server bound to a non-network address" })
+            )
+      );
     });
     wss.on("error", (error) => {
-      Effect.runFork(
-        Deferred.fail(
-          listening,
+      Deferred.doneUnsafe(
+        listening,
+        Effect.fail(
           new TransportError({ message: "WebSocket server failed to start", cause: error })
         )
       );
     });
     wss.on("connection", (socket: WsSocket) => {
-      Effect.runFork(
+      Queue.offerUnsafe(acceptedSockets, socket);
+    });
+
+    // Wrap accepted sockets into ServerConnections within the Effect runtime.
+    yield* Effect.forkScoped(
+      Stream.runForEach(Stream.fromQueue(acceptedSockets), (socket) =>
         Effect.flatMap(makeServerConnection(socket), (connection) =>
           Queue.offer(connectionQueue, connection)
         )
-      );
-    });
+      )
+    );
 
     const bound = yield* Deferred.await(listening);
 

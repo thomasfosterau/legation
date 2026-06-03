@@ -4,9 +4,10 @@ Browser-runtime adapters for the [Effect](https://effect.website)-native sync en
 [`@thomasfosterau/effect-sync-core`](../core). These modules implement core's
 `ClientTransport` and `CacheStore` interfaces against browser platform globals:
 
-- **`WebSocketTransport`** — a `ClientTransport` over the platform `WebSocket`, with
-  transparent auto-reconnect and exponential backoff. It also runs in Node 22+, which
-  ships a global `WebSocket` client.
+- **`WebSocketTransport`** — a `ClientTransport` over the platform `WebSocket`, built on
+  Effect's own `Socket` abstraction (`effect/unstable/socket`), with transparent
+  auto-reconnect and exponential backoff. It also runs in Node 22+, which ships a global
+  `WebSocket` client.
 - **`IndexedDbCacheStore`** — a persistent `CacheStore` over `indexedDB`, so cached data
   survives page reloads.
 
@@ -24,8 +25,10 @@ bun add @thomasfosterau/effect-sync-browser @thomasfosterau/effect-sync-core eff
 
 `WebSocketTransport.layer` provides core's `ClientTransport` service, which the sync client
 consumes. Each WebSocket text frame carries exactly one JSON-encoded protocol message
-(`JSON.stringify` going up, `JSON.parse` coming down) — the same framing the Node server
-runtime speaks.
+(`JSON.stringify` going up; incoming frames are schema-validated by core's
+`ProtocolSchema.parseServerMessage` coming down) — the same framing the Node server runtime
+speaks. Frames that fail schema validation are logged and skipped rather than tearing the
+socket down.
 
 ```ts
 import { Effect, Layer } from "effect";
