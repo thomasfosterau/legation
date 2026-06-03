@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -10,7 +10,6 @@ import {
   Query,
   SyncCache,
 } from "@thomasfosterau/effect-sync-core";
-import type { CacheStore } from "@thomasfosterau/effect-sync-core";
 import { Adapter } from "../index.js";
 import { SyncConfig } from "../synchronizer.js";
 import type { JsonApiDocument, ResourceObject } from "../types.js";
@@ -88,21 +87,16 @@ const mockHttpClientLayer = Layer.succeed(
   })
 );
 
-const testLayer = SyncCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
-
-// Run a program that needs a SyncCache plus the mock JSON:API environment.
-const withCache = <A, E>(
-  program: (
-    cache: SyncCache.SyncCache
-  ) => Effect.Effect<A, E, SyncCache.SyncCache | CacheStore | HttpClient.HttpClient | SyncConfig>
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.flatMap(Effect.service(SyncCache.SyncCache), program).pipe(
-      Effect.provide(testLayer),
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig)
-    ) as Effect.Effect<A, E>
+// A fresh cache layer per test plus the mock JSON:API environment.
+const cacheEnv = () =>
+  SyncCache.layer.pipe(
+    Layer.provideMerge(MemoryCacheStore.layer()),
+    Layer.provideMerge(mockHttpClientLayer),
+    Layer.provideMerge(Layer.succeed(SyncConfig, mockConfig))
   );
+
+// The JSON:API environment without a cache (HttpClient + SyncConfig).
+const httpEnv = Layer.mergeAll(mockHttpClientLayer, Layer.succeed(SyncConfig, mockConfig));
 
 describe("Adapter.resourceKey", () => {
   it("builds a collection key", () => {
@@ -120,29 +114,29 @@ describe("Adapter.resourceKey", () => {
 });
 
 describe("Adapter query descriptors", () => {
-  it("wires resourceQuery to fetchResource", async () => {
-    const descriptor = Adapter.resourceQuery("users", "1");
+  it.effect("wires resourceQuery to fetchResource", () =>
+    Effect.gen(function* () {
+      const descriptor = Adapter.resourceQuery("users", "1");
 
-    const result = await Effect.runPromise(
-      descriptor.loader.pipe(
-        Effect.provide(mockHttpClientLayer),
-        Effect.provideService(SyncConfig, mockConfig)
-      )
-    );
+      const result = yield* descriptor.loader;
 
-    expect(result.id).toBe("1");
-    expect(result.attributes?.name).toBe("John Doe");
-    expect(descriptor.key).toEqual(["jsonapi", "users", "1"]);
-    expect(descriptor.tags).toEqual(["jsonapi:users"]);
-  });
+      expect(result.id).toBe("1");
+      expect(result.attributes?.name).toBe("John Doe");
+      expect(descriptor.key).toEqual(["jsonapi", "users", "1"]);
+      expect(descriptor.tags).toEqual(["jsonapi:users"]);
+    }).pipe(Effect.provide(httpEnv))
+  );
 
-  it("runs a resourceQuery through the SyncCache", async () => {
-    const descriptor = Adapter.resourceQuery("users", "1");
+  it.effect("runs a resourceQuery through the SyncCache", () =>
+    Effect.gen(function* () {
+      const cache = yield* SyncCache.SyncCache;
+      const descriptor = Adapter.resourceQuery("users", "1");
 
-    const result = await withCache((cache) => cache.read(Query.toReadOptions(descriptor)));
+      const result = yield* cache.read(Query.toReadOptions(descriptor));
 
-    expect((result as ResourceObject).id).toBe("1");
-  });
+      expect((result as ResourceObject).id).toBe("1");
+    }).pipe(Effect.provide(cacheEnv()))
+  );
 
   it("gives resourcesQuery a list-marked key", () => {
     const descriptor = Adapter.resourcesQuery("users");
@@ -151,99 +145,93 @@ describe("Adapter query descriptors", () => {
 });
 
 describe("Adapter.resourcePageQuery", () => {
-  it("computes the next cursor from page size", async () => {
-    const descriptor = Adapter.resourcePageQuery("users", { page: { size: 2 } });
+  it.effect("computes the next cursor from page size", () =>
+    Effect.gen(function* () {
+      const descriptor = Adapter.resourcePageQuery("users", { page: { size: 2 } });
 
-    const env = <A, E>(eff: Effect.Effect<A, E, HttpClient.HttpClient | SyncConfig>) =>
-      Effect.runPromise(
-        eff.pipe(
-          Effect.provide(mockHttpClientLayer),
-          Effect.provideService(SyncConfig, mockConfig)
-        ) as Effect.Effect<A, E>
-      );
+      // First page returns 2 items == size, so there is a next cursor.
+      const first = yield* descriptor.loadPage(Option.none());
+      expect(first.items).toHaveLength(2);
+      expect(Option.getOrUndefined(first.nextCursor)).toBe(2);
 
-    // First page returns 2 items == size, so there is a next cursor.
-    const first = await env(descriptor.loadPage(Option.none()));
-    expect(first.items).toHaveLength(2);
-    expect(Option.getOrUndefined(first.nextCursor)).toBe(2);
+      // Second page returns 1 item < size, so it is the last page.
+      const second = yield* descriptor.loadPage(Option.some(2));
+      expect(second.items).toHaveLength(1);
+      expect(Option.isNone(second.nextCursor)).toBe(true);
+    }).pipe(Effect.provide(httpEnv))
+  );
 
-    // Second page returns 1 item < size, so it is the last page.
-    const second = await env(descriptor.loadPage(Option.some(2)));
-    expect(second.items).toHaveLength(1);
-    expect(Option.isNone(second.nextCursor)).toBe(true);
-  });
+  it.effect("treats any non-empty page as having a successor when size is unknown", () =>
+    Effect.gen(function* () {
+      const descriptor = Adapter.resourcePageQuery("users");
 
-  it("treats any non-empty page as having a successor when size is unknown", async () => {
-    const descriptor = Adapter.resourcePageQuery("users");
+      const page = yield* descriptor.loadPage(Option.none());
 
-    const page = await Effect.runPromise(
-      descriptor
-        .loadPage(Option.none())
-        .pipe(
-          Effect.provide(mockHttpClientLayer),
-          Effect.provideService(SyncConfig, mockConfig)
-        ) as unknown as Effect.Effect<{ nextCursor: Option.Option<number> }, never>
-    );
-
-    expect(Option.isSome(page.nextCursor)).toBe(true);
-  });
+      expect(Option.isSome(page.nextCursor)).toBe(true);
+    }).pipe(Effect.provide(httpEnv))
+  );
 });
 
 describe("Adapter mutation descriptors", () => {
-  it("creates a resource and returns the server result", async () => {
-    const descriptor = Adapter.createResourceMutation("users");
+  it.effect("creates a resource and returns the server result", () =>
+    Effect.gen(function* () {
+      const cache = yield* SyncCache.SyncCache;
+      const descriptor = Adapter.createResourceMutation("users");
 
-    const result = await withCache((cache) =>
-      Mutation.execute(cache, descriptor, { type: "users", attributes: { name: "Created" } })
-    );
+      const result = yield* Mutation.execute(cache, descriptor, {
+        type: "users",
+        attributes: { name: "Created" },
+      });
 
-    expect((result as ResourceObject).id).toBe("100");
-  });
+      expect((result as ResourceObject).id).toBe("100");
+    }).pipe(Effect.provide(cacheEnv()))
+  );
 
-  it("update mutation writes the result under the resource key", async () => {
-    const descriptor = Adapter.updateResourceMutation("users");
+  it.effect("update mutation writes the result under the resource key", () =>
+    Effect.gen(function* () {
+      const cache = yield* SyncCache.SyncCache;
+      const descriptor = Adapter.updateResourceMutation("users");
 
-    const cached = await withCache((cache) =>
-      Effect.gen(function* () {
-        yield* Mutation.execute(cache, descriptor, {
-          type: "users",
-          id: "1",
-          attributes: { name: "New" },
-        });
-        return yield* cache.peek<ResourceObject>(Adapter.resourceKey("users", "1"));
-      })
-    );
+      yield* Mutation.execute(cache, descriptor, {
+        type: "users",
+        id: "1",
+        attributes: { name: "New" },
+      });
+      const cached = yield* cache.peek<ResourceObject>(Adapter.resourceKey("users", "1"));
 
-    expect(Option.getOrUndefined(cached)?.value.attributes?.name).toBe("Updated");
-  });
+      expect(Option.getOrUndefined(cached)?.value.attributes?.name).toBe("Updated");
+    }).pipe(Effect.provide(cacheEnv()))
+  );
 
-  it("create invalidation marks list queries stale", async () => {
-    const listDescriptor = Adapter.resourcesQuery("users");
-    const createDescriptor = Adapter.createResourceMutation("users");
+  it.effect("create invalidation marks list queries stale", () =>
+    Effect.gen(function* () {
+      const cache = yield* SyncCache.SyncCache;
+      const listDescriptor = Adapter.resourcesQuery("users");
+      const createDescriptor = Adapter.createResourceMutation("users");
 
-    const wasStale = await withCache((cache) =>
-      Effect.gen(function* () {
-        // Populate the list query (fresh for a long time).
-        yield* cache.read(Query.toReadOptions({ ...listDescriptor, staleTime: "1 hour" }));
-        // A create mutation should invalidate the collection.
-        yield* Mutation.execute(cache, createDescriptor, {
-          type: "users",
-          attributes: { name: "Created" },
-        });
-        const entry = yield* cache.peek(listDescriptor.key);
-        const now = Date.now();
-        return Option.isSome(entry) ? freshness(entry.value, now) !== "fresh" : false;
-      })
-    );
+      // Populate the list query (fresh for a long time).
+      yield* cache.read(Query.toReadOptions({ ...listDescriptor, staleTime: "1 hour" }));
+      // A create mutation should invalidate the collection.
+      yield* Mutation.execute(cache, createDescriptor, {
+        type: "users",
+        attributes: { name: "Created" },
+      });
+      const entry = yield* cache.peek(listDescriptor.key);
+      const now = Date.now();
+      const wasStale = Option.isSome(entry) ? freshness(entry.value, now) !== "fresh" : false;
 
-    expect(wasStale).toBe(true);
-  });
+      expect(wasStale).toBe(true);
+    }).pipe(Effect.provide(cacheEnv()))
+  );
 
-  it("delete mutation runs and invalidates the collection", async () => {
-    const descriptor = Adapter.deleteResourceMutation("users");
+  it.effect("delete mutation runs and invalidates the collection", () =>
+    Effect.gen(function* () {
+      const cache = yield* SyncCache.SyncCache;
+      const descriptor = Adapter.deleteResourceMutation("users");
 
-    const result = await withCache((cache) => Mutation.execute(cache, descriptor, "1"));
+      const result = yield* Mutation.execute(cache, descriptor, "1");
 
-    expect(result).toBeUndefined();
-  });
+      expect(result).toBeUndefined();
+    }).pipe(Effect.provide(cacheEnv()))
+  );
 });

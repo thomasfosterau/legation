@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@effect/vitest";
 import type { JsonApiDocument, ResourceObject, JsonApiError } from "../types.js";
 
 describe("JSON:API Types", () => {
