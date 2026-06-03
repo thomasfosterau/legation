@@ -460,15 +460,15 @@ const findInFlightEntry = (
   return undefined;
 };
 
+/** The key or prefix a wire filter selects on. */
+const filterKey = (filter: Protocol.WireKeyFilter): SyncKey.SyncKey =>
+  filter._tag === "Exact" ? filter.key : filter.prefix;
+
 /**
  * Structural equality between two wire filters.
  */
-const filtersEqual = (a: Protocol.WireKeyFilter, b: Protocol.WireKeyFilter): boolean => {
-  if (a._tag !== b._tag) return false;
-  if (a._tag === "Exact" && b._tag === "Exact") return SyncKey.equals(a.key, b.key);
-  if (a._tag === "Prefix" && b._tag === "Prefix") return SyncKey.equals(a.prefix, b.prefix);
-  return false;
-};
+const filtersEqual = (a: Protocol.WireKeyFilter, b: Protocol.WireKeyFilter): boolean =>
+  a._tag === b._tag && SyncKey.equals(filterKey(a), filterKey(b));
 
 /**
  * A layer providing the client sync engine.

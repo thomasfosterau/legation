@@ -122,6 +122,68 @@ describe("KeyValueStoreAdapter", () => {
     expect(result).toEqual({ v: 42 });
   });
 
+  it("treats invalid JSON in the store as a cache miss", async () => {
+    // Write a key directly through the raw KV so the adapter sees garbage.
+    const program = Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const storeKey = `effect-sync-core:${SyncKey.hash(["broken"])}`;
+      yield* kv.set(storeKey, "{not valid json");
+      const store = yield* KeyValueStoreAdapter.make;
+      const got = yield* store.get(["broken"]);
+      return Option.isNone(got);
+    });
+    const isNone = await Effect.runPromise(
+      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<boolean>
+    );
+    expect(isNone).toBe(true);
+  });
+
+  it("treats a structurally-corrupted entry as a cache miss", async () => {
+    const program = Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const hash = SyncKey.hash(["corrupt"]);
+      const storeKey = `effect-sync-core:${hash}`;
+      // Valid JSON, but missing required fields (no tags / updatedAt etc.).
+      yield* kv.set(storeKey, JSON.stringify({ key: ["corrupt"], value: 1 }));
+      // Register it in the index too, so entries() also has to skip it.
+      yield* kv.set("effect-sync-core:__index__", JSON.stringify([hash]));
+      const store = yield* KeyValueStoreAdapter.make;
+      const got = yield* store.get(["corrupt"]);
+      const all = yield* store.entries();
+      return { isNone: Option.isNone(got), count: all.length };
+    });
+    const result = await Effect.runPromise(
+      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<{
+        isNone: boolean;
+        count: number;
+      }>
+    );
+    expect(result.isNone).toBe(true);
+    expect(result.count).toBe(0);
+  });
+
+  it("skips corrupted entries but keeps valid ones in entries()", async () => {
+    const program = Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const store = yield* KeyValueStoreAdapter.make;
+      // Write one good entry through the adapter (also seeds the index).
+      yield* store.set(entry(["good"], "ok"));
+      // Corrupt a second entry directly and add it to the index.
+      const badHash = SyncKey.hash(["bad"]);
+      yield* kv.set(`effect-sync-core:${badHash}`, "garbage");
+      const index = yield* kv
+        .get("effect-sync-core:__index__")
+        .pipe(Effect.map((v) => (v === undefined ? [] : (JSON.parse(v) as Array<string>))));
+      yield* kv.set("effect-sync-core:__index__", JSON.stringify([...index, badHash]));
+      const all = yield* store.entries();
+      return all.map((e) => e.value);
+    });
+    const values = await Effect.runPromise(
+      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<Array<unknown>>
+    );
+    expect(values).toEqual(["ok"]);
+  });
+
   it("works end-to-end behind WriteThroughCache", async () => {
     // Sanity check that the adapter satisfies the engine contract.
     const result = await withStore(adapterLayer, (store) =>

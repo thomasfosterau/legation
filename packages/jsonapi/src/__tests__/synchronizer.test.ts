@@ -13,6 +13,7 @@ import {
 } from "../synchronizer.js";
 import { makeInMemoryStorage } from "../storage.js";
 import type { ResourceObject, JsonApiDocument } from "../types.js";
+import { decodeDocument } from "../schema.js";
 
 describe("Synchronizer", () => {
   const mockConfig = {
@@ -42,6 +43,19 @@ describe("Synchronizer", () => {
           HttpClientResponse.fromWeb(
             request,
             new Response(JSON.stringify(document), {
+              status: 200,
+              headers: { "Content-Type": "application/vnd.api+json" },
+            })
+          )
+        );
+      }
+
+      if (url.includes("/users/malformed")) {
+        // Valid JSON, but `data` is a number — not a JSON:API document shape.
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify({ data: 42 }), {
               status: 200,
               headers: { "Content-Type": "application/vnd.api+json" },
             })
@@ -137,6 +151,91 @@ describe("Synchronizer", () => {
     expect(conflict._tag).toBe("ConflictError");
     expect(conflict.localVersion).toBe("1");
     expect(conflict.remoteVersion).toBe("2");
+  });
+
+  it("fails with a ParseError when the response is not a valid JSON:API document", async () => {
+    const program = fetchResource("users", "malformed").pipe(
+      Effect.provide(mockHttpClientLayer),
+      Effect.provideService(SyncConfig, mockConfig),
+      Effect.result,
+      Effect.map((result) => (Result.isFailure(result) ? result.failure : undefined))
+    );
+
+    const error = await Effect.runPromise(program);
+
+    expect(error).toBeInstanceOf(ParseError);
+    expect(error?._tag).toBe("ParseError");
+  });
+
+  describe("decodeDocument", () => {
+    const run = (input: unknown) => Effect.runSync(Effect.result(decodeDocument(input)));
+
+    it("accepts a single-resource document", () => {
+      const doc: JsonApiDocument = {
+        data: { type: "users", id: "1", attributes: { name: "Ada" } },
+      };
+      const result = run(doc);
+      expect(Result.isSuccess(result)).toBe(true);
+    });
+
+    it("accepts a collection document with included and links", () => {
+      const doc: JsonApiDocument = {
+        data: [
+          {
+            type: "users",
+            id: "1",
+            relationships: { posts: { data: [{ type: "posts", id: "9" }] } },
+          },
+          { type: "users", id: "2" },
+        ],
+        included: [{ type: "posts", id: "9", attributes: { title: "Hi" } }],
+        links: { self: "/users", next: { href: "/users?page=2" } },
+        meta: { total: 2 },
+        jsonapi: { version: "1.1" },
+      };
+      const result = run(doc);
+      expect(Result.isSuccess(result)).toBe(true);
+    });
+
+    it("accepts an errors document", () => {
+      const doc: JsonApiDocument = {
+        errors: [{ status: "422", title: "Invalid", source: { pointer: "/data/attributes/name" } }],
+      };
+      const result = run(doc);
+      expect(Result.isSuccess(result)).toBe(true);
+    });
+
+    it("accepts a document with null data", () => {
+      expect(Result.isSuccess(run({ data: null }))).toBe(true);
+    });
+
+    it("tolerates unknown extra members (open spec)", () => {
+      const result = run({
+        data: { type: "users", id: "1", customMember: "kept-open" },
+        somethingElse: true,
+      });
+      expect(Result.isSuccess(result)).toBe(true);
+    });
+
+    it("rejects a non-object input", () => {
+      expect(Result.isFailure(run(42))).toBe(true);
+      expect(Result.isFailure(run("nope"))).toBe(true);
+    });
+
+    it("rejects a structurally invalid document (data is a number)", () => {
+      expect(Result.isFailure(run({ data: 42 }))).toBe(true);
+    });
+
+    it("rejects a resource missing its id", () => {
+      expect(Result.isFailure(run({ data: { type: "users" } }))).toBe(true);
+    });
+
+    it("maps failures to a tagged ParseError with cause", () => {
+      const result = run({ data: 42 });
+      const failure = Result.isFailure(result) ? result.failure : undefined;
+      expect(failure).toBeInstanceOf(ParseError);
+      expect(failure?.cause).toBeDefined();
+    });
   });
 
   it("should handle conflicts with local strategy", async () => {

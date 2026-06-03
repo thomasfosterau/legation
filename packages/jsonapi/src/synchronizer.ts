@@ -16,6 +16,7 @@ import type {
   JsonApiRequestOptions,
 } from "./types.js";
 import { SyncError, ParseError, ApiError, ConflictError } from "./errors.js";
+import { decodeDocument } from "./schema.js";
 
 /**
  * Storage interface for local data persistence
@@ -155,7 +156,7 @@ export const parseJsonApiResponse = (
       Effect.mapError((error) => new ParseError({ message: "Failed to parse JSON", cause: error }))
     );
 
-    const document = json as JsonApiDocument;
+    const document = yield* decodeDocument(json);
 
     // Check for API errors
     if (document.errors && document.errors.length > 0) {

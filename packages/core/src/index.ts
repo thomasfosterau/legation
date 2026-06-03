@@ -31,6 +31,7 @@ export * as Pagination from "./Pagination.js";
 export * as Mutation from "./Mutation.js";
 export * as Outbox from "./Outbox.js";
 export * as Protocol from "./Protocol.js";
+export * as ProtocolSchema from "./ProtocolSchema.js";
 export * as Transport from "./Transport.js";
 export * as PromiseFacade from "./PromiseFacade.js";
 

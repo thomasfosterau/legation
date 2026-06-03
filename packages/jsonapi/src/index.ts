@@ -47,3 +47,6 @@ export { makeInMemoryStorage } from "./storage.js";
 
 // Export the sync-engine adapter (query/mutation descriptor builders)
 export * as Adapter from "./adapter.js";
+
+// Export the JSON:API document schemas and decode helpers
+export * as JsonApiSchema from "./schema.js";

@@ -24,7 +24,18 @@
     "noFallthroughCasesInSwitch": true,
     "plugins": [
       {
-        "name": "@effect/language-service"
+        "name": "@effect/language-service",
+        // Effect warnings/messages stay visible as diagnostics but must not
+        // break `tsc --build` exit codes (type errors still do).
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          // JSON.parse/stringify is intentional for wire framing and storage
+          // serialization; schema validation happens via ProtocolSchema.
+          "preferSchemaOverJson": "off",
+          // Effect.runFork inside event-handler callbacks (WebSocket/IDB
+          // bridges) is the intended pattern for those modules.
+          "runEffectInsideEffect": "suggestion"
+        }
       }
     ]
   }
