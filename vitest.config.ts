@@ -8,6 +8,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@thomasfosterau/effect-sync-core": pkg("core"),
+      "@thomasfosterau/effect-sync-browser": pkg("browser"),
+      "@thomasfosterau/effect-sync-node": pkg("node"),
       "@thomasfosterau/effect-sync-jsonapi": pkg("jsonapi"),
     },
   },

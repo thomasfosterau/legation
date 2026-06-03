@@ -12,7 +12,8 @@ ADR-0001 split the monorepo into five packages along audience lines: core, clien
 Package boundaries are drawn by **dependency footprint**, not by audience:
 
 - Everything implementable with a dependency on `effect` alone lives in `@thomasfosterau/effect-sync-core`. This includes the primitives, the client query/mutation/subscription manager, the offline sync client, the service-worker/edge cache engine, and the server-side sync hub.
-- Anything that brings additional dependencies or binds to a specific protocol/framework gets its own package. Today that is `@thomasfosterau/effect-sync-jsonapi` (JSON:API adapter); future examples: a React bindings package (depends on `react`), a WebSocket transport package if it needs platform packages, SQL-backed stores (depend on drivers).
+- Anything that brings additional dependencies or binds to a specific protocol/framework gets its own package. Today that is `@thomasfosterau/effect-sync-jsonapi` (JSON:API adapter); future examples: a React bindings package (depends on `react`), SQL-backed stores (depend on drivers).
+- **Runtime globals count as dependencies.** Code that requires browser-only globals (`indexedDB`, the DOM `WebSocket`) lives in `@thomasfosterau/effect-sync-browser`; code that requires Node built-ins or Node-ecosystem packages (`ws`) lives in `@thomasfosterau/effect-sync-node`. Core must run identically in browsers, workers, edge runtimes, and Node.
 
 Within core, the former package boundaries survive as module groups (`QueryClient`/`SyncClient`/`ClientFacade`, `WriteThroughCache`/`HttpCache`/`KeyValueStoreAdapter`, `ServerStore`/`Sessions`/`SyncHub`/`ServerFacade`), all exported as namespaces from the single entry point.
 

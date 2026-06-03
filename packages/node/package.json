@@ -1,0 +1,61 @@
+{
+  "name": "@thomasfosterau/effect-sync-node",
+  "version": "0.1.0",
+  "description": "Node-runtime adapters for the effect-sync engine: WebSocket server transport for the sync hub",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "sync-engine",
+    "node",
+    "websocket",
+    "server",
+    "fan-out",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-sync-core": "workspace:^",
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.65"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.65",
+    "@types/ws": "^8.5.12",
+    "@types/node": "^20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/node"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/node#readme"
+}
