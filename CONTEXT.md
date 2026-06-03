@@ -40,6 +40,8 @@ Package boundaries follow dependency footprint (ADR-0006): everything needing on
 | Package                               | Context                                                                                                                                                                                                                              |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `@thomasfosterau/effect-sync-core`    | The whole engine: keys, cache engine, queries, mutations, outbox, protocol, transports, the client manager (queries/mutations/subscriptions/offline sync), the service-worker/edge cache, and the server-side sync hub with fan-out. |
+| `@thomasfosterau/effect-sync-browser` | Browser-runtime adapters: WebSocket client transport, IndexedDB cache store.                                                                                                                                                         |
+| `@thomasfosterau/effect-sync-node`    | Node-runtime adapters: `ws`-based WebSocket server transport for the sync hub.                                                                                                                                                       |
 | `@thomasfosterau/effect-sync-jsonapi` | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`).                                                                                                                                                         |
 
 ## Avoided terms

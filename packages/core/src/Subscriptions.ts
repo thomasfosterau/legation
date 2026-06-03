@@ -28,6 +28,35 @@ const nextMessageId = (): string => {
 };
 
 /**
+ * Apply a single fan-out notification (`Updated` / `Removed` /
+ * `Invalidated`) to the cache. Acks and responses are ignored here — they
+ * are handled where the corresponding request was sent.
+ *
+ * Exposed so callers building their own message pump (e.g. the
+ * `SyncClient`, which also needs to handle `PushAck` / `PullAck`) can reuse
+ * the exact fan-out semantics without duplicating them.
+ */
+export const applyFanout = (
+  cache: SyncCache.SyncCache,
+  message: Protocol.ServerMessage
+): Effect.Effect<void, StoreError> => {
+  switch (message._tag) {
+    case "Updated":
+      return Effect.asVoid(
+        cache.set(message.entry.key, message.entry.value, { version: message.entry.version })
+      );
+    case "Removed":
+      return Effect.asVoid(cache.remove(message.key));
+    case "Invalidated":
+      return cache.invalidate(Protocol.toKeyFilter(message.filter));
+    default:
+      // SubscribeAck / UnsubscribeAck / PushAck / PullAck / Pong /
+      // ProtocolFailure are responses, not fan-out; ignore here.
+      return Effect.void;
+  }
+};
+
+/**
  * Consume the transport's server messages and apply each fan-out
  * notification to the cache.
  *
@@ -47,22 +76,7 @@ export const runSubscriptions: Effect.Effect<
   const transport = yield* Transport.ClientTransport;
   const cache = yield* SyncCache.SyncCache;
 
-  yield* Stream.runForEach(transport.messages, (message) => {
-    switch (message._tag) {
-      case "Updated":
-        return Effect.asVoid(
-          cache.set(message.entry.key, message.entry.value, { version: message.entry.version })
-        );
-      case "Removed":
-        return Effect.asVoid(cache.remove(message.key));
-      case "Invalidated":
-        return cache.invalidate(Protocol.toKeyFilter(message.filter));
-      default:
-        // SubscribeAck / UnsubscribeAck / PushAck / PullAck / Pong /
-        // ProtocolFailure are responses, not fan-out; ignore here.
-        return Effect.void;
-    }
-  });
+  yield* Stream.runForEach(transport.messages, (message) => applyFanout(cache, message));
 });
 
 /**

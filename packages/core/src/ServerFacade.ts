@@ -62,8 +62,11 @@ export const makeSyncServer = (): SyncServer => {
   ): Effect.Effect<A, E, SyncHub.SyncHub> => Effect.flatMap(Effect.service(SyncHub.SyncHub), f);
 
   return {
+    // runExit so the promise resolves (not rejects) when the connection
+    // closes — disconnects interrupt the handler fiber, and non-Effect
+    // callers should not have to treat that as an error.
     handleConnection: (connection) =>
-      facade.run(withHub((hub) => hub.handleConnection(connection))),
+      facade.runExit(withHub((hub) => hub.handleConnection(connection))).then(() => undefined),
     publish: (key, value) => facade.run(withHub((hub) => hub.publish(key, value))),
     remove: (key) => facade.run(withHub((hub) => hub.remove(key))),
     invalidate: (filter) => facade.run(withHub((hub) => hub.invalidate(filter))),

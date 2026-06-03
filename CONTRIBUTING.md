@@ -35,6 +35,8 @@ bunx vitest run packages/core
 ```text
 packages/
   core/      @thomasfosterau/effect-sync-core      The sync engine (primitives, client, SW/edge cache, server hub)
+  browser/   @thomasfosterau/effect-sync-browser   Browser runtime: WebSocket client transport, IndexedDB store
+  node/      @thomasfosterau/effect-sync-node      Node runtime: ws-based WebSocket server transport
   jsonapi/   @thomasfosterau/effect-sync-jsonapi   JSON:API protocol adapter
 docs/
   adr/       Architecture decision records
@@ -71,6 +73,18 @@ Conventions:
 - Errors: `Data.TaggedError` classes
 - Every service has a `layer`; in-memory implementations exist for everything so tests never need external infrastructure
 - Use the vocabulary from [CONTEXT.md](CONTEXT.md)
+
+## Effect version upgrades
+
+All packages pin `effect` to one exact beta version (peer + dev dependency). To bump it:
+
+1. Update the version everywhere in one PR: root `package.json` and every `packages/*/package.json` (both `peerDependencies` and `devDependencies`), then `bun install`.
+2. Run all quality gates; fix any API breakage in the same PR.
+3. Add a changeset (patch for all packages unless the bump changes our own API).
+
+A scheduled GitHub Actions workflow (`effect-beta-compat.yml`) runs weekly against the
+latest `effect@beta` and reports incompatibilities ahead of time. It never blocks CI —
+it exists so beta bumps are informed decisions (see ADR-0003).
 
 ## Releases
 

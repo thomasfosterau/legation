@@ -14,6 +14,9 @@
     "node": true,
     "es2022": true
   },
+  "rules": {
+    "no-underscore-dangle": ["warn", { "allow": ["_tag"] }]
+  },
   "ignorePatterns": [
     "dist/**",
     "**/dist/**",
