@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "@effect/vitest";
 import { Effect, Layer, Result } from "effect";
 import { ApiError, ConflictError, ParseError } from "../errors.js";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -81,62 +81,54 @@ describe("Synchronizer", () => {
     })
   );
 
-  it("should fetch a resource from the API", async () => {
-    const program = fetchResource("users", "1").pipe(
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig)
-    );
+  it.effect("should fetch a resource from the API", () =>
+    Effect.gen(function* () {
+      const result = yield* fetchResource("users", "1");
 
-    const result = await Effect.runPromise(program);
+      expect(result.type).toBe("users");
+      expect(result.id).toBe("1");
+      expect(result.attributes?.name).toBe("John Doe");
+    }).pipe(Effect.provide(mockHttpClientLayer), Effect.provideService(SyncConfig, mockConfig))
+  );
 
-    expect(result.type).toBe("users");
-    expect(result.id).toBe("1");
-    expect(result.attributes?.name).toBe("John Doe");
-  });
+  it.effect("should sync a resource from remote to storage", () =>
+    Effect.gen(function* () {
+      const storage = makeInMemoryStorage();
 
-  it("should sync a resource from remote to storage", async () => {
-    const storage = makeInMemoryStorage();
+      const result = yield* syncResourceFromRemote("users", "1").pipe(
+        Effect.provideService(Storage, storage)
+      );
 
-    const program = syncResourceFromRemote("users", "1").pipe(
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig),
-      Effect.provideService(Storage, storage)
-    );
+      expect(result.type).toBe("users");
+      expect(result.id).toBe("1");
 
-    const result = await Effect.runPromise(program);
+      // Verify it was saved to storage
+      const storedResource = yield* storage.get("users", "1");
+      expect(storedResource).not.toBeNull();
+      expect(storedResource?.attributes?.name).toBe("John Doe");
+    }).pipe(Effect.provide(mockHttpClientLayer), Effect.provideService(SyncConfig, mockConfig))
+  );
 
-    expect(result.type).toBe("users");
-    expect(result.id).toBe("1");
+  it.effect("should handle HTTP error responses", () =>
+    Effect.gen(function* () {
+      const result = yield* fetchResource("users", "404").pipe(Effect.result);
 
-    // Verify it was saved to storage
-    const storedResource = await Effect.runPromise(storage.get("users", "1"));
-    expect(storedResource).not.toBeNull();
-    expect(storedResource?.attributes?.name).toBe("John Doe");
-  });
+      expect(Result.isFailure(result)).toBe(true);
+      const failure = Result.isFailure(result) ? result.failure : undefined;
+      expect(failure?.message).toContain("HTTP 404");
+    }).pipe(Effect.provide(mockHttpClientLayer), Effect.provideService(SyncConfig, mockConfig))
+  );
 
-  it("should handle HTTP error responses", async () => {
-    const program = fetchResource("users", "404").pipe(
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig)
-    );
+  it.effect("fails with a tagged ApiError carrying message and errors", () =>
+    Effect.gen(function* () {
+      const result = yield* fetchResource("users", "404").pipe(Effect.result);
+      const error = Result.isFailure(result) ? result.failure : undefined;
 
-    await expect(Effect.runPromise(program)).rejects.toThrow("HTTP 404");
-  });
-
-  it("fails with a tagged ApiError carrying message and errors", async () => {
-    const program = fetchResource("users", "404").pipe(
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig),
-      Effect.result,
-      Effect.map((result) => (Result.isFailure(result) ? result.failure : undefined))
-    );
-
-    const error = await Effect.runPromise(program);
-
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error?._tag).toBe("ApiError");
-    expect(error?.message).toBe("HTTP 404");
-  });
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error?._tag).toBe("ApiError");
+      expect(error?.message).toBe("HTTP 404");
+    }).pipe(Effect.provide(mockHttpClientLayer), Effect.provideService(SyncConfig, mockConfig))
+  );
 
   it("constructs tagged errors with the object constructor style", () => {
     const parse = new ParseError({ message: "bad", cause: new Error("x") });
@@ -153,19 +145,15 @@ describe("Synchronizer", () => {
     expect(conflict.remoteVersion).toBe("2");
   });
 
-  it("fails with a ParseError when the response is not a valid JSON:API document", async () => {
-    const program = fetchResource("users", "malformed").pipe(
-      Effect.provide(mockHttpClientLayer),
-      Effect.provideService(SyncConfig, mockConfig),
-      Effect.result,
-      Effect.map((result) => (Result.isFailure(result) ? result.failure : undefined))
-    );
+  it.effect("fails with a ParseError when the response is not a valid JSON:API document", () =>
+    Effect.gen(function* () {
+      const result = yield* fetchResource("users", "malformed").pipe(Effect.result);
+      const error = Result.isFailure(result) ? result.failure : undefined;
 
-    const error = await Effect.runPromise(program);
-
-    expect(error).toBeInstanceOf(ParseError);
-    expect(error?._tag).toBe("ParseError");
-  });
+      expect(error).toBeInstanceOf(ParseError);
+      expect(error?._tag).toBe("ParseError");
+    }).pipe(Effect.provide(mockHttpClientLayer), Effect.provideService(SyncConfig, mockConfig))
+  );
 
   describe("decodeDocument", () => {
     const run = (input: unknown) => Effect.runSync(Effect.result(decodeDocument(input)));
@@ -238,108 +226,108 @@ describe("Synchronizer", () => {
     });
   });
 
-  it("should handle conflicts with local strategy", async () => {
-    const storage = makeInMemoryStorage();
-    const conflictConfig = {
-      baseUrl: "https://api.example.com",
-      conflictStrategy: "local" as const,
-    };
+  it.effect("should handle conflicts with local strategy", () =>
+    Effect.gen(function* () {
+      const storage = makeInMemoryStorage();
+      const conflictConfig = {
+        baseUrl: "https://api.example.com",
+        conflictStrategy: "local" as const,
+      };
 
-    const conflictHttpClientLayer = Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(
-            HttpClientRequest.get("http://test"),
-            new Response(null, { status: 409 })
+      const conflictHttpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make(() =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              HttpClientRequest.get("http://test"),
+              new Response(null, { status: 409 })
+            )
           )
         )
-      )
-    );
+      );
 
-    const localResource: ResourceObject = {
-      type: "users",
-      id: "1",
-      attributes: {
-        name: "Local User",
-        version: "1",
-      },
-    };
+      const localResource: ResourceObject = {
+        type: "users",
+        id: "1",
+        attributes: {
+          name: "Local User",
+          version: "1",
+        },
+      };
 
-    const program = syncResourceToRemote(localResource).pipe(
-      Effect.provide(conflictHttpClientLayer),
-      Effect.provideService(SyncConfig, conflictConfig),
-      Effect.provideService(Storage, storage)
-    );
+      const result = yield* syncResourceToRemote(localResource).pipe(
+        Effect.provide(conflictHttpClientLayer),
+        Effect.provideService(SyncConfig, conflictConfig),
+        Effect.provideService(Storage, storage)
+      );
 
-    const result = await Effect.runPromise(program);
+      // Should keep the local version
+      expect(result.attributes?.name).toBe("Local User");
+      expect(result.attributes?.version).toBe("1");
+    })
+  );
 
-    // Should keep the local version
-    expect(result.attributes?.name).toBe("Local User");
-    expect(result.attributes?.version).toBe("1");
-  });
+  it.effect("should handle conflicts with remote strategy", () =>
+    Effect.gen(function* () {
+      const storage = makeInMemoryStorage();
+      const conflictConfig = {
+        baseUrl: "https://api.example.com",
+        conflictStrategy: "remote" as const,
+      };
 
-  it("should handle conflicts with remote strategy", async () => {
-    const storage = makeInMemoryStorage();
-    const conflictConfig = {
-      baseUrl: "https://api.example.com",
-      conflictStrategy: "remote" as const,
-    };
+      const conflictHttpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request: HttpClientRequest.HttpClientRequest) => {
+          const method = request.method;
 
-    const conflictHttpClientLayer = Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make((request: HttpClientRequest.HttpClientRequest) => {
-        const method = request.method;
+          if (method === "PATCH") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response(null, { status: 409 }))
+            );
+          }
 
-        if (method === "PATCH") {
-          return Effect.succeed(
-            HttpClientResponse.fromWeb(request, new Response(null, { status: 409 }))
-          );
-        }
-
-        // GET request for fetching remote version
-        const document: JsonApiDocument = {
-          data: {
-            type: "users",
-            id: "1",
-            attributes: {
-              name: "Remote User",
-              version: "2",
+          // GET request for fetching remote version
+          const document: JsonApiDocument = {
+            data: {
+              type: "users",
+              id: "1",
+              attributes: {
+                name: "Remote User",
+                version: "2",
+              },
             },
-          },
-        };
+          };
 
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            new Response(JSON.stringify(document), {
-              status: 200,
-              headers: { "Content-Type": "application/vnd.api+json" },
-            })
-          )
-        );
-      })
-    );
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(document), {
+                status: 200,
+                headers: { "Content-Type": "application/vnd.api+json" },
+              })
+            )
+          );
+        })
+      );
 
-    const localResource: ResourceObject = {
-      type: "users",
-      id: "1",
-      attributes: {
-        name: "Local User",
-        version: "1",
-      },
-    };
+      const localResource: ResourceObject = {
+        type: "users",
+        id: "1",
+        attributes: {
+          name: "Local User",
+          version: "1",
+        },
+      };
 
-    const program = syncResourceToRemote(localResource).pipe(
-      Effect.provide(conflictHttpClientLayer),
-      Effect.provideService(SyncConfig, conflictConfig),
-      Effect.provideService(Storage, storage)
-    );
+      const result = yield* syncResourceToRemote(localResource).pipe(
+        Effect.provide(conflictHttpClientLayer),
+        Effect.provideService(SyncConfig, conflictConfig),
+        Effect.provideService(Storage, storage)
+      );
 
-    const result = await Effect.runPromise(program);
-
-    // Should use the remote version
-    expect(result.attributes?.name).toBe("Remote User");
-    expect(result.attributes?.version).toBe("2");
-  });
+      // Should use the remote version
+      expect(result.attributes?.name).toBe("Remote User");
+      expect(result.attributes?.version).toBe("2");
+    })
+  );
 });

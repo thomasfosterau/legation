@@ -13,7 +13,7 @@
  * out updates; client B's local cache converges.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Option } from "effect";
 import {
   MemoryCacheStore,
@@ -68,133 +68,124 @@ interface Todo {
 }
 
 describe("WebSocket end-to-end sync", () => {
-  it("fans out a mutation from client A to client B's cache over real WebSockets", async () => {
-    const received = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          // Start the sync server on an ephemeral port.
-          const { port } = yield* WebSocketServer.serve({ port: 0 });
-          const url = `ws://127.0.0.1:${port}`;
+  it.live(
+    "fans out a mutation from client A to client B's cache over real WebSockets",
+    () =>
+      Effect.gen(function* () {
+        // Start the sync server on an ephemeral port.
+        const { port } = yield* WebSocketServer.serve({ port: 0 });
+        const url = `ws://127.0.0.1:${port}`;
 
-          // ── Client B: subscribe to ["todos"] and wait for the fan-out ──
-          const clientB = Effect.scoped(
-            Effect.gen(function* () {
-              const sync = yield* SyncClient.SyncClient;
-              const cache = yield* SyncCache.SyncCache;
+        // ── Client B: subscribe to ["todos"] and wait for the fan-out ──
+        const clientB = Effect.scoped(
+          Effect.gen(function* () {
+            const sync = yield* SyncClient.SyncClient;
+            const cache = yield* SyncCache.SyncCache;
 
-              // Run the background engine (message pump + reconnect watcher).
-              yield* Effect.forkScoped(Effect.ignore(sync.runSync));
-              yield* Effect.sleep(Duration.millis(200));
-              yield* sync.subscribe(Protocol.prefixFilter(["todos"]));
+            // Run the background engine (message pump + reconnect watcher).
+            yield* Effect.forkScoped(Effect.ignore(sync.runSync));
+            yield* Effect.sleep(Duration.millis(200));
+            yield* sync.subscribe(Protocol.prefixFilter(["todos"]));
 
-              // Wait until the fan-out lands in the local cache.
-              return yield* awaitCacheEntry<Todo>(cache, ["todos", "1"]);
-            })
-          ).pipe(Effect.provide(clientStack(url)));
+            // Wait until the fan-out lands in the local cache.
+            return yield* awaitCacheEntry<Todo>(cache, ["todos", "1"]);
+          })
+        ).pipe(Effect.provide(clientStack(url)));
 
-          // ── Client A: push a mutation through the sync engine ──
-          const clientA = Effect.scoped(
-            Effect.gen(function* () {
-              const sync = yield* SyncClient.SyncClient;
+        // ── Client A: push a mutation through the sync engine ──
+        const clientA = Effect.scoped(
+          Effect.gen(function* () {
+            const sync = yield* SyncClient.SyncClient;
 
-              yield* Effect.forkScoped(Effect.ignore(sync.runSync));
-              yield* Effect.sleep(Duration.millis(200));
+            yield* Effect.forkScoped(Effect.ignore(sync.runSync));
+            yield* Effect.sleep(Duration.millis(200));
 
-              // Mutate locally (data key = the entry's sync key), then push.
-              yield* sync.mutateLocal(
-                {
-                  key: ["todos", "1"],
-                  execute: (input: Todo) => Effect.succeed(input),
-                },
-                { title: "Ship the sync engine", done: false }
-              );
-              yield* sync.push;
+            // Mutate locally (data key = the entry's sync key), then push.
+            yield* sync.mutateLocal(
+              {
+                key: ["todos", "1"],
+                execute: (input: Todo) => Effect.succeed(input),
+              },
+              { title: "Ship the sync engine", done: false }
+            );
+            yield* sync.push;
 
-              // Give the PushAck a moment to be processed.
-              yield* Effect.sleep(Duration.millis(300));
-            })
-          ).pipe(Effect.provide(clientStack(url)));
+            // Give the PushAck a moment to be processed.
+            yield* Effect.sleep(Duration.millis(300));
+          })
+        ).pipe(Effect.provide(clientStack(url)));
 
-          // B subscribes first, then A pushes, then B's result is collected.
-          const fiberB = yield* Effect.forkChild(clientB);
-          yield* Effect.sleep(Duration.millis(500));
-          yield* clientA;
-          return yield* Fiber.join(fiberB);
-        })
-      ).pipe(Effect.provide(hubLayer)) as Effect.Effect<Todo>
-    );
+        // B subscribes first, then A pushes, then B's result is collected.
+        const fiberB = yield* Effect.forkChild(clientB);
+        yield* Effect.sleep(Duration.millis(500));
+        yield* clientA;
+        const received = yield* Fiber.join(fiberB);
 
-    expect(received).toEqual({ title: "Ship the sync engine", done: false });
-  }, 20_000);
+        expect(received).toEqual({ title: "Ship the sync engine", done: false });
+      }).pipe(Effect.provide(hubLayer)),
+    20_000
+  );
 
-  it("delivers the server-applied entry back to the pushing client (PushAck → cache)", async () => {
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { port } = yield* WebSocketServer.serve({ port: 0 });
-          const url = `ws://127.0.0.1:${port}`;
-          const hub = yield* SyncHub.SyncHub;
+  it.live(
+    "delivers the server-applied entry back to the pushing client (PushAck → cache)",
+    () =>
+      Effect.gen(function* () {
+        const { port } = yield* WebSocketServer.serve({ port: 0 });
+        const url = `ws://127.0.0.1:${port}`;
+        const hub = yield* SyncHub.SyncHub;
 
-          const clientA = Effect.scoped(
-            Effect.gen(function* () {
-              const sync = yield* SyncClient.SyncClient;
-              const cache = yield* SyncCache.SyncCache;
-              const outbox = yield* Outbox.Outbox;
+        const clientA = Effect.scoped(
+          Effect.gen(function* () {
+            const sync = yield* SyncClient.SyncClient;
+            const cache = yield* SyncCache.SyncCache;
+            const outbox = yield* Outbox.Outbox;
 
-              yield* Effect.forkScoped(Effect.ignore(sync.runSync));
-              yield* Effect.sleep(Duration.millis(200));
+            yield* Effect.forkScoped(Effect.ignore(sync.runSync));
+            yield* Effect.sleep(Duration.millis(200));
 
-              yield* sync.mutateLocal(
-                {
-                  key: ["notes", "a"],
-                  execute: (input: { readonly text: string }) => Effect.succeed(input),
-                },
-                { text: "hello server" }
-              );
-              yield* sync.push;
+            yield* sync.mutateLocal(
+              {
+                key: ["notes", "a"],
+                execute: (input: { readonly text: string }) => Effect.succeed(input),
+              },
+              { text: "hello server" }
+            );
+            yield* sync.push;
 
-              // Wait for the PushAck round trip: the outbox entry should be
-              // discarded and the cache should hold the server's canonical
-              // entry (with its version).
-              for (let attempt = 0; attempt < 50; attempt++) {
-                const size = yield* outbox.size;
-                if (size === 0) break;
-                yield* Effect.sleep(Duration.millis(100));
-              }
+            // Wait for the PushAck round trip: the outbox entry should be
+            // discarded and the cache should hold the server's canonical
+            // entry (with its version).
+            for (let attempt = 0; attempt < 50; attempt++) {
+              const size = yield* outbox.size;
+              if (size === 0) break;
+              yield* Effect.sleep(Duration.millis(100));
+            }
 
-              const remaining = yield* outbox.size;
-              const cached = yield* cache.peek<{ readonly text: string }>(["notes", "a"]);
-              return {
-                remaining,
-                cachedValue: Option.getOrUndefined(cached)?.value,
-                cachedVersion: Option.getOrUndefined(cached)?.version,
-              };
-            })
-          ).pipe(Effect.provide(clientStack(url)));
+            const remaining = yield* outbox.size;
+            const cached = yield* cache.peek<{ readonly text: string }>(["notes", "a"]);
+            return {
+              remaining,
+              cachedValue: Option.getOrUndefined(cached)?.value,
+              cachedVersion: Option.getOrUndefined(cached)?.version,
+            };
+          })
+        ).pipe(Effect.provide(clientStack(url)));
 
-          const clientResult = yield* clientA;
+        const clientResult = yield* clientA;
 
-          // The server's store has the entry as the source of truth.
-          const serverEntry = yield* Effect.orDie(
-            Effect.flatMap(Effect.succeed(hub), () => Effect.serviceOption(ServerStore.ServerStore))
-          );
+        // The server's store has the entry as the source of truth.
+        const serverEntry = yield* Effect.orDie(
+          Effect.flatMap(Effect.succeed(hub), () => Effect.serviceOption(ServerStore.ServerStore))
+        );
+        const hasServerStore = Option.isSome(serverEntry);
 
-          return { clientResult, hasServerStore: Option.isSome(serverEntry) };
-        })
-      ).pipe(Effect.provide(hubLayer)) as Effect.Effect<{
-        clientResult: {
-          remaining: number;
-          cachedValue: { readonly text: string } | undefined;
-          cachedVersion: string | number | undefined;
-        };
-        hasServerStore: boolean;
-      }>
-    );
-
-    // The outbox drained after the PushAck and the cache holds the
-    // server-acknowledged entry with the server-assigned version 1.
-    expect(result.clientResult.remaining).toBe(0);
-    expect(result.clientResult.cachedValue).toEqual({ text: "hello server" });
-    expect(result.clientResult.cachedVersion).toBe(1);
-  }, 20_000);
+        // The outbox drained after the PushAck and the cache holds the
+        // server-acknowledged entry with the server-assigned version 1.
+        expect(clientResult.remaining).toBe(0);
+        expect(clientResult.cachedValue).toEqual({ text: "hello server" });
+        expect(clientResult.cachedVersion).toBe(1);
+        expect(hasServerStore).toBe(true);
+      }).pipe(Effect.provide(hubLayer)),
+    20_000
+  );
 });
