@@ -8,9 +8,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@thomasfosterau/effect-sync-core": pkg("core"),
-      "@thomasfosterau/effect-sync-client": pkg("client"),
-      "@thomasfosterau/effect-sync-cache": pkg("cache"),
-      "@thomasfosterau/effect-sync-server": pkg("server"),
       "@thomasfosterau/effect-sync-jsonapi": pkg("jsonapi"),
     },
   },

@@ -1,7 +1,7 @@
 {
   "name": "@thomasfosterau/effect-sync-core",
   "version": "0.1.0",
-  "description": "Protocol-agnostic sync and cache primitives built on Effect: keys, cache stores, write-through caching, queries, pagination, mutations, outbox, conflict resolution, and the client/server sync protocol",
+  "description": "An Effect-native sync engine: write-through caching, TanStack-Query-style client queries/mutations/subscriptions, offline outbox, HTTP caching for service workers and edge runtimes, and a server-side sync hub with client fan-out",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,8 +27,14 @@
     "effect",
     "sync-engine",
     "cache",
+    "write-through",
     "query",
+    "mutation",
+    "subscription",
     "offline-first",
+    "service-worker",
+    "edge",
+    "fan-out",
     "typescript"
   ],
   "author": "Thomas Foster",

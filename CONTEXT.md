@@ -35,13 +35,12 @@ The effect-sync monorepo implements a data synchronization engine built on Effec
 
 ## Packages and their bounded contexts
 
-| Package                               | Context                                                                                                  |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `@thomasfosterau/effect-sync-core`    | The shared language: keys, cache engine, queries, mutations, outbox, protocol, transports.               |
-| `@thomasfosterau/effect-sync-client`  | Client-side consumption: query/mutation/subscription manager (TanStack-Query-like), offline sync client. |
-| `@thomasfosterau/effect-sync-cache`   | Standalone write-through cache engine for service workers / edge runtimes (no sync protocol required).   |
-| `@thomasfosterau/effect-sync-server`  | Server-side: sync hub, server store, fan-out.                                                            |
-| `@thomasfosterau/effect-sync-jsonapi` | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`).                             |
+Package boundaries follow dependency footprint (ADR-0006): everything needing only `effect` is in core.
+
+| Package                               | Context                                                                                                                                                                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@thomasfosterau/effect-sync-core`    | The whole engine: keys, cache engine, queries, mutations, outbox, protocol, transports, the client manager (queries/mutations/subscriptions/offline sync), the service-worker/edge cache, and the server-side sync hub with fan-out. |
+| `@thomasfosterau/effect-sync-jsonapi` | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`).                                                                                                                                                         |
 
 ## Avoided terms
 

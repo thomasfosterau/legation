@@ -1,15 +1,9 @@
 ---
 "@thomasfosterau/effect-sync-core": minor
-"@thomasfosterau/effect-sync-client": minor
-"@thomasfosterau/effect-sync-cache": minor
-"@thomasfosterau/effect-sync-server": minor
 "@thomasfosterau/effect-sync-jsonapi": minor
 ---
 
-Restructure the repository into a monorepo of sync-engine packages:
+Restructure the repository into a monorepo of sync-engine packages, with package boundaries drawn by dependency footprint:
 
-- `@thomasfosterau/effect-sync-core` — protocol-agnostic sync and cache primitives: sync keys, cache stores, write-through cache engine, queries, pagination, mutations, offline outbox, conflict resolution, the client/server sync protocol, transports, and a promise facade for non-Effect consumers.
-- `@thomasfosterau/effect-sync-client` — client-side query/mutation/subscription manager (TanStack-Query-style) with live server subscriptions and offline outbox draining.
-- `@thomasfosterau/effect-sync-cache` — write-through cache engine for service workers, edge runtimes, and servers, with paginated query support and pluggable key-value storage.
-- `@thomasfosterau/effect-sync-server` — server-side write-through sync engine that applies mutations to a backing store and fans out updates to subscribed clients.
-- `@thomasfosterau/effect-sync-jsonapi` — the previous `@thomasfosterau/effect-chancery` JSON:API helpers, migrated into the monorepo as a protocol adapter with Effect tagged errors.
+- `@thomasfosterau/effect-sync-core` — the Effect-native sync engine. Everything that needs only a dependency on `effect`: sync keys, cache stores, the write-through cache engine (read-through, dedupe, stale-while-revalidate, invalidation, events), queries, pagination, mutations with optimistic updates, a durable offline outbox, the client/server sync protocol, transports, conflict resolution, the TanStack-Query-style client (queries/mutations/subscriptions/offline sync), the service-worker/edge HTTP cache engine with KeyValueStore persistence, the server-side sync hub with fan-out, and promise facades for non-Effect consumers.
+- `@thomasfosterau/effect-sync-jsonapi` — the previous `@thomasfosterau/effect-chancery` JSON:API helpers, migrated into the monorepo as a protocol adapter with Effect tagged errors and query/mutation descriptor builders that plug into the core engine.

@@ -1,6 +1,6 @@
 # effect-sync
 
-A data synchronization engine built on [Effect](https://effect.website), shipped as a monorepo of composable packages: a protocol-agnostic core, a TanStack-Query-style client, a write-through cache engine for service workers and edge runtimes, a server-side sync hub with client fan-out, and a JSON:API adapter.
+A data synchronization engine built on [Effect](https://effect.website): write-through caching, a TanStack-Query-style client, a cache engine for service workers and edge runtimes, and a server-side sync hub with client fan-out — all in one Effect-native core package, plus protocol adapters.
 
 ## Status
 
@@ -8,42 +8,37 @@ All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 
 
 ## Packages
 
-| Package                                                   | Description                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/effect-sync-core`](packages/core)       | Protocol-agnostic primitives: sync keys, cache store + write-through cache engine (read-through, dedupe, stale-while-revalidate, invalidation, events), queries, pagination, mutations with optimistic updates, durable outbox, client/server sync protocol, transports, conflict resolution, and a promise facade for non-Effect consumers |
-| [`@thomasfosterau/effect-sync-client`](packages/client)   | Client-side query/mutation/subscription manager (TanStack-Query-like) with live server subscriptions and offline outbox draining                                                                                                                                                                                                            |
-| [`@thomasfosterau/effect-sync-cache`](packages/cache)     | Write-through cache engine for service workers, edge runtimes, and servers — HTTP caching and paginated queries, with pluggable persistence                                                                                                                                                                                                 |
-| [`@thomasfosterau/effect-sync-server`](packages/server)   | Server-side write-through sync engine: versioned store, session registry, and fan-out of updates to subscribed clients                                                                                                                                                                                                                      |
-| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`)                                                                                                                                                                                                                                                                 |
+Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md)): everything that needs only `effect` lives in core; protocol- or framework-specific code gets its own package.
+
+| Package                                                   | Description                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/effect-sync-core`](packages/core)       | The sync engine: keys, cache stores, write-through cache engine, queries, pagination, mutations, offline outbox, sync protocol, transports, conflict resolution, the client query/mutation/subscription manager, the service-worker/edge HTTP cache, the server-side sync hub with fan-out, and promise facades for non-Effect consumers |
+| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`)                                                                                                                                                                                                                                                              |
 
 ## Architecture
 
 ```
-            ┌────────────────────────────┐
-            │   effect-sync-client       │  browser / app
-            │  (queries, mutations,      │
-            │   subscriptions, outbox)   │
-            └─────────────┬──────────────┘
-                          │ sync protocol over a Transport
-            ┌─────────────▼──────────────┐
-            │   effect-sync-server       │  your backend
-            │  (sync hub, versioned      │
-            │   store, fan-out)          │
-            └─────────────┬──────────────┘
-                          │
-   ┌──────────────────────┴───────────────────────┐
-   │              effect-sync-core                │
-   │  keys · cache engine · queries · mutations   │
-   │  outbox · protocol · transports · conflicts  │
-   └──────────────────────┬───────────────────────┘
-                          │
-            ┌─────────────▼──────────────┐
-            │   effect-sync-cache        │  service workers / edge
-            │  (write-through HTTP and   │
-            │   data caching)            │
-            └────────────────────────────┘
-
-   effect-sync-jsonapi: adapts JSON:API APIs into core query/mutation descriptors
+   browser / app                  your backend
+┌─────────────────────┐        ┌─────────────────────┐
+│ QueryClient         │        │ SyncHub             │
+│ SyncClient (offline)│◀──────▶│ ServerStore         │
+│ ClientFacade        │  sync  │ Sessions (fan-out)  │
+├─────────────────────┤protocol├─────────────────────┤
+│                     │ over a │                     │
+│  service worker /   │Transport                     │
+│  edge runtime       │        │                     │
+│ WriteThroughCache   │        │                     │
+│ HttpCache           │        │                     │
+├─────────────────────┴────────┴─────────────────────┤
+│              effect-sync-core primitives           │
+│   SyncKey · SyncCache · Query · Mutation · Outbox  │
+│      Protocol · Transport · Versioned · Facades    │
+└─────────────────────────────────────────────────────┘
+          ▲
+          │ descriptors
+┌─────────┴───────────┐
+│ effect-sync-jsonapi │  JSON:API adapter
+└─────────────────────┘
 ```
 
 Every piece is an Effect service with a Layer, so everything is swappable: storage backends, transports, conflict strategies, and stores are all interfaces with in-memory implementations provided for tests and development.
@@ -72,7 +67,7 @@ await Effect.runPromise(program.pipe(Effect.provide(layer)));
 
 ### Non-Effect consumers
 
-Every package ships a promise facade so plain TypeScript apps, UI frameworks, and service workers can drive the engine without writing Effect code. See each package's README.
+The core package ships promise facades (`ClientFacade`, `ServerFacade`, `PromiseFacade`) so plain TypeScript apps, UI frameworks, and service workers can drive the engine without writing Effect code. See the [core README](packages/core/README.md).
 
 ## Development
 

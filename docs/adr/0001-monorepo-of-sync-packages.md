@@ -1,7 +1,7 @@
 # ADR-0001: Monorepo of layered sync packages
 
 Date: 2026-06-03
-Status: Accepted
+Status: Superseded by [ADR-0006](0006-dependency-based-package-boundaries.md) — the five-package split was consolidated; package boundaries are now drawn by dependency footprint.
 
 ## Context
 

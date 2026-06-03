@@ -1,10 +1,4 @@
 {
   "files": [],
-  "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/client" },
-    { "path": "./packages/cache" },
-    { "path": "./packages/server" },
-    { "path": "./packages/jsonapi" }
-  ]
+  "references": [{ "path": "./packages/core" }, { "path": "./packages/jsonapi" }]
 }

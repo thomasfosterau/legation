@@ -42,13 +42,14 @@ Audit of the repository as found (single-package `@thomasfosterau/effect-chancer
 
 134 tests pass across the monorepo; every CI gate (install, format, lint, build, typecheck incl. tests, coverage, fallow audit) is green.
 
-- **Monorepo restructure** (ADR-0001): bun workspaces, five packages, TS project references, root vitest with workspace aliases, per-package changesets
-- **`effect-sync-core`** (46 tests): SyncKey, tagged Errors, CacheStore/MemoryCacheStore, SyncCache engine (read-through, write-through, dedupe, SWR, invalidation, events), Query, Pagination, Mutation (optimistic + rollback), Outbox, Protocol, Transport (+ in-memory pair), Versioned conflict strategies, PromiseFacade
-- **`effect-sync-client`** (23 tests): QueryClient (fetch/observe/invalidate/paginated), mutation states, transport subscriptions, offline SyncClient, promise facade
-- **`effect-sync-cache`** (27 tests): WriteThroughCache, HTTP request/response caching for service workers, KeyValueStore-backed persistence adapter
-- **`effect-sync-server`** (10 tests): ServerStore (versioned), SessionRegistry, SyncHub (subscribe/push/pull/ping handling, write-through + fan-out, conflict detection), promise facade
+- **Monorepo restructure** (ADR-0001, consolidated to two packages by ADR-0006): bun workspaces, TS project references, root vitest with workspace aliases, per-package changesets. Client/cache/server functionality lives in core (dependency-based boundaries); jsonapi is the first protocol adapter package.
+- **`effect-sync-core`** (106 tests) — the whole engine, organized in four module layers:
+  - _Primitives_: SyncKey, tagged Errors, CacheStore/MemoryCacheStore, SyncCache engine (read-through, write-through, dedupe, SWR, invalidation, events), Query, Pagination, Mutation (optimistic + rollback), Outbox, Protocol, Transport (+ in-memory pair), Versioned conflict strategies, PromiseFacade
+  - _Client_: QueryClient (fetch/observe/invalidate/paginated), MutationState, transport Subscriptions, offline SyncClient, ClientFacade
+  - _Cache engine_: WriteThroughCache, HttpCache for service workers, KeyValueStoreAdapter persistence
+  - _Server_: ServerStore (versioned), Sessions registry, SyncHub (subscribe/push/pull/ping, write-through + fan-out, conflict detection), ServerFacade
 - **`effect-sync-jsonapi`** (28 tests): legacy code migrated, errors upgraded to `Data.TaggedError`, adapter integrating JSON:API resources with the core engine (query/pagination/mutation descriptor builders), request-building deduplicated
-- **Docs**: root README, per-package READMEs, CONTEXT.md glossary, ADRs 0001–0005, this audit
+- **Docs**: root README, per-package READMEs, CONTEXT.md glossary, ADRs 0001–0006, this audit
 - **CI**: single coverage test run, coverage-aware fallow audit, monorepo-aware quality gates
 
 ## Remaining work before production (tracked as GitHub issues)

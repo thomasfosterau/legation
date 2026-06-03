@@ -34,11 +34,8 @@ bunx vitest run packages/core
 
 ```text
 packages/
-  core/      @thomasfosterau/effect-sync-core      Shared sync/cache primitives
-  client/    @thomasfosterau/effect-sync-client    Client query/mutation/subscription manager
-  cache/     @thomasfosterau/effect-sync-cache     Write-through cache for SW/edge
-  server/    @thomasfosterau/effect-sync-server    Server sync hub with fan-out
-  jsonapi/   @thomasfosterau/effect-sync-jsonapi   JSON:API adapter
+  core/      @thomasfosterau/effect-sync-core      The sync engine (primitives, client, SW/edge cache, server hub)
+  jsonapi/   @thomasfosterau/effect-sync-jsonapi   JSON:API protocol adapter
 docs/
   adr/       Architecture decision records
   audit/     Production-readiness audits
@@ -50,6 +47,7 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 
 ## Cross-package development
 
+- Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `core`; protocol/framework-specific code gets its own package.
 - Packages import each other by published name (`@thomasfosterau/effect-sync-core`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
 - `effect` is a **peer dependency** of every package, pinned to the exact beta version. Never add it as a regular dependency.

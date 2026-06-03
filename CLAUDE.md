@@ -2,7 +2,7 @@
 
 ## Repository layout
 
-This is a bun-workspaces monorepo of Effect-based sync-engine packages under `packages/` (core, client, cache, server, jsonapi). Read `CONTEXT.md` for the domain glossary and `docs/adr/` for architecture decisions before making changes. Quality gates: `bun run build`, `bun run typecheck`, `bun run test:run`, `bun run lint`, `bun run format:check`.
+This is a bun-workspaces monorepo of Effect-based sync-engine packages under `packages/` (core, jsonapi). Package boundaries are dependency-based: everything that needs only `effect` lives in core; protocol/framework adapters get their own packages (ADR-0006). Read `CONTEXT.md` for the domain glossary and `docs/adr/` for architecture decisions before making changes. Quality gates: `bun run build`, `bun run typecheck`, `bun run test:run`, `bun run lint`, `bun run format:check`.
 
 <!-- effect-solutions:start -->
 
