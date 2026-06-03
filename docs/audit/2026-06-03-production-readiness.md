@@ -54,14 +54,18 @@ Audit of the repository as found (single-package `@thomasfosterau/effect-chancer
 
 ## Remaining work before production (tracked as GitHub issues)
 
-### Must-have (blocking 1.0)
+### Completed in this branch (second pass)
 
-1. **Schema validation at boundaries** — wire `effect/Schema` codecs into the JSON:API adapter and the sync protocol so malformed payloads fail with typed `ParseError`s instead of corrupting caches
-2. **WebSocket/SSE transports** — only the in-memory transport pair exists; production client↔server sync needs a real `ClientTransport`/`ServerConnection` implementation over `effect/unstable/socket` and/or HTTP+SSE
-3. **Client reconnection hardening** — resubscribe + pull-since-version on reconnect, exponential backoff via Schedule, outbox push result handling (Applied/Conflict/Rejected) with conflict strategy application
-4. **Persistent store adapters in production paths** — IndexedDB CacheStore for browsers (KeyValueStoreAdapter covers localStorage-style stores; IndexedDB needs its own), and a SQL/Redis ServerStore example
-5. **Coverage thresholds + cross-package integration test suite** (client ↔ server over in-memory transport end-to-end)
-6. **Effect v4 beta upgrade policy** — beta bump cadence and a compatibility test matrix (ADR-0003)
+1. ~~**Schema validation at boundaries**~~ — DONE (#11): `ProtocolSchema` codecs for every wire message, `JsonApiSchema` for documents, validated KeyValueStore reads
+2. ~~**WebSocket transports**~~ — DONE (#12): browser `WebSocketTransport` (ClientTransport) + node `WebSocketServer` (ServerConnection acceptor); SSE fallback remains open
+3. ~~**Client reconnection hardening**~~ — DONE (#13): resubscribe + pull-on-reconnect, PushAck correlation with conflict strategies, push backoff
+4. **Persistent store adapters** — PARTIAL (#14): IndexedDB CacheStore done (browser package); SQL/Redis ServerStore remains open
+5. ~~**Coverage thresholds + integration tests**~~ — DONE (#15): cross-package WebSocket end-to-end suite in `tests/integration/`, vitest coverage thresholds (85/70/80/85)
+6. ~~**Effect v4 beta upgrade policy**~~ — DONE (#16): weekly `effect@beta` canary workflow + documented bump procedure
+
+### Still open
+
+- SSE fallback transport (#12 follow-up), SQL/Redis ServerStore (#14)
 
 ### Should-have
 
