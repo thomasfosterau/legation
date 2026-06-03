@@ -32,7 +32,8 @@ describe("Subscriptions", () => {
 
       const cached = yield* cache.peek<{ name: string }>(["users", "1"]);
       expect(Option.getOrUndefined(cached)?.value).toEqual({ name: "Ada" });
-    }).pipe(Effect.provide(cacheLayer())));
+    }).pipe(Effect.provide(cacheLayer()))
+  );
 
   it.live("removes entries on server Removed messages", () =>
     Effect.gen(function* () {
@@ -51,7 +52,8 @@ describe("Subscriptions", () => {
 
       const cached = yield* cache.peek(["users", "1"]);
       expect(Option.isNone(cached)).toBe(true);
-    }).pipe(Effect.provide(cacheLayer())));
+    }).pipe(Effect.provide(cacheLayer()))
+  );
 
   it.live("invalidates on server Invalidated messages", () =>
     Effect.gen(function* () {
@@ -80,5 +82,6 @@ describe("Subscriptions", () => {
         onSome: (e) => e.staleAt !== null && e.staleAt <= now + 1,
       });
       expect(isStale).toBe(true);
-    }).pipe(Effect.provide(cacheLayer())));
+    }).pipe(Effect.provide(cacheLayer()))
+  );
 });

@@ -23,14 +23,16 @@ describe("KeyValueStoreAdapter", () => {
       yield* store.set(entry(["users", "1"], { name: "Ada" }));
       const got = yield* store.get(["users", "1"]);
       expect(Option.getOrUndefined(got)?.value).toEqual({ name: "Ada" });
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 
   it.effect("returns None for a missing key", () =>
     Effect.gen(function* () {
       const store = yield* CacheStore;
       const result = yield* store.get(["nope"]);
       expect(Option.isNone(result)).toBe(true);
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 
   it.effect("removes entries and reports prior existence", () =>
     Effect.gen(function* () {
@@ -43,7 +45,8 @@ describe("KeyValueStoreAdapter", () => {
       expect(removedExisting).toBe(true);
       expect(removedMissing).toBe(false);
       expect(Option.isSome(after)).toBe(false);
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 
   it.effect("enumerates entries with a prefix filter", () =>
     Effect.gen(function* () {
@@ -67,7 +70,8 @@ describe("KeyValueStoreAdapter", () => {
         ["users", "1"],
         ["users", "2"],
       ]);
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 
   it.effect("clears every entry and the index", () =>
     Effect.gen(function* () {
@@ -80,7 +84,8 @@ describe("KeyValueStoreAdapter", () => {
 
       expect(size).toBe(0);
       expect(entries.length).toBe(0);
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 
   it.effect("persists across CacheStore instances sharing one KV layer", () =>
     Effect.gen(function* () {
@@ -93,7 +98,8 @@ describe("KeyValueStoreAdapter", () => {
       const got = yield* second.get(["persisted"]);
 
       expect(Option.getOrUndefined(got)?.value).toEqual({ v: 42 });
-    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 
   it.effect("treats invalid JSON in the store as a cache miss", () =>
     Effect.gen(function* () {
@@ -104,7 +110,8 @@ describe("KeyValueStoreAdapter", () => {
       const got = yield* store.get(["broken"]);
 
       expect(Option.isNone(got)).toBe(true);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 
   it.effect("treats a structurally-corrupted entry as a cache miss", () =>
     Effect.gen(function* () {
@@ -121,7 +128,8 @@ describe("KeyValueStoreAdapter", () => {
 
       expect(Option.isNone(got)).toBe(true);
       expect(all.length).toBe(0);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 
   it.effect("skips corrupted entries but keeps valid ones in entries()", () =>
     Effect.gen(function* () {
@@ -139,7 +147,8 @@ describe("KeyValueStoreAdapter", () => {
       const all = yield* store.entries();
 
       expect(all.map((e) => e.value)).toEqual(["ok"]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 
   it.effect("works end-to-end behind WriteThroughCache", () =>
     Effect.gen(function* () {
@@ -153,5 +162,6 @@ describe("KeyValueStoreAdapter", () => {
       // Re-setting the same key must not duplicate the index entry.
       expect(Option.getOrUndefined(got)?.value).toBe("second");
       expect(size).toBe(1);
-    }).pipe(Effect.provide(adapterLayer)));
+    }).pipe(Effect.provide(adapterLayer))
+  );
 });

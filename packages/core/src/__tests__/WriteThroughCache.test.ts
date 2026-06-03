@@ -1,255 +1,225 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { Duration, Effect, Layer, Option, Ref } from "effect";
 import * as MemoryCacheStore from "../MemoryCacheStore.js";
 import * as SyncKey from "../SyncKey.js";
-import { Duration, Effect, Layer, Option, Ref } from "effect";
 import * as WriteThroughCache from "../WriteThroughCache.js";
 
-const testLayer = WriteThroughCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
-
-const withCache = <A, E>(
-  program: (
-    cache: WriteThroughCache.WriteThroughCache
-  ) => Effect.Effect<A, E, WriteThroughCache.WriteThroughCache>
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.flatMap(Effect.service(WriteThroughCache.WriteThroughCache), program).pipe(
-      Effect.provide(testLayer)
-    ) as Effect.Effect<A, E>
-  );
+const testLayer = () => WriteThroughCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
 
 describe("WriteThroughCache", () => {
   describe("get (read-through)", () => {
-    it("loads on miss and serves a fresh value from cache", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.minutes(5),
-          };
+    it.effect("loads on miss and serves a fresh value from cache", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.minutes(5),
+        };
 
-          const first = yield* cache.get(options);
-          const second = yield* cache.get(options);
-          const runs = yield* Ref.get(counter);
-          return { first, second, runs };
-        })
-      );
+        const first = yield* cache.get(options);
+        const second = yield* cache.get(options);
+        const runs = yield* Ref.get(counter);
 
-      expect(result.first).toBe(1);
-      expect(result.second).toBe(1);
-      expect(result.runs).toBe(1);
-    });
+        expect(first).toBe(1);
+        expect(second).toBe(1);
+        expect(runs).toBe(1);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("serves stale value immediately and revalidates in the background", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          // swr omitted: entry is stale immediately, so swr kicks in.
-          const options = { key: ["users", "1"], loader };
+    it.live("serves stale value immediately and revalidates in the background", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        // swr omitted: entry is stale immediately, so swr kicks in.
+        const options = { key: ["users", "1"], loader };
 
-          const first = yield* cache.get(options);
-          // stale: returns cached "1" now, refreshes to "2" in background.
-          const second = yield* cache.get(options);
-          yield* Effect.sleep(Duration.millis(20));
-          const third = yield* cache.get(options);
-          return { first, second, third };
-        })
-      );
+        const first = yield* cache.get(options);
+        // stale: returns cached "1" now, refreshes to "2" in background.
+        const second = yield* cache.get(options);
+        yield* Effect.sleep(Duration.millis(20));
+        const third = yield* cache.get(options);
 
-      expect(result.first).toBe(1);
-      expect(result.second).toBe(1);
-      expect(result.third).toBe(2);
-    });
+        expect(first).toBe(1);
+        expect(second).toBe(1);
+        expect(third).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("forceRefresh bypasses the cached value", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.minutes(5),
-          };
+    it.effect("forceRefresh bypasses the cached value", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.minutes(5),
+        };
 
-          yield* cache.get(options);
-          return yield* cache.get({ ...options, forceRefresh: true });
-        })
-      );
+        yield* cache.get(options);
+        const result = yield* cache.get({ ...options, forceRefresh: true });
 
-      expect(result).toBe(2);
-    });
+        expect(result).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("honors ttl by expiring entries (blocking reload after expiry)", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.millis(5),
-            ttl: Duration.millis(10),
-          };
+    it.live("honors ttl by expiring entries (blocking reload after expiry)", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.millis(5),
+          ttl: Duration.millis(10),
+        };
 
-          const first = yield* cache.get(options);
-          yield* Effect.sleep(Duration.millis(25));
-          const second = yield* cache.get(options);
-          return { first, second };
-        })
-      );
+        const first = yield* cache.get(options);
+        yield* Effect.sleep(Duration.millis(25));
+        const second = yield* cache.get(options);
 
-      expect(result.first).toBe(1);
-      expect(result.second).toBe(2);
-    });
+        expect(first).toBe(1);
+        expect(second).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("put (write-through)", () => {
-    it("runs the writer and persists its result", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const written = yield* cache.put({
+    it.effect("runs the writer and persists its result", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const written = yield* cache.put({
+          key: ["users", "1"],
+          writer: Effect.succeed({ name: "Ada" }),
+          swr: Duration.minutes(5),
+        });
+        const cached = yield* cache.get({
+          key: ["users", "1"],
+          loader: Effect.succeed({ name: "stale" }),
+          swr: Duration.minutes(5),
+        });
+
+        expect(written).toEqual({ name: "Ada" });
+        expect(cached).toEqual({ name: "Ada" });
+      }).pipe(Effect.provide(testLayer()))
+    );
+
+    it.effect("applies optimistic values and rolls back on writer failure", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        yield* cache.put({
+          key: ["users", "1"],
+          writer: Effect.succeed({ name: "Ada" }),
+          swr: Duration.minutes(5),
+        });
+
+        const failed = yield* Effect.result(
+          cache.put({
             key: ["users", "1"],
-            writer: Effect.succeed({ name: "Ada" }),
-            swr: Duration.minutes(5),
-          });
-          const cached = yield* cache.get({
-            key: ["users", "1"],
-            loader: Effect.succeed({ name: "stale" }),
-            swr: Duration.minutes(5),
-          });
-          return { written, cached };
-        })
-      );
+            writer: Effect.fail("rejected" as const),
+            optimistic: { name: "Grace" },
+          })
+        );
 
-      expect(result.written).toEqual({ name: "Ada" });
-      expect(result.cached).toEqual({ name: "Ada" });
-    });
+        const cached = yield* cache.get({
+          key: ["users", "1"],
+          loader: Effect.succeed({ name: "stale" }),
+          swr: Duration.minutes(5),
+        });
 
-    it("applies optimistic values and rolls back on writer failure", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          yield* cache.put({
-            key: ["users", "1"],
-            writer: Effect.succeed({ name: "Ada" }),
-            swr: Duration.minutes(5),
-          });
-
-          const failed = yield* Effect.result(
-            cache.put({
-              key: ["users", "1"],
-              writer: Effect.fail("rejected" as const),
-              optimistic: { name: "Grace" },
-            })
-          );
-
-          const cached = yield* cache.get({
-            key: ["users", "1"],
-            loader: Effect.succeed({ name: "stale" }),
-            swr: Duration.minutes(5),
-          });
-          return { failed: failed._tag === "Failure", cached };
-        })
-      );
-
-      expect(result.failed).toBe(true);
-      expect(result.cached).toEqual({ name: "Ada" });
-    });
+        expect(failed._tag === "Failure").toBe(true);
+        expect(cached).toEqual({ name: "Ada" });
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("invalidation", () => {
-    it("invalidates by prefix", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.minutes(5),
-          };
+    it.live("invalidates by prefix", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.minutes(5),
+        };
 
-          yield* cache.get(options);
-          yield* cache.invalidate(SyncKey.prefixFilter(["users"]));
-          // stale now (invalidated): swr serves cached, refreshes behind.
-          yield* cache.get(options);
-          yield* Effect.sleep(Duration.millis(20));
-          yield* cache.get(options);
-          return yield* Ref.get(counter);
-        })
-      );
+        yield* cache.get(options);
+        yield* cache.invalidate(SyncKey.prefixFilter(["users"]));
+        // stale now (invalidated): swr serves cached, refreshes behind.
+        yield* cache.get(options);
+        yield* Effect.sleep(Duration.millis(20));
+        yield* cache.get(options);
 
-      expect(result).toBe(2);
-    });
+        expect(yield* Ref.get(counter)).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("invalidates by tag", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.minutes(5),
-            tags: ["users"],
-          };
+    it.live("invalidates by tag", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.minutes(5),
+          tags: ["users"],
+        };
 
-          yield* cache.get(options);
-          yield* cache.invalidateTags(["users"]);
-          yield* cache.get(options);
-          yield* Effect.sleep(Duration.millis(20));
-          yield* cache.get(options);
-          return yield* Ref.get(counter);
-        })
-      );
+        yield* cache.get(options);
+        yield* cache.invalidateTags(["users"]);
+        yield* cache.get(options);
+        yield* Effect.sleep(Duration.millis(20));
+        yield* cache.get(options);
 
-      expect(result).toBe(2);
-    });
+        expect(yield* Ref.get(counter)).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("purge removes a single entry", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const options = {
-            key: ["users", "1"],
-            loader,
-            swr: Duration.minutes(5),
-          };
+    it.effect("purge removes a single entry", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const options = {
+          key: ["users", "1"],
+          loader,
+          swr: Duration.minutes(5),
+        };
 
-          yield* cache.get(options);
-          const removed = yield* cache.purge(["users", "1"]);
-          const reloaded = yield* cache.get(options);
-          return { removed, reloaded };
-        })
-      );
+        yield* cache.get(options);
+        const removed = yield* cache.purge(["users", "1"]);
+        const reloaded = yield* cache.get(options);
 
-      expect(result.removed).toBe(true);
-      expect(result.reloaded).toBe(2);
-    });
+        expect(removed).toBe(true);
+        expect(reloaded).toBe(2);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("clear empties the cache", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const counter = yield* Ref.make(0);
-          const loader = Ref.updateAndGet(counter, (n) => n + 1);
-          const a = { key: ["a"], loader, swr: Duration.minutes(5) };
-          const b = { key: ["b"], loader, swr: Duration.minutes(5) };
+    it.effect("clear empties the cache", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const counter = yield* Ref.make(0);
+        const loader = Ref.updateAndGet(counter, (n) => n + 1);
+        const a = { key: ["a"], loader, swr: Duration.minutes(5) };
+        const b = { key: ["b"], loader, swr: Duration.minutes(5) };
 
-          yield* cache.get(a);
-          yield* cache.get(b);
-          yield* cache.clear;
-          yield* cache.get(a);
-          yield* cache.get(b);
-          return yield* Ref.get(counter);
-        })
-      );
+        yield* cache.get(a);
+        yield* cache.get(b);
+        yield* cache.clear;
+        yield* cache.get(a);
+        yield* cache.get(b);
 
-      expect(result).toBe(4);
-    });
+        expect(yield* Ref.get(counter)).toBe(4);
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("pagination", () => {
@@ -273,42 +243,39 @@ describe("WriteThroughCache", () => {
           return { items, cursor, nextCursor };
         });
 
-    it("reads the first page and reports hasNextPage", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const descriptor = {
-            key: ["feed"],
-            loadPage: loadPage(3),
-            staleTime: Duration.minutes(5),
-          };
-          return yield* cache.getPaginated(descriptor);
-        })
-      );
+    it.effect("reads the first page and reports hasNextPage", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const descriptor = {
+          key: ["feed"],
+          loadPage: loadPage(3),
+          staleTime: Duration.minutes(5),
+        };
+        const result = yield* cache.getPaginated(descriptor);
 
-      expect(result.pages).toHaveLength(1);
-      expect(result.pages[0]?.items).toEqual([{ id: 0 }, { id: 1 }]);
-    });
+        expect(result.pages).toHaveLength(1);
+        expect(result.pages[0]?.items).toEqual([{ id: 0 }, { id: 1 }]);
+      }).pipe(Effect.provide(testLayer()))
+    );
 
-    it("appends pages with getNextPage and flattens items", async () => {
-      const result = await withCache((cache) =>
-        Effect.gen(function* () {
-          const descriptor = {
-            key: ["feed"],
-            loadPage: loadPage(3),
-            staleTime: Duration.minutes(5),
-          };
-          yield* cache.getPaginated(descriptor);
-          yield* cache.getNextPage(descriptor);
-          const final = yield* cache.getNextPage(descriptor);
-          return final;
-        })
-      );
+    it.effect("appends pages with getNextPage and flattens items", () =>
+      Effect.gen(function* () {
+        const cache = yield* WriteThroughCache.WriteThroughCache;
+        const descriptor = {
+          key: ["feed"],
+          loadPage: loadPage(3),
+          staleTime: Duration.minutes(5),
+        };
+        yield* cache.getPaginated(descriptor);
+        yield* cache.getNextPage(descriptor);
+        const result = yield* cache.getNextPage(descriptor);
 
-      expect(result.pages).toHaveLength(3);
-      const all = result.pages.flatMap((p) => p.items);
-      expect(all).toEqual([{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
-      // last page has no next cursor
-      expect(Option.isNone(result.pages[2]!.nextCursor)).toBe(true);
-    });
+        expect(result.pages).toHaveLength(3);
+        const all = result.pages.flatMap((p) => p.items);
+        expect(all).toEqual([{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
+        // last page has no next cursor
+        expect(Option.isNone(result.pages[2]!.nextCursor)).toBe(true);
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 });

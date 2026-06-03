@@ -28,7 +28,8 @@ describe("SyncCache", () => {
         expect(first).toBe(1);
         expect(second).toBe(1);
         expect(loaderRuns).toBe(1);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("reloads when the entry is stale", () =>
       Effect.gen(function* () {
@@ -48,7 +49,8 @@ describe("SyncCache", () => {
 
         expect(first).toBe(1);
         expect(second).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("bypasses the cache with forceRefresh", () =>
       Effect.gen(function* () {
@@ -65,7 +67,8 @@ describe("SyncCache", () => {
         const refreshed = yield* cache.read({ ...options, forceRefresh: true });
 
         expect(refreshed).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.live("deduplicates concurrent loads of the same key", () =>
       Effect.gen(function* () {
@@ -89,7 +92,8 @@ describe("SyncCache", () => {
 
         expect(loaderRuns).toBe(1);
         expect(values).toEqual([1, 1, 1]);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("propagates loader failures", () =>
       Effect.gen(function* () {
@@ -102,7 +106,8 @@ describe("SyncCache", () => {
         );
 
         expect(result._tag).toBe("Failure");
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("write-through", () => {
@@ -118,7 +123,8 @@ describe("SyncCache", () => {
 
         expect(written).toEqual({ name: "Ada" });
         expect(Option.getOrUndefined(cached)?.value).toEqual({ name: "Ada" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("applies optimistic values and rolls back on failure", () =>
       Effect.gen(function* () {
@@ -138,7 +144,8 @@ describe("SyncCache", () => {
 
         expect(written._tag === "Failure").toBe(true);
         expect(Option.getOrUndefined(cached)?.value).toEqual({ name: "Ada" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("removes the optimistic entry on failure when nothing was cached before", () =>
       Effect.gen(function* () {
@@ -153,7 +160,8 @@ describe("SyncCache", () => {
         const result = yield* cache.peek(["users", "new"]);
 
         expect(Option.isNone(result)).toBe(true);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("invalidation", () => {
@@ -173,7 +181,8 @@ describe("SyncCache", () => {
         yield* cache.read(options);
 
         expect(yield* Ref.get(counter)).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("invalidates by tag", () =>
       Effect.gen(function* () {
@@ -192,7 +201,8 @@ describe("SyncCache", () => {
         yield* cache.read(options);
 
         expect(yield* Ref.get(counter)).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("events", () => {
@@ -211,6 +221,7 @@ describe("SyncCache", () => {
         expect(events).toHaveLength(2);
         expect(events[0]?._tag).toBe("Updated");
         expect(events[1]?._tag).toBe("Removed");
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 });

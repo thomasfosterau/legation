@@ -11,7 +11,8 @@ describe("ServerStore", () => {
       const v2 = yield* store.set(["users", "1"], { name: "b" });
       const v3 = yield* store.set(["users", "1"], { name: "c" });
       expect([v1.version, v2.version, v3.version]).toEqual([1, 2, 3]);
-    }).pipe(Effect.provide(ServerStore.memoryLayer)));
+    }).pipe(Effect.provide(ServerStore.memoryLayer))
+  );
 
   it.effect("get returns the latest stored entry, none for missing keys", () =>
     Effect.gen(function* () {
@@ -24,7 +25,8 @@ describe("ServerStore", () => {
       expect(Option.getOrUndefined(present)?.value).toBe(2);
       expect(Option.getOrUndefined(present)?.version).toBe(2);
       expect(Option.isNone(absent)).toBe(true);
-    }).pipe(Effect.provide(ServerStore.memoryLayer)));
+    }).pipe(Effect.provide(ServerStore.memoryLayer))
+  );
 
   it.effect("remove returns the removed entry and clears the key", () =>
     Effect.gen(function* () {
@@ -37,7 +39,8 @@ describe("ServerStore", () => {
       expect(Option.getOrUndefined(removed)?.value).toBe("value");
       expect(Option.isNone(after)).toBe(true);
       expect(Option.isNone(removeMissing)).toBe(true);
-    }).pipe(Effect.provide(ServerStore.memoryLayer)));
+    }).pipe(Effect.provide(ServerStore.memoryLayer))
+  );
 
   it.effect("list filters entries by prefix", () =>
     Effect.gen(function* () {
@@ -50,5 +53,6 @@ describe("ServerStore", () => {
 
       expect(all.length).toBe(3);
       expect(users.map((e) => e.key)).toHaveLength(2);
-    }).pipe(Effect.provide(ServerStore.memoryLayer)));
+    }).pipe(Effect.provide(ServerStore.memoryLayer))
+  );
 });

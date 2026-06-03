@@ -35,7 +35,8 @@ describe("Pagination", () => {
 
       expect(Pagination.items(result)).toEqual([0, 1, 2]);
       expect(Pagination.hasNextPage(result)).toBe(true);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("appends subsequent pages", () =>
     Effect.gen(function* () {
@@ -47,7 +48,8 @@ describe("Pagination", () => {
 
       expect(Pagination.items(result)).toEqual([0, 1, 2, 3, 4, 5, 6]);
       expect(Pagination.hasNextPage(result)).toBe(false);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("returns the cached result unchanged when no pages remain", () =>
     Effect.gen(function* () {
@@ -58,7 +60,8 @@ describe("Pagination", () => {
 
       expect(Pagination.items(result)).toEqual([0, 1]);
       expect(result.pages).toHaveLength(1);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("loads the first page when fetchNextPage is called with an empty cache", () =>
     Effect.gen(function* () {
@@ -66,7 +69,8 @@ describe("Pagination", () => {
       const result = yield* Pagination.fetchNextPage(cache, makeDescriptor(5, 2));
 
       expect(Pagination.items(result)).toEqual([0, 1]);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("drops oldest pages beyond maxPages", () =>
     Effect.gen(function* () {
@@ -78,7 +82,8 @@ describe("Pagination", () => {
 
       expect(result.pages).toHaveLength(2);
       expect(Pagination.items(result)).toEqual([3, 4, 5, 6, 7, 8]);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("refetches all previously loaded pages", () =>
     Effect.gen(function* () {
@@ -91,5 +96,6 @@ describe("Pagination", () => {
 
       expect(result.pages).toHaveLength(2);
       expect(Pagination.items(result)).toEqual([0, 1, 2, 3, 4, 5]);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 });

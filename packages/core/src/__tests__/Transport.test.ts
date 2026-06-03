@@ -26,7 +26,8 @@ describe("Transport.makeInMemoryPair", () => {
       expect(received).toHaveLength(2);
       expect(received[0]?._tag).toBe("Ping");
       expect(received[1]?._tag).toBe("Subscribe");
-    }));
+    })
+  );
 
   it.live("delivers server messages to the client side", () =>
     Effect.gen(function* () {
@@ -47,7 +48,8 @@ describe("Transport.makeInMemoryPair", () => {
 
       expect(received).toHaveLength(1);
       expect(received[0]?._tag).toBe("Updated");
-    }));
+    })
+  );
 
   it.live("reports and updates connection status", () =>
     Effect.gen(function* () {
@@ -59,7 +61,8 @@ describe("Transport.makeInMemoryPair", () => {
 
       expect(initial).toBe("connected");
       expect(afterDisconnect).toBe("disconnected");
-    }));
+    })
+  );
 });
 
 describe("Protocol", () => {

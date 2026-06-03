@@ -4,8 +4,7 @@ import * as HttpCache from "../HttpCache.js";
 import * as MemoryCacheStore from "../MemoryCacheStore.js";
 import * as WriteThroughCache from "../WriteThroughCache.js";
 
-const testLayer = () =>
-  WriteThroughCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
+const testLayer = () => WriteThroughCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
 
 describe("HttpCache", () => {
   describe("requestKey", () => {
@@ -49,7 +48,8 @@ describe("HttpCache", () => {
         expect(reconstructed.status).toBe(201);
         expect(reconstructed.headers.get("content-type")).toBe("text/plain");
         expect(yield* Effect.promise(() => reconstructed.text())).toBe("hello world");
-      }));
+      })
+    );
   });
 
   describe("handleFetch", () => {
@@ -84,7 +84,8 @@ describe("HttpCache", () => {
         expect(firstBody).toBe("payload");
         expect(secondBody).toBe("payload");
         expect(upstreamHits).toBe(1);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("preserves status and headers through the cache", () =>
       Effect.gen(function* () {
@@ -107,7 +108,8 @@ describe("HttpCache", () => {
         expect(response.status).toBe(200);
         expect(response.headers.get("x-custom")).toBe("v");
         expect(body).toBe("body");
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("does not persist non-2xx responses", () =>
       Effect.gen(function* () {
@@ -136,7 +138,8 @@ describe("HttpCache", () => {
         expect(second.status).toBe(404);
         // not cached: both calls reached upstream
         expect(upstreamHits).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.live("passes POST through and invalidates the URL's cached GET", () =>
       Effect.gen(function* () {
@@ -187,7 +190,8 @@ describe("HttpCache", () => {
         // invalidation forced a re-fetch of the GET
         expect(refreshedBody).toBe("get-2");
         expect(getCount).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("handleFetchPromise", () => {
@@ -209,6 +213,7 @@ describe("HttpCache", () => {
         const body = yield* Effect.promise(() => response.text());
 
         expect(body).toBe("via-promise");
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 });

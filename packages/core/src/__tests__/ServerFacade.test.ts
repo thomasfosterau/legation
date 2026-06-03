@@ -80,7 +80,8 @@ describe("ServerFacade.makeSyncServer", () => {
       });
 
       yield* Effect.promise(() => server.dispose());
-    }));
+    })
+  );
 
   it.live("fans out invalidations and removals", () =>
     Effect.gen(function* () {
@@ -119,5 +120,6 @@ describe("ServerFacade.makeSyncServer", () => {
       expect(tags).toContain("Invalidated");
 
       yield* Effect.promise(() => server.dispose());
-    }));
+    })
+  );
 });

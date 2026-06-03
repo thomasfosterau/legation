@@ -34,7 +34,8 @@ describe("Query", () => {
 
         expect(value).toBe(3);
         expect(total).toBe(3);
-      }));
+      })
+    );
 
     it.live("fails after exhausting retries", () =>
       Effect.gen(function* () {
@@ -43,7 +44,8 @@ describe("Query", () => {
         );
 
         expect(result._tag).toBe("Failure");
-      }));
+      })
+    );
   });
 
   describe("toReadOptions", () => {

@@ -21,7 +21,8 @@ describe("MutationState.observeMutation", () => {
       expect(states[0]?.status).toBe("pending");
       expect(states[1]?.status).toBe("success");
       expect(Option.getOrUndefined(states[1]?.data ?? Option.none())).toBe(42);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("emits pending then failure", () =>
     Effect.gen(function* () {
@@ -36,5 +37,6 @@ describe("MutationState.observeMutation", () => {
       expect(states[0]?.status).toBe("pending");
       expect(states[1]?.status).toBe("failure");
       expect(Option.getOrUndefined(states[1]?.error ?? Option.none())).toBe("boom");
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 });

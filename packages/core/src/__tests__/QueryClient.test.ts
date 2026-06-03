@@ -24,7 +24,8 @@ describe("QueryClient", () => {
       expect(first).toBe(1);
       expect(second).toBe(1);
       expect(runs).toBe(1);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("refetch forces a fresh load", () =>
     Effect.gen(function* () {
@@ -39,7 +40,8 @@ describe("QueryClient", () => {
       const result = yield* client.refetch(descriptor);
 
       expect(result).toBe(2);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("getQueryData / setQueryData round-trip", () =>
     Effect.gen(function* () {
@@ -48,7 +50,8 @@ describe("QueryClient", () => {
       const result = yield* client.getQueryData<{ name: string }>(["users", "1"]);
 
       expect(Option.getOrUndefined(result)).toEqual({ name: "Ada" });
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("prefetch warms the cache and swallows errors", () =>
     Effect.gen(function* () {
@@ -57,7 +60,8 @@ describe("QueryClient", () => {
       const result = yield* client.getQueryData(["x"]);
 
       expect(Option.isNone(result)).toBe(true);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   describe("observe", () => {
     it.effect("emits loading then success", () =>
@@ -74,7 +78,8 @@ describe("QueryClient", () => {
         expect(states[0]?.status).toBe("loading");
         expect(states[1]?.status).toBe("success");
         expect(Option.getOrUndefined(states[1]?.data ?? Option.none())).toEqual({ name: "Ada" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("emits a failure state when the loader fails", () =>
       Effect.gen(function* () {
@@ -87,7 +92,8 @@ describe("QueryClient", () => {
 
         expect(states[1]?.status).toBe("failure");
         expect(Option.getOrUndefined(states[1]?.error ?? Option.none())).toBe("nope");
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.live("re-emits success when the cache entry is updated", () =>
       Effect.gen(function* () {
@@ -108,7 +114,8 @@ describe("QueryClient", () => {
         expect(states).toHaveLength(3);
         expect(states[2]?.status).toBe("success");
         expect(Option.getOrUndefined(states[2]?.data ?? Option.none())).toEqual({ name: "Grace" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.live("refetches on invalidate", () =>
       Effect.gen(function* () {
@@ -134,7 +141,8 @@ describe("QueryClient", () => {
         // After invalidate the loader runs again, producing { n: 2 }.
         expect(runs).toBe(2);
         expect(Option.getOrUndefined(states[2]?.data ?? Option.none())).toEqual({ n: 2 });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("pagination", () => {
@@ -158,7 +166,8 @@ describe("QueryClient", () => {
 
         expect(first.pages.length).toBe(1);
         expect(second.pages.length).toBe(2);
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 
   describe("mutate", () => {
@@ -170,7 +179,9 @@ describe("QueryClient", () => {
           {
             key: ["mutations", "rename"],
             execute: () => Effect.succeed({ name: "Grace" }),
-            optimistic: () => [{ key: ["users", "1"], update: () => ({ name: "Grace (pending)" }) }],
+            optimistic: () => [
+              { key: ["users", "1"], update: () => ({ name: "Grace (pending)" }) },
+            ],
             updates: (_input, res) => [{ key: ["users", "1"], value: res }],
           },
           undefined
@@ -179,7 +190,8 @@ describe("QueryClient", () => {
 
         expect(value).toEqual({ name: "Grace" });
         expect(Option.getOrUndefined(cached)).toEqual({ name: "Grace" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
 
     it.effect("rolls back optimistic update on failure", () =>
       Effect.gen(function* () {
@@ -199,6 +211,7 @@ describe("QueryClient", () => {
 
         expect(outcome._tag === "Failure").toBe(true);
         expect(Option.getOrUndefined(cached)).toEqual({ name: "Ada" });
-      }).pipe(Effect.provide(testLayer())));
+      }).pipe(Effect.provide(testLayer()))
+    );
   });
 });

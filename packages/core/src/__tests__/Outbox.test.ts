@@ -18,7 +18,8 @@ describe("Outbox", () => {
         "first",
         "second",
       ]);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("drains entries, removing delivered ones", () =>
     Effect.gen(function* () {
@@ -32,7 +33,8 @@ describe("Outbox", () => {
       expect(drain.completed).toBe(2);
       expect(drain.failed).toBe(0);
       expect(remaining).toBe(0);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("keeps failed entries for the next drain", () =>
     Effect.gen(function* () {
@@ -46,7 +48,8 @@ describe("Outbox", () => {
       expect(drain.remaining).toBe(1);
       expect(entries[0]?.status).toBe("failed");
       expect(entries[0]?.attempts).toBe(1);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("drops entries that exceed maxAttempts", () =>
     Effect.gen(function* () {
@@ -59,7 +62,8 @@ describe("Outbox", () => {
       const remaining = yield* outbox.size;
 
       expect(remaining).toBe(0);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("discards entries without delivering them", () =>
     Effect.gen(function* () {
@@ -69,5 +73,6 @@ describe("Outbox", () => {
       const remaining = yield* outbox.size;
 
       expect(remaining).toBe(0);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 });

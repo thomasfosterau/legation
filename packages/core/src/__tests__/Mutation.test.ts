@@ -31,7 +31,8 @@ describe("Mutation", () => {
 
       expect(output.title).toBe("write tests!");
       expect(Option.getOrUndefined(cached)?.value.title).toBe("write tests!");
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("applies optimistic patches and keeps them on success", () =>
     Effect.gen(function* () {
@@ -51,7 +52,8 @@ describe("Mutation", () => {
       const cached = yield* cache.peek(["todos", "1"]);
 
       expect(Option.isSome(cached)).toBe(true);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("rolls back optimistic patches when the mutation fails", () =>
     Effect.gen(function* () {
@@ -73,7 +75,8 @@ describe("Mutation", () => {
 
       expect(outcome._tag === "Failure").toBe(true);
       expect(Option.getOrUndefined(cached)?.value.title).toBe("original");
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("removes optimistic entries on failure when the key was previously empty", () =>
     Effect.gen(function* () {
@@ -90,7 +93,8 @@ describe("Mutation", () => {
       const cached = yield* cache.peek(["todos", "new"]);
 
       expect(Option.isNone(cached)).toBe(true);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 
   it.effect("invalidates dependent keys after success", () =>
     Effect.gen(function* () {
@@ -112,5 +116,6 @@ describe("Mutation", () => {
         Option.isSome(entry) && entry.value.staleAt !== null && entry.value.staleAt <= now;
 
       expect(isStale).toBe(true);
-    }).pipe(Effect.provide(testLayer())));
+    }).pipe(Effect.provide(testLayer()))
+  );
 });
