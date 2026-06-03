@@ -1,0 +1,60 @@
+{
+  "name": "@thomasfosterau/effect-sync-core",
+  "version": "0.1.0",
+  "description": "An Effect-native sync engine: write-through caching, TanStack-Query-style client queries/mutations/subscriptions, offline outbox, HTTP caching for service workers and edge runtimes, and a server-side sync hub with client fan-out",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "sync-engine",
+    "cache",
+    "write-through",
+    "query",
+    "mutation",
+    "subscription",
+    "offline-first",
+    "service-worker",
+    "edge",
+    "fan-out",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.75"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.75"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/core#readme"
+}

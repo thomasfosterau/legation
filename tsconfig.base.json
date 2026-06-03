@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/language-service/refs/heads/main/schema.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleDetection": "force",
+    "lib": ["ES2022"],
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // Effect warnings/messages stay visible as diagnostics but must not
+        // break `tsc --build` exit codes (type errors still do).
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          // JSON.parse/stringify is intentional for wire framing and storage
+          // serialization; schema validation happens via ProtocolSchema.
+          "preferSchemaOverJson": "off",
+          // Effect.runFork inside event-handler callbacks (WebSocket/IDB
+          // bridges) is the intended pattern for those modules.
+          "runEffectInsideEffect": "suggestion"
+        }
+      }
+    ]
+  }
+}

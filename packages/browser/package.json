@@ -1,0 +1,63 @@
+{
+  "name": "@thomasfosterau/effect-sync-browser",
+  "version": "0.1.0",
+  "description": "Browser-runtime adapters for the effect-sync engine: WebSocket client transport and IndexedDB cache persistence",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "sync-engine",
+    "browser",
+    "websocket",
+    "indexeddb",
+    "offline-first",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-sync-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.75",
+    "@effect/platform-browser": "4.0.0-beta.75"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.75",
+    "fake-indexeddb": "^6.0.0",
+    "ws": "^8.18.0",
+    "@types/ws": "^8.5.12",
+    "@effect/platform-browser": "4.0.0-beta.75"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/browser"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/browser#readme"
+}

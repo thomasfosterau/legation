@@ -1,5 +1,9 @@
 # Project Instructions
 
+## Repository layout
+
+This is a bun-workspaces monorepo of Effect-based sync-engine packages under `packages/` (core, browser, node, jsonapi). Package boundaries are dependency-based: everything that needs only `effect` lives in core; protocol/framework adapters get their own packages (ADR-0006). Read `CONTEXT.md` for the domain glossary and `docs/adr/` for architecture decisions before making changes. Quality gates: `bun run build`, `bun run typecheck`, `bun run test:run`, `bun run lint`, `bun run format:check`.
+
 <!-- effect-solutions:start -->
 
 ## Effect Best Practices
@@ -13,6 +17,8 @@
 Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling, error-handling, config, testing, cli.
 
 Never guess at Effect patterns - check the guide first.
+
+**If `effect-solutions` is unavailable** (e.g. in CI or remote containers): this repo targets **Effect v4 beta**, whose APIs differ from v3 and from most online docs. Verify any uncertain API against the installed type definitions in `node_modules/effect/dist/*.d.ts` before using it.
 
 <!-- effect-solutions:end -->
 

@@ -1,0 +1,58 @@
+name: Effect beta compatibility
+
+# Weekly canary: install the latest effect@beta (instead of the pinned
+# version) and run the full quality gates. Failures here do NOT block
+# anything — they signal that the next beta bump needs attention.
+# See ADR-0003 and CONTRIBUTING.md "Effect version upgrades".
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  canary:
+    name: Latest effect@beta canary
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Resolve latest effect beta
+        id: beta
+        run: |
+          LATEST=$(bun pm view effect dist-tags.beta 2>/dev/null || npm view effect dist-tags.beta)
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest effect beta: $LATEST"
+
+      - name: Install latest effect beta in all packages
+        run: |
+          bun add -d "effect@${{ steps.beta.outputs.version }}"
+          for pkg in packages/*/; do
+            (cd "$pkg" && bun add -d "effect@${{ steps.beta.outputs.version }}" --no-save || true)
+          done
+          bun install
+
+      - name: Build
+        run: bun run build
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test:run
+
+      - name: Report
+        if: always()
+        run: |
+          echo "## Effect beta canary: ${{ steps.beta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pinned version in repo: $(node -p "require('./package.json').devDependencies.effect")" >> "$GITHUB_STEP_SUMMARY"
+          echo "Job status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"

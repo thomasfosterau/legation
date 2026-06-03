@@ -1,0 +1,57 @@
+{
+  "name": "@thomasfosterau/effect-sync-jsonapi",
+  "version": "0.1.0",
+  "description": "JSON:API adapter for the effect-sync engine — JSON:API v1.1 types, resource fetching/mutation helpers, and query loaders that plug into the protocol-agnostic core",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "json-api",
+    "jsonapi",
+    "sync-engine",
+    "synchronization",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-sync-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.75"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.75"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/jsonapi"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/jsonapi#readme"
+}
