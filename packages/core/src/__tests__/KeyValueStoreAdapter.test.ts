@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import * as SyncKey from "../SyncKey.js";
-import { type CacheEntry, CacheStore } from "../CacheStore.js";
+import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
+import { type CacheEntry, CacheStore } from "../CacheStore.js";
 import * as KeyValueStoreAdapter from "../KeyValueStoreAdapter.js";
+import * as SyncKey from "../SyncKey.js";
 
 const entry = (key: SyncKey.SyncKey, value: unknown): CacheEntry => ({
   key,
@@ -14,98 +14,76 @@ const entry = (key: SyncKey.SyncKey, value: unknown): CacheEntry => ({
   tags: [],
 });
 
-const withStore = <A, E>(
-  layer: Layer.Layer<CacheStore, never, never>,
-  program: (store: CacheStore) => Effect.Effect<A, E, CacheStore>
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.flatMap(Effect.service(CacheStore), program).pipe(
-      Effect.provide(layer)
-    ) as Effect.Effect<A, E>
-  );
-
 const adapterLayer = KeyValueStoreAdapter.layer.pipe(Layer.provide(KeyValueStore.layerMemory));
 
 describe("KeyValueStoreAdapter", () => {
-  it("round-trips set/get", async () => {
-    const result = await withStore(adapterLayer, (store) =>
-      Effect.gen(function* () {
-        yield* store.set(entry(["users", "1"], { name: "Ada" }));
-        const got = yield* store.get(["users", "1"]);
-        return Option.getOrUndefined(got)?.value;
-      })
-    );
-    expect(result).toEqual({ name: "Ada" });
-  });
+  it.effect("round-trips set/get", () =>
+    Effect.gen(function* () {
+      const store = yield* CacheStore;
+      yield* store.set(entry(["users", "1"], { name: "Ada" }));
+      const got = yield* store.get(["users", "1"]);
+      expect(Option.getOrUndefined(got)?.value).toEqual({ name: "Ada" });
+    }).pipe(Effect.provide(adapterLayer)));
 
-  it("returns None for a missing key", async () => {
-    const result = await withStore(adapterLayer, (store) => store.get(["nope"]));
-    expect(Option.isNone(result)).toBe(true);
-  });
+  it.effect("returns None for a missing key", () =>
+    Effect.gen(function* () {
+      const store = yield* CacheStore;
+      const result = yield* store.get(["nope"]);
+      expect(Option.isNone(result)).toBe(true);
+    }).pipe(Effect.provide(adapterLayer)));
 
-  it("removes entries and reports prior existence", async () => {
-    const result = await withStore(adapterLayer, (store) =>
-      Effect.gen(function* () {
-        yield* store.set(entry(["k"], 1));
-        const removedExisting = yield* store.remove(["k"]);
-        const removedMissing = yield* store.remove(["k"]);
-        const after = yield* store.get(["k"]);
-        return { removedExisting, removedMissing, present: Option.isSome(after) };
-      })
-    );
-    expect(result.removedExisting).toBe(true);
-    expect(result.removedMissing).toBe(false);
-    expect(result.present).toBe(false);
-  });
+  it.effect("removes entries and reports prior existence", () =>
+    Effect.gen(function* () {
+      const store = yield* CacheStore;
+      yield* store.set(entry(["k"], 1));
+      const removedExisting = yield* store.remove(["k"]);
+      const removedMissing = yield* store.remove(["k"]);
+      const after = yield* store.get(["k"]);
 
-  it("enumerates entries with a prefix filter", async () => {
-    const result = await withStore(adapterLayer, (store) =>
-      Effect.gen(function* () {
-        yield* store.set(entry(["users", "1"], "a"));
-        yield* store.set(entry(["users", "2"], "b"));
-        yield* store.set(entry(["posts", "1"], "c"));
+      expect(removedExisting).toBe(true);
+      expect(removedMissing).toBe(false);
+      expect(Option.isSome(after)).toBe(false);
+    }).pipe(Effect.provide(adapterLayer)));
 
-        const all = yield* store.entries();
-        const users = yield* store.entries(SyncKey.prefixFilter(["users"]));
-        const size = yield* store.size;
-        return {
-          allCount: all.length,
-          userKeys: users
-            .map((e) => e.key)
-            .slice()
-            .sort(),
-          size,
-        };
-      })
-    );
-    expect(result.allCount).toBe(3);
-    expect(result.size).toBe(3);
-    expect(result.userKeys).toEqual([
-      ["users", "1"],
-      ["users", "2"],
-    ]);
-  });
+  it.effect("enumerates entries with a prefix filter", () =>
+    Effect.gen(function* () {
+      const store = yield* CacheStore;
+      yield* store.set(entry(["users", "1"], "a"));
+      yield* store.set(entry(["users", "2"], "b"));
+      yield* store.set(entry(["posts", "1"], "c"));
 
-  it("clears every entry and the index", async () => {
-    const result = await withStore(adapterLayer, (store) =>
-      Effect.gen(function* () {
-        yield* store.set(entry(["a"], 1));
-        yield* store.set(entry(["b"], 2));
-        yield* store.clear;
-        const size = yield* store.size;
-        const entries = yield* store.entries();
-        return { size, count: entries.length };
-      })
-    );
-    expect(result.size).toBe(0);
-    expect(result.count).toBe(0);
-  });
+      const all = yield* store.entries();
+      const users = yield* store.entries(SyncKey.prefixFilter(["users"]));
+      const size = yield* store.size;
 
-  it("persists across CacheStore instances sharing one KV layer", async () => {
-    // A single KeyValueStore.layerMemory instance shared by two adapters.
-    const sharedKv = KeyValueStore.layerMemory;
+      expect(all.length).toBe(3);
+      expect(size).toBe(3);
+      expect(
+        users
+          .map((e) => e.key)
+          .slice()
+          .sort()
+      ).toEqual([
+        ["users", "1"],
+        ["users", "2"],
+      ]);
+    }).pipe(Effect.provide(adapterLayer)));
 
-    const program = Effect.gen(function* () {
+  it.effect("clears every entry and the index", () =>
+    Effect.gen(function* () {
+      const store = yield* CacheStore;
+      yield* store.set(entry(["a"], 1));
+      yield* store.set(entry(["b"], 2));
+      yield* store.clear;
+      const size = yield* store.size;
+      const entries = yield* store.entries();
+
+      expect(size).toBe(0);
+      expect(entries.length).toBe(0);
+    }).pipe(Effect.provide(adapterLayer)));
+
+  it.effect("persists across CacheStore instances sharing one KV layer", () =>
+    Effect.gen(function* () {
       // First adapter writes.
       yield* KeyValueStoreAdapter.make.pipe(
         Effect.flatMap((store) => store.set(entry(["persisted"], { v: 42 })))
@@ -113,33 +91,23 @@ describe("KeyValueStoreAdapter", () => {
       // Second, independently-constructed adapter reads the same KV.
       const second = yield* KeyValueStoreAdapter.make;
       const got = yield* second.get(["persisted"]);
-      return Option.getOrUndefined(got)?.value;
-    });
 
-    const result = await Effect.runPromise(
-      program.pipe(Effect.provide(sharedKv)) as Effect.Effect<unknown>
-    );
-    expect(result).toEqual({ v: 42 });
-  });
+      expect(Option.getOrUndefined(got)?.value).toEqual({ v: 42 });
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
 
-  it("treats invalid JSON in the store as a cache miss", async () => {
-    // Write a key directly through the raw KV so the adapter sees garbage.
-    const program = Effect.gen(function* () {
+  it.effect("treats invalid JSON in the store as a cache miss", () =>
+    Effect.gen(function* () {
       const kv = yield* KeyValueStore.KeyValueStore;
       const storeKey = `effect-sync-core:${SyncKey.hash(["broken"])}`;
       yield* kv.set(storeKey, "{not valid json");
       const store = yield* KeyValueStoreAdapter.make;
       const got = yield* store.get(["broken"]);
-      return Option.isNone(got);
-    });
-    const isNone = await Effect.runPromise(
-      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<boolean>
-    );
-    expect(isNone).toBe(true);
-  });
 
-  it("treats a structurally-corrupted entry as a cache miss", async () => {
-    const program = Effect.gen(function* () {
+      expect(Option.isNone(got)).toBe(true);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+
+  it.effect("treats a structurally-corrupted entry as a cache miss", () =>
+    Effect.gen(function* () {
       const kv = yield* KeyValueStore.KeyValueStore;
       const hash = SyncKey.hash(["corrupt"]);
       const storeKey = `effect-sync-core:${hash}`;
@@ -150,20 +118,13 @@ describe("KeyValueStoreAdapter", () => {
       const store = yield* KeyValueStoreAdapter.make;
       const got = yield* store.get(["corrupt"]);
       const all = yield* store.entries();
-      return { isNone: Option.isNone(got), count: all.length };
-    });
-    const result = await Effect.runPromise(
-      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<{
-        isNone: boolean;
-        count: number;
-      }>
-    );
-    expect(result.isNone).toBe(true);
-    expect(result.count).toBe(0);
-  });
 
-  it("skips corrupted entries but keeps valid ones in entries()", async () => {
-    const program = Effect.gen(function* () {
+      expect(Option.isNone(got)).toBe(true);
+      expect(all.length).toBe(0);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+
+  it.effect("skips corrupted entries but keeps valid ones in entries()", () =>
+    Effect.gen(function* () {
       const kv = yield* KeyValueStore.KeyValueStore;
       const store = yield* KeyValueStoreAdapter.make;
       // Write one good entry through the adapter (also seeds the index).
@@ -176,27 +137,21 @@ describe("KeyValueStoreAdapter", () => {
         .pipe(Effect.map((v) => (v === undefined ? [] : (JSON.parse(v) as Array<string>))));
       yield* kv.set("effect-sync-core:__index__", JSON.stringify([...index, badHash]));
       const all = yield* store.entries();
-      return all.map((e) => e.value);
-    });
-    const values = await Effect.runPromise(
-      program.pipe(Effect.provide(KeyValueStore.layerMemory)) as Effect.Effect<Array<unknown>>
-    );
-    expect(values).toEqual(["ok"]);
-  });
 
-  it("works end-to-end behind WriteThroughCache", async () => {
-    // Sanity check that the adapter satisfies the engine contract.
-    const result = await withStore(adapterLayer, (store) =>
-      Effect.gen(function* () {
-        yield* store.set(entry(["x"], "first"));
-        yield* store.set({ ...entry(["x"], "second") });
-        const got = yield* store.get(["x"]);
-        const size = yield* store.size;
-        return { value: Option.getOrUndefined(got)?.value, size };
-      })
-    );
-    // Re-setting the same key must not duplicate the index entry.
-    expect(result.value).toBe("second");
-    expect(result.size).toBe(1);
-  });
+      expect(all.map((e) => e.value)).toEqual(["ok"]);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)));
+
+  it.effect("works end-to-end behind WriteThroughCache", () =>
+    Effect.gen(function* () {
+      // Sanity check that the adapter satisfies the engine contract.
+      const store = yield* CacheStore;
+      yield* store.set(entry(["x"], "first"));
+      yield* store.set({ ...entry(["x"], "second") });
+      const got = yield* store.get(["x"]);
+      const size = yield* store.size;
+
+      // Re-setting the same key must not duplicate the index entry.
+      expect(Option.getOrUndefined(got)?.value).toBe("second");
+      expect(size).toBe(1);
+    }).pipe(Effect.provide(adapterLayer)));
 });

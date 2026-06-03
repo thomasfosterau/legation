@@ -1,54 +1,49 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Option, Ref } from "effect";
 import * as Query from "../Query.js";
 
 describe("Query", () => {
   describe("applyRetry", () => {
-    it("returns the loader unchanged when no policy is given", async () => {
+    it("returns the loader unchanged when no policy is given", () => {
       const loader = Effect.succeed(1);
       expect(Query.applyRetry(loader, undefined)).toBe(loader);
     });
 
-    it("returns the loader unchanged for a zero-times policy", async () => {
+    it("returns the loader unchanged for a zero-times policy", () => {
       const loader = Effect.succeed(1);
       expect(Query.applyRetry(loader, { times: 0 })).toBe(loader);
     });
 
-    it("retries failing loaders up to the policy limit", async () => {
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const attempts = yield* Ref.make(0);
-          const loader = Effect.gen(function* () {
-            const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
-            if (attempt < 3) {
-              return yield* Effect.fail(`attempt ${attempt} failed`);
-            }
-            return attempt;
-          });
+    it.live("retries failing loaders up to the policy limit", () =>
+      Effect.gen(function* () {
+        const attempts = yield* Ref.make(0);
+        const loader = Effect.gen(function* () {
+          const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
+          if (attempt < 3) {
+            return yield* Effect.fail(`attempt ${attempt} failed`);
+          }
+          return attempt;
+        });
 
-          const value = yield* Query.applyRetry(loader, {
-            times: 5,
-            baseDelay: Duration.millis(1),
-            factor: 1,
-          });
-          const total = yield* Ref.get(attempts);
-          return { value, total };
-        })
-      );
+        const value = yield* Query.applyRetry(loader, {
+          times: 5,
+          baseDelay: Duration.millis(1),
+          factor: 1,
+        });
+        const total = yield* Ref.get(attempts);
 
-      expect(result.value).toBe(3);
-      expect(result.total).toBe(3);
-    });
+        expect(value).toBe(3);
+        expect(total).toBe(3);
+      }));
 
-    it("fails after exhausting retries", async () => {
-      const result = await Effect.runPromise(
-        Effect.result(
+    it.live("fails after exhausting retries", () =>
+      Effect.gen(function* () {
+        const result = yield* Effect.result(
           Query.applyRetry(Effect.fail("always"), { times: 2, baseDelay: Duration.millis(1) })
-        )
-      );
+        );
 
-      expect(result._tag).toBe("Failure");
-    });
+        expect(result._tag).toBe("Failure");
+      }));
   });
 
   describe("toReadOptions", () => {

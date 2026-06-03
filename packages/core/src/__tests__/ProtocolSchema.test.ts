@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import * as ProtocolSchema from "../ProtocolSchema.js";
 import * as Protocol from "../Protocol.js";

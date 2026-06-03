@@ -1,80 +1,65 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Stream } from "effect";
 import * as Protocol from "../Protocol.js";
 import * as Transport from "../Transport.js";
 
 describe("Transport.makeInMemoryPair", () => {
-  it("delivers client messages to the server side", async () => {
-    const received = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const pair = yield* Transport.makeInMemoryPair;
+  it.live("delivers client messages to the server side", () =>
+    Effect.gen(function* () {
+      const pair = yield* Transport.makeInMemoryPair;
 
-          const collector = yield* Effect.forkChild(
-            Stream.runCollect(Stream.take(pair.server.messages, 2))
-          );
-          yield* Effect.sleep(Duration.millis(10));
+      const collector = yield* Effect.forkChild(
+        Stream.runCollect(Stream.take(pair.server.messages, 2))
+      );
+      yield* Effect.sleep(Duration.millis(10));
 
-          yield* pair.client.send({ _tag: "Ping", id: "1" });
-          yield* pair.client.send({
-            _tag: "Subscribe",
-            id: "2",
-            filter: Protocol.prefixFilter(["users"]),
-          });
-
-          return yield* Fiber.join(collector);
+      yield* pair.client.send(Protocol.ClientMessage.Ping({ id: "1" }));
+      yield* pair.client.send(
+        Protocol.ClientMessage.Subscribe({
+          id: "2",
+          filter: Protocol.prefixFilter(["users"]),
         })
-      )
-    );
+      );
 
-    expect(received).toHaveLength(2);
-    expect(received[0]?._tag).toBe("Ping");
-    expect(received[1]?._tag).toBe("Subscribe");
-  });
+      const received = yield* Fiber.join(collector);
 
-  it("delivers server messages to the client side", async () => {
-    const received = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const pair = yield* Transport.makeInMemoryPair;
+      expect(received).toHaveLength(2);
+      expect(received[0]?._tag).toBe("Ping");
+      expect(received[1]?._tag).toBe("Subscribe");
+    }));
 
-          const collector = yield* Effect.forkChild(
-            Stream.runCollect(Stream.take(pair.client.messages, 1))
-          );
-          yield* Effect.sleep(Duration.millis(10));
+  it.live("delivers server messages to the client side", () =>
+    Effect.gen(function* () {
+      const pair = yield* Transport.makeInMemoryPair;
 
-          yield* pair.server.send({
-            _tag: "Updated",
-            entry: { key: ["users", "1"], value: { name: "Ada" }, version: 1, updatedAt: 123 },
-          });
+      const collector = yield* Effect.forkChild(
+        Stream.runCollect(Stream.take(pair.client.messages, 1))
+      );
+      yield* Effect.sleep(Duration.millis(10));
 
-          return yield* Fiber.join(collector);
+      yield* pair.server.send(
+        Protocol.ServerMessage.Updated({
+          entry: { key: ["users", "1"], value: { name: "Ada" }, version: 1, updatedAt: 123 },
         })
-      )
-    );
+      );
 
-    expect(received).toHaveLength(1);
-    expect(received[0]?._tag).toBe("Updated");
-  });
+      const received = yield* Fiber.join(collector);
 
-  it("reports and updates connection status", async () => {
-    const statuses = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const pair = yield* Transport.makeInMemoryPair;
+      expect(received).toHaveLength(1);
+      expect(received[0]?._tag).toBe("Updated");
+    }));
 
-          const initial = yield* pair.client.status;
-          yield* pair.setStatus("disconnected");
-          const afterDisconnect = yield* pair.client.status;
+  it.live("reports and updates connection status", () =>
+    Effect.gen(function* () {
+      const pair = yield* Transport.makeInMemoryPair;
 
-          return { initial, afterDisconnect };
-        })
-      )
-    );
+      const initial = yield* pair.client.status;
+      yield* pair.setStatus("disconnected");
+      const afterDisconnect = yield* pair.client.status;
 
-    expect(statuses.initial).toBe("connected");
-    expect(statuses.afterDisconnect).toBe("disconnected");
-  });
+      expect(initial).toBe("connected");
+      expect(afterDisconnect).toBe("disconnected");
+    }));
 });
 
 describe("Protocol", () => {
