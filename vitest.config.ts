@@ -16,12 +16,18 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["packages/*/src/**/*.test.ts", "tests/**/*.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
       include: ["packages/*/src/**/*.ts"],
       exclude: ["packages/*/src/**/__tests__/**", "packages/*/dist/**"],
+      thresholds: {
+        statements: 85,
+        branches: 70,
+        functions: 80,
+        lines: 85,
+      },
     },
   },
 });

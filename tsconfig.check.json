@@ -16,6 +16,6 @@
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["packages/*/src/**/*", "packages/*/examples/**/*"],
+  "include": ["packages/*/src/**/*", "packages/*/examples/**/*", "tests/**/*"],
   "exclude": ["node_modules", "packages/*/dist"]
 }
