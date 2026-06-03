@@ -1,39 +1,32 @@
 {
-	"$schema": "./node_modules/oxlint/configuration_schema.json",
-	"categories": {
-		"correctness": "error",
-		"suspicious": "warn",
-		"perf": "warn",
-		"style": "off",
-		"pedantic": "off",
-		"restriction": "off",
-		"nursery": "off"
-	},
-	"plugins": [
-		"typescript",
-		"vitest",
-		"import",
-		"unicorn",
-		"oxc"
-	],
-	"env": {
-		"node": true,
-		"es2022": true
-	},
-	"ignorePatterns": [
-		"dist/**",
-		"coverage/**",
-		".changeset/**",
-		"fallow-baselines/**"
-	],
-	"overrides": [
-		{
-			"files": [
-				"src/__tests__/**/*.ts"
-			],
-			"env": {
-				"vitest": true
-			}
-		}
-	]
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn",
+    "style": "off",
+    "pedantic": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "plugins": ["typescript", "vitest", "import", "unicorn", "oxc"],
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "**/dist/**",
+    "coverage/**",
+    ".changeset/**",
+    "fallow-baselines/**"
+  ],
+  "overrides": [
+    {
+      "files": ["packages/*/src/__tests__/**/*.ts"],
+      "env": {
+        "vitest": true
+      }
+    }
+  ]
 }

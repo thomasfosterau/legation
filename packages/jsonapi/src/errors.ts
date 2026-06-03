@@ -14,7 +14,7 @@ export class SyncError {
   constructor(
     readonly message: string,
     readonly cause?: unknown
-  ) { }
+  ) {}
 }
 
 /**
@@ -25,7 +25,7 @@ export class NetworkError {
   constructor(
     readonly message: string,
     readonly cause?: unknown
-  ) { }
+  ) {}
 }
 
 /**
@@ -36,7 +36,7 @@ export class ParseError {
   constructor(
     readonly message: string,
     readonly cause?: unknown
-  ) { }
+  ) {}
 }
 
 /**
@@ -47,7 +47,7 @@ export class ApiError {
   constructor(
     readonly message: string,
     readonly errors: JsonApiError[]
-  ) { }
+  ) {}
 }
 
 /**
@@ -59,5 +59,5 @@ export class ConflictError {
     readonly message: string,
     readonly localVersion?: string,
     readonly remoteVersion?: string
-  ) { }
+  ) {}
 }

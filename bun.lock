@@ -4,19 +4,79 @@
   "workspaces": {
     "": {
       "name": "@thomasfosterau/effect-chancery",
-      "dependencies": {
-        "effect": "4.0.0-beta.65",
-      },
       "devDependencies": {
         "@changesets/cli": "^2.31.0",
         "@effect/language-service": "^0.85.1",
         "@types/node": "^20.0.0",
         "@vitest/coverage-v8": "^4.1.5",
+        "effect": "4.0.0-beta.65",
         "fallow": "^2.69.0",
         "oxlint": "^1.63.0",
         "prettier": "^3.0.0",
         "typescript": "^5.9.3",
         "vitest": "^4.1.5",
+      },
+    },
+    "packages/cache": {
+      "name": "@thomasfosterau/effect-sync-cache",
+      "version": "0.1.0",
+      "dependencies": {
+        "@thomasfosterau/effect-sync-core": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+    },
+    "packages/client": {
+      "name": "@thomasfosterau/effect-sync-client",
+      "version": "0.1.0",
+      "dependencies": {
+        "@thomasfosterau/effect-sync-core": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+    },
+    "packages/core": {
+      "name": "@thomasfosterau/effect-sync-core",
+      "version": "0.1.0",
+      "devDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+    },
+    "packages/jsonapi": {
+      "name": "@thomasfosterau/effect-sync-jsonapi",
+      "version": "0.1.0",
+      "dependencies": {
+        "@thomasfosterau/effect-sync-core": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+    },
+    "packages/server": {
+      "name": "@thomasfosterau/effect-sync-server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@thomasfosterau/effect-sync-core": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "4.0.0-beta.65",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.65",
       },
     },
   },
@@ -196,6 +256,16 @@
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.0-rc.18", "", {}, "sha512-CUY5Mnhe64xQBGZEEXQ5WyZwsc1JU3vAZLIxtrsBt3LO6UOb+C8GunVKqe9sT8NeWb4lqSaoJtp2xo6GxT1MNw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@thomasfosterau/effect-sync-cache": ["@thomasfosterau/effect-sync-cache@workspace:packages/cache"],
+
+    "@thomasfosterau/effect-sync-client": ["@thomasfosterau/effect-sync-client@workspace:packages/client"],
+
+    "@thomasfosterau/effect-sync-core": ["@thomasfosterau/effect-sync-core@workspace:packages/core"],
+
+    "@thomasfosterau/effect-sync-jsonapi": ["@thomasfosterau/effect-sync-jsonapi@workspace:packages/jsonapi"],
+
+    "@thomasfosterau/effect-sync-server": ["@thomasfosterau/effect-sync-server@workspace:packages/server"],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 

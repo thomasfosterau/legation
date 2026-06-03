@@ -1,0 +1,58 @@
+{
+  "name": "@thomasfosterau/effect-sync-server",
+  "version": "0.1.0",
+  "description": "Server-side write-through sync engine built on Effect — applies mutations to a backing store and fans out updates to subscribed clients",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "sync-engine",
+    "fan-out",
+    "realtime",
+    "pubsub",
+    "server",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-sync-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.65"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.65"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/server"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/server#readme"
+}

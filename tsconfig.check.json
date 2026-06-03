@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"],
+      "@thomasfosterau/effect-sync-client": ["packages/client/src/index.ts"],
+      "@thomasfosterau/effect-sync-cache": ["packages/cache/src/index.ts"],
+      "@thomasfosterau/effect-sync-server": ["packages/server/src/index.ts"],
+      "@thomasfosterau/effect-sync-jsonapi": ["packages/jsonapi/src/index.ts"]
+    },
+    "lib": ["ES2022", "WebWorker"]
+  },
+  "include": ["packages/*/src/**/*", "packages/*/examples/**/*"],
+  "exclude": ["node_modules", "packages/*/dist"]
+}
