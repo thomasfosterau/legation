@@ -42,10 +42,10 @@
     "ws": "^8.18.0"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.65"
+    "effect": "4.0.0-beta.75"
   },
   "devDependencies": {
-    "effect": "4.0.0-beta.65",
+    "effect": "4.0.0-beta.75",
     "@types/ws": "^8.5.12",
     "@types/node": "^20.0.0"
   },

@@ -40,10 +40,10 @@
     "@thomasfosterau/effect-sync-core": "workspace:^"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.65"
+    "effect": "4.0.0-beta.75"
   },
   "devDependencies": {
-    "effect": "4.0.0-beta.65"
+    "effect": "4.0.0-beta.75"
   },
   "repository": {
     "type": "git",

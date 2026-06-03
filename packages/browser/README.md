@@ -71,7 +71,11 @@ WebSocketTransport.make({ url, webSocketConstructor: (u) => new MyWebSocket(u) }
 
 ## IndexedDB persistence
 
-`IndexedDbCacheStore.layer` provides core's `CacheStore` service backed by `indexedDB`.
+`IndexedDbCacheStore.layer` provides core's `CacheStore` service backed by IndexedDB. It is a
+thin composition of [`@effect/platform-browser`](https://www.npmjs.com/package/@effect/platform-browser)'s
+`BrowserKeyValueStore.layerIndexedDb` (the official IndexedDB `KeyValueStore`) and core's
+`KeyValueStoreAdapter` (which bridges any `KeyValueStore` into a sync-engine `CacheStore`).
+
 Provide it wherever core expects a `CacheStore` (e.g. under the `SyncCache` layer):
 
 ```ts
@@ -83,17 +87,27 @@ const CacheLayer = SyncCache.layer.pipe(
   Layer.provideMerge(
     IndexedDbCacheStore.layer({
       databaseName: "my-app-cache", // default: "effect-sync-cache"
-      storeName: "entries", // default: "entries"
     })
   )
 );
 ```
 
-Entries are stored under `SyncKey.hash(entry.key)` in a single object store. `entries(filter)`
-fetches all records and filters in memory (**O(n)**), since IndexedDB cannot index
-hierarchical sync keys. Cached values must be structured-cloneable; the engine's values are
-plain JSON-ish data, so this holds in practice. All failures map to core's `StoreError` with
-the underlying cause attached.
+The IndexedDB primitives default to `window.indexedDB`. In environments without a `window`
+(tests, exotic workers), inject them explicitly:
+
+```ts
+import { IDBKeyRange, indexedDB } from "fake-indexeddb";
+import * as IndexedDb from "@effect/platform-browser/IndexedDb";
+
+IndexedDbCacheStore.layer({
+  databaseName: "test-cache",
+  indexedDb: IndexedDb.make({ indexedDB, IDBKeyRange }),
+});
+```
+
+Entries are JSON-serialized and schema-validated on read (core `KeyValueStoreAdapter`
+semantics): corrupted entries are treated as cache misses. `entries(filter)` scans via a
+maintained key index (**O(n)**), since IndexedDB cannot index hierarchical sync keys.
 
 ## License
 
