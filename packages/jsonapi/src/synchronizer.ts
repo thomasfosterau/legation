@@ -56,6 +56,21 @@ function isResourceObject(
 }
 
 /**
+ * Append a `prefix[key]=value` family of parameters.
+ */
+const appendBracketedParams = (
+  params: URLSearchParams,
+  prefix: string,
+  record: Record<string, string | number | undefined>
+): void => {
+  for (const [key, value] of Object.entries(record)) {
+    if (value !== undefined) {
+      params.append(`${prefix}[${key}]`, value.toString());
+    }
+  }
+};
+
+/**
  * Build query string from JSON:API request options
  */
 const buildQueryString = (options?: JsonApiRequestOptions): string => {
@@ -67,32 +82,61 @@ const buildQueryString = (options?: JsonApiRequestOptions): string => {
     params.append("include", options.include.join(","));
   }
 
-  if (options.fields) {
-    for (const [type, fields] of Object.entries(options.fields)) {
-      params.append(`fields[${type}]`, fields.join(","));
-    }
-  }
-
   if (options.sort) {
     params.append("sort", options.sort.join(","));
   }
 
+  if (options.fields) {
+    const joined = Object.fromEntries(
+      Object.entries(options.fields).map(([type, fields]) => [type, fields.join(",")])
+    );
+    appendBracketedParams(params, "fields", joined);
+  }
+
   if (options.filter) {
-    for (const [key, value] of Object.entries(options.filter)) {
-      params.append(`filter[${key}]`, value);
-    }
+    appendBracketedParams(params, "filter", options.filter);
   }
 
   if (options.page) {
-    for (const [key, value] of Object.entries(options.page)) {
-      if (value !== undefined) {
-        params.append(`page[${key}]`, value.toString());
-      }
-    }
+    appendBracketedParams(params, "page", options.page);
   }
 
   const queryString = params.toString();
   return queryString ? `?${queryString}` : "";
+};
+
+/**
+ * Headers required on every JSON:API request.
+ */
+const jsonApiHeaders = {
+  "Content-Type": "application/vnd.api+json",
+  Accept: "application/vnd.api+json",
+} as const;
+
+/**
+ * Build a JSON:API GET request.
+ */
+const jsonApiGet = (url: string): HttpClientRequest.HttpClientRequest =>
+  HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(jsonApiHeaders));
+
+/**
+ * Extract a single `ResourceObject` from a document, failing with
+ * `ParseError` when the document holds a collection, null, or a bare
+ * resource identifier.
+ */
+const requireSingleResource = (
+  document: JsonApiDocument,
+  context: string
+): Effect.Effect<ResourceObject, ParseError> => {
+  if (!document.data || Array.isArray(document.data)) {
+    return Effect.fail(
+      new ParseError({ message: `Expected single resource ${context}, got collection or null` })
+    );
+  }
+  if (!isResourceObject(document.data)) {
+    return Effect.fail(new ParseError({ message: `Expected ResourceObject ${context}` }));
+  }
+  return Effect.succeed(document.data);
 };
 
 /**
@@ -104,18 +148,18 @@ export const parseJsonApiResponse = (
   Effect.gen(function* () {
     // Check HTTP status
     if (response.status < 200 || response.status >= 300) {
-      return yield* Effect.fail(new ApiError(`HTTP ${response.status}`, []));
+      return yield* new ApiError({ message: `HTTP ${response.status}`, errors: [] });
     }
 
     const json = yield* response.json.pipe(
-      Effect.mapError((error) => new ParseError("Failed to parse JSON", error))
+      Effect.mapError((error) => new ParseError({ message: "Failed to parse JSON", cause: error }))
     );
 
     const document = json as JsonApiDocument;
 
     // Check for API errors
     if (document.errors && document.errors.length > 0) {
-      return yield* Effect.fail(new ApiError("API returned errors", document.errors));
+      return yield* new ApiError({ message: "API returned errors", errors: document.errors });
     }
 
     return document;
@@ -139,30 +183,10 @@ export const fetchResource = (
 
     const url = `${config.baseUrl}/${type}/${id}${buildQueryString(options)}`;
 
-    const request = HttpClientRequest.get(url).pipe(
-      HttpClientRequest.setHeaders({
-        "Content-Type": "application/vnd.api+json",
-        Accept: "application/vnd.api+json",
-      })
-    );
-
-    const response = yield* Effect.scoped(client.execute(request));
+    const response = yield* Effect.scoped(client.execute(jsonApiGet(url)));
     const document = yield* parseJsonApiResponse(response);
 
-    if (!document.data || Array.isArray(document.data)) {
-      return yield* Effect.fail(new ParseError("Expected single resource, got collection or null"));
-    }
-
-    const resource = document.data;
-
-    // Validate it's a ResourceObject with type guard
-    if (!isResourceObject(resource)) {
-      return yield* Effect.fail(
-        new ParseError("Expected ResourceObject with attributes, relationships, or links")
-      );
-    }
-
-    return resource;
+    return yield* requireSingleResource(document, "from fetch");
   });
 
 /**
@@ -182,18 +206,11 @@ export const fetchResources = (
 
     const url = `${config.baseUrl}/${type}${buildQueryString(options)}`;
 
-    const request = HttpClientRequest.get(url).pipe(
-      HttpClientRequest.setHeaders({
-        "Content-Type": "application/vnd.api+json",
-        Accept: "application/vnd.api+json",
-      })
-    );
-
-    const response = yield* Effect.scoped(client.execute(request));
+    const response = yield* Effect.scoped(client.execute(jsonApiGet(url)));
     const document = yield* parseJsonApiResponse(response);
 
     if (!document.data || !Array.isArray(document.data)) {
-      return yield* Effect.fail(new ParseError("Expected resource collection, got single or null"));
+      return yield* new ParseError({ message: "Expected resource collection, got single or null" });
     }
 
     // Filter to ensure all items are ResourceObjects
@@ -220,38 +237,23 @@ export const updateResource = (
     const body: JsonApiDocument = { data: resource };
 
     const request = HttpClientRequest.patch(url).pipe(
-      HttpClientRequest.setHeaders({
-        "Content-Type": "application/vnd.api+json",
-        Accept: "application/vnd.api+json",
-      }),
+      HttpClientRequest.setHeaders(jsonApiHeaders),
       HttpClientRequest.bodyJsonUnsafe(body)
     );
 
     const response = yield* Effect.scoped(client.execute(request));
 
     if (response.status === 409) {
-      return yield* Effect.fail(
-        new ConflictError(
-          "Resource version conflict",
-          resource.meta?.version as string | undefined,
-          undefined
-        )
-      );
+      return yield* new ConflictError({
+        message: "Resource version conflict",
+        localVersion: resource.meta?.version as string | undefined,
+        remoteVersion: undefined,
+      });
     }
 
     const document = yield* parseJsonApiResponse(response);
 
-    if (!document.data || Array.isArray(document.data)) {
-      return yield* Effect.fail(new ParseError("Expected single resource after update"));
-    }
-
-    const updatedResource = document.data;
-
-    if (!isResourceObject(updatedResource)) {
-      return yield* Effect.fail(new ParseError("Expected ResourceObject after update"));
-    }
-
-    return updatedResource;
+    return yield* requireSingleResource(document, "after update");
   });
 
 /**
@@ -272,27 +274,14 @@ export const createResource = (
     const body: JsonApiDocument = { data: resource as ResourceObject };
 
     const request = HttpClientRequest.post(url).pipe(
-      HttpClientRequest.setHeaders({
-        "Content-Type": "application/vnd.api+json",
-        Accept: "application/vnd.api+json",
-      }),
+      HttpClientRequest.setHeaders(jsonApiHeaders),
       HttpClientRequest.bodyJsonUnsafe(body)
     );
 
     const response = yield* Effect.scoped(client.execute(request));
     const document = yield* parseJsonApiResponse(response);
 
-    if (!document.data || Array.isArray(document.data)) {
-      return yield* Effect.fail(new ParseError("Expected single resource after creation"));
-    }
-
-    const createdResource = document.data;
-
-    if (!isResourceObject(createdResource)) {
-      return yield* Effect.fail(new ParseError("Expected ResourceObject after creation"));
-    }
-
-    return createdResource;
+    return yield* requireSingleResource(document, "after creation");
   });
 
 /**
@@ -313,10 +302,7 @@ export const deleteResource = (
     const url = `${config.baseUrl}/${type}/${id}`;
 
     const request = HttpClientRequest.delete(url).pipe(
-      HttpClientRequest.setHeaders({
-        "Content-Type": "application/vnd.api+json",
-        Accept: "application/vnd.api+json",
-      })
+      HttpClientRequest.setHeaders(jsonApiHeaders)
     );
 
     const response = yield* Effect.scoped(client.execute(request));
@@ -325,9 +311,10 @@ export const deleteResource = (
       return;
     }
 
-    return yield* Effect.fail(
-      new ApiError(`Failed to delete resource ${type}/${id}, status: ${response.status}`, [])
-    );
+    return yield* new ApiError({
+      message: `Failed to delete resource ${type}/${id}, status: ${response.status}`,
+      errors: [],
+    });
   });
 
 /**
@@ -405,7 +392,7 @@ export const syncResourceToRemote = (
         const strategy = config.conflictStrategy ?? "error";
 
         if (strategy === "error") {
-          return yield* Effect.fail(error);
+          return yield* error;
         } else if (strategy === "remote") {
           // Fetch remote version and use it
           const remoteResource = yield* fetchResource(resource.type, resource.id);
@@ -418,10 +405,10 @@ export const syncResourceToRemote = (
           return resource;
         }
 
-        return yield* Effect.fail(error);
+        return yield* error;
       }
 
-      return yield* Effect.fail(error);
+      return yield* error;
     }
 
     const updatedResource = result.success;

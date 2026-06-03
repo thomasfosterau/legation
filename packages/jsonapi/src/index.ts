@@ -1,8 +1,12 @@
 /**
- * effect-chancery
+ * @thomasfosterau/effect-sync-jsonapi
  *
- * An Effect-based library for arbitrary synchronization of data
- * following JSON:API principles
+ * A JSON:API v1.1 protocol adapter for the effect-sync engine. Exposes the
+ * JSON:API types, standalone resource fetch/mutate helpers, an in-memory
+ * storage implementation, and (under `Adapter`) builders that turn JSON:API
+ * resources into the core engine's query and mutation descriptors.
+ *
+ * Formerly published as `@thomasfosterau/effect-chancery`.
  */
 
 // Export types
@@ -40,3 +44,6 @@ export type { SyncConfig as SyncConfigInterface } from "./synchronizer.js";
 
 // Export implementations
 export { makeInMemoryStorage } from "./storage.js";
+
+// Export the sync-engine adapter (query/mutation descriptor builders)
+export * as Adapter from "./adapter.js";

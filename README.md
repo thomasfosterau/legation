@@ -1,190 +1,92 @@
-# @thomasfosterau/effect-chancery
+# effect-sync
 
-An Effect-based TypeScript library for synchronizing JSON:API resources between remote APIs and local storage.
+A data synchronization engine built on [Effect](https://effect.website), shipped as a monorepo of composable packages: a protocol-agnostic core, a TanStack-Query-style client, a write-through cache engine for service workers and edge runtimes, a server-side sync hub with client fan-out, and a JSON:API adapter.
 
 ## Status
 
-This package targets Effect v4 beta and ESM-only consumers.
+All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 and may change.
 
-## Features
+## Packages
 
-- JSON:API v1.1 resource, relationship, error, and request option types
-- Effect-based services for configuration, storage, and HTTP execution
-- Pluggable local storage with an in-memory implementation for tests and development
-- Remote fetch, create, update, delete, and sync helpers
-- Conflict strategies for local, remote, or fail-fast resolution
-- Bun-based tooling, Vitest tests, Oxlint, Fallow analysis, Prettier formatting, and Changesets releases
+| Package                                                   | Description                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/effect-sync-core`](packages/core)       | Protocol-agnostic primitives: sync keys, cache store + write-through cache engine (read-through, dedupe, stale-while-revalidate, invalidation, events), queries, pagination, mutations with optimistic updates, durable outbox, client/server sync protocol, transports, conflict resolution, and a promise facade for non-Effect consumers |
+| [`@thomasfosterau/effect-sync-client`](packages/client)   | Client-side query/mutation/subscription manager (TanStack-Query-like) with live server subscriptions and offline outbox draining                                                                                                                                                                                                            |
+| [`@thomasfosterau/effect-sync-cache`](packages/cache)     | Write-through cache engine for service workers, edge runtimes, and servers — HTTP caching and paginated queries, with pluggable persistence                                                                                                                                                                                                 |
+| [`@thomasfosterau/effect-sync-server`](packages/server)   | Server-side write-through sync engine: versioned store, session registry, and fan-out of updates to subscribed clients                                                                                                                                                                                                                      |
+| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`)                                                                                                                                                                                                                                                                 |
 
-## Installation
+## Architecture
 
-```bash
-bun add @thomasfosterau/effect-chancery effect@beta
+```
+            ┌────────────────────────────┐
+            │   effect-sync-client       │  browser / app
+            │  (queries, mutations,      │
+            │   subscriptions, outbox)   │
+            └─────────────┬──────────────┘
+                          │ sync protocol over a Transport
+            ┌─────────────▼──────────────┐
+            │   effect-sync-server       │  your backend
+            │  (sync hub, versioned      │
+            │   store, fan-out)          │
+            └─────────────┬──────────────┘
+                          │
+   ┌──────────────────────┴───────────────────────┐
+   │              effect-sync-core                │
+   │  keys · cache engine · queries · mutations   │
+   │  outbox · protocol · transports · conflicts  │
+   └──────────────────────┬───────────────────────┘
+                          │
+            ┌─────────────▼──────────────┐
+            │   effect-sync-cache        │  service workers / edge
+            │  (write-through HTTP and   │
+            │   data caching)            │
+            └────────────────────────────┘
+
+   effect-sync-jsonapi: adapts JSON:API APIs into core query/mutation descriptors
 ```
 
-The library uses the HTTP client modules included in Effect v4 beta, for example `effect/unstable/http/FetchHttpClient`.
+Every piece is an Effect service with a Layer, so everything is swappable: storage backends, transports, conflict strategies, and stores are all interfaces with in-memory implementations provided for tests and development.
 
-## Quick Start
+## Quick start
 
-```ts
-import { Effect } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import {
-  fetchResource,
-  makeInMemoryStorage,
-  Storage,
-  SyncConfig,
-  syncResourceFromRemote,
-} from "@thomasfosterau/effect-chancery";
-
-const storage = makeInMemoryStorage();
-
-const config = {
-  baseUrl: "https://api.example.com",
-  conflictStrategy: "error" as const,
-};
-
-const fetchUser = fetchResource("users", "1").pipe(
-  Effect.provide(FetchHttpClient.layer),
-  Effect.provideService(SyncConfig, config)
-);
-
-const syncUser = syncResourceFromRemote("users", "1").pipe(
-  Effect.provide(FetchHttpClient.layer),
-  Effect.provideService(SyncConfig, config),
-  Effect.provideService(Storage, storage)
-);
-
-const user = await Effect.runPromise(syncUser);
-console.log(user);
-```
-
-## JSON:API Resources
+### Client-side caching and queries
 
 ```ts
-import type { ResourceObject } from "@thomasfosterau/effect-chancery";
+import { Duration, Effect, Layer } from "effect";
+import { MemoryCacheStore, SyncCache } from "@thomasfosterau/effect-sync-core";
 
-const user: ResourceObject = {
-  type: "users",
-  id: "1",
-  attributes: {
-    name: "John Doe",
-    email: "john@example.com",
-  },
-  relationships: {
-    posts: {
-      data: [
-        { type: "posts", id: "1" },
-        { type: "posts", id: "2" },
-      ],
-    },
-  },
-};
-```
+const layer = SyncCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
 
-## Synchronization
-
-```ts
-import {
-  createResource,
-  deleteResource,
-  fetchResource,
-  fetchResources,
-  syncResourceFromRemote,
-  syncResourcesFromRemote,
-  syncResourceToRemote,
-  updateResource,
-} from "@thomasfosterau/effect-chancery";
-
-const user = fetchResource("users", "1", {
-  include: ["posts", "comments"],
-  fields: { users: ["name", "email"] },
+const program = Effect.gen(function* () {
+  const cache = yield* SyncCache.SyncCache;
+  return yield* cache.read({
+    key: ["users", "1"],
+    loader: fetchUser("1"), // any Effect
+    staleTime: Duration.minutes(5),
+  });
 });
 
-const users = fetchResources("users", {
-  filter: { active: "true" },
-  page: { number: 1, size: 10 },
-  sort: ["name", "-created_at"],
-});
-
-const newUser = createResource({
-  type: "users",
-  attributes: {
-    name: "Jane Doe",
-    email: "jane@example.com",
-  },
-});
-
-const updatedUser = updateResource({
-  type: "users",
-  id: "1",
-  attributes: {
-    name: "John Smith",
-  },
-});
-
-const deleted = deleteResource("users", "1");
-const pulled = syncResourceFromRemote("users", "1");
-const pulledMany = syncResourcesFromRemote("users");
-const pushed = syncResourceToRemote(localUser);
+await Effect.runPromise(program.pipe(Effect.provide(layer)));
 ```
 
-## Storage
+### Non-Effect consumers
 
-```ts
-import { Effect } from "effect";
-import { SyncError, type StorageInterface } from "@thomasfosterau/effect-chancery";
-
-const storage: StorageInterface = {
-  get: (type, id) =>
-    Effect.tryPromise({
-      try: () => database.findOne({ type, id }),
-      catch: (error) => new SyncError("Failed to get resource", error),
-    }),
-  set: (resource) =>
-    Effect.tryPromise({
-      try: () => database.save(resource),
-      catch: (error) => new SyncError("Failed to save resource", error),
-    }),
-  delete: (type, id) =>
-    Effect.tryPromise({
-      try: () => database.delete({ type, id }),
-      catch: (error) => new SyncError("Failed to delete resource", error),
-    }),
-  list: (type) =>
-    Effect.tryPromise({
-      try: () => database.findAll({ type }),
-      catch: (error) => new SyncError("Failed to list resources", error),
-    }),
-};
-```
-
-## Conflict Strategy
-
-```ts
-const config = {
-  baseUrl: "https://api.example.com",
-  conflictStrategy: "remote" as const,
-};
-```
-
-- `local`: keep the local resource when the remote update reports a conflict
-- `remote`: fetch and store the remote resource when a conflict occurs
-- `error`: fail with `ConflictError`
+Every package ships a promise facade so plain TypeScript apps, UI frameworks, and service workers can drive the engine without writing Effect code. See each package's README.
 
 ## Development
 
 ```bash
-bun ci
-bun run typecheck
-bun run build
-bun run test:run
-bun run lint
-bun run format:check
-bun run analyze:audit
+bun ci                  # install
+bun run build           # build all packages (tsc project references)
+bun run typecheck       # typecheck all packages + tests
+bun run test:run        # run all tests
+bun run lint            # oxlint
+bun run format:check    # prettier
 ```
 
-Changesets manages versions and changelogs:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, [CONTEXT.md](CONTEXT.md) for the domain glossary, and [docs/adr/](docs/adr/) for architecture decisions.
 
-```bash
-bun run changeset
-```
+## License
+
+MIT

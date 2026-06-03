@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Result } from "effect";
+import { ApiError, ConflictError, ParseError } from "../errors.js";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -106,6 +107,36 @@ describe("Synchronizer", () => {
     );
 
     await expect(Effect.runPromise(program)).rejects.toThrow("HTTP 404");
+  });
+
+  it("fails with a tagged ApiError carrying message and errors", async () => {
+    const program = fetchResource("users", "404").pipe(
+      Effect.provide(mockHttpClientLayer),
+      Effect.provideService(SyncConfig, mockConfig),
+      Effect.result,
+      Effect.map((result) => (Result.isFailure(result) ? result.failure : undefined))
+    );
+
+    const error = await Effect.runPromise(program);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error?._tag).toBe("ApiError");
+    expect(error?.message).toBe("HTTP 404");
+  });
+
+  it("constructs tagged errors with the object constructor style", () => {
+    const parse = new ParseError({ message: "bad", cause: new Error("x") });
+    expect(parse._tag).toBe("ParseError");
+    expect(parse.message).toBe("bad");
+
+    const conflict = new ConflictError({
+      message: "conflict",
+      localVersion: "1",
+      remoteVersion: "2",
+    });
+    expect(conflict._tag).toBe("ConflictError");
+    expect(conflict.localVersion).toBe("1");
+    expect(conflict.remoteVersion).toBe("2");
   });
 
   it("should handle conflicts with local strategy", async () => {

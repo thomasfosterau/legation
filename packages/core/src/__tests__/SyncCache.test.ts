@@ -111,14 +111,16 @@ describe("SyncCache", () => {
     });
 
     it("propagates loader failures", async () => {
-      await expect(
-        withCache((cache) =>
+      const result = await withCache((cache) =>
+        Effect.result(
           cache.read({
             key: ["failing"],
             loader: Effect.fail("boom" as const),
           })
         )
-      ).rejects.toThrow();
+      );
+
+      expect(result._tag).toBe("Failure");
     });
   });
 

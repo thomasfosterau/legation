@@ -1,12 +1,15 @@
 /**
  * Example: Basic Usage
  *
- * This example demonstrates basic usage of the effect-chancery library
+ * Demonstrates the standalone JSON:API helpers and the sync-engine adapter
+ * for `@thomasfosterau/effect-sync-jsonapi`.
  */
 
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import { MemoryCacheStore, Mutation, Query, SyncCache } from "@thomasfosterau/effect-sync-core";
 import {
+  Adapter,
   fetchResource,
   syncResourceFromRemote,
   SyncConfig,
@@ -97,9 +100,55 @@ async function example3() {
   }
 }
 
+// Example 4: Adapter + core SyncCache
+//
+// Plug JSON:API resources into the sync engine. The adapter produces query
+// and mutation descriptors that the cache reads/executes, so reads are cached
+// and deduplicated and writes invalidate the affected collection.
+async function example4() {
+  console.log("\n=== Example 4: Adapter with the sync engine ===");
+
+  const config: SyncConfigType = {
+    baseUrl: "https://jsonapi-example.com",
+    conflictStrategy: "remote",
+  };
+
+  // SyncCache backed by an in-memory store, plus the JSON:API environment.
+  const cacheLayer = SyncCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
+
+  const articleQuery = Adapter.resourceQuery("articles", "1");
+  const createArticle = Adapter.createResourceMutation("articles");
+
+  const program = Effect.gen(function* () {
+    const cache = yield* SyncCache.SyncCache;
+
+    // Read-through: first call hits the API, subsequent calls hit the cache.
+    const article = yield* cache.read(Query.toReadOptions(articleQuery));
+    console.log("Cached article:", article);
+
+    // A create mutation invalidates the articles collection.
+    const created = yield* Mutation.execute(cache, createArticle, {
+      type: "articles",
+      attributes: { title: "Hello" },
+    });
+    console.log("Created article:", created);
+  }).pipe(
+    Effect.provide(cacheLayer),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(SyncConfig, config)
+  );
+
+  try {
+    await Effect.runPromise(program);
+  } catch (error) {
+    console.error("Adapter example failed:", error);
+  }
+}
+
 // Run examples (uncomment to test with a real JSON:API server)
 // example1();
 // example2();
 // example3();
+// example4();
 
-export { example1, example2, example3 };
+export { example1, example2, example3, example4 };

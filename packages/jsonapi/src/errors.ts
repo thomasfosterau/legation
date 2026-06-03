@@ -1,63 +1,53 @@
 /**
  * Synchronizer Errors
  *
- * Error types for the synchronizer operations
+ * Tagged error types for the JSON:API adapter. All errors extend
+ * `Data.TaggedError`, so they are yieldable inside `Effect.gen`, usable with
+ * `Effect.fail`, and handled with `Effect.catchTag` / `Effect.catchTags`.
+ * Because `Data.TaggedError` extends `Error`, the `message` field is also
+ * available as `.message` on instances.
  */
 
+import { Data } from "effect";
 import type { JsonApiError } from "./types.js";
 
 /**
- * Base error for synchronizer operations
+ * Base error for synchronizer operations.
  */
-export class SyncError {
-  readonly _tag = "SyncError";
-  constructor(
-    readonly message: string,
-    readonly cause?: unknown
-  ) {}
-}
+export class SyncError extends Data.TaggedError("SyncError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 /**
- * Network-related error
+ * Network-related error (connection failure, timeout, etc.).
  */
-export class NetworkError {
-  readonly _tag = "NetworkError";
-  constructor(
-    readonly message: string,
-    readonly cause?: unknown
-  ) {}
-}
+export class NetworkError extends Data.TaggedError("NetworkError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 /**
- * Parsing error for JSON:API documents
+ * Parsing error for JSON:API documents.
  */
-export class ParseError {
-  readonly _tag = "ParseError";
-  constructor(
-    readonly message: string,
-    readonly cause?: unknown
-  ) {}
-}
+export class ParseError extends Data.TaggedError("ParseError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 /**
- * API error containing JSON:API error objects
+ * API error carrying the JSON:API error objects returned by the server.
  */
-export class ApiError {
-  readonly _tag = "ApiError";
-  constructor(
-    readonly message: string,
-    readonly errors: JsonApiError[]
-  ) {}
-}
+export class ApiError extends Data.TaggedError("ApiError")<{
+  readonly message: string;
+  readonly errors: ReadonlyArray<JsonApiError>;
+}> {}
 
 /**
- * Conflict error when data versions mismatch
+ * Conflict error raised when local and remote resource versions mismatch.
  */
-export class ConflictError {
-  readonly _tag = "ConflictError";
-  constructor(
-    readonly message: string,
-    readonly localVersion?: string,
-    readonly remoteVersion?: string
-  ) {}
-}
+export class ConflictError extends Data.TaggedError("ConflictError")<{
+  readonly message: string;
+  readonly localVersion?: string | undefined;
+  readonly remoteVersion?: string | undefined;
+}> {}
