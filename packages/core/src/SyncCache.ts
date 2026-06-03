@@ -21,14 +21,15 @@
 import {
   Clock,
   Context,
+  Data,
   Deferred,
   Duration,
   Effect,
   Exit,
   Layer,
+  MutableHashMap,
   Option,
   PubSub,
-  Ref,
   Scope,
   Stream,
 } from "effect";
@@ -42,16 +43,22 @@ import type { Version } from "./Versioned.js";
 /**
  * Events published by the cache whenever its contents change.
  */
-export type CacheEvent =
-  | {
-      readonly _tag: "Updated";
-      readonly entry: CacheEntry;
-      /** `true` when the entry was written optimistically and may be rolled back. */
-      readonly optimistic: boolean;
-    }
-  | { readonly _tag: "Removed"; readonly key: SyncKey.SyncKey }
-  | { readonly _tag: "Invalidated"; readonly filter: KeyFilter }
-  | { readonly _tag: "Cleared" };
+export type CacheEvent = Data.TaggedEnum<{
+  Updated: {
+    readonly entry: CacheEntry;
+    /** `true` when the entry was written optimistically and may be rolled back. */
+    readonly optimistic: boolean;
+  };
+  Removed: { readonly key: SyncKey.SyncKey };
+  Invalidated: { readonly filter: KeyFilter };
+  Cleared: {};
+}>;
+
+/**
+ * Constructors and matchers for {@link CacheEvent}:
+ * `CacheEvent.Updated({...})`, `CacheEvent.$is("Removed")`, `CacheEvent.$match`.
+ */
+export const CacheEvent = Data.taggedEnum<CacheEvent>();
 
 const filterKeyOf = (filter: KeyFilter): SyncKey.SyncKey | undefined => {
   switch (filter._tag) {
@@ -189,6 +196,34 @@ export interface SyncCache {
  */
 export const SyncCache = Context.Service<SyncCache>("@thomasfosterau/effect-sync-core/SyncCache");
 
+/**
+ * Ambient defaults applied when a read/write does not specify its own
+ * timing options. Override with `Effect.provideService(SyncCacheDefaults, {...})`
+ * or a layer — no configuration is required (Effect `Reference` semantics).
+ */
+export interface SyncCacheDefaultsShape {
+  /** Default freshness window. `null` = entries are stale immediately. */
+  readonly staleTime: Duration.Duration | null;
+  /** Default eviction window. `null` = entries never expire. */
+  readonly timeToLive: Duration.Duration | null;
+  /** Serve stale entries while refreshing in the background by default. */
+  readonly staleWhileRevalidate: boolean;
+}
+
+/**
+ * `Context.Reference` carrying the cache-wide defaults.
+ */
+export const SyncCacheDefaults = Context.Reference<SyncCacheDefaultsShape>(
+  "@thomasfosterau/effect-sync-core/SyncCacheDefaults",
+  {
+    defaultValue: () => ({
+      staleTime: null,
+      timeToLive: null,
+      staleWhileRevalidate: false,
+    }),
+  }
+);
+
 interface InFlight {
   readonly deferred: Deferred.Deferred<unknown, unknown>;
 }
@@ -208,7 +243,10 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
     const pubsub = yield* Effect.acquireRelease(PubSub.unbounded<CacheEvent>(), (ps) =>
       PubSub.shutdown(ps)
     );
-    const inFlight = yield* Ref.make(new Map<SyncKeyHash, InFlight>());
+    // In-flight loads keyed by hash; MutableHashMap is the idiomatic
+    // fiber-safe mutable map for state confined to this service.
+    const inFlight = MutableHashMap.empty<SyncKeyHash, InFlight>();
+    const defaults = yield* SyncCacheDefaults;
 
     const publish = (event: CacheEvent): Effect.Effect<void> =>
       Effect.asVoid(PubSub.publish(pubsub, event));
@@ -219,8 +257,18 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
       now: number,
       options?: EntryOptions
     ): CacheEntry<A> => {
-      const staleMillis = toMillis(options?.staleTime);
-      const ttlMillis = toMillis(options?.timeToLive);
+      const staleMillis =
+        options?.staleTime !== undefined
+          ? toMillis(options.staleTime)
+          : defaults.staleTime === null
+            ? null
+            : Duration.toMillis(defaults.staleTime);
+      const ttlMillis =
+        options?.timeToLive !== undefined
+          ? toMillis(options.timeToLive)
+          : defaults.timeToLive === null
+            ? null
+            : Duration.toMillis(defaults.timeToLive);
       return {
         key,
         value,
@@ -238,7 +286,7 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
     ): Effect.Effect<CacheEntry<A>, StoreError> =>
       Effect.gen(function* () {
         yield* store.set(entry);
-        yield* publish({ _tag: "Updated", entry, optimistic });
+        yield* publish(CacheEvent.Updated({ entry, optimistic }));
         return entry;
       });
 
@@ -259,7 +307,7 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
     ): Effect.Effect<ReadResult<A>, E | StoreError, R> =>
       Effect.gen(function* () {
         const keyHash = SyncKey.hash(options.key);
-        const running = (yield* Ref.get(inFlight)).get(keyHash);
+        const running = Option.getOrUndefined(MutableHashMap.get(inFlight, keyHash));
 
         if (running !== undefined) {
           // Another fiber is already loading this key: share its result.
@@ -274,17 +322,9 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
         }
 
         const deferred = yield* Deferred.make<unknown, unknown>();
-        yield* Ref.update(inFlight, (map) => {
-          const next = new Map(map);
-          next.set(keyHash, { deferred });
-          return next;
-        });
+        MutableHashMap.set(inFlight, keyHash, { deferred });
 
-        const cleanup = Ref.update(inFlight, (map) => {
-          const next = new Map(map);
-          next.delete(keyHash);
-          return next;
-        });
+        const cleanup = Effect.sync(() => MutableHashMap.remove(inFlight, keyHash));
 
         const persist = (value: A): Effect.Effect<ReadResult<A>, StoreError> =>
           Effect.gen(function* () {
@@ -331,10 +371,17 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
           return { value: entry.value, entry, hit: true } satisfies ReadResult<A>;
         }
 
-        if (state === "stale" && options.staleWhileRevalidate === true) {
+        if (state === "stale" && (options.staleWhileRevalidate ?? defaults.staleWhileRevalidate)) {
           // Serve the stale value now and refresh in the background.
-          // Refresh errors are intentionally ignored; the next read retries.
-          yield* Effect.forkDetach(Effect.ignore(loadDeduped(options)));
+          // Refresh failures are logged (and the next read retries).
+          yield* Effect.forkDetach(
+            loadDeduped(options).pipe(
+              Effect.tapCause((cause) =>
+                Effect.logWarning("SyncCache background refresh failed", cause)
+              ),
+              Effect.ignore
+            )
+          );
           return { value: entry.value, entry, hit: true } satisfies ReadResult<A>;
         }
 
@@ -359,7 +406,7 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
           ? Effect.asVoid(persistEntry(previous.value, false))
           : Effect.gen(function* () {
               yield* store.remove(options.key);
-              yield* publish({ _tag: "Removed", key: options.key });
+              yield* publish(CacheEvent.Removed({ key: options.key }));
             });
 
         return yield* options.writer.pipe(
@@ -398,7 +445,7 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
         yield* Effect.forEach(matching, (entry) => store.set({ ...entry, staleAt: now }), {
           discard: true,
         });
-        yield* publish({ _tag: "Invalidated", filter });
+        yield* publish(CacheEvent.Invalidated({ filter }));
       });
 
     const invalidateTags = (tags: ReadonlyArray<string>): Effect.Effect<void, StoreError> =>
@@ -411,24 +458,25 @@ export const make: Effect.Effect<SyncCache, never, CacheStore | Scope.Scope> = E
           discard: true,
         });
         const matchingHashes = new Set(matching.map((entry) => SyncKey.hash(entry.key)));
-        yield* publish({
-          _tag: "Invalidated",
-          filter: SyncKey.predicateFilter((key) => matchingHashes.has(SyncKey.hash(key))),
-        });
+        yield* publish(
+          CacheEvent.Invalidated({
+            filter: SyncKey.predicateFilter((key) => matchingHashes.has(SyncKey.hash(key))),
+          })
+        );
       });
 
     const remove = (key: SyncKey.SyncKey): Effect.Effect<boolean, StoreError> =>
       Effect.gen(function* () {
         const removed = yield* store.remove(key);
         if (removed) {
-          yield* publish({ _tag: "Removed", key });
+          yield* publish(CacheEvent.Removed({ key }));
         }
         return removed;
       });
 
     const clear: Effect.Effect<void, StoreError> = Effect.gen(function* () {
       yield* store.clear;
-      yield* publish({ _tag: "Cleared" });
+      yield* publish(CacheEvent.Cleared());
     });
 
     const events = Stream.fromPubSub(pubsub);

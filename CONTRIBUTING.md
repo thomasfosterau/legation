@@ -63,6 +63,19 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 5. Add a changeset for user-facing or package-impacting changes: `bun run changeset`.
 6. Open a pull request.
 
+## Tests
+
+Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest):
+
+- `it.effect("...", () => Effect.gen(function* () { ... }))` — runs under TestServices
+  (deterministic `TestClock`; advance time with `TestClock.adjust`). Use for pure logic and
+  anything whose timing you control.
+- `it.live("...", () => ...)` — real clock and services. Use for tests that need real
+  concurrency timing or do real I/O (WebSockets, IndexedDB).
+- `it.layer(layer)("suite", (it) => { ... })` — build a layer once and share it across the
+  tests inside; services are available directly in each test effect's context.
+- Assertions go inside the effect; never wrap tests in `Effect.runPromise`.
+
 ## Effect Code
 
 Use Effect for side effects, dependency injection, and typed failures. Repository instructions require consulting `effect-solutions` before writing Effect code; if the local tool is unavailable, **verify APIs against the installed type definitions** (`node_modules/effect/dist/*.d.ts`) — this codebase targets Effect v4 beta, whose APIs differ from v3 (and from most online documentation).

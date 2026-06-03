@@ -104,12 +104,11 @@ export const make: Effect.Effect<SyncHub, never, ServerStore | SessionRegistry> 
           Option.isSome(current) &&
           current.value.version !== mutation.baseVersion
         ) {
-          return {
-            _tag: "Conflict",
+          return Protocol.PushResult.Conflict({
             mutationId: mutation.mutationId,
             key: mutation.key,
             serverEntry: toWireEntry(current.value),
-          } satisfies Protocol.PushResult;
+          });
         }
 
         const stored = yield* store.set(mutation.key, mutation.input);
@@ -118,54 +117,52 @@ export const make: Effect.Effect<SyncHub, never, ServerStore | SessionRegistry> 
         // Fan out to every OTHER subscribed session.
         const subscribers = yield* registry.subscribers(mutation.key);
         const others = subscribers.filter((session) => session.sessionId !== excludeSessionId);
-        yield* fanOut(others, { _tag: "Updated", entry });
+        yield* fanOut(others, Protocol.ServerMessage.Updated({ entry }));
 
-        return {
-          _tag: "Applied",
+        return Protocol.PushResult.Applied({
           mutationId: mutation.mutationId,
           entry,
-        } satisfies Protocol.PushResult;
+        });
       });
 
     const dispatch = (
       connection: Transport.ServerConnection,
       message: Protocol.ClientMessage
-    ): Effect.Effect<void, TransportError | StoreError> => {
-      switch (message._tag) {
-        case "Subscribe":
-          return registry
-            .addSubscription(connection.sessionId, message.filter)
-            .pipe(Effect.andThen(connection.send({ _tag: "SubscribeAck", id: message.id })));
+    ): Effect.Effect<void, TransportError | StoreError> =>
+      // Exhaustive, type-narrowed dispatch via the tagged-enum matcher.
+      Protocol.ClientMessage.$match(message, {
+        Subscribe: ({ id, filter }) =>
+          registry
+            .addSubscription(connection.sessionId, filter)
+            .pipe(Effect.andThen(connection.send(Protocol.ServerMessage.SubscribeAck({ id })))),
 
-        case "Unsubscribe":
-          return registry
-            .removeSubscription(connection.sessionId, message.filter)
-            .pipe(Effect.andThen(connection.send({ _tag: "UnsubscribeAck", id: message.id })));
+        Unsubscribe: ({ id, filter }) =>
+          registry
+            .removeSubscription(connection.sessionId, filter)
+            .pipe(Effect.andThen(connection.send(Protocol.ServerMessage.UnsubscribeAck({ id })))),
 
-        case "Ping":
-          return connection.send({ _tag: "Pong", id: message.id });
+        Ping: ({ id }) => connection.send(Protocol.ServerMessage.Pong({ id })),
 
-        case "Pull":
-          return Effect.gen(function* () {
+        Pull: ({ id, keys }) =>
+          Effect.gen(function* () {
             const entries: Array<Protocol.WireEntry> = [];
-            for (const key of message.keys) {
+            for (const key of keys) {
               const stored = yield* store.get(key);
               if (Option.isSome(stored)) {
                 entries.push(toWireEntry(stored.value));
               }
             }
-            yield* connection.send({ _tag: "PullAck", id: message.id, entries });
-          });
+            yield* connection.send(Protocol.ServerMessage.PullAck({ id, entries }));
+          }),
 
-        case "Push":
-          return Effect.gen(function* () {
-            const results = yield* Effect.forEach(message.mutations, (mutation) =>
+        Push: ({ id, mutations }) =>
+          Effect.gen(function* () {
+            const results = yield* Effect.forEach(mutations, (mutation) =>
               applyMutation(mutation, connection.sessionId)
             );
-            yield* connection.send({ _tag: "PushAck", id: message.id, results });
-          });
-      }
-    };
+            yield* connection.send(Protocol.ServerMessage.PushAck({ id, results }));
+          }),
+      });
 
     const handleConnection = (
       connection: Transport.ServerConnection
@@ -183,7 +180,7 @@ export const make: Effect.Effect<SyncHub, never, ServerStore | SessionRegistry> 
         const stored = yield* store.set(key, value);
         const entry = toWireEntry(stored);
         const subscribers = yield* registry.subscribers(key);
-        yield* fanOut(subscribers, { _tag: "Updated", entry });
+        yield* fanOut(subscribers, Protocol.ServerMessage.Updated({ entry }));
         return entry;
       });
 
@@ -192,7 +189,7 @@ export const make: Effect.Effect<SyncHub, never, ServerStore | SessionRegistry> 
         const removed = yield* store.remove(key);
         const version = Option.isSome(removed) ? removed.value.version : 0;
         const subscribers = yield* registry.subscribers(key);
-        yield* fanOut(subscribers, { _tag: "Removed", key, version });
+        yield* fanOut(subscribers, Protocol.ServerMessage.Removed({ key, version }));
       });
 
     const invalidate = (filter: Protocol.WireKeyFilter): Effect.Effect<void> =>
@@ -200,7 +197,7 @@ export const make: Effect.Effect<SyncHub, never, ServerStore | SessionRegistry> 
         // Conservative fan-out: notify every session. A session learns which
         // of its own keys are affected by matching the filter client-side.
         const sessions = yield* registry.sessions;
-        yield* fanOut(sessions, { _tag: "Invalidated", filter });
+        yield* fanOut(sessions, Protocol.ServerMessage.Invalidated({ filter }));
       });
 
     const connectedSessions: Effect.Effect<number> = Effect.map(

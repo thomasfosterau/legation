@@ -198,7 +198,7 @@ export const make = (
             ? filters
             : [...filters, filter]
         );
-        yield* transport.send({ _tag: "Subscribe", id: nextMessageId(), filter });
+        yield* transport.send(Protocol.ClientMessage.Subscribe({ id: nextMessageId(), filter }));
       });
 
     const unsubscribe = (filter: Protocol.WireKeyFilter): Effect.Effect<void, TransportError> =>
@@ -206,7 +206,7 @@ export const make = (
         yield* Ref.update(subscriptions, (filters) =>
           filters.filter((existing) => !filtersEqual(existing, filter))
         );
-        yield* transport.send({ _tag: "Unsubscribe", id: nextMessageId(), filter });
+        yield* transport.send(Protocol.ClientMessage.Unsubscribe({ id: nextMessageId(), filter }));
       });
 
     // Send a single Push for all pending entries, recording the message id ->
@@ -232,7 +232,7 @@ export const make = (
         return next;
       });
 
-      yield* transport.send({ _tag: "Push", id, mutations });
+      yield* transport.send(Protocol.ClientMessage.Push({ id, mutations }));
     });
 
     const retrySchedule = Schedule.both(
@@ -259,7 +259,9 @@ export const make = (
         const next = new Map(map);
         next.set(id, [entry]);
         return next;
-      }).pipe(Effect.andThen(transport.send({ _tag: "Push", id, mutations: [mutation] })));
+      }).pipe(
+        Effect.andThen(transport.send(Protocol.ClientMessage.Push({ id, mutations: [mutation] })))
+      );
     };
 
     // Reconcile one PushAck result against the outbox and cache.
@@ -414,13 +416,14 @@ export const make = (
         const filters = yield* Ref.get(subscriptions);
         yield* Effect.forEach(
           filters,
-          (filter) => transport.send({ _tag: "Subscribe", id: nextMessageId(), filter }),
+          (filter) =>
+            transport.send(Protocol.ClientMessage.Subscribe({ id: nextMessageId(), filter })),
           { discard: true }
         );
 
         const keys = Array.from((yield* Ref.get(knownKeys)).values());
         if (keys.length > 0) {
-          yield* transport.send({ _tag: "Pull", id: nextMessageId(), keys });
+          yield* transport.send(Protocol.ClientMessage.Pull({ id: nextMessageId(), keys }));
         }
 
         yield* push;

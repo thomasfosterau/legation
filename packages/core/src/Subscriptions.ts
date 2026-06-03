@@ -86,7 +86,7 @@ export const subscribeKeys = (
   transport: Transport.ClientTransport,
   filter: Protocol.WireKeyFilter
 ): Effect.Effect<void, TransportError> =>
-  transport.send({ _tag: "Subscribe", id: nextMessageId(), filter });
+  transport.send(Protocol.ClientMessage.Subscribe({ id: nextMessageId(), filter }));
 
 /**
  * Unsubscribe from keys matching a wire filter, sending an `Unsubscribe`
@@ -96,4 +96,4 @@ export const unsubscribeKeys = (
   transport: Transport.ClientTransport,
   filter: Protocol.WireKeyFilter
 ): Effect.Effect<void, TransportError> =>
-  transport.send({ _tag: "Unsubscribe", id: nextMessageId(), filter });
+  transport.send(Protocol.ClientMessage.Unsubscribe({ id: nextMessageId(), filter }));

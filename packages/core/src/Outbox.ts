@@ -7,7 +7,7 @@
  * is durable, and are drained when connectivity returns.
  */
 
-import { Clock, Context, Effect, Layer, Option, PubSub, Ref, Scope, Stream } from "effect";
+import { Clock, Context, Data, Effect, Layer, Option, PubSub, Ref, Scope, Stream } from "effect";
 import { CacheStore } from "./CacheStore.js";
 import { OutboxError, StoreError } from "./Errors.js";
 import * as SyncKey from "./SyncKey.js";
@@ -41,11 +41,17 @@ export interface OutboxEntry {
 /**
  * Events published when the outbox changes.
  */
-export type OutboxEvent =
-  | { readonly _tag: "Enqueued"; readonly entry: OutboxEntry }
-  | { readonly _tag: "Completed"; readonly entry: OutboxEntry }
-  | { readonly _tag: "Failed"; readonly entry: OutboxEntry }
-  | { readonly _tag: "Drained"; readonly remaining: number };
+export type OutboxEvent = Data.TaggedEnum<{
+  Enqueued: { readonly entry: OutboxEntry };
+  Completed: { readonly entry: OutboxEntry };
+  Failed: { readonly entry: OutboxEntry };
+  Drained: { readonly remaining: number };
+}>;
+
+/**
+ * Constructors and matchers for {@link OutboxEvent}.
+ */
+export const OutboxEvent = Data.taggedEnum<OutboxEvent>();
 
 /**
  * Result of draining the outbox.
@@ -144,7 +150,7 @@ export const make: Effect.Effect<Outbox, never, CacheStore | Scope.Scope> = Effe
           status: "pending",
         };
         yield* persist(entry);
-        yield* publish({ _tag: "Enqueued", entry });
+        yield* publish(OutboxEvent.Enqueued({ entry }));
         return entry;
       });
 
@@ -172,14 +178,14 @@ export const make: Effect.Effect<Outbox, never, CacheStore | Scope.Scope> = Effe
 
           if (result._tag === "Success") {
             yield* discard(entry.id);
-            yield* publish({ _tag: "Completed", entry: attempt });
+            yield* publish(OutboxEvent.Completed({ entry: attempt }));
             completed += 1;
           } else {
             failed += 1;
             if (attempt.attempts >= maxAttempts) {
               // Exhausted: drop the entry so it cannot block the queue forever.
               yield* discard(entry.id);
-              yield* publish({ _tag: "Failed", entry: { ...attempt, status: "failed" } });
+              yield* publish(OutboxEvent.Failed({ entry: { ...attempt, status: "failed" } }));
             } else {
               const failedEntry: OutboxEntry = {
                 ...attempt,
@@ -187,13 +193,13 @@ export const make: Effect.Effect<Outbox, never, CacheStore | Scope.Scope> = Effe
                 lastError: String(result.failure),
               };
               yield* persist(failedEntry);
-              yield* publish({ _tag: "Failed", entry: failedEntry });
+              yield* publish(OutboxEvent.Failed({ entry: failedEntry }));
             }
           }
         }
 
         const remaining = yield* size;
-        yield* publish({ _tag: "Drained", remaining });
+        yield* publish(OutboxEvent.Drained({ remaining }));
         return { completed, failed, remaining } satisfies DrainResult;
       });
 
