@@ -2,51 +2,91 @@
 
 The effect-sync monorepo implements a data synchronization engine built on Effect. This glossary defines the project's vocabulary; use these terms (not synonyms) in code, issues, and docs.
 
+The engine follows the mutation-log/rebase sync model (ADR-0008): named write intents flow up, server-computed state patches flow down, and the client rebases pending intents on top of authoritative state.
+
 ## Glossary
 
-| Term                       | Meaning                                                                                                                                                                          |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Sync key**               | A hierarchical, serializable key (`["users", "1"]`) identifying one piece of synchronized data. The universal addressing scheme across cache, client, server, and wire protocol. |
-| **Key filter**             | A selector over sync keys: exact, prefix, or predicate. Prefix filters power hierarchical invalidation and subscriptions.                                                        |
-| **Cache store**            | A pluggable storage backend (`CacheStore`) holding cache entries. Implementations: memory, KeyValueStore-backed (browser storage, Redis, SQL), …                                 |
-| **Cache entry**            | A cached value plus metadata: `updatedAt`, `staleAt`, `expiresAt`, `version`, `tags`.                                                                                            |
-| **Freshness**              | A cache entry is _fresh_ (serve it), _stale_ (serve-then-revalidate or reload), or _expired_ (must reload). Computed from entry timestamps, never stored.                        |
-| **Read-through**           | Cache access that consults the store first and runs the _loader_ only on miss/staleness, writing the result back.                                                                |
-| **Write-through**          | A write that goes to the upstream source of truth first, then updates the cache with the canonical result.                                                                       |
-| **Loader**                 | The effect that fetches a value from its source of truth on a cache miss.                                                                                                        |
-| **Writer**                 | The effect that pushes a value to the source of truth in a write-through.                                                                                                        |
-| **Stale-while-revalidate** | Serving a stale cached value immediately while refreshing it in the background.                                                                                                  |
-| **Invalidation**           | Marking entries stale (not deleting them) so the next read re-fetches. By key filter or by tag.                                                                                  |
-| **Tag**                    | A label attached to cache entries for group invalidation (e.g. `"users"`).                                                                                                       |
-| **Query**                  | A declarative description of a read: key + loader + freshness windows + retry policy + tags.                                                                                     |
-| **Query state**            | The observable lifecycle of a query: `initial` / `loading` / `success` / `failure`, plus `isFetching` / `isStale`.                                                               |
-| **Mutation**               | A declarative description of a write: key + execute effect + optimistic patches + invalidations.                                                                                 |
-| **Optimistic update**      | A cache patch applied while a mutation is in flight, rolled back if the mutation fails.                                                                                          |
-| **Outbox**                 | A durable queue of pending mutations awaiting delivery to the server (offline-first support).                                                                                    |
-| **Sync protocol**          | The serializable message vocabulary between clients and servers: Subscribe/Push/Pull/Ping → Updated/Removed/Invalidated/acks.                                                    |
-| **Transport**              | The connection abstraction carrying protocol messages. `ClientTransport` (client side), `ServerConnection` (server side).                                                        |
-| **Fan-out**                | The server pushing an `Updated`/`Removed`/`Invalidated` notification to every subscribed client after a write.                                                                   |
-| **Sync hub**               | The server-side engine: session registry + write-through to the server store + fan-out.                                                                                          |
-| **Server store**           | The server's source of truth, with per-key monotonic versions.                                                                                                                   |
-| **Version**                | A per-key monotonic counter (server) or opaque token used for conflict detection.                                                                                                |
-| **Conflict**               | A push whose `baseVersion` no longer matches the server's current version for that key.                                                                                          |
-| **Conflict strategy**      | How conflicts resolve: `preferLocal`, `preferRemote`, `lastWriteWins`, `fail`, or a custom merge function.                                                                       |
-| **Promise facade**         | The promise/callback wrapper that lets non-Effect code drive the engine.                                                                                                         |
+### Data model
+
+| Term            | Meaning                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Collection**  | A named, schema-typed set of rows, keyed by row id. The unit the client materializes locally and queries.                                           |
+| **Row**         | One value in a collection, identified by (collection, row id), carrying a row version assigned by the backend.                                      |
+| **Row version** | An opaque per-row token the backend changes on every authoritative write. The basis for computing what a client is missing.                         |
+| **Schema**      | The Effect Schema describing a collection's row type; the single source of truth for validation, serialization (wire + persistence), and inference. |
+
+### Writes
+
+| Term                   | Meaning                                                                                                                                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mutator**            | A named, schema-validated write intent (name + args) defined once and executed twice: optimistically on the client, authoritatively on the backend. The backend implementation may differ (validation, permissions, side effects).            |
+| **Mutation**           | One invocation of a mutator: its name, args, and per-client sequence number.                                                                                                                                                                  |
+| **Mutation id**        | A per-client sequential number on each mutation, giving the backend exactly-once, in-order application and giving the client precise acknowledgement.                                                                                         |
+| **Journal**            | The client's durable, causally-ordered log of pending mutations awaiting backend acknowledgement. Survives reloads and crashes.                                                                                                               |
+| **Pending mutation**   | A journal entry not yet acknowledged by the backend. Its local effects live in the optimistic overlay and are replayed on every rebase.                                                                                                       |
+| **Optimistic overlay** | The local effects of pending mutations, rendered above confirmed rows. Dropped per-mutation exactly when that mutation's authoritative effect is observed — never merely when the request resolves.                                           |
+| **Rebase**             | On incoming authoritative state: discard optimistic effects, apply the patch, replay pending mutations on top, and reveal the result atomically. Conflict resolution _is_ replay: mutators may compute different effects against newer state. |
+
+### Sync protocol
+
+| Term                         | Meaning                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Subscription**             | A client-registered collection subset — (collection, predicate, order, limit/cursor) — that the backend keeps synced to the client.                                                  |
+| **Predicate**                | A serializable expression tree over row fields, used in subscriptions. Client predicates can only narrow what auth filters allow.                                                    |
+| **Client view record (CVR)** | The server-side record of exactly which row versions a client holds, per subscription. The basis for computing minimal patches.                                                      |
+| **Cookie**                   | The opaque token a client presents on pull, identifying the CVR snapshot it has.                                                                                                     |
+| **Patch**                    | An ordered sequence of row put/delete operations moving a client's view from one cookie to the next.                                                                                 |
+| **Push**                     | The client delivering pending mutations to the backend.                                                                                                                              |
+| **Pull**                     | The client requesting a patch: cookie + subscriptions in, patch + new cookie + mutation acknowledgements out. The canonical correctness path — sync must be correct over pull alone. |
+| **Poke**                     | A contentless "pull soon" hint. Realtime delivery is a latency optimization, never a correctness dependency.                                                                         |
+| **Sync transport**           | The carrier moving protocol messages between client and server. Messages are schema-defined; carriers are pluggable (the RPC implementation is the default).                         |
+
+### Reads
+
+| Term            | Meaning                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Live query**  | A declarative query (data, not an opaque function) over local collections whose results re-emit when rows it depends on change.                                                            |
+| **Mirror**      | A tab's in-memory copy of its subscribed rows, hydrated from the shared store and kept current by engine broadcasts. Live queries and the optimistic overlay run synchronously against it. |
+| **Engine host** | Where the sync engine runs. In browsers the recommended host is a service worker (the per-origin singleton); the engine itself is host-agnostic.                                           |
+
+### Server
+
+| Term                 | Meaning                                                                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Backend**          | The app-owned storage and mutator-execution environment fulfilling the server contract: run mutators transactionally (mutation-id bump atomic with effects) and evaluate subscriptions to (row id, row version) sets. |
+| **Auth filter**      | A mandatory server-side predicate per collection, AND-ed into every subscription before evaluation. Deny by default.                                                                                                  |
+| **Sync middleware**  | A server-side interception point over subscription and push handling, for cross-cutting concerns (tenancy, cost control, telemetry).                                                                                  |
+| **Session**          | One connected client as seen by the server: its identity, subscriptions, and transport connection.                                                                                                                    |
+| **Invalidation bus** | The pluggable channel carrying committed-write hints from the backend to sync sessions, possibly across instances. Fan-out is poke-then-pull over this bus.                                                           |
+| **Sync room**        | A packaged composition of sessions + CVR storage + invalidation bus that runs identically in-process or as a Durable Object.                                                                                          |
+| **Fan-out**          | Recomputing and delivering patches to every session whose subscriptions a committed write may affect.                                                                                                                 |
+
+### HTTP cache (service-worker module)
+
+| Term                       | Meaning                                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **HTTP cache**             | The separate service-worker module caching fetch-event Request/Response pairs via the browser Cache API.          |
+| **Freshness**              | A cached response is _fresh_ (serve it), _stale_ (serve-then-revalidate), or _expired_ (must reload).             |
+| **Stale-while-revalidate** | Serving a stale cached response immediately while refreshing it in the background.                                |
+| **Tag**                    | A label attached to cached responses for group invalidation, including invalidation driven by collection changes. |
 
 ## Packages and their bounded contexts
 
-Package boundaries follow dependency footprint (ADR-0006): everything needing only `effect` is in core.
+Package boundaries follow dependency footprint (ADR-0006): everything needing only `effect` is in core. Runtime globals count as dependencies.
 
-| Package                               | Context                                                                                                                                                                                                                              |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@thomasfosterau/effect-sync-core`    | The whole engine: keys, cache engine, queries, mutations, outbox, protocol, transports, the client manager (queries/mutations/subscriptions/offline sync), the service-worker/edge cache, and the server-side sync hub with fan-out. |
-| `@thomasfosterau/effect-sync-browser` | Browser-runtime adapters: WebSocket client transport, IndexedDB cache store.                                                                                                                                                         |
-| `@thomasfosterau/effect-sync-node`    | Node-runtime adapters: `ws`-based WebSocket server transport for the sync hub.                                                                                                                                                       |
-| `@thomasfosterau/effect-sync-jsonapi` | JSON:API v1.1 protocol adapter (formerly `@thomasfosterau/effect-chancery`).                                                                                                                                                         |
+| Package                               | Context                                                                                                                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@thomasfosterau/effect-sync-core`    | The engine: collections, mutators, journal, overlay/rebase, live queries, protocol messages + transport seam (RPC default), CVR bookkeeping, backend contract + in-memory reference, invalidation bus, sync room, HTTP cache. |
+| `@thomasfosterau/effect-sync-browser` | Browser-runtime adapters: service-worker engine host, IndexedDB client store, tab mirror + broadcast transport.                                                                                                               |
+| `@thomasfosterau/effect-sync-node`    | Node-runtime adapters for serving the protocol.                                                                                                                                                                               |
+| `@thomasfosterau/effect-sync-jsonapi` | JSON:API v1.1 helpers; being repositioned as collection loaders for the new model.                                                                                                                                            |
 
 ## Avoided terms
 
-- ~~"Query cache"~~ → say **cache store** (storage) or **sync cache** (engine)
-- ~~"Refetch"~~ in core APIs → say **force refresh** (`forceRefresh`); "refetch" is acceptable in client-package UX docs
+- ~~"Outbox"~~ → say **journal**
+- ~~"Sync hub"~~ → say **sync room** (the composition) or **backend** (the storage/execution contract)
+- ~~"Server store"~~ → say **backend**
+- ~~"Conflict strategy"~~ → conflicts resolve by **rebase** (mutator replay); there is no per-key merge-strategy vocabulary
+- ~~"Query cache" / "refetch"~~ → live queries don't refetch; they re-run over local collections when patches or the overlay change
 - ~~"Garbage collection / gcTime"~~ → say **time to live / expiry**
-- ~~"Document"~~ (except in JSON:API adapter where it's the spec's term)
+- ~~"Document"~~ (except in the JSON:API package where it's the spec's term)
