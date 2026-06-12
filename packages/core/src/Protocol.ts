@@ -1,151 +1,144 @@
 /**
  * Protocol
  *
- * The wire protocol spoken between sync clients and sync servers. All
- * messages are plain serializable objects, so any transport that can move
- * JSON can carry them.
+ * The sync protocol's schema-defined messages (ADR-0008). Mutator intents
+ * flow up (push); server-computed state patches flow down (pull). The
+ * protocol is carrier-agnostic: any transport that can move these messages
+ * qualifies (Transport.ts), with the RPC implementation as the default.
  *
- * Message unions are `Data.TaggedEnum`s: construct them with the generated
- * constructors (`ClientMessage.Subscribe({...})`), narrow them with
- * `ClientMessage.$is("Subscribe")`, and pattern-match exhaustively with
- * `ClientMessage.$match`. Values decoded from the wire (plain objects) are
- * type-compatible with the same unions.
- *
- * The protocol is deliberately small:
- *
- * - Clients **subscribe** to key filters and receive `Updated` / `Removed` /
- *   `Invalidated` notifications for matching keys.
- * - Clients **push** mutations; the server applies them write-through to
- *   its backing store and reports per-mutation results (including
- *   conflicts).
- * - Clients **pull** the current state of keys (used on reconnect).
+ * `Pull(cookie) → patch` is the canonical correctness path: sync must be
+ * correct over pull alone. Pokes and streamed patches are optimizations.
  */
 
-import { Data } from "effect";
-import type { SyncKey } from "./SyncKey.js";
-import * as Keys from "./SyncKey.js";
-import type { Version } from "./Versioned.js";
+import { Effect, Schema } from "effect";
+import { ProtocolError } from "./Errors.js";
+import type { Subset } from "./Subset.js";
+import { SubsetSchema } from "./Subset.js";
+
+// ─── Mutations (upstream) ────────────────────────────────────────────────────
 
 /**
- * A key filter that can travel over the wire (no predicates).
+ * One invocation of a mutator: name + args + per-client sequence number.
+ * `mutationId` is sequential per client, giving the backend exactly-once,
+ * in-order application and giving the client precise acknowledgement.
  */
-export type WireKeyFilter = Data.TaggedEnum<{
-  Prefix: { readonly prefix: SyncKey };
-  Exact: { readonly key: SyncKey };
-}>;
-
-/**
- * Constructors and matchers for {@link WireKeyFilter}.
- */
-export const WireKeyFilter = Data.taggedEnum<WireKeyFilter>();
-
-/**
- * Convert a wire filter into a `KeyFilter`.
- */
-export const toKeyFilter = (filter: WireKeyFilter): Keys.KeyFilter => filter;
-
-/**
- * Identifier correlating a request message with its response.
- */
-export type MessageId = string;
-
-/**
- * A client-originated mutation to apply on the server.
- */
-export interface PushMutation {
-  /** Client-side id used to correlate results (e.g. the outbox entry id). */
-  readonly mutationId: string;
-  readonly key: SyncKey;
-  /** The new value (or mutation payload, for command-style mutations). */
-  readonly input: unknown;
-  /** The version the client last saw for this key, for conflict detection. */
-  readonly baseVersion?: Version | undefined;
+export interface Mutation {
+  readonly clientId: string;
+  readonly mutationId: number;
+  readonly mutator: string;
+  readonly args: unknown;
+  /** Client wall-clock at creation; informational only. */
+  readonly createdAt: number;
 }
 
-/**
- * One synchronized entry as it travels over the wire.
- */
-export interface WireEntry {
-  readonly key: SyncKey;
-  readonly value: unknown;
-  readonly version: Version;
-  readonly updatedAt: number;
+export const MutationSchema: Schema.Codec<Mutation> = Schema.Struct({
+  clientId: Schema.String,
+  mutationId: Schema.Number,
+  mutator: Schema.String,
+  args: Schema.Unknown,
+  createdAt: Schema.Number,
+}) as Schema.Codec<Mutation>;
+
+/** Push request: pending mutations in journal order. */
+export interface PushRequest {
+  readonly clientGroupId: string;
+  readonly mutations: ReadonlyArray<Mutation>;
 }
 
-/**
- * Messages sent from client to server.
- */
-export type ClientMessage = Data.TaggedEnum<{
-  Subscribe: { readonly id: MessageId; readonly filter: WireKeyFilter };
-  Unsubscribe: { readonly id: MessageId; readonly filter: WireKeyFilter };
-  Push: { readonly id: MessageId; readonly mutations: ReadonlyArray<PushMutation> };
-  Pull: { readonly id: MessageId; readonly keys: ReadonlyArray<SyncKey> };
-  Ping: { readonly id: MessageId };
-}>;
+export const PushRequestSchema: Schema.Codec<PushRequest> = Schema.Struct({
+  clientGroupId: Schema.String,
+  mutations: Schema.Array(MutationSchema),
+}) as Schema.Codec<PushRequest>;
 
 /**
- * Constructors and matchers for {@link ClientMessage}:
- * `ClientMessage.Subscribe({...})`, `ClientMessage.$is("Push")`,
- * `ClientMessage.$match`.
+ * Push response: the highest mutation id the backend has applied, per
+ * client. Mutations at or below these ids are acknowledged; effects arrive
+ * via the next pull's patch, which is when the optimistic overlay drops.
  */
-export const ClientMessage = Data.taggedEnum<ClientMessage>();
+export interface PushResponse {
+  readonly lastMutationIds: Readonly<Record<string, number>>;
+}
+
+export const PushResponseSchema: Schema.Codec<PushResponse> = Schema.Struct({
+  lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+}) as Schema.Codec<PushResponse>;
+
+// ─── Patches (downstream) ────────────────────────────────────────────────────
 
 /**
- * Per-mutation result of a push.
+ * One patch operation. `Put` and `Del` address rows; `Clear` resets the
+ * client's view (sent when the server does not recognize the cookie).
  */
-export type PushResult = Data.TaggedEnum<{
-  Applied: { readonly mutationId: string; readonly entry: WireEntry };
-  Conflict: {
-    readonly mutationId: string;
-    readonly key: SyncKey;
-    /** The server's current entry for the key. */
-    readonly serverEntry: WireEntry;
-  };
-  Rejected: { readonly mutationId: string; readonly key: SyncKey; readonly reason: string };
-}>;
+export type PatchOp =
+  | {
+      readonly _tag: "Put";
+      readonly collection: string;
+      readonly id: string;
+      readonly version: string | number;
+      readonly value: unknown;
+    }
+  | { readonly _tag: "Del"; readonly collection: string; readonly id: string }
+  | { readonly _tag: "Clear" };
 
-/**
- * Constructors and matchers for {@link PushResult}.
- */
-export const PushResult = Data.taggedEnum<PushResult>();
+export const PatchOpSchema: Schema.Codec<PatchOp> = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.tag("Put"),
+    collection: Schema.String,
+    id: Schema.String,
+    version: Schema.Union([Schema.String, Schema.Number]),
+    value: Schema.Unknown,
+  }),
+  Schema.Struct({ _tag: Schema.tag("Del"), collection: Schema.String, id: Schema.String }),
+  Schema.Struct({ _tag: Schema.tag("Clear") }),
+]) as Schema.Codec<PatchOp>;
 
-/**
- * Messages sent from server to client.
- *
- * `Updated` / `Removed` / `Invalidated` are fan-out notifications
- * (unsolicited); the rest are responses to client requests.
- */
-export type ServerMessage = Data.TaggedEnum<{
-  Updated: { readonly entry: WireEntry };
-  Removed: { readonly key: SyncKey; readonly version: Version };
-  Invalidated: { readonly filter: WireKeyFilter };
-  SubscribeAck: { readonly id: MessageId };
-  UnsubscribeAck: { readonly id: MessageId };
-  PushAck: { readonly id: MessageId; readonly results: ReadonlyArray<PushResult> };
-  PullAck: { readonly id: MessageId; readonly entries: ReadonlyArray<WireEntry> };
-  Pong: { readonly id: MessageId };
-  ProtocolFailure: { readonly id: MessageId | null; readonly reason: string };
-}>;
+/** Pull request: what the client has (cookie) and wants (subsets). */
+export interface PullRequest {
+  readonly clientGroupId: string;
+  /** Cookie from the previous pull; absent on first sync. */
+  readonly cookie?: string | undefined;
+  readonly subscriptions: ReadonlyArray<Subset>;
+}
 
-/**
- * Constructors and matchers for {@link ServerMessage}:
- * `ServerMessage.Updated({...})`, `ServerMessage.$is("PushAck")`,
- * `ServerMessage.$match`.
- */
-export const ServerMessage = Data.taggedEnum<ServerMessage>();
+export const PullRequestSchema: Schema.Codec<PullRequest> = Schema.Struct({
+  clientGroupId: Schema.String,
+  cookie: Schema.optional(Schema.String),
+  subscriptions: Schema.Array(SubsetSchema),
+}) as Schema.Codec<PullRequest>;
 
-/**
- * Construct a prefix wire filter.
- */
-export const prefixFilter = (prefix: SyncKey): WireKeyFilter => WireKeyFilter.Prefix({ prefix });
+/** Pull response: patch to the new cookie, plus mutation acknowledgements. */
+export interface PullResponse {
+  readonly cookie: string;
+  readonly patch: ReadonlyArray<PatchOp>;
+  readonly lastMutationIds: Readonly<Record<string, number>>;
+}
 
-/**
- * Construct an exact wire filter.
- */
-export const exactFilter = (key: SyncKey): WireKeyFilter => WireKeyFilter.Exact({ key });
+export const PullResponseSchema: Schema.Codec<PullResponse> = Schema.Struct({
+  cookie: Schema.String,
+  patch: Schema.Array(PatchOpSchema),
+  lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+}) as Schema.Codec<PullResponse>;
 
-/**
- * Test whether a key matches a wire filter.
- */
-export const matches = (key: SyncKey, filter: WireKeyFilter): boolean =>
-  Keys.matches(key, toKeyFilter(filter));
+/** A contentless "pull soon" hint. */
+export interface Poke {
+  readonly reason?: string | undefined;
+}
+
+export const PokeSchema: Schema.Codec<Poke> = Schema.Struct({
+  reason: Schema.optional(Schema.String),
+}) as Schema.Codec<Poke>;
+
+// ─── Decode helpers ──────────────────────────────────────────────────────────
+
+const decodeWith =
+  <A>(schema: Schema.Codec<A>, what: string) =>
+  (input: unknown): Effect.Effect<A, ProtocolError> =>
+    Schema.decodeUnknownEffect(schema)(input).pipe(
+      Effect.mapError((cause) => new ProtocolError({ message: `Invalid ${what}`, cause }))
+    );
+
+export const decodePushRequest = decodeWith(PushRequestSchema, "push request");
+export const decodePullRequest = decodeWith(PullRequestSchema, "pull request");
+export const decodePushResponse = decodeWith(PushResponseSchema, "push response");
+export const decodePullResponse = decodeWith(PullResponseSchema, "pull response");
+export const decodePatchOp = decodeWith(PatchOpSchema, "patch op");

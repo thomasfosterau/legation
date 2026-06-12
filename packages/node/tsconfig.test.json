@@ -11,7 +11,7 @@
     "paths": {
       "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"]
     },
-    "lib": ["ES2022"],
+    "lib": ["ES2023"],
     "types": ["node", "ws"]
   },
   "include": ["src/**/*", "../core/src/**/*"],

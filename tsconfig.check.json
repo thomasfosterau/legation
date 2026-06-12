@@ -14,7 +14,7 @@
       "@thomasfosterau/effect-sync-node": ["packages/node/src/index.ts"],
       "@thomasfosterau/effect-sync-jsonapi": ["packages/jsonapi/src/index.ts"]
     },
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": ["packages/*/src/**/*", "packages/*/examples/**/*", "tests/**/*"],
   "exclude": ["node_modules", "packages/*/dist"]

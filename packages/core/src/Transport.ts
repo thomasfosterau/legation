@@ -1,116 +1,106 @@
 /**
  * Transport
  *
- * The connection abstraction between sync clients and sync servers.
- *
- * - `ClientTransport` is what a client uses to talk to a server: send
- *   `ClientMessage`s, receive `ServerMessage`s, and observe connectivity.
- * - `ServerConnection` is one connected client as seen by the server:
- *   receive `ClientMessage`s and send `ServerMessage`s back.
- *
- * Implementations can be backed by WebSockets, SSE + HTTP, BroadcastChannel,
- * or anything else that can move JSON. `makeInMemoryPair` provides a
- * loop-back implementation for tests and same-process client/server setups.
+ * The customisable carrier seam for protocol messages (CONTEXT.md: "sync
+ * transport"). Core defines the service interfaces and an in-memory pair;
+ * the RPC-backed implementation (RpcTransport.ts) is the shipped default,
+ * and alternative carriers (HttpApi + SSE, BroadcastChannel tab↔service-
+ * worker, bespoke) implement the same interfaces.
  */
 
-import { Context, Effect, Queue, Scope, Stream, SubscriptionRef } from "effect";
+import { Context, Effect, Layer, PubSub, Scope, Stream, SubscriptionRef } from "effect";
 import type { TransportError } from "./Errors.js";
-import type { ClientMessage, ServerMessage } from "./Protocol.js";
+import type { Poke, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
 
-/**
- * Connectivity of a client transport.
- */
+/** Connectivity of a client transport. */
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
-/**
- * The client side of a sync connection.
- */
+/** The client side of a sync connection. */
 export interface ClientTransport {
-  /** Send a message to the server. */
-  readonly send: (message: ClientMessage) => Effect.Effect<void, TransportError>;
-  /** Messages pushed by the server. */
-  readonly messages: Stream.Stream<ServerMessage, TransportError>;
-  /** Current connection status. */
+  readonly push: (request: PushRequest) => Effect.Effect<PushResponse, TransportError>;
+  readonly pull: (request: PullRequest) => Effect.Effect<PullResponse, TransportError>;
+  /** Pokes from the server; may be empty for pull-only carriers. */
+  readonly pokes: Stream.Stream<Poke, TransportError>;
   readonly status: Effect.Effect<ConnectionStatus>;
-  /** Connection status changes (emits the current status first). */
+  /** Emits the current status first, then changes. */
   readonly statusChanges: Stream.Stream<ConnectionStatus>;
 }
 
-/**
- * Service key for the client transport.
- */
 export const ClientTransport = Context.Service<ClientTransport>(
   "@thomasfosterau/effect-sync-core/ClientTransport"
 );
 
 /**
- * One connected client, as seen by the server.
+ * The server side: what a carrier needs from the sync server to answer
+ * clients. Implemented by SyncServer; bound by each carrier (RPC handlers,
+ * HTTP routes, message listeners).
  */
-export interface ServerConnection {
-  /** Unique id of this connection/session. */
-  readonly sessionId: string;
-  /** Send a message to this client. */
-  readonly send: (message: ServerMessage) => Effect.Effect<void, TransportError>;
-  /** Messages sent by this client. */
-  readonly messages: Stream.Stream<ClientMessage, TransportError>;
-  /** Close the connection. */
-  readonly close: Effect.Effect<void>;
+export interface ServerHandler {
+  readonly handlePush: (request: PushRequest) => Effect.Effect<PushResponse, TransportError>;
+  readonly handlePull: (request: PullRequest) => Effect.Effect<PullResponse, TransportError>;
+  /** Pokes addressed to one client group. */
+  readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
 }
 
-/**
- * An in-memory connected client/server transport pair.
- */
-export interface InMemoryPair {
-  readonly client: ClientTransport;
-  readonly server: ServerConnection;
-  /** Simulate a connectivity change on the client side. */
-  readonly setStatus: (status: ConnectionStatus) => Effect.Effect<void>;
-}
-
-let pairCounter = 0;
+export const ServerHandler = Context.Service<ServerHandler>(
+  "@thomasfosterau/effect-sync-core/ServerHandler"
+);
 
 /**
- * Create a connected in-memory client/server transport pair.
- *
- * Used in tests and for same-process sync (e.g. a server-side cache layer
- * subscribing to its own sync hub). Queues are shut down when the scope
- * closes.
+ * An in-memory client transport bound directly to a ServerHandler — the
+ * loop-back carrier for tests and same-process client/server setups.
  */
-export const makeInMemoryPair: Effect.Effect<InMemoryPair, never, Scope.Scope> = Effect.gen(
-  function* () {
-    const clientToServer = yield* Effect.acquireRelease(Queue.unbounded<ClientMessage>(), (queue) =>
-      Effect.asVoid(Queue.shutdown(queue))
-    );
-    const serverToClient = yield* Effect.acquireRelease(Queue.unbounded<ServerMessage>(), (queue) =>
-      Effect.asVoid(Queue.shutdown(queue))
-    );
+export const makeInMemory = (
+  handler: ServerHandler,
+  clientGroupId: string
+): Effect.Effect<
+  ClientTransport & { readonly setStatus: (status: ConnectionStatus) => Effect.Effect<void> },
+  never,
+  Scope.Scope
+> =>
+  Effect.gen(function* () {
     const status = yield* SubscriptionRef.make<ConnectionStatus>("connected");
-
-    pairCounter += 1;
-    const sessionId = `in-memory-${pairCounter}`;
-
-    const client: ClientTransport = {
-      send: (message) => Effect.asVoid(Queue.offer(clientToServer, message)),
-      messages: Stream.fromQueue(serverToClient),
+    return {
+      push: (request) => handler.handlePush(request),
+      pull: (request) => handler.handlePull(request),
+      pokes: handler.pokes(clientGroupId),
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status),
-    };
-
-    const server: ServerConnection = {
-      sessionId,
-      send: (message) => Effect.asVoid(Queue.offer(serverToClient, message)),
-      messages: Stream.fromQueue(clientToServer),
-      close: Effect.gen(function* () {
-        yield* SubscriptionRef.set(status, "disconnected");
-        yield* Queue.shutdown(clientToServer);
-        yield* Queue.shutdown(serverToClient);
-      }),
-    };
-
-    return {
-      client,
-      server,
       setStatus: (next) => SubscriptionRef.set(status, next),
-    } satisfies InMemoryPair;
-  }
-);
+    };
+  });
+
+/** Layer wiring the in-memory transport to an in-context ServerHandler. */
+export const layerInMemory = (
+  clientGroupId: string
+): Layer.Layer<ClientTransport, never, ServerHandler> =>
+  Layer.effect(ClientTransport)(
+    Effect.gen(function* () {
+      const handler = yield* ServerHandler;
+      return yield* makeInMemory(handler, clientGroupId);
+    })
+  );
+
+/** Internal helper: a poke hub keyed by client group (used by SyncServer). */
+export const makePokeHub: Effect.Effect<
+  {
+    readonly publish: (clientGroupId: string, poke: Poke) => Effect.Effect<void>;
+    readonly subscribe: (clientGroupId: string) => Stream.Stream<Poke>;
+  },
+  never,
+  Scope.Scope
+> = Effect.gen(function* () {
+  const pubsub = yield* Effect.acquireRelease(
+    PubSub.unbounded<{ readonly clientGroupId: string; readonly poke: Poke }>(),
+    (hub) => PubSub.shutdown(hub)
+  );
+  return {
+    publish: (clientGroupId, poke) =>
+      Effect.asVoid(PubSub.publish(pubsub, { clientGroupId, poke })),
+    subscribe: (clientGroupId) =>
+      Stream.fromPubSub(pubsub).pipe(
+        Stream.filter((message) => message.clientGroupId === clientGroupId),
+        Stream.map((message) => message.poke)
+      ),
+  };
+});

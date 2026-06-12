@@ -45,8 +45,8 @@ export type { SyncConfig as SyncConfigInterface } from "./synchronizer.js";
 // Export implementations
 export { makeInMemoryStorage } from "./storage.js";
 
-// Export the sync-engine adapter (query/mutation descriptor builders)
-export * as Adapter from "./adapter.js";
+// The sync-engine adapter is being repositioned as collection loaders for
+// the v2 engine (ADR-0008); the standalone JSON:API helpers remain.
 
 // Export the JSON:API document schemas and decode helpers
 export * as JsonApiSchema from "./schema.js";
