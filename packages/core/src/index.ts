@@ -27,6 +27,7 @@ export * as Mutator from "./Mutator.js";
 // ─── Protocol ────────────────────────────────────────────────────────────────
 export * as Protocol from "./Protocol.js";
 export * as Transport from "./Transport.js";
+export * as RpcTransport from "./RpcTransport.js";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as ClientStore from "./ClientStore.js";
@@ -35,6 +36,7 @@ export * as PromiseFacade from "./PromiseFacade.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 export * as Backend from "./Backend.js";
+export * as BackendContract from "./BackendContract.js";
 export * as MemoryBackend from "./MemoryBackend.js";
 export * as Authorization from "./Authorization.js";
 export * as Cvr from "./Cvr.js";

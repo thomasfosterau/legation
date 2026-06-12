@@ -11,9 +11,10 @@
  * as rows.
  */
 
-import { Context, Effect, Layer, Ref } from "effect";
+import { Context, Effect, Layer, Ref, Semaphore } from "effect";
+import { KeyValueStore } from "effect/unstable/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
-import type { StoreError } from "./Errors.js";
+import { StoreError } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";
 
 /** A confirmed row as persisted: encoded value + authoritative version. */
@@ -103,3 +104,136 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
 
 /** Layer providing the in-memory store. */
 export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(makeMemory);
+
+// ─── KeyValueStore-backed implementation ─────────────────────────────────────
+
+export interface KeyValueOptions {
+  /** Key namespace inside the KeyValueStore. Defaults to `"effect-sync/"`. */
+  readonly prefix?: string;
+}
+
+/**
+ * The durable implementation (ADR-0007): ClientStore over
+ * `effect/unstable/persistence` KeyValueStore, so any platform KVS —
+ * browser IndexedDB/localStorage, Node file system, SQL — persists the
+ * engine. Layout: one JSON blob per collection (`rows/{collection}`), plus
+ * `collections`, `journal`, `counters`, and `cookie` keys.
+ *
+ * Read-modify-write operations are serialized through a semaphore, which
+ * makes one store instance safe for concurrent fibers — not for concurrent
+ * processes (the service-worker host is the per-origin singleton,
+ * ADR-0010).
+ */
+const rowsKey = (collection: string) => `rows/${collection}`;
+
+export const makeKeyValue = (
+  options?: KeyValueOptions
+): Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> =>
+  Effect.gen(function* () {
+    const store = KeyValueStore.prefix(
+      yield* KeyValueStore.KeyValueStore,
+      options?.prefix ?? "effect-sync/"
+    );
+    const lock = yield* Semaphore.make(1);
+    const locked = <A, E>(effect: Effect.Effect<A, E>) => Semaphore.withPermit(lock, effect);
+
+    const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
+
+    const readJson = <A>(key: string): Effect.Effect<A | undefined, StoreError> =>
+      store.get(key).pipe(
+        Effect.mapError(storeError(`Failed to read "${key}"`)),
+        Effect.flatMap((raw) =>
+          raw === undefined
+            ? Effect.succeed(undefined)
+            : Effect.try({
+                try: () => JSON.parse(raw) as A,
+                catch: storeError(`Corrupt JSON at "${key}"`),
+              })
+        )
+      );
+    const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
+      store
+        .set(key, JSON.stringify(value))
+        .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
+
+    const rowMap = (collection: string) =>
+      readJson<Record<RowId, StoredRow>>(rowsKey(collection)).pipe(Effect.map((map) => map ?? {}));
+    const collections = readJson<ReadonlyArray<string>>("collections").pipe(
+      Effect.map((list) => list ?? [])
+    );
+    const trackCollection = (collection: string) =>
+      collections.pipe(
+        Effect.flatMap((list) =>
+          list.includes(collection) ? Effect.void : writeJson("collections", [...list, collection])
+        )
+      );
+    const journal = readJson<ReadonlyArray<Mutation>>("journal").pipe(
+      Effect.map((entries) => entries ?? [])
+    );
+
+    return ClientStore.of({
+      getRow: (collection, id) => rowMap(collection).pipe(Effect.map((map) => map[id])),
+      listRows: (collection) => rowMap(collection).pipe(Effect.map((map) => Object.values(map))),
+      putRow: (collection, row) =>
+        locked(
+          Effect.gen(function* () {
+            const map = yield* rowMap(collection);
+            yield* writeJson(rowsKey(collection), { ...map, [row.id]: row });
+            yield* trackCollection(collection);
+          })
+        ),
+      delRow: (collection, id) =>
+        locked(
+          Effect.gen(function* () {
+            const { [id]: _removed, ...rest } = yield* rowMap(collection);
+            yield* writeJson(rowsKey(collection), rest);
+          })
+        ),
+      clearRows: locked(
+        Effect.gen(function* () {
+          for (const collection of yield* collections) {
+            yield* store
+              .remove(rowsKey(collection))
+              .pipe(Effect.mapError(storeError(`Failed to clear "${collection}"`)));
+          }
+          yield* writeJson("collections", []);
+        })
+      ),
+
+      appendMutation: (mutation) =>
+        locked(
+          journal.pipe(Effect.flatMap((entries) => writeJson("journal", [...entries, mutation])))
+        ),
+      pendingMutations: journal,
+      acknowledge: (clientId, upTo) =>
+        locked(
+          journal.pipe(
+            Effect.flatMap((entries) =>
+              writeJson(
+                "journal",
+                entries.filter((m) => m.clientId !== clientId || m.mutationId > upTo)
+              )
+            )
+          )
+        ),
+      nextMutationId: (clientId) =>
+        locked(
+          Effect.gen(function* () {
+            const counters = (yield* readJson<Record<string, number>>("counters")) ?? {};
+            const next = (counters[clientId] ?? 0) + 1;
+            yield* writeJson("counters", { ...counters, [clientId]: next });
+            return next;
+          })
+        ),
+
+      getCookie: store.get("cookie").pipe(Effect.mapError(storeError(`Failed to read "cookie"`))),
+      setCookie: (value) =>
+        store.set("cookie", value).pipe(Effect.mapError(storeError(`Failed to write "cookie"`))),
+    });
+  });
+
+/** Layer providing the KeyValueStore-backed store. */
+export const layerKeyValue = (
+  options?: KeyValueOptions
+): Layer.Layer<ClientStore, never, KeyValueStore.KeyValueStore> =>
+  Layer.effect(ClientStore)(makeKeyValue(options));

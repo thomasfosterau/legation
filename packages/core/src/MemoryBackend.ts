@@ -8,9 +8,10 @@
  * contract's semantics (idempotent skip, gap rejection, atomic bump).
  */
 
-import { Effect, Layer, Ref } from "effect";
+import { Effect, Layer, Ref, Schema } from "effect";
 import { Backend, type ApplyResult, type ChangeHint, type SyncContext } from "./Backend.js";
 import { BackendError } from "./Errors.js";
+import type { Mutator } from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import * as Subset from "./Subset.js";
 
@@ -27,6 +28,48 @@ export type BackendHandler = (
   writer: BackendWriter,
   context: SyncContext
 ) => Effect.Effect<void, BackendError>;
+
+/** A mutator definition paired with its typed authoritative handler. */
+export interface HandlerEntry<Args> {
+  readonly mutator: Mutator<string, Args, any>;
+  readonly handle: (
+    args: Args,
+    writer: BackendWriter,
+    context: SyncContext
+  ) => Effect.Effect<void, BackendError>;
+}
+
+/** Pair a mutator definition with its authoritative handler (typed). */
+export const handler = <Args>(
+  mutator: Mutator<string, Args, any>,
+  handle: HandlerEntry<Args>["handle"]
+): HandlerEntry<Args> => ({ mutator, handle });
+
+/**
+ * Build the handler record from typed entries: pushed args are untrusted
+ * input, so each handler schema-validates them (ADR-0008's "named,
+ * schema-validated intent") before executing. Invalid args fail the push
+ * with a BackendError.
+ */
+export const validatedHandlers = (
+  entries: ReadonlyArray<HandlerEntry<any>>
+): Record<string, BackendHandler> =>
+  Object.fromEntries(
+    entries.map(({ handle, mutator }) => [
+      mutator.name,
+      ((args, writer, context) =>
+        Schema.decodeUnknownEffect(mutator.args)(args).pipe(
+          Effect.mapError(
+            (cause) =>
+              new BackendError({
+                message: `Invalid args for mutator "${mutator.name}"`,
+                cause,
+              })
+          ),
+          Effect.flatMap((decoded) => handle(decoded, writer, context))
+        )) satisfies BackendHandler,
+    ])
+  );
 
 interface MemoryRow {
   readonly id: string;
@@ -65,8 +108,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
               message: `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${last + 1}`,
             });
           }
-          const handler = handlers[mutation.mutator];
-          if (handler === undefined) {
+          const handle = handlers[mutation.mutator];
+          if (handle === undefined) {
             return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
           }
 
@@ -98,7 +141,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           // construction (single-threaded Ref updates, no partial commit on
           // failure because the handler error aborts before the bump is
           // recorded for subsequent mutations).
-          yield* handler(mutation.args, writer, context);
+          yield* handle(mutation.args, writer, context);
           yield* Ref.update(state, (s) => {
             const lastIds = new Map(s.lastMutationIds);
             const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);

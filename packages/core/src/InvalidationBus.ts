@@ -12,12 +12,23 @@
  * runtime packages and implement the same service.
  */
 
-import { Context, Effect, Layer, PubSub, Scope, Stream } from "effect";
+import { Context, Effect, Layer, PubSub, Scope } from "effect";
 import type { ChangeHint } from "./Backend.js";
+
+/** A live subscription to the bus. */
+export interface HintSubscription {
+  /** The next hint batch; suspends until one arrives. */
+  readonly take: Effect.Effect<ReadonlyArray<ChangeHint>>;
+}
 
 export interface InvalidationBus {
   readonly publish: (hints: ReadonlyArray<ChangeHint>) => Effect.Effect<void>;
-  readonly hints: Stream.Stream<ReadonlyArray<ChangeHint>>;
+  /**
+   * Subscribe to hint batches. The subscription is established once the
+   * effect completes — hints published afterwards are never missed, so a
+   * consumer can subscribe first and start its processing loop later.
+   */
+  readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
 }
 
 export const InvalidationBus = Context.Service<InvalidationBus>(
@@ -34,7 +45,9 @@ export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> =
     return InvalidationBus.of({
       publish: (hints) =>
         hints.length === 0 ? Effect.void : Effect.asVoid(PubSub.publish(pubsub, hints)),
-      hints: Stream.fromPubSub(pubsub),
+      subscribe: PubSub.subscribe(pubsub).pipe(
+        Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
+      ),
     });
   }
 );

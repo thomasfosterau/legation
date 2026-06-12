@@ -11,7 +11,7 @@
  * atomically through a single changes event.
  */
 
-import { Context, Effect, Layer, PubSub, Ref, Scope, Stream } from "effect";
+import { Context, Effect, Layer, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import { MutatorError, StoreError, TransportError } from "./Errors.js";
@@ -33,7 +33,11 @@ export interface ClientEngineOptions {
 }
 
 export interface ClientEngine {
-  /** Run a mutator optimistically and journal it for push. */
+  /**
+   * Run a mutator optimistically and journal it for push. Args are
+   * validated against the mutator's schema and journaled in encoded
+   * (wire/persistence) form; handlers always receive decoded args.
+   */
   readonly mutate: (
     mutator: string,
     args: unknown
@@ -115,16 +119,28 @@ export const make = (
       };
 
       // Seed every collection we know about lazily via collectionView; then
-      // replay pending mutations in journal order.
+      // replay pending mutations in journal order. Journal args are encoded
+      // (they survive persistence and the wire), so decode before replay.
       for (const mutation of yield* store.pendingMutations) {
+        const definition = options.mutators.mutators.get(mutation.mutator);
         const handler = options.mutators.handlers.get(mutation.mutator);
-        if (handler === undefined) {
+        if (definition === undefined || handler === undefined) {
           return yield* new MutatorError({
             message: `Unknown mutator: ${mutation.mutator}`,
             mutator: mutation.mutator,
           });
         }
-        yield* handler(mutation.args, writer);
+        const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+          Effect.mapError(
+            (cause) =>
+              new MutatorError({
+                message: `Invalid journaled args for mutator "${mutation.mutator}"`,
+                mutator: mutation.mutator,
+                cause,
+              })
+          )
+        );
+        yield* handler(args, writer);
       }
       return view;
     });
@@ -222,15 +238,29 @@ export const make = (
     return ClientEngine.of({
       mutate: (mutator, args) =>
         Effect.gen(function* () {
-          if (!options.mutators.handlers.has(mutator)) {
+          const definition = options.mutators.mutators.get(mutator);
+          if (definition === undefined || !options.mutators.handlers.has(mutator)) {
             return yield* new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator });
           }
+          // Validate now (fail fast at the call site). Callers pass the
+          // decoded Type; encoding it validates and produces the journal's
+          // wire/persistence form.
+          const encoded = yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
+            Effect.mapError(
+              (cause) =>
+                new MutatorError({
+                  message: `Invalid args for mutator "${mutator}"`,
+                  mutator,
+                  cause,
+                })
+            )
+          );
           const mutationId = yield* store.nextMutationId(options.clientId);
           const mutation: Mutation = {
             clientId: options.clientId,
             mutationId,
             mutator,
-            args,
+            args: encoded,
             createdAt: Date.now(),
           };
           yield* store.appendMutation(mutation);

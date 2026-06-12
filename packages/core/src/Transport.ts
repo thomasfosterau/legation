@@ -81,7 +81,12 @@ export const layerInMemory = (
     })
   );
 
-/** Internal helper: a poke hub keyed by client group (used by SyncServer). */
+/**
+ * Internal helper: a poke hub keyed by client group (used by SyncServer).
+ * The replay buffer closes the subscribe/publish race for (re)connecting
+ * poke streams: a poke is a contentless "pull soon" hint, so replaying the
+ * most recent one to a late subscriber costs at most a redundant pull.
+ */
 export const makePokeHub: Effect.Effect<
   {
     readonly publish: (clientGroupId: string, poke: Poke) => Effect.Effect<void>;
@@ -91,7 +96,7 @@ export const makePokeHub: Effect.Effect<
   Scope.Scope
 > = Effect.gen(function* () {
   const pubsub = yield* Effect.acquireRelease(
-    PubSub.unbounded<{ readonly clientGroupId: string; readonly poke: Poke }>(),
+    PubSub.unbounded<{ readonly clientGroupId: string; readonly poke: Poke }>({ replay: 1 }),
     (hub) => PubSub.shutdown(hub)
   );
   return {

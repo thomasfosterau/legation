@@ -174,3 +174,75 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
     })
   );
 });
+
+describe("mutator args validation", () => {
+  const TodoArgs = Schema.Struct({
+    id: Schema.String,
+    title: Schema.String,
+    due: Schema.DateFromString,
+  });
+  const typedMutators = Mutator.registry([
+    {
+      mutator: Mutator.make("todo/schedule", TodoArgs),
+      local: (args, writer) => {
+        const todo = args as typeof TodoArgs.Type;
+        return writer.put("todos", todo.id, { id: todo.id, dueYear: todo.due.getFullYear() });
+      },
+    },
+  ]);
+
+  const makeTypedClient = Effect.gen(function* () {
+    const handler = yield* makeServer;
+    const store = yield* ClientStoreModule.makeMemory;
+    const transport = yield* makeInMemory(handler, "group-a");
+    const engine = yield* ClientEngineModule.make({
+      clientId: "client-a",
+      clientGroupId: "group-a",
+      mutators: typedMutators,
+    }).pipe(
+      Effect.provideService(ClientStore, store),
+      Effect.provideService(ClientTransport, transport)
+    );
+    return { engine, store };
+  });
+
+  it.effect("rejects args that fail the mutator schema", () =>
+    Effect.gen(function* () {
+      const { engine, store } = yield* makeTypedClient;
+      const failure = yield* Effect.flip(
+        engine.mutate("todo/schedule", { id: "1", title: 42, due: new Date() })
+      );
+      expect(failure._tag).toBe("MutatorError");
+      expect(yield* store.pendingMutations).toEqual([]);
+    })
+  );
+
+  it.effect("journals encoded args and replays handlers with decoded args", () =>
+    Effect.gen(function* () {
+      const { engine, store } = yield* makeTypedClient;
+      yield* engine.mutate("todo/schedule", {
+        id: "1",
+        title: "ship",
+        due: new Date("2026-06-12T00:00:00.000Z"),
+      });
+
+      // The journal holds the wire/persistence form (Date encoded to string).
+      const pending = yield* store.pendingMutations;
+      expect(pending.map((m) => (m.args as { due: unknown }).due)).toEqual([
+        "2026-06-12T00:00:00.000Z",
+      ]);
+
+      // Replay decoded the args back to a Date for the handler.
+      const view = yield* engine.query(allTodos);
+      expect(view.map((row) => row.value)).toEqual([{ id: "1", dueYear: 2026 }]);
+    })
+  );
+
+  it.effect("rejects unknown mutators", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeTypedClient;
+      const failure = yield* Effect.flip(engine.mutate("todo/unknown", {}));
+      expect(failure._tag).toBe("MutatorError");
+    })
+  );
+});

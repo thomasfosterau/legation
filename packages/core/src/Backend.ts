@@ -13,8 +13,9 @@
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.
  *
- * `MemoryBackend.ts` is the reference implementation; the contract test
- * suite (Phase 2: `verifyBackendContract`) checks these guarantees.
+ * `MemoryBackend.ts` is the reference implementation;
+ * `BackendContract.verifyBackendContract` checks these guarantees against
+ * any implementation.
  */
 
 import { Context } from "effect";

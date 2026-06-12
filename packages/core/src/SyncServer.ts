@@ -13,7 +13,7 @@
  * Predicate-level matching is a planned refinement.
  */
 
-import { Effect, Layer, Ref, Scope, Stream } from "effect";
+import { Effect, Layer, Ref, Scope } from "effect";
 import { Backend, type SyncContext } from "./Backend.js";
 import { AuthPolicy, SyncMiddleware, authorize, passthroughMiddleware } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
@@ -49,17 +49,24 @@ export const make: Effect.Effect<
 
   // Fan-out loop: hints → poke groups whose subscriptions touch the
   // hinted collections. Poke-then-pull; correctness never depends on it.
+  // Subscribing before `make` returns guarantees the loop sees every hint
+  // published after construction, even ones racing the forked fiber's start.
+  const hintSubscription = yield* bus.subscribe;
   yield* Effect.forkScoped(
-    Stream.runForEach(bus.hints, (hints) =>
-      Effect.gen(function* () {
-        const touched = new Set(hints.map((hint) => hint.collection));
-        const groups = yield* Ref.get(activeSubsets);
-        for (const [clientGroupId, subsets] of groups) {
-          if (subsets.some((subset) => touched.has(subset.collection))) {
-            yield* pokeHub.publish(clientGroupId, { reason: undefined });
-          }
-        }
-      })
+    Effect.forever(
+      hintSubscription.take.pipe(
+        Effect.flatMap((hints) =>
+          Effect.gen(function* () {
+            const touched = new Set(hints.map((hint) => hint.collection));
+            const groups = yield* Ref.get(activeSubsets);
+            for (const [clientGroupId, subsets] of groups) {
+              if (subsets.some((subset) => touched.has(subset.collection))) {
+                yield* pokeHub.publish(clientGroupId, { reason: undefined });
+              }
+            }
+          })
+        )
+      )
     )
   );
 

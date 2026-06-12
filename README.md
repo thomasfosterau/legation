@@ -4,7 +4,7 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 
 ## Status
 
-**v2 rebuild in progress** (see [ADRs 0007–0010](docs/adr/)). The end-to-end engine core — optimistic mutations → journal → push → authoritative backend → CVR diff → pull patch → rebase — works in-process today; transports, browser hosts, and bindings are landing in phases. All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 and will change.
+**v2 rebuild in progress** (see [ADRs 0007–0010](docs/adr/)). The engine core and the default RPC transport work today: optimistic mutations → journal → push → authoritative backend → CVR diff → pull patch → rebase, with schema-validated mutator args end to end, pokes streamed over `effect/unstable/rpc`, a durable KeyValueStore-backed client store, and an executable backend contract (`BackendContract.verifyBackendContract`). Browser hosts and platform bindings land next. All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 and will change.
 
 ## Architecture
 
@@ -36,12 +36,12 @@ See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for t
 
 Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md)).
 
-| Package                                                   | Description                                                                                                                                                                                                   |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/effect-sync-core`](packages/core)       | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam, BYO backend contract, CVR bookkeeping, auth, invalidation bus, sync rooms, HTTP cache interfaces |
-| [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters (phase 3): service-worker host, IndexedDB client store, tab mirrors, Cache API response store                                                                                                |
-| [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters (phase 2/3): serving the default RPC protocol, distributed bus adapters                                                                                                                         |
-| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 helpers; being repositioned as collection loaders                                                                                                                                               |
+| Package                                                   | Description                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/effect-sync-core`](packages/core)       | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
+| [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters (phase 3): service-worker host, IndexedDB client store, tab mirrors, Cache API response store                                                                                                                                                         |
+| [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters (phase 2/3): serving the default RPC protocol, distributed bus adapters                                                                                                                                                                                  |
+| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 helpers; being repositioned as collection loaders                                                                                                                                                                                                        |
 
 ## Quick start (in-process, today)
 
@@ -63,19 +63,25 @@ import {
 } from "@thomasfosterau/effect-sync-core";
 
 // 1. Shared mutator contract (client runs it optimistically; your backend
-//    runs its own authoritative version).
+//    runs its own authoritative version). Args are schema-validated on
+//    both sides and journaled in encoded form.
+const TodoArgs = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  done: Schema.Boolean,
+});
+const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  {
-    mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: any, writer) => writer.put("todos", args.id, args),
-  },
+  { mutator: todoSet, local: (args: any, writer) => writer.put("todos", args.id, args) },
 ]);
 
 // 2. Server: reference in-memory backend + deny-by-default auth.
 const server = Effect.gen(function* () {
-  const backend = yield* MemoryBackend.make({
-    "todo/set": (args: any, writer) => Effect.asVoid(writer.put("todos", args.id, args)),
-  });
+  const backend = yield* MemoryBackend.make(
+    MemoryBackend.validatedHandlers([
+      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+    ])
+  );
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend.Backend, backend),
     Effect.provideService(
