@@ -35,7 +35,11 @@
         /// The most recent decoding/query error, if any.
         public private(set) var error: Error?
 
-        private var task: Task<Void, Never>?
+        // Written once in `init` (on the main actor) and read once in the
+        // nonisolated `deinit`; `nonisolated(unsafe)` lets `deinit` cancel it
+        // without the main-actor isolation a stored property would otherwise
+        // require.
+        nonisolated(unsafe) private var task: Task<Void, Never>?
 
         public init(engine: SyncEngine, subset: Subset, of type: Value.Type = Value.self) {
             task = Task { [weak self] in
