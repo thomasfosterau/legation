@@ -6,6 +6,10 @@
  * acknowledgements and mirror updates (materialized subset rows, already
  * overlay-applied by the engine) flow host → tabs.
  *
+ * Subscriptions carry a `tabId` so the host can refcount subsets across
+ * tabs (tear an engine subscription down only when its last tab leaves) and
+ * release everything a departing tab held via `Disconnect`.
+ *
  * Mutator args travel in encoded (wire) form: the tab validates/encodes
  * against its registry before posting, the host re-validates by decoding
  * (`ClientEngine.mutateEncoded`).
@@ -23,8 +27,10 @@ export type TabMessage =
       readonly mutator: string;
       readonly args: unknown;
     }
-  | { readonly _tag: "Subscribe"; readonly subset: Subset.Subset }
-  | { readonly _tag: "Unsubscribe"; readonly subset: Subset.Subset };
+  | { readonly _tag: "Subscribe"; readonly tabId: string; readonly subset: Subset.Subset }
+  | { readonly _tag: "Unsubscribe"; readonly tabId: string; readonly subset: Subset.Subset }
+  /** A tab leaving: release every subscription it held. */
+  | { readonly _tag: "Disconnect"; readonly tabId: string };
 
 export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
   Schema.Struct({
@@ -33,8 +39,17 @@ export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
     mutator: Schema.String,
     args: Schema.Unknown,
   }),
-  Schema.Struct({ _tag: Schema.tag("Subscribe"), subset: Subset.SubsetSchema }),
-  Schema.Struct({ _tag: Schema.tag("Unsubscribe"), subset: Subset.SubsetSchema }),
+  Schema.Struct({
+    _tag: Schema.tag("Subscribe"),
+    tabId: Schema.String,
+    subset: Subset.SubsetSchema,
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("Unsubscribe"),
+    tabId: Schema.String,
+    subset: Subset.SubsetSchema,
+  }),
+  Schema.Struct({ _tag: Schema.tag("Disconnect"), tabId: Schema.String }),
 ]) as Schema.Codec<TabMessage>;
 
 // ─── Host → tabs ─────────────────────────────────────────────────────────────

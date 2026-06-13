@@ -32,6 +32,7 @@ export * as RpcTransport from "./RpcTransport.js";
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as ClientStore from "./ClientStore.js";
 export * as ClientEngine from "./ClientEngine.js";
+export * as LiveQuery from "./LiveQuery.js";
 export * as PromiseFacade from "./PromiseFacade.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────

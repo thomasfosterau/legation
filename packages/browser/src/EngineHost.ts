@@ -8,9 +8,11 @@
  * registered with the engine and their live results broadcast on every
  * change.
  *
- * Subscription bookkeeping is set-based, not refcounted: `Unsubscribe`
- * tears the subset down for every tab. Multi-tab refcounting (requires tab
- * identity + disconnect detection) is a planned refinement.
+ * Subscriptions are refcounted by tab: a subset's engine subscription and
+ * broadcast fiber start when its first tab subscribes and stop only when
+ * the last tab unsubscribes or disconnects. `Disconnect` releases every
+ * subset a departing tab held — the close-time signal that stands in for
+ * the disconnect detection a BroadcastChannel can't provide on its own.
  */
 
 import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
@@ -23,6 +25,13 @@ export interface EngineHostOptions {
   readonly engine: ClientEngine.ClientEngine;
 }
 
+/** One actively-broadcast subset: which tabs hold it, and its fiber. */
+interface Active {
+  readonly subset: Subset.Subset;
+  readonly tabs: ReadonlySet<string>;
+  readonly fiber: Fiber.Fiber<void, never>;
+}
+
 /**
  * Serve the engine over the channel. The inbound subscription is
  * established before this effect completes; message handling runs on a
@@ -32,17 +41,23 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
   Effect.gen(function* () {
     const { channel, engine } = options;
     const inbox = yield* channel.subscribe;
-    const broadcasting = yield* Ref.make(new Map<string, Fiber.Fiber<void, never>>());
+    const active = yield* Ref.make(new Map<string, Active>());
 
     const broadcast = (key: string, rows: ReadonlyArray<ClientEngine.LocalRow>) =>
       channel.post(MirrorProtocol.mirrorUpdate(key, rows));
 
-    const handleSubscribe = (subset: Subset.Subset) =>
+    const handleSubscribe = (tabId: string, subset: Subset.Subset) =>
       Effect.gen(function* () {
         const key = Subset.hash(subset);
-        const fibers = yield* Ref.get(broadcasting);
-        if (fibers.has(key)) {
-          // Already broadcasting: hydrate the (possibly new) tab once.
+        const existing = (yield* Ref.get(active)).get(key);
+        if (existing !== undefined) {
+          // Already broadcasting: refcount this tab and hydrate it once.
+          yield* Ref.update(active, (map) =>
+            new Map(map).set(key, {
+              ...existing,
+              tabs: new Set(existing.tabs).add(tabId),
+            })
+          );
           return yield* engine.query(subset).pipe(Effect.flatMap((rows) => broadcast(key, rows)));
         }
         yield* engine.subscribe(subset);
@@ -52,21 +67,37 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
             Effect.ignore
           )
         );
-        yield* Ref.update(broadcasting, (map) => new Map(map).set(key, fiber));
+        yield* Ref.update(active, (map) =>
+          new Map(map).set(key, { subset, tabs: new Set([tabId]), fiber })
+        );
       });
 
-    const handleUnsubscribe = (subset: Subset.Subset) =>
+    /** Drop one tab from one subset; tear the subset down if it was the last. */
+    const release = (tabId: string, key: string) =>
       Effect.gen(function* () {
-        const key = Subset.hash(subset);
-        const fiber = (yield* Ref.get(broadcasting)).get(key);
-        if (fiber === undefined) return;
-        yield* Fiber.interrupt(fiber);
-        yield* engine.unsubscribe(subset);
-        yield* Ref.update(broadcasting, (map) => {
+        const entry = (yield* Ref.get(active)).get(key);
+        if (entry === undefined || !entry.tabs.has(tabId)) return;
+        const tabs = new Set(entry.tabs);
+        tabs.delete(tabId);
+        if (tabs.size > 0) {
+          yield* Ref.update(active, (map) => new Map(map).set(key, { ...entry, tabs }));
+          return;
+        }
+        yield* Fiber.interrupt(entry.fiber);
+        yield* engine.unsubscribe(entry.subset);
+        yield* Ref.update(active, (map) => {
           const next = new Map(map);
           next.delete(key);
           return next;
         });
+      });
+
+    const handleDisconnect = (tabId: string) =>
+      Effect.gen(function* () {
+        const keys = [...(yield* Ref.get(active)).values()]
+          .filter((entry) => entry.tabs.has(tabId))
+          .map((entry) => Subset.hash(entry.subset));
+        for (const key of keys) yield* release(tabId, key);
       });
 
     const handle = (message: MirrorProtocol.TabMessage) => {
@@ -83,9 +114,11 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
             )
           );
         case "Subscribe":
-          return handleSubscribe(message.subset);
+          return handleSubscribe(message.tabId, message.subset);
         case "Unsubscribe":
-          return handleUnsubscribe(message.subset);
+          return release(message.tabId, Subset.hash(message.subset));
+        case "Disconnect":
+          return handleDisconnect(message.tabId);
       }
     };
 

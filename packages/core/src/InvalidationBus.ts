@@ -14,6 +14,7 @@
 
 import { Context, Effect, Layer, PubSub, Scope } from "effect";
 import type { ChangeHint } from "./Backend.js";
+import type { RowId } from "./Collection.js";
 
 /** A live subscription to the bus. */
 export interface HintSubscription {
@@ -54,3 +55,90 @@ export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> =
 
 export const layerInProcess: Layer.Layer<InvalidationBus> =
   Layer.effect(InvalidationBus)(makeInProcess);
+
+// ─── Distributed adapters ────────────────────────────────────────────────────
+
+/**
+ * A string pub/sub channel — the one primitive a distributed bus needs.
+ * Every subscriber on the channel (across instances) sees every published
+ * payload; the publisher's own subscriptions see it too, which is correct:
+ * each instance fans the hint out to *its* local sessions.
+ *
+ * Concrete brokers (runtime packages or app code) implement this over a
+ * Cloudflare Durable Object broadcast, Redis pub/sub, Postgres
+ * LISTEN/NOTIFY, NATS, etc. — that is the entire distributed surface.
+ */
+export interface BusBroker {
+  readonly publish: (payload: string) => Effect.Effect<void>;
+  /** Subscribe to the channel; established when the effect completes. */
+  readonly subscribe: Effect.Effect<{ readonly take: Effect.Effect<string> }, never, Scope.Scope>;
+}
+
+/** A bare change hint, as it crosses the wire. */
+interface WireHint {
+  readonly collection: string;
+  readonly ids: ReadonlyArray<RowId>;
+}
+
+const isWireHint = (value: unknown): value is WireHint =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as WireHint).collection === "string" &&
+  Array.isArray((value as WireHint).ids);
+
+/** Decode a payload to a hint batch; `undefined` for malformed traffic. */
+const decodeHints = (payload: string): ReadonlyArray<ChangeHint> | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed) || !parsed.every(isWireHint)) return undefined;
+  return parsed.map((hint) => ({ collection: hint.collection, ids: hint.ids }));
+};
+
+/**
+ * An InvalidationBus over a {@link BusBroker}: hints are JSON-serialized
+ * onto the channel and decoded back on the other side. Correctness still
+ * never depends on the bus (ADR-0009), so malformed payloads are skipped
+ * rather than failed — the next pull repairs any missed poke.
+ */
+export const makeSerialized = (broker: BusBroker): InvalidationBus =>
+  InvalidationBus.of({
+    publish: (hints) => (hints.length === 0 ? Effect.void : broker.publish(JSON.stringify(hints))),
+    subscribe: broker.subscribe.pipe(
+      Effect.map((subscription) => {
+        const take: Effect.Effect<ReadonlyArray<ChangeHint>> = subscription.take.pipe(
+          Effect.flatMap((payload) => {
+            const hints = decodeHints(payload);
+            return hints === undefined ? take : Effect.succeed(hints);
+          })
+        );
+        return { take };
+      })
+    ),
+  });
+
+/** Layer for a serialized bus over an in-context broker. */
+export const layerSerialized = (broker: BusBroker): Layer.Layer<InvalidationBus> =>
+  Layer.succeed(InvalidationBus)(makeSerialized(broker));
+
+/**
+ * An in-memory broker over a shared PubSub: every bus built on the same
+ * broker exchanges hints, modelling several instances on one process. The
+ * reference broker for tests and the executable shape a real broker mimics.
+ */
+export const makeMemoryBroker: Effect.Effect<BusBroker, never, Scope.Scope> = Effect.gen(
+  function* () {
+    const pubsub = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (hub) =>
+      PubSub.shutdown(hub)
+    );
+    return {
+      publish: (payload) => Effect.asVoid(PubSub.publish(pubsub, payload)),
+      subscribe: PubSub.subscribe(pubsub).pipe(
+        Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
+      ),
+    };
+  }
+);

@@ -18,7 +18,7 @@ import {
   Transport,
 } from "@thomasfosterau/effect-sync-core";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Ref, Schema } from "effect";
 import * as EngineHost from "../EngineHost.js";
 import * as MirrorChannel from "../MirrorChannel.js";
 import * as TabMirror from "../TabMirror.js";
@@ -155,6 +155,53 @@ describe("EngineHost ↔ TabMirror (loopback)", () => {
       yield* mirror.subscribe(allTodos);
       yield* mirror.mutate("todo/set", { id: "1", title: "still works", done: false });
       yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
+    })
+  );
+});
+
+describe("EngineHost subset refcounting", () => {
+  it.effect("keeps a subset until its last tab leaves; disconnect releases it", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const subs = yield* Ref.make(0);
+      const unsubs = yield* Ref.make(0);
+      // Count engine subscribe/unsubscribe; delegate everything else.
+      const counted = {
+        ...engine,
+        subscribe: (subset) =>
+          Ref.update(subs, (n) => n + 1).pipe(Effect.andThen(engine.subscribe(subset))),
+        unsubscribe: (subset) =>
+          Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
+      } satisfies typeof engine;
+
+      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      yield* EngineHost.run({ channel: host, engine: counted });
+      const one = yield* TabMirror.make({ channel: tab, mutators });
+
+      // Two tabs share the same subset: one engine subscription.
+      yield* one.subscribe(allTodos);
+      yield* eventually(Ref.get(subs), (n) => n === 1);
+      const two = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const second = yield* TabMirror.make({ channel: tab, mutators });
+          yield* second.subscribe(allTodos);
+          // No second engine subscription, no teardown while both are present.
+          yield* sleepReal(30);
+          expect(yield* Ref.get(subs)).toBe(1);
+          expect(yield* Ref.get(unsubs)).toBe(0);
+          return "scoped";
+        })
+      );
+      expect(two).toBe("scoped");
+
+      // The second tab's scope closed → Disconnect released its hold, but
+      // the first tab still holds the subset, so no teardown yet.
+      yield* sleepReal(30);
+      expect(yield* Ref.get(unsubs)).toBe(0);
+
+      // The last tab explicitly unsubscribes → the engine subscription ends.
+      yield* one.unsubscribe(allTodos);
+      yield* eventually(Ref.get(unsubs), (n) => n === 1);
     })
   );
 });

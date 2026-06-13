@@ -43,7 +43,13 @@ export interface TabMirror {
 export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { channel, mutators } = options;
+    const tabId = crypto.randomUUID();
     const inbox = yield* channel.subscribe;
+    // Release every subscription this tab holds when its scope closes — the
+    // host refcounts subsets by tab and tears down the last one's fiber.
+    yield* Effect.addFinalizer(() =>
+      channel.post({ _tag: "Disconnect", tabId }).pipe(Effect.ignore)
+    );
     const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
     const changes = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (hub) =>
       PubSub.shutdown(hub)
@@ -126,8 +132,8 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
           yield* channel.post({ _tag: "Mutate", requestId, mutator, args: encoded });
           yield* Deferred.await(deferred);
         }),
-      subscribe: (subset) => channel.post({ _tag: "Subscribe", subset }),
-      unsubscribe: (subset) => channel.post({ _tag: "Unsubscribe", subset }),
+      subscribe: (subset) => channel.post({ _tag: "Subscribe", tabId, subset }),
+      unsubscribe: (subset) => channel.post({ _tag: "Unsubscribe", tabId, subset }),
       query,
       observe: (subset) => {
         const key = Subset.hash(subset);
