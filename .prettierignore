@@ -9,3 +9,4 @@ bun.lock
 .agents/skills
 .claude/skills
 skills-lock.json
+packages/swift
