@@ -206,6 +206,61 @@ describe("EngineHost subset refcounting", () => {
   );
 });
 
+describe("EngineHost liveness (heartbeat)", () => {
+  const liveness = { tabTimeout: "60 millis", sweepInterval: "15 millis" } as const;
+
+  // Real clock: heartbeat/sweep run on Effect.sleep, which the TestClock
+  // would freeze. `it.live` uses wall time, so the short intervals fire.
+  it.live("reclaims a subset from a tab that stops heartbeating", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const unsubs = yield* Ref.make(0);
+      const counted = {
+        ...engine,
+        unsubscribe: (subset) =>
+          Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
+      } satisfies typeof engine;
+
+      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      yield* EngineHost.run({ channel: host, engine: counted, liveness });
+
+      // A "ghost" tab subscribes directly on the channel and never
+      // heartbeats — modelling a crashed tab that can't send Disconnect.
+      yield* tab.post({ _tag: "Subscribe", tabId: "ghost", subset: allTodos });
+
+      // The sweep reclaims it once its last-seen passes the timeout.
+      yield* eventually(Ref.get(unsubs), (n) => n === 1);
+    })
+  );
+
+  it.live("keeps a live tab's subset across several sweeps", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const unsubs = yield* Ref.make(0);
+      const counted = {
+        ...engine,
+        unsubscribe: (subset) =>
+          Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
+      } satisfies typeof engine;
+
+      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      yield* EngineHost.run({ channel: host, engine: counted, liveness });
+      // A real mirror heartbeats faster than the timeout.
+      const mirror = yield* TabMirror.make({
+        channel: tab,
+        mutators,
+        heartbeatInterval: "15 millis",
+      });
+      yield* mirror.subscribe(allTodos);
+      yield* eventually(mirror.query(allTodos), (current) => current.length === 0);
+
+      // Across several timeout windows the heartbeat keeps it alive.
+      yield* Effect.sleep("200 millis");
+      expect(yield* Ref.get(unsubs)).toBe(0);
+    })
+  );
+});
+
 describe("EngineHost ↔ TabMirror (BroadcastChannel)", () => {
   it.effect("syncs tab to host over a real BroadcastChannel pair", () =>
     Effect.gen(function* () {

@@ -30,7 +30,9 @@ export type TabMessage =
   | { readonly _tag: "Subscribe"; readonly tabId: string; readonly subset: Subset.Subset }
   | { readonly _tag: "Unsubscribe"; readonly tabId: string; readonly subset: Subset.Subset }
   /** A tab leaving: release every subscription it held. */
-  | { readonly _tag: "Disconnect"; readonly tabId: string };
+  | { readonly _tag: "Disconnect"; readonly tabId: string }
+  /** Liveness ping: lets the host reclaim subsets from tabs that crash. */
+  | { readonly _tag: "Heartbeat"; readonly tabId: string };
 
 export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
   Schema.Struct({
@@ -50,6 +52,7 @@ export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
     subset: Subset.SubsetSchema,
   }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), tabId: Schema.String }),
+  Schema.Struct({ _tag: Schema.tag("Heartbeat"), tabId: Schema.String }),
 ]) as Schema.Codec<TabMessage>;
 
 // ─── Host → tabs ─────────────────────────────────────────────────────────────

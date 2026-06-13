@@ -42,6 +42,7 @@ export * as MemoryBackend from "./MemoryBackend.js";
 export * as Authorization from "./Authorization.js";
 export * as Cvr from "./Cvr.js";
 export * as InvalidationBus from "./InvalidationBus.js";
+export * as BusBrokers from "./BusBrokers.js";
 export * as SyncServer from "./SyncServer.js";
 export * as SyncRoom from "./SyncRoom.js";
 

@@ -15,7 +15,7 @@ import {
   TransportError,
   type Mutator,
 } from "@thomasfosterau/effect-sync-core";
-import { Deferred, Effect, PubSub, Ref, Schema, Scope, Stream } from "effect";
+import { Deferred, type Duration, Effect, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -23,6 +23,12 @@ export interface TabMirrorOptions {
   readonly channel: MirrorChannel;
   /** The shared mutator registry (same definitions the host engine runs). */
   readonly mutators: Mutator.MutatorRegistry;
+  /**
+   * How often to send a liveness heartbeat to the host. Keep it shorter
+   * than the host's `tabTimeout` so a live tab is never reclaimed. Defaults
+   * to 10 seconds.
+   */
+  readonly heartbeatInterval?: Duration.Input;
 }
 
 export interface TabMirror {
@@ -49,6 +55,17 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
     // host refcounts subsets by tab and tears down the last one's fiber.
     yield* Effect.addFinalizer(() =>
       channel.post({ _tag: "Disconnect", tabId }).pipe(Effect.ignore)
+    );
+    // Heartbeat so the host keeps this tab's subsets alive (and reclaims
+    // them if the tab crashes without disconnecting). Fires immediately,
+    // then on the interval.
+    const heartbeatInterval = options.heartbeatInterval ?? "10 seconds";
+    yield* Effect.forkScoped(
+      Effect.forever(
+        channel
+          .post({ _tag: "Heartbeat", tabId })
+          .pipe(Effect.ignore, Effect.andThen(Effect.sleep(heartbeatInterval)))
+      )
     );
     const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
     const changes = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (hub) =>

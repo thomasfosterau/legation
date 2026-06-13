@@ -12,8 +12,9 @@
  */
 
 import { Context, Effect, Layer, Ref } from "effect";
+import { KeyValueStore } from "effect/unstable/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
-import type { StoreError } from "./Errors.js";
+import { StoreError } from "./Errors.js";
 
 /** What one client group holds: collection → row id → row version. */
 export interface Cvr {
@@ -86,3 +87,71 @@ export const makeMemoryStore: Effect.Effect<CvrStore> = Effect.gen(function* () 
 });
 
 export const layerMemoryStore: Layer.Layer<CvrStore> = Layer.effect(CvrStore)(makeMemoryStore);
+
+// ─── Shared-storage CVR store (distributed) ──────────────────────────────────
+
+/** The JSON-serializable shape of a CVR on disk: rows as nested entry pairs. */
+interface WireCvr {
+  readonly rows: ReadonlyArray<readonly [string, ReadonlyArray<readonly [RowId, RowVersion]>]>;
+}
+
+const toWire = (cvr: Cvr): WireCvr => ({
+  rows: [...cvr.rows].map(([collection, versions]) => [collection, [...versions]] as const),
+});
+
+const isWireCvr = (value: unknown): value is WireCvr =>
+  typeof value === "object" && value !== null && Array.isArray((value as WireCvr).rows);
+
+const fromWire = (wire: WireCvr): Cvr => ({
+  rows: new Map(wire.rows.map(([collection, versions]) => [collection, new Map(versions)])),
+});
+
+export interface KeyValueCvrOptions {
+  /** Key namespace inside the store. Defaults to `"effect-sync/cvr/"`. */
+  readonly prefix?: string;
+}
+
+/**
+ * A CVR store over `effect/unstable/persistence` KeyValueStore (ADR-0009):
+ * back it with a *shared* KVS — Redis, SQL, a Durable Object's storage — and
+ * every server instance reads the same client view records, so a client can
+ * present a cookie minted by one instance and pull a minimal patch from
+ * another. CVR storage may be ephemeral (an unrecognized cookie degrades to
+ * a reset), so eviction/TTL is the backing store's concern.
+ */
+export const makeKeyValueStore = (
+  options?: KeyValueCvrOptions
+): Effect.Effect<CvrStore, never, KeyValueStore.KeyValueStore> =>
+  Effect.gen(function* () {
+    const store = KeyValueStore.prefix(
+      yield* KeyValueStore.KeyValueStore,
+      options?.prefix ?? "effect-sync/cvr/"
+    );
+    const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
+    return CvrStore.of({
+      get: (cookie) =>
+        store.get(cookie).pipe(
+          Effect.mapError(storeError(`Failed to read CVR "${cookie}"`)),
+          Effect.flatMap((raw) =>
+            raw === undefined
+              ? Effect.succeed(undefined)
+              : Effect.try({
+                  try: () => JSON.parse(raw) as unknown,
+                  catch: storeError(`Corrupt CVR at "${cookie}"`),
+                }).pipe(Effect.map((parsed) => (isWireCvr(parsed) ? fromWire(parsed) : undefined)))
+          )
+        ),
+      set: (cookie, cvr) =>
+        store
+          .set(cookie, JSON.stringify(toWire(cvr)))
+          .pipe(Effect.mapError(storeError(`Failed to write CVR "${cookie}"`))),
+      remove: (cookie) =>
+        store.remove(cookie).pipe(Effect.mapError(storeError(`Failed to remove CVR "${cookie}"`))),
+    });
+  });
+
+/** Layer providing the KeyValueStore-backed CVR store. */
+export const layerKeyValueStore = (
+  options?: KeyValueCvrOptions
+): Layer.Layer<CvrStore, never, KeyValueStore.KeyValueStore> =>
+  Layer.effect(CvrStore)(makeKeyValueStore(options));

@@ -11,18 +11,31 @@
  * Subscriptions are refcounted by tab: a subset's engine subscription and
  * broadcast fiber start when its first tab subscribes and stop only when
  * the last tab unsubscribes or disconnects. `Disconnect` releases every
- * subset a departing tab held — the close-time signal that stands in for
- * the disconnect detection a BroadcastChannel can't provide on its own.
+ * subset a departing tab held — the close-time signal for an orderly exit.
+ *
+ * A tab that crashes can't send `Disconnect`, so the host also tracks each
+ * tab's last-seen time (refreshed by subscribes and heartbeats) and a sweep
+ * fiber reclaims subsets from tabs silent past `tabTimeout`. This is the
+ * disconnect detection a BroadcastChannel can't provide on its own.
  */
 
 import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
-import { Effect, Fiber, Ref, Scope, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
 export interface EngineHostOptions {
   readonly channel: MirrorChannel;
   readonly engine: ClientEngine.ClientEngine;
+  /**
+   * Liveness sweep: reclaim subsets from tabs not heard from within
+   * `tabTimeout`, checked every `sweepInterval`. Defaults: 30s timeout,
+   * 10s sweep — pair with a TabMirror heartbeat shorter than the timeout.
+   */
+  readonly liveness?: {
+    readonly tabTimeout?: Duration.Input;
+    readonly sweepInterval?: Duration.Input;
+  };
 }
 
 /** One actively-broadcast subset: which tabs hold it, and its fiber. */
@@ -42,6 +55,18 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     const { channel, engine } = options;
     const inbox = yield* channel.subscribe;
     const active = yield* Ref.make(new Map<string, Active>());
+    const lastSeen = yield* Ref.make(new Map<string, number>());
+
+    const touch = (tabId: string) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) => Ref.update(lastSeen, (map) => new Map(map).set(tabId, now)))
+      );
+    const forget = (tabId: string) =>
+      Ref.update(lastSeen, (map) => {
+        const next = new Map(map);
+        next.delete(tabId);
+        return next;
+      });
 
     const broadcast = (key: string, rows: ReadonlyArray<ClientEngine.LocalRow>) =>
       channel.post(MirrorProtocol.mirrorUpdate(key, rows));
@@ -98,6 +123,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
           .filter((entry) => entry.tabs.has(tabId))
           .map((entry) => Subset.hash(entry.subset));
         for (const key of keys) yield* release(tabId, key);
+        yield* forget(tabId);
       });
 
     const handle = (message: MirrorProtocol.TabMessage) => {
@@ -114,13 +140,34 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
             )
           );
         case "Subscribe":
-          return handleSubscribe(message.tabId, message.subset);
+          return touch(message.tabId).pipe(
+            Effect.andThen(handleSubscribe(message.tabId, message.subset))
+          );
         case "Unsubscribe":
-          return release(message.tabId, Subset.hash(message.subset));
+          return touch(message.tabId).pipe(
+            Effect.andThen(release(message.tabId, Subset.hash(message.subset)))
+          );
         case "Disconnect":
           return handleDisconnect(message.tabId);
+        case "Heartbeat":
+          return touch(message.tabId);
       }
     };
+
+    // Liveness sweep: reclaim subsets from tabs silent past the timeout.
+    const tabTimeout = options.liveness?.tabTimeout ?? "30 seconds";
+    const sweepInterval = options.liveness?.sweepInterval ?? "10 seconds";
+    const sweep = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const cutoff = now - Duration.toMillis(tabTimeout);
+      const stale = [...(yield* Ref.get(lastSeen))]
+        .filter(([, seen]) => seen < cutoff)
+        .map(([tabId]) => tabId);
+      for (const tabId of stale) yield* handleDisconnect(tabId);
+    });
+    yield* Effect.forkScoped(
+      Effect.forever(sweep.pipe(Effect.andThen(Effect.sleep(sweepInterval))))
+    );
 
     yield* Effect.forkScoped(
       Effect.forever(
