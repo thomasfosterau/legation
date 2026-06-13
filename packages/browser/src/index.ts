@@ -1,13 +1,22 @@
 /**
  * @thomasfosterau/effect-sync-browser
  *
- * Browser-runtime adapters for the effect-sync engine (v2 architecture,
- * ADR-0010). Phase 3 deliverables, landing here:
+ * Browser-runtime adapters for the effect-sync engine (ADR-0010):
  *
- * - `IndexedDbClientStore`: durable `ClientStore` over IndexedDB
- * - `ServiceWorkerHost`: the recommended engine host (per-origin
- *   singleton, crash-tolerant, Background Sync triggers)
- * - `TabMirror`: per-tab in-memory mirror + BroadcastChannel transport
- * - `CacheApiResponseStore`: `ResponseCacheStore` over the Cache API
+ * - `IndexedDbClientStore`: durable ClientStore over IndexedDB
+ * - `MirrorChannel` / `MirrorProtocol` / `EngineHost` / `TabMirror`: the
+ *   tab-mirror seam — per-tab in-memory mirrors served by the engine host
+ *   over BroadcastChannel
+ * - `ServiceWorkerHost`: the recommended host composition (engine sync
+ *   loop + mirror serving) for the per-origin service-worker singleton
+ * - `CacheApiHttpCache`: ResponseCacheStore over the Cache API plus the
+ *   stale-while-revalidate fetch handler
  */
-export const status = "v2 rebuild: browser adapters land in phase 3" as const;
+
+export * as IndexedDbClientStore from "./IndexedDbClientStore.js";
+export * as MirrorChannel from "./MirrorChannel.js";
+export * as MirrorProtocol from "./MirrorProtocol.js";
+export * as EngineHost from "./EngineHost.js";
+export * as TabMirror from "./TabMirror.js";
+export * as ServiceWorkerHost from "./ServiceWorkerHost.js";
+export * as CacheApiHttpCache from "./CacheApiHttpCache.js";

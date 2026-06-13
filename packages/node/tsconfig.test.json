@@ -12,7 +12,7 @@
       "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"]
     },
     "lib": ["ES2023"],
-    "types": ["node", "ws"]
+    "types": ["node"]
   },
   "include": ["src/**/*", "../core/src/**/*"],
   "exclude": ["node_modules", "dist"]
