@@ -35,7 +35,8 @@ final class SyncEngineTests: XCTestCase {
         try await engine.pull()
         let after = try await store.getCookie()
         XCTAssertNotEqual(after, before)
-        XCTAssertEqual(try await store.listRows("todos").count, 1)
+        let stillOneRow = try await store.listRows("todos").count
+        XCTAssertEqual(stillOneRow, 1)
     }
 
     func testSecondClientGroupPullsTheFirstGroupsCommittedWrites() async throws {
@@ -63,13 +64,15 @@ final class SyncEngineTests: XCTestCase {
         try await engine.mutate(todoSet, Todo("2", "closed", true))
         try await engine.push()
         try await engine.pull()
-        XCTAssertEqual((try await store.listRows("todos")).map(\.id), ["1"])
+        let openIds = try await store.listRows("todos").map(\.id)
+        XCTAssertEqual(openIds, ["1"])
 
         // Completing the open todo removes it from the subscribed subset.
         try await engine.mutate(todoSet, Todo("1", "open", true))
         try await engine.push()
         try await engine.pull()
-        XCTAssertTrue((try await store.listRows("todos")).isEmpty)
+        let remaining = try await store.listRows("todos")
+        XCTAssertTrue(remaining.isEmpty)
     }
 
     func testRebaseKeepsPendingLocalMutationsVisibleOverPulledState() async throws {
@@ -85,7 +88,8 @@ final class SyncEngineTests: XCTestCase {
 
         let view = try await a.engine.query(allTodos)
         XCTAssertEqual(view.map(\.id).sorted(), ["1", "2"])
-        XCTAssertEqual((try await a.store.pendingMutations()).count, 1)
+        let pendingCount = try await a.store.pendingMutations().count
+        XCTAssertEqual(pendingCount, 1)
     }
 
     func testUnauthorizedCollectionsAreDeniedByDefault() async throws {
@@ -112,7 +116,8 @@ final class SyncEngineTests: XCTestCase {
         } catch let error as SyncError {
             XCTAssertEqual(error.tag, "MutatorError")
         }
-        XCTAssertTrue((try await store.pendingMutations()).isEmpty)
+        let pending = try await store.pendingMutations()
+        XCTAssertTrue(pending.isEmpty)
     }
 
     func testRejectsUnknownMutators() async throws {
