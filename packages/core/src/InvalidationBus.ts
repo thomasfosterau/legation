@@ -7,9 +7,11 @@
  * sessions' subscriptions and poke affected client groups. Correctness
  * never depends on the bus — a missed hint only delays the next pull.
  *
- * The in-process PubSub implementation is the default; distributed
- * adapters (Durable Object broadcast, Redis, LISTEN/NOTIFY) live in
- * runtime packages and implement the same service.
+ * The in-process PubSub implementation is the default. For multi-instance
+ * deployments, `makeSerialized` runs the bus over a {@link BusBroker} — a
+ * single string pub/sub channel — so a Durable Object broadcast, Redis
+ * pub/sub, or Postgres LISTEN/NOTIFY becomes a distributed bus by
+ * implementing one tiny interface.
  */
 
 import { Context, Effect, Layer, PubSub, Scope } from "effect";

@@ -4,7 +4,7 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 
 ## Status
 
-**v2 rebuild in progress** (see [ADRs 0007–0010](docs/adr/)). The engine core, the default RPC transport, and the runtime adapters work today: optimistic mutations → journal → push → authoritative backend → CVR diff → pull patch → rebase, with schema-validated mutator args end to end, pokes streamed over `effect/unstable/rpc`, an executable backend contract (`BackendContract.verifyBackendContract`), an IndexedDB client store, tab mirrors served by a (service-worker) engine host over BroadcastChannel, a Cache API HTTP cache, and Node HTTP/WebSocket serving of the sync RPCs. Reactivity/Atom read-side bindings and distributed bus adapters land next. All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 and will change.
+**v2 rebuild in progress** (see [ADRs 0007–0010](docs/adr/)). The engine core, the default RPC transport, and the runtime adapters work today: optimistic mutations → journal → push → authoritative backend → CVR diff → pull patch → rebase, with schema-validated mutator args end to end, pokes streamed over `effect/unstable/rpc`, an executable backend contract (`BackendContract.verifyBackendContract`), an IndexedDB client store, tab mirrors (refcounted per tab) served by a (service-worker) engine host over BroadcastChannel, a Cache API HTTP cache, Node HTTP/WebSocket serving of the sync RPCs, live queries bound to `effect/unstable/reactivity` Atoms, a distributed invalidation-bus seam (any string pub/sub broker), and JSON:API collection loaders. All packages target **Effect v4 beta** and ESM-only consumers. APIs are pre-1.0 and will change.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | [`@thomasfosterau/effect-sync-core`](packages/core)       | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
 | [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
 | [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
-| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 helpers; being repositioned as collection loaders                                                                                                                                                                                                        |
+| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
 
 ## Quick start (in-process, today)
 
