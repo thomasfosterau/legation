@@ -1,7 +1,7 @@
 {
   "name": "@thomasfosterau/effect-sync-browser",
   "version": "0.1.0",
-  "description": "Browser-runtime adapters for the effect-sync engine: WebSocket client transport and IndexedDB cache persistence",
+  "description": "Browser-runtime adapters for the effect-sync engine: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, and a Cache API HTTP cache",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,8 +27,9 @@
     "effect",
     "sync-engine",
     "browser",
-    "websocket",
+    "service-worker",
     "indexeddb",
+    "broadcastchannel",
     "offline-first",
     "typescript"
   ],
@@ -45,11 +46,9 @@
     "@effect/platform-browser": "4.0.0-beta.75"
   },
   "devDependencies": {
+    "@effect/platform-browser": "4.0.0-beta.75",
     "effect": "4.0.0-beta.75",
-    "fake-indexeddb": "^6.0.0",
-    "ws": "^8.18.0",
-    "@types/ws": "^8.5.12",
-    "@effect/platform-browser": "4.0.0-beta.75"
+    "fake-indexeddb": "^6.0.0"
   },
   "repository": {
     "type": "git",

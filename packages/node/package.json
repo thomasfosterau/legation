@@ -1,7 +1,7 @@
 {
   "name": "@thomasfosterau/effect-sync-node",
   "version": "0.1.0",
-  "description": "Node-runtime adapters for the effect-sync engine: WebSocket server transport for the sync hub",
+  "description": "Node-runtime adapters for the effect-sync engine: serving the default RPC sync transport over HTTP and WebSocket",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,9 +27,10 @@
     "effect",
     "sync-engine",
     "node",
-    "websocket",
     "server",
-    "fan-out",
+    "rpc",
+    "http",
+    "websocket",
     "typescript"
   ],
   "author": "Thomas Foster",
@@ -38,16 +39,16 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-sync-core": "workspace:^",
-    "ws": "^8.18.0"
+    "@thomasfosterau/effect-sync-core": "workspace:^"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.75"
+    "effect": "4.0.0-beta.75",
+    "@effect/platform-node": "4.0.0-beta.75"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "effect": "4.0.0-beta.75",
-    "@types/ws": "^8.5.12",
-    "@types/node": "^20.0.0"
+    "@effect/platform-node": "4.0.0-beta.75"
   },
   "repository": {
     "type": "git",

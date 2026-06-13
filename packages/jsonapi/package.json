@@ -1,7 +1,7 @@
 {
   "name": "@thomasfosterau/effect-sync-jsonapi",
   "version": "0.1.0",
-  "description": "JSON:API adapter for the effect-sync engine — JSON:API v1.1 types, resource fetching/mutation helpers, and query loaders that plug into the protocol-agnostic core",
+  "description": "JSON:API v1.1 collection loaders for the effect-sync engine: map JSON:API documents into engine collection rows",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,7 +28,7 @@
     "json-api",
     "jsonapi",
     "sync-engine",
-    "synchronization",
+    "collection-loader",
     "typescript"
   ],
   "author": "Thomas Foster",
