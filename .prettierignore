@@ -11,3 +11,4 @@ bun.lock
 skills-lock.json
 packages/swift
 packages/kotlin
+examples
