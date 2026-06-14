@@ -10,3 +10,4 @@ bun.lock
 .claude/skills
 skills-lock.json
 packages/swift
+packages/kotlin
