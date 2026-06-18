@@ -32,12 +32,21 @@ jobs:
           echo "version=$LATEST" >> "$GITHUB_OUTPUT"
           echo "Latest effect beta: $LATEST"
 
-      - name: Install latest effect beta in all packages
+      - name: Point the catalog at the latest effect beta
+        env:
+          VERSION: ${{ steps.beta.outputs.version }}
         run: |
-          bun add -d "effect@${{ steps.beta.outputs.version }}"
-          for pkg in packages/*/; do
-            (cd "$pkg" && bun add -d "effect@${{ steps.beta.outputs.version }}" --no-save || true)
-          done
+          # Every package's devDependencies reference `effect: "catalog:"`, so
+          # overriding the single catalog entry rebuilds the whole workspace
+          # against the latest beta.
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            for (const name of Object.keys(pkg.workspaces.catalog)) {
+              pkg.workspaces.catalog[name] = process.env.VERSION;
+            }
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
           bun install
 
       - name: Build
@@ -54,5 +63,5 @@ jobs:
         run: |
           echo "## Effect beta canary: ${{ steps.beta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pinned version in repo: $(node -p "require('./package.json').devDependencies.effect")" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pinned version in repo: $(node -p "require('./package.json').workspaces.catalog.effect")" >> "$GITHUB_STEP_SUMMARY"
           echo "Job status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"

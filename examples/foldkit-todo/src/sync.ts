@@ -220,7 +220,7 @@ export const createSyncWorld = (): Promise<SyncWorld> =>
         observeTodos: () =>
           engine.observe(allTodos).pipe(
             Stream.map((rows) => rows.map((row) => row.value as Todo)),
-            Stream.catchAll(() => Stream.empty)
+            Stream.catch(() => Stream.empty)
           ),
         connectionChanges: () => transport.statusChanges,
         pendingNow: () =>
@@ -232,7 +232,7 @@ export const createSyncWorld = (): Promise<SyncWorld> =>
                   summary: summarise(mutation),
                 }))
               ),
-              Effect.catchAll(() => Effect.succeed<ReadonlyArray<PendingEntry>>([]))
+              Effect.catch(() => Effect.succeed<ReadonlyArray<PendingEntry>>([]))
             )
           ),
         setTodo: (todo) => Effect.runPromise(engine.mutate("todo/set", todo).pipe(Effect.ignore)),
@@ -264,7 +264,7 @@ export const createSyncWorld = (): Promise<SyncWorld> =>
               // Poke: the sync server fans this out to our subscription, the
               // engine pulls, and the new row appears with no local action.
               yield* bus.publish(result.hints);
-            }).pipe(Effect.catchAll(() => Effect.void))
+            }).pipe(Effect.catch(() => Effect.void))
           ),
       };
 
@@ -275,7 +275,7 @@ export const createSyncWorld = (): Promise<SyncWorld> =>
 
     Effect.runFork(
       Effect.scoped(program).pipe(
-        Effect.catchAllCause((cause) => Effect.sync(() => reject(new Error(String(cause)))))
+        Effect.catchCause((cause) => Effect.sync(() => reject(new Error(String(cause)))))
       )
     );
   });

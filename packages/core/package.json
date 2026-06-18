@@ -43,10 +43,10 @@
     "access": "public"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.75"
+    "effect": "4.0.0-beta.83"
   },
   "devDependencies": {
-    "effect": "4.0.0-beta.75"
+    "effect": "catalog:"
   },
   "repository": {
     "type": "git",

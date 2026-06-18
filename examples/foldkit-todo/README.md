@@ -50,8 +50,10 @@ page**, so every concept in `CONTEXT.md` is exercised by code you can click on.
 
 ## Run
 
-The example consumes the engine as a built dependency (`file:` link to
-`../../packages/core`), so build the workspace once first:
+This example is a workspace member: it consumes the engine via `workspace:*`
+(its built `dist`) and shares the root **Bun catalog** for `effect` /
+`@effect/platform-browser`, so there is a single `effect` version across the
+monorepo and the demo. Build the packages once, then run the dev server:
 
 ```sh
 # from the repo root
@@ -60,20 +62,18 @@ bun run build
 
 # then, in this example
 cd examples/foldkit-todo
-bun install
 bun run dev      # open the printed http://localhost:5173
 ```
 
 ## Notes
 
-- **Effect beta skew.** FoldKit `0.114` targets `effect@4.0.0-beta.83`, while the
-  engine packages currently target `beta.75`. This example pins the framework's
-  beta (`beta.83`) so a single copy of `effect` is bundled; the small slice of
-  the engine API it uses is stable across those betas. If you bump the monorepo's
-  `effect`, re-pin here to match.
+- **Versions come from the catalog.** `effect` and `@effect/platform-browser`
+  are pinned once in the root `package.json` `workspaces.catalog` (currently
+  `4.0.0-beta.83`, which is also FoldKit's pin), referenced here as `catalog:`.
+  Bumping the catalog moves the whole monorepo and this demo together.
 - **The server is ephemeral.** `MemoryBackend` lives in the page, so a reload
   resets server state (the seed rows reappear). The _client_ is durable: pending
   offline writes in the journal survive reloads and flush on the next connect.
-- This example is intentionally outside the monorepo workspace and the CI
-  quality gates (like the Compose/SwiftUI examples); it is illustrative, not a
-  published package.
+- The example is a workspace member for dependency consistency, but it stays
+  outside the CI quality gates (build/typecheck/lint/format), like the
+  Compose/SwiftUI examples; it is illustrative, not a published package.

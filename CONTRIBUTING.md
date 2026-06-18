@@ -89,9 +89,15 @@ Conventions:
 
 ## Effect version upgrades
 
-All packages pin `effect` to one exact beta version (peer + dev dependency). To bump it:
+The exact beta version lives once in the root **Bun catalog**
+(`package.json` → `workspaces.catalog`). Every package references it as
+`effect: "catalog:"` in `devDependencies`; `peerDependencies` (the published
+contract) carry the same version as a concrete string, because `changeset
+publish` does not rewrite the `catalog:` protocol. To bump it:
 
-1. Update the version everywhere in one PR: root `package.json` and every `packages/*/package.json` (both `peerDependencies` and `devDependencies`), then `bun install`.
+1. In one PR, set the new version in the catalog (root `package.json`
+   `workspaces.catalog`) and update the concrete `peerDependencies` in every
+   `packages/*/package.json` to match, then `bun install`.
 2. Run all quality gates; fix any API breakage in the same PR.
 3. Add a changeset (patch for all packages unless the bump changes our own API).
 
