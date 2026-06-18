@@ -83,6 +83,13 @@ const compileNode = (predicate: Predicate.Predicate, dialect: Dialect, params: P
     }
     case "Not":
       return `NOT (${compileNode(predicate.predicate, dialect, params)})`;
+    case "Exists": {
+      // Correlated set membership: localField IN (SELECT foreignField FROM …).
+      const inner = compileNode(predicate.where, dialect, params);
+      const from = dialect.quote(predicate.collection);
+      const column = dialect.quote(predicate.foreignField);
+      return `${dialect.quote(predicate.localField)} IN (SELECT ${column} FROM ${from} WHERE ${inner})`;
+    }
   }
 };
 

@@ -199,6 +199,14 @@ export const make = (
       Effect.gen(function* () {
         const list = config.resources.get(subset.collection)?.list;
         if (list === undefined) return [];
+        // Correlated Exists is a relational join this REST backend can't resolve;
+        // fail closed rather than silently skip the filter (denormalize, or use a
+        // backend that resolves Exists).
+        if (Predicate.hasExists(subset.where)) {
+          return yield* new BackendError({
+            message: `JSON:API backend does not support Exists predicates on "${subset.collection}"`,
+          });
+        }
 
         // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
         // were all delivered by a prior compound `included` harvest is served

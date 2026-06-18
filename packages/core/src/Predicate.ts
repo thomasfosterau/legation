@@ -11,7 +11,7 @@
  * predicate → SQL WHERE clause) live with the backends that need them.
  */
 
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /** A literal comparable value. */
 export type Literal = string | number | boolean | null;
@@ -26,6 +26,11 @@ export type Comparison = "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
  * - `Compare` compares a top-level row field against a literal.
  * - `In` tests field membership in a literal set.
  * - `And` / `Or` / `Not` compose.
+ * - `Exists` is a correlated relationship test: this row matches if a row
+ *   exists in `collection` whose `where` holds and whose `foreignField` equals
+ *   this row's `localField`. It is a relational node — a single-row evaluator
+ *   can't decide it; a backend resolves it to an `In` over `localField` against
+ *   the matching `foreignField` set (`resolveExists`).
  */
 export type Predicate =
   | { readonly _tag: "True" }
@@ -38,7 +43,22 @@ export type Predicate =
   | { readonly _tag: "In"; readonly field: string; readonly values: ReadonlyArray<Literal> }
   | { readonly _tag: "And"; readonly predicates: ReadonlyArray<Predicate> }
   | { readonly _tag: "Or"; readonly predicates: ReadonlyArray<Predicate> }
-  | { readonly _tag: "Not"; readonly predicate: Predicate };
+  | { readonly _tag: "Not"; readonly predicate: Predicate }
+  | {
+      readonly _tag: "Exists";
+      readonly collection: string;
+      readonly localField: string;
+      readonly foreignField: string;
+      readonly where: Predicate;
+    };
+
+/** The fields of an {@link Predicate} `Exists` node. */
+export interface ExistsNode {
+  readonly collection: string;
+  readonly localField: string;
+  readonly foreignField: string;
+  readonly where: Predicate;
+}
 
 const LiteralSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
 
@@ -67,6 +87,13 @@ export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Not"),
     predicate: Schema.suspend((): Schema.Codec<Predicate> => PredicateSchema),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("Exists"),
+    collection: Schema.String,
+    localField: Schema.String,
+    foreignField: Schema.String,
+    where: Schema.suspend((): Schema.Codec<Predicate> => PredicateSchema),
   }),
 ]) as Schema.Codec<Predicate>;
 
@@ -102,6 +129,24 @@ export const or = (...predicates: ReadonlyArray<Predicate>): Predicate =>
 
 export const not = (predicate: Predicate): Predicate => ({ _tag: "Not", predicate });
 
+/**
+ * A correlated relationship test: this row matches if a row exists in
+ * `collection` where `where` holds and `foreignField` equals this row's
+ * `localField`. Resolved server-side by a backend (`resolveExists`).
+ */
+export const exists = (options: {
+  readonly collection: string;
+  readonly localField: string;
+  readonly foreignField: string;
+  readonly where?: Predicate;
+}): Predicate => ({
+  _tag: "Exists",
+  collection: options.collection,
+  localField: options.localField,
+  foreignField: options.foreignField,
+  where: options.where ?? always,
+});
+
 // ─── Evaluation ──────────────────────────────────────────────────────────────
 
 const fieldValue = (row: unknown, field: string): unknown =>
@@ -135,6 +180,11 @@ const compareValues = (op: Comparison, left: unknown, right: Literal): boolean =
  * Evaluate a predicate against a row value (in-memory semantics: top-level
  * field access, strict equality, ordered comparisons on same-typed
  * string/number pairs only).
+ *
+ * `Exists` is relational and can't be decided from one row, so it evaluates to
+ * `true` here: a backend resolves it to an `In` before evaluation
+ * (`resolveExists`), and on the client the rows were already narrowed by the
+ * server's authoritative sync.
  */
 export const test = (predicate: Predicate, row: unknown): boolean => {
   switch (predicate._tag) {
@@ -150,5 +200,59 @@ export const test = (predicate: Predicate, row: unknown): boolean => {
       return predicate.predicates.some((p) => test(p, row));
     case "Not":
       return !test(predicate.predicate, row);
+    case "Exists":
+      return true;
+  }
+};
+
+/**
+ * Rewrite every `Exists` node to an `In` over its `localField`, using `resolve`
+ * to materialize the matching `foreignField` values from the related
+ * collection. Backends call this before evaluation, turning a correlated join
+ * into a flat, locally-evaluable predicate (an allow-set).
+ */
+export const resolveExists = <E, R>(
+  predicate: Predicate,
+  resolve: (node: ExistsNode) => Effect.Effect<ReadonlyArray<Literal>, E, R>
+): Effect.Effect<Predicate, E, R> => {
+  switch (predicate._tag) {
+    case "Exists":
+      return resolve(predicate).pipe(Effect.map((values) => isIn(predicate.localField, values)));
+    case "And":
+      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve)).pipe(
+        Effect.map((predicates) => and(...predicates))
+      );
+    case "Or":
+      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve)).pipe(
+        Effect.map((predicates) => or(...predicates))
+      );
+    case "Not":
+      return resolveExists(predicate.predicate, resolve).pipe(Effect.map(not));
+    default:
+      return Effect.succeed(predicate);
+  }
+};
+
+/** The distinct `foreignField` values among rows matching an Exists `where`. */
+export const existsValues = (node: ExistsNode, rows: Iterable<unknown>): ReadonlyArray<Literal> => {
+  const values = new Set<Literal>();
+  for (const row of rows) {
+    if (test(node.where, row)) values.add(fieldValue(row, node.foreignField) as Literal);
+  }
+  return [...values];
+};
+
+/** Whether a predicate contains any (unresolved) `Exists` node. */
+export const hasExists = (predicate: Predicate): boolean => {
+  switch (predicate._tag) {
+    case "Exists":
+      return true;
+    case "And":
+    case "Or":
+      return predicate.predicates.some(hasExists);
+    case "Not":
+      return hasExists(predicate.predicate);
+    default:
+      return false;
   }
 };

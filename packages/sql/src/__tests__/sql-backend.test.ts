@@ -92,6 +92,45 @@ describe("SqlBackend evaluate / getRows", () => {
     });
   });
 
+  it.effect("resolves a correlated Exists via a DISTINCT subquery", () => {
+    const mock = makeMock();
+    mock.seed("issues", [
+      { id: "i1", projectId: "p1", version: "a" },
+      { id: "i2", projectId: "p2", version: "b" },
+      { id: "i3", projectId: "p1", version: "c" },
+    ]);
+    // The membership table returns alice's allowed project for the subquery.
+    mock.seed("memberships", [{ projectId: "p1" }]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        issues: { table: "issues", versionColumn: "version" },
+        memberships: { table: "memberships" },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    const visible = Subset.make({
+      collection: "issues",
+      where: Predicate.exists({
+        collection: "memberships",
+        localField: "projectId",
+        foreignField: "projectId",
+        where: Predicate.eq("userId", "alice"),
+      }),
+    });
+
+    return Effect.gen(function* () {
+      const entries = yield* backend.evaluate({ clientGroupId: "g" }, visible);
+      expect(entries.map((e) => e.id)).toEqual(["i1", "i3"]);
+      // The correlated subquery was issued with the inner predicate's params.
+      expect(mock.queries[0]).toEqual({
+        text: `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" = ?`,
+        params: ["alice"],
+      });
+    });
+  });
+
   it.effect("fetches explicit rows by id", () => {
     const mock = makeMock();
     mock.seed("todos", [{ id: "1", version: "a", title: "x" }]);

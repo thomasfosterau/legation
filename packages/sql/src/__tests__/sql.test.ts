@@ -43,6 +43,22 @@ describe("Sql.compileWhere", () => {
     ).toEqual({ text: `"status" = $1 AND "owner" = $2`, params: ["open", "ada"] });
   });
 
+  it("compiles a correlated Exists into a subquery", () => {
+    expect(
+      Sql.compileWhere(
+        Predicate.exists({
+          collection: "memberships",
+          localField: "projectId",
+          foreignField: "projectId",
+          where: Predicate.eq("userId", "alice"),
+        })
+      )
+    ).toEqual({
+      text: `"projectId" IN (SELECT "projectId" FROM "memberships" WHERE "userId" = ?)`,
+      params: ["alice"],
+    });
+  });
+
   it("compiles a full SELECT", () => {
     expect(Sql.compileSelect({ table: "todos", where: Predicate.eq("done", false) })).toEqual({
       text: `SELECT * FROM "todos" WHERE "done" = ?`,

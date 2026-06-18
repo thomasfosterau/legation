@@ -96,21 +96,36 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
 
-  const evaluate: Backend.Backend["evaluate"] = (_context, subset) => {
-    const mapping = config.tables[subset.collection];
+  // Resolve a correlated Exists to its allow-set via a DISTINCT subquery.
+  const resolveExistsNode = (
+    node: Predicate.ExistsNode
+  ): Effect.Effect<ReadonlyArray<Predicate.Literal>, BackendError> => {
+    const mapping = config.tables[node.collection];
     if (mapping === undefined) return Effect.succeed([]);
-    const select = Sql.compileSelect({ table: mapping.table, where: subset.where, dialect });
-    return executor.query(select).pipe(
-      Effect.map((rows) => {
-        const idColumn = idOf(subset.collection);
-        const values = rows.map((row) => ({ id: String(row[idColumn]), value: row }));
-        return Subset.apply(values, subset).map((row) => ({
-          id: row.id,
-          version: versionFor(subset.collection, row.value),
-        }));
+    const where = Sql.compileWhere(node.where, dialect);
+    return executor
+      .query({
+        text: `SELECT DISTINCT ${q(node.foreignField)} FROM ${q(mapping.table)} WHERE ${where.text}`,
+        params: where.params,
       })
-    );
+      .pipe(Effect.map((rows) => rows.map((row) => row[node.foreignField] as Predicate.Literal)));
   };
+
+  const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+    Effect.gen(function* () {
+      const mapping = config.tables[subset.collection];
+      if (mapping === undefined) return [];
+      const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
+      const rows = yield* executor.query(
+        Sql.compileSelect({ table: mapping.table, where, dialect })
+      );
+      const idColumn = idOf(subset.collection);
+      const values = rows.map((row) => ({ id: String(row[idColumn]), value: row }));
+      return Subset.apply(values, { ...subset, where }).map((row) => ({
+        id: row.id,
+        version: versionFor(subset.collection, row.value),
+      }));
+    });
 
   const getRows: Backend.Backend["getRows"] = (_context, collection, ids) => {
     const mapping = config.tables[collection];
