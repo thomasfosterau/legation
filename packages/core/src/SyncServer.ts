@@ -15,10 +15,16 @@
 
 import { Effect, Layer, Metric, Ref, Scope } from "effect";
 import { Backend, type SyncContext } from "./Backend.js";
-import { AuthPolicy, SyncMiddleware, authorize, passthroughMiddleware } from "./Authorization.js";
+import {
+  AuthPolicy,
+  IdentityResolver,
+  SyncMiddleware,
+  authorize,
+  passthroughMiddleware,
+} from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
-import { TransportError } from "./Errors.js";
+import { AuthorizationError, TransportError } from "./Errors.js";
 import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
@@ -46,6 +52,15 @@ export const make: Effect.Effect<
   );
   // Optional: resolve named-query subscriptions to subsets (Query.ts).
   const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
+  // Optional: resolve the request's identity onto SyncContext.identity.
+  const identityOption = yield* Effect.serviceOption(IdentityResolver);
+
+  const contextFor = (clientGroupId: string): Effect.Effect<SyncContext, AuthorizationError> =>
+    identityOption._tag === "None"
+      ? Effect.succeed({ clientGroupId })
+      : identityOption.value
+          .resolve(clientGroupId)
+          .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
 
   const pokeHub = yield* makePokeHub;
   // Active subscriptions per client group, for fan-out matching.
@@ -77,7 +92,7 @@ export const make: Effect.Effect<
 
   const handlePush = (request: PushRequest): Effect.Effect<PushResponse, TransportError> =>
     Effect.gen(function* () {
-      const context: SyncContext = { clientGroupId: request.clientGroupId };
+      const context = yield* contextFor(request.clientGroupId);
       const checked = yield* middleware.onPush(context, request);
       const result = yield* backend.applyMutations(context, checked.mutations);
       yield* bus.publish(result.hints);
@@ -86,7 +101,7 @@ export const make: Effect.Effect<
 
   const handlePull = (request: PullRequest): Effect.Effect<PullResponse, TransportError> =>
     Effect.gen(function* () {
-      const context: SyncContext = { clientGroupId: request.clientGroupId };
+      const context = yield* contextFor(request.clientGroupId);
       const checked = yield* middleware.onPull(context, request);
 
       // Authorize: AND each subset with its collection's mandatory filter.
