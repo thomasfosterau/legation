@@ -37,6 +37,7 @@ export * as ClientEngine from "./ClientEngine.js";
 export * as LiveView from "./LiveView.js";
 export * as Subscriptions from "./Subscriptions.js";
 export * as LiveQuery from "./LiveQuery.js";
+export * as EngineAtoms from "./EngineAtoms.js";
 export * as PromiseFacade from "./PromiseFacade.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────

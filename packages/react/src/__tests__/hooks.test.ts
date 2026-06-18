@@ -1,19 +1,22 @@
 // @vitest-environment jsdom
 /**
  * React hooks against a real engine (in-memory backend) under jsdom: useQuery
- * renders live results and re-renders when a mutation lands; useMutation drives
- * an optimistic write from a click.
+ * renders live results (an AsyncResult) and re-renders when a mutation lands;
+ * useMutation drives an optimistic write from a click. Everything runs over an
+ * AtomRegistry — the hooks are a thin layer over the engine's atoms.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import * as React from "react";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import {
   Authorization,
   Backend,
   ClientEngine,
   ClientStore,
+  EngineAtoms,
   MemoryBackend,
   Mutator,
   Subset,
@@ -58,18 +61,21 @@ const engineLayer = ClientEngine.layer({
 const allTodos = Subset.make({ collection: "todos" });
 const title = (row: { readonly value: unknown }) => (row.value as { title: string }).title;
 
-const TodoList = () =>
-  React.createElement(
+const TodoList = () => {
+  const result = useQuery(allTodos);
+  const rows = AsyncResult.getOrElse(result, () => [] as ReadonlyArray<ClientEngine.LocalRow>);
+  return React.createElement(
     "ul",
     null,
-    useQuery(allTodos).map((row) => React.createElement("li", { key: row.id }, title(row)))
+    rows.map((row) => React.createElement("li", { key: row.id }, title(row)))
   );
+};
 
 const AddButton = () => {
   const mutate = useMutation();
   return React.createElement(
     "button",
-    { onClick: () => void mutate("todo/set", { id: "2", title: "added" }) },
+    { onClick: () => mutate("todo/set", { id: "2", title: "added" }) },
     "add"
   );
 };
@@ -78,11 +84,12 @@ afterEach(cleanup);
 
 describe("React hooks", () => {
   it("renders live query results and updates on mutation", async () => {
-    const runtime = ManagedRuntime.make(engineLayer);
+    const atoms = EngineAtoms.fromLayer(engineLayer);
+    const registry = AtomRegistry.make();
     render(
       React.createElement(
         EffectSyncProvider,
-        { runtime },
+        { atoms, registry },
         React.createElement(TodoList),
         React.createElement(AddButton)
       )
@@ -90,12 +97,9 @@ describe("React hooks", () => {
 
     expect(screen.queryByText("seed")).toBeNull();
 
+    // Seed by writing the mutation atom — the same atom-native path the button uses.
     await act(async () => {
-      await runtime.runPromise(
-        Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-          engine.mutate("todo/set", { id: "1", title: "seed" })
-        )
-      );
+      registry.set(atoms.mutation, { mutator: "todo/set", args: { id: "1", title: "seed" } });
     });
     await waitFor(() => expect(screen.getByText("seed")).toBeTruthy());
 
@@ -104,6 +108,6 @@ describe("React hooks", () => {
     });
     await waitFor(() => expect(screen.getByText("added")).toBeTruthy());
 
-    await runtime.dispose();
+    registry.dispose();
   });
 });
