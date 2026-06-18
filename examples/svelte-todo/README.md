@@ -4,10 +4,9 @@ A browser todo app that drives
 [`@thomasfosterau/effect-sync-core`](../../packages/core) from Svelte through the
 [`@thomasfosterau/effect-sync-svelte`](../../packages/svelte) bindings
 (`query` stores + `getMutate`). It is the Svelte counterpart to the
-[React](../react-todo), [FoldKit](../foldkit-todo), [Compose](../compose-todo),
-and [SwiftUI](../swiftui-todo) examples, and like the others it runs the **real
-library server pipeline in the page**, so every concept in `CONTEXT.md` is
-exercised by code you can click on.
+[React](../react-todo) and [FoldKit](../foldkit-todo) examples, and like the
+others it runs the **real library server pipeline in the page**, so every
+concept in `CONTEXT.md` is exercised by code you can click on.
 
 ## What it shows
 

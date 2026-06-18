@@ -136,8 +136,6 @@ Other UI stacks:
 | Example                                 | Stack                                | Highlights                                                                                        |
 | --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
 | [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `effect-sync-core` directly (no framework bindings) — The Elm Architecture |
-| [`compose-todo`](examples/compose-todo) | Jetpack Compose (Kotlin)             | Optimistic writes, `Flow` live queries, in-process demo backend                                   |
-| [`swiftui-todo`](examples/swiftui-todo) | SwiftUI (Swift)                      | `@Observable` live queries, loopback demo backend                                                 |
 
 ## Development
 

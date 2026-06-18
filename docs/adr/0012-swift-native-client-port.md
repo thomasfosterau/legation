@@ -2,7 +2,12 @@
 
 Date: 2026-06-13
 
-Status: Accepted
+Status: Withdrawn (2026-06-18)
+
+> **Withdrawn.** The Swift-native client port was removed to keep the project
+> web-only; `packages/swift` and the `swiftui-todo` example no longer exist. The
+> framework story is now the web bindings (`effect-sync-react`,
+> `effect-sync-svelte`). This record is retained for the decision history.
 
 ## Context
 

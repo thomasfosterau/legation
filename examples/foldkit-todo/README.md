@@ -3,13 +3,12 @@
 A deliberately over-engineered browser todo app that drives
 [`@thomasfosterau/effect-sync-core`](../../packages/core) from
 [FoldKit](https://foldkit.dev) — The Elm Architecture in TypeScript, built (like
-this engine) on Effect. It is one of the web counterparts to the
-[Compose](../compose-todo) and [SwiftUI](../swiftui-todo) examples (alongside the
-[React](../react-todo) and [Svelte](../svelte-todo) examples, which drive the
-engine through its idiomatic `effect-sync-react` / `effect-sync-svelte`
-bindings). FoldKit instead consumes `effect-sync-core` directly, and like those
-it runs the **real library server pipeline in the page**, so every concept in
-`CONTEXT.md` is exercised by code you can click on.
+this engine) on Effect. It is a sibling of the [React](../react-todo) and
+[Svelte](../svelte-todo) todo examples (which drive the engine through its
+idiomatic `effect-sync-react` / `effect-sync-svelte` bindings); FoldKit instead
+consumes `effect-sync-core` directly. Like those it runs the **real library
+server pipeline in the page**, so every concept in `CONTEXT.md` is exercised by
+code you can click on.
 
 ## What it shows
 
@@ -78,5 +77,5 @@ bun run dev      # open the printed http://localhost:5173
   resets server state (the seed rows reappear). The _client_ is durable: pending
   offline writes in the journal survive reloads and flush on the next connect.
 - The example is a workspace member for dependency consistency, but it stays
-  outside the CI quality gates (build/typecheck/lint/format), like the
-  Compose/SwiftUI examples; it is illustrative, not a published package.
+  outside the CI quality gates (build/typecheck/lint/format), like the other
+  examples; it is illustrative, not a published package.
