@@ -45,6 +45,7 @@ export * as InvalidationBus from "./InvalidationBus.js";
 export * as BusBrokers from "./BusBrokers.js";
 export * as SyncServer from "./SyncServer.js";
 export * as SyncRoom from "./SyncRoom.js";
+export * as Telemetry from "./Telemetry.js";
 
 // ─── HTTP cache ──────────────────────────────────────────────────────────────
 export * as HttpCache from "./HttpCache.js";

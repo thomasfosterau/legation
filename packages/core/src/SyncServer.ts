@@ -13,13 +13,14 @@
  * Predicate-level matching is a planned refinement.
  */
 
-import { Effect, Layer, Ref, Scope } from "effect";
+import { Effect, Layer, Metric, Ref, Scope } from "effect";
 import { Backend, type SyncContext } from "./Backend.js";
 import { AuthPolicy, SyncMiddleware, authorize, passthroughMiddleware } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 import { TransportError } from "./Errors.js";
 import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
+import * as Telemetry from "./Telemetry.js";
 import { ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
 
@@ -62,6 +63,7 @@ export const make: Effect.Effect<
             for (const [clientGroupId, subsets] of groups) {
               if (subsets.some((subset) => touched.has(subset.collection))) {
                 yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                yield* Metric.update(Telemetry.pokesTotal, 1);
               }
             }
           })
@@ -77,7 +79,7 @@ export const make: Effect.Effect<
       const result = yield* backend.applyMutations(context, checked.mutations);
       yield* bus.publish(result.hints);
       return { lastMutationIds: result.lastMutationIds };
-    }).pipe(Effect.mapError(asTransportError));
+    }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPush));
 
   const handlePull = (request: PullRequest): Effect.Effect<PullResponse, TransportError> =>
     Effect.gen(function* () {
@@ -138,8 +140,10 @@ export const make: Effect.Effect<
       const cookie = freshCookie();
       yield* cvrStore.set(cookie, { rows: next.rows });
       const lastMutationIds = yield* backend.lastMutationIds(context);
+      yield* Metric.update(Telemetry.patchOps, patch.length);
+      yield* Metric.update(Telemetry.serverPullsTotal, 1);
       return { cookie, patch, lastMutationIds };
-    }).pipe(Effect.mapError(asTransportError));
+    }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPull));
 
   return ServerHandler.of({
     handlePush,

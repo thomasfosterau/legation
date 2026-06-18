@@ -11,12 +11,13 @@
  * atomically through a single changes event.
  */
 
-import { Context, Effect, Layer, PubSub, Ref, Schema, Scope, Stream } from "effect";
+import { Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import { MutatorError, StoreError, TransportError } from "./Errors.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
 import type { Mutation, PatchOp, PullResponse } from "./Protocol.js";
+import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
 import * as Subset from "./Subset.js";
 
@@ -210,7 +211,9 @@ export const make = (
       // Effects arrive via the next pull; the ack only trims the journal.
       yield* acknowledge(response.lastMutationIds);
       yield* publishChange;
-    });
+      yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+      yield* Metric.update(Telemetry.pushesTotal, 1);
+    }).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
@@ -231,7 +234,8 @@ export const make = (
         subscriptions: subsets,
       });
       yield* applyPull(response);
-    });
+      yield* Metric.update(Telemetry.pullsTotal, 1);
+    }).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
       // Pull on every poke.
