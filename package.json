@@ -9,7 +9,8 @@
       "packages/*",
       "examples/foldkit-todo",
       "examples/react-todo",
-      "examples/svelte-todo"
+      "examples/svelte-todo",
+      "examples/react-realworld"
     ],
     "catalog": {
       "effect": "4.0.0-beta.83",
