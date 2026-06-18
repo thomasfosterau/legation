@@ -10,7 +10,10 @@
       "examples/foldkit-todo",
       "examples/react-todo",
       "examples/svelte-todo",
-      "examples/react-realworld"
+      "examples/react-realworld",
+      "examples/svelte-realworld",
+      "examples/react-northwind",
+      "examples/svelte-northwind"
     ],
     "catalog": {
       "effect": "4.0.0-beta.83",

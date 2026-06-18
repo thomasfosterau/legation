@@ -115,15 +115,29 @@ const program = Effect.gen(function* () {
 
 Runnable apps driving the engine from different UI stacks. Each shows the same
 core flow — optimistic writes, live views, push/pull/rebase against an
-in-process demo backend.
+in-process demo backend. The web examples run the **real library server pipeline
+in the page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`)
+over a durable `localStorage` client store.
 
-| Example                                 | Stack                                | Highlights                                                                                                                                     |
-| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`react-todo`](examples/react-todo)     | React (web)                          | `useQuery` / `useMutation` bindings; offline-first with the real `SyncServer` + `MemoryBackend` + CVR + bus in the page                        |
-| [`svelte-todo`](examples/svelte-todo)   | Svelte 5 (web)                       | `query` stores + `getMutate` bindings; same in-page pipeline, durable journal, poke-driven convergence                                         |
-| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | Offline-first: durable journal, true offline toggle, live poke-driven convergence, real `SyncServer` + `MemoryBackend` + CVR + bus in the page |
-| [`compose-todo`](examples/compose-todo) | Jetpack Compose (Kotlin)             | Optimistic writes, `Flow` live queries, in-process demo backend                                                                                |
-| [`swiftui-todo`](examples/swiftui-todo) | SwiftUI (Swift)                      | `@Observable` live queries, loopback demo backend                                                                                              |
+Three apps of increasing scope, each on React and Svelte:
+
+| App                     | React                                         | Svelte                                          | Exercises                                                                                              |
+| ----------------------- | --------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Todo**                | [`react-todo`](examples/react-todo)           | [`svelte-todo`](examples/svelte-todo)           | One collection: optimistic writes, live views, durable journal + true offline, poke-driven convergence |
+| **RealWorld** (Conduit) | [`react-realworld`](examples/react-realworld) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity   |
+| **Northwind** (admin)   | [`react-northwind`](examples/react-northwind) | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins, read-merge mutators, search/filter/pagination                     |
+
+The React examples use the [`effect-sync-react`](packages/react) bindings
+(`useQuery` / `useMutation`); the Svelte examples use
+[`effect-sync-svelte`](packages/svelte) (`query` stores + `getMutate`).
+
+Other UI stacks:
+
+| Example                                 | Stack                                | Highlights                                                                                        |
+| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `effect-sync-core` directly (no framework bindings) — The Elm Architecture |
+| [`compose-todo`](examples/compose-todo) | Jetpack Compose (Kotlin)             | Optimistic writes, `Flow` live queries, in-process demo backend                                   |
+| [`swiftui-todo`](examples/swiftui-todo) | SwiftUI (Swift)                      | `@Observable` live queries, loopback demo backend                                                 |
 
 ## Development
 

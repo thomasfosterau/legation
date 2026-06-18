@@ -39,6 +39,25 @@
         "vite": "^5.4.0",
       },
     },
+    "examples/react-northwind": {
+      "name": "effect-sync-react-northwind",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-browser": "catalog:",
+        "@thomasfosterau/effect-sync-core": "workspace:*",
+        "@thomasfosterau/effect-sync-react": "workspace:*",
+        "effect": "catalog:",
+        "react": "^18",
+        "react-dom": "^18",
+      },
+      "devDependencies": {
+        "@types/react": "^18",
+        "@types/react-dom": "^18",
+        "@vitejs/plugin-react": "^4.3.0",
+        "typescript": "^5.9.3",
+        "vite": "^5.4.0",
+      },
+    },
     "examples/react-realworld": {
       "name": "effect-sync-react-realworld",
       "version": "0.0.0",
@@ -73,6 +92,40 @@
         "@types/react": "^18",
         "@types/react-dom": "^18",
         "@vitejs/plugin-react": "^4.3.0",
+        "typescript": "^5.9.3",
+        "vite": "^5.4.0",
+      },
+    },
+    "examples/svelte-northwind": {
+      "name": "effect-sync-svelte-northwind",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-browser": "catalog:",
+        "@thomasfosterau/effect-sync-core": "workspace:*",
+        "@thomasfosterau/effect-sync-svelte": "workspace:*",
+        "effect": "catalog:",
+        "svelte": "^5",
+      },
+      "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^4.0.0",
+        "svelte-check": "^4.0.0",
+        "typescript": "^5.9.3",
+        "vite": "^5.4.0",
+      },
+    },
+    "examples/svelte-realworld": {
+      "name": "effect-sync-svelte-realworld",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-browser": "catalog:",
+        "@thomasfosterau/effect-sync-core": "workspace:*",
+        "@thomasfosterau/effect-sync-svelte": "workspace:*",
+        "effect": "catalog:",
+        "svelte": "^5",
+      },
+      "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^4.0.0",
+        "svelte-check": "^4.0.0",
         "typescript": "^5.9.3",
         "vite": "^5.4.0",
       },
@@ -690,9 +743,15 @@
 
     "effect-sync-foldkit-todo": ["effect-sync-foldkit-todo@workspace:examples/foldkit-todo"],
 
+    "effect-sync-react-northwind": ["effect-sync-react-northwind@workspace:examples/react-northwind"],
+
     "effect-sync-react-realworld": ["effect-sync-react-realworld@workspace:examples/react-realworld"],
 
     "effect-sync-react-todo": ["effect-sync-react-todo@workspace:examples/react-todo"],
+
+    "effect-sync-svelte-northwind": ["effect-sync-svelte-northwind@workspace:examples/svelte-northwind"],
+
+    "effect-sync-svelte-realworld": ["effect-sync-svelte-realworld@workspace:examples/svelte-realworld"],
 
     "effect-sync-svelte-todo": ["effect-sync-svelte-todo@workspace:examples/svelte-todo"],
 
