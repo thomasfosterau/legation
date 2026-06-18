@@ -19,6 +19,7 @@ import { Effect, Schema } from "effect";
 import {
   Backend,
   BackendError,
+  Hash,
   Predicate,
   Subset,
   type Mutator,
@@ -79,26 +80,8 @@ export interface SqlBackendConfig {
   readonly mutationsTable?: string;
 }
 
-const canonical = (value: unknown): string => {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-    .join(",")}}`;
-};
-
-/** Content-hash fallback version (FNV-1a) when no version column is mapped. */
-export const versionOf = (value: unknown): string => {
-  const text = canonical(value);
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16);
-};
+/** Content-hash fallback version when no version column is mapped. */
+export const versionOf = Hash.contentHash;
 
 export const make = (config: SqlBackendConfig): Backend.Backend => {
   const dialect = config.dialect ?? Sql.sqlite;

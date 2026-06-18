@@ -34,7 +34,7 @@
 import { Effect, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import { Backend, BackendError, Predicate } from "@thomasfosterau/effect-sync-core";
+import { Backend, BackendError, Hash, Predicate } from "@thomasfosterau/effect-sync-core";
 import { Subset } from "@thomasfosterau/effect-sync-core";
 import type { Mutator } from "@thomasfosterau/effect-sync-core";
 import { documentToRows, parseResponse } from "./CollectionLoader.js";
@@ -72,27 +72,8 @@ const trimSlashes = (s: string): string => s.replace(/\/+$/, "");
 const urlFor = (baseUrl: string, path: string, id?: string): string =>
   trimSlashes(baseUrl) + path.replace(/:[^/]+/g, () => encodeURIComponent(id ?? ""));
 
-/** Stable JSON with sorted keys, so the hash is order-independent. */
-const canonical = (value: unknown): string => {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-    .join(",")}}`;
-};
-
-/** A content-hash row version (FNV-1a over the canonical value). */
-export const versionOf = (value: unknown): string => {
-  const text = canonical(value);
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16);
-};
+/** A content-hash row version: a plain REST API exposes no version token. */
+export const versionOf = Hash.contentHash;
 
 const backendError = (message: string) => (cause: unknown) => new BackendError({ message, cause });
 

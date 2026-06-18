@@ -55,9 +55,28 @@ const segmentsOf = (path: string): ReadonlyArray<string> =>
 
 const isParam = (segment: string): boolean => segment.startsWith(":");
 
+/** Map an HTTP method + whether the route has a trailing id to a CRUD role. */
+const roleOf = (method: string, hasId: boolean): Operation | undefined => {
+  switch (method.toUpperCase()) {
+    case "GET":
+      return hasId ? "getOne" : "list";
+    case "POST":
+      return hasId ? undefined : "create";
+    case "PATCH":
+    case "PUT":
+      return hasId ? "update" : undefined;
+    case "DELETE":
+      return hasId ? "delete" : undefined;
+    default:
+      return undefined;
+  }
+};
+
 /**
  * Classify a (method, path) into a resource type + role, or `undefined` if
- * it isn't a conventional JSON:API CRUD route.
+ * it isn't a conventional JSON:API CRUD route — `/{type}` or `/{type}/:id`,
+ * where the type is a static segment and the only param is a trailing id
+ * (nested routes like `/todos/:id/comments` are not CRUD on a single type).
  */
 export const classify = (
   method: string,
@@ -69,26 +88,12 @@ export const classify = (
   const last = segments[segments.length - 1]!;
   const hasId = isParam(last);
   const type = hasId ? segments[segments.length - 2] : last;
-  // A conventional route is `/{type}` or `/{type}/:id`: the type must be a
-  // static segment, and the only param allowed is a trailing id (nested
-  // routes like `/todos/:id/comments` are not CRUD on a single type).
   if (type === undefined || isParam(type)) return undefined;
   const params = segments.filter(isParam);
   if (params.length > 1 || (params.length === 1 && !hasId)) return undefined;
 
-  switch (method.toUpperCase()) {
-    case "GET":
-      return { type, operation: hasId ? "getOne" : "list" };
-    case "POST":
-      return hasId ? undefined : { type, operation: "create" };
-    case "PATCH":
-    case "PUT":
-      return hasId ? { type, operation: "update" } : undefined;
-    case "DELETE":
-      return hasId ? { type, operation: "delete" } : undefined;
-    default:
-      return undefined;
-  }
+  const operation = roleOf(method, hasId);
+  return operation === undefined ? undefined : { type, operation };
 };
 
 /**

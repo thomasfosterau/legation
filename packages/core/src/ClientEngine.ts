@@ -312,6 +312,22 @@ export const make = (
       );
     const namedKey = (name: string, argsEncoded: unknown) =>
       `${name}:${JSON.stringify(argsEncoded)}`;
+    // Encode + key a named subscription, then update the registry with both.
+    const updateNamedSubs = (
+      name: string,
+      args: unknown,
+      update: (
+        current: ReadonlyArray<{ name: string; argsEncoded: unknown; key: string }>,
+        entry: { name: string; argsEncoded: unknown; key: string }
+      ) => ReadonlyArray<{ name: string; argsEncoded: unknown; key: string }>
+    ): Effect.Effect<void, QueryError> =>
+      encodeQueryArgs(name, args).pipe(
+        Effect.flatMap((argsEncoded) =>
+          Ref.update(namedSubs, (current) =>
+            update(current, { name, argsEncoded, key: namedKey(name, argsEncoded) })
+          )
+        )
+      );
     const observeSubset = (subset: Subset.Subset) =>
       Stream.concat(
         Stream.fromEffect(query(subset)),
@@ -365,23 +381,11 @@ export const make = (
           current.filter((s) => Subset.hash(s) !== Subset.hash(subset))
         ),
       subscribeQuery: (name, args) =>
-        encodeQueryArgs(name, args).pipe(
-          Effect.flatMap((argsEncoded) => {
-            const key = namedKey(name, argsEncoded);
-            return Ref.update(namedSubs, (current) =>
-              current.some((entry) => entry.key === key)
-                ? current
-                : [...current, { name, argsEncoded, key }]
-            ).pipe(Effect.andThen(publishChange));
-          })
-        ),
+        updateNamedSubs(name, args, (current, entry) =>
+          current.some((e) => e.key === entry.key) ? current : [...current, entry]
+        ).pipe(Effect.andThen(publishChange)),
       unsubscribeQuery: (name, args) =>
-        encodeQueryArgs(name, args).pipe(
-          Effect.flatMap((argsEncoded) => {
-            const key = namedKey(name, argsEncoded);
-            return Ref.update(namedSubs, (current) => current.filter((entry) => entry.key !== key));
-          })
-        ),
+        updateNamedSubs(name, args, (current, entry) => current.filter((e) => e.key !== entry.key)),
       query,
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
       observe: observeSubset,

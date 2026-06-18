@@ -39,6 +39,16 @@ const refOf = (value: JsonApiRow, name: string): RelationshipRef =>
 const isLink = (value: unknown): value is { readonly type: string; readonly id: string } =>
   typeof value === "object" && value !== null && "type" in value && "id" in value;
 
+/** The `{ type, id }` links a row's named relationship points at. */
+const linksOf = (
+  value: JsonApiRow,
+  name: string
+): ReadonlyArray<{ readonly type: string; readonly id: string }> => {
+  const ref = refOf(value, name);
+  if (ref === null || ref === undefined) return [];
+  return (Array.isArray(ref) ? ref : [ref]).filter(isLink);
+};
+
 /** Resolve one relationship of a row against a lookup (linkage → value[s]). */
 export const resolve = (lookup: Lookup, value: JsonApiRow, name: string): RelatedValue => {
   const ref = refOf(value, name);
@@ -65,23 +75,29 @@ export const hydrate = (
   return related;
 };
 
+/** The (collection → referenced ids) a set of rows' named relationships pin. */
+const targetIds = (
+  rows: ReadonlyArray<JsonApiRow>,
+  names: ReadonlyArray<string>
+): Map<string, Set<string>> => {
+  const map = new Map<string, Set<string>>();
+  for (const value of rows) {
+    for (const name of names) {
+      for (const link of linksOf(value, name)) {
+        const ids = map.get(link.type) ?? new Set<string>();
+        ids.add(link.id);
+        map.set(link.type, ids);
+      }
+    }
+  }
+  return map;
+};
+
 /** The collections a set of rows' named relationships point at. */
 const targetCollections = (
   rows: ReadonlyArray<JsonApiRow>,
   names: ReadonlyArray<string>
-): ReadonlySet<string> => {
-  const collections = new Set<string>();
-  for (const value of rows) {
-    for (const name of names) {
-      const ref = refOf(value, name);
-      if (ref === null || ref === undefined) continue;
-      for (const link of Array.isArray(ref) ? ref : [ref]) {
-        if (isLink(link)) collections.add(link.type);
-      }
-    }
-  }
-  return collections;
-};
+): ReadonlySet<string> => new Set(targetIds(rows, names).keys());
 
 /**
  * Resolve a subset's rows together with their named relationships, reading
@@ -122,27 +138,6 @@ export const observe = (
     Stream.orDie,
     Stream.mapEffect(() => query(engine, subset, names))
   );
-
-/** The (collection → referenced ids) a set of rows' named relationships pin. */
-const targetIds = (
-  rows: ReadonlyArray<JsonApiRow>,
-  names: ReadonlyArray<string>
-): Map<string, Set<string>> => {
-  const map = new Map<string, Set<string>>();
-  for (const value of rows) {
-    for (const name of names) {
-      const ref = refOf(value, name);
-      if (ref === null || ref === undefined) continue;
-      for (const link of Array.isArray(ref) ? ref : [ref]) {
-        if (!isLink(link)) continue;
-        const ids = map.get(link.type) ?? new Set<string>();
-        ids.add(link.id);
-        map.set(link.type, ids);
-      }
-    }
-  }
-  return map;
-};
 
 /**
  * Auto-subscribing relational read: subscribes the base subset and, from its
