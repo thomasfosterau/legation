@@ -48,6 +48,23 @@ describe("ClientStore.makeKeyValue", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
+  it.effect("a corrupt persisted blob fails as a StoreError, not a silent bad cast", () =>
+    Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const store = yield* ClientStoreModule.makeKeyValue();
+
+      // Valid JSON, wrong shape: journal entries that aren't Mutations.
+      yield* kv.set("effect-sync/journal", JSON.stringify([{ nope: true }]));
+      const journalError = yield* Effect.flip(store.pendingMutations);
+      expect(journalError._tag).toBe("StoreError");
+
+      // Not even JSON: the row blob is garbage.
+      yield* kv.set("effect-sync/rows/todos", "}{ not json");
+      const rowsError = yield* Effect.flip(store.listRows("todos"));
+      expect(rowsError._tag).toBe("StoreError");
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
   it.effect("acknowledge trims the journal per client; clearRows resets rows only", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeKeyValue();

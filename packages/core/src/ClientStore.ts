@@ -11,18 +11,26 @@
  * as rows.
  */
 
-import { Context, Effect, Layer, Ref, Semaphore } from "effect";
+import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
-import type { RowId, RowVersion } from "./Collection.js";
+import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
-import type { Mutation } from "./Protocol.js";
+import { MutationSchema, type Mutation } from "./Protocol.js";
 
-/** A confirmed row as persisted: encoded value + authoritative version. */
-export interface StoredRow {
-  readonly id: RowId;
-  readonly version: RowVersion;
-  readonly value: unknown;
-}
+/**
+ * A confirmed row as persisted: encoded value + authoritative version. The
+ * schema validates the row *envelope* on read; `value` stays `Unknown` and
+ * is carried through untouched, so additive schema changes round-trip
+ * (ADR-0014: the engine never decodes row values on the read path).
+ */
+export const StoredRowSchema = Schema.Struct({
+  id: Schema.String,
+  version: Schema.Union([Schema.String, Schema.Number]),
+  value: Schema.Unknown,
+});
+
+/** {@inheritDoc StoredRowSchema} */
+export type StoredRow = typeof StoredRowSchema.Type;
 
 export interface ClientStore {
   // Confirmed rows
@@ -123,8 +131,19 @@ export interface KeyValueOptions {
  * makes one store instance safe for concurrent fibers — not for concurrent
  * processes (the service-worker host is the per-origin singleton,
  * ADR-0010).
+ *
+ * Reads decode each persisted blob through a `Schema` codec, so a corrupt or
+ * format-drifted value on a rehydrating host fails as a `StoreError` instead
+ * of a silent `as A` cast. Only the *envelopes* are validated — row values
+ * and mutation args stay `Unknown` and round-trip untouched (ADR-0014).
  */
 const rowsKey = (collection: string) => `rows/${collection}`;
+
+/** JSON codecs for the persisted blobs (envelope-validated on read). */
+const RowMapFromJson = Schema.fromJsonString(Schema.Record(Schema.String, StoredRowSchema));
+const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
+const JournalFromJson = Schema.fromJsonString(Schema.Array(MutationSchema));
+const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
 
 export const makeKeyValue = (
   options?: KeyValueOptions
@@ -139,16 +158,18 @@ export const makeKeyValue = (
 
     const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 
-    const readJson = <A>(key: string): Effect.Effect<A | undefined, StoreError> =>
+    const readDecoded = <A>(
+      key: string,
+      codec: Schema.Codec<A, string>
+    ): Effect.Effect<A | undefined, StoreError> =>
       store.get(key).pipe(
         Effect.mapError(storeError(`Failed to read "${key}"`)),
         Effect.flatMap((raw) =>
           raw === undefined
             ? Effect.succeed(undefined)
-            : Effect.try({
-                try: () => JSON.parse(raw) as A,
-                catch: storeError(`Corrupt JSON at "${key}"`),
-              })
+            : Schema.decodeUnknownEffect(codec)(raw).pipe(
+                Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
+              )
         )
       );
     const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
@@ -157,8 +178,8 @@ export const makeKeyValue = (
         .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
 
     const rowMap = (collection: string) =>
-      readJson<Record<RowId, StoredRow>>(rowsKey(collection)).pipe(Effect.map((map) => map ?? {}));
-    const collections = readJson<ReadonlyArray<string>>("collections").pipe(
+      readDecoded(rowsKey(collection), RowMapFromJson).pipe(Effect.map((map) => map ?? {}));
+    const collections = readDecoded("collections", CollectionsFromJson).pipe(
       Effect.map((list) => list ?? [])
     );
     const trackCollection = (collection: string) =>
@@ -167,7 +188,7 @@ export const makeKeyValue = (
           list.includes(collection) ? Effect.void : writeJson("collections", [...list, collection])
         )
       );
-    const journal = readJson<ReadonlyArray<Mutation>>("journal").pipe(
+    const journal = readDecoded("journal", JournalFromJson).pipe(
       Effect.map((entries) => entries ?? [])
     );
 
@@ -219,7 +240,7 @@ export const makeKeyValue = (
       nextMutationId: (clientId) =>
         locked(
           Effect.gen(function* () {
-            const counters = (yield* readJson<Record<string, number>>("counters")) ?? {};
+            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
             const next = (counters[clientId] ?? 0) + 1;
             yield* writeJson("counters", { ...counters, [clientId]: next });
             return next;
