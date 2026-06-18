@@ -245,14 +245,27 @@ scorecard above is preserved as the original snapshot):
   the client resolves a name + args to a local `Subset` for rendering; the server resolves the
   same to the authoritative subset it syncs (context-aware, args-validated), so shaping and
   permission live on the server. `PullRequest.namedSubscriptions` (additive) carries them;
-  `ClientEngine` gains `subscribeQuery`/`queryNamed`/`observeNamed`. This is also the natural home
-  for preload + TTL (#18), still to layer on.
+  `ClientEngine` gains `subscribeQuery`/`queryNamed`/`observeNamed`.
+- **Preload + query TTL (#18): 🟡 → ✅.** `core/Subscriptions` adds refcounted acquire/release
+  with a TTL grace before an unused subscription is dropped, plus `preload`/`preloadQuery` — the
+  read-side lifecycle Zero expresses as query `ttl` and `preload()`, over named queries or subsets.
+- **Relationship-scoped read auth (#14): 🔴 → ✅.** An `IdentityResolver` seam populates
+  `SyncContext.identity` on every request, so an auth filter resolves the principal's permitted keys
+  and returns `isIn(key, allowed)` over a denormalized key. ADR-0015 documents the pattern and the
+  deferred join-without-denormalization seam.
+- **SQL reference backend (#23 / #4): 🟡 → ✅.** New `@thomasfosterau/effect-sync-sql`: a pure
+  `Subset` → `WHERE` translator (SQLite/Postgres dialects) and a `SqlBackend` over a minimal
+  driver-agnostic `SqlExecutor` seam (subset evaluation, row fetch, transactional idempotent
+  mutation-id ledger). Bring your own driver.
+- **Framework bindings (#25 / #3): 🔴 → ✅.** New `@thomasfosterau/effect-sync-react`:
+  `EffectSyncProvider` + `useQuery`/`useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`,
+  verified with a jsdom render test.
 - **Observability (#29): 🔴 → ✅.** `core/Telemetry` wires `effect_sync_*` metrics and
   `effect-sync.*` spans into client/server push/pull and fan-out.
 - **Schema migration (#28): 🔴 → 🟡.** ADR-0014 documents expand/contract with cookie-reset
   backfill, grounded in the engine's encoded-row storage and reset-on-unknown-cookie path.
 
-Still open and highest-value: **#3 React bindings**, **#4 SQL reference backend**,
-**#14 relationship-scoped read auth** (largely expressible today via an Effectful auth filter
-that returns an `id IN (allowed)` predicate over a denormalized key; a join-without-denormalization
-seam is the deeper version), and **preload + query TTL (#18)** on top of named queries.
+Still open: **server-side relational joins / `whereExists`** and the deeper
+**join-without-denormalization auth seam** (#10/#14, the part beyond local `related()` and
+allow-set filters); **a concrete distributed bus broker** (#24); **incremental view maintenance**
+(#11); and **migration tooling** beyond the ADR (#28).
