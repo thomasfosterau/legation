@@ -270,7 +270,14 @@ scorecard above is preserved as the original snapshot):
   `effect-sync.*` spans into client/server push/pull and fan-out.
 - **Schema migration (#28): 🔴 → 🟡.** ADR-0014 documents expand/contract with cookie-reset
   backfill, grounded in the engine's encoded-row storage and reset-on-unknown-cookie path.
+- **Distributed bus broker (#24): 🟡 → ✅.** Concrete `BusBroker`s ship: Redis Streams and a
+  WebSocket/Durable-Object relay (`core/BusBrokers`), now joined by a same-machine
+  `BroadcastChannel` broker (browser tabs / Node worker threads, self-delivering per contract).
+  A serialized `InvalidationBus` runs the whole distributed bus over any of them.
+- **Selective live-query re-evaluation (#11): 🟡 → 🟡⁺.** Live queries no longer re-run on every
+  global change — change events carry the touched collections, so an observer re-evaluates only
+  when its collection (or the journal) changed. Full incremental view maintenance (per-row deltas)
+  remains a deeper follow-up.
 
-Still open: **incremental view maintenance** (#11, full re-evaluation today); **a concrete
-distributed bus broker** (#24, the seam exists but ships no Redis/Durable-Object adapter); and
-**migration tooling** beyond the ADR (#28).
+Still open: **true incremental view maintenance** (#11 — per-row delta maintenance vs. the
+selective full re-evaluation now in place) and **migration tooling** beyond the ADR (#28).

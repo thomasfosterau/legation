@@ -28,6 +28,10 @@ export interface LocalRow {
   readonly value: unknown;
 }
 
+/** Which collections a local change touched, or every collection. */
+type ChangeSet = typeof ALL | ReadonlyArray<string>;
+const ALL = "all" as const;
+
 export interface ClientEngineOptions {
   readonly clientId: string;
   readonly clientGroupId: string;
@@ -105,10 +109,25 @@ export const make = (
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
     >([]);
-    const changes = yield* Effect.acquireRelease(PubSub.unbounded<void>(), (hub) =>
+    // A change event names the collections it touched, so a live query
+    // re-evaluates only when its collection changed (selective view
+    // maintenance). `"all"` forces re-evaluation everywhere — used whenever the
+    // optimistic overlay shifts (a journal append or trim can affect any
+    // collection a pending mutation writes).
+    const changes = yield* Effect.acquireRelease(PubSub.unbounded<ChangeSet>(), (hub) =>
       PubSub.shutdown(hub)
     );
-    const publishChange = Effect.asVoid(PubSub.publish(changes, undefined));
+    const publishChange = (change: ChangeSet) => Effect.asVoid(PubSub.publish(changes, change));
+    const affects = (change: ChangeSet, collection: string): boolean =>
+      change === ALL || change.includes(collection);
+    const patchCollections = (ops: ReadonlyArray<PatchOp>): ChangeSet => {
+      const collections = new Set<string>();
+      for (const op of ops) {
+        if (op._tag === "Clear") return ALL;
+        collections.add(op.collection);
+      }
+      return [...collections];
+    };
 
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const materialize: Effect.Effect<
@@ -233,19 +252,23 @@ export const make = (
       });
       // Effects arrive via the next pull; the ack only trims the journal.
       yield* acknowledge(response.lastMutationIds);
-      yield* publishChange;
+      yield* publishChange(ALL); // trimming the overlay can shift any collection
       yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
       yield* Metric.update(Telemetry.pushesTotal, 1);
     }).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
+        // With a pending overlay, acking can shift any collection a pending
+        // mutation writes, so re-evaluate everything; with an empty journal the
+        // pull only changes the patch's collections.
+        const hadPending = (yield* store.pendingMutations).length > 0;
         yield* applyPatch(response.patch);
         yield* acknowledge(response.lastMutationIds);
         yield* store.setCookie(response.cookie);
         // Atomic reveal: one change event after patch + ack (rebase is
         // recomputation in `materialize`).
-        yield* publishChange;
+        yield* publishChange(hadPending ? ALL : patchCollections(response.patch));
       });
 
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
@@ -331,7 +354,10 @@ export const make = (
     const observeSubset = (subset: Subset.Subset) =>
       Stream.concat(
         Stream.fromEffect(query(subset)),
-        Stream.fromPubSub(changes).pipe(Stream.mapEffect(() => query(subset)))
+        Stream.fromPubSub(changes).pipe(
+          Stream.filter((change) => affects(change, subset.collection)),
+          Stream.mapEffect(() => query(subset))
+        )
       );
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
@@ -346,7 +372,7 @@ export const make = (
           createdAt: Date.now(),
         };
         yield* store.appendMutation(mutation);
-        yield* publishChange;
+        yield* publishChange(ALL); // the mutation may write any collection
       });
 
     return ClientEngine.of({
@@ -383,7 +409,7 @@ export const make = (
       subscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) =>
           current.some((e) => e.key === entry.key) ? current : [...current, entry]
-        ).pipe(Effect.andThen(publishChange)),
+        ).pipe(Effect.andThen(publishChange(ALL))),
       unsubscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) => current.filter((e) => e.key !== entry.key)),
       query,
