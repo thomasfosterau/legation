@@ -3,7 +3,7 @@
  * (to-one and to-many), and that resolution reads live synced state.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Schema, Scope, Stream } from "effect";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -35,6 +35,7 @@ interface Stored {
 
 const makeServer = (seed: ReadonlyArray<Stored>) => {
   const store = new Map(seed.map((r) => [`${r.type}:${r.id}`, r]));
+  const requests: Array<string> = [];
   const headers = { "Content-Type": "application/vnd.api+json" };
   const doc = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers });
   const empty = (status: number) => new Response(null, { status, headers });
@@ -45,8 +46,45 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
       : undefined;
   };
 
+  const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
+    const data = (rel as { data?: unknown } | undefined)?.data;
+    return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
+      type: string;
+      id: string;
+    }>;
+  };
+
+  const list = (type: string, params: URLSearchParams): Response => {
+    let rows = [...store.values()].filter((r) => r.type === type);
+    for (const [key, value] of params) {
+      const match = key.match(/^filter\[(.+)\]$/);
+      if (match === null) continue;
+      const field = match[1]!;
+      const allowed = value.split(",");
+      rows = rows.filter((r) =>
+        field === "id" ? allowed.includes(r.id) : allowed.includes(String(r.attributes[field]))
+      );
+    }
+    const include = params.get("include");
+    if (include === null) return doc(rows);
+    const seen = new Map<string, Stored>();
+    for (const r of rows) {
+      for (const name of include.split(",")) {
+        for (const link of links(r.relationships?.[name])) {
+          const target = store.get(`${link.type}:${link.id}`);
+          if (target !== undefined) seen.set(`${link.type}:${link.id}`, target);
+        }
+      }
+    }
+    return new Response(JSON.stringify({ data: rows, included: [...seen.values()] }), {
+      status: 200,
+      headers,
+    });
+  };
+
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
+      requests.push(url.pathname + url.search);
       const segments = url.pathname.split("/").filter((s) => s.length > 0);
       const type = segments[0]!;
       const id = segments[1];
@@ -55,7 +93,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
         case "GET":
           response =
             id === undefined
-              ? doc([...store.values()].filter((r) => r.type === type))
+              ? list(type, url.searchParams)
               : store.has(`${type}:${id}`)
                 ? doc(store.get(`${type}:${id}`))
                 : empty(404);
@@ -90,12 +128,13 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
       return HttpClientResponse.fromWeb(request, response);
     })
   );
-  return { store, layer: Layer.succeed(HttpClient.HttpClient)(client) };
+  return { store, requests, layer: Layer.succeed(HttpClient.HttpClient)(client) };
 };
 
 const provide = <E>(
-  program: Effect.Effect<void, E, ClientEngine.ClientEngine>,
-  server: { layer: Layer.Layer<HttpClient.HttpClient> }
+  program: Effect.Effect<void, E, ClientEngine.ClientEngine | Scope.Scope>,
+  server: { layer: Layer.Layer<HttpClient.HttpClient> },
+  options?: { readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> }
 ) =>
   program.pipe(
     Effect.provide(
@@ -103,6 +142,7 @@ const provide = <E>(
         baseUrl: "http://api.test",
         clientId: "c1",
         clientGroupId: "g1",
+        ...(options?.includes !== undefined ? { includes: options.includes } : {}),
       }).pipe(Layer.provide(server.layer))
     ),
     Effect.scoped
@@ -188,6 +228,56 @@ describe("Relationships", () => {
         ).toEqual(["edited", "second"]);
       }),
       server
+    );
+  });
+
+  it.effect("auto-subscribes the referenced collections (narrowed by id)", () => {
+    const server = makeServer(seed);
+    return provide(
+      Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        // No manual subscribe of comments/people — related() does it.
+        const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
+        const head = yield* Stream.runHead(stream);
+        const issue = (head._tag === "Some" ? head.value : [])[0]!;
+
+        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        expect(
+          (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
+        ).toEqual(["first", "second"]);
+        // The referenced collections were fetched narrowed to the linked ids.
+        expect(
+          server.requests.some((u) => u.startsWith("/comments?") && u.includes("filter%5Bid%5D="))
+        ).toBe(true);
+      }),
+      server
+    );
+  });
+
+  it.effect("include delivers related rows in the parent response (no extra round trip)", () => {
+    const server = makeServer(seed);
+    return provide(
+      Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
+        const head = yield* Stream.runHead(stream);
+        const issue = (head._tag === "Some" ? head.value : [])[0]!;
+
+        expect(
+          (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
+        ).toEqual(["first", "second"]);
+        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+
+        // Parent listing carried `include`; the related collections were served
+        // from the harvested compound document, never fetched on their own.
+        expect(
+          server.requests.some((u) => u.startsWith("/issues?") && u.includes("include="))
+        ).toBe(true);
+        expect(server.requests.some((u) => u.startsWith("/comments"))).toBe(false);
+        expect(server.requests.some((u) => u.startsWith("/people"))).toBe(false);
+      }),
+      server,
+      { includes: { issues: ["author", "comments"] } }
     );
   });
 });

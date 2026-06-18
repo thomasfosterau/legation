@@ -42,6 +42,11 @@ export interface JsonApiSyncOptions {
   readonly clientGroupId: string;
   /** Override the Subset → JSON:API query encoding (e.g. your own package). */
   readonly queryEncoder?: QueryEncoder;
+  /**
+   * Relationship names to compound-load per collection (`?include=...`), so
+   * `Relationships.related` resolves them without extra round trips.
+   */
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
 }
 
 /** Reflect + derive an api's resources, collections, mutators, operations. */
@@ -75,6 +80,7 @@ export const layer = (
       mutators: registry.mutators,
       operations,
       ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
+      ...(options.includes !== undefined ? { includes: options.includes } : {}),
     })
   );
   const authLayer = Layer.succeed(Authorization.AuthPolicy)(authPolicy(resources));

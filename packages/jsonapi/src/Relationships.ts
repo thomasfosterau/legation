@@ -15,8 +15,8 @@
  * needs a `(collection, id) → value` lookup).
  */
 
-import { Effect, Stream } from "effect";
-import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
+import { Effect, Ref, Scope, Stream } from "effect";
+import { ClientEngine, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 
@@ -122,3 +122,91 @@ export const observe = (
     Stream.orDie,
     Stream.mapEffect(() => query(engine, subset, names))
   );
+
+/** The (collection → referenced ids) a set of rows' named relationships pin. */
+const targetIds = (
+  rows: ReadonlyArray<JsonApiRow>,
+  names: ReadonlyArray<string>
+): Map<string, Set<string>> => {
+  const map = new Map<string, Set<string>>();
+  for (const value of rows) {
+    for (const name of names) {
+      const ref = refOf(value, name);
+      if (ref === null || ref === undefined) continue;
+      for (const link of Array.isArray(ref) ? ref : [ref]) {
+        if (!isLink(link)) continue;
+        const ids = map.get(link.type) ?? new Set<string>();
+        ids.add(link.id);
+        map.set(link.type, ids);
+      }
+    }
+  }
+  return map;
+};
+
+/**
+ * Auto-subscribing relational read: subscribes the base subset and, from its
+ * rows, the narrowed `id IN (...)` subsets of each referenced collection — so
+ * the related rows sync without the caller wiring up subscriptions. The
+ * subscriptions track the live linkage (re-derived on every change) and are
+ * torn down when the scope closes. Pair with the backend's `includes` config
+ * to deliver the related rows in the parent's response (no extra round trip).
+ *
+ * Returns a stream that emits the resolved rows and re-emits on any change.
+ */
+export const related = (
+  engine: ClientEngine.ClientEngine,
+  subset: Subset.Subset,
+  names: ReadonlyArray<string>
+): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never, never>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const subscribed = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
+    yield* engine.subscribe(subset);
+    yield* Effect.addFinalizer(() =>
+      Ref.get(subscribed).pipe(
+        Effect.flatMap((subs) =>
+          Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), { discard: true })
+        )
+      )
+    );
+    // Initial base sync so the first relationship derivation sees real rows.
+    yield* engine.pull.pipe(Effect.orDie);
+
+    const refresh = Effect.gen(function* () {
+      const base = yield* engine.query(subset).pipe(Effect.orDie);
+      const desired = [
+        ...targetIds(
+          base.map((row) => row.value as JsonApiRow),
+          names
+        ),
+      ]
+        .filter(([, ids]) => ids.size > 0)
+        .map(([collection, ids]) =>
+          Subset.make({ collection, where: Predicate.isIn("id", [...ids]) })
+        );
+
+      const previous = yield* Ref.get(subscribed);
+      const has = (list: ReadonlyArray<Subset.Subset>, s: Subset.Subset) =>
+        list.some((other) => Subset.hash(other) === Subset.hash(s));
+      let changed = false;
+      for (const stale of previous) {
+        if (!has(desired, stale)) {
+          yield* engine.unsubscribe(stale);
+          changed = true;
+        }
+      }
+      for (const next of desired) {
+        if (!has(previous, next)) {
+          yield* engine.subscribe(next);
+          changed = true;
+        }
+      }
+      yield* Ref.set(subscribed, desired);
+      if (changed) yield* engine.pull.pipe(Effect.orDie);
+    });
+
+    return engine.observe(subset).pipe(
+      Stream.orDie,
+      Stream.mapEffect(() => refresh.pipe(Effect.andThen(query(engine, subset, names))))
+    );
+  });

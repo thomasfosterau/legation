@@ -9,10 +9,11 @@
  * CVR diffing on top.
  *
  * Mapping:
- * - `evaluate` lists the collection (`GET /{type}`) and filters/sorts/limits
- *   locally with `Subset.apply`. Pushing predicates into JSON:API `filter`
- *   query params is a later optimization; listing-then-filtering is always
- *   correct.
+ * - `evaluate` lists the collection (`GET /{type}`), pushing the predicate to
+ *   the server via the `QueryEncoder` (best-effort `filter[...]`) and applying
+ *   the full predicate/order/limit locally with `Subset.apply` (the authority).
+ *   With `includes`, it adds `?include=...` and harvests the compound document's
+ *   related rows, serving auto-subscribed `id IN (...)` subsets from that cache.
  * - `getRows` serves row values from the cache `evaluate` populates (the sync
  *   server always evaluates before fetching put rows in the same pull),
  *   falling back to `GET /{type}/{id}`.
@@ -33,7 +34,7 @@
 import { Effect, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import { Backend, BackendError } from "@thomasfosterau/effect-sync-core";
+import { Backend, BackendError, Predicate } from "@thomasfosterau/effect-sync-core";
 import { Subset } from "@thomasfosterau/effect-sync-core";
 import type { Mutator } from "@thomasfosterau/effect-sync-core";
 import { documentToRows, parseResponse } from "./CollectionLoader.js";
@@ -51,6 +52,13 @@ export interface JsonApiBackendConfig {
   readonly operations: ReadonlyMap<string, OperationInfo>;
   /** Subset → JSON:API query string. Defaults to a sound-superset encoder. */
   readonly query?: QueryEncoder;
+  /**
+   * Relationship names to compound-load per collection (`?include=...`). When a
+   * listing pulls in related resources, they are harvested so an auto-subscribed
+   * `id IN (...)` subset over those collections is served from the same response
+   * — no extra round trip. See `Relationships.related`.
+   */
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
 }
 
 const jsonApiHeaders = {
@@ -88,6 +96,37 @@ export const versionOf = (value: unknown): string => {
 
 const backendError = (message: string) => (cause: unknown) => new BackendError({ message, cause });
 
+/** Append `?`/`&`-joined params to an existing query string. */
+const appendQuery = (query: string, extra: string): string =>
+  extra === "" ? query : query === "" ? `?${extra}` : `${query}&${extra}`;
+
+/**
+ * The set of ids a subset pins via an `id IN (...)` / `id = ...` filter, or
+ * `undefined` if it isn't id-pinned. Used to recognize auto-subscribed
+ * relationship subsets that the include fast-path can serve from cache.
+ */
+const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefined => {
+  switch (predicate._tag) {
+    case "In":
+      return predicate.field === "id"
+        ? new Set(predicate.values.map((value) => String(value)))
+        : undefined;
+    case "Compare":
+      return predicate.op === "eq" && predicate.field === "id"
+        ? new Set([String(predicate.value)])
+        : undefined;
+    case "And": {
+      for (const inner of predicate.predicates) {
+        const ids = pinnedIds(inner);
+        if (ids !== undefined) return ids;
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
 /** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
 const writeBody = (
   type: string,
@@ -110,8 +149,11 @@ export const make = (
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
     const encoder = config.query ?? defaultEncoder;
+    const includes = config.includes ?? {};
     // collection → id → most-recently-listed row (warms getRows).
     const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
+    // collection → ids known complete in cache via a compound `included` harvest.
+    const includedIds = yield* Ref.make(new Map<string, Set<string>>());
     // clientGroupId → clientId → highest applied mutation id (in-session).
     const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
 
@@ -143,25 +185,75 @@ export const make = (
         return next;
       });
 
+    /** Harvest a compound document's `included` rows; record their ids complete. */
+    const harvestIncluded = (
+      included: ReadonlyArray<JsonApiRow & { readonly $collection: string }>
+    ) =>
+      Effect.gen(function* () {
+        const byCollection = new Map<string, Array<JsonApiRow>>();
+        for (const row of included) {
+          const rows = byCollection.get(row.$collection) ?? [];
+          rows.push(row);
+          byCollection.set(row.$collection, rows);
+        }
+        for (const [collection, rows] of byCollection) {
+          yield* cacheRows(collection, rows);
+          yield* Ref.update(includedIds, (current) => {
+            const next = new Map(current);
+            const ids = new Set(next.get(collection) ?? []);
+            for (const row of rows) ids.add(row.id);
+            next.set(collection, ids);
+            return next;
+          });
+        }
+      });
+
+    const entriesFrom = (values: ReadonlyArray<JsonApiRow>, subset: Subset.Subset) =>
+      Subset.apply(
+        values.map((value) => ({ id: value.id, value })),
+        subset
+      ).map((row) => ({ id: row.id, version: versionOf(row.value) }));
+
     const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
       Effect.gen(function* () {
         const list = config.resources.get(subset.collection)?.list;
         if (list === undefined) return [];
+
+        // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
+        // were all delivered by a prior compound `included` harvest is served
+        // from cache — the related rows arrived with their parent, no round trip.
+        const ids = pinnedIds(subset.where);
+        if (ids !== undefined) {
+          const complete = (yield* Ref.get(includedIds)).get(subset.collection);
+          if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
+            const cached = (yield* Ref.get(cache)).get(subset.collection);
+            if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
+              return entriesFrom([...cached.values()], subset);
+            }
+          }
+        }
+
         // Server-side narrowing is best-effort; `Subset.apply` below is the
         // authority, so the encoded query only needs to return a superset.
-        const url = urlFor(config.baseUrl, list.path) + encoder.encode(subset);
+        const includeParam = (includes[subset.collection] ?? []).join(",");
+        const query = appendQuery(
+          encoder.encode(subset),
+          includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
+        );
+        const url = urlFor(config.baseUrl, list.path) + query;
         const response = yield* getJson(url).pipe(
           Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
         );
         const document = yield* parseResponse(response).pipe(
           Effect.mapError(backendError(`Invalid JSON:API listing "${subset.collection}"`))
         );
-        const values = documentToRows(document).rows.map((row) => toRow(row.value));
+        const loaded = documentToRows(document);
+        const values = loaded.rows.map((row) => toRow(row.value));
         yield* cacheRows(subset.collection, values);
-        return Subset.apply(
-          values.map((value) => ({ id: value.id, value })),
-          subset
-        ).map((row) => ({ id: row.id, version: versionOf(row.value) }));
+        yield* harvestIncluded(
+          loaded.included.map((row) => ({ ...toRow(row.value), $collection: row.collection }))
+        );
+        return entriesFrom(values, subset);
       });
 
     const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
