@@ -20,6 +20,7 @@ import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 import { TransportError } from "./Errors.js";
 import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
+import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 import { ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
@@ -43,6 +44,8 @@ export const make: Effect.Effect<
   const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
     option._tag === "Some" ? option.value : passthroughMiddleware
   );
+  // Optional: resolve named-query subscriptions to subsets (Query.ts).
+  const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
 
   const pokeHub = yield* makePokeHub;
   // Active subscriptions per client group, for fan-out matching.
@@ -87,13 +90,24 @@ export const make: Effect.Effect<
       const checked = yield* middleware.onPull(context, request);
 
       // Authorize: AND each subset with its collection's mandatory filter.
+      // Client-authored subsets and server-resolved named queries are treated
+      // identically once resolved.
       const authorized: Array<Subset> = [];
       for (const subset of checked.subscriptions) {
         authorized.push(yield* authorize(authPolicy, context, subset));
       }
+      for (const named of checked.namedSubscriptions ?? []) {
+        if (resolverOption._tag === "None") {
+          return yield* new TransportError({
+            message: `No QueryResolver registered for named subscription "${named.name}"`,
+          });
+        }
+        const subset = yield* resolverOption.value.resolve(named.name, named.args, context);
+        authorized.push(yield* authorize(authPolicy, context, subset));
+      }
       yield* Ref.update(activeSubsets, (m) => {
         const next = new Map(m);
-        next.set(request.clientGroupId, checked.subscriptions);
+        next.set(request.clientGroupId, authorized);
         return next;
       });
 

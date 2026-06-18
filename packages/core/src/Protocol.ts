@@ -92,18 +92,32 @@ export const PatchOpSchema: Schema.Codec<PatchOp> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("Clear") }),
 ]) as Schema.Codec<PatchOp>;
 
+/** A named-query subscription: resolved to a Subset server-side (Query.ts). */
+export interface NamedSubscription {
+  readonly name: string;
+  readonly args: unknown;
+}
+
+export const NamedSubscriptionSchema: Schema.Codec<NamedSubscription> = Schema.Struct({
+  name: Schema.String,
+  args: Schema.Unknown,
+}) as Schema.Codec<NamedSubscription>;
+
 /** Pull request: what the client has (cookie) and wants (subsets). */
 export interface PullRequest {
   readonly clientGroupId: string;
   /** Cookie from the previous pull; absent on first sync. */
   readonly cookie?: string | undefined;
   readonly subscriptions: ReadonlyArray<Subset>;
+  /** Named queries the server resolves to subsets (optional). */
+  readonly namedSubscriptions?: ReadonlyArray<NamedSubscription> | undefined;
 }
 
 export const PullRequestSchema: Schema.Codec<PullRequest> = Schema.Struct({
   clientGroupId: Schema.String,
   cookie: Schema.optional(Schema.String),
   subscriptions: Schema.Array(SubsetSchema),
+  namedSubscriptions: Schema.optional(Schema.Array(NamedSubscriptionSchema)),
 }) as Schema.Codec<PullRequest>;
 
 /** Pull response: patch to the new cookie, plus mutation acknowledgements. */

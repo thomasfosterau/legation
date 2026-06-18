@@ -14,9 +14,10 @@
 import { Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
-import { MutatorError, StoreError, TransportError } from "./Errors.js";
+import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
-import type { Mutation, PatchOp, PullResponse } from "./Protocol.js";
+import type { Mutation, NamedSubscription, PatchOp, PullResponse } from "./Protocol.js";
+import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
 import * as Subset from "./Subset.js";
@@ -31,6 +32,8 @@ export interface ClientEngineOptions {
   readonly clientId: string;
   readonly clientGroupId: string;
   readonly mutators: MutatorRegistry;
+  /** Named queries: client-side subset factories for local rendering. */
+  readonly queries?: Query.QueryRegistry;
 }
 
 export interface ClientEngine {
@@ -55,6 +58,23 @@ export interface ClientEngine {
   /** Register/replace the engine's subscriptions (synced on next pull). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void>;
+  /**
+   * Subscribe a named query (Query.ts): the server resolves it to the
+   * authoritative subset it syncs; the client renders it locally with its own
+   * subset factory. Synced on the next pull.
+   */
+  readonly subscribeQuery: (name: string, args: unknown) => Effect.Effect<void, QueryError>;
+  readonly unsubscribeQuery: (name: string, args: unknown) => Effect.Effect<void, QueryError>;
+  /** Query a named query's local result (confirmed + overlay). */
+  readonly queryNamed: (
+    name: string,
+    args: unknown
+  ) => Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError | QueryError>;
+  /** Live named query: re-emits on every local change. */
+  readonly observeNamed: (
+    name: string,
+    args: unknown
+  ) => Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError | QueryError>;
   /** Query the current local view (confirmed + overlay). */
   readonly query: (
     subset: Subset.Subset
@@ -82,6 +102,9 @@ export const make = (
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
+    const namedSubs = yield* Ref.make<
+      ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
+    >([]);
     const changes = yield* Effect.acquireRelease(PubSub.unbounded<void>(), (hub) =>
       PubSub.shutdown(hub)
     );
@@ -228,10 +251,16 @@ export const make = (
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
       const cookie = yield* store.getCookie;
       const subsets = yield* Ref.get(subscriptions);
+      const named = yield* Ref.get(namedSubs);
+      const namedSubscriptions: ReadonlyArray<NamedSubscription> = named.map((entry) => ({
+        name: entry.name,
+        args: entry.argsEncoded,
+      }));
       const response = yield* transport.pull({
         clientGroupId: options.clientGroupId,
         cookie,
         subscriptions: subsets,
+        ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
       });
       yield* applyPull(response);
       yield* Metric.update(Telemetry.pullsTotal, 1);
@@ -254,6 +283,40 @@ export const make = (
         ? Effect.fail(new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator }))
         : Effect.succeed(definition);
     };
+
+    // Named queries: resolve a name to its client-side definition + subset.
+    const queryDefOf = (
+      name: string
+    ): Effect.Effect<
+      { readonly definition: Query.AnyQuery; readonly local: Query.LocalQuery<any> },
+      QueryError
+    > => {
+      const definition = options.queries?.queries.get(name);
+      const local = options.queries?.locals.get(name);
+      return definition === undefined || local === undefined
+        ? Effect.fail(new QueryError({ message: `Unknown query: ${name}`, query: name }))
+        : Effect.succeed({ definition, local });
+    };
+    const localSubsetOf = (name: string, args: unknown): Effect.Effect<Subset.Subset, QueryError> =>
+      queryDefOf(name).pipe(Effect.map(({ local }) => local(args)));
+    const encodeQueryArgs = (name: string, args: unknown): Effect.Effect<unknown, QueryError> =>
+      queryDefOf(name).pipe(
+        Effect.flatMap(({ definition }) =>
+          Schema.encodeUnknownEffect(definition.args)(args).pipe(
+            Effect.mapError(
+              (cause) =>
+                new QueryError({ message: `Invalid args for query "${name}"`, query: name, cause })
+            )
+          )
+        )
+      );
+    const namedKey = (name: string, argsEncoded: unknown) =>
+      `${name}:${JSON.stringify(argsEncoded)}`;
+    const observeSubset = (subset: Subset.Subset) =>
+      Stream.concat(
+        Stream.fromEffect(query(subset)),
+        Stream.fromPubSub(changes).pipe(Stream.mapEffect(() => query(subset)))
+      );
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
     const journal = (mutator: string, encoded: unknown) =>
@@ -301,12 +364,29 @@ export const make = (
         Ref.update(subscriptions, (current) =>
           current.filter((s) => Subset.hash(s) !== Subset.hash(subset))
         ),
-      query,
-      observe: (subset) =>
-        Stream.concat(
-          Stream.fromEffect(query(subset)),
-          Stream.fromPubSub(changes).pipe(Stream.mapEffect(() => query(subset)))
+      subscribeQuery: (name, args) =>
+        encodeQueryArgs(name, args).pipe(
+          Effect.flatMap((argsEncoded) => {
+            const key = namedKey(name, argsEncoded);
+            return Ref.update(namedSubs, (current) =>
+              current.some((entry) => entry.key === key)
+                ? current
+                : [...current, { name, argsEncoded, key }]
+            ).pipe(Effect.andThen(publishChange));
+          })
         ),
+      unsubscribeQuery: (name, args) =>
+        encodeQueryArgs(name, args).pipe(
+          Effect.flatMap((argsEncoded) => {
+            const key = namedKey(name, argsEncoded);
+            return Ref.update(namedSubs, (current) => current.filter((entry) => entry.key !== key));
+          })
+        ),
+      query,
+      queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
+      observe: observeSubset,
+      observeNamed: (name, args) =>
+        Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
       pull,
       runSync,
