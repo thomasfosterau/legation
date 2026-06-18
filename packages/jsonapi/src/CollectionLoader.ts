@@ -59,18 +59,22 @@ export interface LoadedRows {
 
 const identifier = (ref: ResourceIdentifier) => ({ type: ref.type, id: ref.id });
 
+/**
+ * `Array.isArray` types its guard as `any[]`, so it does not narrow the
+ * `ReadonlyArray` members the schema-derived document types use. This guard
+ * narrows them correctly.
+ */
+const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
+
 /** Map a resource (or bare identifier) to a collection row. */
 export const resourceToRow = (resource: ResourceObject | ResourceIdentifier): CollectionRow => {
   const full = resource as ResourceObject;
   const relationships: Record<string, RelationshipRef> = {};
   for (const [name, relationship] of Object.entries(full.relationships ?? {})) {
-    if (relationship.data === undefined) continue;
+    const data = relationship.data;
+    if (data === undefined) continue;
     relationships[name] =
-      relationship.data === null
-        ? null
-        : Array.isArray(relationship.data)
-          ? relationship.data.map(identifier)
-          : identifier(relationship.data);
+      data === null ? null : isReadonlyArray(data) ? data.map(identifier) : identifier(data);
   }
   return {
     collection: resource.type,
@@ -87,7 +91,7 @@ export const resourceToRow = (resource: ResourceObject | ResourceIdentifier): Co
 const dataResources = (
   data: JsonApiDocument["data"]
 ): ReadonlyArray<ResourceObject | ResourceIdentifier> =>
-  data === undefined || data === null ? [] : Array.isArray(data) ? data : [data];
+  data === undefined || data === null ? [] : isReadonlyArray(data) ? data : [data];
 
 /** Map a whole document to its primary rows and its `included` rows. */
 export const documentToRows = (document: JsonApiDocument): LoadedRows => ({

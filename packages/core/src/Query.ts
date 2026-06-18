@@ -17,7 +17,7 @@
 
 import { Context, Effect, Schema } from "effect";
 import type { SyncContext } from "./Backend.js";
-import { AuthorizationError, QueryError } from "./Errors.js";
+import { AuthorizationError, DuplicateNameError, QueryError } from "./Errors.js";
 import type { Subset } from "./Subset.js";
 
 /** A named query definition: the shared, serializable contract (name + args). */
@@ -52,7 +52,7 @@ export const registry = (
   const queries = new Map<string, AnyQuery>();
   const locals = new Map<string, LocalQuery<any>>();
   for (const { query, local } of entries) {
-    if (queries.has(query.name)) throw new Error(`Duplicate query name: ${query.name}`);
+    if (queries.has(query.name)) throw new DuplicateNameError({ kind: "query", name: query.name });
     queries.set(query.name, query);
     locals.set(query.name, local);
   }

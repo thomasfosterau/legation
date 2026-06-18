@@ -13,7 +13,7 @@
 
 import type { Effect, Schema } from "effect";
 import type { RowId } from "./Collection.js";
-import type { MutatorError, StoreError } from "./Errors.js";
+import { DuplicateNameError, type MutatorError, type StoreError } from "./Errors.js";
 
 /** A mutator definition: the shared, serializable contract. */
 export interface Mutator<Name extends string, Args, ArgsEncoded = unknown> {
@@ -62,7 +62,7 @@ export const registry = (
   const handlers = new Map<string, LocalHandler<any>>();
   for (const { mutator, local } of entries) {
     if (mutators.has(mutator.name)) {
-      throw new Error(`Duplicate mutator name: ${mutator.name}`);
+      throw new DuplicateNameError({ kind: "mutator", name: mutator.name });
     }
     mutators.set(mutator.name, mutator);
     handlers.set(mutator.name, local);

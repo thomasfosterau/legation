@@ -57,3 +57,17 @@ export class QueryError extends Data.TaggedError("QueryError")<{
   readonly query?: string | undefined;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * A registry (collections, mutators, queries) was built with a duplicate
+ * name — a static configuration bug surfaced at setup time. Thrown by the
+ * synchronous `registry` builders; tagged so it is still identifiable.
+ */
+export class DuplicateNameError extends Data.TaggedError("DuplicateNameError")<{
+  readonly kind: "collection" | "mutator" | "query";
+  readonly name: string;
+}> {
+  override get message(): string {
+    return `Duplicate ${this.kind} name: ${this.name}`;
+  }
+}

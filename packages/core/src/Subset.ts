@@ -13,39 +13,35 @@ import * as Predicate from "./Predicate.js";
 /** Sort direction. */
 export type Direction = "asc" | "desc";
 
+/** Wire codec for one sort term: a top-level row field plus direction. */
+export const OrderBySchema = Schema.Struct({
+  field: Schema.String,
+  direction: Schema.Literals(["asc", "desc"]),
+});
+
 /** One sort term: a top-level row field plus direction. */
-export interface OrderBy {
-  readonly field: string;
-  readonly direction: Direction;
-}
+export type OrderBy = typeof OrderBySchema.Type;
+
+/**
+ * Wire codec for {@link Subset}. The schema is the source of truth: the
+ * `Subset` type is derived from it (`typeof SubsetSchema.Type`) so the two
+ * cannot drift.
+ */
+export const SubsetSchema = Schema.Struct({
+  collection: Schema.String,
+  where: Predicate.PredicateSchema,
+  orderBy: Schema.Array(OrderBySchema),
+  limit: Schema.optional(Schema.Number),
+  /** Opaque continuation: sync rows ordered after this cursor. */
+  cursor: Schema.optional(Schema.String),
+});
 
 /**
  * A collection subset. `limit` + `cursor` give cursor-based pagination:
  * "load more" widens the subset (re-register with a larger limit or a
  * cursor at the last row) rather than fetching detached pages.
  */
-export interface Subset {
-  readonly collection: string;
-  readonly where: Predicate.Predicate;
-  readonly orderBy: ReadonlyArray<OrderBy>;
-  readonly limit?: number | undefined;
-  /** Opaque continuation: sync rows ordered after this cursor. */
-  readonly cursor?: string | undefined;
-}
-
-export const OrderBySchema: Schema.Codec<OrderBy> = Schema.Struct({
-  field: Schema.String,
-  direction: Schema.Literals(["asc", "desc"]),
-}) as Schema.Codec<OrderBy>;
-
-/** Wire codec for {@link Subset}. */
-export const SubsetSchema: Schema.Codec<Subset> = Schema.Struct({
-  collection: Schema.String,
-  where: Predicate.PredicateSchema,
-  orderBy: Schema.Array(OrderBySchema),
-  limit: Schema.optional(Schema.Number),
-  cursor: Schema.optional(Schema.String),
-}) as Schema.Codec<Subset>;
+export type Subset = typeof SubsetSchema.Type;
 
 /** Define a subset; `where` defaults to the whole collection. */
 export const make = (options: {

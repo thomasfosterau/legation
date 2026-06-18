@@ -12,7 +12,6 @@
 
 import { Effect, Schema } from "effect";
 import { ProtocolError } from "./Errors.js";
-import type { Subset } from "./Subset.js";
 import { SubsetSchema } from "./Subset.js";
 
 // ─── Mutations (upstream) ────────────────────────────────────────────────────
@@ -22,46 +21,38 @@ import { SubsetSchema } from "./Subset.js";
  * `mutationId` is sequential per client, giving the backend exactly-once,
  * in-order application and giving the client precise acknowledgement.
  */
-export interface Mutation {
-  readonly clientId: string;
-  readonly mutationId: number;
-  readonly mutator: string;
-  readonly args: unknown;
-  /** Client wall-clock at creation; informational only. */
-  readonly createdAt: number;
-}
-
-export const MutationSchema: Schema.Codec<Mutation> = Schema.Struct({
+export const MutationSchema = Schema.Struct({
   clientId: Schema.String,
   mutationId: Schema.Number,
   mutator: Schema.String,
   args: Schema.Unknown,
+  /** Client wall-clock at creation; informational only. */
   createdAt: Schema.Number,
-}) as Schema.Codec<Mutation>;
+});
+
+/** {@inheritDoc MutationSchema} */
+export type Mutation = typeof MutationSchema.Type;
 
 /** Push request: pending mutations in journal order. */
-export interface PushRequest {
-  readonly clientGroupId: string;
-  readonly mutations: ReadonlyArray<Mutation>;
-}
-
-export const PushRequestSchema: Schema.Codec<PushRequest> = Schema.Struct({
+export const PushRequestSchema = Schema.Struct({
   clientGroupId: Schema.String,
   mutations: Schema.Array(MutationSchema),
-}) as Schema.Codec<PushRequest>;
+});
+
+/** {@inheritDoc PushRequestSchema} */
+export type PushRequest = typeof PushRequestSchema.Type;
 
 /**
  * Push response: the highest mutation id the backend has applied, per
  * client. Mutations at or below these ids are acknowledged; effects arrive
  * via the next pull's patch, which is when the optimistic overlay drops.
  */
-export interface PushResponse {
-  readonly lastMutationIds: Readonly<Record<string, number>>;
-}
-
-export const PushResponseSchema: Schema.Codec<PushResponse> = Schema.Struct({
+export const PushResponseSchema = Schema.Struct({
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
-}) as Schema.Codec<PushResponse>;
+});
+
+/** {@inheritDoc PushResponseSchema} */
+export type PushResponse = typeof PushResponseSchema.Type;
 
 // ─── Patches (downstream) ────────────────────────────────────────────────────
 
@@ -69,18 +60,7 @@ export const PushResponseSchema: Schema.Codec<PushResponse> = Schema.Struct({
  * One patch operation. `Put` and `Del` address rows; `Clear` resets the
  * client's view (sent when the server does not recognize the cookie).
  */
-export type PatchOp =
-  | {
-      readonly _tag: "Put";
-      readonly collection: string;
-      readonly id: string;
-      readonly version: string | number;
-      readonly value: unknown;
-    }
-  | { readonly _tag: "Del"; readonly collection: string; readonly id: string }
-  | { readonly _tag: "Clear" };
-
-export const PatchOpSchema: Schema.Codec<PatchOp> = Schema.Union([
+export const PatchOpSchema = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Put"),
     collection: Schema.String,
@@ -90,57 +70,50 @@ export const PatchOpSchema: Schema.Codec<PatchOp> = Schema.Union([
   }),
   Schema.Struct({ _tag: Schema.tag("Del"), collection: Schema.String, id: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Clear") }),
-]) as Schema.Codec<PatchOp>;
+]);
+
+/** {@inheritDoc PatchOpSchema} */
+export type PatchOp = typeof PatchOpSchema.Type;
 
 /** A named-query subscription: resolved to a Subset server-side (Query.ts). */
-export interface NamedSubscription {
-  readonly name: string;
-  readonly args: unknown;
-}
-
-export const NamedSubscriptionSchema: Schema.Codec<NamedSubscription> = Schema.Struct({
+export const NamedSubscriptionSchema = Schema.Struct({
   name: Schema.String,
   args: Schema.Unknown,
-}) as Schema.Codec<NamedSubscription>;
+});
+
+/** {@inheritDoc NamedSubscriptionSchema} */
+export type NamedSubscription = typeof NamedSubscriptionSchema.Type;
 
 /** Pull request: what the client has (cookie) and wants (subsets). */
-export interface PullRequest {
-  readonly clientGroupId: string;
-  /** Cookie from the previous pull; absent on first sync. */
-  readonly cookie?: string | undefined;
-  readonly subscriptions: ReadonlyArray<Subset>;
-  /** Named queries the server resolves to subsets (optional). */
-  readonly namedSubscriptions?: ReadonlyArray<NamedSubscription> | undefined;
-}
-
-export const PullRequestSchema: Schema.Codec<PullRequest> = Schema.Struct({
+export const PullRequestSchema = Schema.Struct({
   clientGroupId: Schema.String,
+  /** Cookie from the previous pull; absent on first sync. */
   cookie: Schema.optional(Schema.String),
   subscriptions: Schema.Array(SubsetSchema),
+  /** Named queries the server resolves to subsets (optional). */
   namedSubscriptions: Schema.optional(Schema.Array(NamedSubscriptionSchema)),
-}) as Schema.Codec<PullRequest>;
+});
+
+/** {@inheritDoc PullRequestSchema} */
+export type PullRequest = typeof PullRequestSchema.Type;
 
 /** Pull response: patch to the new cookie, plus mutation acknowledgements. */
-export interface PullResponse {
-  readonly cookie: string;
-  readonly patch: ReadonlyArray<PatchOp>;
-  readonly lastMutationIds: Readonly<Record<string, number>>;
-}
-
-export const PullResponseSchema: Schema.Codec<PullResponse> = Schema.Struct({
+export const PullResponseSchema = Schema.Struct({
   cookie: Schema.String,
   patch: Schema.Array(PatchOpSchema),
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
-}) as Schema.Codec<PullResponse>;
+});
+
+/** {@inheritDoc PullResponseSchema} */
+export type PullResponse = typeof PullResponseSchema.Type;
 
 /** A contentless "pull soon" hint. */
-export interface Poke {
-  readonly reason?: string | undefined;
-}
-
-export const PokeSchema: Schema.Codec<Poke> = Schema.Struct({
+export const PokeSchema = Schema.Struct({
   reason: Schema.optional(Schema.String),
-}) as Schema.Codec<Poke>;
+});
+
+/** {@inheritDoc PokeSchema} */
+export type Poke = typeof PokeSchema.Type;
 
 // ─── Decode helpers ──────────────────────────────────────────────────────────
 

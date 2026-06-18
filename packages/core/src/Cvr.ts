@@ -11,7 +11,7 @@
  * reset patch (Clear + full Puts).
  */
 
-import { Context, Effect, Layer, Ref } from "effect";
+import { Context, Effect, Layer, Ref, Schema } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
 import { StoreError } from "./Errors.js";
@@ -90,17 +90,29 @@ export const layerMemoryStore: Layer.Layer<CvrStore> = Layer.effect(CvrStore)(ma
 
 // ─── Shared-storage CVR store (distributed) ──────────────────────────────────
 
-/** The JSON-serializable shape of a CVR on disk: rows as nested entry pairs. */
-interface WireCvr {
-  readonly rows: ReadonlyArray<readonly [string, ReadonlyArray<readonly [RowId, RowVersion]>]>;
-}
+/**
+ * The JSON-serializable shape of a CVR on disk: rows as nested entry pairs.
+ * The schema is the source of truth for the on-disk form and for decoding
+ * untrusted stored bytes; `WireCvr` is derived from it.
+ */
+const WireCvrSchema = Schema.fromJsonString(
+  Schema.Struct({
+    rows: Schema.Array(
+      Schema.Tuple([
+        Schema.String,
+        Schema.Array(Schema.Tuple([Schema.String, Schema.Union([Schema.String, Schema.Number])])),
+      ])
+    ),
+  })
+);
+
+type WireCvr = typeof WireCvrSchema.Type;
+
+const decodeCvr = Schema.decodeUnknownEffect(WireCvrSchema);
 
 const toWire = (cvr: Cvr): WireCvr => ({
   rows: [...cvr.rows].map(([collection, versions]) => [collection, [...versions]] as const),
 });
-
-const isWireCvr = (value: unknown): value is WireCvr =>
-  typeof value === "object" && value !== null && Array.isArray((value as WireCvr).rows);
 
 const fromWire = (wire: WireCvr): Cvr => ({
   rows: new Map(wire.rows.map(([collection, versions]) => [collection, new Map(versions)])),
@@ -135,10 +147,10 @@ export const makeKeyValueStore = (
           Effect.flatMap((raw) =>
             raw === undefined
               ? Effect.succeed(undefined)
-              : Effect.try({
-                  try: () => JSON.parse(raw) as unknown,
-                  catch: storeError(`Corrupt CVR at "${cookie}"`),
-                }).pipe(Effect.map((parsed) => (isWireCvr(parsed) ? fromWire(parsed) : undefined)))
+              : decodeCvr(raw).pipe(
+                  Effect.map(fromWire),
+                  Effect.mapError(storeError(`Corrupt CVR at "${cookie}"`))
+                )
           )
         ),
       set: (cookie, cvr) =>

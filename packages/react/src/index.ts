@@ -1,9 +1,12 @@
 /**
  * @thomasfosterau/effect-sync-react
  *
- * Idiomatic React bindings for the effect-sync engine: `useQuery` /
- * `useNamedQuery` (live results via `useSyncExternalStore`) and `useMutation`,
- * over a `ManagedRuntime` provided by `EffectSyncProvider`.
+ * Idiomatic React bindings for the effect-sync engine, built as a thin layer
+ * over `effect/unstable/reactivity` atoms: `EffectSyncProvider` supplies an
+ * `AtomRegistry` and the engine's atoms (`EngineAtoms.fromLayer`); `useQuery`
+ * / `useNamedQuery` expose live `AsyncResult`s via `useSyncExternalStore`; and
+ * `useMutation` writes the mutation atom. `useAtomValue` / `useAtomSet` are
+ * exposed for binding any other atom.
  */
-export * from "./runtime.js";
+export * from "./registry.js";
 export * from "./hooks.js";

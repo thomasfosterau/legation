@@ -17,3 +17,7 @@ Keep targeting Effect v4 beta across all packages, with the version pinned exact
 - Production users must accept beta-channel risk; this is documented in each package README ("Targets Effect v4 beta").
 - The pinned version means dependabot/renovate won't silently move us; beta bumps are explicit decisions.
 - Anything imported from `effect/unstable/*` (HTTP client, KeyValueStore) is double-beta and isolated to adapter/edge modules where practical.
+
+## Update (2026-06-18)
+
+The exact-pin-and-bump-deliberately policy stands; the specific version has moved with it. The pin now lives in the Bun workspace `catalog` (root `package.json`) — currently `4.0.0-beta.83` — which is the single source of truth all packages reference via `catalog:`. The `beta.65` figures above are the original decision's starting point, not the current pin.
