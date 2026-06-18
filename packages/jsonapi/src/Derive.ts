@@ -15,22 +15,39 @@
 
 import { Effect, Schema } from "effect";
 import { Collection, Mutator } from "@thomasfosterau/effect-sync-core";
-import type { ResourceValue } from "./CollectionLoader.js";
+import type { RelationshipRef, ResourceValue } from "./CollectionLoader.js";
 import type { Operation, ResourceMap } from "./Convention.js";
 
-/** Codec for a row value (a JSON:API resource as the engine stores it). */
-export const ResourceValueSchema = Schema.Struct({
-  type: Schema.String,
-  id: Schema.String,
-  attributes: Schema.Record(Schema.String, Schema.Unknown),
-  relationships: Schema.Record(Schema.String, Schema.Unknown),
-}) as unknown as Schema.Codec<ResourceValue>;
+/**
+ * The engine row for a JSON:API resource: attributes flattened to the top
+ * level so predicates and orderBy address them directly (e.g.
+ * `Predicate.eq("status", "open")`), exactly as JSON:API `filter[status]`
+ * does. The keys `id` and `relationships` are reserved.
+ */
+export interface JsonApiRow {
+  readonly id: string;
+  readonly relationships: Record<string, RelationshipRef>;
+  readonly [field: string]: unknown;
+}
+
+/** Flatten a loaded resource into an engine row (attributes at top level). */
+export const toRow = (value: ResourceValue): JsonApiRow => ({
+  ...value.attributes,
+  id: value.id,
+  relationships: value.relationships,
+});
+
+/** Permissive codec for a row (the engine never decodes rows through it). */
+export const RowSchema = Schema.Record(
+  Schema.String,
+  Schema.Unknown
+) as unknown as Schema.Codec<JsonApiRow>;
 
 /** The collection for a resource type: rows keyed by resource id. */
-export const collectionFor = (type: string): Collection.Collection<ResourceValue> =>
+export const collectionFor = (type: string): Collection.Collection<JsonApiRow> =>
   Collection.make({
     name: type,
-    schema: ResourceValueSchema,
+    schema: RowSchema,
     id: (value) => value.id,
   });
 
@@ -59,9 +76,6 @@ export const DeleteArgs = Schema.Struct({
   type: Schema.String,
   id: Schema.String,
 });
-
-const asResourceValue = (value: unknown): ResourceValue | undefined =>
-  value as ResourceValue | undefined;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
@@ -109,25 +123,29 @@ export const derive = (resources: ResourceMap): Derived => {
 
     if (resource.create !== undefined) {
       add(type, "create", CreateArgs, (args, writer) =>
-        writer.put(type, args.id, {
+        writer.put(
           type,
-          id: args.id,
-          attributes: args.attributes,
-          relationships: args.relationships ?? {},
-        } satisfies ResourceValue)
+          args.id,
+          toRow({
+            type,
+            id: args.id,
+            attributes: args.attributes,
+            relationships: args.relationships ?? {},
+          })
+        )
       );
     }
 
     if (resource.update !== undefined) {
       add(type, "update", UpdateArgs, (args, writer) =>
         Effect.gen(function* () {
-          const current = asResourceValue(yield* writer.get(type, args.id));
+          const current = (yield* writer.get(type, args.id)) as JsonApiRow | undefined;
+          // Flat rows: overlay the new attributes, keep id + relationships.
           yield* writer.put(type, args.id, {
-            type,
+            ...(current ?? { id: args.id, relationships: {} }),
+            ...args.attributes,
             id: args.id,
-            attributes: { ...current?.attributes, ...args.attributes },
-            relationships: current?.relationships ?? {},
-          } satisfies ResourceValue);
+          });
         })
       );
     }

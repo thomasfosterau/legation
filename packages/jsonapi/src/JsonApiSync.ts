@@ -26,11 +26,12 @@ import {
   Transport,
 } from "@thomasfosterau/effect-sync-core";
 import { reflectResources, type ResourceMap } from "./Convention.js";
+import { derive, type Derived } from "./Derive.js";
+import * as JsonApiBackend from "./JsonApiBackend.js";
+import type { QueryEncoder } from "./JsonApiQuery.js";
 
 /** An app's JSON:API surface defined with Effect `HttpApi`. */
 export type JsonApi = HttpApi.HttpApi<string, HttpApiGroup.Any>;
-import { derive, type Derived } from "./Derive.js";
-import * as JsonApiBackend from "./JsonApiBackend.js";
 
 export interface JsonApiSyncOptions {
   /** Base URL the resource paths resolve against (no trailing slash). */
@@ -39,6 +40,8 @@ export interface JsonApiSyncOptions {
   readonly clientId: string;
   /** The client group this client belongs to (shared journal scope). */
   readonly clientGroupId: string;
+  /** Override the Subset → JSON:API query encoding (e.g. your own package). */
+  readonly queryEncoder?: QueryEncoder;
 }
 
 /** Reflect + derive an api's resources, collections, mutators, operations. */
@@ -71,6 +74,7 @@ export const layer = (
       resources,
       mutators: registry.mutators,
       operations,
+      ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
     })
   );
   const authLayer = Layer.succeed(Authorization.AuthPolicy)(authPolicy(resources));

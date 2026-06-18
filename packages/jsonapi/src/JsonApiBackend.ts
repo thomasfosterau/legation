@@ -36,9 +36,10 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { Backend, BackendError } from "@thomasfosterau/effect-sync-core";
 import { Subset } from "@thomasfosterau/effect-sync-core";
 import type { Mutator } from "@thomasfosterau/effect-sync-core";
-import { documentToRows, parseResponse, type ResourceValue } from "./CollectionLoader.js";
+import { documentToRows, parseResponse } from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";
-import type { OperationInfo } from "./Derive.js";
+import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
+import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 
 export interface JsonApiBackendConfig {
   /** Base URL the resource paths are resolved against (no trailing slash). */
@@ -48,6 +49,8 @@ export interface JsonApiBackendConfig {
   readonly mutators: ReadonlyMap<string, Mutator.AnyMutator>;
   /** Mutator name → CRUD operation + type. */
   readonly operations: ReadonlyMap<string, OperationInfo>;
+  /** Subset → JSON:API query string. Defaults to a sound-superset encoder. */
+  readonly query?: QueryEncoder;
 }
 
 const jsonApiHeaders = {
@@ -106,8 +109,9 @@ export const make = (
 ): Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    // collection → id → most-recently-listed value (warms getRows).
-    const cache = yield* Ref.make(new Map<string, Map<string, ResourceValue>>());
+    const encoder = config.query ?? defaultEncoder;
+    // collection → id → most-recently-listed row (warms getRows).
+    const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
     // clientGroupId → clientId → highest applied mutation id (in-session).
     const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
 
@@ -130,7 +134,7 @@ export const make = (
         )
       );
 
-    const cacheRows = (collection: string, rows: ReadonlyArray<ResourceValue>) =>
+    const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
       Ref.update(cache, (current) => {
         const next = new Map(current);
         const map = new Map(next.get(collection) ?? []);
@@ -143,13 +147,16 @@ export const make = (
       Effect.gen(function* () {
         const list = config.resources.get(subset.collection)?.list;
         if (list === undefined) return [];
-        const response = yield* getJson(urlFor(config.baseUrl, list.path)).pipe(
+        // Server-side narrowing is best-effort; `Subset.apply` below is the
+        // authority, so the encoded query only needs to return a superset.
+        const url = urlFor(config.baseUrl, list.path) + encoder.encode(subset);
+        const response = yield* getJson(url).pipe(
           Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
         );
         const document = yield* parseResponse(response).pipe(
           Effect.mapError(backendError(`Invalid JSON:API listing "${subset.collection}"`))
         );
-        const values = documentToRows(document).rows.map((row) => row.value);
+        const values = documentToRows(document).rows.map((row) => toRow(row.value));
         yield* cacheRows(subset.collection, values);
         return Subset.apply(
           values.map((value) => ({ id: value.id, value })),
@@ -175,8 +182,11 @@ export const make = (
           const document = yield* parseResponse(response).pipe(
             Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
           );
-          const value = documentToRows(document).rows[0]?.value;
-          if (value !== undefined) result.push({ id, version: versionOf(value), value });
+          const resource = documentToRows(document).rows[0]?.value;
+          if (resource !== undefined) {
+            const value = toRow(resource);
+            result.push({ id, version: versionOf(value), value });
+          }
         }
         return result;
       });

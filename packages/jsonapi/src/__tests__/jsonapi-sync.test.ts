@@ -100,7 +100,7 @@ const makeServer = () => {
 };
 
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
-  rows.map((row) => (row.value as { attributes: { title: string } }).attributes.title);
+  rows.map((row) => (row.value as { title: string }).title);
 
 describe("Convention.classify", () => {
   it("classifies conventional JSON:API routes", () => {
