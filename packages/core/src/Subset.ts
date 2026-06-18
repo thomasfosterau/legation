@@ -65,12 +65,23 @@ export const make = (options: {
 /** Stable identity for a subset (used as CVR / subscription map keys). */
 export const hash = (subset: Subset): string => JSON.stringify(subset);
 
+/** A `(id, value)` row — the unit subsets and live views operate over. */
+export interface Row {
+  readonly id: string;
+  readonly value: unknown;
+}
+
 const fieldOf = (value: unknown, field: string): unknown =>
   typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)[field]
     : undefined;
 
-const compareBy =
+/**
+ * A comparator over row *values* for an `orderBy`. Stable across the same
+ * orderBy, so it can both sort a set and place a single row incrementally
+ * (LiveView).
+ */
+export const comparator =
   (orderBy: ReadonlyArray<OrderBy>) =>
   (a: unknown, b: unknown): number => {
     for (const term of orderBy) {
@@ -85,21 +96,23 @@ const compareBy =
     return 0;
   };
 
-/**
- * Reference in-memory evaluation of a subset over `(id, value)` rows:
- * filter by predicate, sort, apply cursor (rows strictly after the row
- * whose id equals the cursor) and limit. Used by the memory backend, the
- * client mirror, and as the semantics other backends must match.
- */
-export const apply = <R extends { readonly id: string; readonly value: unknown }>(
+/** Filter rows by the subset's predicate and sort by its `orderBy` (no window). */
+export const sortFiltered = <R extends Row>(
   rows: ReadonlyArray<R>,
   subset: Subset
 ): ReadonlyArray<R> => {
-  let result = rows.filter((row) => Predicate.test(subset.where, row.value));
-  if (subset.orderBy.length > 0) {
-    const comparator = compareBy(subset.orderBy);
-    result = result.toSorted((a, b) => comparator(a.value, b.value));
-  }
+  const filtered = rows.filter((row) => Predicate.test(subset.where, row.value));
+  if (subset.orderBy.length === 0) return filtered;
+  const compare = comparator(subset.orderBy);
+  return filtered.toSorted((a, b) => compare(a.value, b.value));
+};
+
+/**
+ * Apply the subset's window to already-filtered, already-sorted rows: cursor
+ * (rows strictly after the row whose id equals the cursor) then limit.
+ */
+export const window = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): ReadonlyArray<R> => {
+  let result = rows;
   if (subset.cursor !== undefined) {
     const index = result.findIndex((row) => row.id === subset.cursor);
     result = index >= 0 ? result.slice(index + 1) : result;
@@ -107,3 +120,11 @@ export const apply = <R extends { readonly id: string; readonly value: unknown }
   if (subset.limit !== undefined) result = result.slice(0, subset.limit);
   return result;
 };
+
+/**
+ * Reference in-memory evaluation of a subset over `(id, value)` rows: filter,
+ * sort, then window (cursor + limit). Used by the memory backend, the client
+ * mirror, and as the semantics other backends must match.
+ */
+export const apply = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): ReadonlyArray<R> =>
+  window(sortFiltered(rows, subset), subset);

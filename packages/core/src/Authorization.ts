@@ -81,3 +81,18 @@ export const passthroughMiddleware: SyncMiddleware = {
   onPush: (_context, request) => Effect.succeed(request),
   onPull: (_context, request) => Effect.succeed(request),
 };
+
+/**
+ * Resolve the request's identity for a connected client group — the decoded,
+ * never-client-forgeable principal the auth filters and middleware see on
+ * `SyncContext.identity`. A real carrier derives it from the authenticated
+ * connection (a verified token); the resolver is the seam where that lands.
+ * Optional: absent ⇒ `identity` stays `undefined` (public/deny-by-default).
+ */
+export interface IdentityResolver {
+  readonly resolve: (clientGroupId: string) => Effect.Effect<unknown, AuthorizationError>;
+}
+
+export const IdentityResolver = Context.Service<IdentityResolver>(
+  "@thomasfosterau/effect-sync-core/IdentityResolver"
+);

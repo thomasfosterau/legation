@@ -1,0 +1,59 @@
+{
+  "name": "@thomasfosterau/effect-sync-react",
+  "version": "0.1.0",
+  "description": "React bindings for the effect-sync engine: useQuery, useNamedQuery and useMutation hooks",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "react",
+    "hooks",
+    "sync-engine",
+    "useQuery",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-sync-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.75",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "effect": "4.0.0-beta.75",
+    "react": "^18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/react#readme"
+}

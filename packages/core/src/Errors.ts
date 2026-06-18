@@ -50,3 +50,10 @@ export class MutatorError extends Data.TaggedError("MutatorError")<{
   readonly mutator?: string | undefined;
   readonly cause?: unknown;
 }> {}
+
+/** A named query was missing or its args failed validation. */
+export class QueryError extends Data.TaggedError("QueryError")<{
+  readonly message: string;
+  readonly query?: string | undefined;
+  readonly cause?: unknown;
+}> {}

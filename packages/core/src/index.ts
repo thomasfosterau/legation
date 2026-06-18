@@ -23,6 +23,8 @@ export * as Collection from "./Collection.js";
 export * as Predicate from "./Predicate.js";
 export * as Subset from "./Subset.js";
 export * as Mutator from "./Mutator.js";
+export * as Query from "./Query.js";
+export * as Hash from "./Hash.js";
 
 // ─── Protocol ────────────────────────────────────────────────────────────────
 export * as Protocol from "./Protocol.js";
@@ -32,6 +34,8 @@ export * as RpcTransport from "./RpcTransport.js";
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as ClientStore from "./ClientStore.js";
 export * as ClientEngine from "./ClientEngine.js";
+export * as LiveView from "./LiveView.js";
+export * as Subscriptions from "./Subscriptions.js";
 export * as LiveQuery from "./LiveQuery.js";
 export * as PromiseFacade from "./PromiseFacade.js";
 
@@ -45,6 +49,7 @@ export * as InvalidationBus from "./InvalidationBus.js";
 export * as BusBrokers from "./BusBrokers.js";
 export * as SyncServer from "./SyncServer.js";
 export * as SyncRoom from "./SyncRoom.js";
+export * as Telemetry from "./Telemetry.js";
 
 // ─── HTTP cache ──────────────────────────────────────────────────────────────
 export * as HttpCache from "./HttpCache.js";

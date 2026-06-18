@@ -15,7 +15,7 @@
  *   relay (each Worker isolate holds a socket to the DO; the DO rebroadcasts).
  */
 
-import { Duration, Effect, Queue } from "effect";
+import { Duration, Effect, Queue, Scope } from "effect";
 import { Redis } from "effect/unstable/persistence";
 import type { BusBroker } from "./InvalidationBus.js";
 
@@ -136,3 +136,59 @@ export const makeWebSocketBroker = (socket: WebSocketLike): BusBroker => ({
     return { take: Queue.take(queue) };
   }),
 });
+
+// ─── BroadcastChannel broker ─────────────────────────────────────────────────
+
+/** The minimal `BroadcastChannel` surface this broker uses. */
+export interface BroadcastChannelLike {
+  readonly postMessage: (data: string) => void;
+  readonly addEventListener: (
+    type: "message",
+    listener: (event: { readonly data: unknown }) => void
+  ) => void;
+  readonly removeEventListener: (
+    type: "message",
+    listener: (event: { readonly data: unknown }) => void
+  ) => void;
+}
+
+/**
+ * A BusBroker over a `BroadcastChannel` — cross-context fan-out on one machine
+ * (browser tabs, Node worker threads). A `BroadcastChannel` delivers to every
+ * *other* channel of the same name but not the sender, so `publish` also offers
+ * to this broker's own subscribers, honoring the contract's self-delivery (each
+ * instance fans the hint out to its local sessions). Point every context's
+ * broker at the same channel name.
+ */
+export const makeBroadcastChannelBroker = (
+  channel: BroadcastChannelLike
+): Effect.Effect<BusBroker, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const queues = new Set<Queue.Queue<string>>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const listener = (event: { readonly data: unknown }) => {
+          if (typeof event.data !== "string") return;
+          for (const queue of queues) Queue.offerUnsafe(queue, event.data);
+        };
+        channel.addEventListener("message", listener);
+        return listener;
+      }),
+      (listener) => Effect.sync(() => channel.removeEventListener("message", listener))
+    );
+    return {
+      publish: (payload) =>
+        Effect.sync(() => {
+          for (const queue of queues) Queue.offerUnsafe(queue, payload); // self
+          channel.postMessage(payload); // other contexts
+        }),
+      subscribe: Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<string>();
+        yield* Effect.acquireRelease(
+          Effect.sync(() => queues.add(queue)),
+          () => Effect.sync(() => queues.delete(queue))
+        );
+        return { take: Queue.take(queue) };
+      }),
+    };
+  });

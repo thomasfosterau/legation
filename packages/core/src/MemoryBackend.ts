@@ -13,6 +13,7 @@ import { Backend, type ApplyResult, type ChangeHint, type SyncContext } from "./
 import { BackendError } from "./Errors.js";
 import type { Mutator } from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
+import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
 
 /** The write surface handed to authoritative mutator handlers. */
@@ -173,12 +174,22 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           )
         ),
       evaluate: (_context, subset) =>
-        Ref.get(state).pipe(
-          Effect.map((s) => {
-            const rows = [...(s.rows.get(subset.collection) ?? new Map()).values()];
-            return Subset.apply(rows, subset).map((row) => ({ id: row.id, version: row.version }));
-          })
-        ),
+        Effect.gen(function* () {
+          const s = yield* Ref.get(state);
+          const collectionValues = (collection: string) =>
+            [...(s.rows.get(collection) ?? new Map<string, MemoryRow>()).values()].map(
+              (r) => r.value
+            );
+          // Resolve correlated Exists nodes against in-memory storage.
+          const where = yield* Predicate.resolveExists(subset.where, (node) =>
+            Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
+          );
+          const rows = [...(s.rows.get(subset.collection) ?? new Map()).values()];
+          return Subset.apply(rows, { ...subset, where }).map((row) => ({
+            id: row.id,
+            version: row.version,
+          }));
+        }),
       getRows: (_context, collection, ids) =>
         Ref.get(state).pipe(
           Effect.map((s) => {

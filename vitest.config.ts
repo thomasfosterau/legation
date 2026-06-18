@@ -11,6 +11,8 @@ export default defineConfig({
       "@thomasfosterau/effect-sync-browser": pkg("browser"),
       "@thomasfosterau/effect-sync-node": pkg("node"),
       "@thomasfosterau/effect-sync-jsonapi": pkg("jsonapi"),
+      "@thomasfosterau/effect-sync-sql": pkg("sql"),
+      "@thomasfosterau/effect-sync-react": pkg("react"),
     },
   },
   test: {

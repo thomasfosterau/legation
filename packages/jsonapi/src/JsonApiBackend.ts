@@ -1,0 +1,385 @@
+/**
+ * JsonApiBackend
+ *
+ * An implementation of the core `Backend` contract (ADR-0009) backed by a
+ * JSON:API HTTP surface instead of app-owned storage. This is what lets the
+ * library "figure out the sync story" from a plain REST API: the sync server
+ * (in-process for the client-direct happy path) drives this backend's three
+ * operations, and the existing engine supplies journal, overlay, rebase, and
+ * CVR diffing on top.
+ *
+ * Mapping:
+ * - `evaluate` lists the collection (`GET /{type}`), pushing the predicate to
+ *   the server via the `QueryEncoder` (best-effort `filter[...]`) and applying
+ *   the full predicate/order/limit locally with `Subset.apply` (the authority).
+ *   With `includes`, it adds `?include=...` and harvests the compound document's
+ *   related rows, serving auto-subscribed `id IN (...)` subsets from that cache.
+ * - `getRows` serves row values from the cache `evaluate` populates (the sync
+ *   server always evaluates before fetching put rows in the same pull),
+ *   falling back to `GET /{type}/{id}`.
+ * - `applyMutations` replays each CRUD mutator as its HTTP write
+ *   (`POST`/`PATCH`/`DELETE`).
+ *
+ * **Versioning.** A plain REST API exposes no row-version token, so versions
+ * are a content hash of the resource value: the hash changes iff the row
+ * changed, which is exactly what CVR diffing needs.
+ *
+ * **Delivery semantics.** Without a cooperating server there is no
+ * server-side mutation-id ledger, so this backend keeps an in-session ledger
+ * and provides *at-least-once* application. Make writes idempotent
+ * (client-generated ids on create; PATCH/DELETE are naturally idempotent) and
+ * retries are safe.
+ */
+
+import { Effect, Ref, Schema } from "effect";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import { Backend, BackendError, Hash, Predicate } from "@thomasfosterau/effect-sync-core";
+import { Subset } from "@thomasfosterau/effect-sync-core";
+import type { Mutator } from "@thomasfosterau/effect-sync-core";
+import { documentToRows, parseResponse } from "./CollectionLoader.js";
+import type { ResourceMap } from "./Convention.js";
+import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
+import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
+
+export interface JsonApiBackendConfig {
+  /** Base URL the resource paths are resolved against (no trailing slash). */
+  readonly baseUrl: string;
+  readonly resources: ResourceMap;
+  /** Mutator definitions, for decoding/validating pushed args. */
+  readonly mutators: ReadonlyMap<string, Mutator.AnyMutator>;
+  /** Mutator name → CRUD operation + type. */
+  readonly operations: ReadonlyMap<string, OperationInfo>;
+  /** Subset → JSON:API query string. Defaults to a sound-superset encoder. */
+  readonly query?: QueryEncoder;
+  /**
+   * Relationship names to compound-load per collection (`?include=...`). When a
+   * listing pulls in related resources, they are harvested so an auto-subscribed
+   * `id IN (...)` subset over those collections is served from the same response
+   * — no extra round trip. See `Relationships.related`.
+   */
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+}
+
+const jsonApiHeaders = {
+  "Content-Type": "application/vnd.api+json",
+  Accept: "application/vnd.api+json",
+} as const;
+
+const trimSlashes = (s: string): string => s.replace(/\/+$/, "");
+
+/** Resolve a route template against the base url, substituting the id param. */
+const urlFor = (baseUrl: string, path: string, id?: string): string =>
+  trimSlashes(baseUrl) + path.replace(/:[^/]+/g, () => encodeURIComponent(id ?? ""));
+
+/** A content-hash row version: a plain REST API exposes no version token. */
+export const versionOf = Hash.contentHash;
+
+const backendError = (message: string) => (cause: unknown) => new BackendError({ message, cause });
+
+/** Append `?`/`&`-joined params to an existing query string. */
+const appendQuery = (query: string, extra: string): string =>
+  extra === "" ? query : query === "" ? `?${extra}` : `${query}&${extra}`;
+
+/**
+ * The set of ids a subset pins via an `id IN (...)` / `id = ...` filter, or
+ * `undefined` if it isn't id-pinned. Used to recognize auto-subscribed
+ * relationship subsets that the include fast-path can serve from cache.
+ */
+const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefined => {
+  switch (predicate._tag) {
+    case "In":
+      return predicate.field === "id"
+        ? new Set(predicate.values.map((value) => String(value)))
+        : undefined;
+    case "Compare":
+      return predicate.op === "eq" && predicate.field === "id"
+        ? new Set([String(predicate.value)])
+        : undefined;
+    case "And": {
+      for (const inner of predicate.predicates) {
+        const ids = pinnedIds(inner);
+        if (ids !== undefined) return ids;
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+/** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
+const writeBody = (
+  type: string,
+  id: string,
+  attributes: Record<string, unknown>,
+  relationships?: Record<string, unknown>
+): { readonly data: Record<string, unknown> } => ({
+  data: {
+    type,
+    id,
+    attributes,
+    ...(relationships !== undefined ? { relationships } : {}),
+  },
+});
+
+/** Build the JsonApiBackend from its config; requires an `HttpClient`. */
+export const make = (
+  config: JsonApiBackendConfig
+): Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const encoder = config.query ?? defaultEncoder;
+    const includes = config.includes ?? {};
+    // collection → id → most-recently-listed row (warms getRows).
+    const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
+    // collection → ids known complete in cache via a compound `included` harvest.
+    const includedIds = yield* Ref.make(new Map<string, Set<string>>());
+    // clientGroupId → clientId → highest applied mutation id (in-session).
+    const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
+
+    const getJson = (url: string) =>
+      Effect.scoped(
+        client.execute(
+          HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(jsonApiHeaders))
+        )
+      );
+
+    const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.scoped(client.execute(request)).pipe(
+        Effect.mapError(backendError("JSON:API write failed")),
+        Effect.flatMap((response) =>
+          response.status >= 200 && response.status < 300
+            ? Effect.void
+            : new BackendError({
+                message: `JSON:API write returned HTTP ${response.status}`,
+              })
+        )
+      );
+
+    const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
+      Ref.update(cache, (current) => {
+        const next = new Map(current);
+        const map = new Map(next.get(collection) ?? []);
+        for (const value of rows) map.set(value.id, value);
+        next.set(collection, map);
+        return next;
+      });
+
+    /** Harvest a compound document's `included` rows; record their ids complete. */
+    const harvestIncluded = (
+      included: ReadonlyArray<JsonApiRow & { readonly $collection: string }>
+    ) =>
+      Effect.gen(function* () {
+        const byCollection = new Map<string, Array<JsonApiRow>>();
+        for (const row of included) {
+          const rows = byCollection.get(row.$collection) ?? [];
+          rows.push(row);
+          byCollection.set(row.$collection, rows);
+        }
+        for (const [collection, rows] of byCollection) {
+          yield* cacheRows(collection, rows);
+          yield* Ref.update(includedIds, (current) => {
+            const next = new Map(current);
+            const ids = new Set(next.get(collection) ?? []);
+            for (const row of rows) ids.add(row.id);
+            next.set(collection, ids);
+            return next;
+          });
+        }
+      });
+
+    const entriesFrom = (values: ReadonlyArray<JsonApiRow>, subset: Subset.Subset) =>
+      Subset.apply(
+        values.map((value) => ({ id: value.id, value })),
+        subset
+      ).map((row) => ({ id: row.id, version: versionOf(row.value) }));
+
+    const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+      Effect.gen(function* () {
+        const list = config.resources.get(subset.collection)?.list;
+        if (list === undefined) return [];
+        // Correlated Exists is a relational join this REST backend can't resolve;
+        // fail closed rather than silently skip the filter (denormalize, or use a
+        // backend that resolves Exists).
+        if (Predicate.hasExists(subset.where)) {
+          return yield* new BackendError({
+            message: `JSON:API backend does not support Exists predicates on "${subset.collection}"`,
+          });
+        }
+
+        // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
+        // were all delivered by a prior compound `included` harvest is served
+        // from cache — the related rows arrived with their parent, no round trip.
+        const ids = pinnedIds(subset.where);
+        if (ids !== undefined) {
+          const complete = (yield* Ref.get(includedIds)).get(subset.collection);
+          if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
+            const cached = (yield* Ref.get(cache)).get(subset.collection);
+            if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
+              return entriesFrom([...cached.values()], subset);
+            }
+          }
+        }
+
+        // Server-side narrowing is best-effort; `Subset.apply` below is the
+        // authority, so the encoded query only needs to return a superset.
+        const includeParam = (includes[subset.collection] ?? []).join(",");
+        const query = appendQuery(
+          encoder.encode(subset),
+          includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
+        );
+        const url = urlFor(config.baseUrl, list.path) + query;
+        const response = yield* getJson(url).pipe(
+          Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
+        );
+        const document = yield* parseResponse(response).pipe(
+          Effect.mapError(backendError(`Invalid JSON:API listing "${subset.collection}"`))
+        );
+        const loaded = documentToRows(document);
+        const values = loaded.rows.map((row) => toRow(row.value));
+        yield* cacheRows(subset.collection, values);
+        yield* harvestIncluded(
+          loaded.included.map((row) => ({ ...toRow(row.value), $collection: row.collection }))
+        );
+        return entriesFrom(values, subset);
+      });
+
+    const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
+      Effect.gen(function* () {
+        const cached = (yield* Ref.get(cache)).get(collection);
+        const getOne = config.resources.get(collection)?.getOne;
+        const result: Array<{ id: string; version: string; value: unknown }> = [];
+        for (const id of ids) {
+          const hit = cached?.get(id);
+          if (hit !== undefined) {
+            result.push({ id, version: versionOf(hit), value: hit });
+            continue;
+          }
+          if (getOne === undefined) continue;
+          const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
+            Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
+          );
+          const document = yield* parseResponse(response).pipe(
+            Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
+          );
+          const resource = documentToRows(document).rows[0]?.value;
+          if (resource !== undefined) {
+            const value = toRow(resource);
+            result.push({ id, version: versionOf(value), value });
+          }
+        }
+        return result;
+      });
+
+    const applyOne = (
+      operation: OperationInfo,
+      args: unknown
+    ): Effect.Effect<string, BackendError> =>
+      Effect.gen(function* () {
+        const resource = config.resources.get(operation.type);
+        switch (operation.operation) {
+          case "create": {
+            const a = args as {
+              id: string;
+              attributes: Record<string, unknown>;
+              relationships?: Record<string, unknown>;
+            };
+            const ref = resource?.create;
+            if (ref === undefined)
+              return yield* new BackendError({
+                message: `No create endpoint for "${operation.type}"`,
+              });
+            yield* sendWrite(
+              HttpClientRequest.post(urlFor(config.baseUrl, ref.path)).pipe(
+                HttpClientRequest.setHeaders(jsonApiHeaders),
+                HttpClientRequest.bodyJsonUnsafe(
+                  writeBody(operation.type, a.id, a.attributes, a.relationships)
+                )
+              )
+            );
+            return a.id;
+          }
+          case "update": {
+            const a = args as { id: string; attributes: Record<string, unknown> };
+            const ref = resource?.update;
+            if (ref === undefined)
+              return yield* new BackendError({
+                message: `No update endpoint for "${operation.type}"`,
+              });
+            yield* sendWrite(
+              HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, a.id)).pipe(
+                HttpClientRequest.setHeaders(jsonApiHeaders),
+                HttpClientRequest.bodyJsonUnsafe(writeBody(operation.type, a.id, a.attributes))
+              )
+            );
+            return a.id;
+          }
+          case "delete": {
+            const a = args as { id: string };
+            const ref = resource?.delete;
+            if (ref === undefined)
+              return yield* new BackendError({
+                message: `No delete endpoint for "${operation.type}"`,
+              });
+            yield* sendWrite(
+              HttpClientRequest.make("DELETE")(urlFor(config.baseUrl, ref.path, a.id)).pipe(
+                HttpClientRequest.setHeaders(jsonApiHeaders)
+              )
+            );
+            return a.id;
+          }
+          default:
+            return yield* new BackendError({
+              message: `Operation "${operation.operation}" is not a write`,
+            });
+        }
+      });
+
+    const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
+      Effect.gen(function* () {
+        const touched = new Map<string, Set<string>>();
+        for (const mutation of mutations) {
+          const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
+          const last = group.get(mutation.clientId) ?? 0;
+          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+
+          const operation = config.operations.get(mutation.mutator);
+          const definition = config.mutators.get(mutation.mutator);
+          if (operation === undefined || definition === undefined)
+            return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+
+          const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+            Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
+          );
+          const id = yield* applyOne(operation, args);
+
+          touched.set(operation.type, (touched.get(operation.type) ?? new Set()).add(id));
+          yield* Ref.update(ledger, (current) => {
+            const next = new Map(current);
+            const groupIds = new Map(next.get(context.clientGroupId) ?? []);
+            groupIds.set(mutation.clientId, mutation.mutationId);
+            next.set(context.clientGroupId, groupIds);
+            return next;
+          });
+        }
+
+        const finalGroup = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
+        return {
+          lastMutationIds: Object.fromEntries(finalGroup),
+          hints: [...touched].map(([collection, ids]) => ({ collection, ids: [...ids] })),
+        };
+      });
+
+    return Backend.Backend.of({
+      applyMutations,
+      lastMutationIds: (context) =>
+        Ref.get(ledger).pipe(
+          Effect.map((current) =>
+            Object.fromEntries(current.get(context.clientGroupId) ?? new Map())
+          )
+        ),
+      evaluate,
+      getRows,
+    });
+  });
