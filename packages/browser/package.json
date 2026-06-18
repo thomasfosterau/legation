@@ -42,12 +42,12 @@
     "@thomasfosterau/effect-sync-core": "workspace:^"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.75",
-    "@effect/platform-browser": "4.0.0-beta.75"
+    "effect": "4.0.0-beta.83",
+    "@effect/platform-browser": "4.0.0-beta.83"
   },
   "devDependencies": {
-    "@effect/platform-browser": "4.0.0-beta.75",
-    "effect": "4.0.0-beta.75",
+    "@effect/platform-browser": "catalog:",
+    "effect": "catalog:",
     "fake-indexeddb": "^6.0.0"
   },
   "repository": {
