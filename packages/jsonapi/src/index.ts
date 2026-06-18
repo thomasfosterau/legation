@@ -1,11 +1,15 @@
 /**
  * @thomasfosterau/effect-sync-jsonapi
  *
- * JSON:API v1.1 as a *collection loader* for the v2 sync engine (ADR-0008):
- * map JSON:API documents into collection rows — a `type` is a collection,
- * a resource `id` is a row id, a resource is a row value. The package owns
- * the JSON:API types, schemas, and read-side loaders; it does not own a
- * sync model (writes in the engine are named mutators).
+ * JSON:API v1.1 for the v2 sync engine (ADR-0008): map JSON:API documents
+ * into collection rows — a `type` is a collection, a resource `id` is a row
+ * id, a resource is a row value. The package owns the JSON:API types,
+ * schemas, and read-side loaders.
+ *
+ * It also provides the convention-first **sync derivation** (`JsonApiSync`):
+ * point it at an app's JSON:API `HttpApi` and it derives collections + CRUD
+ * mutators and wires the whole offline/optimistic sync engine on top of the
+ * existing REST API — no bespoke backend to write.
  *
  * Formerly published as `@thomasfosterau/effect-chancery`.
  */
@@ -29,3 +33,9 @@ export { SyncError, NetworkError, ParseError, ApiError, ConflictError } from "./
 
 // Collection loaders: documents → engine rows, and read-side fetching.
 export * as CollectionLoader from "./CollectionLoader.js";
+
+// Convention-first sync derivation from an app's JSON:API HttpApi.
+export * as Convention from "./Convention.js";
+export * as Derive from "./Derive.js";
+export * as JsonApiBackend from "./JsonApiBackend.js";
+export * as JsonApiSync from "./JsonApiSync.js";
