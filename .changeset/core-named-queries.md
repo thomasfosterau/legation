@@ -4,7 +4,7 @@
 
 Add **named queries** (`Query`): a read defined once and resolved twice, like a
 mutator. The client resolves a name + args to a `Subset` it renders locally; the
-server resolves the same name + args to the *authoritative* subset it syncs,
+server resolves the same name + args to the _authoritative_ subset it syncs,
 with the request's identity in hand — so query shaping and permission move to
 the server (it can narrow, scope to a tenant, or add a filter the client can't
 override) while the client still renders from the rows it was sent.
