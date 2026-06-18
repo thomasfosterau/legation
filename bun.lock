@@ -73,6 +73,19 @@
         "effect": "4.0.0-beta.75",
       },
     },
+    "packages/sql": {
+      "name": "@thomasfosterau/effect-sync-sql",
+      "version": "0.1.0",
+      "dependencies": {
+        "@thomasfosterau/effect-sync-core": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "4.0.0-beta.75",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.75",
+      },
+    },
   },
   "packages": {
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.27.1", "", {}, "sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA=="],
@@ -268,6 +281,8 @@
     "@thomasfosterau/effect-sync-jsonapi": ["@thomasfosterau/effect-sync-jsonapi@workspace:packages/jsonapi"],
 
     "@thomasfosterau/effect-sync-node": ["@thomasfosterau/effect-sync-node@workspace:packages/node"],
+
+    "@thomasfosterau/effect-sync-sql": ["@thomasfosterau/effect-sync-sql@workspace:packages/sql"],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 

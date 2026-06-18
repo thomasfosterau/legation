@@ -1,0 +1,166 @@
+/**
+ * SqlBackend tests over an in-memory executor: evaluate compiles the right
+ * WHERE and finalizes order/limit with Subset.apply; getRows fetches by id;
+ * applyMutations runs handlers transactionally with an idempotent, gap-checked
+ * mutation-id ledger.
+ */
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Ref, Schema } from "effect";
+import { BackendError, Mutator, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
+import type { Backend } from "@thomasfosterau/effect-sync-core";
+import * as Sql from "../Sql.js";
+import * as SqlBackend from "../SqlBackend.js";
+
+interface Mock {
+  readonly executor: SqlBackend.SqlExecutor;
+  readonly queries: ReadonlyArray<Sql.SqlFragment>;
+  readonly seed: (table: string, rows: ReadonlyArray<SqlBackend.SqlRow>) => void;
+}
+
+/**
+ * An executor that returns ledger rows for `sync_mutations` and seeded rows for
+ * any other table (ignoring its WHERE — the backend re-applies the predicate
+ * via Subset.apply). Records every query for SQL assertions.
+ */
+const makeMock = (): Mock => {
+  const tables = new Map<string, ReadonlyArray<SqlBackend.SqlRow>>();
+  const ledger = new Map<string, number>(); // `${group}:${client}` → lastId
+  const queries: Array<Sql.SqlFragment> = [];
+
+  const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
+
+  const executor: SqlBackend.SqlExecutor = {
+    query: (fragment) =>
+      Effect.sync(() => {
+        queries.push(fragment);
+        if (fragment.text.includes(`"sync_mutations"`)) {
+          const group = fragment.params[0];
+          return [...ledger.entries()]
+            .filter(([key]) => key.startsWith(`${group}:`))
+            .map(([key, last]) => ({
+              client_id: key.slice(String(group).length + 1),
+              last_mutation_id: last,
+            }));
+        }
+        const table = tableOf(fragment.text);
+        return table !== undefined ? (tables.get(table) ?? []) : [];
+      }),
+    run: (fragment) =>
+      Effect.sync(() => {
+        if (fragment.text.includes(`"sync_mutations"`)) {
+          const [group, client, last] = fragment.params as [string, string, number];
+          ledger.set(`${group}:${client}`, last);
+        }
+      }),
+    transaction: (effect) => effect,
+  };
+
+  return { executor, queries, seed: (table, rows) => tables.set(table, rows) };
+};
+
+const setTodo = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
+const tables = { todos: { table: "todos", versionColumn: "version" } };
+
+describe("SqlBackend evaluate / getRows", () => {
+  it.effect("compiles the WHERE and finalizes order + limit locally", () => {
+    const mock = makeMock();
+    mock.seed("todos", [
+      { id: "1", status: "open", rank: 2, version: "a" },
+      { id: "2", status: "open", rank: 1, version: "b" },
+      { id: "3", status: "done", rank: 0, version: "c" },
+    ]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map(),
+      handlers: {},
+    });
+    const subset = Subset.make({
+      collection: "todos",
+      where: Predicate.eq("status", "open"),
+      orderBy: [{ field: "rank", direction: "asc" }],
+      limit: 1,
+    });
+
+    return Effect.gen(function* () {
+      const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
+      // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
+      expect(entries).toEqual([{ id: "2", version: "b" }]);
+      const select = mock.queries.at(-1)!;
+      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" = ?`);
+      expect(select.params).toEqual(["open"]);
+    });
+  });
+
+  it.effect("fetches explicit rows by id", () => {
+    const mock = makeMock();
+    mock.seed("todos", [{ id: "1", version: "a", title: "x" }]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map(),
+      handlers: {},
+    });
+    return Effect.gen(function* () {
+      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      expect(rows).toEqual([
+        { id: "1", version: "a", value: { id: "1", version: "a", title: "x" } },
+      ]);
+      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
+    });
+  });
+});
+
+describe("SqlBackend applyMutations", () => {
+  const makeBackend = (mock: Mock, ran: Ref.Ref<number>) =>
+    SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map([[setTodo.name, setTodo]]),
+      handlers: {
+        "todo/set": () =>
+          Ref.update(ran, (n) => n + 1).pipe(
+            Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: ["1"] }])
+          ),
+      },
+    });
+
+  const mutation = (mutationId: number) => ({
+    clientId: "c1",
+    mutationId,
+    mutator: "todo/set",
+    args: { id: "1" },
+    createdAt: 0,
+  });
+
+  it.effect("applies in order, bumps the ledger, and skips replays", () => {
+    const mock = makeMock();
+    return Effect.gen(function* () {
+      const ran = yield* Ref.make(0);
+      const backend = makeBackend(mock, ran);
+
+      const first = yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      expect(first.lastMutationIds).toEqual({ c1: 1 });
+      expect(first.hints).toEqual([{ collection: "todos", ids: ["1"] }]);
+
+      // Replaying id 1 is an idempotent no-op (handler does not run again).
+      yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      expect(yield* Ref.get(ran)).toBe(1);
+
+      yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(2)]);
+      expect(yield* Ref.get(ran)).toBe(2);
+    });
+  });
+
+  it.effect("rejects a mutation-id gap", () => {
+    const mock = makeMock();
+    return Effect.gen(function* () {
+      const ran = yield* Ref.make(0);
+      const backend = makeBackend(mock, ran);
+      const error = yield* backend
+        .applyMutations({ clientGroupId: "g" }, [mutation(3)])
+        .pipe(Effect.flip);
+      expect(error).toBeInstanceOf(BackendError);
+    });
+  });
+});
