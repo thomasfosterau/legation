@@ -250,9 +250,15 @@ scorecard above is preserved as the original snapshot):
   with a TTL grace before an unused subscription is dropped, plus `preload`/`preloadQuery` — the
   read-side lifecycle Zero expresses as query `ttl` and `preload()`, over named queries or subsets.
 - **Relationship-scoped read auth (#14): 🔴 → ✅.** An `IdentityResolver` seam populates
-  `SyncContext.identity` on every request, so an auth filter resolves the principal's permitted keys
-  and returns `isIn(key, allowed)` over a denormalized key. ADR-0015 documents the pattern and the
-  deferred join-without-denormalization seam.
+  `SyncContext.identity` on every request, so an auth filter scopes visibility to the principal —
+  either as `isIn(key, allowed)` over a denormalized key, or, **without denormalization**, via the
+  relational `Predicate.exists` node (below). ADR-0015 documents both.
+- **Server-side relational joins (#10): 🔴 → ✅ (read auth) / 🟡 (queries).** `Predicate.exists`
+  is a correlated join (`exists(collection where … and foreignField = thisRow.localField)` that
+  backends resolve to an allow-set (`resolveExists`): MemoryBackend over its rows, the SQL backend
+  via a `SELECT DISTINCT` subquery (the `Sql` translator also compiles it to `IN (SELECT …)`). This
+  powers join-based auth filters and server-authored named queries; client-side rendering of an
+  `Exists` query still relies on named queries (the server authors the join).
 - **SQL reference backend (#23 / #4): 🟡 → ✅.** New `@thomasfosterau/effect-sync-sql`: a pure
   `Subset` → `WHERE` translator (SQLite/Postgres dialects) and a `SqlBackend` over a minimal
   driver-agnostic `SqlExecutor` seam (subset evaluation, row fetch, transactional idempotent
@@ -265,7 +271,6 @@ scorecard above is preserved as the original snapshot):
 - **Schema migration (#28): 🔴 → 🟡.** ADR-0014 documents expand/contract with cookie-reset
   backfill, grounded in the engine's encoded-row storage and reset-on-unknown-cookie path.
 
-Still open: **server-side relational joins / `whereExists`** and the deeper
-**join-without-denormalization auth seam** (#10/#14, the part beyond local `related()` and
-allow-set filters); **a concrete distributed bus broker** (#24); **incremental view maintenance**
-(#11); and **migration tooling** beyond the ADR (#28).
+Still open: **incremental view maintenance** (#11, full re-evaluation today); **a concrete
+distributed bus broker** (#24, the seam exists but ships no Redis/Durable-Object adapter); and
+**migration tooling** beyond the ADR (#28).
