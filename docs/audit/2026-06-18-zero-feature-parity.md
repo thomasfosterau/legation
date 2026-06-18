@@ -220,3 +220,31 @@ distance. Migrations (#6) and observability (#7) are smaller, well-scoped follow
 5. **Schema migration ADR** (expand/contract + cookie-reset backfill).
 6. **Tracer spans + metrics** across engine/cache/fan-out.
 7. One concrete **bus broker** (Redis or Durable Object) and one **REST→mutator** recipe.
+
+## Progress addendum — 2026-06-18
+
+Work delivered against this audit on the `claude/package-zero-sync-audit-papsbe` branch (the
+scorecard above is preserved as the original snapshot):
+
+- **JSON:API happy path (#22, #23).** `@thomasfosterau/effect-sync-jsonapi` now derives the whole
+  sync/offline story from an app's Effect `HttpApi`: convention-first reflection → collections +
+  CRUD mutators, a `JsonApiBackend` satisfying the BYO contract over HTTP (content-hash row
+  versions, at-least-once with idempotent writes), and a client-direct `JsonApiSync.layer`. This
+  is a genuine batteries-included reference backend — #23 moves 🔴 → 🟡 (HTTP rather than SQL;
+  a SQL adapter is still the canonical "real database" example to ship).
+- **Relational reads (#2, #10).** `Relationships` resolves JSON:API linkage against the local
+  mirror (`resolve`/`hydrate`, reactive `query`/`observe`), and `related()` auto-subscribes the
+  narrowed `id IN (...)` subsets of referenced collections; the backend's `includes` option
+  compound-loads them (`?include=`) and serves those subsets from the harvested document. Read-side
+  joins over the mirror now exist — #10 moves 🔴 → 🟡 (server-side joins / `whereExists` and
+  relationship-scoped auth #14 still open).
+- **Server-side query narrowing (#8/#9).** A pluggable `QueryEncoder` seam pushes the predicate to
+  the server as `filter[...]`/`sort` (sound-superset default; local `Subset.apply` stays
+  authoritative), with the strictly-JSON:API encoding swappable for a dedicated package.
+- **Observability (#29): 🔴 → ✅.** `core/Telemetry` wires `effect_sync_*` metrics and
+  `effect-sync.*` spans into client/server push/pull and fan-out.
+- **Schema migration (#28): 🔴 → 🟡.** ADR-0014 documents expand/contract with cookie-reset
+  backfill, grounded in the engine's encoded-row storage and reset-on-unknown-cookie path.
+
+Still open and highest-value: **#3 React bindings**, **#4 SQL reference backend**, **#2 named
+server-side queries**, **#14 relationship-scoped read auth**.
