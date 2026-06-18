@@ -113,4 +113,52 @@ describe("selective live-query re-evaluation", () => {
       }).pipe(Effect.scoped)
     );
   }, 10000);
+
+  it("maintains a paginated live query incrementally", async () => {
+    const top2 = Subset.make({
+      collection: "todos",
+      orderBy: [{ field: "rank", direction: "asc" }],
+      limit: 2,
+    });
+    const page = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const writer = yield* makeClient(handler, "writer");
+        const reader = yield* makeClient(handler, "reader");
+
+        yield* writer.mutate("todo/set", { id: "t1", rank: 1 });
+        yield* writer.mutate("todo/set", { id: "t3", rank: 3 });
+        yield* writer.push;
+        yield* reader.subscribe(top2);
+        yield* reader.pull;
+
+        const pages = yield* Ref.make<Array<ReadonlyArray<string>>>([]);
+        yield* Effect.forkScoped(
+          Stream.runForEach(reader.observe(top2), (rows) =>
+            Ref.update(pages, (acc) => [...acc, page(rows)])
+          )
+        );
+        yield* settle;
+
+        // A row that sorts into the page pushes the last visible row out.
+        yield* writer.mutate("todo/set", { id: "t2", rank: 2 });
+        yield* writer.push;
+        yield* reader.pull;
+        yield* settle;
+
+        // A row beyond the limit does not move the page → no re-emit.
+        yield* writer.mutate("todo/set", { id: "t4", rank: 4 });
+        yield* writer.push;
+        yield* reader.pull;
+        yield* settle;
+
+        expect(yield* Ref.get(pages)).toEqual([
+          ["t1", "t3"],
+          ["t1", "t2"],
+        ]);
+      }).pipe(Effect.scoped)
+    );
+  }, 10000);
 });

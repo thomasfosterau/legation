@@ -15,6 +15,7 @@ import { Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } fr
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
+import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
 import type { Mutation, NamedSubscription, PatchOp, PullResponse } from "./Protocol.js";
 import * as Query from "./Query.js";
@@ -28,9 +29,18 @@ export interface LocalRow {
   readonly value: unknown;
 }
 
-/** Which collections a local change touched, or every collection. */
-type ChangeSet = typeof ALL | ReadonlyArray<string>;
-const ALL = "all" as const;
+/**
+ * A local-view change. `Patch` carries per-row confirmed deltas (emitted only
+ * when the journal is empty, so they equal the materialized-view deltas) and
+ * drives incremental `LiveView` maintenance. `Rebuild` is the conservative
+ * fallback when the optimistic overlay shifts (a journal append/trim can affect
+ * any collection), so observers re-materialize.
+ */
+type ViewChange =
+  | { readonly _tag: "Patch"; readonly ops: ReadonlyArray<PatchOp> }
+  | { readonly _tag: "Rebuild" };
+
+const REBUILD: ViewChange = { _tag: "Rebuild" };
 
 export interface ClientEngineOptions {
   readonly clientId: string;
@@ -109,25 +119,10 @@ export const make = (
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
     >([]);
-    // A change event names the collections it touched, so a live query
-    // re-evaluates only when its collection changed (selective view
-    // maintenance). `"all"` forces re-evaluation everywhere — used whenever the
-    // optimistic overlay shifts (a journal append or trim can affect any
-    // collection a pending mutation writes).
-    const changes = yield* Effect.acquireRelease(PubSub.unbounded<ChangeSet>(), (hub) =>
+    const changes = yield* Effect.acquireRelease(PubSub.unbounded<ViewChange>(), (hub) =>
       PubSub.shutdown(hub)
     );
-    const publishChange = (change: ChangeSet) => Effect.asVoid(PubSub.publish(changes, change));
-    const affects = (change: ChangeSet, collection: string): boolean =>
-      change === ALL || change.includes(collection);
-    const patchCollections = (ops: ReadonlyArray<PatchOp>): ChangeSet => {
-      const collections = new Set<string>();
-      for (const op of ops) {
-        if (op._tag === "Clear") return ALL;
-        collections.add(op.collection);
-      }
-      return [...collections];
-    };
+    const publishChange = (change: ViewChange) => Effect.asVoid(PubSub.publish(changes, change));
 
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const materialize: Effect.Effect<
@@ -197,23 +192,28 @@ export const make = (
       return view;
     });
 
+    // All local rows of a collection (confirmed + overlay), loading confirmed
+    // rows the overlay didn't already touch.
+    const ensureCollection = (
+      view: Map<string, Map<RowId, LocalRow>>,
+      collection: string
+    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError> =>
+      Effect.gen(function* () {
+        const existing = view.get(collection);
+        if (existing !== undefined) return [...existing.values()];
+        const rows = new Map<RowId, LocalRow>();
+        for (const row of yield* store.listRows(collection)) {
+          rows.set(row.id, { id: row.id, value: row.value });
+        }
+        view.set(collection, rows);
+        return [...rows.values()];
+      });
+
+    const collectionRows = (collection: string) =>
+      materialize.pipe(Effect.flatMap((view) => ensureCollection(view, collection)));
+
     const query = (subset: Subset.Subset) =>
-      materialize.pipe(
-        Effect.flatMap((view) =>
-          Effect.gen(function* () {
-            // Ensure confirmed rows for the queried collection are loaded
-            // even when no pending mutation touched it.
-            if (!view.has(subset.collection)) {
-              const rows = new Map<RowId, LocalRow>();
-              for (const row of yield* store.listRows(subset.collection)) {
-                rows.set(row.id, { id: row.id, value: row.value });
-              }
-              view.set(subset.collection, rows);
-            }
-            return Subset.apply([...view.get(subset.collection)!.values()], subset);
-          })
-        )
-      );
+      collectionRows(subset.collection).pipe(Effect.map((rows) => Subset.apply(rows, subset)));
 
     const applyPatch = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
@@ -252,23 +252,26 @@ export const make = (
       });
       // Effects arrive via the next pull; the ack only trims the journal.
       yield* acknowledge(response.lastMutationIds);
-      yield* publishChange(ALL); // trimming the overlay can shift any collection
+      yield* publishChange(REBUILD); // trimming the overlay can shift any collection
       yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
       yield* Metric.update(Telemetry.pushesTotal, 1);
     }).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
-        // With a pending overlay, acking can shift any collection a pending
-        // mutation writes, so re-evaluate everything; with an empty journal the
-        // pull only changes the patch's collections.
+        // With an empty journal the patch ops are exactly the materialized-view
+        // deltas, so observers maintain incrementally; with a pending overlay (or
+        // a reset) the overlay could shift any row, so fall back to a rebuild.
         const hadPending = (yield* store.pendingMutations).length > 0;
+        const hasClear = response.patch.some((op) => op._tag === "Clear");
         yield* applyPatch(response.patch);
         yield* acknowledge(response.lastMutationIds);
         yield* store.setCookie(response.cookie);
         // Atomic reveal: one change event after patch + ack (rebase is
         // recomputation in `materialize`).
-        yield* publishChange(hadPending ? ALL : patchCollections(response.patch));
+        yield* publishChange(
+          hadPending || hasClear ? REBUILD : { _tag: "Patch", ops: response.patch }
+        );
       });
 
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
@@ -351,13 +354,59 @@ export const make = (
           )
         )
       );
+    // Apply a Patch's confirmed deltas for one collection to a LiveView.
+    const applyOps = (
+      view: LiveView.LiveView,
+      collection: string,
+      ops: ReadonlyArray<PatchOp>
+    ): LiveView.LiveView => {
+      let next = view;
+      for (const op of ops) {
+        if (op._tag === "Clear" || op.collection !== collection) continue;
+        next =
+          op._tag === "Put"
+            ? LiveView.put(next, { id: op.id, value: op.value })
+            : LiveView.del(next, op.id);
+      }
+      return next;
+    };
+
+    const sameResult = (a: ReadonlyArray<LocalRow>, b: ReadonlyArray<LocalRow>): boolean =>
+      a.length === b.length &&
+      a.every((row, i) => row.id === b[i]!.id && row.value === b[i]!.value);
+
+    // Advance a query's LiveView for one change and return its current page.
+    const stepView = (
+      viewRef: Ref.Ref<LiveView.LiveView>,
+      subset: Subset.Subset,
+      change: ViewChange
+    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
+      Effect.gen(function* () {
+        const view = yield* Ref.get(viewRef);
+        const next =
+          change._tag === "Rebuild"
+            ? LiveView.make(subset, yield* collectionRows(subset.collection))
+            : applyOps(view, subset.collection, change.ops);
+        if (next !== view) yield* Ref.set(viewRef, next);
+        return LiveView.result(next);
+      });
+
     const observeSubset = (subset: Subset.Subset) =>
-      Stream.concat(
-        Stream.fromEffect(query(subset)),
-        Stream.fromPubSub(changes).pipe(
-          Stream.filter((change) => affects(change, subset.collection)),
-          Stream.mapEffect(() => query(subset))
-        )
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const viewRef = yield* Ref.make(
+            LiveView.make(subset, yield* collectionRows(subset.collection))
+          );
+          const initial = LiveView.result(yield* Ref.get(viewRef));
+          // Emit the page on each change, dropping re-emits when it didn't move
+          // (e.g. a change outside the limit window).
+          return Stream.concat(
+            Stream.succeed(initial),
+            Stream.fromPubSub(changes).pipe(
+              Stream.mapEffect((change) => stepView(viewRef, subset, change))
+            )
+          ).pipe(Stream.changesWith(sameResult));
+        })
       );
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
@@ -372,7 +421,7 @@ export const make = (
           createdAt: Date.now(),
         };
         yield* store.appendMutation(mutation);
-        yield* publishChange(ALL); // the mutation may write any collection
+        yield* publishChange(REBUILD); // the mutation may write any collection
       });
 
     return ClientEngine.of({
@@ -409,7 +458,7 @@ export const make = (
       subscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) =>
           current.some((e) => e.key === entry.key) ? current : [...current, entry]
-        ).pipe(Effect.andThen(publishChange(ALL))),
+        ).pipe(Effect.andThen(publishChange(REBUILD))),
       unsubscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) => current.filter((e) => e.key !== entry.key)),
       query,
