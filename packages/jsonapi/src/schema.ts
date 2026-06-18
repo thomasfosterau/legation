@@ -19,14 +19,6 @@
 
 import { Effect, Schema } from "effect";
 import { ParseError } from "./errors.js";
-import type {
-  JsonApiDocument,
-  JsonApiError,
-  Links,
-  Relationship,
-  ResourceIdentifier,
-  ResourceObject,
-} from "./types.js";
 
 /** Free-form `meta` / `attributes` object: arbitrary JSON values by key. */
 const MetaSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -34,10 +26,13 @@ const MetaSchema = Schema.Record(Schema.String, Schema.Unknown);
 /**
  * Schema for a JSON:API link object (`{ href, meta? }`).
  */
-const LinkObjectSchema = Schema.Struct({
+export const LinkObjectSchema = Schema.Struct({
   href: Schema.String,
   meta: Schema.optional(MetaSchema),
 });
+
+/** A JSON:API link object (`{ href, meta? }`). */
+export type LinkObject = typeof LinkObjectSchema.Type;
 
 /**
  * Schema for a single link value: either a URL string or a link object.
@@ -49,50 +44,59 @@ const LinkValueSchema = Schema.Union([Schema.String, LinkObjectSchema]);
  * names, so this is a record of link values; `self` / `related` are simply
  * well-known keys within it.
  */
-export const LinksSchema: Schema.Codec<Links> = Schema.Record(
-  Schema.String,
-  LinkValueSchema
-) as Schema.Codec<Links>;
+export const LinksSchema = Schema.Record(Schema.String, LinkValueSchema);
+
+/** A JSON:API `links` object: arbitrary link names → string | link object. */
+export type Links = typeof LinksSchema.Type;
 
 /**
  * Schema for a JSON:API resource identifier (`{ type, id, meta? }`).
  */
-export const ResourceIdentifierSchema: Schema.Codec<ResourceIdentifier> = Schema.Struct({
+export const ResourceIdentifierSchema = Schema.Struct({
   type: Schema.String,
   id: Schema.String,
   meta: Schema.optional(MetaSchema),
-}) as Schema.Codec<ResourceIdentifier>;
+});
+
+/** A JSON:API resource identifier (`{ type, id, meta? }`). */
+export type ResourceIdentifier = typeof ResourceIdentifierSchema.Type;
 
 /**
  * Schema for a JSON:API relationship (`{ data?, links?, meta? }`). The
  * `data` member may be a single identifier, an array of identifiers, or
  * `null`.
  */
-export const RelationshipSchema: Schema.Codec<Relationship> = Schema.Struct({
+export const RelationshipSchema = Schema.Struct({
   data: Schema.optional(
     Schema.NullOr(Schema.Union([ResourceIdentifierSchema, Schema.Array(ResourceIdentifierSchema)]))
   ),
   links: Schema.optional(LinksSchema),
   meta: Schema.optional(MetaSchema),
-}) as Schema.Codec<Relationship>;
+});
+
+/** A JSON:API relationship (`{ data?, links?, meta? }`). */
+export type Relationship = typeof RelationshipSchema.Type;
 
 /**
  * Schema for a JSON:API resource object (a resource identifier plus
  * optional `attributes`, `relationships`, and `links`).
  */
-export const ResourceObjectSchema: Schema.Codec<ResourceObject> = Schema.Struct({
+export const ResourceObjectSchema = Schema.Struct({
   type: Schema.String,
   id: Schema.String,
   meta: Schema.optional(MetaSchema),
   attributes: Schema.optional(MetaSchema),
   relationships: Schema.optional(Schema.Record(Schema.String, RelationshipSchema)),
   links: Schema.optional(LinksSchema),
-}) as Schema.Codec<ResourceObject>;
+});
+
+/** A JSON:API resource object (identifier + optional attributes/relationships/links). */
+export type ResourceObject = typeof ResourceObjectSchema.Type;
 
 /**
  * Schema for a JSON:API error object.
  */
-export const JsonApiErrorSchema: Schema.Codec<JsonApiError> = Schema.Struct({
+export const JsonApiErrorSchema = Schema.Struct({
   id: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   code: Schema.optional(Schema.String),
@@ -106,7 +110,10 @@ export const JsonApiErrorSchema: Schema.Codec<JsonApiError> = Schema.Struct({
     })
   ),
   meta: Schema.optional(MetaSchema),
-}) as Schema.Codec<JsonApiError>;
+});
+
+/** A JSON:API error object. */
+export type JsonApiError = typeof JsonApiErrorSchema.Type;
 
 /**
  * Schema for a top-level JSON:API document.
@@ -116,7 +123,7 @@ export const JsonApiErrorSchema: Schema.Codec<JsonApiError> = Schema.Struct({
  * top-level members (`errors`, `meta`, `included`, `links`, `jsonapi`) are
  * all optional.
  */
-export const JsonApiDocumentSchema: Schema.Codec<JsonApiDocument> = Schema.Struct({
+export const JsonApiDocumentSchema = Schema.Struct({
   data: Schema.optional(
     Schema.NullOr(
       Schema.Union([
@@ -137,10 +144,13 @@ export const JsonApiDocumentSchema: Schema.Codec<JsonApiDocument> = Schema.Struc
       meta: Schema.optional(MetaSchema),
     })
   ),
-  // The decoded shape is structurally equivalent to `JsonApiDocument`, but
-  // the nested optional unions don't line up nominally for TypeScript's
-  // assignability check, so the cast goes through `unknown`.
-}) as unknown as Schema.Codec<JsonApiDocument>;
+});
+
+/**
+ * A top-level JSON:API document. Derived from {@link JsonApiDocumentSchema}
+ * so the type and the validator cannot drift.
+ */
+export type JsonApiDocument = typeof JsonApiDocumentSchema.Type;
 
 const decodeDocumentSchema = Schema.decodeUnknownEffect(JsonApiDocumentSchema);
 
