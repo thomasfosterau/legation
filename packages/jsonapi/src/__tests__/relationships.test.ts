@@ -3,7 +3,7 @@
  * (to-one and to-many), and that resolution reads live synced state.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, Scope, Stream } from "effect";
+import { Duration, Effect, Layer, Ref, Schema, Scope, Stream } from "effect";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -230,6 +230,48 @@ describe("Relationships", () => {
       server
     );
   });
+
+  // Real-clock test: a forked observer collects the join's emissions while a
+  // referenced (not base) row is edited, proving the live join re-emits
+  // incrementally without the base subset changing.
+  it("re-emits the join incrementally when a referenced row changes", async () => {
+    const server = makeServer(seed);
+    const settle = Effect.sleep(Duration.millis(50));
+    await Effect.runPromise(
+      provide(
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* syncAll(engine);
+
+          const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
+            (rows[0]!.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"));
+          const seen = yield* Ref.make<Array<ReadonlyArray<unknown>>>([]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(Relationships.observe(engine, issues, ["comments"]), (rows) =>
+              Ref.update(seen, (acc) => [...acc, bodiesOf(rows)])
+            )
+          );
+          yield* settle;
+
+          // Edit a referenced comment only — the base `issues` row is untouched.
+          yield* engine.mutate("comments/update", {
+            type: "comments",
+            id: "c1",
+            attributes: { body: "edited" },
+          });
+          yield* engine.push;
+          yield* engine.pull;
+          yield* settle;
+
+          const emissions = yield* Ref.get(seen);
+          expect(emissions[0]).toEqual(["first", "second"]);
+          expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);
+          expect(emissions.length).toBeGreaterThanOrEqual(2);
+        }),
+        server
+      )
+    );
+  }, 10000);
 
   it.effect("auto-subscribes the referenced collections (narrowed by id)", () => {
     const server = makeServer(seed);

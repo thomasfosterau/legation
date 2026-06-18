@@ -125,9 +125,40 @@ export const query = (
     });
   });
 
+/** A `(id → row)` index of a referenced collection's local rows. */
+const indexOf = (rows: ReadonlyArray<ClientEngine.LocalRow>): Map<string, JsonApiRow> =>
+  new Map(rows.map((row) => [row.id, row.value as JsonApiRow]));
+
+/** Two resolved relationship values are equal when they share row references. */
+const sameRelated = (a: RelatedValue, b: RelatedValue): boolean => {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((row, i) => row === b[i]);
+  }
+  return false;
+};
+
+/** Two joins are equal when base rows and every resolved relationship match by reference. */
+const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): boolean =>
+  a.length === b.length &&
+  a.every((row, i) => {
+    const other = b[i]!;
+    if (row.id !== other.id || row.value !== other.value) return false;
+    const names = Object.keys(row.related);
+    return (
+      names.length === Object.keys(other.related).length &&
+      names.every((name) => sameRelated(row.related[name], other.related[name]))
+    );
+  });
+
 /**
- * Live version of {@link query}: re-resolves on every local change (a write to
- * the base subset *or* to any referenced collection), like a reactive join.
+ * Live version of {@link query} as an incrementally-maintained join. The base
+ * page is kept current by `engine.observe(subset)`; each referenced collection
+ * by its own `engine.observe`, so a write to a related row re-hydrates the join
+ * without re-querying the base. When a base change shifts *which* collections
+ * are referenced, `switchMap` re-establishes the referenced observers. Per
+ * collection the lookup index is cached and only the changed slice is rebuilt;
+ * changes that don't move the resolved result are deduped away.
  */
 export const observe = (
   engine: ClientEngine.ClientEngine,
@@ -136,7 +167,47 @@ export const observe = (
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never, never> =>
   engine.observe(subset).pipe(
     Stream.orDie,
-    Stream.mapEffect(() => query(engine, subset, names))
+    Stream.switchMap((base) => {
+      const values = base.map((row) => row.value as JsonApiRow);
+      const collections = [...targetCollections(values, names)];
+      const hydrateWith = (
+        index: ReadonlyMap<string, Map<string, JsonApiRow>>
+      ): ReadonlyArray<RelatedRow> => {
+        const lookup: Lookup = (collection, id) => index.get(collection)?.get(id);
+        return base.map((row, i) => ({
+          id: row.id,
+          value: values[i]!,
+          related: hydrate(lookup, values[i]!, names),
+        }));
+      };
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          // Prime each referenced collection so the first join is complete.
+          const index = new Map<string, Map<string, JsonApiRow>>();
+          for (const collection of collections) {
+            const rows = yield* engine.query(Subset.make({ collection })).pipe(Effect.orDie);
+            index.set(collection, indexOf(rows));
+          }
+          // Each referenced collection refreshes its own index slice on change,
+          // dropping the redundant initial snapshot `observe` re-emits.
+          const updates = Stream.mergeAll(
+            collections.map((collection) =>
+              engine.observe(Subset.make({ collection })).pipe(
+                Stream.orDie,
+                Stream.drop(1),
+                Stream.map((rows) => {
+                  index.set(collection, indexOf(rows));
+                  return hydrateWith(index);
+                })
+              )
+            ),
+            { concurrency: "unbounded" }
+          );
+          return Stream.concat(Stream.succeed(hydrateWith(index)), updates);
+        })
+      );
+    }),
+    Stream.changesWith(sameJoin)
   );
 
 /**
@@ -200,8 +271,8 @@ export const related = (
       if (changed) yield* engine.pull.pipe(Effect.orDie);
     });
 
-    return engine.observe(subset).pipe(
-      Stream.orDie,
-      Stream.mapEffect(() => refresh.pipe(Effect.andThen(query(engine, subset, names))))
-    );
+    // Sync the referenced collections up front so the first join is complete,
+    // then keep the subscriptions tracking the live linkage as it changes.
+    yield* refresh;
+    return observe(engine, subset, names).pipe(Stream.tap(() => refresh));
   });

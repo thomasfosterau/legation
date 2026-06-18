@@ -276,8 +276,19 @@ scorecard above is preserved as the original snapshot):
   A serialized `InvalidationBus` runs the whole distributed bus over any of them.
 - **Selective live-query re-evaluation (#11): 🟡 → 🟡⁺.** Live queries no longer re-run on every
   global change — change events carry the touched collections, so an observer re-evaluates only
-  when its collection (or the journal) changed. Full incremental view maintenance (per-row deltas)
-  remains a deeper follow-up.
+  when its collection (or the journal) changed.
+- **Incremental view maintenance (#11): 🟡⁺ → ✅ (reads).** `LiveView` (core) maintains a
+  filtered + sorted + windowed result by per-row deltas: on the read path (empty journal) the
+  pull's patch ops drive `put`/`del` into a maintained order, the visible page is sliced from it,
+  and re-emits are dropped when the page didn't move — so a change outside the limit window never
+  re-sorts or re-notifies. `ClientEngine.observe` falls back to a full rebuild only when the
+  optimistic overlay shifts. **Paginated** live queries are now incremental end to end.
+- **Relational live joins (#2/#10/#11): 🟡 → ✅.** `Relationships.observe`/`related` maintain the
+  join incrementally on top of `LiveView`: the base page and each referenced collection are each
+  kept current by their own `engine.observe`, cached per-collection indexes are rebuilt only for
+  the changed slice, and `switchMap` re-establishes referenced observers when the base linkage
+  shifts. A write to a related row (e.g. editing a comment) re-hydrates the join without
+  re-resolving the base — and is no longer missed now that the base observe is deduped.
 
-Still open: **true incremental view maintenance** (#11 — per-row delta maintenance vs. the
-selective full re-evaluation now in place) and **migration tooling** beyond the ADR (#28).
+Still open: **migration tooling** beyond the ADR (#28); write-path IVM beyond the read-path
+materialization above (the optimistic overlay still rebuilds rather than delta-maintains).
