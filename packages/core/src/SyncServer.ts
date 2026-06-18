@@ -13,7 +13,7 @@
  * Predicate-level matching is a planned refinement.
  */
 
-import { Effect, Layer, Metric, Ref, Scope } from "effect";
+import { Clock, Effect, Layer, Metric, Ref, Scope } from "effect";
 import { Backend, type SyncContext } from "./Backend.js";
 import {
   AuthPolicy,
@@ -30,9 +30,6 @@ import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 import { ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
-
-let cookieCounter = 0;
-const freshCookie = (): string => `cvr-${Date.now()}-${++cookieCounter}`;
 
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
@@ -65,6 +62,15 @@ export const make: Effect.Effect<
   const pokeHub = yield* makePokeHub;
   // Active subscriptions per client group, for fan-out matching.
   const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
+
+  // Monotonic cookie minting, scoped to this handler instead of a module
+  // global. The Clock makes the timestamp injectable (TestClock in tests).
+  const cookieCounter = yield* Ref.make(0);
+  const freshCookie = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
+    return `cvr-${now}-${seq}`;
+  });
 
   // Fan-out loop: hints → poke groups whose subscriptions touch the
   // hinted collections. Poke-then-pull; correctness never depends on it.
@@ -184,7 +190,7 @@ export const make: Effect.Effect<
       const isReset = checked.cookie !== undefined && previous === undefined;
       const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
 
-      const cookie = freshCookie();
+      const cookie = yield* freshCookie;
       yield* cvrStore.set(cookie, { rows: next.rows });
       const lastMutationIds = yield* backend.lastMutationIds(context);
       yield* Metric.update(Telemetry.patchOps, patch.length);

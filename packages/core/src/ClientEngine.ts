@@ -11,7 +11,7 @@
  * atomically through a single changes event.
  */
 
-import { Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } from "effect";
+import { Clock, Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
@@ -418,7 +418,7 @@ export const make = (
           mutationId,
           mutator,
           args: encoded,
-          createdAt: Date.now(),
+          createdAt: yield* Clock.currentTimeMillis,
         };
         yield* store.appendMutation(mutation);
         yield* publishChange(REBUILD); // the mutation may write any collection

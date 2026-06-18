@@ -14,9 +14,8 @@
  * implementing one tiny interface.
  */
 
-import { Context, Effect, Layer, PubSub, Scope } from "effect";
+import { Context, Effect, Layer, PubSub, Schema, Scope } from "effect";
 import type { ChangeHint } from "./Backend.js";
-import type { RowId } from "./Collection.js";
 
 /** A live subscription to the bus. */
 export interface HintSubscription {
@@ -76,29 +75,22 @@ export interface BusBroker {
   readonly subscribe: Effect.Effect<{ readonly take: Effect.Effect<string> }, never, Scope.Scope>;
 }
 
-/** A bare change hint, as it crosses the wire. */
-interface WireHint {
-  readonly collection: string;
-  readonly ids: ReadonlyArray<RowId>;
-}
+/** Wire form of a change-hint batch: a JSON array of `{ collection, ids }`. */
+const HintsFromJson = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      collection: Schema.String,
+      ids: Schema.Array(Schema.String),
+    })
+  )
+);
 
-const isWireHint = (value: unknown): value is WireHint =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as WireHint).collection === "string" &&
-  Array.isArray((value as WireHint).ids);
-
-/** Decode a payload to a hint batch; `undefined` for malformed traffic. */
-const decodeHints = (payload: string): ReadonlyArray<ChangeHint> | undefined => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(parsed) || !parsed.every(isWireHint)) return undefined;
-  return parsed.map((hint) => ({ collection: hint.collection, ids: hint.ids }));
-};
+/**
+ * Decode a channel payload to a hint batch. Correctness never depends on the
+ * bus (ADR-0009), so malformed traffic fails the decode and the consumer
+ * skips it (the next pull repairs any missed poke) rather than propagating.
+ */
+const decodeHints = Schema.decodeUnknownEffect(HintsFromJson);
 
 /**
  * An InvalidationBus over a {@link BusBroker}: hints are JSON-serialized
@@ -112,10 +104,7 @@ export const makeSerialized = (broker: BusBroker): InvalidationBus =>
     subscribe: broker.subscribe.pipe(
       Effect.map((subscription) => {
         const take: Effect.Effect<ReadonlyArray<ChangeHint>> = subscription.take.pipe(
-          Effect.flatMap((payload) => {
-            const hints = decodeHints(payload);
-            return hints === undefined ? take : Effect.succeed(hints);
-          })
+          Effect.flatMap((payload) => decodeHints(payload).pipe(Effect.catch(() => take)))
         );
         return { take };
       })
