@@ -241,10 +241,18 @@ scorecard above is preserved as the original snapshot):
 - **Server-side query narrowing (#8/#9).** A pluggable `QueryEncoder` seam pushes the predicate to
   the server as `filter[...]`/`sort` (sound-superset default; local `Subset.apply` stays
   authoritative), with the strictly-JSON:API encoding swappable for a dedicated package.
+- **Named server-side queries (#12): 🔴 → ✅.** `core/Query` adds mutator-shaped named queries:
+  the client resolves a name + args to a local `Subset` for rendering; the server resolves the
+  same to the authoritative subset it syncs (context-aware, args-validated), so shaping and
+  permission live on the server. `PullRequest.namedSubscriptions` (additive) carries them;
+  `ClientEngine` gains `subscribeQuery`/`queryNamed`/`observeNamed`. This is also the natural home
+  for preload + TTL (#18), still to layer on.
 - **Observability (#29): 🔴 → ✅.** `core/Telemetry` wires `effect_sync_*` metrics and
   `effect-sync.*` spans into client/server push/pull and fan-out.
 - **Schema migration (#28): 🔴 → 🟡.** ADR-0014 documents expand/contract with cookie-reset
   backfill, grounded in the engine's encoded-row storage and reset-on-unknown-cookie path.
 
-Still open and highest-value: **#3 React bindings**, **#4 SQL reference backend**, **#2 named
-server-side queries**, **#14 relationship-scoped read auth**.
+Still open and highest-value: **#3 React bindings**, **#4 SQL reference backend**,
+**#14 relationship-scoped read auth** (largely expressible today via an Effectful auth filter
+that returns an `id IN (allowed)` predicate over a denormalized key; a join-without-denormalization
+seam is the deeper version), and **preload + query TTL (#18)** on top of named queries.
