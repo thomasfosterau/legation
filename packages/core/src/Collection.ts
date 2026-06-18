@@ -9,6 +9,7 @@
  */
 
 import type { Schema } from "effect";
+import { DuplicateNameError } from "./Errors.js";
 
 /** The identifier of one row within a collection. */
 export type RowId = string;
@@ -64,7 +65,7 @@ export const registry = (collections: ReadonlyArray<AnyCollection>): CollectionR
   const map = new Map<string, AnyCollection>();
   for (const collection of collections) {
     if (map.has(collection.name)) {
-      throw new Error(`Duplicate collection name: ${collection.name}`);
+      throw new DuplicateNameError({ kind: "collection", name: collection.name });
     }
     map.set(collection.name, collection);
   }
