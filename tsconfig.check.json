@@ -14,7 +14,8 @@
       "@thomasfosterau/effect-sync-node": ["packages/node/src/index.ts"],
       "@thomasfosterau/effect-sync-jsonapi": ["packages/jsonapi/src/index.ts"],
       "@thomasfosterau/effect-sync-sql": ["packages/sql/src/index.ts"],
-      "@thomasfosterau/effect-sync-react": ["packages/react/src/index.ts"]
+      "@thomasfosterau/effect-sync-react": ["packages/react/src/index.ts"],
+      "@thomasfosterau/effect-sync-svelte": ["packages/svelte/src/index.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },

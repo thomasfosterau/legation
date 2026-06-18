@@ -42,6 +42,9 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
 | [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
 | [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
+| [`@thomasfosterau/effect-sync-sql`](packages/sql)         | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
+| [`@thomasfosterau/effect-sync-react`](packages/react)     | React bindings: `EffectSyncProvider` + `useQuery` / `useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`                                                                                                                                                  |
+| [`@thomasfosterau/effect-sync-svelte`](packages/svelte)   | Svelte bindings: `setEngineRuntime` + `query` / `namedQuery` (live `Readable` stores) + `getMutate`                                                                                                                                                                    |
 
 ## Quick start (in-process, today)
 
@@ -116,6 +119,8 @@ in-process demo backend.
 
 | Example                                 | Stack                                | Highlights                                                                                                                                     |
 | --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`react-todo`](examples/react-todo)     | React (web)                          | `useQuery` / `useMutation` bindings; offline-first with the real `SyncServer` + `MemoryBackend` + CVR + bus in the page                        |
+| [`svelte-todo`](examples/svelte-todo)   | Svelte 5 (web)                       | `query` stores + `getMutate` bindings; same in-page pipeline, durable journal, poke-driven convergence                                         |
 | [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | Offline-first: durable journal, true offline toggle, live poke-driven convergence, real `SyncServer` + `MemoryBackend` + CVR + bus in the page |
 | [`compose-todo`](examples/compose-todo) | Jetpack Compose (Kotlin)             | Optimistic writes, `Flow` live queries, in-process demo backend                                                                                |
 | [`swiftui-todo`](examples/swiftui-todo) | SwiftUI (Swift)                      | `@Observable` live queries, loopback demo backend                                                                                              |

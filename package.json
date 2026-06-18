@@ -7,7 +7,9 @@
   "workspaces": {
     "packages": [
       "packages/*",
-      "examples/foldkit-todo"
+      "examples/foldkit-todo",
+      "examples/react-todo",
+      "examples/svelte-todo"
     ],
     "catalog": {
       "effect": "4.0.0-beta.83",
@@ -55,6 +57,7 @@
     "prettier": "^3.0.0",
     "react": "18",
     "react-dom": "18",
+    "svelte": "^5",
     "typescript": "^5.9.3",
     "vitest": "^4.1.5"
   },

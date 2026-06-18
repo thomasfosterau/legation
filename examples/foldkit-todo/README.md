@@ -3,10 +3,13 @@
 A deliberately over-engineered browser todo app that drives
 [`@thomasfosterau/effect-sync-core`](../../packages/core) from
 [FoldKit](https://foldkit.dev) — The Elm Architecture in TypeScript, built (like
-this engine) on Effect. It is the web counterpart to the
-[Compose](../compose-todo) and [SwiftUI](../swiftui-todo) examples, but instead
-of a hand-rolled demo server it runs the **real library server pipeline in the
-page**, so every concept in `CONTEXT.md` is exercised by code you can click on.
+this engine) on Effect. It is one of the web counterparts to the
+[Compose](../compose-todo) and [SwiftUI](../swiftui-todo) examples (alongside the
+[React](../react-todo) and [Svelte](../svelte-todo) examples, which drive the
+engine through its idiomatic `effect-sync-react` / `effect-sync-svelte`
+bindings). FoldKit instead consumes `effect-sync-core` directly, and like those
+it runs the **real library server pipeline in the page**, so every concept in
+`CONTEXT.md` is exercised by code you can click on.
 
 ## What it shows
 
