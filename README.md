@@ -108,6 +108,18 @@ const program = Effect.gen(function* () {
 });
 ```
 
+## Examples
+
+Runnable apps driving the engine from different UI stacks. Each shows the same
+core flow — optimistic writes, live views, push/pull/rebase against an
+in-process demo backend.
+
+| Example                                       | Stack                                  | Highlights                                                                                  |
+| --------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`foldkit-todo`](examples/foldkit-todo)       | [FoldKit](https://foldkit.dev) (web)   | Offline-first: durable journal, true offline toggle, live poke-driven convergence, real `SyncServer` + `MemoryBackend` + CVR + bus in the page |
+| [`compose-todo`](examples/compose-todo)       | Jetpack Compose (Kotlin)               | Optimistic writes, `Flow` live queries, in-process demo backend                             |
+| [`swiftui-todo`](examples/swiftui-todo)       | SwiftUI (Swift)                        | `@Observable` live queries, loopback demo backend                                           |
+
 ## Development
 
 ```bash

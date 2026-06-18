@@ -22,7 +22,8 @@
     "**/dist/**",
     "coverage/**",
     ".changeset/**",
-    "fallow-baselines/**"
+    "fallow-baselines/**",
+    "examples/**"
   ],
   "overrides": [
     {
