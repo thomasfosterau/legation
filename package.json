@@ -16,10 +16,10 @@
       "examples/svelte-northwind"
     ],
     "catalog": {
-      "effect": "4.0.0-beta.83",
-      "@effect/platform-browser": "4.0.0-beta.83",
-      "@effect/platform-node": "4.0.0-beta.83",
-      "@effect/vitest": "4.0.0-beta.83"
+      "effect": "4.0.0-beta.84",
+      "@effect/platform-browser": "4.0.0-beta.84",
+      "@effect/platform-node": "4.0.0-beta.84",
+      "@effect/vitest": "4.0.0-beta.84"
     }
   },
   "scripts": {

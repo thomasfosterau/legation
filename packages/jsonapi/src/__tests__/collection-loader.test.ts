@@ -72,7 +72,7 @@ describe("buildQueryString", () => {
   it("encodes include, sort, fields, filter, and page", () => {
     const query = CollectionLoader.buildQueryString({
       include: ["author"],
-      sort: ["-createdAt"],
+      sort: [{ field: "createdAt", direction: "desc" }],
       fields: { articles: ["title", "body"] },
       filter: { status: "published" },
       page: { number: 2, size: 10 },

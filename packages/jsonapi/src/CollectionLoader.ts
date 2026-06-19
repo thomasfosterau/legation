@@ -14,7 +14,8 @@
  * from the upstream's own change token (ETag, `meta.version`, …).
  */
 
-import { Context, Effect } from "effect";
+import { Query } from "@thomasfosterau/effect-jsonapi";
+import { Context, Effect, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -125,12 +126,24 @@ const appendBracketed = (
   }
 };
 
+/**
+ * Serialize sort terms into the JSON:API `sort` value (`-field,field`) through
+ * the library's `Query.Sort` codec, so the wire encoding matches the spec's
+ * descending-prefix convention by construction.
+ */
+const encodeSort = (
+  terms: ReadonlyArray<{ readonly field: string; readonly direction: "asc" | "desc" }>
+): string =>
+  Schema.encodeSync(Query.Sort(terms.map((term) => term.field)))(
+    terms.map((term) => ({ field: term.field, direction: term.direction }))
+  );
+
 /** Build the JSON:API query string for `include`/`sort`/`fields`/`filter`/`page`. */
 export const buildQueryString = (options?: JsonApiRequestOptions): string => {
   if (options === undefined) return "";
   const params = new URLSearchParams();
   if (options.include) params.append("include", options.include.join(","));
-  if (options.sort) params.append("sort", options.sort.join(","));
+  if (options.sort && options.sort.length > 0) params.append("sort", encodeSort(options.sort));
   if (options.fields) {
     appendBracketed(
       params,
@@ -139,7 +152,7 @@ export const buildQueryString = (options?: JsonApiRequestOptions): string => {
     );
   }
   if (options.filter) appendBracketed(params, "filter", options.filter);
-  if (options.page) appendBracketed(params, "page", options.page);
+  if (options.page) appendBracketed(params, "page", { ...options.page });
   const query = params.toString();
   return query ? `?${query}` : "";
 };

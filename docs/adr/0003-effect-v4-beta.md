@@ -21,3 +21,7 @@ Keep targeting Effect v4 beta across all packages, with the version pinned exact
 ## Update (2026-06-18)
 
 The exact-pin-and-bump-deliberately policy stands; the specific version has moved with it. The pin now lives in the Bun workspace `catalog` (root `package.json`) — currently `4.0.0-beta.83` — which is the single source of truth all packages reference via `catalog:`. The `beta.65` figures above are the original decision's starting point, not the current pin.
+
+## Update (2026-06-19)
+
+Bumped the catalog from `4.0.0-beta.83` to `4.0.0-beta.84`, package-wide in one change per the policy above. The bump was forced by adopting `@thomasfosterau/effect-jsonapi` (ADR-0016), whose peer dependency is `effect >= 4.0.0-beta.84`. All quality gates (build, typecheck, test, lint, format) pass on the new pin.
