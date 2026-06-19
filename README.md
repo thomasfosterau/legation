@@ -42,6 +42,9 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
 | [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
 | [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
+| [`@thomasfosterau/effect-sync-sql`](packages/sql)         | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
+| [`@thomasfosterau/effect-sync-react`](packages/react)     | React bindings: `EffectSyncProvider` + `useQuery` / `useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`                                                                                                                                                  |
+| [`@thomasfosterau/effect-sync-svelte`](packages/svelte)   | Svelte bindings: `setEngineRuntime` + `query` / `namedQuery` (live `Readable` stores) + `getMutate`                                                                                                                                                                    |
 
 ## Quick start (in-process, today)
 
@@ -112,13 +115,27 @@ const program = Effect.gen(function* () {
 
 Runnable apps driving the engine from different UI stacks. Each shows the same
 core flow — optimistic writes, live views, push/pull/rebase against an
-in-process demo backend.
+in-process demo backend. The web examples run the **real library server pipeline
+in the page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`)
+over a durable `localStorage` client store.
 
-| Example                                 | Stack                                | Highlights                                                                                                                                     |
-| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | Offline-first: durable journal, true offline toggle, live poke-driven convergence, real `SyncServer` + `MemoryBackend` + CVR + bus in the page |
-| [`compose-todo`](examples/compose-todo) | Jetpack Compose (Kotlin)             | Optimistic writes, `Flow` live queries, in-process demo backend                                                                                |
-| [`swiftui-todo`](examples/swiftui-todo) | SwiftUI (Swift)                      | `@Observable` live queries, loopback demo backend                                                                                              |
+Three apps of increasing scope, each on React and Svelte:
+
+| App                     | React                                         | Svelte                                          | Exercises                                                                                              |
+| ----------------------- | --------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Todo**                | [`react-todo`](examples/react-todo)           | [`svelte-todo`](examples/svelte-todo)           | One collection: optimistic writes, live views, durable journal + true offline, poke-driven convergence |
+| **RealWorld** (Conduit) | [`react-realworld`](examples/react-realworld) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity   |
+| **Northwind** (admin)   | [`react-northwind`](examples/react-northwind) | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins, read-merge mutators, search/filter/pagination                     |
+
+The React examples use the [`effect-sync-react`](packages/react) bindings
+(`useQuery` / `useMutation`); the Svelte examples use
+[`effect-sync-svelte`](packages/svelte) (`query` stores + `getMutate`).
+
+Other UI stacks:
+
+| Example                                 | Stack                                | Highlights                                                                                        |
+| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `effect-sync-core` directly (no framework bindings) — The Elm Architecture |
 
 ## Development
 
