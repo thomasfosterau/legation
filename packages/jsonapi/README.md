@@ -1,19 +1,23 @@
 # @thomasfosterau/effect-sync-jsonapi
 
-A [JSON:API v1.1](https://jsonapi.org/format/) protocol adapter for the
-`@thomasfosterau/effect-sync-core` sync engine, built on
-[Effect](https://effect.website).
+JSON:API v1.1 collection loaders for the
+[`@thomasfosterau/effect-sync-core`](https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/core)
+sync engine, built on [Effect](https://effect.website).
 
-It gives you three things:
+In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
+resource **`id` is a row id**, and a **resource is a row value**. This package
+maps JSON:API documents into engine collection rows and — through a
+convention-first derivation — wires an app's existing JSON:API REST API into the
+full offline/optimistic sync engine with no bespoke backend to write.
 
-- **JSON:API types** — `ResourceObject`, `JsonApiDocument`, `Relationship`,
-  `JsonApiError`, request options, and friends.
-- **Standalone helpers** — `fetchResource`, `fetchResources`,
-  `createResource`, `updateResource`, `deleteResource`, plus
-  remote↔local sync helpers, all returning Effects.
-- **A sync-engine adapter** (`Adapter`) — query and mutation descriptor
-  builders that plug JSON:API resources into the protocol-agnostic core so
-  reads are cached, deduplicated, and invalidated like any other entry.
+It is **read-side**: reads come from JSON:API documents, while writes are the
+engine's named mutators (create/update/delete replayed as `POST`/`PATCH`/`DELETE`),
+not ad-hoc REST calls.
+
+The JSON:API wire types/schemas and query encoding are adopted from
+[`@thomasfosterau/effect-jsonapi`](https://www.npmjs.com/package/@thomasfosterau/effect-jsonapi)
+(the spec-compliant source of truth); this package layers the generic,
+resource-agnostic loaders on top (ADR-0016).
 
 > This package was formerly published as `@thomasfosterau/effect-chancery`.
 
@@ -23,132 +27,181 @@ It gives you three things:
 npm install @thomasfosterau/effect-sync-jsonapi @thomasfosterau/effect-sync-core effect
 ```
 
-`effect` and `@thomasfosterau/effect-sync-core` are required alongside this
-package.
+`effect`, `@thomasfosterau/effect-sync-core`, and
+`@thomasfosterau/effect-jsonapi` are required alongside this package. It
+targets Effect v4 beta (`effect@>=4.0.0-beta.84`).
 
-## Quick start
+## The happy path: sync an existing JSON:API
 
-### Standalone helpers
+`JsonApiSync` reflects an app's Effect `HttpApi`, classifies its endpoints into
+JSON:API CRUD roles by convention (method + path), derives one collection and
+the available CRUD mutators per resource type, and composes the whole
+client-direct sync stack — journal, optimistic overlay, rebase, live queries —
+over the existing REST API.
 
-Every helper is an `Effect` requiring an `HttpClient` and a `SyncConfig`.
+```ts
+import { Duration, Effect, Layer } from "effect";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import { ClientEngine, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
+import { JsonApiSync } from "@thomasfosterau/effect-sync-jsonapi";
+import { api } from "./my-json-api"; // your app's Effect HttpApi
+
+const sync = JsonApiSync.layer(api, {
+  baseUrl: "https://api.example.com",
+  clientId: "device-1",
+  clientGroupId: "user-42",
+}).pipe(Layer.provide(FetchHttpClient.layer));
+
+const program = Effect.gen(function* () {
+  // Run the sync loop + background polling (lives until the scope closes).
+  yield* JsonApiSync.start({ pollInterval: Duration.seconds(5) });
+
+  const engine = yield* ClientEngine.ClientEngine;
+  const open = Subset.make({
+    collection: "articles",
+    where: Predicate.eq("status", "open"),
+  });
+
+  yield* engine.subscribe(open);
+  yield* engine.pull;
+  return yield* engine.query(open);
+}).pipe(Effect.provide(sync), Effect.scoped);
+
+const articles = await Effect.runPromise(program);
+```
+
+`JsonApiSync.layer` requires an `HttpClient` and returns a ready `ClientEngine`.
+The CVR store and invalidation bus are in-process and the client store is
+in-memory; swap in a durable `ClientStore` layer for offline persistence across
+reloads.
+
+### Endpoint conventions
+
+Endpoints are classified by HTTP method and path shape — no per-endpoint
+annotation required. The resource `type` is the last static path segment (any
+`/api` or version prefix is ignored):
+
+| Method        | Path shape    | Role     |
+| ------------- | ------------- | -------- |
+| `GET`         | `/{type}`     | `list`   |
+| `GET`         | `/{type}/:id` | `getOne` |
+| `POST`        | `/{type}`     | `create` |
+| `PATCH`/`PUT` | `/{type}/:id` | `update` |
+| `DELETE`      | `/{type}/:id` | `delete` |
+
+A CRUD mutator is derived only when its endpoint exists (no `POST /{type}` ⇒ no
+`create` mutator). Endpoints that don't fit the table (nested routes, custom
+actions) are simply not part of the derived sync surface. Use
+`JsonApiSync.inspect(api)` to see the reflected resources, collections,
+mutators, and operations.
+
+## Standalone collection loading
+
+`CollectionLoader` reads JSON:API endpoints into rows directly. Every helper is
+an `Effect` requiring an `HttpClient` and a `JsonApiSource`.
 
 ```ts
 import { Effect } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { fetchResource, SyncConfig } from "@thomasfosterau/effect-sync-jsonapi";
+import { CollectionLoader } from "@thomasfosterau/effect-sync-jsonapi";
 
-const program = fetchResource("articles", "1", { include: ["author"] }).pipe(
+const program = CollectionLoader.load("articles", {
+  include: ["author"],
+  sort: [{ field: "createdAt", direction: "desc" }],
+  filter: { status: "published" },
+  page: { number: 1, size: 20 },
+}).pipe(
   Effect.provide(FetchHttpClient.layer),
-  Effect.provideService(SyncConfig, { baseUrl: "https://api.example.com" })
+  Effect.provideService(CollectionLoader.JsonApiSource, {
+    baseUrl: "https://api.example.com",
+  })
 );
 
-const article = await Effect.runPromise(program);
+const { rows, included } = await Effect.runPromise(program);
 ```
 
-### Adapter with the sync engine
+- `load(type, options?)` — `GET /{type}` → `{ rows, included }`.
+- `loadOne(type, id, options?)` — `GET /{type}/{id}` → a single row, or
+  `undefined` if absent.
+- `documentToRows(document)` — map an already-parsed `JsonApiDocument` to its
+  primary rows and its compound `included` rows.
 
-The `Adapter` builders return core `Query` / `Pagination` / `Mutation`
-descriptors. Run them against a `SyncCache` to get read-through caching,
-request deduplication, optimistic updates, and tag/prefix invalidation.
+The request `options` are a `JsonApiRequestOptions`: `include`, `fields`,
+`sort` (the library's `{ field, direction }` term shape), `filter`, and `page`
+(an offset/limit, number/size, or cursor/size strategy from the library's
+`Query.Page`).
+
+## Relationships
+
+A JSON:API resource row carries relationship **linkage** (`{ type, id }`
+references). Once the referenced collections are synced into the local mirror, a
+relationship name resolves to the related row value(s) — a client-side join over
+already-synced data, no extra request.
 
 ```ts
-import { Effect, Layer } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { MemoryCacheStore, Mutation, Query, SyncCache } from "@thomasfosterau/effect-sync-core";
-import { Adapter, SyncConfig } from "@thomasfosterau/effect-sync-jsonapi";
-
-const articleQuery = Adapter.resourceQuery("articles", "1");
-const createArticle = Adapter.createResourceMutation("articles");
-
-const cacheLayer = SyncCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
+import { Effect, Stream } from "effect";
+import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
+import { Relationships } from "@thomasfosterau/effect-sync-jsonapi";
 
 const program = Effect.gen(function* () {
-  const cache = yield* SyncCache.SyncCache;
+  const engine = yield* ClientEngine.ClientEngine;
+  const articles = Subset.make({ collection: "articles" });
 
-  // Read-through: the first read hits the API, later reads hit the cache.
-  const article = yield* cache.read(Query.toReadOptions(articleQuery));
-
-  // A create mutation invalidates the `articles` collection so list
-  // queries refetch on their next read.
-  yield* Mutation.execute(cache, createArticle, {
-    type: "articles",
-    attributes: { title: "Hello" },
-  });
-
-  return article;
-}).pipe(
-  Effect.provide(cacheLayer),
-  Effect.provide(FetchHttpClient.layer),
-  Effect.provideService(SyncConfig, { baseUrl: "https://api.example.com" })
-);
+  // Auto-subscribes the referenced collections and re-emits on any change.
+  const joined = yield* Relationships.related(engine, articles, ["author", "tags"]);
+  yield* Stream.runForEach(joined, (rows) =>
+    Effect.sync(() => console.log(rows[0]?.related.author))
+  );
+});
 ```
 
-#### Keys and tags
+- `related(engine, subset, names)` — auto-subscribes the base subset and the
+  `id IN (...)` subsets of each referenced collection, then streams the resolved
+  rows. Pair with the backend's `includes` config to deliver related rows in the
+  parent's response (no extra round trip).
+- `observe(engine, subset, names)` — a live, incrementally-maintained join
+  (you manage the subscriptions).
+- `query(engine, subset, names)` — a one-shot resolved snapshot.
 
-The adapter uses hierarchical sync keys rooted at `"jsonapi"`:
+## Query encoding
 
-| Builder                  | Key                        |
-| ------------------------ | -------------------------- |
-| `resourceKey(t)`         | `["jsonapi", t]`           |
-| `resourceKey(t, id)`     | `["jsonapi", t, id]`       |
-| `resourceKey(t, id, o)`  | `["jsonapi", t, id, o]`    |
-| `resourcesQuery(t)`      | `["jsonapi", t, "list"]`   |
-| `resourcePageQuery(t)`   | `["jsonapi", t, "page"]`   |
-| `createResourceMutation` | `["jsonapi", t, "create"]` |
-| `updateResourceMutation` | `["jsonapi", t, "update"]` |
-| `deleteResourceMutation` | `["jsonapi", t, "delete"]` |
+`JsonApiQuery` is the seam that turns a core `Subset` (predicate + order +
+paging) into a JSON:API query string. JSON:API deliberately leaves filter/page
+syntax implementation-defined, so the shipped `defaultEncoder` follows a
+**soundness contract**: the backend always re-runs the full predicate, order,
+and limit locally with `Subset.apply`, so the encoder only has to return a
+_superset_ of the desired rows. It therefore encodes:
 
-Every query is tagged `jsonapi:${type}`, and create/update/delete mutations
-invalidate that tag (and the `["jsonapi", type]` key prefix), so a write to
-one resource refreshes the relevant collection and single-resource reads.
+- top-level `eq` / `in` conjuncts → `filter[field]=...` (operators, `or`/`not`,
+  and `eq null` are dropped — that only makes the server filter _less_
+  restrictive, which is safe);
+- `orderBy` → `sort=-field,field` via the library's `Query.Sort` codec (a hint;
+  local order is authoritative);
+- it does **not** push `limit`/`cursor`, since server-side paging would drop
+  rows the local order still needs.
 
-#### Pagination
+Pass your own `queryEncoder` to `JsonApiSync.layer` to match a server that owns
+an operator-filter or cursor-page contract.
 
-`resourcePageQuery` uses the page number as its cursor. When
-`options.page.size` is supplied, a page is treated as having a successor when
-its item count equals the page size; without a size, any non-empty page is
-assumed to have a successor. Drive it with the core `Pagination` helpers
-(`readFirstPage`, `fetchNextPage`).
+## Types, schemas, and errors
 
-## Conflict strategies
+JSON:API document types (`ResourceObject`, `JsonApiDocument`, `Relationship`,
+`JsonApiError`, …) and their `Schema` codecs (`JsonApiSchema`) are exported for
+direct use; `JsonApiSchema.decodeDocument` validates untrusted input (e.g. a
+parsed response body) into a `JsonApiDocument`, failing with `ParseError`.
 
-`updateResource` (and `syncResourceToRemote`) treat an HTTP `409` as a
-`ConflictError`. `SyncConfig.conflictStrategy` controls how
-`syncResourceToRemote` resolves it:
-
-- `"error"` (default) — fail with the `ConflictError`.
-- `"remote"` — fetch the remote version, store it locally, and return it.
-- `"local"` — keep the local version (store and return it without retrying
-  the remote write).
-
-```ts
-import { syncResourceToRemote, SyncConfig, Storage } from "@thomasfosterau/effect-sync-jsonapi";
-
-const program = syncResourceToRemote(localArticle).pipe(
-  Effect.provideService(SyncConfig, {
-    baseUrl: "https://api.example.com",
-    conflictStrategy: "remote",
-  })
-  // ...provide HttpClient and a Storage implementation
-);
-```
-
-## Errors
-
-All errors are Effect `Data.TaggedError` types, so they can be matched with
-`Effect.catchTag` / `Effect.catchTags` and carry structured fields. They
-extend `Error`, so `.message` is also available.
+All errors are Effect `Data.TaggedError` types (`SyncError`, `NetworkError`,
+`ParseError`, `ApiError`, `ConflictError`), so they match with
+`Effect.catchTag` / `Effect.catchTags` and carry structured fields. `ApiError`
+carries the JSON:API error objects returned by the server.
 
 ```ts
-import { ApiError, ParseError, ConflictError } from "@thomasfosterau/effect-sync-jsonapi";
+import { Effect } from "effect";
+import { CollectionLoader, ApiError, ParseError } from "@thomasfosterau/effect-sync-jsonapi";
 
-new ParseError({ message: "Failed to parse JSON", cause });
-new ApiError({ message: "API returned errors", errors });
-new ConflictError({ message: "Resource version conflict", localVersion: "1", remoteVersion: "2" });
-
-program.pipe(
+CollectionLoader.load("articles").pipe(
   Effect.catchTag("ApiError", (error) => Effect.logError(error.errors)),
-  Effect.catchTag("ConflictError", (error) => Effect.logError(error.message))
+  Effect.catchTag("ParseError", (error) => Effect.logError(error.message))
 );
 ```
 
