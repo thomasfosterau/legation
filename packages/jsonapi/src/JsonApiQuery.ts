@@ -56,10 +56,16 @@ const safeFilters = (where: Predicate.Predicate): Record<string, string> => {
   return filter;
 };
 
-const sortTerms = (subset: Subset.Subset): Array<string> =>
-  subset.orderBy.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field));
+const sortTerms = (
+  subset: Subset.Subset
+): ReadonlyArray<{ readonly field: string; readonly direction: "asc" | "desc" }> =>
+  subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
 
-/** Translate a subset into the JSON:API request options the default encodes. */
+/**
+ * Translate a subset into the JSON:API request options the default encodes.
+ * Sort terms are carried in the library's `Query.Sort` decoded shape; the
+ * loader serializes them to the `-field,field` wire form on encode.
+ */
 export const toRequestOptions = (subset: Subset.Subset): JsonApiRequestOptions => {
   const filter = safeFilters(subset.where);
   const sort = sortTerms(subset);

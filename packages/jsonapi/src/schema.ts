@@ -1,48 +1,57 @@
 /**
  * JSON:API Schemas
  *
- * Effect `Schema` codecs for the JSON:API v1.1 document types defined in
- * `types.ts`, plus a `decodeDocument` helper that validates untrusted input
- * (e.g. a parsed HTTP response body) into a `JsonApiDocument`.
+ * Generic codecs for the JSON:API v1.1 document types this loader decodes from
+ * arbitrary upstream servers, plus a `decodeDocument` helper that validates
+ * untrusted input (e.g. a parsed HTTP response body) into a `JsonApiDocument`.
+ *
+ * The spec primitives — link objects, the `jsonapi` member, error objects, and
+ * free-form `meta` — are adopted from `@thomasfosterau/effect-jsonapi`'s
+ * `Document` module (the canonical, spec-compliant definitions) rather than
+ * hand-rolled here. What stays local are the *generic, untyped* composites
+ * (`ResourceObject`, `Relationship`, `JsonApiDocument`): the library models
+ * documents per known `Resource` definition, but a collection loader reads
+ * resources whose `type` and attribute shapes it does not know ahead of time,
+ * so it needs a resource-agnostic document schema layered over those
+ * primitives.
  *
  * JSON:API is an *open* format: documents and most member objects may carry
  * implementation-specific members beyond those the spec names. Effect v4
- * `Schema.Struct` already drops excess properties during decoding rather
- * than rejecting them, so these schemas validate the *shape* of the members
- * we care about while tolerating extra members. Free-form members (`meta`,
- * `attributes`) are modelled as `Schema.Record(Schema.String,
- * Schema.Unknown)`.
+ * `Schema.Struct` already drops excess properties during decoding rather than
+ * rejecting them, so these schemas validate the *shape* of the members we care
+ * about while tolerating extra members. Free-form members (`meta`,
+ * `attributes`) are modelled as `Document.AnyMeta`
+ * (`Schema.Record(Schema.String, Schema.Unknown)`).
  *
  * Schema failures are mapped to the package's `ParseError`, with the
  * underlying `Schema` issue attached as `cause`.
  */
 
+import { Document } from "@thomasfosterau/effect-jsonapi";
 import { Effect, Schema } from "effect";
 import { ParseError } from "./errors.js";
 
 /** Free-form `meta` / `attributes` object: arbitrary JSON values by key. */
-const MetaSchema = Schema.Record(Schema.String, Schema.Unknown);
+const MetaSchema = Document.AnyMeta;
 
 /**
- * Schema for a JSON:API link object (`{ href, meta? }`).
+ * Schema for a JSON:API link object (`{ href, ... }`), adopted from the
+ * library's spec-compliant definition.
  */
-export const LinkObjectSchema = Schema.Struct({
-  href: Schema.String,
-  meta: Schema.optional(MetaSchema),
-});
+export const LinkObjectSchema = Document.LinkObject;
 
-/** A JSON:API link object (`{ href, meta? }`). */
+/** A JSON:API link object. */
 export type LinkObject = typeof LinkObjectSchema.Type;
 
 /**
  * Schema for a single link value: either a URL string or a link object.
  */
-const LinkValueSchema = Schema.Union([Schema.String, LinkObjectSchema]);
+const LinkValueSchema = Document.Link;
 
 /**
- * Schema for a JSON:API `links` object. The spec allows arbitrary link
- * names, so this is a record of link values; `self` / `related` are simply
- * well-known keys within it.
+ * Schema for a JSON:API `links` object. The spec allows arbitrary link names,
+ * so this is a record of link values; `self` / `related` are simply well-known
+ * keys within it.
  */
 export const LinksSchema = Schema.Record(Schema.String, LinkValueSchema);
 
@@ -94,23 +103,10 @@ export const ResourceObjectSchema = Schema.Struct({
 export type ResourceObject = typeof ResourceObjectSchema.Type;
 
 /**
- * Schema for a JSON:API error object.
+ * Schema for a JSON:API error object, adopted from the library's
+ * spec-compliant definition.
  */
-export const JsonApiErrorSchema = Schema.Struct({
-  id: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-  code: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-  detail: Schema.optional(Schema.String),
-  source: Schema.optional(
-    Schema.Struct({
-      pointer: Schema.optional(Schema.String),
-      parameter: Schema.optional(Schema.String),
-      header: Schema.optional(Schema.String),
-    })
-  ),
-  meta: Schema.optional(MetaSchema),
-});
+export const JsonApiErrorSchema = Document.ErrorObject;
 
 /** A JSON:API error object. */
 export type JsonApiError = typeof JsonApiErrorSchema.Type;
@@ -121,7 +117,7 @@ export type JsonApiError = typeof JsonApiErrorSchema.Type;
  * The `data` member may be a single resource, a collection of resources, a
  * resource identifier (or collection thereof), or `null`. The other
  * top-level members (`errors`, `meta`, `included`, `links`, `jsonapi`) are
- * all optional.
+ * all optional. The `jsonapi` member reuses the library's `JsonApiObject`.
  */
 export const JsonApiDocumentSchema = Schema.Struct({
   data: Schema.optional(
@@ -138,12 +134,7 @@ export const JsonApiDocumentSchema = Schema.Struct({
   meta: Schema.optional(MetaSchema),
   included: Schema.optional(Schema.Array(ResourceObjectSchema)),
   links: Schema.optional(LinksSchema),
-  jsonapi: Schema.optional(
-    Schema.Struct({
-      version: Schema.optional(Schema.String),
-      meta: Schema.optional(MetaSchema),
-    })
-  ),
+  jsonapi: Schema.optional(Document.JsonApiObject),
 });
 
 /**

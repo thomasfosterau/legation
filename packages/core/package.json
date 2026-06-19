@@ -43,7 +43,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.83"
+    "effect": "4.0.0-beta.84"
   },
   "devDependencies": {
     "effect": "catalog:"

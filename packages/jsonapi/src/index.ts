@@ -3,8 +3,9 @@
  *
  * JSON:API v1.1 for the v2 sync engine (ADR-0008): map JSON:API documents
  * into collection rows — a `type` is a collection, a resource `id` is a row
- * id, a resource is a row value. The package owns the JSON:API types,
- * schemas, and read-side loaders.
+ * id, a resource is a row value. The JSON:API wire types/schemas and query
+ * encoding are adopted from `@thomasfosterau/effect-jsonapi` (ADR-0016); this
+ * package layers the generic, resource-agnostic loaders on top.
  *
  * It also provides the convention-first **sync derivation** (`JsonApiSync`):
  * point it at an app's JSON:API `HttpApi` and it derives collections + CRUD
