@@ -140,3 +140,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Generated example API specs (SpecExport, ADR-0017) — regenerated via `bun run spec`
+examples/*/spec/

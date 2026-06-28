@@ -131,6 +131,13 @@ The React examples use the [`effect-sync-react`](packages/react) bindings
 (`useQuery` / `useMutation`); the Svelte examples use
 [`effect-sync-svelte`](packages/svelte) (`query` stores + `getMutate`).
 
+Every example also wires up **spec export** (`SpecExport`, ADR-0017): run
+`bun run spec` inside an example to project its sync surface — collections,
+mutators — into `spec/openapi.json` (OpenAPI 3.1) and `spec/asyncapi.json`
+(AsyncAPI 3.0), ready to feed a client generator. The documents are specialized
+with the example's own row and mutator schemas, so a generated client gets
+concrete per-name types rather than an opaque envelope.
+
 Other UI stacks:
 
 | Example                                 | Stack                                | Highlights                                                                                        |
