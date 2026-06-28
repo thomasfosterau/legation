@@ -7,7 +7,8 @@
  * customisable schema-message protocol.
  *
  * - **Shared model**: collections, predicates, subsets, mutators, errors
- * - **Protocol**: push/pull/poke messages and patch operations
+ * - **Protocol**: push/pull/poke messages and patch operations, plus spec
+ *   export (OpenAPI/AsyncAPI) for generating bespoke clients
  * - **Client**: durable store, optimistic engine with journal + rebase
  * - **Server**: BYO backend contract, auth filters + middleware, CVR
  *   bookkeeping, invalidation bus, sync rooms
@@ -30,6 +31,7 @@ export * as Hash from "./Hash.js";
 export * as Protocol from "./Protocol.js";
 export * as Transport from "./Transport.js";
 export * as RpcTransport from "./RpcTransport.js";
+export * as SpecExport from "./SpecExport.js";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as ClientStore from "./ClientStore.js";
