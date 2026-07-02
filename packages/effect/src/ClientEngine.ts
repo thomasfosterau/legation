@@ -31,7 +31,13 @@ import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
-import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
+import {
+  MutatorError,
+  QueryError,
+  StoreError,
+  TransportError,
+  VersionNotSupportedError,
+} from "./Errors.js";
 import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
 import type {
@@ -127,6 +133,9 @@ export interface MutationEvent {
  * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
  * - `ViewRebuilt` — the local view was rebuilt (rebase/seed/subscribe), scoped
  *   to the `collections` the shift touched (absent means "any collection").
+ * - `UpdateNeeded` — the server rejected this build's `schemaVersion` (#48);
+ *   emitted at most once per ongoing rejection (the latch resets on the next
+ *   successful push/pull), alongside the `onUpdateNeeded` hook.
  */
 export type EngineEvent =
   | { readonly _tag: "MutationJournaled"; readonly clientId: string; readonly mutationId: number }
@@ -146,7 +155,12 @@ export type EngineEvent =
   | { readonly _tag: "PullStarted" }
   | { readonly _tag: "PullCompleted"; readonly ops: number }
   | { readonly _tag: "PokeReceived"; readonly reason?: string }
-  | { readonly _tag: "ViewRebuilt"; readonly collections?: ReadonlyArray<string> };
+  | { readonly _tag: "ViewRebuilt"; readonly collections?: ReadonlyArray<string> }
+  | {
+      readonly _tag: "UpdateNeeded";
+      readonly schemaVersion?: string;
+      readonly message: string;
+    };
 
 /**
  * A local-view change. `Patch` carries per-row confirmed deltas (emitted only
@@ -239,6 +253,26 @@ export interface ClientEngineOptions {
    * {@link DEFAULT_CHANGE_HUB_CAPACITY}.
    */
   readonly changeHubCapacity?: number;
+  /**
+   * This build's schema version (#48), sent on every push and pull request. The
+   * server's acceptor may reject an unsupported version; omit it for today's
+   * version-less behaviour.
+   */
+  readonly schemaVersion?: string;
+  /**
+   * Invoked when the server rejects this build's `schemaVersion`
+   * (`VersionNotSupportedError`) — the app's cue to prompt an update. Fired
+   * **exactly once per occurrence**: a latch dedupes a retry storm / repeated
+   * pulls so an ongoing rejection refires it only after the next request
+   * succeeds. The pending journal is retained across the rejection (a version
+   * rejection is a transport-level "your build is obsolete", not a per-mutation
+   * verdict), so intents survive an eventual update. Also emitted as an
+   * `UpdateNeeded` engine event.
+   */
+  readonly onUpdateNeeded?: (info: {
+    readonly schemaVersion?: string;
+    readonly message: string;
+  }) => Effect.Effect<void>;
 }
 
 /**
@@ -336,7 +370,7 @@ export interface ClientEngine {
    */
   readonly ensureSubset: (
     subset: Subset.Subset
-  ) => Effect.Effect<void, TransportError | StoreError | MutatorError>;
+  ) => Effect.Effect<void, TransportError | StoreError | MutatorError | VersionNotSupportedError>;
   /**
    * Subscribe a named query (Query.ts): the server resolves it to the
    * authoritative subset it syncs; the client renders it locally with its own
@@ -419,10 +453,20 @@ export interface ClientEngine {
     agg: Aggregate.Aggregate,
     groupBy: string
   ) => Stream.Stream<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
-  /** Push pending mutations now. */
-  readonly push: Effect.Effect<void, TransportError | StoreError>;
-  /** Pull a patch now and rebase. */
-  readonly pull: Effect.Effect<void, TransportError | StoreError | MutatorError>;
+  /**
+   * Push pending mutations now. Fails with `VersionNotSupportedError` when the
+   * server rejects this build's `schemaVersion` (#48) — the journal is retained,
+   * and `onUpdateNeeded` fires (deduped) as a side effect.
+   */
+  readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
+  /**
+   * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
+   * server rejects this build's `schemaVersion` (#48); see {@link push}.
+   */
+  readonly pull: Effect.Effect<
+    void,
+    TransportError | StoreError | MutatorError | VersionNotSupportedError
+  >;
   /** Run the sync loop: pull on poke; push+pull on reconnect. */
   readonly runSync: Effect.Effect<void, TransportError | StoreError | MutatorError, Scope.Scope>;
   /**
@@ -445,7 +489,13 @@ export const make = (
     // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
     // prefetches of the same subset share one pull instead of racing N of them.
     const ensurePulls = yield* Ref.make(
-      new Map<string, Deferred.Deferred<void, TransportError | StoreError | MutatorError>>()
+      new Map<
+        string,
+        Deferred.Deferred<
+          void,
+          TransportError | StoreError | MutatorError | VersionNotSupportedError
+        >
+      >()
     );
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
@@ -806,29 +856,68 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
-    const push: ClientEngine["push"] = Effect.gen(function* () {
-      const pending = yield* store.pendingMutations;
-      if (pending.length === 0) return;
-      yield* emitEngineEvent({ _tag: "PushStarted" });
-      const response = yield* transport.push({
-        clientGroupId: options.clientGroupId,
-        mutations: pending,
-      });
-      // Trimming these pending mutations drops their optimistic effects, so
-      // only their collections can shift — scope the rebuild to that union so
-      // observers of untouched collections don't re-materialize.
-      const touched = yield* collectionsTouchedByMutations(pending);
-      // Settle permanently-rejected mutations before the ack sweep, so a
-      // rejected id reports `rejected` rather than `applied`.
-      yield* settleRejected(response);
-      // Effects arrive via the next pull; the ack only trims the journal.
-      yield* acknowledge(response.lastMutationIds);
-      yield* publishChange(rebuildFor(touched));
-      yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
-      yield* Metric.update(Telemetry.pushesTotal, 1);
-      yield* Metric.update(Telemetry.pushMutations, pending.length);
-      yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
-    }).pipe(Effect.withSpan(Telemetry.span.clientPush));
+    // Latch so an ongoing schema-version rejection (#48) fires `onUpdateNeeded`
+    // and the `UpdateNeeded` event exactly once — a retry storm or repeated
+    // pulls against the same rejection do not refire it. The latch resets on the
+    // next successful request, so a fresh rejection after an interim success
+    // notifies again. A version rejection never trims the journal: pending
+    // intents are retained across it, ready to push once the build is updated.
+    const updateNeededLatch = yield* Ref.make(false);
+    const infoOf = (error: VersionNotSupportedError) => ({
+      ...(error.schemaVersion !== undefined ? { schemaVersion: error.schemaVersion } : {}),
+      message: error.message,
+    });
+    const onVersionError = (error: VersionNotSupportedError): Effect.Effect<void> =>
+      Ref.getAndSet(updateNeededLatch, true).pipe(
+        Effect.flatMap((already) =>
+          already
+            ? Effect.void
+            : emitEngineEvent({ _tag: "UpdateNeeded", ...infoOf(error) }).pipe(
+                Effect.andThen(options.onUpdateNeeded?.(infoOf(error)) ?? Effect.void)
+              )
+        )
+      );
+    const resetUpdateLatch = Ref.set(updateNeededLatch, false);
+    // Fire `onVersionError` on a version rejection, reset the latch on success;
+    // shared by push and pull so both dedupe against one latch.
+    const withVersionLatch = <A, E extends { readonly _tag: string }, R>(
+      effect: Effect.Effect<A, E, R>
+    ): Effect.Effect<A, E, R> =>
+      effect.pipe(
+        Effect.tap(() => resetUpdateLatch),
+        Effect.tapError((error) =>
+          error._tag === "VersionNotSupportedError"
+            ? onVersionError(error as unknown as VersionNotSupportedError)
+            : Effect.void
+        )
+      );
+
+    const push: ClientEngine["push"] = withVersionLatch(
+      Effect.gen(function* () {
+        const pending = yield* store.pendingMutations;
+        if (pending.length === 0) return;
+        yield* emitEngineEvent({ _tag: "PushStarted" });
+        const response = yield* transport.push({
+          clientGroupId: options.clientGroupId,
+          mutations: pending,
+          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
+        });
+        // Trimming these pending mutations drops their optimistic effects, so
+        // only their collections can shift — scope the rebuild to that union so
+        // observers of untouched collections don't re-materialize.
+        const touched = yield* collectionsTouchedByMutations(pending);
+        // Settle permanently-rejected mutations before the ack sweep, so a
+        // rejected id reports `rejected` rather than `applied`.
+        yield* settleRejected(response);
+        // Effects arrive via the next pull; the ack only trims the journal.
+        yield* acknowledge(response.lastMutationIds);
+        yield* publishChange(rebuildFor(touched));
+        yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+        yield* Metric.update(Telemetry.pushesTotal, 1);
+        yield* Metric.update(Telemetry.pushMutations, pending.length);
+        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+      })
+    ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
@@ -847,26 +936,29 @@ export const make = (
         );
       });
 
-    const pull: ClientEngine["pull"] = Effect.gen(function* () {
-      yield* emitEngineEvent({ _tag: "PullStarted" });
-      const cookie = yield* store.getCookie;
-      const subsets = yield* Ref.get(subscriptions);
-      const named = yield* Ref.get(namedSubs);
-      const namedSubscriptions: ReadonlyArray<NamedSubscription> = named.map((entry) => ({
-        name: entry.name,
-        args: entry.argsEncoded,
-      }));
-      const response = yield* transport.pull({
-        clientGroupId: options.clientGroupId,
-        cookie,
-        subscriptions: subsets,
-        ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
-      });
-      yield* applyPull(response);
-      yield* Metric.update(Telemetry.pullsTotal, 1);
-      yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
-      yield* emitEngineEvent({ _tag: "PullCompleted", ops: response.patch.length });
-    }).pipe(Effect.withSpan(Telemetry.span.clientPull));
+    const pull: ClientEngine["pull"] = withVersionLatch(
+      Effect.gen(function* () {
+        yield* emitEngineEvent({ _tag: "PullStarted" });
+        const cookie = yield* store.getCookie;
+        const subsets = yield* Ref.get(subscriptions);
+        const named = yield* Ref.get(namedSubs);
+        const namedSubscriptions: ReadonlyArray<NamedSubscription> = named.map((entry) => ({
+          name: entry.name,
+          args: entry.argsEncoded,
+        }));
+        const response = yield* transport.pull({
+          clientGroupId: options.clientGroupId,
+          cookie,
+          subscriptions: subsets,
+          ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
+          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
+        });
+        yield* applyPull(response);
+        yield* Metric.update(Telemetry.pullsTotal, 1);
+        yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
+        yield* emitEngineEvent({ _tag: "PullCompleted", ops: response.patch.length });
+      })
+    ).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
       Ref.update(subscriptions, (current) =>
@@ -894,7 +986,10 @@ export const make = (
     // Register or reuse the in-flight pull for a subset. Returns the deferred to
     // await plus whether this call owns the pull (only the owner runs it), so
     // concurrent prefetches of one subset collapse to a single pull.
-    type PullDeferred = Deferred.Deferred<void, TransportError | StoreError | MutatorError>;
+    type PullDeferred = Deferred.Deferred<
+      void,
+      TransportError | StoreError | MutatorError | VersionNotSupportedError
+    >;
     type PullMap = Map<string, PullDeferred>;
     type PullClaim = { readonly deferred: PullDeferred; readonly owner: boolean };
     const claimPull = (hash: string, own: PullDeferred): Effect.Effect<PullClaim> =>
@@ -916,10 +1011,13 @@ export const make = (
     // shared deferred; everyone else just awaits it.
     const dedupedPull = (
       subset: Subset.Subset
-    ): Effect.Effect<void, TransportError | StoreError | MutatorError> =>
+    ): Effect.Effect<void, TransportError | StoreError | MutatorError | VersionNotSupportedError> =>
       Effect.gen(function* () {
         const hash = Subset.hash(subset);
-        const own = yield* Deferred.make<void, TransportError | StoreError | MutatorError>();
+        const own = yield* Deferred.make<
+          void,
+          TransportError | StoreError | MutatorError | VersionNotSupportedError
+        >();
         const { deferred, owner } = yield* claimPull(hash, own);
         if (!owner) return yield* Deferred.await(deferred);
         const exit = yield* Effect.exit(pull);
@@ -938,7 +1036,7 @@ export const make = (
 
     // Retry only transient (transport) failures; store/mutator errors are not
     // transient and go straight to the failure surface.
-    const isTransient = (error: TransportError | StoreError | MutatorError): boolean =>
+    const isTransient = (error: { readonly _tag: string }): boolean =>
       error._tag === "TransportError";
 
     const pushPolicy = options.retry?.push ?? defaultRetryPolicy;
@@ -947,12 +1045,19 @@ export const make = (
 
     // A network leg that survives transient failure via its policy, then
     // surfaces (never raises) whatever it could not recover from.
+    // A version rejection (#48) is already handled by `onUpdateNeeded` inside
+    // push/pull and is not a transient failure to retry or a terminal
+    // `SyncFailure` to surface, so the loop swallows it here (the app was
+    // already told to update). The journal is untouched, so pending intents
+    // wait for an updated build.
     const attemptPush = push.pipe(
       Effect.retry({ schedule: pushPolicy, while: isTransient }),
+      Effect.catchTag("VersionNotSupportedError", () => Effect.void),
       Effect.catch((error) => surfaceFailure("push", error))
     );
     const attemptPull = pull.pipe(
       Effect.retry({ schedule: pullPolicy, while: isTransient }),
+      Effect.catchTag("VersionNotSupportedError", () => Effect.void),
       Effect.catch((error) => surfaceFailure("pull", error))
     );
 

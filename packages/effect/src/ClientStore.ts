@@ -152,6 +152,16 @@ export interface KeyValueOptions {
    * store is ephemeral and imposes no bound. Unset means unbounded.
    */
   readonly journalHighWater?: number;
+  /**
+   * Local store-version buster (#48). On open, if the persisted store-version
+   * key differs from this value, the confirmed rows and the pull cookie are
+   * cleared — so the next pull is a full reset ({@link Cvr} sends `Clear` + full
+   * puts for the now-absent cookie) — and the new version is persisted. The
+   * **pending journal is preserved**: a store-version bump is a local cache
+   * buster, not a reason to drop the user's unsynced intents, so they still
+   * push once the fresh rows land. Unset means no buster (today's behaviour).
+   */
+  readonly storeVersion?: string;
 }
 
 /**
@@ -160,6 +170,8 @@ export interface KeyValueOptions {
  */
 const CURRENT_LAYOUT = "2";
 const LAYOUT_KEY = "__layout";
+/** Where the app-supplied {@link KeyValueOptions.storeVersion} is persisted (#48). */
+const STORE_VERSION_KEY = "__storeVersion";
 
 /** Per-row / per-mutation key builders (layout 2). */
 const rowKey = (collection: string, id: string) => `row/${collection}/${id}`;
@@ -428,6 +440,28 @@ export const makeKeyValue = (
       }
     });
     yield* openMigration.pipe(Effect.catch(() => Effect.void));
+
+    // Local store-version buster (#48): a mismatch clears confirmed rows + the
+    // cookie (so the next pull rehydrates fully) but preserves the journal, then
+    // stamps the new version. Kept infallible at construction, like the
+    // migration open above.
+    const openStoreVersion = Effect.gen(function* () {
+      const desired = options?.storeVersion;
+      if (desired === undefined) return;
+      const current = yield* store.get(STORE_VERSION_KEY);
+      if (current === desired) return;
+      const stampVersion = store
+        .set(STORE_VERSION_KEY, desired)
+        .pipe(Effect.mapError(storeError(`Failed to write "${STORE_VERSION_KEY}"`)));
+      yield* locked(
+        clearRowsInner.pipe(
+          Effect.andThen(remove("cookie")),
+          // Journal deliberately untouched: pending intents survive the buster.
+          Effect.andThen(stampVersion)
+        )
+      );
+    });
+    yield* openStoreVersion.pipe(Effect.catch(() => Effect.void));
 
     return ClientStore.of({
       getRow: (collection, id) => readDecoded(rowKey(collection, id), RowFromJson),

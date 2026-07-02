@@ -13,7 +13,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
-import { TransportError } from "../Errors.js";
+import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
@@ -181,8 +181,8 @@ describe("Undo (#46)", () => {
       // A transport that fails push/pull while "offline" (like the demo + the
       // sync-loop tests). Mutations then queue in the journal.
       const gated = <A>(
-        effect: Effect.Effect<A, TransportError>
-      ): Effect.Effect<A, TransportError> =>
+        effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+      ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
         Ref.get(online).pipe(
           Effect.flatMap((on) =>
             on ? effect : Effect.fail(new TransportError({ message: "offline" }))

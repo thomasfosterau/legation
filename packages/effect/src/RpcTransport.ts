@@ -51,7 +51,15 @@ export const SyncRpcs = RpcGroup.make(
 
 export type SyncRpc = RpcGroup.Rpcs<typeof SyncRpcs>;
 
-const toRpcError = (error: TransportError): SyncRpcError =>
+// The RPC carrier's wire error schema carries only a message (SyncRpcError), so
+// a typed `VersionNotSupportedError` cannot survive it — it is mapped
+// best-effort to a SyncRpcError and reaches the client as a `TransportError`
+// (the tag is lost). Carriers that can carry the tag — notably the in-memory
+// `ServerHandler`/`ClientTransport` seam — preserve it, so `onUpdateNeeded`
+// fires there; over RPC the version rejection degrades to a transport failure
+// (#48). Preserving the tag over RPC would mean adding a schema-typed variant to
+// this group's error union — deferred.
+const toRpcError = (error: { readonly message: string }): SyncRpcError =>
   new SyncRpcError({ message: error.message });
 
 /** Server side: implement the sync RPCs from an in-context ServerHandler. */
