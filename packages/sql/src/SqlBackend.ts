@@ -16,7 +16,15 @@
  */
 
 import { Effect, Schema } from "effect";
-import { Backend, BackendError, Hash, Predicate, Subset, type Mutator } from "@legation/effect";
+import {
+  Backend,
+  BackendError,
+  Hash,
+  MutationRejected,
+  Predicate,
+  Subset,
+  type Mutator,
+} from "@legation/effect";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).
@@ -55,12 +63,17 @@ export interface TableMapping {
   readonly versionColumn?: string;
 }
 
-/** An app-authored write, running its own SQL inside the push transaction. */
+/**
+ * An app-authored write, running its own SQL inside the push transaction. Fail
+ * with `BackendError` for a transient error (aborts the whole push) or
+ * `MutationRejected` for a permanent one (this mutation's writes are rolled back
+ * to a savepoint, its id still bumped, the batch continues).
+ */
 export type SqlHandler = (
   args: unknown,
   tx: SqlExecutor,
   context: Backend.SyncContext
-) => Effect.Effect<ReadonlyArray<Backend.ChangeHint>, BackendError>;
+) => Effect.Effect<ReadonlyArray<Backend.ChangeHint>, BackendError | MutationRejected>;
 
 export interface SqlBackendConfig {
   readonly executor: SqlExecutor;
@@ -169,6 +182,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     executor.transaction(
       Effect.gen(function* () {
         const hints: Array<Backend.ChangeHint> = [];
+        const rejected: Array<Backend.RejectedMutation> = [];
+        let savepointCounter = 0;
         for (const mutation of mutations) {
           const lastIds = yield* readLastIds(context.clientGroupId);
           const last = lastIds[mutation.clientId] ?? 0;
@@ -184,10 +199,38 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
           }
           const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
-          hints.push(...(yield* handler(args, executor, context)));
+
+          // Run the handler inside a savepoint so a permanent rejection can drop
+          // its writes while the lastMutationId bump (committed with the outer
+          // transaction) still lands. A transient BackendError aborts the whole
+          // transaction and propagates unchanged.
+          const savepoint = q(`legation_sp_${savepointCounter++}`);
+          yield* executor.run({ text: `SAVEPOINT ${savepoint}`, params: [] });
+          const outcome = yield* handler(args, executor, context).pipe(
+            Effect.map((hs) => ({ _tag: "applied", hints: hs }) as const),
+            Effect.catchTag("MutationRejected", (error) =>
+              executor
+                .run({ text: `ROLLBACK TO SAVEPOINT ${savepoint}`, params: [] })
+                .pipe(Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const))
+            )
+          );
+          yield* executor.run({ text: `RELEASE SAVEPOINT ${savepoint}`, params: [] });
+          if (outcome._tag === "applied") {
+            hints.push(...outcome.hints);
+          } else {
+            rejected.push({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason: outcome.reason,
+            });
+          }
           yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
         }
-        return { lastMutationIds: yield* readLastIds(context.clientGroupId), hints };
+        return {
+          lastMutationIds: yield* readLastIds(context.clientGroupId),
+          hints,
+          ...(rejected.length > 0 ? { rejected } : {}),
+        };
       })
     );
 

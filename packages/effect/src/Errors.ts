@@ -26,9 +26,28 @@ export class ProtocolError extends Data.TaggedError("ProtocolError")<{
   readonly cause?: unknown;
 }> {}
 
-/** The backend failed to apply mutations or evaluate a subscription. */
+/**
+ * The backend failed to apply mutations or evaluate a subscription. A
+ * `BackendError` from a mutator handler is a *transient* failure: the push
+ * batch is aborted and the client retries (correct for deadlocks, timeouts,
+ * lost connections).
+ */
 export class BackendError extends Data.TaggedError("BackendError")<{
   readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * A mutator was *permanently* rejected by the backend — failed server-side
+ * validation, a revoked permission, a violated business rule. Unlike a
+ * transient `BackendError`, the backend records the mutation as processed
+ * (bumps `lastMutationId` without applying effects, atomically) so it never
+ * poisons the queue: mutations behind it still apply, and the client drops the
+ * optimistic effect on the next rebase. A mutator handler raises this to opt a
+ * failure into the permanent class (Replicache's lastMutationID rule).
+ */
+export class MutationRejected extends Data.TaggedError("MutationRejected")<{
+  readonly reason: string;
   readonly cause?: unknown;
 }> {}
 
