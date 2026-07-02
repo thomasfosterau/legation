@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Add `BusBrokers.makeBroadcastChannelBroker`: a concrete `BusBroker` over a

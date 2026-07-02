@@ -1,9 +1,9 @@
-# effect-sync · React · Northwind Traders
+# legation · React · Northwind Traders
 
 The classic [Northwind](https://en.wikipedia.org/wiki/Northwind_Database) sales
 dataset as a small admin dashboard, driving
-[`@thomasfosterau/effect-sync-core`](../../packages/core) from React through the
-[`@thomasfosterau/effect-sync-react`](../../packages/react) bindings. Where the
+[`@legation/effect`](../../packages/core) from React through the
+[`@legation/react`](../../packages/react) bindings. Where the
 [Conduit example](../react-realworld) shows relationships + auth, Northwind
 leans on **many collections and the joins between them**, plus optimistic edits.
 

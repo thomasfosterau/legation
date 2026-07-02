@@ -11,7 +11,7 @@
  */
 
 import { Schema } from "effect";
-import { Collection, Mutator, Subset } from "@thomasfosterau/effect-sync-core";
+import { Collection, Mutator, Subset } from "@legation/effect";
 
 /** A todo row. Same schema drives the collection, the mutator args, and the UI. */
 export const Todo = Schema.Struct({

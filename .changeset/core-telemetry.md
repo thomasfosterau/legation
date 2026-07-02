@@ -1,9 +1,9 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
-Add Effect-native observability (`Telemetry`): `effect_sync_*` metrics and
-`effect-sync.*` spans wired into the engine's hot paths — client push/pull,
+Add Effect-native observability (`Telemetry`): `legation_*` metrics and
+`legation.*` spans wired into the engine's hot paths — client push/pull,
 server push/pull, and fan-out. Counters (pulls, pushes, mutations pushed,
 server pulls, pokes) and a patch-size histogram surface through whatever
 `MetricRegistry`/`Tracer` exporter the host installs (OpenTelemetry,

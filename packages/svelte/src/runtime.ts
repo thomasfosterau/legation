@@ -10,12 +10,12 @@
  */
 import { getContext, setContext } from "svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
-import type { ClientEngine } from "@thomasfosterau/effect-sync-core";
+import type { ClientEngine } from "@legation/effect";
 
 /** A runtime that can run `ClientEngine` effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientEngine.ClientEngine, never>;
 
-const RUNTIME_KEY = Symbol("@thomasfosterau/effect-sync-svelte/runtime");
+const RUNTIME_KEY = Symbol("@legation/svelte/runtime");
 
 /**
  * Provide the engine runtime to descendant components. Call once, high in the
@@ -31,7 +31,7 @@ export const getEngineRuntime = (): EffectSyncRuntime => {
   const runtime = getContext<EffectSyncRuntime | undefined>(RUNTIME_KEY);
   if (runtime === undefined) {
     throw new Error(
-      "effect-sync-svelte: call setEngineRuntime(runtime) higher in the component tree before query()/getMutate()"
+      "@legation/svelte: call setEngineRuntime(runtime) higher in the component tree before query()/getMutate()"
     );
   }
   return runtime;

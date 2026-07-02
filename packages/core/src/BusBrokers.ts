@@ -22,7 +22,7 @@ import type { BusBroker } from "./InvalidationBus.js";
 // ─── Redis Streams broker ────────────────────────────────────────────────────
 
 export interface RedisBrokerOptions {
-  /** Stream key all instances share. Defaults to `"effect-sync:hints"`. */
+  /** Stream key all instances share. Defaults to `"legation:hints"`. */
   readonly stream?: string;
   /** XREAD BLOCK timeout before re-issuing. Defaults to 5 seconds. */
   readonly block?: Duration.Input;
@@ -60,7 +60,7 @@ export const makeRedisBroker = (
 ): Effect.Effect<BusBroker, never, Redis.Redis> =>
   Effect.gen(function* () {
     const redis = yield* Redis.Redis;
-    const stream = options?.stream ?? "effect-sync:hints";
+    const stream = options?.stream ?? "legation:hints";
     const blockMs = String(Math.trunc(Duration.toMillis(options?.block ?? "5 seconds")));
     const from = options?.from ?? "$";
 

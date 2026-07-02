@@ -12,7 +12,7 @@
  * testable without browser globals.
  */
 
-import { HttpCache, StoreError, TransportError } from "@thomasfosterau/effect-sync-core";
+import { HttpCache, StoreError, TransportError } from "@legation/effect";
 import { Clock, Duration, Effect } from "effect";
 
 /** The subset of the Cache API this store uses. */
@@ -28,7 +28,7 @@ export interface CacheStorageLike {
 }
 
 /** Header carrying the serialized CachedResponseMeta on stored copies. */
-export const metaHeader = "x-effect-sync-cache-meta";
+export const metaHeader = "x-legation-cache-meta";
 
 const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 

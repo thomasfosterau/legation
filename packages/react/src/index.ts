@@ -1,7 +1,7 @@
 /**
- * @thomasfosterau/effect-sync-react
+ * @legation/react
  *
- * Idiomatic React bindings for the effect-sync engine, built as a thin layer
+ * Idiomatic React bindings for the legation engine, built as a thin layer
  * over `effect/unstable/reactivity` atoms: `EffectSyncProvider` supplies an
  * `AtomRegistry` and the engine's atoms (`EngineAtoms.fromLayer`); `useQuery`
  * / `useNamedQuery` expose live `AsyncResult`s via `useSyncExternalStore`; and

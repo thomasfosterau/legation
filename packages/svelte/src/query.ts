@@ -10,7 +10,7 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
-import { ClientEngine, type Subset } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine, type Subset } from "@legation/effect";
 import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */

@@ -7,7 +7,7 @@
  * re-derives on every optimistic edit, push ack, and pull/rebase.
  */
 import * as React from "react";
-import { useQuery } from "@thomasfosterau/effect-sync-react";
+import { useQuery } from "@legation/react";
 import {
   allCategories,
   allCustomers,

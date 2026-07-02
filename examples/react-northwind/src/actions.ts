@@ -6,7 +6,7 @@
  * applies it authoritatively (the read-merge mutators look the row up first).
  */
 import * as React from "react";
-import { useMutation } from "@thomasfosterau/effect-sync-react";
+import { useMutation } from "@legation/react";
 import type { Product, ProductPatchType } from "./domain";
 
 export interface Actions {

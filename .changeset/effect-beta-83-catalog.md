@@ -1,10 +1,10 @@
 ---
-"@thomasfosterau/effect-sync-core": patch
-"@thomasfosterau/effect-sync-browser": patch
-"@thomasfosterau/effect-sync-node": patch
-"@thomasfosterau/effect-sync-jsonapi": patch
-"@thomasfosterau/effect-sync-sql": patch
-"@thomasfosterau/effect-sync-react": patch
+"@legation/effect": patch
+"@legation/browser": patch
+"@legation/node": patch
+"@legation/jsonapi": patch
+"@legation/sql": patch
+"@legation/react": patch
 ---
 
 Bump the pinned Effect version from `4.0.0-beta.75` to `4.0.0-beta.83` across all

@@ -10,7 +10,7 @@
  */
 import * as React from "react";
 import { AtomRegistry } from "effect/unstable/reactivity";
-import type { EngineAtoms } from "@thomasfosterau/effect-sync-core";
+import type { EngineAtoms } from "@legation/effect";
 
 const RegistryContext = React.createContext<AtomRegistry.AtomRegistry | null>(null);
 const AtomsContext = React.createContext<EngineAtoms.EngineAtoms | null>(null);

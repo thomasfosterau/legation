@@ -1,9 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": ["packages/*/src/index.ts", "packages/*/examples/*.ts"],
-  "publicPackages": ["@thomasfosterau/*"],
+  "publicPackages": ["@legation/*"],
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", "scripts/**"],
-  "ignoreDependencies": ["@thomasfosterau/effect-sync-core"],
+  "ignoreDependencies": ["@legation/effect"],
   "rules": {
     "duplicate-exports": "off"
   },

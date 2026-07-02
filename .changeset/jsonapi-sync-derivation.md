@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-jsonapi": minor
+"@legation/jsonapi": minor
 ---
 
 Add convention-first sync derivation from an app's JSON:API `HttpApi`

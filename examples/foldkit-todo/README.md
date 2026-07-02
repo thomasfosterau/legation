@@ -1,12 +1,12 @@
-# effect-sync · FoldKit example
+# legation · FoldKit example
 
 A deliberately over-engineered browser todo app that drives
-[`@thomasfosterau/effect-sync-core`](../../packages/core) from
+[`@legation/effect`](../../packages/core) from
 [FoldKit](https://foldkit.dev) — The Elm Architecture in TypeScript, built (like
 this engine) on Effect. It is a sibling of the [React](../react-todo) and
 [Svelte](../svelte-todo) todo examples (which drive the engine through its
-idiomatic `effect-sync-react` / `effect-sync-svelte` bindings); FoldKit instead
-consumes `effect-sync-core` directly. Like those it runs the **real library
+idiomatic `@legation/react` / `@legation/svelte` bindings); FoldKit instead
+consumes `@legation/effect` directly. Like those it runs the **real library
 server pipeline in the page**, so every concept in `CONTEXT.md` is exercised by
 code you can click on.
 

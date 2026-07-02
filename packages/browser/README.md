@@ -1,7 +1,7 @@
-# @thomasfosterau/effect-sync-browser
+# @legation/browser
 
 Browser-runtime adapters for the [Effect](https://effect.website)-native sync engine in
-[`@thomasfosterau/effect-sync-core`](../core). These modules implement core's
+[`@legation/effect`](../core). These modules implement core's
 `ClientTransport` and `CacheStore` interfaces against browser platform globals:
 
 - **`WebSocketTransport`** — a `ClientTransport` over the platform `WebSocket`, built on
@@ -18,7 +18,7 @@ core, which must run identically in browsers, workers, edge runtimes, and Node.
 ## Install
 
 ```sh
-bun add @thomasfosterau/effect-sync-browser @thomasfosterau/effect-sync-core effect
+bun add @legation/browser @legation/effect effect
 ```
 
 ## WebSocket transport
@@ -32,8 +32,8 @@ socket down.
 
 ```ts
 import { Effect, Layer } from "effect";
-import { SyncClient } from "@thomasfosterau/effect-sync-core";
-import { WebSocketTransport } from "@thomasfosterau/effect-sync-browser";
+import { SyncClient } from "@legation/effect";
+import { WebSocketTransport } from "@legation/browser";
 
 const TransportLayer = WebSocketTransport.layer({
   url: "wss://sync.example.com",
@@ -56,7 +56,7 @@ You can build a transport directly (scoped) instead of using the layer:
 
 ```ts
 import { Effect } from "effect";
-import { WebSocketTransport } from "@thomasfosterau/effect-sync-browser";
+import { WebSocketTransport } from "@legation/browser";
 
 const program = Effect.scoped(
   Effect.gen(function* () {
@@ -83,13 +83,13 @@ Provide it wherever core expects a `CacheStore` (e.g. under the `SyncCache` laye
 
 ```ts
 import { Layer } from "effect";
-import { SyncCache } from "@thomasfosterau/effect-sync-core";
-import { IndexedDbCacheStore } from "@thomasfosterau/effect-sync-browser";
+import { SyncCache } from "@legation/effect";
+import { IndexedDbCacheStore } from "@legation/browser";
 
 const CacheLayer = SyncCache.layer.pipe(
   Layer.provideMerge(
     IndexedDbCacheStore.layer({
-      databaseName: "my-app-cache", // default: "effect-sync-cache"
+      databaseName: "my-app-cache", // default: "legation-cache"
     })
   )
 );

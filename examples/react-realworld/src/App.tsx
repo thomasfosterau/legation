@@ -93,7 +93,7 @@ const SyncBanner = (): React.ReactElement => {
     >
       <div className="container" style={{ display: "flex", justifyContent: "space-between" }}>
         <span>
-          effect-sync · in-page SyncServer + MemoryBackend ·{" "}
+          legation · in-page SyncServer + MemoryBackend ·{" "}
           {offline ? "offline — writes queue in the journal" : "online — optimistic + rebase"}
         </span>
         <button
@@ -143,7 +143,7 @@ const Footer = (): React.ReactElement => (
       </Link>
       <span className="attribution">
         RealWorld example driving the{" "}
-        <a href="https://github.com/thomasfosterau/effect-synchronizer">effect-sync</a> engine.
+        <a href="https://github.com/thomasfosterau/legation">legation</a> engine.
       </span>
     </div>
   </footer>

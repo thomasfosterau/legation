@@ -27,8 +27,8 @@ import {
   SyncServer,
   Transport,
   TransportError,
-} from "@thomasfosterau/effect-sync-core";
-import type { EffectSyncRuntime } from "@thomasfosterau/effect-sync-svelte";
+} from "@legation/effect";
+import type { EffectSyncRuntime } from "@legation/svelte";
 
 import {
   CLIENT_GROUP_ID,

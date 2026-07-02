@@ -10,7 +10,7 @@
    * flush on reconnect.
    */
   import { untrack } from "svelte";
-  import { setEngineRuntime, getMutate } from "@thomasfosterau/effect-sync-svelte";
+  import { setEngineRuntime, getMutate } from "@legation/svelte";
   import type { World } from "./sync";
   import { setWorld, connectionStore } from "./world";
   import { createData, setData } from "./data";
@@ -56,7 +56,7 @@
 >
   <div class="container" style="display: flex; justify-content: space-between;">
     <span>
-      effect-sync · in-page SyncServer + MemoryBackend ·
+      legation · in-page SyncServer + MemoryBackend ·
       {offline ? "offline — writes queue in the journal" : "online — optimistic + rebase"}
     </span>
     <button
@@ -130,7 +130,7 @@
     <a href={hrefFor({ name: "home" })} class="logo-font">conduit</a>
     <span class="attribution">
       RealWorld example driving the
-      <a href="https://github.com/thomasfosterau/effect-synchronizer">effect-sync</a> engine.
+      <a href="https://github.com/thomasfosterau/legation">legation</a> engine.
     </span>
   </div>
 </footer>

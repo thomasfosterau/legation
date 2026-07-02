@@ -1,7 +1,7 @@
 {
-  "name": "@thomasfosterau/effect-sync-browser",
+  "name": "@legation/browser",
   "version": "0.1.0",
-  "description": "Browser-runtime adapters for the effect-sync engine: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, and a Cache API HTTP cache",
+  "description": "Browser-runtime adapters for the legation engine: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, and a Cache API HTTP cache",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -39,7 +39,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-sync-core": "workspace:^"
+    "@legation/effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84",
@@ -52,11 +52,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
     "directory": "packages/browser"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/browser#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/browser#readme"
 }

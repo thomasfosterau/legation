@@ -9,7 +9,7 @@
     "noEmit": true,
     "baseUrl": "../..",
     "paths": {
-      "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"]
+      "@legation/effect": ["packages/core/src/index.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },

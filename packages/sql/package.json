@@ -1,7 +1,7 @@
 {
-  "name": "@thomasfosterau/effect-sync-sql",
+  "name": "@legation/sql",
   "version": "0.1.0",
-  "description": "Driver-agnostic SQL reference backend for the effect-sync engine: Subset->WHERE translation and a Backend over a SqlExecutor seam",
+  "description": "Driver-agnostic SQL reference backend for the legation engine: Subset->WHERE translation and a Backend over a SqlExecutor seam",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,7 +38,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-sync-core": "workspace:^"
+    "@legation/effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84"
@@ -48,11 +48,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
     "directory": "packages/sql"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/sql#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/sql#readme"
 }

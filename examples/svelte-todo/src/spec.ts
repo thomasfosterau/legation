@@ -6,7 +6,7 @@
  * definitions that drive the engine drive the spec, so it cannot drift. Run
  * `bun run spec` to write the documents into `spec/`.
  */
-import { SpecExport } from "@thomasfosterau/effect-sync-core";
+import { SpecExport } from "@legation/effect";
 import { removeTodo, setTodo, todosCollection } from "./domain";
 
 export const api: SpecExport.SyncApi = {

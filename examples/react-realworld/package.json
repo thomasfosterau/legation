@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-react-realworld",
+  "name": "legation-react-realworld",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "RealWorld (Conduit) app driving the effect-sync engine through @thomasfosterau/effect-sync-react: optimistic mutators, relational live queries joined over the mirror, server-side write authorization.",
+  "description": "RealWorld (Conduit) app driving the legation engine through @legation/react: optimistic mutators, relational live queries joined over the mirror, server-side write authorization.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
-    "@thomasfosterau/effect-sync-react": "workspace:*",
+    "@legation/effect": "workspace:*",
+    "@legation/react": "workspace:*",
     "effect": "catalog:",
     "react": "^18",
     "react-dom": "^18"

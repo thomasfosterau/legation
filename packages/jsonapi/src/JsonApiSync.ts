@@ -24,7 +24,7 @@ import {
   ClientStore,
   SyncRoom,
   Transport,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 import { reflectResources, type ResourceMap } from "./Convention.js";
 import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";

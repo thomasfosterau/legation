@@ -17,7 +17,7 @@ proposal live in the tracking issue:
   surface (staleTime/invalidation/dedupe/setQueryData/optimistic rollback) is
   moot or structurally subsumed under store observation + mutation-log rebase;
   the same holds for SwiftData's `@Query` auto-invalidation, `ModelActor`
-  serialisation, and Apollo-style normalisation (collections *are* the
+  serialisation, and Apollo-style normalisation (collections _are_ the
   normalised store). The mapping is a documentation gap, filed as
   [#50](https://github.com/thomasfosterau/effect-synchronizer/issues/50).
 - **The sync loop is the biggest functional gap.** Nothing schedules a push

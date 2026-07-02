@@ -1,7 +1,7 @@
-# @thomasfosterau/effect-sync-react
+# @legation/react
 
 Idiomatic React bindings for the
-[`@thomasfosterau/effect-sync-core`](../core) engine — a thin layer over
+[`@legation/effect`](../core) engine — a thin layer over
 `effect/unstable/reactivity` atoms.
 
 - **`<EffectSyncProvider atoms={…} registry={…?}>`** — supplies the engine's
@@ -16,5 +16,5 @@ Idiomatic React bindings for the
 - **`useAtomValue(atom)`** / **`useAtomSet(atom)`** — bind any other atom.
 
 ```bash
-npm install @thomasfosterau/effect-sync-react @thomasfosterau/effect-sync-core effect react
+npm install @legation/react @legation/effect effect react
 ```

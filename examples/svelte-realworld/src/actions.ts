@@ -11,7 +11,7 @@
  * with `$actions` so it tracks login/logout reactively.
  */
 import { derived, type Readable } from "svelte/store";
-import { getMutate } from "@thomasfosterau/effect-sync-svelte";
+import { getMutate } from "@legation/svelte";
 import { getAuth } from "./auth";
 import { favoriteId, followId, slugify } from "./domain";
 import type { Article } from "./domain";

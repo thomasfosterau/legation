@@ -26,11 +26,11 @@
       },
     },
     "examples/foldkit-todo": {
-      "name": "effect-sync-foldkit-todo",
+      "name": "legation-foldkit-todo",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
+        "@legation/effect": "workspace:*",
         "effect": "catalog:",
         "foldkit": "^0.114.0",
       },
@@ -40,12 +40,12 @@
       },
     },
     "examples/react-northwind": {
-      "name": "effect-sync-react-northwind",
+      "name": "legation-react-northwind",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-react": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/react": "workspace:*",
         "effect": "catalog:",
         "react": "^18",
         "react-dom": "^18",
@@ -59,12 +59,12 @@
       },
     },
     "examples/react-realworld": {
-      "name": "effect-sync-react-realworld",
+      "name": "legation-react-realworld",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-react": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/react": "workspace:*",
         "effect": "catalog:",
         "react": "^18",
         "react-dom": "^18",
@@ -78,12 +78,12 @@
       },
     },
     "examples/react-todo": {
-      "name": "effect-sync-react-todo",
+      "name": "legation-react-todo",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-react": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/react": "workspace:*",
         "effect": "catalog:",
         "react": "^18",
         "react-dom": "^18",
@@ -97,12 +97,12 @@
       },
     },
     "examples/svelte-northwind": {
-      "name": "effect-sync-svelte-northwind",
+      "name": "legation-svelte-northwind",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-svelte": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -114,12 +114,12 @@
       },
     },
     "examples/svelte-realworld": {
-      "name": "effect-sync-svelte-realworld",
+      "name": "legation-svelte-realworld",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-svelte": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -131,12 +131,12 @@
       },
     },
     "examples/svelte-todo": {
-      "name": "effect-sync-svelte-todo",
+      "name": "legation-svelte-todo",
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@thomasfosterau/effect-sync-core": "workspace:*",
-        "@thomasfosterau/effect-sync-svelte": "workspace:*",
+        "@legation/effect": "workspace:*",
+        "@legation/svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -148,10 +148,10 @@
       },
     },
     "packages/browser": {
-      "name": "@thomasfosterau/effect-sync-browser",
+      "name": "@legation/browser",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-sync-core": "workspace:^",
+        "@legation/effect": "workspace:^",
       },
       "devDependencies": {
         "@effect/platform-browser": "catalog:",
@@ -164,7 +164,7 @@
       },
     },
     "packages/core": {
-      "name": "@thomasfosterau/effect-sync-core",
+      "name": "@legation/effect",
       "version": "0.1.0",
       "devDependencies": {
         "effect": "catalog:",
@@ -174,11 +174,11 @@
       },
     },
     "packages/jsonapi": {
-      "name": "@thomasfosterau/effect-sync-jsonapi",
+      "name": "@legation/jsonapi",
       "version": "0.1.0",
       "dependencies": {
+        "@legation/effect": "workspace:^",
         "@thomasfosterau/effect-jsonapi": "^0.1.0",
-        "@thomasfosterau/effect-sync-core": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -188,10 +188,10 @@
       },
     },
     "packages/node": {
-      "name": "@thomasfosterau/effect-sync-node",
+      "name": "@legation/node",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-sync-core": "workspace:^",
+        "@legation/effect": "workspace:^",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -204,10 +204,10 @@
       },
     },
     "packages/react": {
-      "name": "@thomasfosterau/effect-sync-react",
+      "name": "@legation/react",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-sync-core": "workspace:^",
+        "@legation/effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -219,10 +219,10 @@
       },
     },
     "packages/sql": {
-      "name": "@thomasfosterau/effect-sync-sql",
+      "name": "@legation/sql",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-sync-core": "workspace:^",
+        "@legation/effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -232,10 +232,10 @@
       },
     },
     "packages/svelte": {
-      "name": "@thomasfosterau/effect-sync-svelte",
+      "name": "@legation/svelte",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-sync-core": "workspace:^",
+        "@legation/effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -446,6 +446,20 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
+    "@legation/browser": ["@legation/browser@workspace:packages/browser"],
+
+    "@legation/effect": ["@legation/effect@workspace:packages/core"],
+
+    "@legation/jsonapi": ["@legation/jsonapi@workspace:packages/jsonapi"],
+
+    "@legation/node": ["@legation/node@workspace:packages/node"],
+
+    "@legation/react": ["@legation/react@workspace:packages/react"],
+
+    "@legation/sql": ["@legation/sql@workspace:packages/sql"],
+
+    "@legation/svelte": ["@legation/svelte@workspace:packages/svelte"],
+
     "@manypkg/find-root": ["@manypkg/find-root@1.1.0", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@types/node": "^12.7.1", "find-up": "^4.1.0", "fs-extra": "^8.1.0" } }, "sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA=="],
 
     "@manypkg/get-packages": ["@manypkg/get-packages@1.1.3", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@changesets/types": "^4.0.1", "@manypkg/find-root": "^1.1.0", "fs-extra": "^8.1.0", "globby": "^11.0.0", "read-yaml-file": "^1.1.0" } }, "sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A=="],
@@ -608,20 +622,6 @@
 
     "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.1.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.84" } }, "sha512-B1X6Hc/SEsBoX4HPwOnedyBjfElSXo/ZkWG1FjSXDu5fOtXe3Nay6rx8Hg+PsXbbdC3Chpbe5fUGpow2yEkK5Q=="],
 
-    "@thomasfosterau/effect-sync-browser": ["@thomasfosterau/effect-sync-browser@workspace:packages/browser"],
-
-    "@thomasfosterau/effect-sync-core": ["@thomasfosterau/effect-sync-core@workspace:packages/core"],
-
-    "@thomasfosterau/effect-sync-jsonapi": ["@thomasfosterau/effect-sync-jsonapi@workspace:packages/jsonapi"],
-
-    "@thomasfosterau/effect-sync-node": ["@thomasfosterau/effect-sync-node@workspace:packages/node"],
-
-    "@thomasfosterau/effect-sync-react": ["@thomasfosterau/effect-sync-react@workspace:packages/react"],
-
-    "@thomasfosterau/effect-sync-sql": ["@thomasfosterau/effect-sync-sql@workspace:packages/sql"],
-
-    "@thomasfosterau/effect-sync-svelte": ["@thomasfosterau/effect-sync-svelte@workspace:packages/svelte"],
-
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 
     "@types/aria-query": ["@types/aria-query@5.0.4", "", {}, "sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw=="],
@@ -744,20 +744,6 @@
 
     "effect": ["effect@4.0.0-beta.84", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.8.0", "find-my-way-ts": "^0.1.6", "ini": "^7.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^2.0.1", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^14.0.0", "yaml": "^2.9.0" } }, "sha512-zWwFI9WZ4TsddBmtcuuAO2IXGR0Dp56xIUt8cX29ZeyOEtErXqP6muDaVpro08lGiMSOGMqSpuH/C1TUxHsRAA=="],
 
-    "effect-sync-foldkit-todo": ["effect-sync-foldkit-todo@workspace:examples/foldkit-todo"],
-
-    "effect-sync-react-northwind": ["effect-sync-react-northwind@workspace:examples/react-northwind"],
-
-    "effect-sync-react-realworld": ["effect-sync-react-realworld@workspace:examples/react-realworld"],
-
-    "effect-sync-react-todo": ["effect-sync-react-todo@workspace:examples/react-todo"],
-
-    "effect-sync-svelte-northwind": ["effect-sync-svelte-northwind@workspace:examples/svelte-northwind"],
-
-    "effect-sync-svelte-realworld": ["effect-sync-svelte-realworld@workspace:examples/svelte-realworld"],
-
-    "effect-sync-svelte-todo": ["effect-sync-svelte-todo@workspace:examples/svelte-todo"],
-
     "electron-to-chromium": ["electron-to-chromium@1.5.375", "", {}, "sha512-ZWP5eB4BVPW/ZYo9252hQZHZ5XavtsTgpbhcmMmRwymavC5AsLWQWBPaKMeNd2LW0KGby5HPXvj7+sr4ta5j/Q=="],
 
     "enquirer": ["enquirer@2.4.1", "", { "dependencies": { "ansi-colors": "^4.1.1", "strip-ansi": "^6.0.1" } }, "sha512-rRqJg/6gd538VHvR3PSrdRBb/1Vy2YfzHqzvbhGIQpDRKIa4FgV/54b5Q1xYSxOOwKvjXweS26E0Q+nAMwp2pQ=="],
@@ -867,6 +853,20 @@
     "kleur": ["kleur@4.1.5", "", {}, "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="],
 
     "kubernetes-types": ["kubernetes-types@1.30.0", "", {}, "sha512-Dew1okvhM/SQcIa2rcgujNndZwU8VnSapDgdxlYoB84ZlpAD43U6KLAFqYo17ykSFGHNPrg0qry0bP+GJd9v7Q=="],
+
+    "legation-foldkit-todo": ["legation-foldkit-todo@workspace:examples/foldkit-todo"],
+
+    "legation-react-northwind": ["legation-react-northwind@workspace:examples/react-northwind"],
+
+    "legation-react-realworld": ["legation-react-realworld@workspace:examples/react-realworld"],
+
+    "legation-react-todo": ["legation-react-todo@workspace:examples/react-todo"],
+
+    "legation-svelte-northwind": ["legation-svelte-northwind@workspace:examples/svelte-northwind"],
+
+    "legation-svelte-realworld": ["legation-svelte-realworld@workspace:examples/svelte-realworld"],
+
+    "legation-svelte-todo": ["legation-svelte-todo@workspace:examples/svelte-todo"],
 
     "lightningcss": ["lightningcss@1.32.0", "", { "dependencies": { "detect-libc": "^2.0.3" }, "optionalDependencies": { "lightningcss-android-arm64": "1.32.0", "lightningcss-darwin-arm64": "1.32.0", "lightningcss-darwin-x64": "1.32.0", "lightningcss-freebsd-x64": "1.32.0", "lightningcss-linux-arm-gnueabihf": "1.32.0", "lightningcss-linux-arm64-gnu": "1.32.0", "lightningcss-linux-arm64-musl": "1.32.0", "lightningcss-linux-x64-gnu": "1.32.0", "lightningcss-linux-x64-musl": "1.32.0", "lightningcss-win32-arm64-msvc": "1.32.0", "lightningcss-win32-x64-msvc": "1.32.0" } }, "sha512-NXYBzinNrblfraPGyrbPoD19C1h9lfI/1mzgWYvXUTe414Gz/X1FD2XBZSZM7rRTrMA8JL3OtAaGifrIKhQ5yQ=="],
 

@@ -6,7 +6,7 @@
  * resolves once the mutation is journaled (and rendered through the overlay).
  */
 import { Effect } from "effect";
-import { ClientEngine } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine } from "@legation/effect";
 import { getEngineRuntime } from "./runtime.js";
 
 /** A `mutate(mutator, args)` bound to the context runtime. */

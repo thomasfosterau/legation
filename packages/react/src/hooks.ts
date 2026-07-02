@@ -10,7 +10,7 @@
  */
 import * as React from "react";
 import type { Atom } from "effect/unstable/reactivity";
-import type { EngineAtoms, Subset } from "@thomasfosterau/effect-sync-core";
+import type { EngineAtoms, Subset } from "@legation/effect";
 import { useEngineAtoms, useRegistry } from "./registry.js";
 
 /** Subscribe to an atom's value, re-rendering whenever it changes. */

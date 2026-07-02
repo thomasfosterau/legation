@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Relationship-scoped read authorization. Add an `IdentityResolver` seam: an

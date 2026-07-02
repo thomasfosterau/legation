@@ -33,8 +33,8 @@ import {
   SyncServer,
   Transport,
   TransportError,
-} from "@thomasfosterau/effect-sync-core";
-import type { EffectSyncRuntime } from "@thomasfosterau/effect-sync-react";
+} from "@legation/effect";
+import type { EffectSyncRuntime } from "@legation/react";
 
 import {
   CLIENT_GROUP_ID,

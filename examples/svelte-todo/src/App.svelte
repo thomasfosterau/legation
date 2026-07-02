@@ -8,10 +8,10 @@
    * journal) come from the demo context. Visual design and behaviour mirror the
    * FoldKit / React / Compose / SwiftUI todo examples.
    */
-  import { query, getMutate, setEngineRuntime } from "@thomasfosterau/effect-sync-svelte";
+  import { query, getMutate, setEngineRuntime } from "@legation/svelte";
   import { type Todo, allTodos } from "./domain";
   import type { DemoControls } from "./sync";
-  import type { EffectSyncRuntime } from "@thomasfosterau/effect-sync-svelte";
+  import type { EffectSyncRuntime } from "@legation/svelte";
   import { setDemo, connectionStore, pendingStore } from "./demo";
 
   type Filter = "All" | "Active" | "Completed";
@@ -71,7 +71,7 @@
 
 <div class="app">
   <div class="card">
-    <h1 class="title">effect-sync · Svelte</h1>
+    <h1 class="title">legation · Svelte</h1>
     <p class="subtitle">Offline-first todos: optimistic writes, live views, push/pull rebase.</p>
 
     <div class="status-bar">

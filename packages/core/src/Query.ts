@@ -76,9 +76,7 @@ export interface QueryResolver {
   ) => Effect.Effect<Subset, AuthorizationError | QueryError>;
 }
 
-export const QueryResolver = Context.Service<QueryResolver>(
-  "@thomasfosterau/effect-sync-core/QueryResolver"
-);
+export const QueryResolver = Context.Service<QueryResolver>("@legation/effect/QueryResolver");
 
 /**
  * Build a server resolver from typed entries. Pushed args are untrusted, so

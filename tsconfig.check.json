@@ -9,13 +9,13 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"],
-      "@thomasfosterau/effect-sync-browser": ["packages/browser/src/index.ts"],
-      "@thomasfosterau/effect-sync-node": ["packages/node/src/index.ts"],
-      "@thomasfosterau/effect-sync-jsonapi": ["packages/jsonapi/src/index.ts"],
-      "@thomasfosterau/effect-sync-sql": ["packages/sql/src/index.ts"],
-      "@thomasfosterau/effect-sync-react": ["packages/react/src/index.ts"],
-      "@thomasfosterau/effect-sync-svelte": ["packages/svelte/src/index.ts"]
+      "@legation/effect": ["packages/core/src/index.ts"],
+      "@legation/browser": ["packages/browser/src/index.ts"],
+      "@legation/node": ["packages/node/src/index.ts"],
+      "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],
+      "@legation/sql": ["packages/sql/src/index.ts"],
+      "@legation/react": ["packages/react/src/index.ts"],
+      "@legation/svelte": ["packages/svelte/src/index.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },

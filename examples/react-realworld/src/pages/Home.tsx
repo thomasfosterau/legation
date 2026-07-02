@@ -35,7 +35,7 @@ export const Home = (): React.ReactElement => {
       <div className="banner">
         <div className="container">
           <h1 className="logo-font">conduit</h1>
-          <p>A place to share your knowledge. Synced with effect-sync.</p>
+          <p>A place to share your knowledge. Synced with legation.</p>
         </div>
       </div>
 

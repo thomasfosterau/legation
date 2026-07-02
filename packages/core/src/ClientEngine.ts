@@ -105,9 +105,7 @@ export interface ClientEngine {
   readonly runSync: Effect.Effect<void, TransportError | StoreError | MutatorError, Scope.Scope>;
 }
 
-export const ClientEngine = Context.Service<ClientEngine>(
-  "@thomasfosterau/effect-sync-core/ClientEngine"
-);
+export const ClientEngine = Context.Service<ClientEngine>("@legation/effect/ClientEngine");
 
 export const make = (
   options: ClientEngineOptions

@@ -38,7 +38,7 @@ import {
   SyncServer,
   Transport,
   TransportError,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 
 import {
   CLIENT_GROUP_ID,

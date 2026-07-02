@@ -1,7 +1,7 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
-"@thomasfosterau/effect-sync-browser": minor
-"@thomasfosterau/effect-sync-node": minor
+"@legation/effect": minor
+"@legation/browser": minor
+"@legation/node": minor
 ---
 
 Effect-idiomatic API refactor:

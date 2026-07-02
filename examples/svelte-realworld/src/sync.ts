@@ -35,8 +35,8 @@ import {
   SyncServer,
   Transport,
   TransportError,
-} from "@thomasfosterau/effect-sync-core";
-import type { EffectSyncRuntime } from "@thomasfosterau/effect-sync-svelte";
+} from "@legation/effect";
+import type { EffectSyncRuntime } from "@legation/svelte";
 
 import {
   Article,
@@ -237,7 +237,7 @@ const seed = (backend: Backend.Backend, bus: InvalidationBus.InvalidationBus) =>
       { username: "liang", email: "liang@conduit.dev", password: "demo", bio: "Frontend, offline-first.", image: "https://i.pravatar.cc/120?u=liang" },
     ];
     const articles: ReadonlyArray<Article> = [
-      { slug: "welcome-to-conduit", title: "Welcome to Conduit", description: "What this demo shows", body: "This is the RealWorld example driving the **effect-sync** engine.\n\nEverything you do — posting, favoriting, following — is an optimistic mutator that syncs to an in-page backend and rebases.", tagList: ["intro", "effect"], authorId: "emma", createdAt: now, updatedAt: now },
+      { slug: "welcome-to-conduit", title: "Welcome to Conduit", description: "What this demo shows", body: "This is the RealWorld example driving the **legation** engine.\n\nEverything you do — posting, favoriting, following — is an optimistic mutator that syncs to an in-page backend and rebases.", tagList: ["intro", "effect"], authorId: "emma", createdAt: now, updatedAt: now },
       { slug: "offline-first-writes", title: "Offline-first writes", description: "Queue writes, then converge", body: "Go offline and keep posting. Your mutations pile up in the durable journal and flush on reconnect.", tagList: ["sync", "offline"], authorId: "liang", createdAt: now + 1, updatedAt: now + 1 },
     ];
     let seq = 0;

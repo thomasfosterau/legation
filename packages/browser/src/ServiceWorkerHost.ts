@@ -12,7 +12,7 @@
  * wire those events to `ClientEngine.push` / `ClientEngine.pull`.
  */
 
-import { ClientEngine } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine } from "@legation/effect";
 import { Effect, Scope } from "effect";
 import * as EngineHost from "./EngineHost.js";
 import * as MirrorChannel from "./MirrorChannel.js";
@@ -23,7 +23,7 @@ export interface ServiceWorkerHostOptions {
 }
 
 /** The default channel name; TabMirror setups should use the same one. */
-export const defaultChannelName = "effect-sync";
+export const defaultChannelName = "legation";
 
 /**
  * Run the host: serve tab mirrors over the broadcast channel and start the

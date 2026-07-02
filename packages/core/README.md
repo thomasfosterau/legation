@@ -1,4 +1,4 @@
-# @thomasfosterau/effect-sync-core
+# @legation/effect
 
 The Effect-native sync engine. One package, one dependency (`effect`), four layers:
 
@@ -7,7 +7,7 @@ The Effect-native sync engine. One package, one dependency (`effect`), four laye
 3. **Cache engine** — write-through HTTP and data caching for service workers and edge runtimes, with pluggable persistence
 4. **Server** — a write-through sync hub that fans out updates to subscribed clients
 
-Protocol adapters live in separate packages (e.g. [`@thomasfosterau/effect-sync-jsonapi`](../jsonapi)).
+Protocol adapters live in separate packages (e.g. [`@legation/jsonapi`](../jsonapi)).
 
 ## Status
 
@@ -16,7 +16,7 @@ Targets Effect v4 beta and ESM-only consumers.
 ## Installation
 
 ```bash
-bun add @thomasfosterau/effect-sync-core effect@4.0.0-beta.65
+bun add @legation/effect effect@4.0.0-beta.65
 ```
 
 ## Module map
@@ -49,7 +49,7 @@ bun add @thomasfosterau/effect-sync-core effect@4.0.0-beta.65
 
 ```ts
 import { Duration, Effect, Layer } from "effect";
-import { MemoryCacheStore, SyncCache } from "@thomasfosterau/effect-sync-core";
+import { MemoryCacheStore, SyncCache } from "@legation/effect";
 
 const cacheLayer = SyncCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
 
@@ -81,7 +81,7 @@ await Effect.runPromise(program.pipe(Effect.provide(cacheLayer)));
 
 ```ts
 import { Effect, Layer, Stream } from "effect";
-import { MemoryCacheStore, Query, QueryClient } from "@thomasfosterau/effect-sync-core";
+import { MemoryCacheStore, Query, QueryClient } from "@legation/effect";
 
 // QueryClient.layer composes SyncCache.layer internally; it only needs a CacheStore.
 const layer = QueryClient.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()));
@@ -108,7 +108,7 @@ const program = Effect.gen(function* () {
 `SyncClient` combines the query client, an `Outbox`, and a `ClientTransport` into an offline-capable engine:
 
 ```ts
-import { SyncClient } from "@thomasfosterau/effect-sync-core";
+import { SyncClient } from "@legation/effect";
 
 const engine = Effect.gen(function* () {
   const client = yield* SyncClient.SyncClient;
@@ -122,7 +122,7 @@ const engine = Effect.gen(function* () {
 Non-Effect apps use the promise facade:
 
 ```ts
-import { ClientFacade } from "@thomasfosterau/effect-sync-core";
+import { ClientFacade } from "@legation/effect";
 
 const client = ClientFacade.makeClient({ maxEntries: 1000 });
 const user = await client.fetch(["users", "1"], () => fetch("/api/users/1").then((r) => r.json()), {
@@ -142,12 +142,7 @@ await client.dispose();
 
 ```ts
 import { Duration, Effect, Layer } from "effect";
-import {
-  HttpCache,
-  MemoryCacheStore,
-  PromiseFacade,
-  WriteThroughCache,
-} from "@thomasfosterau/effect-sync-core";
+import { HttpCache, MemoryCacheStore, PromiseFacade, WriteThroughCache } from "@legation/effect";
 
 const facade = PromiseFacade.make(
   WriteThroughCache.layer.pipe(Layer.provideMerge(MemoryCacheStore.layer()))
@@ -187,7 +182,7 @@ Known limitation: `HttpCache` stores response bodies as text; binary bodies are 
 
 ```ts
 import { Effect, Layer } from "effect";
-import { ServerStore, Sessions, SyncHub, Transport } from "@thomasfosterau/effect-sync-core";
+import { ServerStore, Sessions, SyncHub, Transport } from "@legation/effect";
 
 const ServerLayer = SyncHub.layer.pipe(
   Layer.provideMerge(Layer.mergeAll(ServerStore.memoryLayer, Sessions.layer))
@@ -209,7 +204,7 @@ Server-initiated writes use the same path: `hub.publish(key, value)`, `hub.remov
 ## Mutations, pagination, outbox
 
 ```ts
-import { Mutation, Outbox, Pagination } from "@thomasfosterau/effect-sync-core";
+import { Mutation, Outbox, Pagination } from "@legation/effect";
 import { Option } from "effect";
 
 // Mutations with optimistic patches and invalidation
@@ -238,7 +233,7 @@ yield * outbox.drain((entry) => pushToServer(entry), { maxAttempts: 5 });
 
 ## Related packages
 
-- [`@thomasfosterau/effect-sync-jsonapi`](../jsonapi) — JSON:API protocol adapter
+- [`@legation/jsonapi`](../jsonapi) — JSON:API protocol adapter
 
 ## License
 

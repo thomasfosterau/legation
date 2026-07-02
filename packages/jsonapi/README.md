@@ -1,7 +1,7 @@
-# @thomasfosterau/effect-sync-jsonapi
+# @legation/jsonapi
 
 JSON:API v1.1 collection loaders for the
-[`@thomasfosterau/effect-sync-core`](https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/core)
+[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/main/packages/core)
 sync engine, built on [Effect](https://effect.website).
 
 In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
@@ -24,10 +24,10 @@ resource-agnostic loaders on top (ADR-0016).
 ## Install
 
 ```sh
-npm install @thomasfosterau/effect-sync-jsonapi @thomasfosterau/effect-sync-core effect
+npm install @legation/jsonapi @legation/effect effect
 ```
 
-`effect`, `@thomasfosterau/effect-sync-core`, and
+`effect`, `@legation/effect`, and
 `@thomasfosterau/effect-jsonapi` are required alongside this package. It
 targets Effect v4 beta (`effect@>=4.0.0-beta.84`).
 
@@ -42,8 +42,8 @@ over the existing REST API.
 ```ts
 import { Duration, Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { ClientEngine, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
-import { JsonApiSync } from "@thomasfosterau/effect-sync-jsonapi";
+import { ClientEngine, Predicate, Subset } from "@legation/effect";
+import { JsonApiSync } from "@legation/jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
 
 const sync = JsonApiSync.layer(api, {
@@ -103,7 +103,7 @@ an `Effect` requiring an `HttpClient` and a `JsonApiSource`.
 ```ts
 import { Effect } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { CollectionLoader } from "@thomasfosterau/effect-sync-jsonapi";
+import { CollectionLoader } from "@legation/jsonapi";
 
 const program = CollectionLoader.load("articles", {
   include: ["author"],
@@ -140,8 +140,8 @@ already-synced data, no extra request.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
-import { Relationships } from "@thomasfosterau/effect-sync-jsonapi";
+import { ClientEngine, Subset } from "@legation/effect";
+import { Relationships } from "@legation/jsonapi";
 
 const program = Effect.gen(function* () {
   const engine = yield* ClientEngine.ClientEngine;
@@ -197,7 +197,7 @@ carries the JSON:API error objects returned by the server.
 
 ```ts
 import { Effect } from "effect";
-import { CollectionLoader, ApiError, ParseError } from "@thomasfosterau/effect-sync-jsonapi";
+import { CollectionLoader, ApiError, ParseError } from "@legation/jsonapi";
 
 CollectionLoader.load("articles").pipe(
   Effect.catchTag("ApiError", (error) => Effect.logError(error.errors)),

@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-foldkit-todo",
+  "name": "legation-foldkit-todo",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "FoldKit (The Elm Architecture) todo app driving the effect-sync engine: offline-first, optimistic writes, live views, push/pull rebase.",
+  "description": "FoldKit (The Elm Architecture) todo app driving the legation engine: offline-first, optimistic writes, live views, push/pull rebase.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
+    "@legation/effect": "workspace:*",
     "effect": "catalog:",
     "foldkit": "^0.114.0"
   },

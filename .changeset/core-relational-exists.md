@@ -1,7 +1,7 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
-"@thomasfosterau/effect-sync-sql": minor
-"@thomasfosterau/effect-sync-jsonapi": patch
+"@legation/effect": minor
+"@legation/sql": minor
+"@legation/jsonapi": patch
 ---
 
 Add the relational `Predicate.exists` node: a correlated relationship test

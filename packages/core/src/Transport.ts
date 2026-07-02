@@ -26,9 +26,7 @@ export interface ClientTransport {
   readonly statusChanges: Stream.Stream<ConnectionStatus>;
 }
 
-export const ClientTransport = Context.Service<ClientTransport>(
-  "@thomasfosterau/effect-sync-core/ClientTransport"
-);
+export const ClientTransport = Context.Service<ClientTransport>("@legation/effect/ClientTransport");
 
 /**
  * The server side: what a carrier needs from the sync server to answer
@@ -42,9 +40,7 @@ export interface ServerHandler {
   readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
 }
 
-export const ServerHandler = Context.Service<ServerHandler>(
-  "@thomasfosterau/effect-sync-core/ServerHandler"
-);
+export const ServerHandler = Context.Service<ServerHandler>("@legation/effect/ServerHandler");
 
 /**
  * An in-memory client transport bound directly to a ServerHandler — the

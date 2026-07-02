@@ -1,8 +1,8 @@
 ---
-"@thomasfosterau/effect-sync-svelte": minor
+"@legation/svelte": minor
 ---
 
-New package `@thomasfosterau/effect-sync-svelte`: idiomatic Svelte bindings.
+New package `@legation/svelte`: idiomatic Svelte bindings.
 `setEngineRuntime` supplies a `ManagedRuntime` running `ClientEngine` effects;
 `query` / `namedQuery` render live results as Svelte `Readable` stores (a forked
 `observe` fiber per store, torn down when the last subscriber unsubscribes);

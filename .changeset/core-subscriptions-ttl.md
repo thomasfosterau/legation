@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Add `Subscriptions`: subscription lifecycle on top of `ClientEngine` —

@@ -7,7 +7,7 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { getContext, setContext } from "svelte";
-import type { Transport } from "@thomasfosterau/effect-sync-core";
+import type { Transport } from "@legation/effect";
 import type { World } from "./sync";
 
 const WORLD_KEY = Symbol("svelte-realworld/world");

@@ -12,7 +12,7 @@
  * a real token exchange.
  */
 import * as React from "react";
-import { useMutation } from "@thomasfosterau/effect-sync-react";
+import { useMutation } from "@legation/react";
 import { useUsers } from "./data";
 import { useWorld } from "./world";
 import type { User } from "./domain";
