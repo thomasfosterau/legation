@@ -10,6 +10,7 @@
  * collections (`favorites`, `follows`), never denormalised onto the row — so a
  * rebase can never leave a stale counter.
  */
+import type { Related } from "@legation/effect";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 import type { ArticlePage, ArticleView, CommentView, Feed, ProfileView } from "./types";
 
@@ -121,17 +122,32 @@ export const toArticle = (
     : toArticleView(article, users, follows, favorites, viewer);
 };
 
-/** Comments on an article, oldest first, with author profiles. */
+/** Build a comment author's profile from its resolved `users` row. */
+const profileOf = (user: User | undefined, username: string): ProfileView =>
+  user
+    ? {
+        username: user.username,
+        bio: user.bio,
+        image: user.image || emptyProfile(username).image,
+        following: false,
+      }
+    : emptyProfile(username);
+
+/**
+ * Comments on an article with author profiles. The author is resolved by the
+ * declared `comments.author` relationship (`Related.observe` in `data.ts`),
+ * so this no longer joins against a `users` array by hand — it just narrows the
+ * pre-joined rows to the article and shapes each author profile. (Comment
+ * authors don't surface a follow flag in the UI, so `following` stays `false`.)
+ */
 export const toComments = (
   slug: string,
-  viewer: string | null,
-  comments: ReadonlyArray<Comment>,
-  users: ReadonlyArray<User>,
-  follows: ReadonlyArray<Follow>
+  commentRows: ReadonlyArray<Related.RelatedRow>
 ): ReadonlyArray<CommentView> =>
-  comments
-    .filter((c) => c.articleSlug === slug)
-    .map((comment) => ({
+  commentRows
+    .map((row) => ({ comment: row.value as Comment, author: row.related.author as User | null }))
+    .filter(({ comment }) => comment.articleSlug === slug)
+    .map(({ comment, author }) => ({
       comment,
-      author: toProfile(comment.authorId, users, follows, viewer),
+      author: profileOf(author ?? undefined, comment.authorId),
     }));

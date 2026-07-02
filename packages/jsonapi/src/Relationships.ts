@@ -7,16 +7,19 @@
  * to the actual related row value(s) — a client-side join over already-synced
  * data, no extra request.
  *
- * This is the read half of the "relationships / joins" gap (audit #10): a
- * `related()` over the local mirror. `observe` re-resolves on every local
- * change, so adding a comment updates the issue's `comments` immediately.
- *
- * The linkage shape is JSON:API's; the resolution is storage-agnostic (it only
- * needs a `(collection, id) → value` lookup).
+ * The incremental-join plumbing (base `observe` → target collections →
+ * per-collection index → `switchMap` on linkage shift → dedup; auto-subscribe
+ * the narrowed foreign subsets + scope teardown) is the protocol-agnostic core
+ * `Related` module. This module supplies JSON:API's linkage-based
+ * {@link Related.Strategy} — `targets` derived from `{ type, id }` refs,
+ * `resolveRow` via {@link hydrate} over those refs — and reuses the shared
+ * machinery, so `query`/`observe`/`related` are thin adapters over it with no
+ * behaviour change (audit #10). The linkage extraction stays here; only the
+ * generic pipeline is shared.
  */
 
-import { Effect, Ref, Scope, Stream } from "effect";
-import { ClientEngine, Predicate, Subset } from "@legation/effect";
+import { Effect, Scope, Stream } from "effect";
+import { ClientEngine, Related, Subset } from "@legation/effect";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 
@@ -75,204 +78,88 @@ export const hydrate = (
   return related;
 };
 
-/** The (collection → referenced ids) a set of rows' named relationships pin. */
-const targetIds = (
-  rows: ReadonlyArray<JsonApiRow>,
-  names: ReadonlyArray<string>
-): Map<string, Set<string>> => {
-  const map = new Map<string, Set<string>>();
-  for (const value of rows) {
-    for (const name of names) {
-      for (const link of linksOf(value, name)) {
-        const ids = map.get(link.type) ?? new Set<string>();
-        ids.add(link.id);
-        map.set(link.type, ids);
-      }
-    }
-  }
-  return map;
-};
-
-/** The collections a set of rows' named relationships point at. */
-const targetCollections = (
-  rows: ReadonlyArray<JsonApiRow>,
-  names: ReadonlyArray<string>
-): ReadonlySet<string> => new Set(targetIds(rows, names).keys());
+// ─── Delegation to the core `Related` plumbing ───────────────────────────────
+//
+// JSON:API's relationship model differs from core's declared field mappings: it
+// extracts `{ type, id }` linkage from the row value rather than matching a
+// `localField`/`foreignField`. That difference is confined to the strategy; the
+// incremental-join pipeline is the shared core module.
 
 /**
- * Resolve a subset's rows together with their named relationships, reading
- * the referenced collections from the engine's local view.
+ * The linkage strategy: `targets` pins each referenced collection by `id` and
+ * the linked ids; `resolveRow` reads the referenced rows out of the index by id
+ * and hydrates via {@link hydrate}, so resolution is byte-for-byte the previous
+ * behaviour.
+ */
+const linkageStrategy = (names: ReadonlyArray<string>): Related.Strategy => ({
+  targets: (baseRows) => {
+    const map = new Map<string, { field: string; ids: Set<string> }>();
+    for (const row of baseRows) {
+      const value = row.value as JsonApiRow;
+      for (const name of names) {
+        for (const link of linksOf(value, name)) {
+          const entry = map.get(link.type) ?? { field: "id", ids: new Set<string>() };
+          entry.ids.add(link.id);
+          map.set(link.type, entry);
+        }
+      }
+    }
+    return map;
+  },
+  resolveRow: (index, baseRow) => {
+    const lookup: Lookup = (collection, id) =>
+      index.get(collection)?.get(id)?.[0]?.value as JsonApiRow | undefined;
+    return hydrate(lookup, baseRow.value as JsonApiRow, names);
+  },
+});
+
+/**
+ * Resolve a subset's rows together with their named relationships, reading the
+ * referenced collections from the engine's local view. Delegates to
+ * {@link Related.queryWith} with the linkage strategy.
  */
 export const query = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Effect.Effect<ReadonlyArray<RelatedRow>, never, never> =>
-  Effect.gen(function* () {
-    const base = yield* engine.query(subset).pipe(Effect.orDie);
-    const values = base.map((row) => row.value as JsonApiRow);
-
-    const index = new Map<string, Map<string, JsonApiRow>>();
-    for (const collection of targetCollections(values, names)) {
-      const rows = yield* engine.query(Subset.make({ collection })).pipe(Effect.orDie);
-      index.set(collection, new Map(rows.map((row) => [row.id, row.value as JsonApiRow])));
-    }
-    const lookup: Lookup = (collection, id) => index.get(collection)?.get(id);
-
-    return base.map((row) => {
-      const value = row.value as JsonApiRow;
-      return { id: row.id, value, related: hydrate(lookup, value, names) };
-    });
-  });
-
-/** A `(id → row)` index of a referenced collection's local rows. */
-const indexOf = (rows: ReadonlyArray<ClientEngine.LocalRow>): Map<string, JsonApiRow> =>
-  new Map(rows.map((row) => [row.id, row.value as JsonApiRow]));
-
-/** Two resolved relationship values are equal when they share row references. */
-const sameRelated = (a: RelatedValue, b: RelatedValue): boolean => {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((row, i) => row === b[i]);
-  }
-  return false;
-};
-
-/** Two joins are equal when base rows and every resolved relationship match by reference. */
-const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): boolean =>
-  a.length === b.length &&
-  a.every((row, i) => {
-    const other = b[i]!;
-    if (row.id !== other.id || row.value !== other.value) return false;
-    const names = Object.keys(row.related);
-    return (
-      names.length === Object.keys(other.related).length &&
-      names.every((name) => sameRelated(row.related[name], other.related[name]))
-    );
-  });
+  Related.queryWith(engine, linkageStrategy(names), subset) as Effect.Effect<
+    ReadonlyArray<RelatedRow>,
+    never,
+    never
+  >;
 
 /**
- * Live version of {@link query} as an incrementally-maintained join. The base
- * page is kept current by `engine.observe(subset)`; each referenced collection
- * by its own `engine.observe`, so a write to a related row re-hydrates the join
- * without re-querying the base. When a base change shifts *which* collections
- * are referenced, `switchMap` re-establishes the referenced observers. Per
- * collection the lookup index is cached and only the changed slice is rebuilt;
- * changes that don't move the resolved result are deduped away.
+ * Live version of {@link query} as an incrementally-maintained join. Delegates
+ * to {@link Related.observeWith}: a write to a referenced row re-hydrates the
+ * join without re-querying the base; a base change that shifts referenced
+ * collections re-establishes the observers.
  */
 export const observe = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never, never> =>
-  engine.observe(subset).pipe(
-    Stream.orDie,
-    Stream.switchMap((base) => {
-      const values = base.map((row) => row.value as JsonApiRow);
-      const collections = [...targetCollections(values, names)];
-      const hydrateWith = (
-        index: ReadonlyMap<string, Map<string, JsonApiRow>>
-      ): ReadonlyArray<RelatedRow> => {
-        const lookup: Lookup = (collection, id) => index.get(collection)?.get(id);
-        return base.map((row, i) => ({
-          id: row.id,
-          value: values[i]!,
-          related: hydrate(lookup, values[i]!, names),
-        }));
-      };
-      return Stream.unwrap(
-        Effect.gen(function* () {
-          // Prime each referenced collection so the first join is complete.
-          const index = new Map<string, Map<string, JsonApiRow>>();
-          for (const collection of collections) {
-            const rows = yield* engine.query(Subset.make({ collection })).pipe(Effect.orDie);
-            index.set(collection, indexOf(rows));
-          }
-          // Each referenced collection refreshes its own index slice on change,
-          // dropping the redundant initial snapshot `observe` re-emits.
-          const updates = Stream.mergeAll(
-            collections.map((collection) =>
-              engine.observe(Subset.make({ collection })).pipe(
-                Stream.orDie,
-                Stream.drop(1),
-                Stream.map((rows) => {
-                  index.set(collection, indexOf(rows));
-                  return hydrateWith(index);
-                })
-              )
-            ),
-            { concurrency: "unbounded" }
-          );
-          return Stream.concat(Stream.succeed(hydrateWith(index)), updates);
-        })
-      );
-    }),
-    Stream.changesWith(sameJoin)
-  );
+  Related.observeWith(engine, linkageStrategy(names), subset) as Stream.Stream<
+    ReadonlyArray<RelatedRow>,
+    never,
+    never
+  >;
 
 /**
- * Auto-subscribing relational read: subscribes the base subset and, from its
- * rows, the narrowed `id IN (...)` subsets of each referenced collection — so
- * the related rows sync without the caller wiring up subscriptions. The
- * subscriptions track the live linkage (re-derived on every change) and are
- * torn down when the scope closes. Pair with the backend's `includes` config
- * to deliver the related rows in the parent's response (no extra round trip).
- *
- * Returns a stream that emits the resolved rows and re-emits on any change.
+ * Auto-subscribing relational read: subscribes the base subset and the narrowed
+ * `id IN (...)` subsets of each referenced collection, tracks the live linkage,
+ * and tears the subscriptions down when the scope closes. Delegates to
+ * {@link Related.relatedWith}. Pair with the backend's `includes` config to
+ * deliver the related rows in the parent's response (no extra round trip).
  */
 export const related = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never, never>, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const subscribed = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
-    yield* engine.subscribe(subset);
-    yield* Effect.addFinalizer(() =>
-      Ref.get(subscribed).pipe(
-        Effect.flatMap((subs) =>
-          Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), { discard: true })
-        )
-      )
-    );
-    // Initial base sync so the first relationship derivation sees real rows.
-    yield* engine.pull.pipe(Effect.orDie);
-
-    const refresh = Effect.gen(function* () {
-      const base = yield* engine.query(subset).pipe(Effect.orDie);
-      const desired = [
-        ...targetIds(
-          base.map((row) => row.value as JsonApiRow),
-          names
-        ),
-      ]
-        .filter(([, ids]) => ids.size > 0)
-        .map(([collection, ids]) =>
-          Subset.make({ collection, where: Predicate.isIn("id", [...ids]) })
-        );
-
-      const previous = yield* Ref.get(subscribed);
-      const has = (list: ReadonlyArray<Subset.Subset>, s: Subset.Subset) =>
-        list.some((other) => Subset.hash(other) === Subset.hash(s));
-      let changed = false;
-      for (const stale of previous) {
-        if (!has(desired, stale)) {
-          yield* engine.unsubscribe(stale);
-          changed = true;
-        }
-      }
-      for (const next of desired) {
-        if (!has(previous, next)) {
-          yield* engine.subscribe(next);
-          changed = true;
-        }
-      }
-      yield* Ref.set(subscribed, desired);
-      if (changed) yield* engine.pull.pipe(Effect.orDie);
-    });
-
-    // Sync the referenced collections up front so the first join is complete,
-    // then keep the subscriptions tracking the live linkage as it changes.
-    yield* refresh;
-    return observe(engine, subset, names).pipe(Stream.tap(() => refresh));
-  });
+  Related.relatedWith(engine, linkageStrategy(names), subset) as Effect.Effect<
+    Stream.Stream<ReadonlyArray<RelatedRow>, never, never>,
+    never,
+    Scope.Scope
+  >;

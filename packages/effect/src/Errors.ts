@@ -83,10 +83,29 @@ export class QueryError extends Data.TaggedError("QueryError")<{
  * synchronous `registry` builders; tagged so it is still identifiable.
  */
 export class DuplicateNameError extends Data.TaggedError("DuplicateNameError")<{
-  readonly kind: "collection" | "mutator" | "query";
+  readonly kind: "collection" | "mutator" | "query" | "relationship";
   readonly name: string;
 }> {
   override get message(): string {
     return `Duplicate ${this.kind} name: ${this.name}`;
+  }
+}
+
+/**
+ * A collection declared a relationship pointing at a foreign collection that is
+ * not present in the registry — a static configuration bug surfaced at setup
+ * time (like {@link DuplicateNameError}). Thrown by the synchronous
+ * `Collection.registry` builder.
+ */
+export class UnknownCollectionError extends Data.TaggedError("UnknownCollectionError")<{
+  /** The collection declaring the relationship. */
+  readonly from: string;
+  /** The relationship name whose `collection` is unknown. */
+  readonly relationship: string;
+  /** The missing foreign collection the relationship points at. */
+  readonly collection: string;
+}> {
+  override get message(): string {
+    return `Relationship "${this.relationship}" on collection "${this.from}" points at unknown collection: ${this.collection}`;
   }
 }
