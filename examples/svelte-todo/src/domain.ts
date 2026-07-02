@@ -11,7 +11,7 @@
  */
 
 import { Schema } from "effect";
-import { Collection, Mutator, Subset } from "@legation/effect";
+import { Collection, Mutator, Predicate, Subset } from "@legation/effect";
 
 /** A todo row. Same schema drives the collection, the mutator args, and the UI. */
 export const Todo = Schema.Struct({
@@ -45,6 +45,16 @@ export const removeTodo = Mutator.make("todo/remove", RemoveArgs);
 export const allTodos = Subset.make({
   collection: "todos",
   orderBy: [{ field: "createdAt", direction: "asc" }],
+});
+
+/**
+ * The incomplete todos: the footer's "active" count is a `Count` aggregate over
+ * this subset (see `App.svelte`), so the tally is derived by the engine rather
+ * than an app-side `.filter().length`.
+ */
+export const activeTodos = Subset.make({
+  collection: "todos",
+  where: Predicate.eq("done", false),
 });
 
 /** This tab's client identity (per-client mutation sequencing) and group. */

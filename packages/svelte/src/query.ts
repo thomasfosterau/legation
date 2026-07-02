@@ -10,20 +10,21 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
-import { ClientEngine, type Subset } from "@legation/effect";
+import { type Aggregate, ClientEngine, type Subset } from "@legation/effect";
 import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */
 export type Rows = ReadonlyArray<ClientEngine.LocalRow>;
 const EMPTY: Rows = [];
 
-const makeStore = (
+const makeStore = <T>(
   runtime: EffectSyncRuntime,
-  toStream: (engine: ClientEngine.ClientEngine) => Stream.Stream<Rows, unknown>
-): Readable<Rows> =>
-  readable<Rows>(EMPTY, (set) => {
+  initial: T,
+  toStream: (engine: ClientEngine.ClientEngine) => Stream.Stream<T, unknown>
+): Readable<T> =>
+  readable<T>(initial, (set) => {
     const run = Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-      Stream.runForEach(toStream(engine), (rows) => Effect.sync(() => set(rows)))
+      Stream.runForEach(toStream(engine), (value) => Effect.sync(() => set(value)))
     ).pipe(Effect.catchCause(() => Effect.void));
     const fiber = runtime.runFork(run);
     return () => {
@@ -41,9 +42,32 @@ export function query<A>(
 ): Readable<ReadonlyArray<ClientEngine.TypedRow<A>>>;
 export function query(subset: Subset.Subset): Readable<Rows>;
 export function query(subset: Subset.Subset): Readable<Rows> {
-  return makeStore(getEngineRuntime(), (engine) => engine.observe(subset));
+  return makeStore(getEngineRuntime(), EMPTY, (engine) => engine.observe(subset));
 }
 
 /** Live result of a named query (Query.ts). */
 export const namedQuery = (name: string, args: unknown): Readable<Rows> =>
-  makeStore(getEngineRuntime(), (engine) => engine.observeNamed(name, args));
+  makeStore(getEngineRuntime(), EMPTY, (engine) => engine.observeNamed(name, args));
+
+/**
+ * Live aggregate over a subset (count/sum/min/max/avg), re-emitting only when
+ * the value changes. Starts `undefined` until the first emission. Local tier
+ * only — the aggregate sees the rows this client has synced.
+ */
+export const aggregate = (
+  subset: Subset.Subset,
+  agg: Aggregate.Aggregate
+): Readable<Aggregate.AggregateValue> =>
+  makeStore<Aggregate.AggregateValue>(getEngineRuntime(), undefined, (engine) =>
+    engine.observeAggregate(subset, agg)
+  );
+
+/** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
+export const aggregateGrouped = (
+  subset: Subset.Subset,
+  agg: Aggregate.Aggregate,
+  groupBy: string
+): Readable<Record<string, Aggregate.AggregateValue>> =>
+  makeStore<Record<string, Aggregate.AggregateValue>>(getEngineRuntime(), {}, (engine) =>
+    engine.observeAggregateGrouped(subset, agg, groupBy)
+  );
