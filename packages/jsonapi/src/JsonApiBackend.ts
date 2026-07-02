@@ -108,6 +108,47 @@ const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefi
   }
 };
 
+/** Record a PUT's current value under its collection (mutates `puts`). */
+const recordPut = (
+  puts: Map<string, Map<string, unknown>>,
+  collection: string,
+  id: string,
+  value: unknown
+): void => {
+  puts.set(collection, (puts.get(collection) ?? new Map<string, unknown>()).set(id, value));
+};
+
+/** The mutable accumulators one push folds its per-mutation outcomes into. */
+interface WriteAccumulator {
+  readonly touched: Map<string, Set<string>>;
+  readonly puts: Map<string, Map<string, unknown>>;
+  readonly rejected: Array<Backend.RejectedMutation>;
+}
+
+/** One mutation's outcome: applied (with its written value) or rejected. */
+type WriteOutcome =
+  | { readonly _tag: "applied"; readonly id: string; readonly value?: unknown }
+  | { readonly _tag: "rejected"; readonly reason: string };
+
+/** Fold one mutation's outcome into the push accumulators (mutates `acc`). */
+const recordOutcome = (
+  acc: WriteAccumulator,
+  type: string,
+  mutation: { readonly clientId: string; readonly mutationId: number },
+  outcome: WriteOutcome
+): void => {
+  if (outcome._tag === "applied") {
+    acc.touched.set(type, (acc.touched.get(type) ?? new Set()).add(outcome.id));
+    if (outcome.value !== undefined) recordPut(acc.puts, type, outcome.id, outcome.value);
+  } else {
+    acc.rejected.push({
+      clientId: mutation.clientId,
+      mutationId: mutation.mutationId,
+      reason: outcome.reason,
+    });
+  }
+};
+
 /** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
 const writeBody = (
   type: string,
@@ -280,10 +321,17 @@ export const make = (
         return result;
       });
 
+    // Apply one write and report the affected id plus, for create/update, the
+    // row value (`{ id, ...attributes }`) so the hint can carry it for
+    // predicate matching. A delete reports no value → absent from the hint's
+    // values, marking it a delete.
     const applyOne = (
       operation: OperationInfo,
       args: unknown
-    ): Effect.Effect<string, BackendError | MutationRejected> =>
+    ): Effect.Effect<
+      { readonly id: string; readonly value?: unknown },
+      BackendError | MutationRejected
+    > =>
       Effect.gen(function* () {
         const resource = config.resources.get(operation.type);
         switch (operation.operation) {
@@ -306,7 +354,7 @@ export const make = (
                 )
               )
             );
-            return a.id;
+            return { id: a.id, value: { id: a.id, ...a.attributes } };
           }
           case "update": {
             const a = args as { id: string; attributes: Record<string, unknown> };
@@ -321,7 +369,7 @@ export const make = (
                 HttpClientRequest.bodyJsonUnsafe(writeBody(operation.type, a.id, a.attributes))
               )
             );
-            return a.id;
+            return { id: a.id, value: { id: a.id, ...a.attributes } };
           }
           case "delete": {
             const a = args as { id: string };
@@ -335,7 +383,7 @@ export const make = (
                 HttpClientRequest.setHeaders(jsonApiHeaders)
               )
             );
-            return a.id;
+            return { id: a.id };
           }
           default:
             return yield* new BackendError({
@@ -359,6 +407,7 @@ export const make = (
     const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
       Effect.gen(function* () {
         const touched = new Map<string, Set<string>>();
+        const puts = new Map<string, Map<string, unknown>>();
         const rejected: Array<Backend.RejectedMutation> = [];
         for (const mutation of mutations) {
           const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
@@ -377,27 +426,19 @@ export const make = (
           // its id, so it is acknowledged and never poisons the queue. A
           // transient failure propagates and aborts the push.
           const outcome = yield* applyOne(operation, args).pipe(
-            Effect.map((id) => ({ _tag: "applied", id }) as const),
+            Effect.map((applied) => ({ _tag: "applied", ...applied }) as const),
             Effect.catchTag("MutationRejected", (error) =>
               Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
             )
           );
-          if (outcome._tag === "applied") {
-            touched.set(operation.type, (touched.get(operation.type) ?? new Set()).add(outcome.id));
-          } else {
-            rejected.push({
-              clientId: mutation.clientId,
-              mutationId: mutation.mutationId,
-              reason: outcome.reason,
-            });
-          }
+          recordOutcome({ touched, puts, rejected }, operation.type, mutation, outcome);
           yield* bumpLedger(context, mutation);
         }
 
         const finalGroup = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
         return {
           lastMutationIds: Object.fromEntries(finalGroup),
-          hints: [...touched].map(([collection, ids]) => ({ collection, ids: [...ids] })),
+          hints: Backend.buildChangeHints(touched, puts),
           ...(rejected.length > 0 ? { rejected } : {}),
         };
       });

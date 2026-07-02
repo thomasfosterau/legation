@@ -32,6 +32,16 @@ export const serverPullsTotal = Metric.counter("legation_server_pulls_total", {
 /** Pokes published by server fan-out. */
 export const pokesTotal = Metric.counter("legation_pokes_total", { incremental: true });
 
+/**
+ * Pokes suppressed by predicate-level fan-out matching: a group that a
+ * collection-only match would have poked, but whose subscriptions no hinted
+ * change plausibly affects. Over-matching is safe (a redundant poke costs an
+ * empty pull), so this counts avoided-but-safe work, not correctness.
+ */
+export const pokesSuppressedTotal = Metric.counter("legation_pokes_suppressed_total", {
+  incremental: true,
+});
+
 /** Patch sizes (ops per pull) computed by the server. */
 export const patchOps = Metric.histogram("legation_patch_ops", {
   boundaries: [0, 1, 2, 5, 10, 25, 50, 100, 250, 500],

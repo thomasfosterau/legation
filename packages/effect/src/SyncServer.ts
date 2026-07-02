@@ -8,13 +8,17 @@
  * InvalidationBus. Carriers (RpcTransport, HTTP routes, in-memory) bind the
  * resulting ServerHandler.
  *
- * Phase-1 fan-out matching is collection-granular: a change hint pokes
- * every client group whose subscriptions touch the hinted collections.
- * Predicate-level matching is a planned refinement.
+ * Fan-out matching is predicate-aware: a change hint pokes a client group
+ * only when some hinted change plausibly affects one of its subscriptions.
+ * A value-carrying PUT matches against the subset predicate, a delete against
+ * the group's last-synced CVR; value-less hints and `Exists` predicates fall
+ * back to the collection-level match. Soundness first — over-matching is safe
+ * (a redundant poke costs an empty pull), under-matching would delay
+ * convergence, so anything a single row can't decide matches (ADR-0009).
  */
 
 import { Clock, Effect, Layer, Metric, Ref, Scope } from "effect";
-import { Backend, type SyncContext } from "./Backend.js";
+import { Backend, type ChangeHint, type SyncContext } from "./Backend.js";
 import {
   AuthPolicy,
   IdentityResolver,
@@ -26,6 +30,7 @@ import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 import { AuthorizationError, QueryError, TransportError } from "./Errors.js";
 import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
+import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 import { ServerHandler, makePokeHub } from "./Transport.js";
@@ -33,6 +38,64 @@ import type { Subset } from "./Subset.js";
 
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
+
+// ─── Fan-out matching ────────────────────────────────────────────────────────
+//
+// Correctness invariant (ADR-0009): over-matching is safe — a redundant poke
+// costs an empty pull — but under-matching would delay convergence (the next
+// interval pull still recovers it). So every rule below matches when a single
+// row can't decide the question.
+
+/** Whether a group's subsets touch any of the hinted collections (today's match). */
+const collectionMatch = (touched: ReadonlySet<string>, subsets: ReadonlyArray<Subset>): boolean =>
+  subsets.some((subset) => touched.has(subset.collection));
+
+/** Does any hinted PUT value satisfy some subset's predicate? */
+const someValueMatches = (
+  values: ReadonlyArray<{ readonly value: unknown }>,
+  subsets: ReadonlyArray<Subset>
+): boolean => values.some(({ value }) => subsets.some((s) => Predicate.test(s.where, value)));
+
+/** Does the group's last-synced view hold a row this hint deletes? */
+const someDeleteHeld = (
+  hint: ChangeHint,
+  putIds: ReadonlySet<string>,
+  groupCvr: Cvr.Cvr | undefined
+): boolean => {
+  const held = groupCvr?.rows.get(hint.collection);
+  return held !== undefined && hint.ids.some((id) => !putIds.has(id) && held.has(id));
+};
+
+/**
+ * Whether one hint plausibly affects some of a group's subsets on the hint's
+ * collection. An `Exists` node is relational (a single row can't decide it) and
+ * a value-less hint carries no row to test, so both fall back to a match; a
+ * value-carrying PUT matches by predicate, a delete by the group's CVR.
+ */
+const hintAffects = (
+  hint: ChangeHint,
+  subsets: ReadonlyArray<Subset>,
+  groupCvr: Cvr.Cvr | undefined
+): boolean => {
+  if (subsets.some((s) => Predicate.hasExists(s.where))) return true;
+  if (hint.values === undefined) return true;
+  const putIds = new Set(hint.values.map((v) => v.id));
+  return someValueMatches(hint.values, subsets) || someDeleteHeld(hint, putIds, groupCvr);
+};
+
+/**
+ * Predicate-level match for a group: some hint on a collection the group
+ * subscribes plausibly affects one of its subsets there.
+ */
+const predicateMatch = (
+  hints: ReadonlyArray<ChangeHint>,
+  subsets: ReadonlyArray<Subset>,
+  groupCvr: Cvr.Cvr | undefined
+): boolean =>
+  hints.some((hint) => {
+    const onCollection = subsets.filter((s) => s.collection === hint.collection);
+    return onCollection.length > 0 && hintAffects(hint, onCollection, groupCvr);
+  });
 
 /** Build the ServerHandler. */
 export const make: Effect.Effect<
@@ -62,6 +125,9 @@ export const make: Effect.Effect<
   const pokeHub = yield* makePokeHub;
   // Active subscriptions per client group, for fan-out matching.
   const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
+  // Each group's last-synced view (collection → id → version), for matching a
+  // delete against the rows a group actually holds.
+  const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
 
   // Monotonic cookie minting, scoped to this handler instead of a module
   // global. The Clock makes the timestamp injectable (TestClock in tests).
@@ -72,8 +138,10 @@ export const make: Effect.Effect<
     return `cvr-${now}-${seq}`;
   });
 
-  // Fan-out loop: hints → poke groups whose subscriptions touch the
-  // hinted collections. Poke-then-pull; correctness never depends on it.
+  // Fan-out loop: hints → poke each group some hinted change plausibly
+  // affects. A group the collection-level match would poke but predicate
+  // matching rules out is suppressed (counted, never dropped for
+  // correctness). Poke-then-pull; correctness never depends on it.
   // Subscribing before `make` returns guarantees the loop sees every hint
   // published after construction, even ones racing the forked fiber's start.
   const hintSubscription = yield* bus.subscribe;
@@ -84,10 +152,14 @@ export const make: Effect.Effect<
           Effect.gen(function* () {
             const touched = new Set(hints.map((hint) => hint.collection));
             const groups = yield* Ref.get(activeSubsets);
+            const cvrs = yield* Ref.get(activeCvrs);
             for (const [clientGroupId, subsets] of groups) {
-              if (subsets.some((subset) => touched.has(subset.collection))) {
+              if (!collectionMatch(touched, subsets)) continue;
+              if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
                 yield* pokeHub.publish(clientGroupId, { reason: undefined });
                 yield* Metric.update(Telemetry.pokesTotal, 1);
+              } else {
+                yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
               }
             }
           })
@@ -197,6 +269,11 @@ export const make: Effect.Effect<
 
       const cookie = yield* freshCookie;
       yield* cvrStore.set(cookie, { rows: next.rows });
+      // Track this group's latest view so fan-out can match a delete against
+      // the rows the group actually holds (CVR-precise deletes).
+      yield* Ref.update(activeCvrs, (m) =>
+        new Map(m).set(request.clientGroupId, { rows: next.rows })
+      );
       const lastMutationIds = yield* backend.lastMutationIds(context);
       yield* Metric.update(Telemetry.patchOps, patch.length);
       yield* Metric.update(Telemetry.serverPullsTotal, 1);

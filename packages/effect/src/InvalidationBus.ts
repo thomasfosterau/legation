@@ -73,12 +73,21 @@ export interface BusBroker {
   readonly subscribe: Effect.Effect<{ readonly take: Effect.Effect<string> }, never, Scope.Scope>;
 }
 
-/** Wire form of a change-hint batch: a JSON array of `{ collection, ids }`. */
+/**
+ * Wire form of a change-hint batch: a JSON array of `{ collection, ids }`,
+ * plus an optional `values` carrying the current row values of the PUTs (for
+ * predicate-level fan-out matching). The field is optional for wire
+ * compatibility: an old hint with no `values` decodes and behaves exactly as
+ * before (a collection-level match).
+ */
 const HintsFromJson = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
       collection: Schema.String,
       ids: Schema.Array(Schema.String),
+      values: Schema.optional(
+        Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.Unknown }))
+      ),
     })
   )
 );

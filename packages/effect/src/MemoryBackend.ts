@@ -11,8 +11,8 @@
 import { Effect, Layer, Ref, Schema } from "effect";
 import {
   Backend,
+  buildChangeHints,
   type ApplyResult,
-  type ChangeHint,
   type RejectedMutation,
   type SyncContext,
 } from "./Backend.js";
@@ -112,8 +112,13 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       });
 
     // A writer that records what it touches into `localTouched`, so a rejected
-    // mutation's writes can be identified and rolled back.
-    const stagingWriter = (localTouched: Map<string, Set<string>>): BackendWriter => ({
+    // mutation's writes can be identified and rolled back, and the value of
+    // each PUT into `localPuts`, so hints can carry it for predicate matching
+    // (a delete removes the id, so it is absent from the values it emits).
+    const stagingWriter = (
+      localTouched: Map<string, Set<string>>,
+      localPuts: Map<string, Map<string, unknown>>
+    ): BackendWriter => ({
       put: (collection, id, value) =>
         Ref.update(state, (s) => {
           const rows = new Map(s.rows);
@@ -122,6 +127,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           collectionRows.set(id, { id, version, value });
           rows.set(collection, collectionRows);
           localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
+          localPuts.set(collection, (localPuts.get(collection) ?? new Map()).set(id, value));
           return { ...s, rows, versionCounter: version };
         }),
       del: (collection, id) =>
@@ -131,6 +137,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           collectionRows.delete(id);
           rows.set(collection, collectionRows);
           localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
+          localPuts.get(collection)?.delete(id);
           return { ...s, rows };
         }),
       get: (collection, id) =>
@@ -145,6 +152,17 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       }
     };
 
+    const mergePuts = (
+      into: Map<string, Map<string, unknown>>,
+      from: Map<string, Map<string, unknown>>
+    ) => {
+      for (const [collection, values] of from) {
+        const map = into.get(collection) ?? new Map<string, unknown>();
+        for (const [id, value] of values) map.set(id, value);
+        into.set(collection, map);
+      }
+    };
+
     // Apply one mutation: skip replays, reject id gaps, then run the handler
     // atomically. Effects + the lastMutationId bump are atomic by construction
     // (single-threaded Ref updates). A transient `BackendError` aborts the batch
@@ -156,6 +174,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       context: SyncContext,
       mutation: Mutation,
       touched: Map<string, Set<string>>,
+      puts: Map<string, Map<string, unknown>>,
       rejected: Array<RejectedMutation>
     ): Effect.Effect<void, BackendError> =>
       Effect.gen(function* () {
@@ -176,7 +195,12 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         }
 
         const localTouched = new Map<string, Set<string>>();
-        const outcome = yield* handle(mutation.args, stagingWriter(localTouched), context).pipe(
+        const localPuts = new Map<string, Map<string, unknown>>();
+        const outcome = yield* handle(
+          mutation.args,
+          stagingWriter(localTouched, localPuts),
+          context
+        ).pipe(
           Effect.map(() => ({ _tag: "applied" }) as const),
           Effect.catchTag("MutationRejected", (error) =>
             Ref.set(state, current).pipe(
@@ -186,6 +210,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         );
         if (outcome._tag === "applied") {
           mergeTouched(touched, localTouched);
+          mergePuts(puts, localPuts);
         } else {
           rejected.push({
             clientId: mutation.clientId,
@@ -202,15 +227,13 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     ): Effect.Effect<ApplyResult, BackendError> =>
       Effect.gen(function* () {
         const touched = new Map<string, Set<string>>();
+        const puts = new Map<string, Map<string, unknown>>();
         const rejected: Array<RejectedMutation> = [];
         for (const mutation of mutations) {
-          yield* applyOne(context, mutation, touched, rejected);
+          yield* applyOne(context, mutation, touched, puts, rejected);
         }
         const final = yield* Ref.get(state);
-        const hints: Array<ChangeHint> = [...touched].map(([collection, ids]) => ({
-          collection,
-          ids: [...ids],
-        }));
+        const hints = buildChangeHints(touched, puts);
         return {
           lastMutationIds: Object.fromEntries(
             final.lastMutationIds.get(context.clientGroupId) ?? new Map()

@@ -133,25 +133,49 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       }));
     });
 
-  const getRows: Backend.Backend["getRows"] = (_context, collection, ids) => {
+  // Fetch the raw rows for explicit ids (shared by getRows and hint
+  // enrichment). Reads see the push transaction's own writes.
+  const queryRowsById = (
+    collection: string,
+    ids: ReadonlyArray<string>
+  ): Effect.Effect<ReadonlyArray<SqlRow>, BackendError> => {
     const mapping = config.tables[collection];
     if (mapping === undefined || ids.length === 0) return Effect.succeed([]);
-    const idColumn = idOf(collection);
-    const select = Sql.compileSelect({
-      table: mapping.table,
-      where: Predicate.isIn(idColumn, [...ids]),
-      dialect,
-    });
-    return executor.query(select).pipe(
+    return executor.query(
+      Sql.compileSelect({
+        table: mapping.table,
+        where: Predicate.isIn(idOf(collection), [...ids]),
+        dialect,
+      })
+    );
+  };
+
+  const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
+    queryRowsById(collection, ids).pipe(
       Effect.map((rows) =>
         rows.map((row) => ({
-          id: String(row[idColumn]),
+          id: String(row[idOf(collection)]),
           version: versionFor(collection, row),
           value: row,
         }))
       )
     );
-  };
+
+  // Current (id, value) pairs for explicit ids, for hint enrichment.
+  const rowValuesFor = (collection: string, ids: ReadonlyArray<string>) =>
+    queryRowsById(collection, ids).pipe(
+      Effect.map((rows) => rows.map((row) => ({ id: String(row[idOf(collection)]), value: row })))
+    );
+
+  // Attach the current row values to a handler-emitted hint (best-effort, for
+  // predicate-level fan-out). The rows still present are PUTs; ids the handler
+  // named but that the read no longer returns were deleted (absent from
+  // `values`). A collection without a table mapping keeps the hint value-less,
+  // so the server falls back to a collection-level match.
+  const enrichHint = (hint: Backend.ChangeHint): Effect.Effect<Backend.ChangeHint, BackendError> =>
+    config.tables[hint.collection] === undefined
+      ? Effect.succeed(hint)
+      : rowValuesFor(hint.collection, hint.ids).pipe(Effect.map((values) => ({ ...hint, values })));
 
   const readLastIds = (
     clientGroupId: string
@@ -226,9 +250,11 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           }
           yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
         }
+        // Enrich once, after all writes, so the reads see the final tx state
+        // (a row a later mutation deleted is correctly absent from `values`).
         return {
           lastMutationIds: yield* readLastIds(context.clientGroupId),
-          hints,
+          hints: yield* Effect.forEach(hints, enrichHint),
           ...(rejected.length > 0 ? { rejected } : {}),
         };
       })

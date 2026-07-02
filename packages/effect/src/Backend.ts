@@ -41,6 +41,16 @@ export interface SyncContext {
 export interface ChangeHint {
   readonly collection: string;
   readonly ids: ReadonlyArray<RowId>;
+  /**
+   * The current values of the rows PUT in this change, when the backend has
+   * them cheaply to hand. Lets the server match hints against subscription
+   * predicates instead of only their collection. Best-effort and additive: a
+   * backend that can't produce values omits the field, and the server falls
+   * back to a collection-level match. Deletes are ids present in `ids` but
+   * absent from `values`; an omitted `values` means "no value information",
+   * not "all deletes".
+   */
+  readonly values?: ReadonlyArray<{ readonly id: RowId; readonly value: unknown }> | undefined;
 }
 
 /** The (row id, row version) set an evaluated subset currently contains. */
@@ -100,3 +110,22 @@ export interface Backend {
 }
 
 export const Backend = Context.Service<Backend>("@legation/effect/Backend");
+
+/**
+ * Build change hints from a push's touched ids and the values of its PUTs:
+ * each touched collection becomes one hint whose `values` carry the current
+ * row value of every PUT there. Ids touched but absent from `puts` are deletes,
+ * so they appear in `ids` but not `values`. Backends that track writes as
+ * `(touched, puts)` share this to emit predicate-matchable hints (ADR-0009).
+ */
+export const buildChangeHints = (
+  touched: ReadonlyMap<string, ReadonlySet<RowId>>,
+  puts: ReadonlyMap<string, ReadonlyMap<RowId, unknown>>
+): ReadonlyArray<ChangeHint> =>
+  [...touched].map(([collection, ids]) => {
+    const putMap = puts.get(collection);
+    const values = [...ids].flatMap((id) =>
+      putMap?.has(id) === true ? [{ id, value: putMap.get(id) }] : []
+    );
+    return { collection, ids: [...ids], values };
+  });
