@@ -23,6 +23,7 @@ export * from "./Errors.js";
 export * as Collection from "./Collection.js";
 export * as Predicate from "./Predicate.js";
 export * as Subset from "./Subset.js";
+export * as Related from "./Related.js";
 export * as Mutator from "./Mutator.js";
 export * as Query from "./Query.js";
 export * as Hash from "./Hash.js";

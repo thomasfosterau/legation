@@ -15,12 +15,12 @@
 
   const { currentUsername } = getAuth();
   const actions = getActions();
-  const { users, articles, comments, follows, favorites } = getData();
+  const { users, articles, commentsWithAuthor, follows, favorites } = getData();
 
   const view = $derived(
     toArticle(slug, $currentUsername, $articles, $users, $follows, $favorites)
   );
-  const commentViews = $derived(toComments(slug, $currentUsername, $comments, $users, $follows));
+  const commentViews = $derived(toComments(slug, $commentsWithAuthor));
 
   let draft = $state("");
 

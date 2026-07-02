@@ -92,6 +92,11 @@ export const commentsCollection = Collection.make({
   name: "comments",
   schema: Comment,
   id: (comment) => comment.id,
+  // A comment's author is the single `users` row whose id (username) equals the
+  // comment's `authorId` — resolved client-side by `Related` over the mirror.
+  relationships: [
+    { name: "author", kind: "one", collection: "users", localField: "authorId", foreignField: "username" },
+  ],
 });
 export const favoritesCollection = Collection.make({
   name: "favorites",
@@ -103,6 +108,19 @@ export const followsCollection = Collection.make({
   schema: Follow,
   id: (follow) => follow.id,
 });
+
+/**
+ * The client's collection registry, carrying the declared relationships. Built
+ * once so `Related` reads its relationship metadata (and so a duplicate or
+ * dangling declaration fails loudly at startup).
+ */
+export const conduitRegistry = Collection.registry([
+  usersCollection,
+  articlesCollection,
+  commentsCollection,
+  favoritesCollection,
+  followsCollection,
+]);
 
 // ─── Mutator arg schemas ─────────────────────────────────────────────────────
 
