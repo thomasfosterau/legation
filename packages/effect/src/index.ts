@@ -38,6 +38,7 @@ export * as SpecExport from "./SpecExport.js";
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as ClientStore from "./ClientStore.js";
 export * as ClientEngine from "./ClientEngine.js";
+export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
 export * as Subscriptions from "./Subscriptions.js";
 export * as LiveQuery from "./LiveQuery.js";
