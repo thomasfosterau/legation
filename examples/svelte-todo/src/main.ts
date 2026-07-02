@@ -14,8 +14,8 @@ const target = document.getElementById("root");
 if (target === null) throw new Error("Missing #root container");
 
 const main = async (): Promise<void> => {
-  const { runtime, controls } = await createWorld();
-  mount(App, { target, props: { runtime, controls } });
+  const { runtime, controls, undo } = await createWorld();
+  mount(App, { target, props: { runtime, controls, undo } });
 };
 
 void main();

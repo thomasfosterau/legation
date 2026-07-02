@@ -8,8 +8,9 @@
    * journal) come from the demo context. Visual design and behaviour mirror the
    * FoldKit / React / Compose / SwiftUI todo examples.
    */
-  import { query, aggregate, getMutate, setEngineRuntime } from "@legation/svelte";
-  import { Aggregate } from "@legation/effect";
+  import { Effect } from "effect";
+  import { query, aggregate, setEngineRuntime, undoControls } from "@legation/svelte";
+  import { Aggregate, type Undo } from "@legation/effect";
   import { type Todo, allTodos, activeTodos } from "./domain";
   import type { DemoControls } from "./sync";
   import type { EffectSyncRuntime } from "@legation/svelte";
@@ -17,7 +18,11 @@
 
   type Filter = "All" | "Active" | "Completed";
 
-  let { runtime, controls }: { runtime: EffectSyncRuntime; controls: DemoControls } = $props();
+  let {
+    runtime,
+    controls,
+    undo: manager,
+  }: { runtime: EffectSyncRuntime; controls: DemoControls; undo: Undo.UndoManager } = $props();
 
   // Wire the engine runtime + demo controls into context for this subtree.
   setEngineRuntime(runtime);
@@ -28,7 +33,9 @@
   // subset — derived by the engine, deduped so an edit that leaves the count
   // unchanged doesn't re-render the footer.
   const activeCount = aggregate(activeTodos, Aggregate.count);
-  const mutate = getMutate();
+  // Undo/redo over the engine: `run` a paired intent (do + reverse), and the
+  // stores track whether an undo/redo is currently possible.
+  const { canUndo, canRedo, undo, redo } = undoControls(manager);
   const connection = connectionStore(controls);
   const pending = pendingStore(controls);
 
@@ -60,19 +67,68 @@
     return () => clearInterval(timer);
   });
 
+  // Every write is a *paired intent*: the mutation to run now plus the mutation
+  // that reverses it. `manager.run` applies `execute` optimistically (journaled,
+  // rebased, offline-safe) and records the pair so undo/redo can replay it.
+  const run = (entry: Undo.UndoEntry): void => void manager.run(entry);
+
   const submit = (event: SubmitEvent): void => {
     event.preventDefault();
     const title = draft.trim();
     if (title.length === 0) return;
     draft = "";
-    void mutate("todo/set", { id: crypto.randomUUID(), title, done: false, createdAt: Date.now() });
+    const todo: Todo = { id: crypto.randomUUID(), title, done: false, createdAt: Date.now() };
+    // Undo of a create is a delete of the same id.
+    run({
+      execute: { mutator: "todo/set", args: todo },
+      undo: { mutator: "todo/remove", args: { id: todo.id } },
+    });
   };
 
-  // Mutators re-run on every rebase, so toggling is a full idempotent put.
-  const toggle = (todo: Todo): void => void mutate("todo/set", { ...todo, done: !todo.done });
-  const remove = (id: string): void => void mutate("todo/remove", { id });
+  // Mutators re-run on every rebase, so toggling is a full idempotent put; its
+  // undo restores the pre-toggle row captured here.
+  const toggle = (todo: Todo): void =>
+    run({
+      execute: { mutator: "todo/set", args: { ...todo, done: !todo.done } },
+      undo: { mutator: "todo/set", args: todo },
+    });
+
+  // Delete-then-undo: capture the whole pre-delete row now, so its undo
+  // re-creates it exactly (the paired-intents way to satisfy #46's criterion).
+  const remove = (todo: Todo): void =>
+    run({
+      execute: { mutator: "todo/remove", args: { id: todo.id } },
+      undo: { mutator: "todo/set", args: todo },
+    });
+
+  // Clear-completed is many deletes coalesced into ONE undo step via `group`,
+  // so a single undo brings every cleared todo back.
+  const clearCompleted = (): void => {
+    const done = todos.filter((todo) => todo.done);
+    void Effect.runPromise(
+      manager.group(
+        Effect.forEach(done, (todo) =>
+          manager.run({
+            execute: { mutator: "todo/remove", args: { id: todo.id } },
+            undo: { mutator: "todo/set", args: todo },
+          })
+        )
+      )
+    );
+  };
+
   const syncNow = (): void => void controls.syncNow().then(() => (lastSyncAt = Date.now()));
+
+  // Keyboard shortcuts: ⌘Z / ⌃Z to undo, add Shift to redo.
+  const onKeydown = (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+    event.preventDefault();
+    if (event.shiftKey) void redo();
+    else void undo();
+  };
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="app">
   <div class="card">
@@ -97,6 +153,12 @@
       <button class="btn" onclick={() => void controls.simulateRemote()}>Remote edit</button>
       <button class={remoteAgent ? "btn btn-active" : "btn"} onclick={() => (remoteAgent = !remoteAgent)}>
         {remoteAgent ? "Remote agent: on" : "Remote agent: off"}
+      </button>
+      <button class="btn" disabled={!$canUndo} onclick={() => void undo()} title="Undo (⌘Z / Ctrl+Z)">
+        Undo
+      </button>
+      <button class="btn" disabled={!$canRedo} onclick={() => void redo()} title="Redo (⇧⌘Z / Ctrl+Shift+Z)">
+        Redo
       </button>
     </div>
 
@@ -127,7 +189,7 @@
               <input type="checkbox" checked={todo.done} onchange={() => toggle(todo)} />
               <span class="todo-title">{todo.title}</span>
             </label>
-            <button class="link link-danger" onclick={() => remove(todo.id)}>delete</button>
+            <button class="link link-danger" onclick={() => remove(todo)}>delete</button>
           </li>
         {/each}
       </ul>
@@ -138,7 +200,7 @@
       {#if completed > 0}
         <button
           class="link"
-          onclick={() => todos.filter((todo) => todo.done).forEach((todo) => remove(todo.id))}
+          onclick={clearCompleted}
         >
           clear completed
         </button>

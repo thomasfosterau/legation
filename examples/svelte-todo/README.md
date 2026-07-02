@@ -3,16 +3,22 @@
 A browser todo app that drives
 [`@legation/effect`](../../packages/effect) from Svelte through the
 [`@legation/svelte`](../../packages/svelte) bindings
-(`query` stores + `getMutate`). It is the Svelte counterpart to the
+(`query` stores + `undoControls`). It is the Svelte counterpart to the
 [React](../react-todo) and [FoldKit](../foldkit-todo) examples, and like the
 others it runs the **real library server pipeline in the page**, so every
 concept in `CONTEXT.md` is exercised by code you can click on.
 
 ## What it shows
 
-- **Optimistic writes** — adding, toggling, or deleting a todo calls the
-  `getMutate()` function; the row updates immediately, before any round trip.
-  The mutator handlers are idempotent because they re-run on every rebase.
+- **Optimistic writes** — adding, toggling, or deleting a todo runs a mutation;
+  the row updates immediately, before any round trip. The mutator handlers are
+  idempotent because they re-run on every rebase.
+- **Undo / redo (#46)** — every write goes through the `Undo` manager as a
+  _paired intent_ (the mutation to run plus the mutation that reverses it). Undo
+  and redo replay through the same optimistic `mutate` pipeline, so they are
+  journaled, rebased, and offline-safe like any write. Press **⌘Z / Ctrl+Z** to
+  undo and **⇧⌘Z / Ctrl+Shift+Z** to redo, or use the toolbar buttons; the
+  history is in-memory and per-client (a reload clears it).
 - **Live views** — the list is `query(allTodos)`, a Svelte `Readable` store
   backed by a forked `observe` fiber. Read with `$todos` auto-subscription, it
   re-renders on every local change (mutation, push ack, pull/rebase).
@@ -49,10 +55,50 @@ concept in `CONTEXT.md` is exercised by code you can click on.
 - `src/demo.ts` — a small Svelte context + two stores for the demo knobs the
   engine's read/write API doesn't cover (offline, remote edit, journal,
   connection).
-- `src/App.svelte` — the UI: `setEngineRuntime` + `query` + `getMutate` and the
-  demo context, in idiomatic Svelte 5 runes.
+- `src/App.svelte` — the UI: `setEngineRuntime` + `query` + `undoControls` and
+  the demo context, in idiomatic Svelte 5 runes.
 - `src/main.ts` — builds the world, then mounts the app with the runtime +
-  controls as props.
+  controls + undo manager as props.
+
+## Recipe: paired-intents undo
+
+The `Undo` module (`@legation/effect`) adds undo/redo without touching the
+engine: the caller supplies both directions of a change, and undo/redo replay
+through `ClientEngine.mutate`, so they inherit the overlay, the journal, rebase,
+and offline behaviour for free.
+
+```ts
+import { Undo } from "@legation/effect";
+import { undoControls } from "@legation/svelte";
+
+// One manager per client (in-memory history) — see src/sync.ts.
+const manager = yield * Undo.make(engine);
+
+// Svelte stores + handlers — see src/App.svelte.
+const { canUndo, canRedo, undo, redo } = undoControls(manager);
+
+// A create: undo is a delete of the same id.
+manager.run({
+  execute: { mutator: "todo/set", args: todo },
+  undo: { mutator: "todo/remove", args: { id: todo.id } },
+});
+```
+
+**Delete-then-undo** is the case that needs care: to bring a deleted row back,
+capture its value from the local view *at run time* and pass it as the undo's
+`set` args, so the undo re-creates the row exactly.
+
+```ts
+// `todo` is the current row, read from `query(allTodos)` before deleting.
+manager.run({
+  execute: { mutator: "todo/remove", args: { id: todo.id } },
+  undo: { mutator: "todo/set", args: todo }, // captured pre-delete value
+});
+```
+
+**Grouping** coalesces several `run`s into one undo step — "clear completed"
+deletes every done todo inside `manager.group(...)`, so a single undo restores
+them all.
 
 ## Run
 
