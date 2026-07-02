@@ -180,7 +180,9 @@ describe("SqlBackend applyMutations", () => {
 
       const first = yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
       expect(first.lastMutationIds).toEqual({ c1: 1 });
-      expect(first.hints).toEqual([{ collection: "todos", ids: ["1"] }]);
+      // The hint carries the PUT's current row values (best-effort); the mock
+      // executor stores nothing, so the enrichment read finds no row.
+      expect(first.hints).toEqual([{ collection: "todos", ids: ["1"], values: [] }]);
 
       // Replaying id 1 is an idempotent no-op (handler does not run again).
       yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
@@ -188,6 +190,25 @@ describe("SqlBackend applyMutations", () => {
 
       yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(2)]);
       expect(yield* Ref.get(ran)).toBe(2);
+    });
+  });
+
+  it.effect("enriches hints with the PUT's current row values", () => {
+    const mock = makeMock();
+    // A row the enrichment read finds for the hinted id.
+    mock.seed("todos", [{ id: "1", version: "a", title: "x" }]);
+    return Effect.gen(function* () {
+      const ran = yield* Ref.make(0);
+      const backend = makeBackend(mock, ran);
+      const result = yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      // The hint carries the current row value for predicate-level fan-out.
+      expect(result.hints).toEqual([
+        {
+          collection: "todos",
+          ids: ["1"],
+          values: [{ id: "1", value: { id: "1", version: "a", title: "x" } }],
+        },
+      ]);
     });
   });
 
@@ -252,8 +273,9 @@ describe("SqlBackend applyMutations", () => {
         // The rejected mutation and the one behind it are both acknowledged.
         expect(result.lastMutationIds).toEqual({ c1: 2 });
         expect(result.rejected).toEqual([{ clientId: "c1", mutationId: 1, reason: "forbidden" }]);
-        // Only the applied mutation contributes a hint.
-        expect(result.hints).toEqual([{ collection: "todos", ids: ["2"] }]);
+        // Only the applied mutation contributes a hint (values enriched
+        // best-effort; the mock executor stores no row to read back).
+        expect(result.hints).toEqual([{ collection: "todos", ids: ["2"], values: [] }]);
         // The rejection rolled its write back to a savepoint.
         expect(runs.some((text) => text.startsWith("SAVEPOINT "))).toBe(true);
         expect(runs.some((text) => text.startsWith("ROLLBACK TO SAVEPOINT "))).toBe(true);
