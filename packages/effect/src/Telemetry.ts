@@ -37,6 +37,15 @@ export const patchOps = Metric.histogram("legation_patch_ops", {
   boundaries: [0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
 });
 
+/**
+ * Sync operations (push/pull/poke stream) that failed terminally after the
+ * client's retry policy was exhausted. A rising count means the transport is
+ * degraded — bindings can surface a "sync degraded" state from it.
+ */
+export const syncFailuresTotal = Metric.counter("legation_client_sync_failures_total", {
+  incremental: true,
+});
+
 /** Record an integer count against a counter (no-op-safe in any context). */
 export const count = <Input extends number>(
   metric: Metric.Metric<Input, unknown>,
