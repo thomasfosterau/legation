@@ -69,13 +69,14 @@ export interface Data {
 
 /** Build the base collection stores. Call during init, after setEngineRuntime. */
 export const createData = (): Data => ({
-  categories: derived(query(allCategories), (rows) => rows.map((r) => r.value as Category)),
-  suppliers: derived(query(allSuppliers), (rows) => rows.map((r) => r.value as Supplier)),
-  products: derived(query(allProducts), (rows) => rows.map((r) => r.value as Product)),
-  customers: derived(query(allCustomers), (rows) => rows.map((r) => r.value as Customer)),
-  employees: derived(query(allEmployees), (rows) => rows.map((r) => r.value as Employee)),
-  orders: derived(query(allOrders), (rows) => rows.map((r) => r.value as Order)),
-  orderDetails: derived(query(allOrderDetails), (rows) => rows.map((r) => r.value as OrderDetail)),
+  // `query` is typed by `Subset.for(...)`, so `r.value` is the row type — no cast.
+  categories: derived(query(allCategories), (rows) => rows.map((r) => r.value)),
+  suppliers: derived(query(allSuppliers), (rows) => rows.map((r) => r.value)),
+  products: derived(query(allProducts), (rows) => rows.map((r) => r.value)),
+  customers: derived(query(allCustomers), (rows) => rows.map((r) => r.value)),
+  employees: derived(query(allEmployees), (rows) => rows.map((r) => r.value)),
+  orders: derived(query(allOrders), (rows) => rows.map((r) => r.value)),
+  orderDetails: derived(query(allOrderDetails), (rows) => rows.map((r) => r.value)),
 });
 
 const DATA_KEY = Symbol("svelte-northwind/data");

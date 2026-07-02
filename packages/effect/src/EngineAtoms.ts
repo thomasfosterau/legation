@@ -20,8 +20,14 @@ import type { Cause, Layer } from "effect";
 import { Effect, Stream } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import type { AsyncResult, AtomRegistry, Reactivity } from "effect/unstable/reactivity";
-import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
+import {
+  ClientEngine,
+  type LocalRow,
+  type MutationOutcome,
+  type TypedRow,
+} from "./ClientEngine.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
+import * as Hash from "./Hash.js";
 import * as Subset from "./Subset.js";
 
 type Rows = ReadonlyArray<LocalRow>;
@@ -33,6 +39,16 @@ type Rows = ReadonlyArray<LocalRow>;
  */
 export type LiveQueryResult = AsyncResult.AsyncResult<
   Rows,
+  StoreError | MutatorError | Cause.NoSuchElementError
+>;
+
+/**
+ * A typed live query's Atom value: the current rows refined to the row type
+ * `A`, as an `AsyncResult`. `TypedLiveQueryResult<unknown>` is structurally
+ * {@link LiveQueryResult}, so plain-subset callers are unaffected.
+ */
+export type TypedLiveQueryResult<A> = AsyncResult.AsyncResult<
+  ReadonlyArray<TypedRow<A>>,
   StoreError | MutatorError | Cause.NoSuchElementError
 >;
 
@@ -55,9 +71,13 @@ export interface EngineAtoms {
   /**
    * The Atom for a subset's live results. Stable per subset identity
    * (`Subset.hash`): the same subset yields the same Atom, so mounting it
-   * from many components shares one subscription.
+   * from many components shares one subscription. A {@link Subset.TypedSubset}
+   * refines the Atom's rows to its row type.
    */
-  readonly liveQuery: (subset: Subset.Subset) => Atom.Atom<LiveQueryResult>;
+  readonly liveQuery: {
+    <A>(subset: Subset.TypedSubset<A>): Atom.Atom<TypedLiveQueryResult<A>>;
+    (subset: Subset.Subset): Atom.Atom<LiveQueryResult>;
+  };
   /** The Atom for a named query's live results, stable per (name, args). */
   readonly namedQuery: (name: string, args: unknown) => Atom.Atom<NamedQueryResult>;
   /** Write a {@link MutationArg} to run a mutator; its result is an `AsyncResult`. */
@@ -99,7 +119,7 @@ export const fromLayer = (
 
   const namedQueries = new Map<string, Atom.Atom<NamedQueryResult>>();
   const namedQuery = (name: string, args: unknown): Atom.Atom<NamedQueryResult> => {
-    const key = `${name}:${JSON.stringify(args)}`;
+    const key = `${name}:${Hash.canonicalJson(args)}`;
     const existing = namedQueries.get(key);
     if (existing !== undefined) return existing;
     const atom = runtime.atom(
@@ -121,5 +141,11 @@ export const fromLayer = (
     )
   );
 
-  return { runtime, liveQuery, namedQuery, mutation, mutationWithAck };
+  return {
+    runtime,
+    liveQuery: liveQuery as EngineAtoms["liveQuery"],
+    namedQuery,
+    mutation,
+    mutationWithAck,
+  };
 };

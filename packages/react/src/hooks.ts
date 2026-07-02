@@ -31,9 +31,16 @@ export const useAtomSet = <R, W>(atom: Atom.Writable<R, W>): ((value: W) => void
   return React.useCallback((value: W) => registry.set(atom, value), [registry, atom]);
 };
 
-/** Live result of a subset as an `AsyncResult`, re-rendering on every local change. */
-export const useQuery = (subset: Subset.Subset): EngineAtoms.LiveQueryResult =>
-  useAtomValue(useEngineAtoms().liveQuery(subset));
+/**
+ * Live result of a subset as an `AsyncResult`, re-rendering on every local
+ * change. A {@link Subset.TypedSubset} refines the rows to its row type; a
+ * plain `Subset` returns untyped rows.
+ */
+export function useQuery<A>(subset: Subset.TypedSubset<A>): EngineAtoms.TypedLiveQueryResult<A>;
+export function useQuery(subset: Subset.Subset): EngineAtoms.LiveQueryResult;
+export function useQuery(subset: Subset.Subset): EngineAtoms.LiveQueryResult {
+  return useAtomValue(useEngineAtoms().liveQuery(subset));
+}
 
 /** Live result of a named query (Query.ts) as an `AsyncResult`. */
 export const useNamedQuery = (name: string, args: unknown): EngineAtoms.NamedQueryResult =>

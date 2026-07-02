@@ -18,6 +18,15 @@ const canonical = (value: unknown): string => {
     .join(",")}}`;
 };
 
+/**
+ * A canonical, key-order-insensitive JSON serialisation: two structurally
+ * equal values always produce the same string, whatever the order their keys
+ * were written in. The correct basis for cache/subscription keys derived from
+ * args objects (where `JSON.stringify` would key on insertion order and split
+ * one logical subscription across two entries).
+ */
+export const canonicalJson = (value: unknown): string => canonical(value);
+
 /** A content-hash row version (FNV-1a over the canonical value). */
 export const contentHash = (value: unknown): string => {
   const text = canonical(value);

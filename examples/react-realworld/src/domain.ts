@@ -160,17 +160,15 @@ export const deleteComment = Mutator.make("comment/delete", CommentIdArgs);
 // whole of every collection and joins/filters locally. Articles are ordered
 // newest-first to match Conduit's feed ordering.
 
-export const allUsers = Subset.make({ collection: "users" });
-export const allArticles = Subset.make({
-  collection: "articles",
+export const allUsers = Subset.for(usersCollection).make();
+export const allArticles = Subset.for(articlesCollection).make({
   orderBy: [{ field: "createdAt", direction: "desc" }],
 });
-export const allComments = Subset.make({
-  collection: "comments",
+export const allComments = Subset.for(commentsCollection).make({
   orderBy: [{ field: "createdAt", direction: "asc" }],
 });
-export const allFavorites = Subset.make({ collection: "favorites" });
-export const allFollows = Subset.make({ collection: "follows" });
+export const allFavorites = Subset.for(favoritesCollection).make();
+export const allFollows = Subset.for(followsCollection).make();
 
 /** All subsets a client subscribes to on boot. */
 export const allSubsets: ReadonlyArray<Subset.Subset> = [
