@@ -755,26 +755,12 @@ export const make = (
     const query = (subset: Subset.Subset) =>
       collectionRows(subset.collection).pipe(Effect.map((rows) => Subset.apply(rows, subset)));
 
+    // Route the whole patch through the store's batched bulk write, so a K-op
+    // patch on a large collection costs K row-value writes + ~1 index rewrite
+    // per touched collection — I/O scales with patch size, not collection size
+    // (#47) — instead of one read-whole/rewrite-whole per op.
     const applyPatch = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        for (const op of ops) {
-          switch (op._tag) {
-            case "Clear":
-              yield* store.clearRows;
-              break;
-            case "Put":
-              yield* store.putRow(op.collection, {
-                id: op.id,
-                version: op.version,
-                value: op.value,
-              });
-              break;
-            case "Del":
-              yield* store.delRow(op.collection, op.id);
-              break;
-          }
-        }
-      });
+      store.applyRowOps(ops);
 
     // Resolve every pending deferred at or below `lastId` as applied, but only
     // report ids this call actually settled (a rejected mutation is already
