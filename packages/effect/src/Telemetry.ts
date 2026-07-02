@@ -86,6 +86,44 @@ export const mirrorRefreshesTotal = Metric.counter("legation_mirror_refreshes_to
   incremental: true,
 });
 
+/**
+ * Depth of the client's journal — the number of pending (unacknowledged)
+ * mutations. Sampled as an absolute gauge on every append (a new pending
+ * mutation) and every acknowledgement (a trim), so it tracks the outbox
+ * backlog: a persistently high value means pushes are not draining.
+ */
+export const journalDepth = Metric.gauge("legation_journal_depth");
+
+/**
+ * Time (ms) to rebuild the optimistic overlay — the rebase (ADR-0008): replay
+ * every pending mutation over confirmed rows. Sampled around the actual
+ * materialisation (cache misses only), so it measures replay cost, not cache
+ * hits.
+ */
+export const rebaseDurationMs = Metric.histogram("legation_rebase_duration_ms", {
+  boundaries: [0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+});
+
+/**
+ * Time (ms) the server fan-out loop spends processing one hint batch — from
+ * taking the batch off the invalidation bus to poking every matching group.
+ * A proxy for hint-published → poke-sent latency (the hints carry no publish
+ * timestamp), so it measures the fan-out leg the server controls.
+ */
+export const fanoutLatencyMs = Metric.histogram("legation_fanout_latency_ms", {
+  boundaries: [0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500],
+});
+
+/** Patch size (ops) a client applies per pull — the downstream volume per rebase. */
+export const pullPatchOps = Metric.histogram("legation_pull_patch_ops", {
+  boundaries: [0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
+});
+
+/** Mutations delivered per push — the upstream batch size the journal coalesced. */
+export const pushMutations = Metric.histogram("legation_push_mutations", {
+  boundaries: [0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
+});
+
 /** Record an integer count against a counter (no-op-safe in any context). */
 export const count = <Input extends number>(
   metric: Metric.Metric<Input, unknown>,

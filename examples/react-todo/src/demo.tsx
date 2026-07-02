@@ -31,19 +31,14 @@ export const useConnection = (): Connection => {
   return status;
 };
 
-/** The durable journal, polled so the panel reflects push acks (which trim it). */
+/**
+ * The durable journal, driven by `EngineIntrospection` (#45): the panel
+ * re-renders on every engine lifecycle event (journal, push, pull, rebuild),
+ * so push acks that trim the journal show up without polling.
+ */
 export const usePending = (): ReadonlyArray<PendingEntry> => {
   const controls = useDemo();
   const [pending, setPending] = React.useState<ReadonlyArray<PendingEntry>>([]);
-  React.useEffect(() => {
-    let live = true;
-    const poll = () => void controls.pendingNow().then((next) => live && setPending(next));
-    poll();
-    const timer = window.setInterval(poll, 750);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [controls]);
+  React.useEffect(() => controls.subscribeJournal(setPending), [controls]);
   return pending;
 };
