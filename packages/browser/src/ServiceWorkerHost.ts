@@ -10,6 +10,18 @@
  * (the documented degraded mode) since it only needs BroadcastChannel.
  * Background Sync / Periodic Background Sync registration stays app code —
  * wire those events to `ClientEngine.push` / `ClientEngine.pull`.
+ *
+ * To evict HTTP-cache entries as collection changes land, fork
+ * `HttpCacheInvalidation.invalidateOnChanges` alongside `run` in the same
+ * scope — kept out of the host so it stays an opt-in composition:
+ *
+ * ```ts
+ * yield* ServiceWorkerHost.run();
+ * yield* HttpCacheInvalidation.invalidateOnChanges({
+ *   store,
+ *   changes: HttpCacheInvalidation.collectionChanges(engine.engineEvents),
+ * });
+ * ```
  */
 
 import { ClientEngine } from "@legation/effect";

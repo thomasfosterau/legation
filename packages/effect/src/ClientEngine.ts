@@ -129,7 +129,12 @@ export interface MutationEvent {
  * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
  *   of `mutations` delivered).
  * - `PullStarted` / `PullCompleted` — a pull began / finished (with the number
- *   of patch `ops` applied).
+ *   of patch `ops` applied and the distinct `collections` those ops touched —
+ *   a `Clear` stands for every collection the client currently holds, since it
+ *   resets the whole view). The touched collections drive collection-scoped
+ *   reactions such as HTTP-cache tag invalidation (`@legation/browser`), which
+ *   is why they are reported even on a client with an empty journal (the
+ *   common case, where a pull emits a `Patch` change and no `ViewRebuilt`).
  * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
  * - `ViewRebuilt` — the local view was rebuilt (rebase/seed/subscribe), scoped
  *   to the `collections` the shift touched (absent means "any collection").
@@ -153,7 +158,11 @@ export type EngineEvent =
   | { readonly _tag: "PushStarted" }
   | { readonly _tag: "PushCompleted"; readonly mutations: number }
   | { readonly _tag: "PullStarted" }
-  | { readonly _tag: "PullCompleted"; readonly ops: number }
+  | {
+      readonly _tag: "PullCompleted";
+      readonly ops: number;
+      readonly collections: ReadonlyArray<string>;
+    }
   | { readonly _tag: "PokeReceived"; readonly reason?: string }
   | { readonly _tag: "ViewRebuilt"; readonly collections?: ReadonlyArray<string> }
   | {
@@ -919,13 +928,35 @@ export const make = (
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
-    const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
+    // The distinct collections a pulled patch touches, computed before the
+    // patch is applied so a `Clear` can stand for every collection the client
+    // currently holds (the patch would otherwise wipe them). Put/Del name their
+    // collection directly. Drives collection-scoped reactions (HTTP-cache tag
+    // invalidation) via the `PullCompleted` event.
+    const pullTouchedCollections = (
+      patch: ReadonlyArray<PatchOp>
+    ): Effect.Effect<ReadonlyArray<string>, StoreError> =>
+      Effect.gen(function* () {
+        const touched = new Set<string>();
+        let cleared = false;
+        for (const op of patch) {
+          if (op._tag === "Clear") cleared = true;
+          else touched.add(op.collection);
+        }
+        if (cleared) {
+          for (const collection of yield* store.listCollections) touched.add(collection);
+        }
+        return [...touched];
+      });
+
+    const applyPull = (response: PullResponse): Effect.Effect<ReadonlyArray<string>, StoreError> =>
       Effect.gen(function* () {
         // With an empty journal the patch ops are exactly the materialized-view
         // deltas, so observers maintain incrementally; with a pending overlay (or
         // a reset) the overlay could shift any row, so fall back to a rebuild.
         const hadPending = (yield* store.pendingMutations).length > 0;
         const hasClear = response.patch.some((op) => op._tag === "Clear");
+        const touched = yield* pullTouchedCollections(response.patch);
         yield* applyPatch(response.patch);
         yield* acknowledge(response.lastMutationIds);
         yield* store.setCookie(response.cookie);
@@ -934,6 +965,7 @@ export const make = (
         yield* publishChange(
           hadPending || hasClear ? REBUILD : { _tag: "Patch", ops: response.patch }
         );
+        return touched;
       });
 
     const pull: ClientEngine["pull"] = withVersionLatch(
@@ -953,10 +985,14 @@ export const make = (
           ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
           ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
         });
-        yield* applyPull(response);
+        const collections = yield* applyPull(response);
         yield* Metric.update(Telemetry.pullsTotal, 1);
         yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
-        yield* emitEngineEvent({ _tag: "PullCompleted", ops: response.patch.length });
+        yield* emitEngineEvent({
+          _tag: "PullCompleted",
+          ops: response.patch.length,
+          collections,
+        });
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
