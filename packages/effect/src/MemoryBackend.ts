@@ -9,8 +9,14 @@
  */
 
 import { Effect, Layer, Ref, Schema } from "effect";
-import { Backend, type ApplyResult, type ChangeHint, type SyncContext } from "./Backend.js";
-import { BackendError } from "./Errors.js";
+import {
+  Backend,
+  type ApplyResult,
+  type ChangeHint,
+  type RejectedMutation,
+  type SyncContext,
+} from "./Backend.js";
+import { BackendError, MutationRejected } from "./Errors.js";
 import type { Mutator } from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
@@ -23,12 +29,16 @@ export interface BackendWriter {
   readonly get: (collection: string, id: string) => Effect.Effect<unknown | undefined>;
 }
 
-/** An authoritative mutator handler. */
+/**
+ * An authoritative mutator handler. Fail with `BackendError` for a transient
+ * error (aborts the batch, client retries) or `MutationRejected` for a
+ * permanent one (id bumped without effects; the mutation is skipped).
+ */
 export type BackendHandler = (
   args: unknown,
   writer: BackendWriter,
   context: SyncContext
-) => Effect.Effect<void, BackendError>;
+) => Effect.Effect<void, BackendError | MutationRejected>;
 
 /** A mutator definition paired with its typed authoritative handler. */
 export interface HandlerEntry<Args> {
@@ -37,7 +47,7 @@ export interface HandlerEntry<Args> {
     args: Args,
     writer: BackendWriter,
     context: SyncContext
-  ) => Effect.Effect<void, BackendError>;
+  ) => Effect.Effect<void, BackendError | MutationRejected>;
 }
 
 /** Pair a mutator definition with its authoritative handler (typed). */
@@ -92,66 +102,110 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
 
+    const bumpLastId = (context: SyncContext, mutation: Mutation) =>
+      Ref.update(state, (s) => {
+        const lastIds = new Map(s.lastMutationIds);
+        const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
+        groupIds.set(mutation.clientId, mutation.mutationId);
+        lastIds.set(context.clientGroupId, groupIds);
+        return { ...s, lastMutationIds: lastIds };
+      });
+
+    // A writer that records what it touches into `localTouched`, so a rejected
+    // mutation's writes can be identified and rolled back.
+    const stagingWriter = (localTouched: Map<string, Set<string>>): BackendWriter => ({
+      put: (collection, id, value) =>
+        Ref.update(state, (s) => {
+          const rows = new Map(s.rows);
+          const collectionRows = new Map(rows.get(collection) ?? []);
+          const version = s.versionCounter + 1;
+          collectionRows.set(id, { id, version, value });
+          rows.set(collection, collectionRows);
+          localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
+          return { ...s, rows, versionCounter: version };
+        }),
+      del: (collection, id) =>
+        Ref.update(state, (s) => {
+          const rows = new Map(s.rows);
+          const collectionRows = new Map(rows.get(collection) ?? []);
+          collectionRows.delete(id);
+          rows.set(collection, collectionRows);
+          localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
+          return { ...s, rows };
+        }),
+      get: (collection, id) =>
+        Ref.get(state).pipe(Effect.map((s) => s.rows.get(collection)?.get(id)?.value)),
+    });
+
+    const mergeTouched = (into: Map<string, Set<string>>, from: Map<string, Set<string>>) => {
+      for (const [collection, ids] of from) {
+        const set = into.get(collection) ?? new Set<string>();
+        for (const id of ids) set.add(id);
+        into.set(collection, set);
+      }
+    };
+
+    // Apply one mutation: skip replays, reject id gaps, then run the handler
+    // atomically. Effects + the lastMutationId bump are atomic by construction
+    // (single-threaded Ref updates). A transient `BackendError` aborts the batch
+    // before any bump; a permanent `MutationRejected` rolls this mutation's
+    // writes back (restore `current`, which predates them) yet still bumps the
+    // id, so the poison mutation is acknowledged, skipped, and cannot block
+    // the ones behind it.
+    const applyOne = (
+      context: SyncContext,
+      mutation: Mutation,
+      touched: Map<string, Set<string>>,
+      rejected: Array<RejectedMutation>
+    ): Effect.Effect<void, BackendError> =>
+      Effect.gen(function* () {
+        const current = yield* Ref.get(state);
+        const last = (current.lastMutationIds.get(context.clientGroupId) ?? new Map()).get(
+          mutation.clientId
+        ) as number | undefined;
+        const lastId = last ?? 0;
+        if (mutation.mutationId <= lastId) return; // idempotent skip
+        if (mutation.mutationId > lastId + 1) {
+          return yield* new BackendError({
+            message: `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${lastId + 1}`,
+          });
+        }
+        const handle = handlers[mutation.mutator];
+        if (handle === undefined) {
+          return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+        }
+
+        const localTouched = new Map<string, Set<string>>();
+        const outcome = yield* handle(mutation.args, stagingWriter(localTouched), context).pipe(
+          Effect.map(() => ({ _tag: "applied" }) as const),
+          Effect.catchTag("MutationRejected", (error) =>
+            Ref.set(state, current).pipe(
+              Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const)
+            )
+          )
+        );
+        if (outcome._tag === "applied") {
+          mergeTouched(touched, localTouched);
+        } else {
+          rejected.push({
+            clientId: mutation.clientId,
+            mutationId: mutation.mutationId,
+            reason: outcome.reason,
+          });
+        }
+        yield* bumpLastId(context, mutation);
+      });
+
     const applyMutations = (
       context: SyncContext,
       mutations: ReadonlyArray<Mutation>
     ): Effect.Effect<ApplyResult, BackendError> =>
       Effect.gen(function* () {
         const touched = new Map<string, Set<string>>();
-
+        const rejected: Array<RejectedMutation> = [];
         for (const mutation of mutations) {
-          const current = yield* Ref.get(state);
-          const group = current.lastMutationIds.get(context.clientGroupId) ?? new Map();
-          const last = group.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent skip
-          if (mutation.mutationId > last + 1) {
-            return yield* new BackendError({
-              message: `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${last + 1}`,
-            });
-          }
-          const handle = handlers[mutation.mutator];
-          if (handle === undefined) {
-            return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
-          }
-
-          const writer: BackendWriter = {
-            put: (collection, id, value) =>
-              Ref.update(state, (s) => {
-                const rows = new Map(s.rows);
-                const collectionRows = new Map(rows.get(collection) ?? []);
-                const version = s.versionCounter + 1;
-                collectionRows.set(id, { id, version, value });
-                rows.set(collection, collectionRows);
-                touched.set(collection, (touched.get(collection) ?? new Set()).add(id));
-                return { ...s, rows, versionCounter: version };
-              }),
-            del: (collection, id) =>
-              Ref.update(state, (s) => {
-                const rows = new Map(s.rows);
-                const collectionRows = new Map(rows.get(collection) ?? []);
-                collectionRows.delete(id);
-                rows.set(collection, collectionRows);
-                touched.set(collection, (touched.get(collection) ?? new Set()).add(id));
-                return { ...s, rows };
-              }),
-            get: (collection, id) =>
-              Ref.get(state).pipe(Effect.map((s) => s.rows.get(collection)?.get(id)?.value)),
-          };
-
-          // Handler effects + the lastMutationId bump are atomic here by
-          // construction (single-threaded Ref updates, no partial commit on
-          // failure because the handler error aborts before the bump is
-          // recorded for subsequent mutations).
-          yield* handle(mutation.args, writer, context);
-          yield* Ref.update(state, (s) => {
-            const lastIds = new Map(s.lastMutationIds);
-            const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
-            groupIds.set(mutation.clientId, mutation.mutationId);
-            lastIds.set(context.clientGroupId, groupIds);
-            return { ...s, lastMutationIds: lastIds };
-          });
+          yield* applyOne(context, mutation, touched, rejected);
         }
-
         const final = yield* Ref.get(state);
         const hints: Array<ChangeHint> = [...touched].map(([collection, ids]) => ({
           collection,
@@ -162,6 +216,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             final.lastMutationIds.get(context.clientGroupId) ?? new Map()
           ),
           hints,
+          ...(rejected.length > 0 ? { rejected } : {}),
         };
       });
 

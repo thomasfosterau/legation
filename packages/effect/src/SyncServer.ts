@@ -102,7 +102,12 @@ export const make: Effect.Effect<
       const checked = yield* middleware.onPush(context, request);
       const result = yield* backend.applyMutations(context, checked.mutations);
       yield* bus.publish(result.hints);
-      return { lastMutationIds: result.lastMutationIds };
+      return {
+        lastMutationIds: result.lastMutationIds,
+        ...(result.rejected !== undefined && result.rejected.length > 0
+          ? { rejected: result.rejected }
+          : {}),
+      };
     }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPush));
 
   // Resolve a named subscription to a subset, or fail if no resolver is set.

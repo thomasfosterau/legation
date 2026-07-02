@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
-import { BackendError, Mutator, Predicate, Subset } from "@legation/effect";
+import { BackendError, MutationRejected, Mutator, Predicate, Subset } from "@legation/effect";
 import type { Backend } from "@legation/effect";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
@@ -202,4 +202,62 @@ describe("SqlBackend applyMutations", () => {
       expect(error).toBeInstanceOf(BackendError);
     });
   });
+
+  it.effect(
+    "rolls a permanently rejected mutation back to a savepoint but still bumps its id",
+    () => {
+      const mock = makeMock();
+      // Record every statement so we can assert the savepoint dance.
+      const runs: Array<string> = [];
+      const executor: SqlBackend.SqlExecutor = {
+        ...mock.executor,
+        run: (fragment) => {
+          runs.push(fragment.text);
+          return mock.executor.run(fragment);
+        },
+      };
+      const rejectTodo = Mutator.make("todo/reject", Schema.Struct({ id: Schema.String }));
+      const backend = SqlBackend.make({
+        executor,
+        tables,
+        mutators: new Map<string, Mutator.AnyMutator>([
+          [setTodo.name, setTodo],
+          [rejectTodo.name, rejectTodo],
+        ]),
+        handlers: {
+          "todo/set": () =>
+            Effect.succeed<ReadonlyArray<Backend.ChangeHint>>([
+              { collection: "todos", ids: ["2"] },
+            ]),
+          // Write, then reject permanently.
+          "todo/reject": (_args, tx) =>
+            tx
+              .run({ text: `INSERT INTO "todos" VALUES (?)`, params: ["poison"] })
+              .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "forbidden" })))),
+        },
+      });
+      const at = (id: number, mutator: string, args: unknown) => ({
+        clientId: "c1",
+        mutationId: id,
+        mutator,
+        args,
+        createdAt: 0,
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* backend.applyMutations({ clientGroupId: "g" }, [
+          at(1, "todo/reject", { id: "poison" }),
+          at(2, "todo/set", { id: "2" }),
+        ]);
+        // The rejected mutation and the one behind it are both acknowledged.
+        expect(result.lastMutationIds).toEqual({ c1: 2 });
+        expect(result.rejected).toEqual([{ clientId: "c1", mutationId: 1, reason: "forbidden" }]);
+        // Only the applied mutation contributes a hint.
+        expect(result.hints).toEqual([{ collection: "todos", ids: ["2"] }]);
+        // The rejection rolled its write back to a savepoint.
+        expect(runs.some((text) => text.startsWith("SAVEPOINT "))).toBe(true);
+        expect(runs.some((text) => text.startsWith("ROLLBACK TO SAVEPOINT "))).toBe(true);
+      });
+    }
+  );
 });

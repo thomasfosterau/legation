@@ -34,7 +34,7 @@
 import { Effect, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import { Backend, BackendError, Hash, Predicate } from "@legation/effect";
+import { Backend, BackendError, Hash, MutationRejected, Predicate } from "@legation/effect";
 import { Subset } from "@legation/effect";
 import type { Mutator } from "@legation/effect";
 import { documentToRows, parseResponse } from "./CollectionLoader.js";
@@ -145,16 +145,24 @@ export const make = (
         )
       );
 
+    // A transport-level failure (connection lost) or a 5xx is transient — a
+    // BackendError that aborts the push. A 4xx is a permanent rejection (bad
+    // request, forbidden, conflict): the server did not apply the write, so it
+    // is a MutationRejected that skips the mutation without poisoning the queue.
+    // 408/429 are the transient exceptions in the 4xx band (timeout, rate limit).
+    const transientStatuses = new Set([408, 429]);
     const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.scoped(client.execute(request)).pipe(
         Effect.mapError(backendError("JSON:API write failed")),
-        Effect.flatMap((response) =>
-          response.status >= 200 && response.status < 300
-            ? Effect.void
-            : new BackendError({
-                message: `JSON:API write returned HTTP ${response.status}`,
-              })
-        )
+        Effect.flatMap((response): Effect.Effect<void, BackendError | MutationRejected> => {
+          if (response.status >= 200 && response.status < 300) return Effect.void;
+          const message = `JSON:API write returned HTTP ${response.status}`;
+          return response.status >= 400 &&
+            response.status < 500 &&
+            !transientStatuses.has(response.status)
+            ? Effect.fail(new MutationRejected({ reason: message }))
+            : Effect.fail(new BackendError({ message }));
+        })
       );
 
     const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
@@ -275,7 +283,7 @@ export const make = (
     const applyOne = (
       operation: OperationInfo,
       args: unknown
-    ): Effect.Effect<string, BackendError> =>
+    ): Effect.Effect<string, BackendError | MutationRejected> =>
       Effect.gen(function* () {
         const resource = config.resources.get(operation.type);
         switch (operation.operation) {
@@ -336,9 +344,22 @@ export const make = (
         }
       });
 
+    const bumpLedger = (
+      context: Backend.SyncContext,
+      mutation: { clientId: string; mutationId: number }
+    ) =>
+      Ref.update(ledger, (current) => {
+        const next = new Map(current);
+        const groupIds = new Map(next.get(context.clientGroupId) ?? []);
+        groupIds.set(mutation.clientId, mutation.mutationId);
+        next.set(context.clientGroupId, groupIds);
+        return next;
+      });
+
     const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
       Effect.gen(function* () {
         const touched = new Map<string, Set<string>>();
+        const rejected: Array<Backend.RejectedMutation> = [];
         for (const mutation of mutations) {
           const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
           const last = group.get(mutation.clientId) ?? 0;
@@ -352,22 +373,32 @@ export const make = (
           const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
             Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
           );
-          const id = yield* applyOne(operation, args);
-
-          touched.set(operation.type, (touched.get(operation.type) ?? new Set()).add(id));
-          yield* Ref.update(ledger, (current) => {
-            const next = new Map(current);
-            const groupIds = new Map(next.get(context.clientGroupId) ?? []);
-            groupIds.set(mutation.clientId, mutation.mutationId);
-            next.set(context.clientGroupId, groupIds);
-            return next;
-          });
+          // A permanent HTTP rejection (4xx) skips this mutation but still bumps
+          // its id, so it is acknowledged and never poisons the queue. A
+          // transient failure propagates and aborts the push.
+          const outcome = yield* applyOne(operation, args).pipe(
+            Effect.map((id) => ({ _tag: "applied", id }) as const),
+            Effect.catchTag("MutationRejected", (error) =>
+              Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
+            )
+          );
+          if (outcome._tag === "applied") {
+            touched.set(operation.type, (touched.get(operation.type) ?? new Set()).add(outcome.id));
+          } else {
+            rejected.push({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason: outcome.reason,
+            });
+          }
+          yield* bumpLedger(context, mutation);
         }
 
         const finalGroup = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
         return {
           lastMutationIds: Object.fromEntries(finalGroup),
           hints: [...touched].map(([collection, ids]) => ({ collection, ids: [...ids] })),
+          ...(rejected.length > 0 ? { rejected } : {}),
         };
       });
 

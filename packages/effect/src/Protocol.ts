@@ -49,6 +49,21 @@ export type PushRequest = typeof PushRequestSchema.Type;
  */
 export const PushResponseSchema = Schema.Struct({
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+  /**
+   * Mutations the backend permanently rejected: their `lastMutationId` is
+   * bumped (so they are acknowledged and skipped, never poisoning the queue)
+   * but their effects were not applied. Additive and optional, so older clients
+   * ignore it; the per-mutation outcome surface (#36) reads it.
+   */
+  rejected: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        clientId: Schema.String,
+        mutationId: Schema.Number,
+        reason: Schema.String,
+      })
+    )
+  ),
 });
 
 /** {@inheritDoc PushResponseSchema} */

@@ -8,7 +8,12 @@
  * 1. `applyMutations` executes each mutation's authoritative mutator
  *    transactionally, with the per-client `lastMutationId` bump atomic with
  *    the effects. Mutations with `mutationId <= lastMutationId` are skipped
- *    (idempotency); a gap (`> lastMutationId + 1`) is a `BackendError`.
+ *    (idempotency); a gap (`> lastMutationId + 1`) is a `BackendError`. A
+ *    handler that fails with `BackendError` aborts the batch (transient — the
+ *    client retries); one that fails with `MutationRejected` is permanent — the
+ *    id is bumped atomically *without* applying effects, so the mutation is
+ *    acknowledged and skipped rather than poisoning the queue, and mutations
+ *    behind it still apply.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.
@@ -44,10 +49,22 @@ export interface SubsetEntry {
   readonly version: RowVersion;
 }
 
+/** A mutation the backend acknowledged but permanently rejected. */
+export interface RejectedMutation {
+  readonly clientId: string;
+  readonly mutationId: number;
+  readonly reason: string;
+}
+
 export interface ApplyResult {
-  /** Highest applied mutation id per client in the group. */
+  /** Highest applied (or permanently rejected) mutation id per client. */
   readonly lastMutationIds: Readonly<Record<string, number>>;
   readonly hints: ReadonlyArray<ChangeHint>;
+  /**
+   * Mutations acknowledged but permanently rejected (`MutationRejected`): their
+   * id was bumped without applying effects. Omitted/empty when none were.
+   */
+  readonly rejected?: ReadonlyArray<RejectedMutation>;
 }
 
 export interface Backend {

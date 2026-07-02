@@ -47,7 +47,7 @@ const readBody = (request: { readonly body: unknown }): any => {
 };
 
 /** An in-memory JSON:API server exposed as an HttpClient. */
-const makeServer = () => {
+const makeServer = (forbidCreate?: (id: string) => boolean) => {
   const store = new Map<string, StoredResource>();
 
   const client = HttpClient.make((request, url) =>
@@ -66,6 +66,10 @@ const makeServer = () => {
           break;
         case "POST": {
           const resource = readBody(request).data as StoredResource;
+          if (forbidCreate?.(resource.id)) {
+            response = empty(403); // permanent rejection
+            break;
+          }
           store.set(resource.id, {
             type: resource.type,
             id: resource.id,
@@ -189,6 +193,53 @@ describe("end-to-end client-direct sync", () => {
       yield* engine.pull;
       expect(server.store.has("2")).toBe(false);
       expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
+    }).pipe(
+      Effect.provide(
+        JsonApiSync.layer(api, {
+          baseUrl: "http://api.test",
+          clientId: "client-1",
+          clientGroupId: "group-1",
+        }).pipe(Layer.provide(server.layer))
+      ),
+      Effect.scoped
+    );
+  });
+
+  it.effect("a 4xx create is permanently rejected without poisoning the queue", () => {
+    // The server forbids creating "x"; the create behind it must still land.
+    const server = makeServer((id) => id === "x");
+    const todos = Subset.make({
+      collection: "todos",
+      orderBy: [{ field: "id", direction: "asc" }],
+    });
+
+    return Effect.gen(function* () {
+      const engine = yield* ClientEngine.ClientEngine;
+      yield* engine.subscribe(todos);
+
+      yield* engine.mutate("todos/create", {
+        type: "todos",
+        id: "x",
+        attributes: { title: "doomed" },
+      });
+      yield* engine.mutate("todos/create", {
+        type: "todos",
+        id: "y",
+        attributes: { title: "kept" },
+      });
+      // Both are optimistically visible.
+      expect(titles(yield* engine.query(todos))).toEqual(["doomed", "kept"]);
+
+      // Push succeeds (the 403 is a permanent rejection, not a transport error);
+      // the journal drains without app intervention.
+      yield* engine.push;
+      yield* engine.pull;
+
+      // The forbidden create left no server row and its optimistic effect is
+      // gone; the create queued behind it applied.
+      expect(server.store.has("x")).toBe(false);
+      expect(server.store.has("y")).toBe(true);
+      expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
     }).pipe(
       Effect.provide(
         JsonApiSync.layer(api, {

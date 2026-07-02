@@ -16,7 +16,7 @@
 
 import { Data, Effect, Schema } from "effect";
 import type { Backend, SyncContext } from "./Backend.js";
-import { BackendError } from "./Errors.js";
+import { BackendError, MutationRejected } from "./Errors.js";
 import * as MemoryBackend from "./MemoryBackend.js";
 import * as Mutator from "./Mutator.js";
 import * as Predicate from "./Predicate.js";
@@ -43,8 +43,20 @@ export const delRow = Mutator.make(
   Schema.Struct({ collection: Schema.String, id: Schema.String })
 );
 
-/** Always fails — probes that the mutation-id bump is atomic with effects. */
+/**
+ * Fails transiently — probes that a `BackendError` aborts the batch and the
+ * mutation-id bump is atomic with effects (no bump on abort).
+ */
 export const failAlways = Mutator.make("contract/fail", Schema.Struct({}));
+
+/**
+ * Writes a row and then rejects permanently — probes that a `MutationRejected`
+ * bumps the id *without* leaving effects (the staged write must roll back).
+ */
+export const rejectAlways = Mutator.make(
+  "contract/reject",
+  Schema.Struct({ collection: Schema.String, id: Schema.String })
+);
 
 /** Ready-made authoritative handlers for MemoryBackend-style registration. */
 export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
@@ -55,6 +67,15 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     MemoryBackend.handler(delRow, (args, writer) => writer.del(args.collection, args.id)),
     MemoryBackend.handler(failAlways, () =>
       Effect.fail(new BackendError({ message: "contract/fail always fails" }))
+    ),
+    MemoryBackend.handler(rejectAlways, (args, writer) =>
+      writer
+        .put(args.collection, args.id, { poison: true })
+        .pipe(
+          Effect.andThen(
+            Effect.fail(new MutationRejected({ reason: "contract/reject always rejects" }))
+          )
+        )
     ),
   ]);
 
@@ -97,6 +118,8 @@ export const verifyBackendContract = (
   });
   const put = (mutationId: number, collection: string, id: string, value: unknown) =>
     mutation(mutationId, putRow.name, { collection, id, value });
+  const reject = (mutationId: number, collection: string, id: string) =>
+    mutation(mutationId, rejectAlways.name, { collection, id });
 
   /** Run backend calls that the contract requires to succeed. */
   const expectOk = <A>(rule: string, effect: Effect.Effect<A, BackendError>) =>
@@ -275,6 +298,44 @@ export const verifyBackendContract = (
         rule,
         (ids[clientId] ?? 0) === 0,
         `A fresh client group must not see another group's mutation ids (got ${ids[clientId]})`
+      );
+    }
+
+    // 9. Permanent rejection: the poison mutation is acknowledged (its id
+    //    bumped) with no effects, and the mutation queued behind it applies.
+    {
+      const rule = "acknowledges a permanent rejection without effects and applies those behind it";
+      const startId = yield* lastIdOf(rule);
+      const result = yield* expectOk(
+        rule,
+        backend.applyMutations(context, [
+          reject(startId + 1, rows, "poison"),
+          put(startId + 2, rows, "behind", { n: 1 }),
+        ])
+      );
+      yield* check(
+        rule,
+        result.lastMutationIds[clientId] === startId + 2,
+        `A rejection must still bump lastMutationId (expected ${startId + 2}, got ${result.lastMutationIds[clientId]})`
+      );
+      yield* check(
+        rule,
+        (result.rejected ?? []).some(
+          (entry) => entry.clientId === clientId && entry.mutationId === startId + 1
+        ),
+        "The rejected mutation must appear in the result's `rejected` list"
+      );
+      const poison = yield* expectOk(rule, backend.getRows(context, rows, ["poison"]));
+      yield* check(
+        rule,
+        poison.length === 0,
+        "A rejected mutation must leave no effects (its staged write must roll back)"
+      );
+      const behind = yield* expectOk(rule, backend.getRows(context, rows, ["behind"]));
+      yield* check(
+        rule,
+        behind.length === 1,
+        "A mutation queued behind a rejected one must still apply in the same push"
       );
     }
   });
