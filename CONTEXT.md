@@ -2,6 +2,8 @@
 
 The legation monorepo implements a data synchronization engine built on Effect. This glossary defines the project's vocabulary; use these terms (not synonyms) in code, issues, and docs.
 
+Coming from TanStack Query, SwiftData, SWR, or Apollo? [`docs/coming-from-tanstack-query.md`](docs/coming-from-tanstack-query.md) translates those libraries' vocabulary into the terms below. This file is the internal law; that guide is the outward-facing translation.
+
 The engine follows the mutation-log/rebase sync model (ADR-0008): named write intents flow up, server-computed state patches flow down, and the client rebases pending intents on top of authoritative state.
 
 ## Glossary
@@ -101,6 +103,9 @@ Package boundaries follow dependency footprint (ADR-0006): everything needing on
 | `@legation/browser` | Browser-runtime adapters: service-worker engine host, IndexedDB client store, tab mirror + broadcast transport.                                                                                                                                                                                                                                                                                              |
 | `@legation/node`    | Node-runtime adapters for serving the protocol.                                                                                                                                                                                                                                                                                                                                                              |
 | `@legation/jsonapi` | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row). Read-side only — writes are mutators.                                                                                                                                                                                                                                              |
+| `@legation/sql`     | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger).                                                                                                                                                                                                              |
+| `@legation/react`   | React bindings: `EffectSyncProvider` + `useQuery` / `useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`, over the reactivity atoms.                                                                                                                                                                                                                                                            |
+| `@legation/svelte`  | Svelte bindings: `setEngineRuntime` + `query` / `namedQuery` (live `Readable` stores) + `getMutate`.                                                                                                                                                                                                                                                                                                         |
 
 ## Avoided terms
 
@@ -111,3 +116,5 @@ Package boundaries follow dependency footprint (ADR-0006): everything needing on
 - ~~"Query cache" / "refetch"~~ → live queries don't refetch; they re-run over local collections when patches or the overlay change
 - ~~"Garbage collection / gcTime"~~ → say **time to live / expiry**
 - ~~"Document"~~ (except in the JSON:API package where it's the spec's term)
+
+For the reverse mapping — where a TanStack Query / SwiftData / SWR / Apollo term lands in this vocabulary — see [`docs/coming-from-tanstack-query.md`](docs/coming-from-tanstack-query.md).
