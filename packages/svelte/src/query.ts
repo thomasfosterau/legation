@@ -31,9 +31,18 @@ const makeStore = (
     };
   });
 
-/** Live result of a subset, re-emitting on every local change. */
-export const query = (subset: Subset.Subset): Readable<Rows> =>
-  makeStore(getEngineRuntime(), (engine) => engine.observe(subset));
+/**
+ * Live result of a subset, re-emitting on every local change. A
+ * {@link Subset.TypedSubset} refines the rows to its row type; a plain
+ * `Subset` returns untyped rows.
+ */
+export function query<A>(
+  subset: Subset.TypedSubset<A>
+): Readable<ReadonlyArray<ClientEngine.TypedRow<A>>>;
+export function query(subset: Subset.Subset): Readable<Rows>;
+export function query(subset: Subset.Subset): Readable<Rows> {
+  return makeStore(getEngineRuntime(), (engine) => engine.observe(subset));
+}
 
 /** Live result of a named query (Query.ts). */
 export const namedQuery = (name: string, args: unknown): Readable<Rows> =>

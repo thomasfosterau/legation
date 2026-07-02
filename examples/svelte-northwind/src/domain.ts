@@ -133,13 +133,13 @@ export const createOrderDetail = Mutator.make("orderDetail/create", OrderDetail)
 // The seed dataset is small, so each tab subscribes to every collection and
 // joins/filters/paginates locally.
 
-export const allCategories = Subset.make({ collection: "categories", orderBy: [{ field: "name", direction: "asc" }] });
-export const allSuppliers = Subset.make({ collection: "suppliers" });
-export const allProducts = Subset.make({ collection: "products", orderBy: [{ field: "name", direction: "asc" }] });
-export const allCustomers = Subset.make({ collection: "customers", orderBy: [{ field: "company", direction: "asc" }] });
-export const allEmployees = Subset.make({ collection: "employees" });
-export const allOrders = Subset.make({ collection: "orders", orderBy: [{ field: "orderedAt", direction: "desc" }] });
-export const allOrderDetails = Subset.make({ collection: "orderDetails" });
+export const allCategories = Subset.for(categoriesCollection).make({ orderBy: [{ field: "name", direction: "asc" }] });
+export const allSuppliers = Subset.for(suppliersCollection).make();
+export const allProducts = Subset.for(productsCollection).make({ orderBy: [{ field: "name", direction: "asc" }] });
+export const allCustomers = Subset.for(customersCollection).make({ orderBy: [{ field: "company", direction: "asc" }] });
+export const allEmployees = Subset.for(employeesCollection).make();
+export const allOrders = Subset.for(ordersCollection).make({ orderBy: [{ field: "orderedAt", direction: "desc" }] });
+export const allOrderDetails = Subset.for(orderDetailsCollection).make();
 
 export const allSubsets: ReadonlyArray<Subset.Subset> = [
   allCategories,

@@ -28,6 +28,7 @@ import {
 } from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
+import * as Hash from "./Hash.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
 import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
@@ -47,6 +48,29 @@ import * as Subset from "./Subset.js";
 export interface LocalRow {
   readonly id: RowId;
   readonly value: unknown;
+}
+
+/**
+ * A {@link LocalRow} whose `value` is refined to the collection's row type `A`.
+ * Produced by the typed `query`/`observe` overloads when handed a
+ * {@link Subset.TypedSubset}. The refinement is a trust-cast: server data
+ * already passed the row schema on write, so the read path never decodes
+ * (ADR-0014) — only the static type is narrowed.
+ */
+export interface TypedRow<A> {
+  readonly id: RowId;
+  readonly value: A;
+}
+
+/**
+ * Options for a projected {@link ClientEngine.observe}: `select` maps each
+ * emitted page to a derived value `B`; consecutive equal projections are
+ * dropped by `equals` (reference equality by default), so a change to a field
+ * the projection ignores never re-emits.
+ */
+export interface ObserveOptions<Row, B> {
+  readonly select: (rows: ReadonlyArray<Row>) => B;
+  readonly equals?: (a: B, b: B) => boolean;
 }
 
 /**
@@ -213,14 +237,37 @@ export interface ClientEngine {
     name: string,
     args: unknown
   ) => Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError | QueryError>;
-  /** Query the current local view (confirmed + overlay). */
-  readonly query: (
-    subset: Subset.Subset
-  ) => Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
-  /** Live query: emits the result now and after every local change. */
-  readonly observe: (
-    subset: Subset.Subset
-  ) => Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
+  /**
+   * Query the current local view (confirmed + overlay). A
+   * {@link Subset.TypedSubset} refines the rows to its row type; a plain
+   * `Subset` keeps returning untyped {@link LocalRow}s.
+   */
+  readonly query: {
+    <A>(
+      subset: Subset.TypedSubset<A>
+    ): Effect.Effect<ReadonlyArray<TypedRow<A>>, StoreError | MutatorError>;
+    (subset: Subset.Subset): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
+  };
+  /**
+   * Live query: emits the result now and after every local change. With a
+   * {@link ObserveOptions.select} it emits the projection instead, re-emitting
+   * only when the projected value changes. A {@link Subset.TypedSubset} refines
+   * the row type; a plain `Subset` keeps returning untyped {@link LocalRow}s.
+   */
+  readonly observe: {
+    <A, B>(
+      subset: Subset.TypedSubset<A>,
+      options: ObserveOptions<TypedRow<A>, B>
+    ): Stream.Stream<B, StoreError | MutatorError>;
+    <B>(
+      subset: Subset.Subset,
+      options: ObserveOptions<LocalRow, B>
+    ): Stream.Stream<B, StoreError | MutatorError>;
+    <A>(
+      subset: Subset.TypedSubset<A>
+    ): Stream.Stream<ReadonlyArray<TypedRow<A>>, StoreError | MutatorError>;
+    (subset: Subset.Subset): Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
+  };
   /** Push pending mutations now. */
   readonly push: Effect.Effect<void, TransportError | StoreError>;
   /** Pull a patch now and rebase. */
@@ -599,7 +646,7 @@ export const make = (
         )
       );
     const namedKey = (name: string, argsEncoded: unknown) =>
-      `${name}:${JSON.stringify(argsEncoded)}`;
+      `${name}:${Hash.canonicalJson(argsEncoded)}`;
     // Encode + key a named subscription, then update the registry with both.
     const updateNamedSubs = (
       name: string,
@@ -670,6 +717,20 @@ export const make = (
           ).pipe(Stream.changesWith(sameResult));
         })
       );
+    // Projected observe: map each page through `select` and drop consecutive
+    // equal projections, so a change to a field the projection ignores never
+    // re-emits. Without `select` it is the plain rows stream (whole-page dedup
+    // still handled inside `observeSubset`).
+    const observeProjected = <B>(
+      subset: Subset.Subset,
+      options?: ObserveOptions<LocalRow, B>
+    ): Stream.Stream<B | ReadonlyArray<LocalRow>, StoreError | MutatorError> => {
+      const base = observeSubset(subset);
+      if (options === undefined) return base;
+      const equals = options.equals ?? ((a: B, b: B) => a === b);
+      return base.pipe(Stream.map(options.select), Stream.changesWith(equals));
+    };
+
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
     const journal = (mutator: string, encoded: unknown) =>
@@ -738,9 +799,9 @@ export const make = (
         ).pipe(Effect.andThen(publishChange(REBUILD))),
       unsubscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) => current.filter((e) => e.key !== entry.key)),
-      query,
+      query: query as ClientEngine["query"],
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
-      observe: observeSubset,
+      observe: observeProjected as ClientEngine["observe"],
       observeNamed: (name, args) =>
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
