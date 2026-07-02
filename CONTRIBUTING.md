@@ -107,7 +107,40 @@ it exists so beta bumps are informed decisions (see ADR-0003).
 
 ## Releases
 
-Merges to `main` run the release workflow. Changesets opens/updates a version PR or publishes when a version PR is merged. Publishing requires the `NPM_TOKEN` repository secret.
+Merges to `main` run the release workflow (`.github/workflows/release.yml`). It
+verifies the build, then runs `changesets/action@v1`: if unreleased changesets
+exist it opens or updates a **Version Packages** PR (running `changeset
+version`); when that PR is merged it publishes (`changeset publish`). Publishing
+requires the `NPM_TOKEN` repository secret — a granular or automation token from
+npm with publish rights to the `@legation` scope. Provenance is enabled
+(`id-token: write` + `NPM_CONFIG_PROVENANCE`), so the workflow must stay on a
+public repository.
+
+### First release (manual, once per package)
+
+`changeset publish` can only version-bump packages that already exist on the
+registry, and the `@legation` scope must be provisioned before automation can
+use it. The initial publish is therefore done by hand:
+
+1. Create the `@legation` organisation/scope on npm and confirm you have
+   publish rights.
+2. Create the `NPM_TOKEN` repository secret so the workflow can publish
+   thereafter.
+3. From a clean checkout of `main`:
+
+   ```sh
+   npm login
+   bun ci
+   bun run build
+   npm publish --workspaces --access public   # or `bun run release`
+   ```
+
+   `--access public` matches `.changeset/config.json` (`access: "public"`); it
+   is required because the packages are scoped.
+
+Once every package has a published `0.1.0`, the workflow above takes over:
+land changesets on `main`, merge the Version Packages PR, and releases publish
+automatically.
 
 ## Reporting Issues
 
