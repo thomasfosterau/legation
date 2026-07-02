@@ -28,7 +28,13 @@ import {
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
-import { AuthorizationError, QueryError, TransportError } from "./Errors.js";
+import {
+  AuthorizationError,
+  QueryError,
+  StoreError,
+  TransportError,
+  VersionNotSupportedError,
+} from "./Errors.js";
 import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
@@ -38,6 +44,42 @@ import type { Subset } from "./Subset.js";
 
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
+
+/**
+ * Server construction options (#48). Both default to today's behaviour: an
+ * absent `acceptSchemaVersion` accepts every version, and an absent
+ * `cookieNamespace` mints bare cookies.
+ */
+export interface SyncServerOptions {
+  /**
+   * Schema-version acceptor: decide whether a request's declared
+   * `schemaVersion` (possibly `undefined` for an old client) is one this build
+   * serves. Returning `false` makes `handlePush`/`handlePull` fail up front with
+   * a {@link VersionNotSupportedError} — before applying mutations or computing a
+   * patch — so an obsolete build is told to update and the journal is not
+   * poisoned. Default: accept everything.
+   */
+  readonly acceptSchemaVersion?: (version: string | undefined) => boolean;
+  /**
+   * Fleet cookie-reset namespace (#48). Every cookie this server mints is
+   * tagged with this namespace; a presented cookie carrying a *different*
+   * namespace is treated as unknown, so its next pull degrades to a reset patch
+   * (`Clear` + full puts, exactly as an unrecognised cookie does). Bumping this
+   * value on deploy therefore forces every previously-issued cookie to reset in
+   * one place — the runtime side of ADR-0014's schema-epoch bump. Default: `""`
+   * (bare cookies, today's format).
+   */
+  readonly cookieNamespace?: string;
+}
+
+/** Separator between a cookie's fleet namespace and its monotonic body. */
+const COOKIE_NAMESPACE_SEP = "::";
+
+/** The fleet namespace a cookie was minted under (`""` for a bare cookie). */
+const cookieNamespaceOf = (cookie: string): string => {
+  const index = cookie.indexOf(COOKIE_NAMESPACE_SEP);
+  return index === -1 ? "" : cookie.slice(0, index);
+};
 
 // ─── Fan-out matching ────────────────────────────────────────────────────────
 //
@@ -136,230 +178,305 @@ export interface ServerHandlerWithIntrospection {
   readonly introspection: ServerIntrospection;
 }
 
-/** Build the ServerHandler together with its introspection view. */
+/** Build the ServerHandler together with its introspection view (with options, #48). */
+export const makeWithIntrospectionWith = (
+  options?: SyncServerOptions
+): Effect.Effect<
+  ServerHandlerWithIntrospection,
+  never,
+  Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const acceptSchemaVersion = options?.acceptSchemaVersion ?? (() => true);
+    const cookieNamespace = options?.cookieNamespace ?? "";
+    // Reject an unsupported schema version up front, before any mutation is
+    // applied or patch computed, so the journal is never poisoned (#48).
+    const checkVersion = (
+      version: string | undefined
+    ): Effect.Effect<void, VersionNotSupportedError> =>
+      acceptSchemaVersion(version)
+        ? Effect.void
+        : Effect.fail(
+            new VersionNotSupportedError({
+              schemaVersion: version,
+              message: `Schema version ${version ?? "(unset)"} is not supported by this server`,
+            })
+          );
+    const backend = yield* Backend;
+    const authPolicy = yield* AuthPolicy;
+    const cvrStore = yield* Cvr.CvrStore;
+    const bus = yield* InvalidationBus;
+    const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
+      option._tag === "Some" ? option.value : passthroughMiddleware
+    );
+    // Optional: resolve named-query subscriptions to subsets (Query.ts).
+    const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
+    // Optional: resolve the request's identity onto SyncContext.identity.
+    const identityOption = yield* Effect.serviceOption(IdentityResolver);
+
+    const contextFor = (clientGroupId: string): Effect.Effect<SyncContext, AuthorizationError> =>
+      identityOption._tag === "None"
+        ? Effect.succeed({ clientGroupId })
+        : identityOption.value
+            .resolve(clientGroupId)
+            .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
+
+    const pokeHub = yield* makePokeHub;
+    // Active subscriptions per client group, for fan-out matching.
+    const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
+    // Each group's last-synced view (collection → id → version), for matching a
+    // delete against the rows a group actually holds.
+    const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
+
+    // Monotonic cookie minting, scoped to this handler instead of a module
+    // global. The Clock makes the timestamp injectable (TestClock in tests).
+    const cookieCounter = yield* Ref.make(0);
+    const freshCookie = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
+      const body = `cvr-${now}-${seq}`;
+      // Tag the cookie with the fleet namespace so a later namespace bump makes
+      // every pre-bump cookie unknown → a reset patch on its next pull (#48).
+      return cookieNamespace === "" ? body : `${cookieNamespace}${COOKIE_NAMESPACE_SEP}${body}`;
+    });
+
+    // Fan-out loop: hints → poke each group some hinted change plausibly
+    // affects. A group the collection-level match would poke but predicate
+    // matching rules out is suppressed (counted, never dropped for
+    // correctness). Poke-then-pull; correctness never depends on it.
+    // Subscribing before `make` returns guarantees the loop sees every hint
+    // published after construction, even ones racing the forked fiber's start.
+    const hintSubscription = yield* bus.subscribe;
+    yield* Effect.forkScoped(
+      Effect.forever(
+        hintSubscription.take.pipe(
+          Effect.flatMap((hints) =>
+            Effect.gen(function* () {
+              const start = yield* Clock.currentTimeMillis;
+              const touched = new Set(hints.map((hint) => hint.collection));
+              const groups = yield* Ref.get(activeSubsets);
+              const cvrs = yield* Ref.get(activeCvrs);
+              for (const [clientGroupId, subsets] of groups) {
+                if (!collectionMatch(touched, subsets)) continue;
+                if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
+                  yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                  yield* Metric.update(Telemetry.pokesTotal, 1);
+                } else {
+                  yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
+                }
+              }
+              yield* Metric.update(
+                Telemetry.fanoutLatencyMs,
+                (yield* Clock.currentTimeMillis) - start
+              );
+            })
+          )
+        )
+      )
+    );
+
+    const handlePush = (
+      request: PushRequest
+    ): Effect.Effect<PushResponse, TransportError | VersionNotSupportedError> =>
+      checkVersion(request.schemaVersion).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const context = yield* contextFor(request.clientGroupId);
+            const checked = yield* middleware.onPush(context, request);
+            const result = yield* backend.applyMutations(context, checked.mutations);
+            yield* bus.publish(result.hints);
+            return {
+              lastMutationIds: result.lastMutationIds,
+              ...(result.rejected !== undefined && result.rejected.length > 0
+                ? { rejected: result.rejected }
+                : {}),
+            };
+          }).pipe(Effect.mapError(asTransportError))
+        ),
+        Effect.withSpan(Telemetry.span.serverPush)
+      );
+
+    // Resolve a named subscription to a subset, or fail if no resolver is set.
+    const resolveNamed = (
+      context: SyncContext,
+      named: { readonly name: string; readonly args: unknown }
+    ) =>
+      resolverOption._tag === "None"
+        ? new TransportError({
+            message: `No QueryResolver registered for named subscription "${named.name}"`,
+          })
+        : resolverOption.value.resolve(named.name, named.args, context);
+
+    // Authorize client-authored subsets and server-resolved named queries
+    // identically: AND each with its collection's mandatory filter.
+    const authorizeAll = (
+      context: SyncContext,
+      request: PullRequest
+    ): Effect.Effect<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> =>
+      Effect.gen(function* () {
+        const authorized: Array<Subset> = [];
+        for (const subset of request.subscriptions) {
+          authorized.push(yield* authorize(authPolicy, context, subset));
+        }
+        for (const named of request.namedSubscriptions ?? []) {
+          authorized.push(
+            yield* authorize(authPolicy, context, yield* resolveNamed(context, named))
+          );
+        }
+        return authorized;
+      });
+
+    // Evaluate the desired next view: (collection → id → version) per subset.
+    const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
+      Effect.gen(function* () {
+        const rows = new Map<string, Map<string, string | number>>();
+        for (const subset of subsets) {
+          const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
+          for (const entry of yield* backend.evaluate(context, subset)) {
+            collection.set(entry.id, entry.version);
+          }
+          rows.set(subset.collection, collection);
+        }
+        return { rows } satisfies Cvr.NextView;
+      });
+
+    // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
+    // per collection) then deletes.
+    const assemblePatch = (context: SyncContext, difference: Cvr.CvrDiff, isReset: boolean) =>
+      Effect.gen(function* () {
+        const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
+        const putsByCollection = new Map<string, Array<string>>();
+        for (const put of difference.puts) {
+          putsByCollection.set(put.collection, [
+            ...(putsByCollection.get(put.collection) ?? []),
+            put.id,
+          ]);
+        }
+        for (const [collection, ids] of putsByCollection) {
+          for (const row of yield* backend.getRows(context, collection, ids)) {
+            patch.push({
+              _tag: "Put",
+              collection,
+              id: row.id,
+              version: row.version,
+              value: row.value,
+            });
+          }
+        }
+        for (const del of difference.dels) {
+          patch.push({ _tag: "Del", collection: del.collection, id: del.id });
+        }
+        return patch;
+      });
+
+    // Resolve the CVR the presented cookie names. A cookie minted under a
+    // different fleet namespace (a bumped deploy) is treated as unknown, so the
+    // pull degrades to a reset patch exactly as an unrecognised cookie does (#48).
+    const resolvePrevious = (
+      cookie: string | undefined
+    ): Effect.Effect<Cvr.Cvr | undefined, StoreError> => {
+      if (cookie === undefined) return Effect.succeed(undefined);
+      if (cookieNamespaceOf(cookie) !== cookieNamespace) return Effect.succeed(undefined);
+      return cvrStore.get(cookie);
+    };
+
+    const handlePull = (
+      request: PullRequest
+    ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
+      checkVersion(request.schemaVersion).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const context = yield* contextFor(request.clientGroupId);
+            const checked = yield* middleware.onPull(context, request);
+
+            const authorized = yield* authorizeAll(context, checked);
+            yield* Ref.update(activeSubsets, (m) =>
+              new Map(m).set(request.clientGroupId, authorized)
+            );
+
+            const next = yield* evaluateView(context, authorized);
+            const previous = yield* resolvePrevious(checked.cookie);
+            const isReset = checked.cookie !== undefined && previous === undefined;
+            const patch = yield* assemblePatch(
+              context,
+              Cvr.diff(previous ?? Cvr.empty, next),
+              isReset
+            );
+
+            const cookie = yield* freshCookie;
+            yield* cvrStore.set(cookie, { rows: next.rows });
+            // Track this group's latest view so fan-out can match a delete against
+            // the rows the group actually holds (CVR-precise deletes).
+            yield* Ref.update(activeCvrs, (m) =>
+              new Map(m).set(request.clientGroupId, { rows: next.rows })
+            );
+            const lastMutationIds = yield* backend.lastMutationIds(context);
+            yield* Metric.update(Telemetry.patchOps, patch.length);
+            yield* Metric.update(Telemetry.serverPullsTotal, 1);
+            return { cookie, patch, lastMutationIds };
+          }).pipe(Effect.mapError(asTransportError))
+        ),
+        Effect.withSpan(Telemetry.span.serverPull)
+      );
+
+    const handler = ServerHandler.of({
+      handlePush,
+      handlePull,
+      pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
+    });
+
+    const introspection: ServerIntrospection = {
+      groups: Effect.gen(function* () {
+        const subs = yield* Ref.get(activeSubsets);
+        const cvrs = yield* Ref.get(activeCvrs);
+        const result: Array<ServerGroup> = [];
+        for (const [clientGroupId, subsets] of subs) {
+          const cvr = cvrs.get(clientGroupId);
+          result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
+        }
+        return result;
+      }),
+      pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),
+      pokesSuppressed: Metric.value(Telemetry.pokesSuppressedTotal).pipe(
+        Effect.map((state) => state.count)
+      ),
+    };
+
+    return { handler, introspection };
+  });
+
+/** Build the ServerHandler together with its introspection view (default options). */
 export const makeWithIntrospection: Effect.Effect<
   ServerHandlerWithIntrospection,
   never,
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
-> = Effect.gen(function* () {
-  const backend = yield* Backend;
-  const authPolicy = yield* AuthPolicy;
-  const cvrStore = yield* Cvr.CvrStore;
-  const bus = yield* InvalidationBus;
-  const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
-    option._tag === "Some" ? option.value : passthroughMiddleware
-  );
-  // Optional: resolve named-query subscriptions to subsets (Query.ts).
-  const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
-  // Optional: resolve the request's identity onto SyncContext.identity.
-  const identityOption = yield* Effect.serviceOption(IdentityResolver);
+> = makeWithIntrospectionWith();
 
-  const contextFor = (clientGroupId: string): Effect.Effect<SyncContext, AuthorizationError> =>
-    identityOption._tag === "None"
-      ? Effect.succeed({ clientGroupId })
-      : identityOption.value
-          .resolve(clientGroupId)
-          .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
-
-  const pokeHub = yield* makePokeHub;
-  // Active subscriptions per client group, for fan-out matching.
-  const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
-  // Each group's last-synced view (collection → id → version), for matching a
-  // delete against the rows a group actually holds.
-  const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
-
-  // Monotonic cookie minting, scoped to this handler instead of a module
-  // global. The Clock makes the timestamp injectable (TestClock in tests).
-  const cookieCounter = yield* Ref.make(0);
-  const freshCookie = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
-    return `cvr-${now}-${seq}`;
-  });
-
-  // Fan-out loop: hints → poke each group some hinted change plausibly
-  // affects. A group the collection-level match would poke but predicate
-  // matching rules out is suppressed (counted, never dropped for
-  // correctness). Poke-then-pull; correctness never depends on it.
-  // Subscribing before `make` returns guarantees the loop sees every hint
-  // published after construction, even ones racing the forked fiber's start.
-  const hintSubscription = yield* bus.subscribe;
-  yield* Effect.forkScoped(
-    Effect.forever(
-      hintSubscription.take.pipe(
-        Effect.flatMap((hints) =>
-          Effect.gen(function* () {
-            const start = yield* Clock.currentTimeMillis;
-            const touched = new Set(hints.map((hint) => hint.collection));
-            const groups = yield* Ref.get(activeSubsets);
-            const cvrs = yield* Ref.get(activeCvrs);
-            for (const [clientGroupId, subsets] of groups) {
-              if (!collectionMatch(touched, subsets)) continue;
-              if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
-                yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                yield* Metric.update(Telemetry.pokesTotal, 1);
-              } else {
-                yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
-              }
-            }
-            yield* Metric.update(
-              Telemetry.fanoutLatencyMs,
-              (yield* Clock.currentTimeMillis) - start
-            );
-          })
-        )
-      )
-    )
-  );
-
-  const handlePush = (request: PushRequest): Effect.Effect<PushResponse, TransportError> =>
-    Effect.gen(function* () {
-      const context = yield* contextFor(request.clientGroupId);
-      const checked = yield* middleware.onPush(context, request);
-      const result = yield* backend.applyMutations(context, checked.mutations);
-      yield* bus.publish(result.hints);
-      return {
-        lastMutationIds: result.lastMutationIds,
-        ...(result.rejected !== undefined && result.rejected.length > 0
-          ? { rejected: result.rejected }
-          : {}),
-      };
-    }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPush));
-
-  // Resolve a named subscription to a subset, or fail if no resolver is set.
-  const resolveNamed = (
-    context: SyncContext,
-    named: { readonly name: string; readonly args: unknown }
-  ) =>
-    resolverOption._tag === "None"
-      ? new TransportError({
-          message: `No QueryResolver registered for named subscription "${named.name}"`,
-        })
-      : resolverOption.value.resolve(named.name, named.args, context);
-
-  // Authorize client-authored subsets and server-resolved named queries
-  // identically: AND each with its collection's mandatory filter.
-  const authorizeAll = (
-    context: SyncContext,
-    request: PullRequest
-  ): Effect.Effect<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> =>
-    Effect.gen(function* () {
-      const authorized: Array<Subset> = [];
-      for (const subset of request.subscriptions) {
-        authorized.push(yield* authorize(authPolicy, context, subset));
-      }
-      for (const named of request.namedSubscriptions ?? []) {
-        authorized.push(yield* authorize(authPolicy, context, yield* resolveNamed(context, named)));
-      }
-      return authorized;
-    });
-
-  // Evaluate the desired next view: (collection → id → version) per subset.
-  const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
-    Effect.gen(function* () {
-      const rows = new Map<string, Map<string, string | number>>();
-      for (const subset of subsets) {
-        const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-        for (const entry of yield* backend.evaluate(context, subset)) {
-          collection.set(entry.id, entry.version);
-        }
-        rows.set(subset.collection, collection);
-      }
-      return { rows } satisfies Cvr.NextView;
-    });
-
-  // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
-  // per collection) then deletes.
-  const assemblePatch = (context: SyncContext, difference: Cvr.CvrDiff, isReset: boolean) =>
-    Effect.gen(function* () {
-      const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
-      const putsByCollection = new Map<string, Array<string>>();
-      for (const put of difference.puts) {
-        putsByCollection.set(put.collection, [
-          ...(putsByCollection.get(put.collection) ?? []),
-          put.id,
-        ]);
-      }
-      for (const [collection, ids] of putsByCollection) {
-        for (const row of yield* backend.getRows(context, collection, ids)) {
-          patch.push({
-            _tag: "Put",
-            collection,
-            id: row.id,
-            version: row.version,
-            value: row.value,
-          });
-        }
-      }
-      for (const del of difference.dels) {
-        patch.push({ _tag: "Del", collection: del.collection, id: del.id });
-      }
-      return patch;
-    });
-
-  const handlePull = (request: PullRequest): Effect.Effect<PullResponse, TransportError> =>
-    Effect.gen(function* () {
-      const context = yield* contextFor(request.clientGroupId);
-      const checked = yield* middleware.onPull(context, request);
-
-      const authorized = yield* authorizeAll(context, checked);
-      yield* Ref.update(activeSubsets, (m) => new Map(m).set(request.clientGroupId, authorized));
-
-      const next = yield* evaluateView(context, authorized);
-      const previous =
-        checked.cookie === undefined ? undefined : yield* cvrStore.get(checked.cookie);
-      const isReset = checked.cookie !== undefined && previous === undefined;
-      const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
-
-      const cookie = yield* freshCookie;
-      yield* cvrStore.set(cookie, { rows: next.rows });
-      // Track this group's latest view so fan-out can match a delete against
-      // the rows the group actually holds (CVR-precise deletes).
-      yield* Ref.update(activeCvrs, (m) =>
-        new Map(m).set(request.clientGroupId, { rows: next.rows })
-      );
-      const lastMutationIds = yield* backend.lastMutationIds(context);
-      yield* Metric.update(Telemetry.patchOps, patch.length);
-      yield* Metric.update(Telemetry.serverPullsTotal, 1);
-      return { cookie, patch, lastMutationIds };
-    }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPull));
-
-  const handler = ServerHandler.of({
-    handlePush,
-    handlePull,
-    pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
-  });
-
-  const introspection: ServerIntrospection = {
-    groups: Effect.gen(function* () {
-      const subs = yield* Ref.get(activeSubsets);
-      const cvrs = yield* Ref.get(activeCvrs);
-      const result: Array<ServerGroup> = [];
-      for (const [clientGroupId, subsets] of subs) {
-        const cvr = cvrs.get(clientGroupId);
-        result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
-      }
-      return result;
-    }),
-    pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),
-    pokesSuppressed: Metric.value(Telemetry.pokesSuppressedTotal).pipe(
-      Effect.map((state) => state.count)
-    ),
-  };
-
-  return { handler, introspection };
-});
+/** Build the ServerHandler with options (#48: schema-version acceptor, fleet cookie namespace). */
+export const makeWith = (
+  options?: SyncServerOptions
+): Effect.Effect<
+  ServerHandler,
+  never,
+  Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
+> => makeWithIntrospectionWith(options).pipe(Effect.map((built) => built.handler));
 
 /** Build the ServerHandler. */
 export const make: Effect.Effect<
   ServerHandler,
   never,
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
-> = makeWithIntrospection.pipe(Effect.map((built) => built.handler));
+> = makeWith();
+
+/** Layer providing the ServerHandler from Backend + policy + CVR + bus (with options, #48). */
+export const layerWith = (
+  options?: SyncServerOptions
+): Layer.Layer<ServerHandler, never, Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus> =>
+  Layer.effect(ServerHandler)(makeWith(options));
 
 /** Layer providing the ServerHandler from Backend + policy + CVR + bus. */
 export const layer: Layer.Layer<
   ServerHandler,
   never,
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus
-> = Layer.effect(ServerHandler)(make);
+> = layerWith();

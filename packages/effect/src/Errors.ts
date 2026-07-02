@@ -51,6 +51,22 @@ export class MutationRejected extends Data.TaggedError("MutationRejected")<{
   readonly cause?: unknown;
 }> {}
 
+/**
+ * The server rejected a request because the client's declared `schemaVersion`
+ * is not one this build accepts (#48). Unlike a {@link MutationRejected} (a
+ * per-mutation, permanent business verdict) this is a *transport-level* "your
+ * build is obsolete" condition: it is raised up front, before any mutation is
+ * applied or any patch computed, so the journal is never poisoned — the client
+ * retains its pending intents and is told to update. Distinct from a
+ * {@link TransportError} so a carrier that can carry the tag lets the client
+ * react precisely (the in-memory seam does; the RPC carrier degrades it to a
+ * `TransportError`, see RpcTransport.ts).
+ */
+export class VersionNotSupportedError extends Data.TaggedError("VersionNotSupportedError")<{
+  readonly schemaVersion?: string | undefined;
+  readonly message: string;
+}> {}
+
 /** A subscription or push was refused by auth filters or middleware. */
 export class AuthorizationError extends Data.TaggedError("AuthorizationError")<{
   readonly message: string;

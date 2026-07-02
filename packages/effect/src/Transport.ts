@@ -19,7 +19,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import type { TransportError } from "./Errors.js";
+import type { TransportError, VersionNotSupportedError } from "./Errors.js";
 import type { Poke, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
 
 /** Connectivity of a client transport. */
@@ -27,8 +27,12 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 /** The client side of a sync connection. */
 export interface ClientTransport {
-  readonly push: (request: PushRequest) => Effect.Effect<PushResponse, TransportError>;
-  readonly pull: (request: PullRequest) => Effect.Effect<PullResponse, TransportError>;
+  readonly push: (
+    request: PushRequest
+  ) => Effect.Effect<PushResponse, TransportError | VersionNotSupportedError>;
+  readonly pull: (
+    request: PullRequest
+  ) => Effect.Effect<PullResponse, TransportError | VersionNotSupportedError>;
   /** Pokes from the server; may be empty for pull-only carriers. */
   readonly pokes: Stream.Stream<Poke, TransportError>;
   readonly status: Effect.Effect<ConnectionStatus>;
@@ -44,8 +48,12 @@ export const ClientTransport = Context.Service<ClientTransport>("@legation/effec
  * HTTP routes, message listeners).
  */
 export interface ServerHandler {
-  readonly handlePush: (request: PushRequest) => Effect.Effect<PushResponse, TransportError>;
-  readonly handlePull: (request: PullRequest) => Effect.Effect<PullResponse, TransportError>;
+  readonly handlePush: (
+    request: PushRequest
+  ) => Effect.Effect<PushResponse, TransportError | VersionNotSupportedError>;
+  readonly handlePull: (
+    request: PullRequest
+  ) => Effect.Effect<PullResponse, TransportError | VersionNotSupportedError>;
   /** Pokes addressed to one client group. */
   readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
 }

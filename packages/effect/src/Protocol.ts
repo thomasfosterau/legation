@@ -37,6 +37,13 @@ export type Mutation = typeof MutationSchema.Type;
 export const PushRequestSchema = Schema.Struct({
   clientGroupId: Schema.String,
   mutations: Schema.Array(MutationSchema),
+  /**
+   * The client build's schema version (#48). Additive and optional: an old
+   * client omits it and still decodes, a new server tolerates its absence. The
+   * server's acceptor may reject an unsupported version up front
+   * (VersionNotSupportedError) so an obsolete build is told to update.
+   */
+  schemaVersion: Schema.optional(Schema.String),
 });
 
 /** {@inheritDoc PushRequestSchema} */
@@ -107,6 +114,8 @@ export const PullRequestSchema = Schema.Struct({
   subscriptions: Schema.Array(SubsetSchema),
   /** Named queries the server resolves to subsets (optional). */
   namedSubscriptions: Schema.optional(Schema.Array(NamedSubscriptionSchema)),
+  /** {@inheritDoc PushRequestSchema.schemaVersion} */
+  schemaVersion: Schema.optional(Schema.String),
 });
 
 /** {@inheritDoc PullRequestSchema} */
