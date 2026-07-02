@@ -97,9 +97,48 @@ const predicateMatch = (
     return onCollection.length > 0 && hintAffects(hint, onCollection, groupCvr);
   });
 
-/** Build the ServerHandler. */
-export const make: Effect.Effect<
-  ServerHandler,
+// ─── Server introspection ─────────────────────────────────────────────────────
+
+/** One active client group as the server sees it: its authorised subsets and CVR size. */
+export interface ServerGroup {
+  readonly clientGroupId: string;
+  /** The subsets authorised on the group's most recent pull. */
+  readonly subsets: ReadonlyArray<Subset>;
+  /** Rows tracked in the group's last-synced CVR, summed across collections. */
+  readonly cvrSize: number;
+}
+
+/**
+ * A read-only view of the sync server's live fan-out state (#45): the active
+ * client groups with their authorised subsets and CVR sizes, plus poke
+ * counters. Reads the handler's internal `activeSubsets`/`activeCvrs` Refs and
+ * the `legation_*` poke metrics; does not change fan-out behaviour.
+ */
+export interface ServerIntrospection {
+  /** Active client groups with their authorised subsets and CVR sizes. */
+  readonly groups: Effect.Effect<ReadonlyArray<ServerGroup>>;
+  /** Total pokes published by fan-out (cumulative counter snapshot). */
+  readonly pokesPublished: Effect.Effect<number>;
+  /** Total pokes suppressed by predicate matching (cumulative counter snapshot). */
+  readonly pokesSuppressed: Effect.Effect<number>;
+}
+
+/** Rows a CVR holds, summed across its collections. */
+const cvrSize = (cvr: Cvr.Cvr): number => {
+  let total = 0;
+  for (const rows of cvr.rows.values()) total += rows.size;
+  return total;
+};
+
+/** The handler paired with its introspection view. */
+export interface ServerHandlerWithIntrospection {
+  readonly handler: ServerHandler;
+  readonly introspection: ServerIntrospection;
+}
+
+/** Build the ServerHandler together with its introspection view. */
+export const makeWithIntrospection: Effect.Effect<
+  ServerHandlerWithIntrospection,
   never,
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
 > = Effect.gen(function* () {
@@ -150,6 +189,7 @@ export const make: Effect.Effect<
       hintSubscription.take.pipe(
         Effect.flatMap((hints) =>
           Effect.gen(function* () {
+            const start = yield* Clock.currentTimeMillis;
             const touched = new Set(hints.map((hint) => hint.collection));
             const groups = yield* Ref.get(activeSubsets);
             const cvrs = yield* Ref.get(activeCvrs);
@@ -162,6 +202,10 @@ export const make: Effect.Effect<
                 yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
               }
             }
+            yield* Metric.update(
+              Telemetry.fanoutLatencyMs,
+              (yield* Clock.currentTimeMillis) - start
+            );
           })
         )
       )
@@ -280,12 +324,38 @@ export const make: Effect.Effect<
       return { cookie, patch, lastMutationIds };
     }).pipe(Effect.mapError(asTransportError), Effect.withSpan(Telemetry.span.serverPull));
 
-  return ServerHandler.of({
+  const handler = ServerHandler.of({
     handlePush,
     handlePull,
     pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
   });
+
+  const introspection: ServerIntrospection = {
+    groups: Effect.gen(function* () {
+      const subs = yield* Ref.get(activeSubsets);
+      const cvrs = yield* Ref.get(activeCvrs);
+      const result: Array<ServerGroup> = [];
+      for (const [clientGroupId, subsets] of subs) {
+        const cvr = cvrs.get(clientGroupId);
+        result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
+      }
+      return result;
+    }),
+    pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),
+    pokesSuppressed: Metric.value(Telemetry.pokesSuppressedTotal).pipe(
+      Effect.map((state) => state.count)
+    ),
+  };
+
+  return { handler, introspection };
 });
+
+/** Build the ServerHandler. */
+export const make: Effect.Effect<
+  ServerHandler,
+  never,
+  Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
+> = makeWithIntrospection.pipe(Effect.map((built) => built.handler));
 
 /** Layer providing the ServerHandler from Backend + policy + CVR + bus. */
 export const layer: Layer.Layer<

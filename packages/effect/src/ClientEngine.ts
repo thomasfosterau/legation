@@ -109,6 +109,46 @@ export interface MutationEvent {
 }
 
 /**
+ * A unified sync-lifecycle event on {@link ClientEngine.engineEvents} (#45):
+ * the single source of truth from which {@link ClientEngine.mutationEvents}
+ * (#36) is derived. Every variant is emitted from one internal hub, kept
+ * unbounded for the same reason #44 keeps `mutationEventsHub` unbounded:
+ * lifecycle events are low-volume, consumer-driven, and must be lossless —
+ * they are observability, not reconstructable via pull.
+ *
+ * - `MutationJournaled` — a mutation was journaled locally (from `mutate`,
+ *   `mutateEncoded`, or `mutateWithAck`).
+ * - `MutationAcknowledged` — the backend applied a journaled mutation.
+ * - `MutationRejected` — the backend permanently refused it, with a `reason`.
+ * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
+ *   of `mutations` delivered).
+ * - `PullStarted` / `PullCompleted` — a pull began / finished (with the number
+ *   of patch `ops` applied).
+ * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
+ * - `ViewRebuilt` — the local view was rebuilt (rebase/seed/subscribe), scoped
+ *   to the `collections` the shift touched (absent means "any collection").
+ */
+export type EngineEvent =
+  | { readonly _tag: "MutationJournaled"; readonly clientId: string; readonly mutationId: number }
+  | {
+      readonly _tag: "MutationAcknowledged";
+      readonly clientId: string;
+      readonly mutationId: number;
+    }
+  | {
+      readonly _tag: "MutationRejected";
+      readonly clientId: string;
+      readonly mutationId: number;
+      readonly reason: string;
+    }
+  | { readonly _tag: "PushStarted" }
+  | { readonly _tag: "PushCompleted"; readonly mutations: number }
+  | { readonly _tag: "PullStarted" }
+  | { readonly _tag: "PullCompleted"; readonly ops: number }
+  | { readonly _tag: "PokeReceived"; readonly reason?: string }
+  | { readonly _tag: "ViewRebuilt"; readonly collections?: ReadonlyArray<string> };
+
+/**
  * A local-view change. `Patch` carries per-row confirmed deltas (emitted only
  * when the journal is empty, so they equal the materialized-view deltas) and
  * drives incremental `LiveView` maintenance. `Rebuild` is the conservative
@@ -252,6 +292,19 @@ export interface ClientEngine {
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
    */
   readonly mutationEvents: Stream.Stream<MutationEvent>;
+  /**
+   * The unified sync-lifecycle event stream (#45): mutation, push, pull, poke,
+   * and view-rebuild events from one hub. {@link mutationEvents} is a filtered
+   * projection of this stream. Consumed read-only by `EngineIntrospection`.
+   */
+  readonly engineEvents: Stream.Stream<EngineEvent>;
+  /**
+   * A read-only snapshot of the engine's active subsets — the raw subscriptions
+   * plus every named subscription resolved through its local subset factory.
+   * The introspection seam (`Introspection.ts`); does not touch private state
+   * from outside.
+   */
+  readonly activeSubscriptions: Effect.Effect<ReadonlyArray<Subset.Subset>>;
   /** Register/replace the engine's subscriptions (synced on next pull). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void>;
@@ -415,9 +468,28 @@ export const make = (
     // invariant the consumer's gap-collapse relies on to skip stale buffered
     // changes after a Rebuild.
     const changeSeq = yield* Ref.make(0);
+    // The single unified event hub (#45): every sync-lifecycle event flows
+    // through here, and `mutationEvents` (#36) is a filtered projection of it.
+    // Unbounded for the same reason #44 kept `mutationEventsHub` unbounded —
+    // lifecycle events are low-volume, consumer-driven, and lossless (they are
+    // observability, not reconstructable via pull).
+    const engineEventsHub = yield* Effect.acquireRelease(PubSub.unbounded<EngineEvent>(), (hub) =>
+      PubSub.shutdown(hub)
+    );
+    const emitEngineEvent = (event: EngineEvent): Effect.Effect<void> =>
+      Effect.asVoid(PubSub.publish(engineEventsHub, event));
+    // A Rebuild change is a view rebuild; carry its scoped collections (#39).
+    const viewRebuiltEvent = (change: ViewChange): Effect.Effect<void> =>
+      change._tag === "Rebuild"
+        ? emitEngineEvent({
+            _tag: "ViewRebuilt",
+            ...(change.collections !== undefined ? { collections: [...change.collections] } : {}),
+          })
+        : Effect.void;
     const publishChange = (change: ViewChange): Effect.Effect<void> =>
       Ref.updateAndGet(changeSeq, (n) => n + 1).pipe(
         Effect.flatMap((seq) => PubSub.publish(changes, { seq, change })),
+        Effect.andThen(viewRebuiltEvent(change)),
         Effect.asVoid
       );
 
@@ -445,23 +517,62 @@ export const make = (
     // mutation id. `mutate`/`mutateEncoded` never register one, so their path
     // stays allocation-free.
     const acks = yield* Ref.make(new Map<number, Deferred.Deferred<MutationOutcome>>());
-    const mutationEventsHub = yield* Effect.acquireRelease(
-      PubSub.unbounded<MutationEvent>(),
-      (hub) => PubSub.shutdown(hub)
-    );
+    // Emit a mutation-lifecycle event onto the unified hub as its tagged
+    // variant; `mutationEvents` projects these three tags back to `phase`s.
     const emitEvent = (
       mutationId: number,
       phase: MutationEvent["phase"],
       reason?: string
-    ): Effect.Effect<void> =>
-      Effect.asVoid(
-        PubSub.publish(mutationEventsHub, {
-          clientId: options.clientId,
-          mutationId,
-          ...(reason !== undefined ? { reason } : {}),
-          phase,
-        })
-      );
+    ): Effect.Effect<void> => {
+      const clientId = options.clientId;
+      switch (phase) {
+        case "journaled":
+          return emitEngineEvent({ _tag: "MutationJournaled", clientId, mutationId });
+        case "acknowledged":
+          return emitEngineEvent({ _tag: "MutationAcknowledged", clientId, mutationId });
+        case "rejected":
+          return emitEngineEvent({
+            _tag: "MutationRejected",
+            clientId,
+            mutationId,
+            reason: reason ?? "",
+          });
+      }
+    };
+    // Project the three mutation variants back to the #36 `MutationEvent` shape.
+    const toMutationEvent = (event: EngineEvent): MutationEvent | undefined => {
+      switch (event._tag) {
+        case "MutationJournaled":
+          return { clientId: event.clientId, mutationId: event.mutationId, phase: "journaled" };
+        case "MutationAcknowledged":
+          return { clientId: event.clientId, mutationId: event.mutationId, phase: "acknowledged" };
+        case "MutationRejected":
+          return {
+            clientId: event.clientId,
+            mutationId: event.mutationId,
+            phase: "rejected",
+            reason: event.reason,
+          };
+        default:
+          return undefined;
+      }
+    };
+    // Sample the journal-depth gauge from the current pending count. Called on
+    // every append (a new pending mutation) and acknowledge (a trim).
+    const sampleJournalDepth: Effect.Effect<void> = store.pendingMutations.pipe(
+      Effect.flatMap((pending) => Metric.update(Telemetry.journalDepth, pending.length)),
+      Effect.catch(() => Effect.void)
+    );
+    // Time an effect and record its wall-clock duration (ms) as the rebase
+    // histogram — wraps the actual overlay replay (cache misses only).
+    const timedRebase = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+      Effect.gen(function* () {
+        const start = yield* Clock.currentTimeMillis;
+        const result = yield* effect;
+        const elapsed = (yield* Clock.currentTimeMillis) - start;
+        yield* Metric.update(Telemetry.rebaseDurationMs, elapsed);
+        return result;
+      });
     const forgetAck = (id: number): Effect.Effect<void> =>
       Ref.update(acks, (map) => {
         const next = new Map(map);
@@ -569,7 +680,7 @@ export const make = (
         Effect.flatMap((cached) =>
           cached !== undefined
             ? Effect.succeed(cached)
-            : computeOverlay.pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
+            : timedRebase(computeOverlay).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
         )
       )
     );
@@ -706,11 +817,13 @@ export const make = (
         const lastId = lastMutationIds[options.clientId];
         if (lastId !== undefined) yield* settleApplied(lastId);
         yield* invalidateOverlay; // trimming the journal shifts the overlay
+        yield* sampleJournalDepth; // the trim changed journal depth
       });
 
     const push: ClientEngine["push"] = Effect.gen(function* () {
       const pending = yield* store.pendingMutations;
       if (pending.length === 0) return;
+      yield* emitEngineEvent({ _tag: "PushStarted" });
       const response = yield* transport.push({
         clientGroupId: options.clientGroupId,
         mutations: pending,
@@ -727,6 +840,8 @@ export const make = (
       yield* publishChange(rebuildFor(touched));
       yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
       yield* Metric.update(Telemetry.pushesTotal, 1);
+      yield* Metric.update(Telemetry.pushMutations, pending.length);
+      yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
     }).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     const applyPull = (response: PullResponse): Effect.Effect<void, StoreError> =>
@@ -747,6 +862,7 @@ export const make = (
       });
 
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
+      yield* emitEngineEvent({ _tag: "PullStarted" });
       const cookie = yield* store.getCookie;
       const subsets = yield* Ref.get(subscriptions);
       const named = yield* Ref.get(namedSubs);
@@ -762,6 +878,8 @@ export const make = (
       });
       yield* applyPull(response);
       yield* Metric.update(Telemetry.pullsTotal, 1);
+      yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
+      yield* emitEngineEvent({ _tag: "PullCompleted", ops: response.patch.length });
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
@@ -856,9 +974,12 @@ export const make = (
       // Pull on every poke; re-establish the poke stream with backoff, and
       // surface if it stays down (the replay-1 hub covers the resubscribe race).
       yield* Effect.forkScoped(
-        Stream.runForEach(transport.pokes.pipe(Stream.retry(pokePolicy)), () => attemptPull).pipe(
-          Effect.catch((error) => surfaceFailure("pokes", error))
-        )
+        Stream.runForEach(transport.pokes.pipe(Stream.retry(pokePolicy)), (poke) =>
+          emitEngineEvent({
+            _tag: "PokeReceived",
+            ...(poke.reason !== undefined ? { reason: poke.reason } : {}),
+          }).pipe(Effect.andThen(attemptPull))
+        ).pipe(Effect.catch((error) => surfaceFailure("pokes", error)))
       );
       // Push + pull on (re)connect.
       yield* Effect.forkScoped(
@@ -1108,6 +1229,7 @@ export const make = (
         };
         yield* store.appendMutation(mutation);
         yield* invalidateOverlay; // the new pending mutation shifts the overlay
+        yield* sampleJournalDepth; // the append changed journal depth
         yield* emitEvent(mutationId, "journaled");
         // Scope the rebuild to the collections this mutation writes, so
         // observers of other collections don't re-materialize.
@@ -1126,6 +1248,38 @@ export const make = (
           Effect.mapError(invalidArgs(mutator))
         );
       });
+
+    // Resolve one named subscription to its local subset, skipping (undefined)
+    // any whose args can no longer decode or whose query is unregistered — a
+    // read-only best effort for introspection, never a failure.
+    const resolveNamedSubset = (entry: {
+      readonly name: string;
+      readonly argsEncoded: unknown;
+    }): Effect.Effect<Subset.Subset | undefined> =>
+      queryDefOf(entry.name).pipe(
+        Effect.flatMap(({ definition, local }) =>
+          Schema.decodeUnknownEffect(definition.args)(entry.argsEncoded).pipe(
+            Effect.map((decoded) => local(decoded))
+          )
+        ),
+        Effect.catch(() => Effect.succeed(undefined))
+      );
+
+    // Read-only snapshot of every active subset: raw subscriptions plus each
+    // named subscription resolved through its local factory. The introspection
+    // seam — reads the Refs internally, exposes only the resolved subsets.
+    const activeSubscriptions: Effect.Effect<ReadonlyArray<Subset.Subset>> = Effect.gen(
+      function* () {
+        const raw = yield* Ref.get(subscriptions);
+        const named = yield* Ref.get(namedSubs);
+        const resolved: Array<Subset.Subset> = [];
+        for (const entry of named) {
+          const subset = yield* resolveNamedSubset(entry);
+          if (subset !== undefined) resolved.push(subset);
+        }
+        return [...raw, ...resolved];
+      }
+    );
 
     return ClientEngine.of({
       mutate: (mutator, args) =>
@@ -1176,7 +1330,13 @@ export const make = (
       pull,
       runSync,
       syncFailures: Stream.fromPubSub(failures),
-      mutationEvents: Stream.fromPubSub(mutationEventsHub),
+      engineEvents: Stream.fromPubSub(engineEventsHub),
+      activeSubscriptions,
+      // #36's mutation stream, now a filtered projection of the one hub (#45).
+      mutationEvents: Stream.fromPubSub(engineEventsHub).pipe(
+        Stream.map(toMutationEvent),
+        Stream.filter((event): event is MutationEvent => event !== undefined)
+      ),
     });
   });
 

@@ -27,6 +27,7 @@ import {
   ClientStore,
   Cvr,
   InvalidationBus,
+  Introspection,
   MemoryBackend,
   Mutator,
   type Protocol,
@@ -63,8 +64,15 @@ export interface DemoControls {
   readonly syncNow: () => Promise<void>;
   /** Apply an authoritative write as a second client, then poke. */
   readonly simulateRemote: () => Promise<void>;
-  /** Snapshot of the durable journal (pending, unconfirmed mutations). */
-  readonly pendingNow: () => Promise<ReadonlyArray<PendingEntry>>;
+  /**
+   * Subscribe to the pending journal via `EngineIntrospection` (#45): the
+   * listener fires now and again on every engine lifecycle event (journal,
+   * push, pull, poke, rebuild), so the panel reflects push acks that trim the
+   * journal without polling. Returns an unsubscribe.
+   */
+  readonly subscribeJournal: (
+    listener: (entries: ReadonlyArray<PendingEntry>) => void
+  ) => () => void;
   /** Subscribe to connection status; returns an unsubscribe. Emits now + on change. */
   readonly subscribeConnection: (listener: (status: Connection) => void) => () => void;
 }
@@ -210,6 +218,19 @@ export const createWorld = (): Promise<World> =>
       // journal left over from a previous offline session and hydrates.
       yield* engine.runSync;
 
+      // Read-only introspection over the engine + store (#45): the demo journal
+      // panel is driven by `journal` + `events`, not by polling the store.
+      const introspection = Introspection.make(engine, store);
+      const journalEntries: Effect.Effect<ReadonlyArray<PendingEntry>> = introspection.journal.pipe(
+        Effect.map((mutations) =>
+          mutations.map((mutation) => ({
+            mutationId: mutation.mutationId,
+            summary: summarise(mutation),
+          }))
+        ),
+        Effect.catch(() => Effect.succeed<ReadonlyArray<PendingEntry>>([]))
+      );
+
       // The React bindings drive observe/mutate through a runtime providing the
       // engine we just built; its scope (and the forked sync loop) stays alive
       // because this program ends in `Effect.never`.
@@ -225,18 +246,18 @@ export const createWorld = (): Promise<World> =>
         setOnline: (next) => Effect.runPromise(SubscriptionRef.set(online, next)),
         syncNow: () =>
           Effect.runPromise(engine.push.pipe(Effect.andThen(engine.pull), Effect.ignore)),
-        pendingNow: () =>
-          Effect.runPromise(
-            store.pendingMutations.pipe(
-              Effect.map((mutations) =>
-                mutations.map((mutation) => ({
-                  mutationId: mutation.mutationId,
-                  summary: summarise(mutation),
-                }))
-              ),
-              Effect.catch(() => Effect.succeed<ReadonlyArray<PendingEntry>>([]))
-            )
-          ),
+        subscribeJournal: (listener) => {
+          const emit = () => void Effect.runPromise(journalEntries).then(listener);
+          // Emit the current journal immediately so first paint is correct.
+          emit();
+          // Then refresh on every engine lifecycle event (push acks trim it).
+          const fiber = Effect.runFork(
+            Stream.runForEach(introspection.events, () => Effect.sync(emit))
+          );
+          return () => {
+            Effect.runFork(Fiber.interrupt(fiber));
+          };
+        },
         simulateRemote: () =>
           Effect.runPromise(
             Effect.gen(function* () {
