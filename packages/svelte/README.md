@@ -1,7 +1,9 @@
 # @legation/svelte
 
 Idiomatic Svelte bindings for the
-[`@legation/effect`](../core) engine.
+[`@legation/effect`](../effect) engine.
+
+Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 - **`setEngineRuntime(runtime)`** — supply a `ManagedRuntime` that can run
   `ClientEngine` effects (build it from a core composition or

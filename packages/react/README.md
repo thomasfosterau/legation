@@ -1,8 +1,10 @@
 # @legation/react
 
 Idiomatic React bindings for the
-[`@legation/effect`](../core) engine — a thin layer over
+[`@legation/effect`](../effect) engine — a thin layer over
 `effect/unstable/reactivity` atoms.
+
+Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 - **`<EffectSyncProvider atoms={…} registry={…?}>`** — supplies the engine's
   atoms (`EngineAtoms.fromLayer(engineLayer)`) and an `AtomRegistry` (created
