@@ -126,19 +126,47 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
         yield* forget(tabId);
       });
 
+    // The backend's authoritative outcome for a forwarded mutation, posted back
+    // to the tab so `TabMirror.mutateWithAck` can resolve. Runs on a scoped
+    // fibre because `acknowledged` only settles on a later push/pull.
+    const postSettled = (requestId: number, outcome: ClientEngine.MutationOutcome) =>
+      channel.post({
+        _tag: "MutateSettled",
+        requestId,
+        outcome: outcome._tag,
+        ...(outcome._tag === "rejected" ? { reason: outcome.reason } : {}),
+      });
+
+    const handleMutate = (message: MirrorProtocol.TabMessage & { readonly _tag: "Mutate" }) =>
+      engine.mutateWithAck(message.mutator, message.args).pipe(
+        Effect.flatMap((mutation) =>
+          // Ack on journal (unchanged tab behaviour), then await the backend
+          // outcome on a background fibre and forward it.
+          channel
+            .post({ _tag: "MutateAck", requestId: message.requestId })
+            .pipe(
+              Effect.andThen(
+                Effect.forkScoped(
+                  mutation.acknowledged.pipe(
+                    Effect.flatMap((outcome) => postSettled(message.requestId, outcome))
+                  )
+                )
+              )
+            )
+        ),
+        Effect.catch((error) =>
+          channel.post({
+            _tag: "MutateError",
+            requestId: message.requestId,
+            message: error.message,
+          })
+        )
+      );
+
     const handle = (message: MirrorProtocol.TabMessage) => {
       switch (message._tag) {
         case "Mutate":
-          return engine.mutateEncoded(message.mutator, message.args).pipe(
-            Effect.flatMap(() => channel.post({ _tag: "MutateAck", requestId: message.requestId })),
-            Effect.catch((error) =>
-              channel.post({
-                _tag: "MutateError",
-                requestId: message.requestId,
-                message: error.message,
-              })
-            )
-          );
+          return handleMutate(message);
         case "Subscribe":
           return touch(message.tabId).pipe(
             Effect.andThen(handleSubscribe(message.tabId, message.subset))

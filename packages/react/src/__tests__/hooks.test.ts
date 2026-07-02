@@ -23,7 +23,7 @@ import {
   SyncRoom,
   Transport,
 } from "@legation/effect";
-import { EffectSyncProvider, useMutation, useQuery } from "../index.js";
+import { EffectSyncProvider, useMutation, useMutationWithAck, useQuery } from "../index.js";
 
 const mutators = Mutator.registry([
   {
@@ -80,6 +80,21 @@ const AddButton = () => {
   );
 };
 
+const AckButton = (props: {
+  readonly onOutcome: (outcome: ClientEngine.MutationOutcome) => void;
+}) => {
+  const mutateWithAck = useMutationWithAck();
+  return React.createElement(
+    "button",
+    {
+      onClick: () => {
+        void mutateWithAck("todo/set", { id: "3", title: "awaited" }).then(props.onOutcome);
+      },
+    },
+    "ack"
+  );
+};
+
 afterEach(cleanup);
 
 describe("React hooks", () => {
@@ -107,6 +122,37 @@ describe("React hooks", () => {
       fireEvent.click(screen.getByText("add"));
     });
     await waitFor(() => expect(screen.getByText("added")).toBeTruthy());
+
+    registry.dispose();
+  });
+
+  it("useMutationWithAck resolves with the backend outcome", async () => {
+    const atoms = EngineAtoms.fromLayer(engineLayer);
+    const registry = AtomRegistry.make();
+    // A push atom to drive the acknowledgement that settles the outcome.
+    const pushAtom = atoms.runtime.fn(() =>
+      Effect.flatMap(ClientEngine.ClientEngine, (engine) => engine.push)
+    );
+    let outcome: ClientEngine.MutationOutcome | undefined;
+    render(
+      React.createElement(
+        EffectSyncProvider,
+        { atoms, registry },
+        React.createElement(TodoList),
+        React.createElement(AckButton, { onOutcome: (value) => (outcome = value) })
+      )
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("ack"));
+    });
+    // The optimistic write lands (and the ack is registered) before the push.
+    await waitFor(() => expect(screen.getByText("awaited")).toBeTruthy());
+
+    await act(async () => {
+      registry.set(pushAtom, undefined);
+    });
+    await waitFor(() => expect(outcome).toEqual({ _tag: "applied" }));
 
     registry.dispose();
   });

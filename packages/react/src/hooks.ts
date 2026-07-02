@@ -9,8 +9,9 @@
  * primitives — no bespoke reactivity here.
  */
 import * as React from "react";
-import type { Atom } from "effect/unstable/reactivity";
-import type { EngineAtoms, Subset } from "@legation/effect";
+import { Effect } from "effect";
+import { AtomRegistry, type Atom } from "effect/unstable/reactivity";
+import type { ClientEngine, EngineAtoms, Subset } from "@legation/effect";
 import { useEngineAtoms, useRegistry } from "./registry.js";
 
 /** Subscribe to an atom's value, re-rendering whenever it changes. */
@@ -46,4 +47,26 @@ export const useNamedQuery = (name: string, args: unknown): EngineAtoms.NamedQue
 export const useMutation = (): ((mutator: string, args: unknown) => void) => {
   const set = useAtomSet(useEngineAtoms().mutation);
   return React.useCallback((mutator: string, args: unknown) => set({ mutator, args }), [set]);
+};
+
+/**
+ * A mutate function that resolves with the mutation's authoritative outcome
+ * (applied or permanently rejected) once the backend settles it. Runs
+ * `mutateWithAck` on the engine runtime and awaits its acknowledgement; the
+ * returned promise never rejects on a permanent rejection — inspect the
+ * `MutationOutcome` instead. Use {@link useMutation} for fire-and-forget writes.
+ */
+export const useMutationWithAck = (): ((
+  mutator: string,
+  args: unknown
+) => Promise<ClientEngine.MutationOutcome>) => {
+  const registry = useRegistry();
+  const atom = useEngineAtoms().mutationWithAck;
+  return React.useCallback(
+    (mutator: string, args: unknown) => {
+      registry.set(atom, { mutator, args });
+      return Effect.runPromise(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }));
+    },
+    [registry, atom]
+  );
 };

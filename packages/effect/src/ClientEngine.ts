@@ -14,6 +14,7 @@
 import {
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   Layer,
@@ -30,7 +31,13 @@ import { ClientStore } from "./ClientStore.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
 import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
-import type { Mutation, NamedSubscription, PatchOp, PullResponse } from "./Protocol.js";
+import type {
+  Mutation,
+  NamedSubscription,
+  PatchOp,
+  PullResponse,
+  PushResponse,
+} from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
@@ -40,6 +47,39 @@ import * as Subset from "./Subset.js";
 export interface LocalRow {
   readonly id: RowId;
   readonly value: unknown;
+}
+
+/**
+ * A mutation's authoritative (server) outcome: `applied` once the backend
+ * acknowledged it with effects, or `rejected` with a reason when the backend
+ * permanently refused it (#35). Observed via {@link MutationHandle}.
+ */
+export type MutationOutcome =
+  | { readonly _tag: "applied" }
+  | { readonly _tag: "rejected"; readonly reason: string };
+
+/**
+ * A handle to a journaled mutation whose backend outcome can be awaited. The
+ * `acknowledged` effect resolves once the backend settles the mutation (via a
+ * push or pull acknowledgement); it is interrupted if the engine scope closes
+ * first, so it never hangs.
+ */
+export interface MutationHandle {
+  readonly mutationId: number;
+  readonly acknowledged: Effect.Effect<MutationOutcome>;
+}
+
+/**
+ * A mutation lifecycle event on {@link ClientEngine.mutationEvents}: emitted
+ * when a mutation is `journaled` locally, then when the backend `acknowledged`
+ * (applied) or `rejected` it. Every journaled mutation emits `journaled`,
+ * whether it came from `mutate`, `mutateEncoded`, or `mutateWithAck`.
+ */
+export interface MutationEvent {
+  readonly clientId: string;
+  readonly mutationId: number;
+  readonly phase: "journaled" | "acknowledged" | "rejected";
+  readonly reason?: string;
 }
 
 /**
@@ -138,6 +178,21 @@ export interface ClientEngine {
     mutator: string,
     args: unknown
   ) => Effect.Effect<void, MutatorError | StoreError>;
+  /**
+   * Like {@link mutate}, but returns a {@link MutationHandle} whose
+   * `acknowledged` effect resolves with the mutation's authoritative outcome
+   * (applied or permanently rejected). Validates and journals identically to
+   * `mutate`; the returned handle lets a caller await the backend's verdict.
+   */
+  readonly mutateWithAck: (
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<MutationHandle, MutatorError | StoreError>;
+  /**
+   * Mutation lifecycle events: a `journaled` event for every journaled
+   * mutation, then `acknowledged` or `rejected` once the backend settles it.
+   */
+  readonly mutationEvents: Stream.Stream<MutationEvent>;
   /** Register/replace the engine's subscriptions (synced on next pull). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void>;
@@ -216,6 +271,42 @@ export const make = (
         Effect.andThen(PubSub.publish(failures, { operation, error })),
         Effect.asVoid
       );
+
+    // Per-mutation outcome deferreds registered by `mutateWithAck`, keyed by
+    // mutation id. `mutate`/`mutateEncoded` never register one, so their path
+    // stays allocation-free.
+    const acks = yield* Ref.make(new Map<number, Deferred.Deferred<MutationOutcome>>());
+    const mutationEventsHub = yield* Effect.acquireRelease(
+      PubSub.unbounded<MutationEvent>(),
+      (hub) => PubSub.shutdown(hub)
+    );
+    const emitEvent = (
+      mutationId: number,
+      phase: MutationEvent["phase"],
+      reason?: string
+    ): Effect.Effect<void> =>
+      Effect.asVoid(
+        PubSub.publish(mutationEventsHub, {
+          clientId: options.clientId,
+          mutationId,
+          ...(reason !== undefined ? { reason } : {}),
+          phase,
+        })
+      );
+    const forgetAck = (id: number): Effect.Effect<void> =>
+      Ref.update(acks, (map) => {
+        const next = new Map(map);
+        next.delete(id);
+        return next;
+      });
+    // Interrupt any still-pending outcome deferreds on scope close, so a caller
+    // awaiting `acknowledged` never hangs and nothing leaks.
+    yield* Effect.addFinalizer(() =>
+      Ref.get(acks).pipe(
+        Effect.flatMap((map) => Effect.forEach([...map.values()], Deferred.interrupt)),
+        Effect.asVoid
+      )
+    );
 
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const materialize: Effect.Effect<
@@ -329,11 +420,46 @@ export const make = (
         }
       });
 
+    // Resolve every pending deferred at or below `lastId` as applied, but only
+    // report ids this call actually settled (a rejected mutation is already
+    // settled, so `succeed` returns false and it is not re-reported).
+    const settleApplied = (lastId: number): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        for (const [id, deferred] of yield* Ref.get(acks)) {
+          if (id > lastId) continue;
+          const won = yield* Deferred.succeed(deferred, { _tag: "applied" });
+          if (won) yield* emitEvent(id, "acknowledged");
+          yield* forgetAck(id);
+        }
+      });
+
+    // Settle one mutation as permanently rejected; emit only if this call won
+    // the race (it was not already settled).
+    const rejectAck = (id: number, reason: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const deferred = (yield* Ref.get(acks)).get(id);
+        if (deferred === undefined) return;
+        const won = yield* Deferred.succeed(deferred, { _tag: "rejected", reason });
+        if (won) yield* emitEvent(id, "rejected", reason);
+        yield* forgetAck(id);
+      });
+
+    // Resolve deferreds for the mutations this client had permanently rejected.
+    const settleRejected = (response: PushResponse): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        for (const entry of response.rejected ?? []) {
+          if (entry.clientId !== options.clientId) continue;
+          yield* rejectAck(entry.mutationId, entry.reason);
+        }
+      });
+
     const acknowledge = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
           yield* store.acknowledge(clientId, upTo);
         }
+        const lastId = lastMutationIds[options.clientId];
+        if (lastId !== undefined) yield* settleApplied(lastId);
       });
 
     const push: ClientEngine["push"] = Effect.gen(function* () {
@@ -343,6 +469,9 @@ export const make = (
         clientGroupId: options.clientGroupId,
         mutations: pending,
       });
+      // Settle permanently-rejected mutations before the ack sweep, so a
+      // rejected id reports `rejected` rather than `applied`.
+      yield* settleRejected(response);
       // Effects arrive via the next pull; the ack only trims the journal.
       yield* acknowledge(response.lastMutationIds);
       yield* publishChange(REBUILD); // trimming the overlay can shift any collection
@@ -554,22 +683,28 @@ export const make = (
           createdAt: yield* Clock.currentTimeMillis,
         };
         yield* store.appendMutation(mutation);
+        yield* emitEvent(mutationId, "journaled");
         yield* publishChange(REBUILD); // the mutation may write any collection
         yield* signalPush; // the sync loop may auto-push this (debounced)
+        return mutationId;
+      });
+    // Validate the decoded args now (fail fast at the call site) and produce the
+    // journal's encoded (wire/persistence) form — shared by `mutate` and
+    // `mutateWithAck`.
+    const encodeFor = (mutator: string, args: unknown): Effect.Effect<unknown, MutatorError> =>
+      Effect.gen(function* () {
+        const definition = yield* definitionOf(mutator);
+        return yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
+          Effect.mapError(invalidArgs(mutator))
+        );
       });
 
     return ClientEngine.of({
       mutate: (mutator, args) =>
-        Effect.gen(function* () {
-          const definition = yield* definitionOf(mutator);
-          // Validate now (fail fast at the call site). Callers pass the
-          // decoded Type; encoding it validates and produces the journal's
-          // wire/persistence form.
-          const encoded = yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
-            Effect.mapError(invalidArgs(mutator))
-          );
-          yield* journal(mutator, encoded);
-        }),
+        encodeFor(mutator, args).pipe(
+          Effect.flatMap((encoded) => journal(mutator, encoded)),
+          Effect.asVoid
+        ),
       mutateEncoded: (mutator, args) =>
         Effect.gen(function* () {
           const definition = yield* definitionOf(mutator);
@@ -578,6 +713,14 @@ export const make = (
             Effect.mapError(invalidArgs(mutator))
           );
           yield* journal(mutator, args);
+        }),
+      mutateWithAck: (mutator, args) =>
+        Effect.gen(function* () {
+          const encoded = yield* encodeFor(mutator, args);
+          const mutationId = yield* journal(mutator, encoded);
+          const deferred = yield* Deferred.make<MutationOutcome>();
+          yield* Ref.update(acks, (map) => new Map(map).set(mutationId, deferred));
+          return { mutationId, acknowledged: Deferred.await(deferred) };
         }),
       subscribe: (subset) =>
         Ref.update(subscriptions, (current) =>
@@ -604,6 +747,7 @@ export const make = (
       pull,
       runSync,
       syncFailures: Stream.fromPubSub(failures),
+      mutationEvents: Stream.fromPubSub(mutationEventsHub),
     });
   });
 
