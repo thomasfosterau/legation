@@ -11,7 +11,20 @@
  * atomically through a single changes event.
  */
 
-import { Clock, Context, Effect, Layer, Metric, PubSub, Ref, Schema, Scope, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Metric,
+  PubSub,
+  Ref,
+  Schedule,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
@@ -42,12 +55,35 @@ type ViewChange =
 
 const REBUILD: ViewChange = { _tag: "Rebuild" };
 
+/**
+ * Sync-loop scheduling knobs. `push`/`pull` stay the primitives; these grow
+ * `runSync` into a configurable scheduler driven by `Effect.Schedule` and the
+ * transport's `statusChanges` seam. Both are opt-in: unset means the loop
+ * keeps only its baseline triggers (pull on poke, push+pull on reconnect).
+ * Retry/backoff is a separate concern the loop composes with, not embeds.
+ */
+export interface SyncLoopOptions {
+  /**
+   * Auto-push after `mutate`/`mutateEncoded` journals a mutation, debounced so
+   * a burst of mutations inside the window coalesces into a single push (the
+   * journal already batches naturally).
+   */
+  readonly pushDebounce?: Duration.Input;
+  /**
+   * Periodic pull as the correctness backstop, so the client converges over
+   * pull alone even when no pokes arrive ("pull is the correctness path").
+   */
+  readonly pullInterval?: Duration.Input;
+}
+
 export interface ClientEngineOptions {
   readonly clientId: string;
   readonly clientGroupId: string;
   readonly mutators: MutatorRegistry;
   /** Named queries: client-side subset factories for local rendering. */
   readonly queries?: Query.QueryRegistry;
+  /** Sync-loop scheduling (push-on-mutate debounce, interval pull). */
+  readonly syncLoop?: SyncLoopOptions;
 }
 
 export interface ClientEngine {
@@ -121,6 +157,13 @@ export const make = (
       PubSub.shutdown(hub)
     );
     const publishChange = (change: ViewChange) => Effect.asVoid(PubSub.publish(changes, change));
+
+    // Fires whenever a mutation is journaled; the sync loop debounces it into
+    // an auto-push when `syncLoop.pushDebounce` is set.
+    const pushTrigger = yield* Effect.acquireRelease(PubSub.unbounded<void>(), (hub) =>
+      PubSub.shutdown(hub)
+    );
+    const signalPush = Effect.asVoid(PubSub.publish(pushTrigger, undefined));
 
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const materialize: Effect.Effect<
@@ -299,6 +342,23 @@ export const make = (
           status === "connected" ? Effect.ignore(push.pipe(Effect.andThen(pull))) : Effect.void
         )
       );
+      // Auto-push after mutations, debounced so a burst coalesces into one push.
+      const pushDebounce = options.syncLoop?.pushDebounce;
+      if (pushDebounce !== undefined) {
+        yield* Effect.forkScoped(
+          Stream.fromPubSub(pushTrigger).pipe(
+            Stream.debounce(pushDebounce),
+            Stream.runForEach(() => Effect.ignore(push))
+          )
+        );
+      }
+      // Periodic pull: the correctness backstop when no pokes arrive.
+      const pullInterval = options.syncLoop?.pullInterval;
+      if (pullInterval !== undefined) {
+        yield* Effect.forkScoped(
+          Effect.ignore(pull).pipe(Effect.repeat(Schedule.spaced(pullInterval)))
+        );
+      }
     });
 
     const definitionOf = (mutator: string) => {
@@ -420,6 +480,7 @@ export const make = (
         };
         yield* store.appendMutation(mutation);
         yield* publishChange(REBUILD); // the mutation may write any collection
+        yield* signalPush; // the sync loop may auto-push this (debounced)
       });
 
     return ClientEngine.of({
