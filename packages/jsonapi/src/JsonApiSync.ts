@@ -47,6 +47,17 @@ export interface JsonApiSyncOptions {
    * `Relationships.related` resolves them without extra round trips.
    */
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  /**
+   * Periodic pull interval — the correctness backstop that picks up changes
+   * made elsewhere ("realtime" is periodic pull for client-direct deployment).
+   * Defaults to 5 seconds; set to `null` to disable interval pulling.
+   */
+  readonly pullInterval?: Duration.Input | null;
+  /**
+   * Auto-push debounce window. When set, mutations are pushed automatically
+   * (coalesced) without an app-level `push` call.
+   */
+  readonly pushDebounce?: Duration.Input;
 }
 
 /** Reflect + derive an api's resources, collections, mutators, operations. */
@@ -90,28 +101,32 @@ export const layer = (
     Layer.provide(serverLayer)
   );
 
+  // Interval pull is now a core sync-loop concern (default 5s, opt-out with
+  // `null`); no bespoke poll loop in `start`.
+  const pullInterval =
+    options.pullInterval === null ? undefined : (options.pullInterval ?? Duration.seconds(5));
+  const syncLoop: ClientEngine.SyncLoopOptions = {
+    ...(pullInterval !== undefined ? { pullInterval } : {}),
+    ...(options.pushDebounce !== undefined ? { pushDebounce: options.pushDebounce } : {}),
+  };
+
   return ClientEngine.layer({
     clientId: options.clientId,
     clientGroupId: options.clientGroupId,
     mutators: registry,
+    syncLoop,
   }).pipe(Layer.provide(transportLayer), Layer.provide(ClientStore.layerMemory));
 };
 
 /**
- * Start syncing: run the engine's sync loop (pull on poke from local writes;
- * push+pull on connect) and poll for changes made elsewhere. Requires a
- * `Scope` — fork it into the app's runtime and the fibers live until the
- * scope closes.
+ * Start syncing: run the engine's sync loop. Interval pull, push-on-mutate,
+ * pull-on-poke and push+pull-on-reconnect are all scheduled by the core loop
+ * (configure the interval/debounce on `layer`'s options). Requires a `Scope` —
+ * fork it into the app's runtime and the fibers live until the scope closes.
  */
-export const start = (options?: {
-  readonly pollInterval?: Duration.Duration;
-}): Effect.Effect<void, never, ClientEngine.ClientEngine | Scope.Scope> =>
+export const start: Effect.Effect<void, never, ClientEngine.ClientEngine | Scope.Scope> =
   Effect.gen(function* () {
     const engine = yield* ClientEngine.ClientEngine;
     // Forking never surfaces the loop's errors; die on the impossible.
     yield* engine.runSync.pipe(Effect.orDie);
-    const interval = options?.pollInterval ?? Duration.seconds(5);
-    yield* Effect.forkScoped(
-      Effect.forever(Effect.ignore(engine.pull).pipe(Effect.delay(interval)))
-    );
   });

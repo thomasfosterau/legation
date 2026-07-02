@@ -11,6 +11,8 @@
  *   loop + mirror serving) for the per-origin service-worker singleton
  * - `CacheApiHttpCache`: ResponseCacheStore over the Cache API plus the
  *   stale-while-revalidate fetch handler
+ * - `BrowserConnectivity`: layers `navigator.onLine` + focus signals onto a
+ *   `ClientTransport` so the sync loop's reconnect/focus triggers fire
  */
 
 export * as IndexedDbClientStore from "./IndexedDbClientStore.js";
@@ -20,3 +22,4 @@ export * as EngineHost from "./EngineHost.js";
 export * as TabMirror from "./TabMirror.js";
 export * as ServiceWorkerHost from "./ServiceWorkerHost.js";
 export * as CacheApiHttpCache from "./CacheApiHttpCache.js";
+export * as BrowserConnectivity from "./BrowserConnectivity.js";
