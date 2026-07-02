@@ -27,6 +27,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import * as Aggregate from "./Aggregate.js";
 import type { RowId } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
@@ -277,6 +278,40 @@ export interface ClientEngine {
     ): Stream.Stream<ReadonlyArray<TypedRow<A>>, StoreError | MutatorError>;
     (subset: Subset.Subset): Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
   };
+  /**
+   * One-shot aggregate over the current local view (confirmed + overlay):
+   * `query` the subset, then fold it with {@link Aggregate.compute}.
+   *
+   * Local tier only — the aggregate sees exactly the rows this client has
+   * synced (a subset's window included); a server-evaluated tier that folds
+   * the whole collection is explicit future work.
+   */
+  readonly queryAggregate: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate
+  ) => Effect.Effect<Aggregate.AggregateValue, StoreError | MutatorError>;
+  /** One-shot grouped aggregate over the current local view (see {@link queryAggregate}). */
+  readonly queryAggregateGrouped: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate,
+    groupBy: string
+  ) => Effect.Effect<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
+  /**
+   * Live aggregate over a subset: emits now and after every local change,
+   * re-scanning the subset and folding it. Deduped — a change that leaves the
+   * aggregate value unchanged does not re-emit. Local tier only, as
+   * {@link queryAggregate}.
+   */
+  readonly observeAggregate: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate
+  ) => Stream.Stream<Aggregate.AggregateValue, StoreError | MutatorError>;
+  /** Live grouped aggregate; deduped by structural equality of the record (see {@link observeAggregate}). */
+  readonly observeAggregateGrouped: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate,
+    groupBy: string
+  ) => Stream.Stream<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
   /** Push pending mutations now. */
   readonly push: Effect.Effect<void, TransportError | StoreError>;
   /** Pull a patch now and rebase. */
@@ -830,6 +865,44 @@ export const make = (
       return base.pipe(Stream.map(options.select), Stream.changesWith(equals));
     };
 
+    // A change that leaves the scalar aggregate unchanged must not re-emit;
+    // `Object.is` treats `undefined`/`NaN` correctly (unlike `===`).
+    const sameScalar = (a: Aggregate.AggregateValue, b: Aggregate.AggregateValue): boolean =>
+      Object.is(a, b);
+    // Structural equality for a grouped aggregate: same keys, same values.
+    const sameGrouped = (
+      a: Record<string, Aggregate.AggregateValue>,
+      b: Record<string, Aggregate.AggregateValue>
+    ): boolean => {
+      const keys = Object.keys(a);
+      return (
+        keys.length === Object.keys(b).length &&
+        keys.every((key) => Object.hasOwn(b, key) && Object.is(a[key], b[key]))
+      );
+    };
+
+    const queryAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
+      query(subset).pipe(Effect.map((rows) => Aggregate.compute(agg, rows)));
+    const queryAggregateGrouped = (
+      subset: Subset.Subset,
+      agg: Aggregate.Aggregate,
+      groupBy: string
+    ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
+    const observeAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
+      observeSubset(subset).pipe(
+        Stream.map((rows) => Aggregate.compute(agg, rows)),
+        Stream.changesWith(sameScalar)
+      );
+    const observeAggregateGrouped = (
+      subset: Subset.Subset,
+      agg: Aggregate.Aggregate,
+      groupBy: string
+    ) =>
+      observeSubset(subset).pipe(
+        Stream.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)),
+        Stream.changesWith(sameGrouped)
+      );
+
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
     const journal = (mutator: string, encoded: unknown, decodedArgs: unknown) =>
@@ -905,6 +978,10 @@ export const make = (
       query: query as ClientEngine["query"],
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
       observe: observeProjected as ClientEngine["observe"],
+      queryAggregate,
+      queryAggregateGrouped,
+      observeAggregate,
+      observeAggregateGrouped,
       observeNamed: (name, args) =>
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,

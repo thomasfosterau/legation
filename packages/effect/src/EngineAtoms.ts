@@ -26,6 +26,7 @@ import {
   type MutationOutcome,
   type TypedRow,
 } from "./ClientEngine.js";
+import * as Aggregate from "./Aggregate.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Hash from "./Hash.js";
 import * as Subset from "./Subset.js";
@@ -58,6 +59,18 @@ export type NamedQueryResult = AsyncResult.AsyncResult<
   StoreError | MutatorError | QueryError | Cause.NoSuchElementError
 >;
 
+/** A live aggregate's Atom value: the current aggregate value as an `AsyncResult`. */
+export type AggregateResult = AsyncResult.AsyncResult<
+  Aggregate.AggregateValue,
+  StoreError | MutatorError | Cause.NoSuchElementError
+>;
+
+/** A live grouped-aggregate's Atom value: the per-group record as an `AsyncResult`. */
+export type GroupedAggregateResult = AsyncResult.AsyncResult<
+  Record<string, Aggregate.AggregateValue>,
+  StoreError | MutatorError | Cause.NoSuchElementError
+>;
+
 /** What to write to the mutation atom to run a mutator optimistically. */
 export interface MutationArg {
   readonly mutator: string;
@@ -80,6 +93,21 @@ export interface EngineAtoms {
   };
   /** The Atom for a named query's live results, stable per (name, args). */
   readonly namedQuery: (name: string, args: unknown) => Atom.Atom<NamedQueryResult>;
+  /**
+   * The Atom for a subset's live aggregate value. Stable per
+   * `(subset hash, aggregate)`, so mounting it from many components shares one
+   * subscription. Re-emits only when the aggregate value changes.
+   */
+  readonly aggregate: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate
+  ) => Atom.Atom<AggregateResult>;
+  /** The Atom for a subset's live grouped aggregate, stable per `(subset hash, aggregate, groupBy)`. */
+  readonly aggregateGrouped: (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate,
+    groupBy: string
+  ) => Atom.Atom<GroupedAggregateResult>;
   /** Write a {@link MutationArg} to run a mutator; its result is an `AsyncResult`. */
   readonly mutation: Atom.AtomResultFn<MutationArg, void, MutatorError | StoreError>;
   /**
@@ -129,6 +157,39 @@ export const fromLayer = (
     return atom;
   };
 
+  const aggregates = new Map<string, Atom.Atom<AggregateResult>>();
+  const aggregate = (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate
+  ): Atom.Atom<AggregateResult> => {
+    const key = `${Subset.hash(subset)}:${Hash.canonicalJson(agg)}`;
+    const existing = aggregates.get(key);
+    if (existing !== undefined) return existing;
+    const atom = runtime.atom(
+      Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observeAggregate(subset, agg)))
+    );
+    aggregates.set(key, atom);
+    return atom;
+  };
+
+  const groupedAggregates = new Map<string, Atom.Atom<GroupedAggregateResult>>();
+  const aggregateGrouped = (
+    subset: Subset.Subset,
+    agg: Aggregate.Aggregate,
+    groupBy: string
+  ): Atom.Atom<GroupedAggregateResult> => {
+    const key = `${Subset.hash(subset)}:${Hash.canonicalJson(agg)}:${groupBy}`;
+    const existing = groupedAggregates.get(key);
+    if (existing !== undefined) return existing;
+    const atom = runtime.atom(
+      Stream.unwrap(
+        Effect.map(ClientEngine, (engine) => engine.observeAggregateGrouped(subset, agg, groupBy))
+      )
+    );
+    groupedAggregates.set(key, atom);
+    return atom;
+  };
+
   const mutation = runtime.fn((arg: MutationArg) =>
     Effect.flatMap(ClientEngine, (engine) => engine.mutate(arg.mutator, arg.args))
   );
@@ -145,6 +206,8 @@ export const fromLayer = (
     runtime,
     liveQuery: liveQuery as EngineAtoms["liveQuery"],
     namedQuery,
+    aggregate,
+    aggregateGrouped,
     mutation,
     mutationWithAck,
   };

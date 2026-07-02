@@ -8,8 +8,9 @@
    * journal) come from the demo context. Visual design and behaviour mirror the
    * FoldKit / React / Compose / SwiftUI todo examples.
    */
-  import { query, getMutate, setEngineRuntime } from "@legation/svelte";
-  import { type Todo, allTodos } from "./domain";
+  import { query, aggregate, getMutate, setEngineRuntime } from "@legation/svelte";
+  import { Aggregate } from "@legation/effect";
+  import { type Todo, allTodos, activeTodos } from "./domain";
   import type { DemoControls } from "./sync";
   import type { EffectSyncRuntime } from "@legation/svelte";
   import { setDemo, connectionStore, pendingStore } from "./demo";
@@ -23,6 +24,10 @@
   setDemo(controls);
 
   const rows = query(allTodos);
+  // The "active" tally is a live Count aggregate over the incomplete-todos
+  // subset — derived by the engine, deduped so an edit that leaves the count
+  // unchanged doesn't re-render the footer.
+  const activeCount = aggregate(activeTodos, Aggregate.count);
   const mutate = getMutate();
   const connection = connectionStore(controls);
   const pending = pendingStore(controls);
@@ -35,7 +40,7 @@
   const todos = $derived($rows.map((row) => row.value as Todo));
   const offline = $derived($connection === "disconnected");
   const total = $derived(todos.length);
-  const active = $derived(todos.filter((todo) => !todo.done).length);
+  const active = $derived($activeCount ?? 0);
   const completed = $derived(total - active);
   const visible = $derived(
     filter === "All"
