@@ -28,7 +28,7 @@ import {
   Stream,
 } from "effect";
 import * as Aggregate from "./Aggregate.js";
-import type { RowId } from "./Collection.js";
+import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
 import { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
@@ -231,6 +231,35 @@ export interface ClientEngine {
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void>;
   /**
+   * Seed the local view with confirmed rows before any transport call, so
+   * observers render them synchronously (the hydration path — pair with
+   * `Hydration.hydrate` for a full store, or use `seed` for a targeted warm-up).
+   * Writes the rows via the store and publishes one change scoped to exactly the
+   * seeded collections.
+   *
+   * The `version`s must be genuine backend versions for CVR diffing to converge
+   * cheaply on the next pull; self-invented versions are safe but degrade to the
+   * reset path (the server sends a `Clear` + full puts). See `Hydration.ts`.
+   */
+  readonly seed: (
+    rows: ReadonlyArray<{
+      readonly collection: string;
+      readonly id: RowId;
+      readonly version: RowVersion;
+      readonly value: unknown;
+    }>
+  ) => Effect.Effect<void, StoreError>;
+  /**
+   * Prefetch a subset: `subscribe` to it, and if it currently yields no local
+   * rows, `pull` once so the rows are present before the caller proceeds.
+   * Concurrent calls for the same subset dedupe — at most one pull runs per
+   * `Subset.hash` in flight — so a burst of renders that all need the same data
+   * triggers a single network round-trip.
+   */
+  readonly ensureSubset: (
+    subset: Subset.Subset
+  ) => Effect.Effect<void, TransportError | StoreError | MutatorError>;
+  /**
    * Subscribe a named query (Query.ts): the server resolves it to the
    * authoritative subset it syncs; the client renders it locally with its own
    * subset factory. Synced on the next pull.
@@ -335,6 +364,11 @@ export const make = (
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
+    // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
+    // prefetches of the same subset share one pull instead of racing N of them.
+    const ensurePulls = yield* Ref.make(
+      new Map<string, Deferred.Deferred<void, TransportError | StoreError | MutatorError>>()
+    );
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
     >([]);
@@ -686,6 +720,74 @@ export const make = (
       yield* Metric.update(Telemetry.pullsTotal, 1);
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
+    const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
+      Ref.update(subscriptions, (current) =>
+        current.some((s) => Subset.hash(s) === Subset.hash(subset)) ? current : [...current, subset]
+      );
+
+    // Seed confirmed rows and reveal them with one scoped rebuild, so observers
+    // of the seeded collections re-materialize while others stay put. Confirmed
+    // rows shifted, so the overlay cache is invalidated first.
+    const seed: ClientEngine["seed"] = (rows) =>
+      Effect.gen(function* () {
+        const touched = new Set<string>();
+        for (const row of rows) {
+          yield* store.putRow(row.collection, {
+            id: row.id,
+            version: row.version,
+            value: row.value,
+          });
+          touched.add(row.collection);
+        }
+        yield* invalidateOverlay;
+        yield* publishChange(rebuildFor(touched));
+      });
+
+    // Register or reuse the in-flight pull for a subset. Returns the deferred to
+    // await plus whether this call owns the pull (only the owner runs it), so
+    // concurrent prefetches of one subset collapse to a single pull.
+    type PullDeferred = Deferred.Deferred<void, TransportError | StoreError | MutatorError>;
+    type PullMap = Map<string, PullDeferred>;
+    type PullClaim = { readonly deferred: PullDeferred; readonly owner: boolean };
+    const claimPull = (hash: string, own: PullDeferred): Effect.Effect<PullClaim> =>
+      Ref.modify(ensurePulls, (map): readonly [PullClaim, PullMap] => {
+        const existing = map.get(hash);
+        return existing !== undefined
+          ? [{ deferred: existing, owner: false }, map]
+          : [{ deferred: own, owner: true }, new Map(map).set(hash, own)];
+      });
+
+    const releasePull = (hash: string): Effect.Effect<void> =>
+      Ref.update(ensurePulls, (map) => {
+        const next = new Map(map);
+        next.delete(hash);
+        return next;
+      });
+
+    // A single deduped pull for a subset: the owner runs `pull` and settles the
+    // shared deferred; everyone else just awaits it.
+    const dedupedPull = (
+      subset: Subset.Subset
+    ): Effect.Effect<void, TransportError | StoreError | MutatorError> =>
+      Effect.gen(function* () {
+        const hash = Subset.hash(subset);
+        const own = yield* Deferred.make<void, TransportError | StoreError | MutatorError>();
+        const { deferred, owner } = yield* claimPull(hash, own);
+        if (!owner) return yield* Deferred.await(deferred);
+        const exit = yield* Effect.exit(pull);
+        yield* releasePull(hash);
+        yield* Deferred.done(own, exit);
+        return yield* Deferred.await(own);
+      });
+
+    const ensureSubset: ClientEngine["ensureSubset"] = (subset) =>
+      Effect.gen(function* () {
+        yield* subscribeSubset(subset);
+        const rows = yield* query(subset);
+        if (rows.length > 0) return;
+        yield* dedupedPull(subset);
+      });
+
     // Retry only transient (transport) failures; store/mutator errors are not
     // transient and go straight to the failure surface.
     const isTransient = (error: TransportError | StoreError | MutatorError): boolean =>
@@ -959,12 +1061,9 @@ export const make = (
           yield* Ref.update(acks, (map) => new Map(map).set(mutationId, deferred));
           return { mutationId, acknowledged: Deferred.await(deferred) };
         }),
-      subscribe: (subset) =>
-        Ref.update(subscriptions, (current) =>
-          current.some((s) => Subset.hash(s) === Subset.hash(subset))
-            ? current
-            : [...current, subset]
-        ),
+      subscribe: subscribeSubset,
+      seed,
+      ensureSubset,
       unsubscribe: (subset) =>
         Ref.update(subscriptions, (current) =>
           current.filter((s) => Subset.hash(s) !== Subset.hash(subset))

@@ -39,6 +39,8 @@ export interface ClientStore {
     id: RowId
   ) => Effect.Effect<StoredRow | undefined, StoreError>;
   readonly listRows: (collection: string) => Effect.Effect<ReadonlyArray<StoredRow>, StoreError>;
+  /** Every collection that currently holds confirmed rows — the enumeration `dehydrate` walks. */
+  readonly listCollections: Effect.Effect<ReadonlyArray<string>, StoreError>;
   readonly putRow: (collection: string, row: StoredRow) => Effect.Effect<void, StoreError>;
   readonly delRow: (collection: string, id: RowId) => Effect.Effect<void, StoreError>;
   readonly clearRows: Effect.Effect<void, StoreError>;
@@ -71,6 +73,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     getRow: (collection, id) => Ref.get(rows).pipe(Effect.map((m) => m.get(collection)?.get(id))),
     listRows: (collection) =>
       Ref.get(rows).pipe(Effect.map((m) => Array.from(collectionMap(m, collection).values()))),
+    listCollections: Ref.get(rows).pipe(Effect.map((m) => Array.from(m.keys()))),
     putRow: (collection, row) =>
       Ref.update(rows, (m) => {
         const next = new Map(m);
@@ -193,6 +196,7 @@ export const makeKeyValue = (
     return ClientStore.of({
       getRow: (collection, id) => rowMap(collection).pipe(Effect.map((map) => map[id])),
       listRows: (collection) => rowMap(collection).pipe(Effect.map((map) => Object.values(map))),
+      listCollections: collections,
       putRow: (collection, row) =>
         locked(
           Effect.gen(function* () {
