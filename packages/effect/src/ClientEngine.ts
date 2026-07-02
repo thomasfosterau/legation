@@ -76,6 +76,37 @@ export interface SyncLoopOptions {
   readonly pullInterval?: Duration.Input;
 }
 
+/**
+ * Retry/backoff policies for the sync loop's network legs (#34). The scheduler
+ * (#33) decides *when* to attempt; these `Schedule`s decide *how* an attempt
+ * survives transient failure — kept orthogonal to avoid double-retry. Only
+ * `TransportError` is retried; `StoreError`/`MutatorError` are not transient and
+ * propagate to the failure surface immediately. Unset legs use
+ * {@link defaultRetryPolicy}.
+ */
+export interface RetryOptions {
+  readonly push?: Schedule.Schedule<unknown, unknown>;
+  readonly pull?: Schedule.Schedule<unknown, unknown>;
+  /** Re-establishment policy for a failed poke stream. */
+  readonly pokes?: Schedule.Schedule<unknown, unknown>;
+}
+
+/**
+ * Default backoff: exponential from 1s (factor 2), the delay capped at 30s,
+ * bounded to 5 retries — mirroring TanStack Query's 1s→30s policy. No jitter,
+ * so it composes predictably; add `Schedule.jittered` to taste.
+ */
+export const defaultRetryPolicy: Schedule.Schedule<unknown, unknown> = Schedule.exponential(
+  Duration.seconds(1),
+  2
+).pipe(Schedule.either(Schedule.spaced(Duration.seconds(30))), Schedule.both(Schedule.recurs(5)));
+
+/** A terminal sync failure surfaced after the retry policy was exhausted. */
+export interface SyncFailure {
+  readonly operation: "push" | "pull" | "pokes";
+  readonly error: TransportError | StoreError | MutatorError;
+}
+
 export interface ClientEngineOptions {
   readonly clientId: string;
   readonly clientGroupId: string;
@@ -84,6 +115,8 @@ export interface ClientEngineOptions {
   readonly queries?: Query.QueryRegistry;
   /** Sync-loop scheduling (push-on-mutate debounce, interval pull). */
   readonly syncLoop?: SyncLoopOptions;
+  /** Retry/backoff policies for push, pull, and the poke stream. */
+  readonly retry?: RetryOptions;
 }
 
 export interface ClientEngine {
@@ -139,6 +172,12 @@ export interface ClientEngine {
   readonly pull: Effect.Effect<void, TransportError | StoreError | MutatorError>;
   /** Run the sync loop: pull on poke; push+pull on reconnect. */
   readonly runSync: Effect.Effect<void, TransportError | StoreError | MutatorError, Scope.Scope>;
+  /**
+   * Terminal sync failures surfaced after the retry policy is exhausted — so
+   * bindings can show a "sync degraded" state. Also counted in
+   * `Telemetry.syncFailuresTotal`.
+   */
+  readonly syncFailures: Stream.Stream<SyncFailure>;
 }
 
 export const ClientEngine = Context.Service<ClientEngine>("@legation/effect/ClientEngine");
@@ -164,6 +203,19 @@ export const make = (
       PubSub.shutdown(hub)
     );
     const signalPush = Effect.asVoid(PubSub.publish(pushTrigger, undefined));
+
+    // Terminal sync failures (retry exhausted) surfaced to bindings + metrics.
+    const failures = yield* Effect.acquireRelease(PubSub.unbounded<SyncFailure>(), (hub) =>
+      PubSub.shutdown(hub)
+    );
+    const surfaceFailure = (
+      operation: SyncFailure["operation"],
+      error: SyncFailure["error"]
+    ): Effect.Effect<void> =>
+      Metric.update(Telemetry.syncFailuresTotal, 1).pipe(
+        Effect.andThen(PubSub.publish(failures, { operation, error })),
+        Effect.asVoid
+      );
 
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const materialize: Effect.Effect<
@@ -333,13 +385,38 @@ export const make = (
       yield* Metric.update(Telemetry.pullsTotal, 1);
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
+    // Retry only transient (transport) failures; store/mutator errors are not
+    // transient and go straight to the failure surface.
+    const isTransient = (error: TransportError | StoreError | MutatorError): boolean =>
+      error._tag === "TransportError";
+
+    const pushPolicy = options.retry?.push ?? defaultRetryPolicy;
+    const pullPolicy = options.retry?.pull ?? defaultRetryPolicy;
+    const pokePolicy = options.retry?.pokes ?? defaultRetryPolicy;
+
+    // A network leg that survives transient failure via its policy, then
+    // surfaces (never raises) whatever it could not recover from.
+    const attemptPush = push.pipe(
+      Effect.retry({ schedule: pushPolicy, while: isTransient }),
+      Effect.catch((error) => surfaceFailure("push", error))
+    );
+    const attemptPull = pull.pipe(
+      Effect.retry({ schedule: pullPolicy, while: isTransient }),
+      Effect.catch((error) => surfaceFailure("pull", error))
+    );
+
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
-      // Pull on every poke.
-      yield* Effect.forkScoped(Stream.runForEach(transport.pokes, () => Effect.ignore(pull)));
+      // Pull on every poke; re-establish the poke stream with backoff, and
+      // surface if it stays down (the replay-1 hub covers the resubscribe race).
+      yield* Effect.forkScoped(
+        Stream.runForEach(transport.pokes.pipe(Stream.retry(pokePolicy)), () => attemptPull).pipe(
+          Effect.catch((error) => surfaceFailure("pokes", error))
+        )
+      );
       // Push + pull on (re)connect.
       yield* Effect.forkScoped(
         Stream.runForEach(transport.statusChanges, (status) =>
-          status === "connected" ? Effect.ignore(push.pipe(Effect.andThen(pull))) : Effect.void
+          status === "connected" ? attemptPush.pipe(Effect.andThen(attemptPull)) : Effect.void
         )
       );
       // Auto-push after mutations, debounced so a burst coalesces into one push.
@@ -348,16 +425,14 @@ export const make = (
         yield* Effect.forkScoped(
           Stream.fromPubSub(pushTrigger).pipe(
             Stream.debounce(pushDebounce),
-            Stream.runForEach(() => Effect.ignore(push))
+            Stream.runForEach(() => attemptPush)
           )
         );
       }
       // Periodic pull: the correctness backstop when no pokes arrive.
       const pullInterval = options.syncLoop?.pullInterval;
       if (pullInterval !== undefined) {
-        yield* Effect.forkScoped(
-          Effect.ignore(pull).pipe(Effect.repeat(Schedule.spaced(pullInterval)))
-        );
+        yield* Effect.forkScoped(attemptPull.pipe(Effect.repeat(Schedule.spaced(pullInterval))));
       }
     });
 
@@ -528,6 +603,7 @@ export const make = (
       push,
       pull,
       runSync,
+      syncFailures: Stream.fromPubSub(failures),
     });
   });
 
