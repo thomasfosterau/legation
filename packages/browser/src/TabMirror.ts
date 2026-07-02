@@ -8,8 +8,26 @@
  * journal in encoded form and await the host's acknowledgement.
  */
 
-import { ClientEngine, MutatorError, Subset, TransportError, type Mutator } from "@legation/effect";
-import { Deferred, type Duration, Effect, PubSub, Ref, Schema, Scope, Stream } from "effect";
+import {
+  ClientEngine,
+  MutatorError,
+  Subset,
+  Telemetry,
+  TransportError,
+  type Mutator,
+} from "@legation/effect";
+import {
+  Deferred,
+  type Duration,
+  Effect,
+  Metric,
+  Option,
+  PubSub,
+  Ref,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -23,6 +41,32 @@ export interface TabMirrorOptions {
    * to 10 seconds.
    */
   readonly heartbeatInterval?: Duration.Input;
+  /**
+   * Capacity of the bounded change hub (#44). A stalled tab observer cannot
+   * make the hub grow without limit: at capacity the hub drops the newest
+   * subset keys, and the observer collapses the resulting seq gap into a full
+   * re-read of its subset — lossless because the newest rows live in the
+   * mirror's `Ref`. Defaults to {@link DEFAULT_CHANGE_HUB_CAPACITY}.
+   */
+  readonly changeHubCapacity?: number;
+}
+
+/**
+ * Default bound for the mirror's change hub. Large enough that no realistic
+ * burst of mirror updates fills it under normal consumption, so behaviour is
+ * identical to the old unbounded hub until a tab observer genuinely stalls.
+ */
+const DEFAULT_CHANGE_HUB_CAPACITY = 1024;
+
+/**
+ * A subset key published on the change hub, tagged with a monotonic seq. A
+ * consumer tracks the last seq it saw; a non-contiguous seq means the bounded
+ * hub dropped a key, so the observer re-reads its subset (a full refresh)
+ * rather than risk missing its own key.
+ */
+interface SeqKey {
+  readonly seq: number;
+  readonly key: string;
 }
 
 /** A backend outcome message reduced to the engine's {@link ClientEngine.MutationOutcome}. */
@@ -79,9 +123,25 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
       )
     );
     const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
-    const changes = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (hub) =>
-      PubSub.shutdown(hub)
+    // Monotonic seq stamped on every published key. The `rows` Ref is updated
+    // before the key is published, so a re-read after a gap always sees the
+    // latest rows even for a dropped key.
+    const keySeq = yield* Ref.make(0);
+    // Bounded, dropping change hub (#44): a stalled observer holds keys in the
+    // shared hub; at capacity the hub drops the newest keys rather than growing
+    // without limit. A consumer detects a drop as a seq gap and re-reads its
+    // subset from the always-current `rows` Ref — lossless under pressure,
+    // identical under none.
+    const keyHubCapacity = options.changeHubCapacity ?? DEFAULT_CHANGE_HUB_CAPACITY;
+    const keyHub = yield* Effect.acquireRelease(
+      PubSub.dropping<SeqKey>({ capacity: keyHubCapacity }),
+      (hub) => PubSub.shutdown(hub)
     );
+    const publishKey = (key: string): Effect.Effect<void> =>
+      Effect.flatMap(
+        Ref.updateAndGet(keySeq, (n) => n + 1),
+        (seq) => Effect.asVoid(PubSub.publish(keyHub, { seq, key }))
+      );
     const pending = yield* Ref.make(
       new Map<number, Deferred.Deferred<void, MutatorError | TransportError>>()
     );
@@ -129,7 +189,7 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
                     message.key,
                     message.rows.map((row) => ({ id: row.id, value: row.value }))
                   )
-                ).pipe(Effect.andThen(Effect.asVoid(PubSub.publish(changes, message.key))));
+                ).pipe(Effect.andThen(publishKey(message.key)));
               case "MutateAck":
                 return resolveIn(pending, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, undefined)
@@ -209,12 +269,36 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
       query,
       observe: (subset) => {
         const key = Subset.hash(subset);
-        return Stream.concat(
-          Stream.fromEffect(query(subset)),
-          Stream.fromPubSub(changes).pipe(
-            Stream.filter((changed) => changed === key),
-            Stream.mapEffect(() => query(subset))
-          )
+        // Decide whether one sequenced key warrants re-emitting this subset's
+        // rows: skip a stale/duplicate seq; on a gap (a dropped key) refresh
+        // (the dropped key might have been ours — the `rows` Ref holds latest);
+        // otherwise emit only when our own key changed. Under no pressure
+        // (contiguous seqs) this is exactly the old key-filter behaviour.
+        const decide = (
+          lastSeenRef: Ref.Ref<number>,
+          item: SeqKey
+        ): Effect.Effect<Option.Option<ReadonlyArray<ClientEngine.LocalRow>>> =>
+          Effect.gen(function* () {
+            const lastSeen = yield* Ref.get(lastSeenRef);
+            if (item.seq <= lastSeen) return Option.none();
+            const gapped = item.seq > lastSeen + 1;
+            yield* Ref.set(lastSeenRef, item.seq);
+            if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
+            return gapped || item.key === key ? Option.some(yield* query(subset)) : Option.none();
+          });
+        return Stream.unwrap(
+          Effect.gen(function* () {
+            const startSeq = yield* Ref.get(keySeq);
+            const lastSeenRef = yield* Ref.make(startSeq);
+            return Stream.concat(
+              Stream.fromEffect(query(subset)),
+              Stream.fromPubSub(keyHub).pipe(
+                Stream.mapEffect((item) => decide(lastSeenRef, item)),
+                Stream.filter(Option.isSome),
+                Stream.map((option) => option.value)
+              )
+            );
+          })
         );
       },
     };

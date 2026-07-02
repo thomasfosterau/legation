@@ -191,6 +191,31 @@ export interface ClientEngineOptions {
   readonly syncLoop?: SyncLoopOptions;
   /** Retry/backoff policies for push, pull, and the poke stream. */
   readonly retry?: RetryOptions;
+  /**
+   * Capacity of the bounded change hub (#44). A stalled observer cannot make
+   * the hub grow without limit: at capacity the hub drops the newest
+   * view-changes, and the consumer collapses the resulting seq gap into a
+   * lossless `Rebuild` (see {@link make}). Defaults to
+   * {@link DEFAULT_CHANGE_HUB_CAPACITY}.
+   */
+  readonly changeHubCapacity?: number;
+}
+
+/**
+ * Default bound for the change hub. Large enough that no realistic burst of
+ * mutations/pulls fills it under normal consumption, so behaviour is identical
+ * to the old unbounded hub until an observer genuinely stalls.
+ */
+const DEFAULT_CHANGE_HUB_CAPACITY = 1024;
+
+/**
+ * A {@link ViewChange} tagged with a monotonic sequence number. The consumer
+ * tracks the last seq it saw; a non-contiguous seq means the bounded hub
+ * dropped one or more changes, which it collapses into a full `Rebuild`.
+ */
+interface SeqChange {
+  readonly seq: number;
+  readonly change: ViewChange;
 }
 
 export interface ClientEngine {
@@ -372,10 +397,29 @@ export const make = (
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
     >([]);
-    const changes = yield* Effect.acquireRelease(PubSub.unbounded<ViewChange>(), (hub) =>
-      PubSub.shutdown(hub)
+    // Bounded, dropping change hub (#44). A stalled observer holds messages in
+    // the shared hub; at capacity the hub drops the newest `SeqChange`s rather
+    // than growing without limit. Each change carries a monotonic `seq`, so a
+    // consumer detects a drop as a seq gap and collapses it into a `Rebuild`
+    // that subsumes the dropped `Patch`es — lossless under pressure, identical
+    // to the old hub under none (contiguous seqs → same incremental path).
+    const changes = yield* Effect.acquireRelease(
+      PubSub.dropping<SeqChange>({
+        capacity: options.changeHubCapacity ?? DEFAULT_CHANGE_HUB_CAPACITY,
+      }),
+      (hub) => PubSub.shutdown(hub)
     );
-    const publishChange = (change: ViewChange) => Effect.asVoid(PubSub.publish(changes, change));
+    // Monotonic sequence stamped on every published change. The store mutation
+    // a change describes always completes before its seq is assigned here, so
+    // "seqRef == R" implies the store reflects every change with seq ≤ R — the
+    // invariant the consumer's gap-collapse relies on to skip stale buffered
+    // changes after a Rebuild.
+    const changeSeq = yield* Ref.make(0);
+    const publishChange = (change: ViewChange): Effect.Effect<void> =>
+      Ref.updateAndGet(changeSeq, (n) => n + 1).pipe(
+        Effect.flatMap((seq) => PubSub.publish(changes, { seq, change })),
+        Effect.asVoid
+      );
 
     // Fires whenever a mutation is journaled; the sync loop debounces it into
     // an auto-push when `syncLoop.pushDebounce` is set.
@@ -919,8 +963,10 @@ export const make = (
       change.collections !== undefined &&
       !change.collections.has(collection);
 
-    // Advance a query's LiveView for one change and return its current page.
-    const stepView = (
+    // Apply one contiguous change (no drop before it) to a query's LiveView and
+    // return its current page — the incremental fast path, unchanged from the
+    // unbounded-hub behaviour.
+    const applyContiguous = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       subset: Subset.Subset,
       change: ViewChange
@@ -936,19 +982,62 @@ export const make = (
         return LiveView.result(next);
       });
 
+    // A drop happened before this seq: collapse it into a full Rebuild. Read
+    // the latest assigned seq FIRST, then re-materialize — the store then
+    // reflects every change with seq ≤ latest, so advancing `lastSeenRef` to
+    // `latest` safely skips any still-buffered changes already folded into this
+    // rebuild (they would otherwise re-apply as stale, regressing rows). A
+    // Rebuild subsumes the dropped Patches (ADR-0008), so the view is correct.
+    const collapseToRebuild = (
+      viewRef: Ref.Ref<LiveView.LiveView>,
+      lastSeenRef: Ref.Ref<number>,
+      subset: Subset.Subset
+    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
+      Effect.gen(function* () {
+        yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
+        const latest = yield* Ref.get(changeSeq);
+        const next = LiveView.make(subset, yield* collectionRows(subset.collection));
+        yield* Ref.set(viewRef, next);
+        yield* Ref.set(lastSeenRef, latest);
+        return LiveView.result(next);
+      });
+
+    // Advance a query's LiveView for one sequenced change and return its page.
+    // Contiguous seq → incremental apply; a gap (a bounded-hub drop) → lossless
+    // Rebuild collapse; a seq at/below the last seen → already reflected, skip.
+    const stepView = (
+      viewRef: Ref.Ref<LiveView.LiveView>,
+      lastSeenRef: Ref.Ref<number>,
+      subset: Subset.Subset,
+      item: SeqChange
+    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
+      Effect.gen(function* () {
+        const lastSeen = yield* Ref.get(lastSeenRef);
+        if (item.seq <= lastSeen) return LiveView.result(yield* Ref.get(viewRef));
+        if (item.seq === lastSeen + 1) {
+          yield* Ref.set(lastSeenRef, item.seq);
+          return yield* applyContiguous(viewRef, subset, item.change);
+        }
+        return yield* collapseToRebuild(viewRef, lastSeenRef, subset);
+      });
+
     const observeSubset = (subset: Subset.Subset) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          // Capture the seq before materializing: the view then reflects the
+          // store at ≥ this seq, so the first live change is contiguous.
+          const startSeq = yield* Ref.get(changeSeq);
           const viewRef = yield* Ref.make(
             LiveView.make(subset, yield* collectionRows(subset.collection))
           );
+          const lastSeenRef = yield* Ref.make(startSeq);
           const initial = LiveView.result(yield* Ref.get(viewRef));
           // Emit the page on each change, dropping re-emits when it didn't move
-          // (e.g. a change outside the limit window).
+          // (e.g. a change outside the limit window, or a skipped stale seq).
           return Stream.concat(
             Stream.succeed(initial),
             Stream.fromPubSub(changes).pipe(
-              Stream.mapEffect((change) => stepView(viewRef, subset, change))
+              Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, subset, item))
             )
           ).pipe(Stream.changesWith(sameResult));
         })

@@ -14,8 +14,61 @@
  * implementing one tiny interface.
  */
 
-import { Context, Effect, Layer, PubSub, Schema, Scope } from "effect";
+import { Context, Effect, Layer, Metric, PubSub, Schema, Scope } from "effect";
 import type { ChangeHint } from "./Backend.js";
+import * as Telemetry from "./Telemetry.js";
+
+/**
+ * Default capacity for the bounded in-process bus and memory broker. Hints are
+ * small "pull soon" batches; 1024 buffered batches is ample headroom before a
+ * slow consumer sheds load, and correctness never depends on the bus.
+ */
+const DEFAULT_CAPACITY = 1024;
+
+/** Bounding options shared by the in-process bus and the memory broker. */
+export interface BusCapacityOptions {
+  /** PubSub capacity before publishes are dropped. Defaults to 1024. */
+  readonly capacity?: number;
+}
+
+/**
+ * Count a dropped publish: a bounded bus PubSub returns `false` when a publish
+ * overflows (dropping strategy at capacity). A dropped hint only delays the
+ * next pull (ADR-0009), so we tally it and move on.
+ */
+const countIfDropped = (published: boolean): Effect.Effect<void> =>
+  published ? Effect.void : Metric.update(Telemetry.hintsDroppedTotal, 1);
+
+/** Subscribe to a PubSub and expose a `take`-only handle (shared by the bus and broker). */
+const takeHandle = <A>(
+  pubsub: PubSub.PubSub<A>
+): Effect.Effect<{ readonly take: Effect.Effect<A> }, never, Scope.Scope> =>
+  PubSub.subscribe(pubsub).pipe(
+    Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
+  );
+
+/**
+ * Allocate a bounded, dropping PubSub (shut down with the scope) plus a
+ * `publish` that tallies overflows — the backpressure primitive shared by the
+ * in-process bus and the memory broker (#44).
+ */
+const droppingHub = <A>(
+  capacity?: number
+): Effect.Effect<
+  { readonly pubsub: PubSub.PubSub<A>; readonly publish: (value: A) => Effect.Effect<void> },
+  never,
+  Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const pubsub = yield* Effect.acquireRelease(
+      PubSub.dropping<A>({ capacity: capacity ?? DEFAULT_CAPACITY }),
+      (hub) => PubSub.shutdown(hub)
+    );
+    return {
+      pubsub,
+      publish: (value) => PubSub.publish(pubsub, value).pipe(Effect.flatMap(countIfDropped)),
+    };
+  });
 
 /** A live subscription to the bus. */
 export interface HintSubscription {
@@ -35,25 +88,38 @@ export interface InvalidationBus {
 
 export const InvalidationBus = Context.Service<InvalidationBus>("@legation/effect/InvalidationBus");
 
-/** In-process bus over an unbounded PubSub. */
-export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> = Effect.gen(
-  function* () {
-    const pubsub = yield* Effect.acquireRelease(
-      PubSub.unbounded<ReadonlyArray<ChangeHint>>(),
-      (hub) => PubSub.shutdown(hub)
-    );
+/**
+ * In-process bus over a bounded, dropping PubSub (#44).
+ *
+ * Delivery guarantee: the hub is bounded (`dropping` at `capacity`) so a bus
+ * consumer that falls behind cannot make the publisher grow the queue without
+ * limit. On overflow the newest hint batch is dropped and
+ * `legation_hints_dropped_total` is incremented. Dropping a hint only delays
+ * convergence — the next pull recovers the missed change (ADR-0009), so
+ * correctness never depends on the bus. Capacity is configurable; the default
+ * is generous ({@link DEFAULT_CAPACITY}).
+ */
+export const makeInProcessWith = (
+  options?: BusCapacityOptions
+): Effect.Effect<InvalidationBus, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const hub = yield* droppingHub<ReadonlyArray<ChangeHint>>(options?.capacity);
     return InvalidationBus.of({
-      publish: (hints) =>
-        hints.length === 0 ? Effect.void : Effect.asVoid(PubSub.publish(pubsub, hints)),
-      subscribe: PubSub.subscribe(pubsub).pipe(
-        Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
-      ),
+      publish: (hints) => (hints.length === 0 ? Effect.void : hub.publish(hints)),
+      subscribe: takeHandle(hub.pubsub),
     });
-  }
-);
+  });
+
+/** In-process bus with the default capacity. */
+export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> =
+  makeInProcessWith();
 
 export const layerInProcess: Layer.Layer<InvalidationBus> =
   Layer.effect(InvalidationBus)(makeInProcess);
+
+/** In-process bus layer with a configurable capacity. */
+export const layerInProcessWith = (options?: BusCapacityOptions): Layer.Layer<InvalidationBus> =>
+  Layer.effect(InvalidationBus)(makeInProcessWith(options));
 
 // ─── Distributed adapters ────────────────────────────────────────────────────
 
@@ -123,20 +189,24 @@ export const layerSerialized = (broker: BusBroker): Layer.Layer<InvalidationBus>
   Layer.succeed(InvalidationBus)(makeSerialized(broker));
 
 /**
- * An in-memory broker over a shared PubSub: every bus built on the same
- * broker exchanges hints, modelling several instances on one process. The
+ * An in-memory broker over a shared, bounded PubSub: every bus built on the
+ * same broker exchanges hints, modelling several instances on one process. The
  * reference broker for tests and the executable shape a real broker mimics.
+ *
+ * Delivery guarantee (#44): bounded with a `dropping` strategy, matching the
+ * in-process bus — a lagging subscriber cannot make a publisher grow the queue
+ * without limit. An overflowing publish is dropped and counted in
+ * `legation_hints_dropped_total`; the next pull repairs any missed hint
+ * (ADR-0009). Capacity is configurable, defaulting to {@link DEFAULT_CAPACITY}.
  */
-export const makeMemoryBroker: Effect.Effect<BusBroker, never, Scope.Scope> = Effect.gen(
-  function* () {
-    const pubsub = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (hub) =>
-      PubSub.shutdown(hub)
-    );
-    return {
-      publish: (payload) => Effect.asVoid(PubSub.publish(pubsub, payload)),
-      subscribe: PubSub.subscribe(pubsub).pipe(
-        Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
-      ),
-    };
-  }
-);
+export const makeMemoryBrokerWith = (
+  options?: BusCapacityOptions
+): Effect.Effect<BusBroker, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const hub = yield* droppingHub<string>(options?.capacity);
+    return { publish: hub.publish, subscribe: takeHandle(hub.pubsub) };
+  });
+
+/** In-memory broker with the default capacity. */
+export const makeMemoryBroker: Effect.Effect<BusBroker, never, Scope.Scope> =
+  makeMemoryBrokerWith();
