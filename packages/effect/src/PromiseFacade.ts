@@ -9,6 +9,10 @@
  * A facade wraps a `ManagedRuntime` built from the layer that provides
  * the engine's services. Effects are run with `run`/`runExit`, streams are
  * consumed with `subscribe`, and `dispose` tears everything down.
+ *
+ * To await a mutation's authoritative backend outcome (#36), run the handle's
+ * `acknowledged` effect through `run`:
+ * `facade.run(engine.mutateWithAck(m, a).pipe(Effect.flatMap((h) => h.acknowledged)))`.
  */
 
 import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime, Result, Stream } from "effect";

@@ -20,7 +20,7 @@ import type { Cause, Layer } from "effect";
 import { Effect, Stream } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import type { AsyncResult, AtomRegistry, Reactivity } from "effect/unstable/reactivity";
-import { ClientEngine, type LocalRow } from "./ClientEngine.js";
+import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Subset from "./Subset.js";
 
@@ -62,6 +62,16 @@ export interface EngineAtoms {
   readonly namedQuery: (name: string, args: unknown) => Atom.Atom<NamedQueryResult>;
   /** Write a {@link MutationArg} to run a mutator; its result is an `AsyncResult`. */
   readonly mutation: Atom.AtomResultFn<MutationArg, void, MutatorError | StoreError>;
+  /**
+   * Like {@link mutation}, but its result resolves with the mutation's
+   * authoritative outcome (applied or permanently rejected) once the backend
+   * settles it — the atom stays `Waiting` until then. Backs `useMutationWithAck`.
+   */
+  readonly mutationWithAck: Atom.AtomResultFn<
+    MutationArg,
+    MutationOutcome,
+    MutatorError | StoreError
+  >;
 }
 
 /**
@@ -103,5 +113,13 @@ export const fromLayer = (
     Effect.flatMap(ClientEngine, (engine) => engine.mutate(arg.mutator, arg.args))
   );
 
-  return { runtime, liveQuery, namedQuery, mutation };
+  const mutationWithAck = runtime.fn((arg: MutationArg) =>
+    Effect.flatMap(ClientEngine, (engine) =>
+      engine
+        .mutateWithAck(arg.mutator, arg.args)
+        .pipe(Effect.flatMap((handle) => handle.acknowledged))
+    )
+  );
+
+  return { runtime, liveQuery, namedQuery, mutation, mutationWithAck };
 };

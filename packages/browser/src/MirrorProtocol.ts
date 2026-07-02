@@ -65,6 +65,17 @@ export interface MirrorRow {
 export type HostMessage =
   | { readonly _tag: "MutateAck"; readonly requestId: number }
   | { readonly _tag: "MutateError"; readonly requestId: number; readonly message: string }
+  /**
+   * The backend's authoritative outcome for a forwarded mutation, correlated by
+   * `requestId`. Sent in addition to `MutateAck` (which still fires on journal),
+   * so a tab can await the backend verdict via `TabMirror.mutateWithAck`.
+   */
+  | {
+      readonly _tag: "MutateSettled";
+      readonly requestId: number;
+      readonly outcome: "applied" | "rejected";
+      readonly reason?: string;
+    }
   | {
       readonly _tag: "MirrorUpdate";
       /** `Subset.hash` of the subset these rows materialize. */
@@ -78,6 +89,12 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
     _tag: Schema.tag("MutateError"),
     requestId: Schema.Number,
     message: Schema.String,
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("MutateSettled"),
+    requestId: Schema.Number,
+    outcome: Schema.Literals(["applied", "rejected"]),
+    reason: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     _tag: Schema.tag("MirrorUpdate"),

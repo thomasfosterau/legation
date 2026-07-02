@@ -25,12 +25,29 @@ export interface TabMirrorOptions {
   readonly heartbeatInterval?: Duration.Input;
 }
 
+/** A backend outcome message reduced to the engine's {@link ClientEngine.MutationOutcome}. */
+const outcomeOf = (
+  message: MirrorProtocol.HostMessage & { readonly _tag: "MutateSettled" }
+): ClientEngine.MutationOutcome =>
+  message.outcome === "applied"
+    ? { _tag: "applied" }
+    : { _tag: "rejected", reason: message.reason ?? "" };
+
 export interface TabMirror {
   /** Validate args locally, forward to the host journal, await the ack. */
   readonly mutate: (
     mutator: string,
     args: unknown
   ) => Effect.Effect<void, MutatorError | TransportError>;
+  /**
+   * Like {@link mutate}, but resolves with the mutation's authoritative backend
+   * outcome (applied or permanently rejected) once the host forwards it, rather
+   * than on the host journal ack.
+   */
+  readonly mutateWithAck: (
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngine.MutationOutcome, MutatorError | TransportError>;
   /** Register a subset with the host; rows arrive as mirror updates. */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
@@ -68,18 +85,29 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
     const pending = yield* Ref.make(
       new Map<number, Deferred.Deferred<void, MutatorError | TransportError>>()
     );
+    // `mutateWithAck` callers awaiting the backend outcome, keyed by the same
+    // requestId space as `pending` (a requestId lives in exactly one map).
+    const pendingSettled = yield* Ref.make(
+      new Map<
+        number,
+        Deferred.Deferred<ClientEngine.MutationOutcome, MutatorError | TransportError>
+      >()
+    );
     const requestIds = yield* Ref.make(0);
 
-    const resolve = (
+    // Take a request's deferred out of its map and complete it. A no-op when the
+    // requestId is not in this map (so both maps can be swept on `MutateError`).
+    const resolveIn = <A>(
+      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
       requestId: number,
       complete: (
-        deferred: Deferred.Deferred<void, MutatorError | TransportError>
+        deferred: Deferred.Deferred<A, MutatorError | TransportError>
       ) => Effect.Effect<boolean>
     ) =>
       Effect.gen(function* () {
-        const deferred = (yield* Ref.get(pending)).get(requestId);
+        const deferred = (yield* Ref.get(ref)).get(requestId);
         if (deferred === undefined) return;
-        yield* Ref.update(pending, (map) => {
+        yield* Ref.update(ref, (map) => {
           const next = new Map(map);
           next.delete(requestId);
           return next;
@@ -103,12 +131,26 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
                   )
                 ).pipe(Effect.andThen(Effect.asVoid(PubSub.publish(changes, message.key))));
               case "MutateAck":
-                return resolve(message.requestId, (deferred) =>
+                return resolveIn(pending, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, undefined)
                 );
-              case "MutateError":
-                return resolve(message.requestId, (deferred) =>
-                  Deferred.fail(deferred, new MutatorError({ message: message.message }))
+              case "MutateError": {
+                // A host-side failure (never journaled): fail whichever caller
+                // is waiting — `mutate` or `mutateWithAck`.
+                const error = new MutatorError({ message: message.message });
+                return resolveIn(pending, message.requestId, (deferred) =>
+                  Deferred.fail(deferred, error)
+                ).pipe(
+                  Effect.andThen(
+                    resolveIn(pendingSettled, message.requestId, (deferred) =>
+                      Deferred.fail(deferred, error)
+                    )
+                  )
+                );
+              }
+              case "MutateSettled":
+                return resolveIn(pendingSettled, message.requestId, (deferred) =>
+                  Deferred.succeed(deferred, outcomeOf(message))
                 );
             }
           })
@@ -119,30 +161,49 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
     const query = (subset: Subset.Subset) =>
       Ref.get(rows).pipe(Effect.map((map) => map.get(Subset.hash(subset)) ?? []));
 
+    // Validate + encode args against the shared registry (fail fast in the tab;
+    // the host re-validates by decoding), then forward as a `Mutate` message and
+    // register a deferred so the correlated reply resolves the caller.
+    const encodeArgs = (mutator: string, args: unknown) =>
+      Effect.gen(function* () {
+        const definition = mutators.mutators.get(mutator);
+        if (definition === undefined) {
+          return yield* new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator });
+        }
+        return yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
+          Effect.mapError(
+            (cause) =>
+              new MutatorError({
+                message: `Invalid args for mutator "${mutator}"`,
+                mutator,
+                cause,
+              })
+          )
+        );
+      });
+
+    const forward = <A>(
+      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+      mutator: string,
+      encoded: unknown
+    ) =>
+      Effect.gen(function* () {
+        const requestId = yield* Ref.modify(requestIds, (id) => [id + 1, id + 1]);
+        const deferred = yield* Deferred.make<A, MutatorError | TransportError>();
+        yield* Ref.update(ref, (map) => new Map(map).set(requestId, deferred));
+        yield* channel.post({ _tag: "Mutate", requestId, mutator, args: encoded });
+        return yield* Deferred.await(deferred);
+      });
+
     return {
       mutate: (mutator, args) =>
-        Effect.gen(function* () {
-          const definition = mutators.mutators.get(mutator);
-          if (definition === undefined) {
-            return yield* new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator });
-          }
-          // Fail fast in the tab; the host re-validates by decoding.
-          const encoded = yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
-            Effect.mapError(
-              (cause) =>
-                new MutatorError({
-                  message: `Invalid args for mutator "${mutator}"`,
-                  mutator,
-                  cause,
-                })
-            )
-          );
-          const requestId = yield* Ref.modify(requestIds, (id) => [id + 1, id + 1]);
-          const deferred = yield* Deferred.make<void, MutatorError | TransportError>();
-          yield* Ref.update(pending, (map) => new Map(map).set(requestId, deferred));
-          yield* channel.post({ _tag: "Mutate", requestId, mutator, args: encoded });
-          yield* Deferred.await(deferred);
-        }),
+        encodeArgs(mutator, args).pipe(
+          Effect.flatMap((encoded) => forward(pending, mutator, encoded))
+        ),
+      mutateWithAck: (mutator, args) =>
+        encodeArgs(mutator, args).pipe(
+          Effect.flatMap((encoded) => forward(pendingSettled, mutator, encoded))
+        ),
       subscribe: (subset) => channel.post({ _tag: "Subscribe", tabId, subset }),
       unsubscribe: (subset) => channel.post({ _tag: "Unsubscribe", tabId, subset }),
       query,

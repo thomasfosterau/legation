@@ -17,3 +17,22 @@ export const getMutate = (): ((mutator: string, args: unknown) => Promise<void>)
       Effect.flatMap(ClientEngine.ClientEngine, (engine) => engine.mutate(mutator, args))
     );
 };
+
+/**
+ * Like {@link getMutate}, but the promise resolves with the mutation's
+ * authoritative outcome (applied or permanently rejected) once the backend
+ * settles it, rather than on journal. Runs `mutateWithAck` on the context
+ * runtime and awaits its acknowledgement.
+ */
+export const getMutateWithAck = (): ((
+  mutator: string,
+  args: unknown
+) => Promise<ClientEngine.MutationOutcome>) => {
+  const runtime = getEngineRuntime();
+  return (mutator, args) =>
+    runtime.runPromise(
+      Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
+        engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged))
+      )
+    );
+};
