@@ -56,6 +56,36 @@ export const syncFailuresTotal = Metric.counter("legation_client_sync_failures_t
   incremental: true,
 });
 
+/**
+ * Invalidation-bus hints dropped because a bounded bus (in-process PubSub or
+ * memory broker) overflowed while a consumer was behind. A dropped hint only
+ * delays convergence — the next pull repairs it — so this counts safely-shed
+ * work under backpressure, never lost correctness (ADR-0009).
+ */
+export const hintsDroppedTotal = Metric.counter("legation_hints_dropped_total", {
+  incremental: true,
+});
+
+/**
+ * Times a stalled engine observer's bounded change hub dropped a view-change,
+ * forcing the consumer to collapse the gap into a full `Rebuild`. A Rebuild
+ * subsumes any dropped `Patch`es (ADR-0008), so the view stays correct; this
+ * counts backpressure-induced recomputes, not lost updates.
+ */
+export const changeCollapsesTotal = Metric.counter("legation_change_collapses_total", {
+  incremental: true,
+});
+
+/**
+ * Times a stalled tab-mirror observer's bounded change hub dropped a subset
+ * key, forcing a full re-read of the observed subset. The newest rows live in
+ * the mirror's `Ref`, so the re-read is lossless; this counts refreshes forced
+ * by backpressure.
+ */
+export const mirrorRefreshesTotal = Metric.counter("legation_mirror_refreshes_total", {
+  incremental: true,
+});
+
 /** Record an integer count against a counter (no-op-safe in any context). */
 export const count = <Input extends number>(
   metric: Metric.Metric<Input, unknown>,

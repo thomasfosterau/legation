@@ -72,6 +72,25 @@ The engine follows the mutation-log/rebase sync model (ADR-0008): named write in
 | **Stale-while-revalidate** | Serving a stale cached response immediately while refreshing it in the background.                                |
 | **Tag**                    | A label attached to cached responses for group invalidation, including invalidation driven by collection changes. |
 
+## Delivery guarantees (hub backpressure)
+
+Every in-process message hub is bounded, so a slow or stalled consumer cannot
+make a producer grow a queue without limit. Because **pull is the correctness
+path** (ADR-0008), each hub can shed load under pressure without threatening
+convergence — a dropped hint or poke only delays the next pull, and a dropped
+`Patch` is only ever dropped behind a forced `Rebuild` that subsumes it.
+
+| Hub                                      | Bound + policy                          | What may be shed, and why it is safe                                                                                                                                                                                                           |
+| ---------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Poke hub** (`Transport.makePokeHub`)   | `sliding(1)` per client group, replay 1 | A poke is a contentless "pull soon" hint, so a storm collapses to one queued poke per group: an outstanding poke absorbs any number of fresh ones. A missed poke only delays the next pull. Replay 1 covers the reconnect race.                |
+| **Invalidation bus** (`InvalidationBus`) | `dropping` at a configurable capacity   | A dropped hint only delays the next pull, which recovers the missed change (ADR-0009). Drops are counted in `legation_hints_dropped_total`.                                                                                                    |
+| **Engine change hub** (`ClientEngine`)   | `dropping` at a configurable capacity   | Each view-change carries a monotonic seq; a consumer that sees a seq gap (a drop) collapses it into a full `Rebuild`, which subsumes the dropped `Patch`es. Lossless. Collapses are counted in `legation_change_collapses_total`.              |
+| **Mirror change hub** (`TabMirror`)      | `dropping` at a configurable capacity   | The hub carries subset keys; the newest rows live in a `Ref`. A seq gap makes the observer re-read its subset from the `Ref` — a full refresh, lossless because the `Ref` holds the latest rows. Counted in `legation_mirror_refreshes_total`. |
+
+A `Patch` view-change is never silently dropped: the change hub only ever sheds
+a `Patch` behind a seq gap, and the gap forces a `Rebuild` before the view is
+next read, so no confirmed delta is ever lost.
+
 ## Packages and their bounded contexts
 
 Package boundaries follow dependency footprint (ADR-0006): everything needing only `effect` is in core. Runtime globals count as dependencies.
