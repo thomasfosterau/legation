@@ -46,7 +46,7 @@ export interface ResponseCacheStore {
 }
 
 export const ResponseCacheStore = Context.Service<ResponseCacheStore>(
-  "@thomasfosterau/effect-sync-core/ResponseCacheStore"
+  "@legation/effect/ResponseCacheStore"
 );
 
 /** Per-route caching policy. */

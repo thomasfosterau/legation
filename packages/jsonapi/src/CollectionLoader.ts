@@ -107,9 +107,7 @@ export interface JsonApiSource {
   readonly baseUrl: string;
 }
 
-export const JsonApiSource = Context.Service<JsonApiSource>(
-  "@thomasfosterau/effect-sync-jsonapi/JsonApiSource"
-);
+export const JsonApiSource = Context.Service<JsonApiSource>("@legation/jsonapi/JsonApiSource");
 
 const jsonApiHeaders = {
   "Content-Type": "application/vnd.api+json",

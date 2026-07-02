@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-react-northwind",
+  "name": "legation-react-northwind",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Northwind Traders admin dashboard driving the effect-sync engine through @thomasfosterau/effect-sync-react: seven collections joined live over the mirror, optimistic edits.",
+  "description": "Northwind Traders admin dashboard driving the legation engine through @legation/react: seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
-    "@thomasfosterau/effect-sync-react": "workspace:*",
+    "@legation/effect": "workspace:*",
+    "@legation/react": "workspace:*",
     "effect": "catalog:",
     "react": "^18",
     "react-dom": "^18"

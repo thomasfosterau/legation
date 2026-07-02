@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Live queries re-evaluate selectively: a change event now names the collections

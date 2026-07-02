@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-jsonapi": minor
+"@legation/jsonapi": minor
 ---
 
 Make relationship live queries incremental. `Relationships.observe` (and the

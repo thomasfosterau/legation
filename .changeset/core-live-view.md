@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Add `LiveView`: a modular, incrementally-maintained materialized view — a

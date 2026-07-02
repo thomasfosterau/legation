@@ -11,7 +11,7 @@
  */
 import { derived, type Readable } from "svelte/store";
 import { getContext, setContext } from "svelte";
-import { query } from "@thomasfosterau/effect-sync-svelte";
+import { query } from "@legation/svelte";
 import {
   allCategories,
   allCustomers,

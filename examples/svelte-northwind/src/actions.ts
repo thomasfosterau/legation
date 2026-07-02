@@ -6,7 +6,7 @@
  * authoritatively (the read-merge mutators look the row up first). Northwind has
  * no auth, so these are unbound and need no session.
  */
-import { getMutate } from "@thomasfosterau/effect-sync-svelte";
+import { getMutate } from "@legation/svelte";
 import type { Product, ProductPatchType } from "./domain";
 
 export interface Actions {

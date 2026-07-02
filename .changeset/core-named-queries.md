@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-core": minor
+"@legation/effect": minor
 ---
 
 Add **named queries** (`Query`): a read defined once and resolved twice, like a

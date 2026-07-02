@@ -8,13 +8,13 @@
  */
 
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore } from "@thomasfosterau/effect-sync-core";
+import { ClientStore } from "@legation/effect";
 import { Layer } from "effect";
 
 export interface IndexedDbClientStoreOptions {
   /** IndexedDB database name. Defaults to platform-browser's default. */
   readonly database?: string;
-  /** Key namespace inside the store. Defaults to core's `"effect-sync/"`. */
+  /** Key namespace inside the store. Defaults to core's `"legation/"`. */
   readonly prefix?: string;
 }
 

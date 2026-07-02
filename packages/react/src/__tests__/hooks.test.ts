@@ -22,7 +22,7 @@ import {
   Subset,
   SyncRoom,
   Transport,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 import { EffectSyncProvider, useMutation, useQuery } from "../index.js";
 
 const mutators = Mutator.registry([

@@ -4,7 +4,7 @@
  * stale-while-revalidate fetch handler (fresh serve, stale serve +
  * background refresh, expired reload, passthrough).
  */
-import type { HttpCache } from "@thomasfosterau/effect-sync-core";
+import type { HttpCache } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";

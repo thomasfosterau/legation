@@ -25,7 +25,7 @@ const Banner = (): React.ReactElement => {
   return (
     <div className={`banner ${offline ? "offline" : ""}`}>
       <span className="muted">
-        effect-sync · Northwind · in-page SyncServer + MemoryBackend ·{" "}
+        legation · Northwind · in-page SyncServer + MemoryBackend ·{" "}
         {offline ? "offline — edits queue in the journal" : "online — optimistic + rebase"}
       </span>
       <button onClick={() => void world.setOnline(offline)}>

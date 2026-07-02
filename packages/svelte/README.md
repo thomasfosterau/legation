@@ -1,7 +1,7 @@
-# @thomasfosterau/effect-sync-svelte
+# @legation/svelte
 
 Idiomatic Svelte bindings for the
-[`@thomasfosterau/effect-sync-core`](../core) engine.
+[`@legation/effect`](../core) engine.
 
 - **`setEngineRuntime(runtime)`** — supply a `ManagedRuntime` that can run
   `ClientEngine` effects (build it from a core composition or
@@ -15,7 +15,7 @@ Idiomatic Svelte bindings for the
 
 ```svelte
 <script lang="ts">
-  import { query, getMutate } from "@thomasfosterau/effect-sync-svelte";
+  import { query, getMutate } from "@legation/svelte";
   import { allTodos } from "./domain";
 
   const todos = query(allTodos);
@@ -37,5 +37,5 @@ so it builds with the same `tsc -b` as the rest of the monorepo. Works with
 Svelte 4 stores and Svelte 5 (`$store` auto-subscription is unchanged).
 
 ```bash
-npm install @thomasfosterau/effect-sync-svelte @thomasfosterau/effect-sync-core effect svelte
+npm install @legation/svelte @legation/effect effect svelte
 ```

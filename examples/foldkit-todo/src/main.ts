@@ -382,7 +382,7 @@ export const view = (model: Model): Document => {
       h.div(
         [h.Class("card")],
         [
-          h.h1([h.Class("title")], ["effect-sync · FoldKit"]),
+          h.h1([h.Class("title")], ["legation · FoldKit"]),
           h.p([h.Class("subtitle")], ["Offline-first todos: optimistic writes, live views, push/pull rebase."]),
           statusBar,
           controls,

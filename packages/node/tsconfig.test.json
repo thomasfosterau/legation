@@ -9,11 +9,11 @@
     "noEmit": true,
     "baseUrl": "../..",
     "paths": {
-      "@thomasfosterau/effect-sync-core": ["packages/core/src/index.ts"]
+      "@legation/effect": ["packages/effect/src/index.ts"]
     },
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/**/*", "../core/src/**/*"],
+  "include": ["src/**/*", "../effect/src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

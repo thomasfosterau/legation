@@ -32,9 +32,7 @@ export interface AuthPolicy {
   readonly filters: ReadonlyMap<string, AuthFilter>;
 }
 
-export const AuthPolicy = Context.Service<AuthPolicy>(
-  "@thomasfosterau/effect-sync-core/AuthPolicy"
-);
+export const AuthPolicy = Context.Service<AuthPolicy>("@legation/effect/AuthPolicy");
 
 export const policy = (filters: Readonly<Record<string, AuthFilter>>): AuthPolicy => ({
   filters: new Map(Object.entries(filters)),
@@ -72,9 +70,7 @@ export interface SyncMiddleware {
   ) => Effect.Effect<PullRequest, AuthorizationError>;
 }
 
-export const SyncMiddleware = Context.Service<SyncMiddleware>(
-  "@thomasfosterau/effect-sync-core/SyncMiddleware"
-);
+export const SyncMiddleware = Context.Service<SyncMiddleware>("@legation/effect/SyncMiddleware");
 
 /** The identity middleware (no interception). */
 export const passthroughMiddleware: SyncMiddleware = {
@@ -94,5 +90,5 @@ export interface IdentityResolver {
 }
 
 export const IdentityResolver = Context.Service<IdentityResolver>(
-  "@thomasfosterau/effect-sync-core/IdentityResolver"
+  "@legation/effect/IdentityResolver"
 );

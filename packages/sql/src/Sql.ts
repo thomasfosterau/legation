@@ -15,7 +15,7 @@
  * - `Not` → `NOT (…)`
  */
 
-import { Predicate } from "@thomasfosterau/effect-sync-core";
+import { Predicate } from "@legation/effect";
 
 /** A SQL fragment plus its ordered bind parameters. */
 export interface SqlFragment {

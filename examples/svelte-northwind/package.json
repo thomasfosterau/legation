@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-svelte-northwind",
+  "name": "legation-svelte-northwind",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Northwind Traders admin dashboard driving the effect-sync engine through @thomasfosterau/effect-sync-svelte: seven collections joined live over the mirror, optimistic edits.",
+  "description": "Northwind Traders admin dashboard driving the legation engine through @legation/svelte: seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
-    "@thomasfosterau/effect-sync-svelte": "workspace:*",
+    "@legation/effect": "workspace:*",
+    "@legation/svelte": "workspace:*",
     "effect": "catalog:",
     "svelte": "^5"
   },

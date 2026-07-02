@@ -1,8 +1,8 @@
-# effect-sync · React example
+# legation · React example
 
 A browser todo app that drives
-[`@thomasfosterau/effect-sync-core`](../../packages/core) from React through the
-[`@thomasfosterau/effect-sync-react`](../../packages/react) bindings
+[`@legation/effect`](../../packages/effect) from React through the
+[`@legation/react`](../../packages/react) bindings
 (`useQuery` / `useMutation`). It is the React counterpart to the
 [Svelte](../svelte-todo) and [FoldKit](../foldkit-todo) examples, and like
 FoldKit it runs the **real library server pipeline in the page**, so every

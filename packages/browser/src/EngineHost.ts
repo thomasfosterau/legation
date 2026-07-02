@@ -19,7 +19,7 @@
  * disconnect detection a BroadcastChannel can't provide on its own.
  */
 
-import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine, Subset } from "@legation/effect";
 import { Clock, Duration, Effect, Fiber, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";

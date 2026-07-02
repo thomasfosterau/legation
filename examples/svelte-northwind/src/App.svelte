@@ -8,7 +8,7 @@
    * same live stores. The banner reflects the live transport status.
    */
   import { untrack } from "svelte";
-  import { setEngineRuntime } from "@thomasfosterau/effect-sync-svelte";
+  import { setEngineRuntime } from "@legation/svelte";
   import type { World } from "./sync";
   import { setWorld, connectionStore } from "./world";
   import { createData, setData } from "./data";
@@ -48,7 +48,7 @@
 
 <div class={`banner ${offline ? "offline" : ""}`}>
   <span class="muted">
-    effect-sync · Northwind · in-page SyncServer + MemoryBackend ·
+    legation · Northwind · in-page SyncServer + MemoryBackend ·
     {offline ? "offline — edits queue in the journal" : "online — optimistic + rebase"}
   </span>
   <button onclick={() => void world.setOnline(offline)}>

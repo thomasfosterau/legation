@@ -1,7 +1,7 @@
 {
-  "name": "@thomasfosterau/effect-sync-react",
+  "name": "@legation/react",
   "version": "0.1.0",
-  "description": "React bindings for the effect-sync engine: useQuery, useNamedQuery and useMutation hooks",
+  "description": "React bindings for the legation engine: useQuery, useNamedQuery and useMutation hooks",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -37,7 +37,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-sync-core": "workspace:^"
+    "@legation/effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84",
@@ -49,11 +49,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
     "directory": "packages/react"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/react#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/react#readme"
 }

@@ -15,7 +15,7 @@
  * (`ClientEngine.mutateEncoded`).
  */
 
-import { ClientEngine, Subset } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine, Subset } from "@legation/effect";
 import { Effect, Schema } from "effect";
 
 // ─── Tab → host ──────────────────────────────────────────────────────────────

@@ -7,12 +7,12 @@ const pkg = (name: string) =>
 export default defineConfig({
   resolve: {
     alias: {
-      "@thomasfosterau/effect-sync-core": pkg("core"),
-      "@thomasfosterau/effect-sync-browser": pkg("browser"),
-      "@thomasfosterau/effect-sync-node": pkg("node"),
-      "@thomasfosterau/effect-sync-jsonapi": pkg("jsonapi"),
-      "@thomasfosterau/effect-sync-sql": pkg("sql"),
-      "@thomasfosterau/effect-sync-react": pkg("react"),
+      "@legation/effect": pkg("effect"),
+      "@legation/browser": pkg("browser"),
+      "@legation/node": pkg("node"),
+      "@legation/jsonapi": pkg("jsonapi"),
+      "@legation/sql": pkg("sql"),
+      "@legation/react": pkg("react"),
     },
   },
   test: {

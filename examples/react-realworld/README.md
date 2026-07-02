@@ -1,9 +1,9 @@
-# effect-sync · React · RealWorld (Conduit)
+# legation · React · RealWorld (Conduit)
 
 The [RealWorld](https://github.com/gothinkster/realworld) spec app — a
 Medium-style blogging platform ("Conduit") — driving
-[`@thomasfosterau/effect-sync-core`](../../packages/core) from React through the
-[`@thomasfosterau/effect-sync-react`](../../packages/react) bindings. Like the
+[`@legation/effect`](../../packages/effect) from React through the
+[`@legation/react`](../../packages/react) bindings. Like the
 todo examples it runs the **real library server pipeline in the page**
 (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`) over a durable
 `localStorage` client store, but it exercises the engine's _relational_ and

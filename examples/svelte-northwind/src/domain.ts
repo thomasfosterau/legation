@@ -20,7 +20,7 @@
  */
 
 import { Schema } from "effect";
-import { Collection, Mutator, Subset } from "@thomasfosterau/effect-sync-core";
+import { Collection, Mutator, Subset } from "@legation/effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 

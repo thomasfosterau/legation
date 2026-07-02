@@ -1,6 +1,6 @@
 /** Sql translator tests: predicate → parameterized WHERE, both dialects. */
 import { describe, expect, it } from "@effect/vitest";
-import { Predicate } from "@thomasfosterau/effect-sync-core";
+import { Predicate } from "@legation/effect";
 import * as Sql from "../Sql.js";
 
 describe("Sql.compileWhere", () => {

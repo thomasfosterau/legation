@@ -55,9 +55,7 @@ export interface ClientStore {
   readonly setCookie: (cookie: string) => Effect.Effect<void, StoreError>;
 }
 
-export const ClientStore = Context.Service<ClientStore>(
-  "@thomasfosterau/effect-sync-core/ClientStore"
-);
+export const ClientStore = Context.Service<ClientStore>("@legation/effect/ClientStore");
 
 /** In-memory implementation (tests, SSR, ephemeral clients). */
 export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
@@ -116,7 +114,7 @@ export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(m
 // ─── KeyValueStore-backed implementation ─────────────────────────────────────
 
 export interface KeyValueOptions {
-  /** Key namespace inside the KeyValueStore. Defaults to `"effect-sync/"`. */
+  /** Key namespace inside the KeyValueStore. Defaults to `"legation/"`. */
   readonly prefix?: string;
 }
 
@@ -151,7 +149,7 @@ export const makeKeyValue = (
   Effect.gen(function* () {
     const store = KeyValueStore.prefix(
       yield* KeyValueStore.KeyValueStore,
-      options?.prefix ?? "effect-sync/"
+      options?.prefix ?? "legation/"
     );
     const lock = yield* Semaphore.make(1);
     const locked = <A, E>(effect: Effect.Effect<A, E>) => Semaphore.withPermit(lock, effect);

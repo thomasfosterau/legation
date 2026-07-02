@@ -11,8 +11,8 @@ const asLike = (channel: BroadcastChannel) => channel as unknown as BusBrokers.B
 
 describe("makeBroadcastChannelBroker", () => {
   it("delivers to self and to other contexts on the same channel", async () => {
-    const channelA = new BroadcastChannel("effect-sync-bus-test");
-    const channelB = new BroadcastChannel("effect-sync-bus-test");
+    const channelA = new BroadcastChannel("legation-bus-test");
+    const channelB = new BroadcastChannel("legation-bus-test");
     try {
       await Effect.runPromise(
         Effect.gen(function* () {

@@ -8,13 +8,7 @@
  * journal in encoded form and await the host's acknowledgement.
  */
 
-import {
-  ClientEngine,
-  MutatorError,
-  Subset,
-  TransportError,
-  type Mutator,
-} from "@thomasfosterau/effect-sync-core";
+import { ClientEngine, MutatorError, Subset, TransportError, type Mutator } from "@legation/effect";
 import { Deferred, type Duration, Effect, PubSub, Ref, Schema, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";

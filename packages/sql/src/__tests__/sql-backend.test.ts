@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
-import { BackendError, Mutator, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
-import type { Backend } from "@thomasfosterau/effect-sync-core";
+import { BackendError, Mutator, Predicate, Subset } from "@legation/effect";
+import type { Backend } from "@legation/effect";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 

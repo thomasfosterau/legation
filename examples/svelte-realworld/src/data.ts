@@ -9,7 +9,7 @@
  */
 import { derived, type Readable } from "svelte/store";
 import { getContext, setContext } from "svelte";
-import { query } from "@thomasfosterau/effect-sync-svelte";
+import { query } from "@legation/svelte";
 import { allArticles, allComments, allFavorites, allFollows, allUsers } from "./domain";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 

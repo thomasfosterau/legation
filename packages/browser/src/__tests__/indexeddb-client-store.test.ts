@@ -4,7 +4,7 @@
  * backed by fake-indexeddb.
  */
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientStore } from "@thomasfosterau/effect-sync-core";
+import { ClientStore } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";

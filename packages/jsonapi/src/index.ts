@@ -1,5 +1,5 @@
 /**
- * @thomasfosterau/effect-sync-jsonapi
+ * @legation/jsonapi
  *
  * JSON:API v1.1 for the v2 sync engine (ADR-0008): map JSON:API documents
  * into collection rows — a `type` is a collection, a resource `id` is a row

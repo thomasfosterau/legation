@@ -1,12 +1,12 @@
-# Contributing to effect-sync
+# Contributing to legation
 
 Thank you for contributing. This repository is a bun-workspaces monorepo using TypeScript, Effect v4 beta, Vitest, Oxlint, Prettier, Fallow, and Changesets.
 
 ## Setup
 
 ```bash
-git clone https://github.com/thomasfosterau/effect-synchronizer.git
-cd effect-synchronizer
+git clone https://github.com/thomasfosterau/legation.git
+cd legation
 bun ci
 ```
 
@@ -27,17 +27,17 @@ bun run analyze:audit   # Fallow CI audit
 Run a single package's tests:
 
 ```bash
-bunx vitest run packages/core
+bunx vitest run packages/effect
 ```
 
 ## Project Structure
 
 ```text
 packages/
-  core/      @thomasfosterau/effect-sync-core      The sync engine (primitives, client, SW/edge cache, server hub)
-  browser/   @thomasfosterau/effect-sync-browser   Browser runtime: WebSocket client transport, IndexedDB store
-  node/      @thomasfosterau/effect-sync-node      Node runtime: ws-based WebSocket server transport
-  jsonapi/   @thomasfosterau/effect-sync-jsonapi   JSON:API protocol adapter
+  core/      @legation/effect      The sync engine (primitives, client, SW/edge cache, server hub)
+  browser/   @legation/browser   Browser runtime: WebSocket client transport, IndexedDB store
+  node/      @legation/node      Node runtime: ws-based WebSocket server transport
+  jsonapi/   @legation/jsonapi   JSON:API protocol adapter
 docs/
   adr/       Architecture decision records
   audit/     Production-readiness audits
@@ -50,7 +50,7 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 ## Cross-package development
 
 - Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `core`; protocol/framework-specific code gets its own package.
-- Packages import each other by published name (`@thomasfosterau/effect-sync-core`); bun workspaces link them.
+- Packages import each other by published name (`@legation/effect`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
 - `effect` is a **peer dependency** of every package, pinned to the exact beta version. Never add it as a regular dependency.
 
@@ -82,7 +82,7 @@ Use Effect for side effects, dependency injection, and typed failures. Repositor
 
 Conventions:
 
-- Services: interface + `Context.Service<Interface>("@thomasfosterau/effect-sync-<pkg>/<Name>")` constant of the same name
+- Services: interface + `Context.Service<Interface>("@legation/<pkg>/<Name>")` constant of the same name
 - Errors: `Data.TaggedError` classes
 - Every service has a `layer`; in-memory implementations exist for everything so tests never need external infrastructure
 - Use the vocabulary from [CONTEXT.md](CONTEXT.md)

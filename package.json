@@ -1,5 +1,5 @@
 {
-  "name": "effect-sync-monorepo",
+  "name": "legation-monorepo",
   "private": true,
   "description": "Effect-based sync engine monorepo: core primitives, client query manager, write-through cache, and server fan-out",
   "type": "module",
@@ -67,12 +67,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git"
+    "url": "git+https://github.com/thomasfosterau/legation.git"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer#readme",
+  "homepage": "https://github.com/thomasfosterau/legation#readme",
   "author": "Thomas Foster",
   "license": "MIT"
 }

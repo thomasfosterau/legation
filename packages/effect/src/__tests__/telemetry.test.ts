@@ -1,5 +1,5 @@
 /**
- * Telemetry tests: the engine's hot paths update the `effect_sync_*` metrics.
+ * Telemetry tests: the engine's hot paths update the `legation_*` metrics.
  * Counters are cumulative in the shared registry, so assertions use before/after
  * deltas rather than absolute values.
  */

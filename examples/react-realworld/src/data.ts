@@ -14,7 +14,7 @@
  * auth context by the caller, keeping this module free of an auth import.
  */
 import * as React from "react";
-import { useQuery } from "@thomasfosterau/effect-sync-react";
+import { useQuery } from "@legation/react";
 import {
   allArticles,
   allComments,

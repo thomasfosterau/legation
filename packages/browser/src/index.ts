@@ -1,7 +1,7 @@
 /**
- * @thomasfosterau/effect-sync-browser
+ * @legation/browser
  *
- * Browser-runtime adapters for the effect-sync engine (ADR-0010):
+ * Browser-runtime adapters for the legation engine (ADR-0010):
  *
  * - `IndexedDbClientStore`: durable ClientStore over IndexedDB
  * - `MirrorChannel` / `MirrorProtocol` / `EngineHost` / `TabMirror`: the

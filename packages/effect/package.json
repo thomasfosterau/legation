@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-sync-core",
+  "name": "@legation/effect",
   "version": "0.1.0",
   "description": "An Effect-native sync engine: write-through caching, TanStack-Query-style client queries/mutations/subscriptions, offline outbox, HTTP caching for service workers and edge runtimes, and a server-side sync hub with client fan-out",
   "type": "module",
@@ -50,11 +50,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomasfosterau/effect-synchronizer.git",
-    "directory": "packages/core"
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/effect"
   },
   "bugs": {
-    "url": "https://github.com/thomasfosterau/effect-synchronizer/issues"
+    "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/effect-synchronizer/tree/main/packages/core#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/effect#readme"
 }

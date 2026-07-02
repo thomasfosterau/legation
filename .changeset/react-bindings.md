@@ -1,8 +1,8 @@
 ---
-"@thomasfosterau/effect-sync-react": minor
+"@legation/react": minor
 ---
 
-New package `@thomasfosterau/effect-sync-react`: idiomatic React bindings.
+New package `@legation/react`: idiomatic React bindings.
 `<EffectSyncProvider>` supplies a `ManagedRuntime` running `ClientEngine`
 effects; `useQuery` / `useNamedQuery` render live results via
 `useSyncExternalStore` (a forked `observe` fiber per query, torn down on

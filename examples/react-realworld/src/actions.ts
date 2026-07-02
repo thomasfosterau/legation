@@ -7,7 +7,7 @@
  * applied authoritatively (with ownership checks) on the backend.
  */
 import * as React from "react";
-import { useMutation } from "@thomasfosterau/effect-sync-react";
+import { useMutation } from "@legation/react";
 import { useAuth } from "./auth";
 import { favoriteId, followId, slugify } from "./domain";
 import type { Article } from "./domain";

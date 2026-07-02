@@ -2,7 +2,7 @@
  * World context — the demo side-channel (offline toggle, connection status).
  */
 import * as React from "react";
-import type { Transport } from "@thomasfosterau/effect-sync-core";
+import type { Transport } from "@legation/effect";
 import type { World } from "./sync";
 
 const WorldContext = React.createContext<World | null>(null);

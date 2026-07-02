@@ -34,9 +34,9 @@
 import { Effect, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import { Backend, BackendError, Hash, Predicate } from "@thomasfosterau/effect-sync-core";
-import { Subset } from "@thomasfosterau/effect-sync-core";
-import type { Mutator } from "@thomasfosterau/effect-sync-core";
+import { Backend, BackendError, Hash, Predicate } from "@legation/effect";
+import { Subset } from "@legation/effect";
+import type { Mutator } from "@legation/effect";
 import { documentToRows, parseResponse } from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";

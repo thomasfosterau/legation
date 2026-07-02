@@ -33,9 +33,7 @@ export interface InvalidationBus {
   readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
 }
 
-export const InvalidationBus = Context.Service<InvalidationBus>(
-  "@thomasfosterau/effect-sync-core/InvalidationBus"
-);
+export const InvalidationBus = Context.Service<InvalidationBus>("@legation/effect/InvalidationBus");
 
 /** In-process bus over an unbounded PubSub. */
 export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> = Effect.gen(

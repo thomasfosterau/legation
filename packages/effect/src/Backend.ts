@@ -82,4 +82,4 @@ export interface Backend {
   >;
 }
 
-export const Backend = Context.Service<Backend>("@thomasfosterau/effect-sync-core/Backend");
+export const Backend = Context.Service<Backend>("@legation/effect/Backend");

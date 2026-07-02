@@ -14,7 +14,7 @@ import {
   RpcTransport,
   Subset,
   SyncRoom,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";

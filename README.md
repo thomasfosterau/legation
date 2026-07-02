@@ -1,4 +1,4 @@
-# effect-sync
+# legation
 
 A modular sync engine built on [Effect](https://effect.website): mutation-log writes with server-authoritative rebase, CVR-tracked state patches downstream, typed collections with live queries, offline-first clients, and a customisable transport seam — designed to integrate natively with Effect's RPC, HttpApi, reactivity, and persistence modules.
 
@@ -36,15 +36,15 @@ See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for t
 
 Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md)).
 
-| Package                                                   | Description                                                                                                                                                                                                                                                            |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/effect-sync-core`](packages/core)       | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
-| [`@thomasfosterau/effect-sync-browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
-| [`@thomasfosterau/effect-sync-node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
-| [`@thomasfosterau/effect-sync-jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
-| [`@thomasfosterau/effect-sync-sql`](packages/sql)         | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
-| [`@thomasfosterau/effect-sync-react`](packages/react)     | React bindings: `EffectSyncProvider` + `useQuery` / `useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`                                                                                                                                                  |
-| [`@thomasfosterau/effect-sync-svelte`](packages/svelte)   | Svelte bindings: `setEngineRuntime` + `query` / `namedQuery` (live `Readable` stores) + `getMutate`                                                                                                                                                                    |
+| Package                                 | Description                                                                                                                                                                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@legation/effect`](packages/effect)   | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
+| [`@legation/browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
+| [`@legation/node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
+| [`@legation/jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
+| [`@legation/sql`](packages/sql)         | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
+| [`@legation/react`](packages/react)     | React bindings: `EffectSyncProvider` + `useQuery` / `useNamedQuery` (live via `useSyncExternalStore`) + `useMutation`                                                                                                                                                  |
+| [`@legation/svelte`](packages/svelte)   | Svelte bindings: `setEngineRuntime` + `query` / `namedQuery` (live `Readable` stores) + `getMutate`                                                                                                                                                                    |
 
 ## Quick start (in-process, today)
 
@@ -63,7 +63,7 @@ import {
   Subset,
   SyncServer,
   Transport,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 
 // 1. Shared mutator contract (client runs it optimistically; your backend
 //    runs its own authoritative version). Args are schema-validated on
@@ -127,9 +127,9 @@ Three apps of increasing scope, each on React and Svelte:
 | **RealWorld** (Conduit) | [`react-realworld`](examples/react-realworld) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity   |
 | **Northwind** (admin)   | [`react-northwind`](examples/react-northwind) | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins, read-merge mutators, search/filter/pagination                     |
 
-The React examples use the [`effect-sync-react`](packages/react) bindings
+The React examples use the [`@legation/react`](packages/react) bindings
 (`useQuery` / `useMutation`); the Svelte examples use
-[`effect-sync-svelte`](packages/svelte) (`query` stores + `getMutate`).
+[`@legation/svelte`](packages/svelte) (`query` stores + `getMutate`).
 
 Every example also wires up **spec export** (`SpecExport`, ADR-0017): run
 `bun run spec` inside an example to project its sync surface — collections,
@@ -142,7 +142,7 @@ Other UI stacks:
 
 | Example                                 | Stack                                | Highlights                                                                                        |
 | --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `effect-sync-core` directly (no framework bindings) — The Elm Architecture |
+| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `@legation/effect` directly (no framework bindings) — The Elm Architecture |
 
 ## Development
 

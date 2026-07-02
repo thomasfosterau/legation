@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-jsonapi": minor
+"@legation/jsonapi": minor
 ---
 
 Auto-subscribe and `include` for relationship resolution.

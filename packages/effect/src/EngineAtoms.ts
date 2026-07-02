@@ -6,7 +6,7 @@
  * plus a mutation atom for optimistic writes. Built over an `Atom.runtime`
  * from the engine layer, so the registry owns the engine's scope.
  *
- * Atoms are the UI surface. Framework packages (e.g. effect-sync-react) are
+ * Atoms are the UI surface. Framework packages (e.g. @legation/react) are
  * thin bindings over these — they mount an atom against an `AtomRegistry`,
  * they do not re-implement reactivity.
  *

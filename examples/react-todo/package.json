@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-react-todo",
+  "name": "legation-react-todo",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "React todo app driving the effect-sync engine through @thomasfosterau/effect-sync-react: offline-first, optimistic writes, live views, push/pull rebase.",
+  "description": "React todo app driving the legation engine through @legation/react: offline-first, optimistic writes, live views, push/pull rebase.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
-    "@thomasfosterau/effect-sync-react": "workspace:*",
+    "@legation/effect": "workspace:*",
+    "@legation/react": "workspace:*",
     "effect": "catalog:",
     "react": "^18",
     "react-dom": "^18"

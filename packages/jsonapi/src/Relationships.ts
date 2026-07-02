@@ -16,7 +16,7 @@
  */
 
 import { Effect, Ref, Scope, Stream } from "effect";
-import { ClientEngine, Predicate, Subset } from "@thomasfosterau/effect-sync-core";
+import { ClientEngine, Predicate, Subset } from "@legation/effect";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 

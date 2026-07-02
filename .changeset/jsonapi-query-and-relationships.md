@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/effect-sync-jsonapi": minor
+"@legation/jsonapi": minor
 ---
 
 Extend the JSON:API sync derivation with server-side query narrowing and

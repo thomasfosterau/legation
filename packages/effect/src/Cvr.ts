@@ -64,7 +64,7 @@ export interface CvrStore {
   readonly remove: (cookie: string) => Effect.Effect<void, StoreError>;
 }
 
-export const CvrStore = Context.Service<CvrStore>("@thomasfosterau/effect-sync-core/CvrStore");
+export const CvrStore = Context.Service<CvrStore>("@legation/effect/CvrStore");
 
 /** In-memory CVR store (tests, single-instance servers, sync rooms). */
 export const makeMemoryStore: Effect.Effect<CvrStore> = Effect.gen(function* () {
@@ -119,7 +119,7 @@ const fromWire = (wire: WireCvr): Cvr => ({
 });
 
 export interface KeyValueCvrOptions {
-  /** Key namespace inside the store. Defaults to `"effect-sync/cvr/"`. */
+  /** Key namespace inside the store. Defaults to `"legation/cvr/"`. */
   readonly prefix?: string;
 }
 
@@ -137,7 +137,7 @@ export const makeKeyValueStore = (
   Effect.gen(function* () {
     const store = KeyValueStore.prefix(
       yield* KeyValueStore.KeyValueStore,
-      options?.prefix ?? "effect-sync/cvr/"
+      options?.prefix ?? "legation/cvr/"
     );
     const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
     return CvrStore.of({

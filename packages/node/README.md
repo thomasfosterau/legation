@@ -1,15 +1,15 @@
-# @thomasfosterau/effect-sync-node
+# @legation/node
 
-Node-runtime adapters for the [effect-sync](https://github.com/thomasfosterau/effect-synchronizer) engine.
+Node-runtime adapters for the [legation](https://github.com/thomasfosterau/legation) engine.
 
 This package contains the server-side **WebSocket transport**: it accepts WebSocket connections (via the [`ws`](https://www.npmjs.com/package/ws) package) and exposes each connected client as a core `Transport.ServerConnection`, ready to be driven by a `SyncHub`.
 
-Per [ADR-0006](../../docs/adr), runtime code that depends on Node-only APIs lives here rather than in the runtime-agnostic `@thomasfosterau/effect-sync-core`.
+Per [ADR-0006](../../docs/adr), runtime code that depends on Node-only APIs lives here rather than in the runtime-agnostic `@legation/effect`.
 
 ## Install
 
 ```sh
-bun add @thomasfosterau/effect-sync-node @thomasfosterau/effect-sync-core effect
+bun add @legation/node @legation/effect effect
 ```
 
 `ws` is bundled as a dependency; `effect` is a peer dependency.
@@ -20,8 +20,8 @@ Compose the in-memory `ServerStore` and `SessionRegistry` into a `SyncHub`, then
 
 ```ts
 import { Effect, Layer } from "effect";
-import { ServerStore, Sessions, SyncHub } from "@thomasfosterau/effect-sync-core";
-import { WebSocketServer } from "@thomasfosterau/effect-sync-node";
+import { ServerStore, Sessions, SyncHub } from "@legation/effect";
+import { WebSocketServer } from "@legation/node";
 
 const hubLayer = SyncHub.layer.pipe(
   Layer.provideMerge(Layer.mergeAll(ServerStore.memoryLayer, Sessions.layer))
@@ -65,7 +65,7 @@ crash the connection).
 
 ## Connecting clients
 
-Browser clients use the matching `WebSocketTransport` from [`@thomasfosterau/effect-sync-browser`](../browser), which speaks the same one-JSON-message-per-frame wire format. Any client that can open a WebSocket and send/receive JSON protocol messages will interoperate — including the platform-global `WebSocket` available in Node 22+ (used by this package's own tests).
+Browser clients use the matching `WebSocketTransport` from [`@legation/browser`](../browser), which speaks the same one-JSON-message-per-frame wire format. Any client that can open a WebSocket and send/receive JSON protocol messages will interoperate — including the platform-global `WebSocket` available in Node 22+ (used by this package's own tests).
 
 ## API
 

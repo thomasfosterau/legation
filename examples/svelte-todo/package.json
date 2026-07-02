@@ -1,9 +1,9 @@
 {
-  "name": "effect-sync-svelte-todo",
+  "name": "legation-svelte-todo",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Svelte todo app driving the effect-sync engine through @thomasfosterau/effect-sync-svelte: offline-first, optimistic writes, live views, push/pull rebase.",
+  "description": "Svelte todo app driving the legation engine through @legation/svelte: offline-first, optimistic writes, live views, push/pull rebase.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@thomasfosterau/effect-sync-core": "workspace:*",
-    "@thomasfosterau/effect-sync-svelte": "workspace:*",
+    "@legation/effect": "workspace:*",
+    "@legation/svelte": "workspace:*",
     "effect": "catalog:",
     "svelte": "^5"
   },

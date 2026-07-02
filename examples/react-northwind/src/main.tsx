@@ -4,7 +4,7 @@
  */
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { EffectSyncProvider } from "@thomasfosterau/effect-sync-react";
+import { EffectSyncProvider } from "@legation/react";
 import { createWorld } from "./sync";
 import { WorldProvider } from "./world";
 import { App } from "./App";

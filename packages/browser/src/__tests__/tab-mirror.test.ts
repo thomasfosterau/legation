@@ -16,7 +16,7 @@ import {
   Subset,
   SyncServer,
   Transport,
-} from "@thomasfosterau/effect-sync-core";
+} from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
 import * as EngineHost from "../EngineHost.js";
@@ -265,7 +265,7 @@ describe("EngineHost ↔ TabMirror (BroadcastChannel)", () => {
   it.effect("syncs tab to host over a real BroadcastChannel pair", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const name = `effect-sync-test-${Date.now()}`;
+      const name = `legation-test-${Date.now()}`;
       const host = yield* MirrorChannel.makeBroadcastChannel(name);
       const tabChannel = yield* MirrorChannel.makeBroadcastChannel(name);
       yield* EngineHost.run({ channel: host, engine });

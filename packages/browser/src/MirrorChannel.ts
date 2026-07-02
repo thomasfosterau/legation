@@ -12,7 +12,7 @@
  * subscribe/publish race.
  */
 
-import { TransportError } from "@thomasfosterau/effect-sync-core";
+import { TransportError } from "@legation/effect";
 import { Effect, PubSub, Queue, Scope } from "effect";
 
 /** A live inbound subscription. */

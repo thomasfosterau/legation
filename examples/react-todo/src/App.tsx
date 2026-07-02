@@ -8,7 +8,7 @@
  * SwiftUI todo examples.
  */
 import * as React from "react";
-import { useMutation, useQuery } from "@thomasfosterau/effect-sync-react";
+import { useMutation, useQuery } from "@legation/react";
 import { type Todo, allTodos } from "./domain";
 import { useConnection, useDemo, usePending } from "./demo";
 
@@ -71,7 +71,7 @@ export const App = (): React.ReactElement => {
   return (
     <div className="app">
       <div className="card">
-        <h1 className="title">effect-sync · React</h1>
+        <h1 className="title">legation · React</h1>
         <p className="subtitle">
           Offline-first todos: optimistic writes, live views, push/pull rebase.
         </p>

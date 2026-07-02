@@ -1,5 +1,5 @@
 /**
- * @thomasfosterau/effect-sync-core
+ * @legation/effect
  *
  * The Effect-native sync engine (v2 architecture, ADRs 0007–0010):
  * mutation-log writes with server-authoritative rebase, CVR state patches
