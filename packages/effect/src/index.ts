@@ -55,6 +55,7 @@ export * as Authorization from "./Authorization.js";
 export * as Cvr from "./Cvr.js";
 export * as InvalidationBus from "./InvalidationBus.js";
 export * as BusBrokers from "./BusBrokers.js";
+export * as HintSource from "./HintSource.js";
 export * as SyncServer from "./SyncServer.js";
 export * as SyncRoom from "./SyncRoom.js";
 export * as Telemetry from "./Telemetry.js";
