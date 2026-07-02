@@ -33,6 +33,7 @@ import {
   SyncServer,
   Transport,
   TransportError,
+  Undo,
 } from "@legation/effect";
 import type { EffectSyncRuntime } from "@legation/svelte";
 
@@ -73,6 +74,12 @@ export interface DemoControls {
 export interface World {
   readonly runtime: EffectSyncRuntime;
   readonly controls: DemoControls;
+  /**
+   * The per-client undo manager (#46). Its `run`/`undo`/`redo` replay through
+   * the same optimistic `mutate` pipeline, so undo is journaled, rebased, and
+   * offline-safe like any write; history is in-memory (a page reload clears it).
+   */
+  readonly undo: Undo.UndoManager;
 }
 
 // ─── Mutator handlers ────────────────────────────────────────────────────────
@@ -210,6 +217,9 @@ export const createWorld = (): Promise<World> =>
       // journal left over from a previous offline session and hydrates.
       yield* engine.runSync;
 
+      // The undo manager over this engine (in-memory, per-client history).
+      const undo = yield* Undo.make(engine);
+
       // The Svelte bindings drive observe/mutate through a runtime providing the
       // engine we just built; its scope (and the forked sync loop) stays alive
       // because this program ends in `Effect.never`.
@@ -276,7 +286,7 @@ export const createWorld = (): Promise<World> =>
         },
       };
 
-      yield* Effect.sync(() => resolve({ runtime, controls }));
+      yield* Effect.sync(() => resolve({ runtime, controls, undo }));
       // Keep the scope open forever so the forked sync/fan-out fibers live on.
       yield* Effect.never;
     });

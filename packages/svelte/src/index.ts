@@ -8,3 +8,4 @@
 export * from "./runtime.js";
 export * from "./query.js";
 export * from "./mutation.js";
+export * from "./undo.js";

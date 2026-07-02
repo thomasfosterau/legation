@@ -10,3 +10,4 @@
  */
 export * from "./registry.js";
 export * from "./hooks.js";
+export * from "./undo.js";
