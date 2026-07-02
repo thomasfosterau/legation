@@ -10,3 +10,4 @@
 
 export * as Sql from "./Sql.js";
 export * as SqlBackend from "./SqlBackend.js";
+export * as PollingHintSource from "./PollingHintSource.js";
