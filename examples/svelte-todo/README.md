@@ -1,7 +1,7 @@
 # legation · Svelte example
 
 A browser todo app that drives
-[`@legation/effect`](../../packages/core) from Svelte through the
+[`@legation/effect`](../../packages/effect) from Svelte through the
 [`@legation/svelte`](../../packages/svelte) bindings
 (`query` stores + `getMutate`). It is the Svelte counterpart to the
 [React](../react-todo) and [FoldKit](../foldkit-todo) examples, and like the

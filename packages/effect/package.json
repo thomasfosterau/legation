@@ -51,10 +51,10 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/core"
+    "directory": "packages/effect"
   },
   "bugs": {
     "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/core#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/effect#readme"
 }

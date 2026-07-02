@@ -1,7 +1,7 @@
 # legation · FoldKit example
 
 A deliberately over-engineered browser todo app that drives
-[`@legation/effect`](../../packages/core) from
+[`@legation/effect`](../../packages/effect) from
 [FoldKit](https://foldkit.dev) — The Elm Architecture in TypeScript, built (like
 this engine) on Effect. It is a sibling of the [React](../react-todo) and
 [Svelte](../svelte-todo) todo examples (which drive the engine through its

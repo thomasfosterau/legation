@@ -163,7 +163,7 @@
         "effect": "4.0.0-beta.84",
       },
     },
-    "packages/core": {
+    "packages/effect": {
       "name": "@legation/effect",
       "version": "0.1.0",
       "devDependencies": {
@@ -448,7 +448,7 @@
 
     "@legation/browser": ["@legation/browser@workspace:packages/browser"],
 
-    "@legation/effect": ["@legation/effect@workspace:packages/core"],
+    "@legation/effect": ["@legation/effect@workspace:packages/effect"],
 
     "@legation/jsonapi": ["@legation/jsonapi@workspace:packages/jsonapi"],
 

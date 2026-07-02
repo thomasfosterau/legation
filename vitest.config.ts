@@ -7,7 +7,7 @@ const pkg = (name: string) =>
 export default defineConfig({
   resolve: {
     alias: {
-      "@legation/effect": pkg("core"),
+      "@legation/effect": pkg("effect"),
       "@legation/browser": pkg("browser"),
       "@legation/node": pkg("node"),
       "@legation/jsonapi": pkg("jsonapi"),

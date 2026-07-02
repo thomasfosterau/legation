@@ -27,7 +27,7 @@ bun run analyze:audit   # Fallow CI audit
 Run a single package's tests:
 
 ```bash
-bunx vitest run packages/core
+bunx vitest run packages/effect
 ```
 
 ## Project Structure

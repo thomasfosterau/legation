@@ -1,7 +1,7 @@
 # legation · React example
 
 A browser todo app that drives
-[`@legation/effect`](../../packages/core) from React through the
+[`@legation/effect`](../../packages/effect) from React through the
 [`@legation/react`](../../packages/react) bindings
 (`useQuery` / `useMutation`). It is the React counterpart to the
 [Svelte](../svelte-todo) and [FoldKit](../foldkit-todo) examples, and like

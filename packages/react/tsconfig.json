@@ -16,5 +16,5 @@
     "**/*.test.tsx",
     "examples/**"
   ],
-  "references": [{ "path": "../core" }]
+  "references": [{ "path": "../effect" }]
 }

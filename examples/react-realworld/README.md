@@ -2,7 +2,7 @@
 
 The [RealWorld](https://github.com/gothinkster/realworld) spec app — a
 Medium-style blogging platform ("Conduit") — driving
-[`@legation/effect`](../../packages/core) from React through the
+[`@legation/effect`](../../packages/effect) from React through the
 [`@legation/react`](../../packages/react) bindings. Like the
 todo examples it runs the **real library server pipeline in the page**
 (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`) over a durable

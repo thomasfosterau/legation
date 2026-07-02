@@ -9,7 +9,7 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@legation/effect": ["packages/core/src/index.ts"],
+      "@legation/effect": ["packages/effect/src/index.ts"],
       "@legation/browser": ["packages/browser/src/index.ts"],
       "@legation/node": ["packages/node/src/index.ts"],
       "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],

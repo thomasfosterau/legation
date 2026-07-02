@@ -1,7 +1,7 @@
 # @legation/jsonapi
 
 JSON:API v1.1 collection loaders for the
-[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/main/packages/core)
+[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/main/packages/effect)
 sync engine, built on [Effect](https://effect.website).
 
 In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
