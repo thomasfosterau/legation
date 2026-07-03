@@ -57,9 +57,5 @@
         </li>
       {/each}
     </ul>
-
-    {#snippet pending()}
-      <p>Loading orders…</p>
-    {/snippet}
   </svelte:boundary>
 {/if}

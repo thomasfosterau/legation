@@ -35,7 +35,10 @@
     ).catch(() => undefined);
   };
 
-  const placeOrder = async () => {
+  // Progressive enhancement: the form posts to the JSON:API action without
+  // JS; with JS we intercept and journal the offline-capable mutator instead.
+  const placeOrder = async (event: SubmitEvent) => {
+    event.preventDefault();
     if (userId === undefined) return;
     const rows = await cart.promise;
     if (rows.length === 0) return;
@@ -76,7 +79,18 @@
             — ${(((variant?.priceCents ?? 0) * item.qty) / 100).toFixed(2)}
             <button onclick={() => setQty(item, item.qty + 1)}>+</button>
             <button onclick={() => setQty(item, item.qty - 1)}>−</button>
-            <button onclick={() => setQty(item, 0)}>Remove</button>
+            <form
+              method="post"
+              action="?/remove"
+              style="display:inline"
+              onsubmit={(event) => {
+                event.preventDefault();
+                setQty(item, 0);
+              }}
+            >
+              <input type="hidden" name="id" value={item.id} />
+              <button>Remove</button>
+            </form>
           </li>
         {/each}
       </ul>
@@ -89,12 +103,10 @@
           }, 0) / 100
         ).toFixed(2)}
       </p>
-      <button onclick={placeOrder}>Place order</button>
+      <form method="post" action="?/placeOrder" onsubmit={placeOrder}>
+        <button>Place order</button>
+      </form>
       <p><em>Works offline: the order journals locally and pushes on reconnect.</em></p>
     {/if}
-
-    {#snippet pending()}
-      <p>Loading cart…</p>
-    {/snippet}
   </svelte:boundary>
 {/if}

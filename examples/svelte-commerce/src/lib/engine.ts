@@ -26,6 +26,11 @@ export const boot = (options: {
   readonly clientGroupId: string;
   readonly userId: string | undefined;
 }): AppRuntime => {
+  // Surface engine-host failures relayed by the worker (see service-worker.ts).
+  navigator.serviceWorker?.addEventListener("message", (event) => {
+    const info = (event.data as { legationInfo?: string } | undefined)?.legationInfo;
+    if (info !== undefined) console.warn(`[legation-sw] ${info}`);
+  });
   const runtime = ManagedRuntime.make(
     Layer.effect(ClientView.ClientView)(
       Effect.gen(function* () {
@@ -37,11 +42,17 @@ export const boot = (options: {
       })
     )
   );
-  // Wake the worker's engine (idempotent — the first handshake wins), then
-  // register this tab's shell subsets with it.
+  // Wake the worker's engine (idempotent — the first handshake wins, and a
+  // worker that activates AFTER this tab still hears a later repeat; its
+  // HostReady answer replays this tab's registrations).
   const config = new BroadcastChannel("legation-config");
-  config.postMessage({ clientGroupId: options.clientGroupId });
-  config.close();
+  const announce = () => config.postMessage({ clientGroupId: options.clientGroupId });
+  announce();
+  const timer = setInterval(announce, 2000);
+  setTimeout(() => {
+    clearInterval(timer);
+    config.close();
+  }, 20_000);
   void runtime
     .runPromise(
       Effect.flatMap(ClientView.ClientView, (view) =>
@@ -51,6 +62,7 @@ export const boot = (options: {
       )
     )
     .catch(() => undefined);
+  if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
   return runtime;
 };
 
@@ -69,17 +81,3 @@ export const ssrStub = (): AppRuntime =>
     },
   });
 
-/**
- * Register the service worker in dev. Production registration is
- * SvelteKit's own (it emits and registers `service-worker.js` in builds);
- * dev needs the documented manual snippet with `type: "module"` because the
- * worker is served untransformed-for-classic-workers by Vite.
- * https://svelte.dev/docs/kit/service-workers#During-development
- */
-export const registerDevServiceWorker = (): void => {
-  if (import.meta.env.DEV && "serviceWorker" in navigator) {
-    void navigator.serviceWorker
-      .register("/service-worker.js", { type: "module" })
-      .catch(() => undefined);
-  }
-};

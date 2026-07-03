@@ -1,7 +1,7 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { setEngineRuntime } from "@legation/svelte";
-  import { boot, registerDevServiceWorker, ssrStub, type AppRuntime } from "../lib/engine.js";
+  import { boot, ssrStub, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();
 
@@ -11,9 +11,6 @@
   // the server gets a loud stub instead of a runtime.
   let runtime: AppRuntime | undefined;
   if (browser) {
-    // SvelteKit registers the worker itself in production builds; dev needs
-    // the documented manual module registration.
-    registerDevServiceWorker();
     // svelte-ignore state_referenced_locally
     runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
   }

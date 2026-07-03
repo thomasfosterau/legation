@@ -19,7 +19,7 @@ import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpServerRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import { ApiError, Endpoint, Group, Handlers } from "@thomasfosterau/effect-jsonapi";
+import { ApiError, Endpoint, Group, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
 import { InvalidationBus } from "@legation/effect";
 import { CartItem, Category, Order, OrderItem, Product, Review, Seller, Variant } from "./resources.js";
 
@@ -409,10 +409,15 @@ const orderItemsLive = HttpApiBuilder.group(api, "orderItems", (handlers) =>
 
 /** Registers the JSON:API's routes on the ambient `HttpRouter`. */
 export const jsonApiLive = HttpApiBuilder.layer(api).pipe(
-  Layer.provide(categoriesLive),
-  Layer.provide(productsLive),
-  Layer.provide(reviewsLive),
-  Layer.provide(cartItemsLive),
-  Layer.provide(ordersLive),
-  Layer.provide(orderItemsLive)
+  Layer.provide(
+    Layer.mergeAll(
+      categoriesLive,
+      productsLive,
+      reviewsLive,
+      cartItemsLive,
+      ordersLive,
+      orderItemsLive
+    ).pipe(Layer.provide(Middleware.layer))
+  ),
+  Layer.provide(Middleware.layer)
 );

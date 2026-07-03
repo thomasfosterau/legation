@@ -30,17 +30,18 @@
   // has synced — the "out of stock" badges update as orders decrement stock.
   // svelte-ignore state_referenced_locally
   const stock = useAggregateGrouped(() => allVariants, Aggregate.sum("stock"), "productId", {
-    initial: Object.fromEntries(
-      variantRows(data.variants).map((row) => {
-        const value = row.value as { productId?: string; stock?: number };
-        return [value.productId ?? "", value.stock ?? 0];
-      })
-    ),
+    initial: variantRows(data.variants).reduce<Record<string, number>>((sums, row) => {
+      const value = row.value as { productId?: string; stock?: number };
+      const key = value.productId ?? "";
+      sums[key] = (sums[key] ?? 0) + (value.stock ?? 0);
+      return sums;
+    }, {}),
   });
 
   const products = $derived.by(async () => {
-    const rows = await productsQuery.promise;
+    // Read reactive inputs BEFORE the first await (Svelte tracks sync reads).
     const needle = search.trim().toLowerCase();
+    const rows = await productsQuery.promise;
     return rows
       .map((row) => row.value as Product)
       .filter((product) => needle === "" || product.name.toLowerCase().includes(needle));
@@ -81,8 +82,4 @@
     <button onclick={firstPage} disabled={cursor === undefined}>First page</button>
     <button onclick={nextPage}>Next page</button>
   </p>
-
-  {#snippet pending()}
-    <p>Loading catalog…</p>
-  {/snippet}
 </svelte:boundary>

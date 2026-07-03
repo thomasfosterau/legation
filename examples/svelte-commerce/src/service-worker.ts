@@ -22,18 +22,10 @@
 /// <reference lib="webworker" />
 import { build, files, version } from "$service-worker";
 import { Effect, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import * as Socket from "effect/unstable/socket/Socket";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientEngine, RpcTransport, Transport, type HttpCache } from "@legation/effect";
-import {
-  BrowserConnectivity,
-  CacheApiHttpCache,
-  IndexedDbClientStore,
-  ServiceWorkerHost,
-} from "@legation/browser";
-import { mutators, registry } from "./lib/domain.js";
+import type { HttpCache } from "@legation/effect";
+import { CacheApiHttpCache } from "@legation/browser";
+import { runHost } from "./lib/host.js";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -81,61 +73,17 @@ self.addEventListener("fetch", (event) => {
 
 // ─── The engine host ─────────────────────────────────────────────────────────
 
-const SYNC_HTTP = `${self.location.origin}/sync`;
-const SYNC_WS = `${self.location.protocol === "https:" ? "wss" : "ws"}://${self.location.host}/sync-ws`;
-
-/** WS primary + HTTP fallback + connectivity, as one transport layer. */
-const transportLayer = (clientGroupId: string): Layer.Layer<Transport.ClientTransport> =>
-  Layer.effect(Transport.ClientTransport)(
-    Effect.gen(function* () {
-      const options = { clientGroupId };
-      // Layer.build ties each protocol's resources to the enclosing layer
-      // scope (Effect.provide here would finalize them on return).
-      const wsContext = yield* Layer.build(
-        RpcClient.layerProtocolSocket().pipe(
-          Layer.provide(Socket.layerWebSocket(SYNC_WS)),
-          Layer.provide(Socket.layerWebSocketConstructorGlobal),
-          Layer.provide(RpcSerialization.layerNdjson)
-        )
-      );
-      const ws = yield* RpcTransport.make(options).pipe(Effect.provide(wsContext));
-      const httpContext = yield* Layer.build(
-        RpcClient.layerProtocolHttp({ url: SYNC_HTTP }).pipe(
-          Layer.provide(RpcSerialization.layerNdjson),
-          Layer.provide(FetchHttpClient.layer)
-        )
-      );
-      const http = yield* RpcTransport.make(options).pipe(Effect.provide(httpContext));
-      // primaryTimeout: a hanging WebSocket must not stall sync — time it
-      // out, sideline it, serve through HTTP.
-      const combined = yield* Transport.withFallback(ws, http, {
-        restoreAfter: "30 seconds",
-        primaryTimeout: "10 seconds",
-      });
-      return yield* BrowserConnectivity.withBrowserConnectivity(combined);
-    })
-  );
-
 /** IndexedDB from the worker's own globals (no `window` here). */
 const indexedDbLayer = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB: self.indexedDB, IDBKeyRange })
 );
 
-const host = (clientGroupId: string) =>
-  ServiceWorkerHost.run({ registry }).pipe(
-    Effect.provide(
-      ClientEngine.layer({
-        clientId: `sw-${clientGroupId}`,
-        clientGroupId,
-        mutators,
-        syncLoop: { pullInterval: "15 seconds", pushDebounce: "300 millis" },
-      }).pipe(
-        Layer.provide(transportLayer(clientGroupId)),
-        Layer.provide(IndexedDbClientStore.layer().pipe(Layer.provide(indexedDbLayer)))
-      )
-    ),
-    Effect.scoped
-  );
+/** A dead engine in a worker is undebuggable — relay failures to the tabs. */
+const reportToClients = (message: string) =>
+  self.clients
+    .matchAll()
+    .then((clients) => clients.forEach((client) => client.postMessage({ legationInfo: message })))
+    .catch(() => undefined);
 
 // Boot on the first tab's config handshake; ignore repeats.
 let started = false;
@@ -144,7 +92,16 @@ config.addEventListener("message", (event) => {
   const clientGroupId = (event.data as { clientGroupId?: string } | undefined)?.clientGroupId;
   if (started || typeof clientGroupId !== "string" || clientGroupId.length === 0) return;
   started = true;
-  void Effect.runPromise(host(clientGroupId)).catch(() => {
+  void reportToClients(`engine host starting (group ${clientGroupId})`);
+  void Effect.runPromise(
+    runHost({
+      clientGroupId,
+      clientId: `sw-${clientGroupId}`,
+      syncOrigin: self.location.origin,
+      indexedDb: indexedDbLayer,
+    })
+  ).catch((error) => {
     started = false; // a failed boot may retry on the next handshake
+    void reportToClients(`engine host failed: ${String(error)}`);
   });
 });

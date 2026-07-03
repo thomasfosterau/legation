@@ -130,8 +130,4 @@
   {:else}
     <p>No such product.</p>
   {/if}
-
-  {#snippet pending()}
-    <p>Loading product…</p>
-  {/snippet}
 </svelte:boundary>
