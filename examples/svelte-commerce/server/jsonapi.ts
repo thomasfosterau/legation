@@ -38,29 +38,28 @@ export class NotFound extends ApiError.make<NotFound>()("NotFound", {
 }) {}
 
 // ─── Row → resource-object mapping ──────────────────────────────────────────
+//
+// Rows come from our own SQL; each mapper constructs the resource with the
+// library's branded id constructors (`X.Id.make`), so the objects satisfy
+// `typeof X.Type` structurally — no casts.
 
 type Row = Record<string, unknown>;
 
-const one = (type: string, id: unknown) => ({ data: { type, id: String(id) } });
-
-const categoryResource = (row: Row): typeof Category.Type =>
-  ({
-  type: "categories" as const,
-  id: String(row.id),
+const categoryResource = (row: Row): typeof Category.Type => ({
+  type: "categories",
+  id: Category.Id.make(String(row.id)),
   attributes: { name: String(row.name), slug: String(row.slug) },
-  }) as unknown as typeof Category.Type;
+});
 
-const sellerResource = (row: Row): typeof Seller.Type =>
-  ({
-  type: "sellers" as const,
-  id: String(row.id),
+const sellerResource = (row: Row): typeof Seller.Type => ({
+  type: "sellers",
+  id: Seller.Id.make(String(row.id)),
   attributes: { name: String(row.name) },
-  }) as unknown as typeof Seller.Type;
+});
 
-const variantResource = (row: Row): typeof Variant.Type =>
-  ({
-  type: "variants" as const,
-  id: String(row.id),
+const variantResource = (row: Row): typeof Variant.Type => ({
+  type: "variants",
+  id: Variant.Id.make(String(row.id)),
   attributes: {
     productId: String(row.productId),
     sku: String(row.sku),
@@ -68,68 +67,70 @@ const variantResource = (row: Row): typeof Variant.Type =>
     priceCents: Number(row.priceCents),
     stock: Number(row.stock),
   },
-  }) as unknown as typeof Variant.Type;
+});
 
-const productResource = (row: Row, variantRows: ReadonlyArray<Row>): typeof Product.Type =>
-  ({
-  type: "products" as const,
-  id: String(row.id),
+const productResource = (row: Row, variantRows: ReadonlyArray<Row>): typeof Product.Type => ({
+  type: "products",
+  id: Product.Id.make(String(row.id)),
   attributes: {
     name: String(row.name),
     description: String(row.description),
     priceCents: Number(row.priceCents),
   },
   relationships: {
-    category: one("categories", row.categoryId),
-    seller: one("sellers", row.sellerId),
+    category: { data: { type: "categories", id: Category.Id.make(String(row.categoryId)) } },
+    seller: { data: { type: "sellers", id: Seller.Id.make(String(row.sellerId)) } },
     variants: {
-      data: variantRows.map((variant) => ({ type: "variants" as const, id: String(variant.id) })),
+      data: variantRows.map((variant) => ({
+        type: "variants" as const,
+        id: Variant.Id.make(String(variant.id)),
+      })),
     },
   },
-  }) as unknown as typeof Product.Type;
+});
 
-const reviewResource = (row: Row): typeof Review.Type =>
-  ({
-  type: "reviews" as const,
-  id: String(row.id),
+const reviewResource = (row: Row): typeof Review.Type => ({
+  type: "reviews",
+  id: Review.Id.make(String(row.id)),
   attributes: {
     authorName: String(row.authorName),
     rating: Number(row.rating),
     body: String(row.body),
     createdAt: String(row.createdAt),
   },
-  relationships: { product: one("products", row.productId) },
-  }) as unknown as typeof Review.Type;
+  relationships: {
+    product: { data: { type: "products", id: Product.Id.make(String(row.productId)) } },
+  },
+});
 
-const cartItemResource = (row: Row): typeof CartItem.Type =>
-  ({
-  type: "cartItems" as const,
-  id: String(row.id),
+const cartItemResource = (row: Row): typeof CartItem.Type => ({
+  type: "cartItems",
+  id: CartItem.Id.make(String(row.id)),
   attributes: { qty: Number(row.qty) },
-  relationships: { variant: one("variants", row.variantId) },
-  }) as unknown as typeof CartItem.Type;
+  relationships: {
+    variant: { data: { type: "variants", id: Variant.Id.make(String(row.variantId)) } },
+  },
+});
 
-const orderResource = (row: Row): typeof Order.Type =>
-  ({
-  type: "orders" as const,
-  id: String(row.id),
+const orderResource = (row: Row): typeof Order.Type => ({
+  type: "orders",
+  id: Order.Id.make(String(row.id)),
   attributes: {
     status: String(row.status),
     totalCents: Number(row.totalCents),
     createdAt: String(row.createdAt),
   },
-  }) as unknown as typeof Order.Type;
+});
 
-const orderItemResource = (row: Row): typeof OrderItem.Type =>
-  ({
-  type: "orderItems" as const,
-  id: String(row.id),
+const orderItemResource = (row: Row): typeof OrderItem.Type => ({
+  type: "orderItems",
+  id: OrderItem.Id.make(String(row.id)),
   attributes: { qty: Number(row.qty), priceCents: Number(row.priceCents) },
   relationships: {
-    order: one("orders", row.orderId),
-    variant: one("variants", row.variantId),
+    order: { data: { type: "orders", id: Order.Id.make(String(row.orderId)) } },
+    variant: { data: { type: "variants", id: Variant.Id.make(String(row.variantId)) } },
   },
-  }) as unknown as typeof OrderItem.Type;
+});
 
 // ─── API shape ───────────────────────────────────────────────────────────────
 
@@ -193,9 +194,9 @@ const orDie = <A, R>(effect: Effect.Effect<A, SqlError, R>): Effect.Effect<A, ne
 const hint = (collection: string, ids: ReadonlyArray<string>) => ({ collection, ids });
 
 /** Brand plain route/form ids for typed client calls (example-level sugar). */
-export const productId = (id: string): typeof Product.Type.id => id as typeof Product.Type.id;
-export const cartItemId = (id: string): typeof CartItem.Type.id => id as typeof CartItem.Type.id;
-export const variantId = (id: string): typeof Variant.Type.id => id as typeof Variant.Type.id;
+export const productId = Product.Id.make;
+export const cartItemId = CartItem.Id.make;
+export const variantId = Variant.Id.make;
 
 const categoriesLive = HttpApiBuilder.group(api, "categories", (handlers) =>
   handlers.handle("list", () =>

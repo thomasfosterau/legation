@@ -27,3 +27,18 @@ export const makeApiClient = (userId?: string) =>
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
 export type CommerceApi = Effect.Success<ReturnType<typeof makeApiClient>>;
+
+// One client per identity per process, built lazily on first use — request
+// handling looks the client up instead of carrying it in `locals`.
+const clients = new Map<string, CommerceApi>();
+
+/** The process-wide JSON:API client acting as `userId` (or anonymously). */
+export const apiFor = (userId?: string): Effect.Effect<CommerceApi> =>
+  Effect.suspend(() => {
+    const key = userId ?? "";
+    const cached = clients.get(key);
+    if (cached !== undefined) return Effect.succeed(cached);
+    return makeApiClient(userId).pipe(
+      Effect.tap((client) => Effect.sync(() => clients.set(key, client)))
+    );
+  });

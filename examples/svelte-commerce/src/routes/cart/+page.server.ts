@@ -6,12 +6,14 @@
 import type { Actions, PageServerLoad } from "./$types";
 import { redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
+import { apiFor } from "../../../server/client.js";
 import { cartItemId } from "../../../server/jsonapi.js";
 
 export const load: PageServerLoad = async ({ locals }) => {
   if (locals.user === undefined) return { lines: [], variants: [] };
+  const api = await Effect.runPromise(apiFor(locals.user.id));
   const cart = await Effect.runPromise(
-    locals.api.cartItems
+    api.cartItems
       .list({ query: { include: ["variant"] } })
       .pipe(Effect.catchTag("Unauthorized", () => Effect.succeed({ data: [], included: [] })))
   );
@@ -21,16 +23,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
   remove: async ({ request, locals }) => {
     if (locals.user === undefined) redirect(303, "/account");
+    const api = await Effect.runPromise(apiFor(locals.user.id));
     const form = await request.formData();
     await Effect.runPromise(
-      locals.api.cartItems.delete({ params: { id: cartItemId(String(form.get("id") ?? "")) } })
+      api.cartItems.delete({ params: { id: cartItemId(String(form.get("id") ?? "")) } })
     );
     redirect(303, "/cart");
   },
   placeOrder: async ({ locals }) => {
     if (locals.user === undefined) redirect(303, "/account");
+    const api = await Effect.runPromise(apiFor(locals.user.id));
     await Effect.runPromise(
-      locals.api.orders
+      api.orders
         .create({
           payload: {
             data: {

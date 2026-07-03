@@ -6,19 +6,21 @@
  */
 import type { PageServerLoad } from "./$types";
 import { Effect } from "effect";
+import { apiFor } from "../../server/client.js";
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const categoryId = url.searchParams.get("category") ?? undefined;
+  const api = await Effect.runPromise(apiFor(locals.user?.id));
   const [products, categories] = await Promise.all([
     Effect.runPromise(
-      locals.api.products.list({
+      api.products.list({
         query: {
           include: ["variants"],
           ...(categoryId === undefined ? {} : { filter: { categoryId } }),
         },
       })
     ),
-    Effect.runPromise(locals.api.categories.list({ query: {} })),
+    Effect.runPromise(api.categories.list({ query: {} })),
   ]);
   return {
     categoryId,

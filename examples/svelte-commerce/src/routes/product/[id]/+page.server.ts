@@ -6,16 +6,18 @@
 import type { Actions, PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
+import { apiFor } from "../../../../server/client.js";
 import { productId, variantId } from "../../../../server/jsonapi.js";
 
 export const load: PageServerLoad = async ({ locals, params }) => {
+  const api = await Effect.runPromise(apiFor(locals.user?.id));
   const [product, reviews] = await Promise.all([
     Effect.runPromise(
-      locals.api.products.get({ params: { id: productId(params.id) }, query: { include: ["variants"] } }).pipe(
+      api.products.get({ params: { id: productId(params.id) }, query: { include: ["variants"] } }).pipe(
         Effect.catchTag("NotFound", () => Effect.succeed(undefined))
       )
     ),
-    Effect.runPromise(locals.api.reviews.list({ query: { filter: { productId: params.id } } })),
+    Effect.runPromise(api.reviews.list({ query: { filter: { productId: params.id } } })),
   ]);
   if (product?.data == null) error(404, "no such product");
   return {
@@ -28,10 +30,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
   addToCart: async ({ request, locals }) => {
     if (locals.user === undefined) redirect(303, "/account");
+    const api = await Effect.runPromise(apiFor(locals.user.id));
     const form = await request.formData();
     const variantIdRaw = String(form.get("variantId") ?? "");
     await Effect.runPromise(
-      locals.api.cartItems
+      api.cartItems
         .create({
           payload: {
             data: {
@@ -47,9 +50,10 @@ export const actions: Actions = {
   },
   review: async ({ request, locals, params }) => {
     if (locals.user === undefined) redirect(303, "/account");
+    const api = await Effect.runPromise(apiFor(locals.user.id));
     const form = await request.formData();
     await Effect.runPromise(
-      locals.api.reviews.create({
+      api.reviews.create({
         payload: {
           data: {
             type: "reviews",
