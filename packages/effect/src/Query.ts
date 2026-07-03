@@ -190,6 +190,12 @@ const applyEdgeWindow = (
   return edgePlan.first === undefined ? rows : rows.slice(0, edgePlan.first);
 };
 
+/** Apply a plan's edge windows to resolved rows (used by `Client`). */
+export const applyWindows = (
+  compiled: Plan,
+  rows: ReadonlyArray<Related.RelatedRow>
+): ReadonlyArray<Related.RelatedRow> => rows.map((row) => windowRow(row, compiled.edges));
+
 /** Apply every collection-valued edge window to one resolved row. */
 const windowRow = (row: Related.RelatedRow, edges: ReadonlyArray<EdgePlan>): Related.RelatedRow => {
   let related = row.related;
