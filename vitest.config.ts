@@ -1,24 +1,54 @@
 import { defineConfig } from "vitest/config";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { fileURLToPath } from "node:url";
 
 const pkg = (name: string) =>
   fileURLToPath(new URL(`packages/${name}/src/index.ts`, import.meta.url));
 
+const alias = {
+  "@legation/effect": pkg("effect"),
+  "@legation/browser": pkg("browser"),
+  "@legation/node": pkg("node"),
+  "@legation/jsonapi": pkg("jsonapi"),
+  "@legation/sql": pkg("sql"),
+  "@legation/react": pkg("react"),
+  "@legation/svelte": pkg("svelte"),
+};
+
 export default defineConfig({
   resolve: {
-    alias: {
-      "@legation/effect": pkg("effect"),
-      "@legation/browser": pkg("browser"),
-      "@legation/node": pkg("node"),
-      "@legation/jsonapi": pkg("jsonapi"),
-      "@legation/sql": pkg("sql"),
-      "@legation/react": pkg("react"),
-    },
+    alias,
   },
   test: {
     globals: true,
-    environment: "node",
-    include: ["packages/*/src/**/*.test.ts", "tests/**/*.test.ts"],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          include: ["packages/*/src/**/*.test.ts", "tests/**/*.test.ts"],
+          exclude: ["**/node_modules/**", "packages/svelte/**"],
+        },
+      },
+      {
+        // The Svelte bindings mount real components, so this project compiles
+        // `.svelte` fixtures and resolves Svelte's client (browser) build.
+        extends: true,
+        plugins: [svelte()],
+        resolve: {
+          conditions: ["browser"],
+        },
+        test: {
+          name: "svelte",
+          environment: "jsdom",
+          include: ["packages/svelte/src/**/*.test.ts"],
+          // Component tests poll the DOM while engine fibers settle; leave
+          // headroom for cold-start transform/import under parallel workers.
+          testTimeout: 30_000,
+        },
+      },
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
