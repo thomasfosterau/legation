@@ -60,6 +60,11 @@ re-subscribing the previous value stays visible with `waiting: true`
 - **`useMutation()`** / **`useMutationWithAck()`** — aliases of `getMutate` /
   `getMutateWithAck`.
 
+Every live hook accepts `{ initial }` to seed a synchronous `Success` before
+the first emission — during SSR (where `$effect` never runs) the seed is what
+renders, and on the client it makes the first render match the server markup
+(no loading flash).
+
 ```svelte
 <script lang="ts">
   import { AsyncResult } from "effect/unstable/reactivity";

@@ -42,6 +42,18 @@ export interface Live<A, E = never> {
   readonly current: AsyncResult.AsyncResult<A, E>;
 }
 
+/** Options shared by the live hooks. */
+export interface LiveOptions<A> {
+  /**
+   * Seed `current` with a synchronous `Success` before the first emission —
+   * during SSR (where `$effect` never runs) this is what renders, and on the
+   * client it makes the first render match the server markup (no loading
+   * flash). Compute it from the page's hydration snapshot, e.g. with
+   * `Hydration.rowsFor(snapshot, subset)`.
+   */
+  readonly initial?: A;
+}
+
 /** The error channel of engine reads. */
 export type LiveError = StoreError | MutatorError;
 
@@ -53,9 +65,14 @@ export type LiveError = StoreError | MutatorError;
  */
 const live = <A, E>(
   runtime: EffectSyncRuntime,
-  makeStream: () => (engine: ClientEngine.ClientEngine) => Stream.Stream<A, E>
+  makeStream: () => (engine: ClientEngine.ClientEngine) => Stream.Stream<A, E>,
+  options?: LiveOptions<A>
 ): Live<A, E> => {
-  let current = $state.raw<AsyncResult.AsyncResult<A, E>>(AsyncResult.initial(true));
+  let current = $state.raw<AsyncResult.AsyncResult<A, E>>(
+    options?.initial !== undefined
+      ? AsyncResult.success(options.initial, { waiting: true })
+      : AsyncResult.initial(true)
+  );
   $effect(() => {
     const toStream = makeStream();
     current = AsyncResult.waitingFrom(Option.some(untrack(() => current)));
@@ -93,24 +110,40 @@ const live = <A, E>(
  * change. A {@link Subset.TypedSubset} refines the rows to its row type.
  */
 export function useQuery<A>(
-  subset: () => Subset.TypedSubset<A>
+  subset: () => Subset.TypedSubset<A>,
+  options?: LiveOptions<ReadonlyArray<ClientEngine.TypedRow<A>>>
 ): Live<ReadonlyArray<ClientEngine.TypedRow<A>>, LiveError>;
-export function useQuery(subset: () => Subset.Subset): Live<Rows, LiveError>;
-export function useQuery(subset: () => Subset.Subset): Live<Rows, LiveError> {
-  return live(getEngineRuntime(), () => {
-    const value = subset();
-    return (engine) => engine.observe(value);
-  });
+export function useQuery(
+  subset: () => Subset.Subset,
+  options?: LiveOptions<Rows>
+): Live<Rows, LiveError>;
+export function useQuery(
+  subset: () => Subset.Subset,
+  options?: LiveOptions<Rows>
+): Live<Rows, LiveError> {
+  return live(
+    getEngineRuntime(),
+    () => {
+      const value = subset();
+      return (engine) => engine.observe(value);
+    },
+    options
+  );
 }
 
 /** Live result of a named query (Query.ts), with reactive name/args. */
 export const useNamedQuery = (
-  query: () => { readonly name: string; readonly args: unknown }
+  query: () => { readonly name: string; readonly args: unknown },
+  options?: LiveOptions<Rows>
 ): Live<Rows, LiveError | QueryError> =>
-  live(getEngineRuntime(), () => {
-    const { name, args } = query();
-    return (engine) => engine.observeNamed(name, args);
-  });
+  live(
+    getEngineRuntime(),
+    () => {
+      const { name, args } = query();
+      return (engine) => engine.observeNamed(name, args);
+    },
+    options
+  );
 
 /**
  * Live aggregate over a subset (count/sum/min/max/avg). Local tier only —
@@ -118,23 +151,33 @@ export const useNamedQuery = (
  */
 export const useAggregate = (
   subset: () => Subset.Subset,
-  aggregate: Aggregate.Aggregate
+  aggregate: Aggregate.Aggregate,
+  options?: LiveOptions<Aggregate.AggregateValue>
 ): Live<Aggregate.AggregateValue, LiveError> =>
-  live(getEngineRuntime(), () => {
-    const value = subset();
-    return (engine) => engine.observeAggregate(value, aggregate);
-  });
+  live(
+    getEngineRuntime(),
+    () => {
+      const value = subset();
+      return (engine) => engine.observeAggregate(value, aggregate);
+    },
+    options
+  );
 
 /** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
 export const useAggregateGrouped = (
   subset: () => Subset.Subset,
   aggregate: Aggregate.Aggregate,
-  groupBy: string
+  groupBy: string,
+  options?: LiveOptions<Record<string, Aggregate.AggregateValue>>
 ): Live<Record<string, Aggregate.AggregateValue>, LiveError> =>
-  live(getEngineRuntime(), () => {
-    const value = subset();
-    return (engine) => engine.observeAggregateGrouped(value, aggregate, groupBy);
-  });
+  live(
+    getEngineRuntime(),
+    () => {
+      const value = subset();
+      return (engine) => engine.observeAggregateGrouped(value, aggregate, groupBy);
+    },
+    options
+  );
 
 /** Reactive inputs of {@link useRelated}. */
 export interface RelatedInputs {
@@ -153,16 +196,20 @@ export interface RelatedInputs {
  */
 export const useRelated = (
   inputs: () => RelatedInputs,
-  options?: { readonly subscribe?: boolean }
+  options?: LiveOptions<ReadonlyArray<Related.RelatedRow>> & { readonly subscribe?: boolean }
 ): Live<ReadonlyArray<Related.RelatedRow>> =>
-  live(getEngineRuntime(), () => {
-    const { registry, collection, subset, names } = inputs();
-    return options?.subscribe === true
-      ? // `Stream.unwrap` scopes the auto-subscriptions to the stream's
-        // lifetime: interrupting the hook's fiber unsubscribes them.
-        (engine) => Stream.unwrap(Related.related(engine, registry, collection, subset, names))
-      : (engine) => Related.observe(engine, registry, collection, subset, names);
-  });
+  live(
+    getEngineRuntime(),
+    () => {
+      const { registry, collection, subset, names } = inputs();
+      return options?.subscribe === true
+        ? // `Stream.unwrap` scopes the auto-subscriptions to the stream's
+          // lifetime: interrupting the hook's fiber unsubscribes them.
+          (engine) => Stream.unwrap(Related.related(engine, registry, collection, subset, names))
+        : (engine) => Related.observe(engine, registry, collection, subset, names);
+    },
+    options
+  );
 
 /**
  * A `mutate(mutator, args)` bound to the context runtime, resolving on

@@ -6,7 +6,7 @@
  * `subscribe: true` variant that syncs its own subsets.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mount, unmount } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
 import { Subset } from "@legation/effect";
 import RunesQueryHarness from "./fixtures/RunesQueryHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
@@ -40,6 +40,32 @@ describe("rune hooks", () => {
     // A mutation matching the new subset re-emits.
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "3", title: "other" }));
     await until(() => text().includes("count:3"));
+
+    unmount(app);
+    await runtime.dispose();
+  });
+
+  it("initial seeds a synchronous Success before the first emission", async () => {
+    const runtime = makeRuntime();
+    const app = mount(RunesQueryHarness, {
+      target: document.body,
+      props: {
+        runtime,
+        initial: [{ id: "s1", value: { id: "s1", title: "match" } }],
+      },
+    });
+
+    // Rendered synchronously from the seed at mount, before $effect ever
+    // runs — no Initial flash, and marked waiting (the live take-over is
+    // pending). This is also exactly what SSR renders, where $effect never
+    // runs at all.
+    expect(text()).toContain("row:match");
+    expect(text()).toContain("state:Success:waiting");
+
+    // The live subscription then takes over (the engine has no such row).
+    await until(() => !text().includes("row:match"));
+    expect(text()).toContain("state:Success");
+    expect(text()).not.toContain(":waiting");
 
     unmount(app);
     await runtime.dispose();
