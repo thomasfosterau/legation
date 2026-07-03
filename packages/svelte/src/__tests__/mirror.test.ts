@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { ClientEngine, ClientView, Subset } from "@legation/effect";
-import { EngineHost, MirrorChannel, TabMirror } from "@legation/browser";
+import { EngineHost, MirrorChannel, TabMirror } from "@legation/effect";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";

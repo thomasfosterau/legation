@@ -26,7 +26,10 @@
  * the disconnect detection a BroadcastChannel can't provide on its own.
  */
 
-import { ClientEngine, type Collection, Related, Subset } from "@legation/effect";
+import * as ClientEngine from "./ClientEngine.js";
+import type * as Collection from "./Collection.js";
+import * as Related from "./Related.js";
+import * as Subset from "./Subset.js";
 import { Clock, Duration, Effect, Fiber, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
@@ -60,6 +63,12 @@ interface Active {
   /** Re-hydrate a newly-joining tab from the current result. */
   readonly hydrate: Effect.Effect<void>;
 }
+
+/** Liveness settings with their defaults applied. */
+const livenessOf = (options: EngineHostOptions) => ({
+  tabTimeout: options.liveness?.tabTimeout ?? "30 seconds",
+  sweepInterval: options.liveness?.sweepInterval ?? "10 seconds",
+});
 
 /**
  * Serve the engine over the channel. The inbound subscription is
@@ -320,8 +329,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     };
 
     // Liveness sweep: reclaim registrations from tabs silent past the timeout.
-    const tabTimeout = options.liveness?.tabTimeout ?? "30 seconds";
-    const sweepInterval = options.liveness?.sweepInterval ?? "10 seconds";
+    const { tabTimeout, sweepInterval } = livenessOf(options);
     const sweep = Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const cutoff = now - Duration.toMillis(tabTimeout);

@@ -8,16 +8,13 @@
  * journal in encoded form and await the host's acknowledgement.
  */
 
-import {
-  ClientEngine,
-  type Collection,
-  MutatorError,
-  type Related,
-  Subset,
-  Telemetry,
-  TransportError,
-  type Mutator,
-} from "@legation/effect";
+import type * as ClientEngine from "./ClientEngine.js";
+import type * as Collection from "./Collection.js";
+import { MutatorError, TransportError } from "./Errors.js";
+import type * as Mutator from "./Mutator.js";
+import type * as Related from "./Related.js";
+import * as Subset from "./Subset.js";
+import * as Telemetry from "./Telemetry.js";
 import {
   Deferred,
   type Duration,

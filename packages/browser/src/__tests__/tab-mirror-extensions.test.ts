@@ -11,21 +11,22 @@ import {
   ClientStore,
   Collection,
   Cvr,
+  EngineHost,
   InvalidationBus,
   MemoryBackend,
+  MirrorChannel,
   Mutator,
   Predicate,
   Query,
   Subset,
   SyncServer,
+  TabMirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
-import * as EngineHost from "../EngineHost.js";
-import * as MirrorChannel from "../MirrorChannel.js";
+import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
-import * as TabMirror from "../TabMirror.js";
 
 interface Todo {
   readonly id: string;
@@ -332,7 +333,7 @@ describe("ServiceWorkerHost", () => {
           );
           yield* sleepReal(200);
 
-          const tabChannel = yield* MirrorChannel.makeBroadcastChannel(name);
+          const tabChannel = yield* BroadcastMirrorChannel.make(name);
           const mirror = yield* TabMirror.make({ channel: tabChannel, mutators });
           yield* mirror.mutate("user/set", { id: "u1", name: "Ada" });
           yield* mirror.mutate("todo/set", { id: "1", title: "sw", done: false, authorId: "u1" });

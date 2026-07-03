@@ -1,8 +1,18 @@
 /**
  * MirrorProtocol
  *
- * Schema-defined messages between tab mirrors and the engine host
- * (ADR-0010). Mutations, subset subscriptions, named-query registrations,
+ * Schema-defined messages between mirrors and the engine host (ADR-0010).
+ *
+ * A **mirror** is the light half of the split the seam exists for: the
+ * engine proper holds the durable replica and runs the sync loop — one per
+ * origin — while each client context (a browser tab, an Electron window,
+ * an extension, a CLI instance) holds a mirror: an in-memory copy of just
+ * the subsets that context registered, hydrated and kept current by host
+ * broadcasts, serving reads synchronously and forwarding writes to the
+ * host journal. A read-replica + write-proxy of the engine, cheap enough
+ * to have one per window; it holds no durable state (a mirror that dies
+ * loses nothing — a new one re-registers and rehydrates) and can only
+ * answer for registered keys (hence observing auto-registers). Mutations, subset subscriptions, named-query registrations,
  * and relational (`related`) registrations flow tab → host;
  * acknowledgements, mirror updates (materialized subset rows, already
  * overlay-applied by the engine), and resolved relational updates flow
@@ -18,7 +28,10 @@
  * way (the host's engine decodes against its query registry).
  */
 
-import { ClientEngine, Hash, Related, Subset } from "@legation/effect";
+import type * as ClientEngine from "./ClientEngine.js";
+import * as Hash from "./Hash.js";
+import type * as Related from "./Related.js";
+import * as Subset from "./Subset.js";
 import { Effect, Schema } from "effect";
 
 // ─── Broadcast keys ──────────────────────────────────────────────────────────

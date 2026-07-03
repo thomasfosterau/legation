@@ -48,6 +48,12 @@ export * as LiveQuery from "./LiveQuery.js";
 export * as EngineAtoms from "./EngineAtoms.js";
 export * as PromiseFacade from "./PromiseFacade.js";
 
+// ─── Mirror seam (ADR-0010/0021) ─────────────────────────────────────────────
+export * as MirrorProtocol from "./MirrorProtocol.js";
+export * as MirrorChannel from "./MirrorChannel.js";
+export * as EngineHost from "./EngineHost.js";
+export * as TabMirror from "./TabMirror.js";
+
 // ─── Server ──────────────────────────────────────────────────────────────────
 export * as Backend from "./Backend.js";
 export * as BackendContract from "./BackendContract.js";

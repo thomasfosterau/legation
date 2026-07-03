@@ -10,18 +10,18 @@ import {
   ClientEngine,
   ClientStore,
   Cvr,
+  EngineHost,
   InvalidationBus,
   MemoryBackend,
+  MirrorChannel,
   MutationRejected,
   Mutator,
   SyncServer,
+  TabMirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema } from "effect";
-import * as EngineHost from "../EngineHost.js";
-import * as MirrorChannel from "../MirrorChannel.js";
-import * as TabMirror from "../TabMirror.js";
 
 interface Todo {
   readonly id: string;

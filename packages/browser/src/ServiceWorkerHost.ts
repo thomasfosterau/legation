@@ -24,10 +24,9 @@
  * ```
  */
 
-import { ClientEngine, type Collection } from "@legation/effect";
+import { ClientEngine, type Collection, EngineHost } from "@legation/effect";
 import { Effect, Scope } from "effect";
-import * as EngineHost from "./EngineHost.js";
-import * as MirrorChannel from "./MirrorChannel.js";
+import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 
 export interface ServiceWorkerHostOptions {
   /** BroadcastChannel name shared with tab mirrors. */
@@ -57,7 +56,7 @@ export const run = (
   Effect.gen(function* () {
     const { channelName = defaultChannelName, registry } = options;
     const engine = yield* ClientEngine.ClientEngine;
-    const channel = yield* MirrorChannel.makeBroadcastChannel(channelName);
+    const channel = yield* BroadcastMirrorChannel.make(channelName);
     yield* registry === undefined
       ? EngineHost.run({ channel, engine })
       : EngineHost.run({ channel, engine, registry });

@@ -1,10 +1,11 @@
 /**
  * MirrorChannel
  *
- * The tab↔engine-host message carrier seam (ADR-0010): one more
+ * The mirror↔engine-host message carrier seam (ADR-0010): one more
  * implementation of "schema-defined messages over a pluggable carrier".
- * BroadcastChannel is the shipped browser implementation; the loopback
- * pair serves tests and same-thread (no-service-worker) hosting.
+ * The BroadcastChannel implementation ships in `@legation/browser`
+ * (`BroadcastMirrorChannel`); the loopback pair here serves tests and
+ * same-process (no-service-worker) hosting on any runtime.
  *
  * `subscribe` is deliberately effectful and eager — the subscription is
  * established once the effect completes — so hosts and mirrors can
@@ -12,8 +13,8 @@
  * subscribe/publish race.
  */
 
-import { TransportError } from "@legation/effect";
-import { Effect, PubSub, Queue, Scope } from "effect";
+import type { TransportError } from "./Errors.js";
+import { Effect, PubSub, Scope } from "effect";
 
 /** A live inbound subscription. */
 export interface MirrorInbox {
@@ -29,43 +30,6 @@ export interface MirrorChannel {
    */
   readonly subscribe: Effect.Effect<MirrorInbox, never, Scope.Scope>;
 }
-
-/**
- * A MirrorChannel over a `BroadcastChannel` name. Pair one in the engine
- * host with one per tab.
- */
-export const makeBroadcastChannel = (
-  name: string
-): Effect.Effect<MirrorChannel, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const channel = yield* Effect.acquireRelease(
-      Effect.sync(() => new BroadcastChannel(name)),
-      (ch) => Effect.sync(() => ch.close())
-    );
-    return {
-      post: (message) =>
-        Effect.try({
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- BroadcastChannel.postMessage takes no targetOrigin
-          try: () => channel.postMessage(message),
-          catch: (cause) => new TransportError({ message: `BroadcastChannel post failed`, cause }),
-        }),
-      subscribe: Effect.gen(function* () {
-        const queue = yield* Queue.unbounded<unknown>();
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const listener = (event: MessageEvent) => {
-              Queue.offerUnsafe(queue, event.data);
-            };
-            channel.addEventListener("message", listener as EventListener);
-            return listener;
-          }),
-          (listener) =>
-            Effect.sync(() => channel.removeEventListener("message", listener as EventListener))
-        );
-        return { take: Queue.take(queue).pipe(Effect.orDie) };
-      }),
-    };
-  });
 
 /**
  * Two linked in-memory channels: messages posted on one side arrive on the
