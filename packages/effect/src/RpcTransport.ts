@@ -88,8 +88,10 @@ export interface RpcTransportOptions {
 /**
  * Adapt a generated `SyncRpcs` client into a ClientTransport. Connectivity
  * is reported as permanently "connected": RPC protocols reconnect (or fail
- * per call) internally, and sync stays correct over pull alone — carriers
- * with real connection awareness can layer a richer status.
+ * per call) internally, and sync stays correct over pull alone. Wrap the
+ * result with `Transport.withInferredStatus` for behaviour-derived status
+ * (and `Transport.withFallback` to degrade to a second carrier); in browsers
+ * add `BrowserConnectivity.withBrowserConnectivity` on top.
  */
 export const fromRpcClient = <E extends { readonly message: string }>(
   client: RpcClient.RpcClient<SyncRpc, E>,

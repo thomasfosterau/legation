@@ -9,11 +9,14 @@
  */
 
 import {
+  Clock,
   Context,
+  Duration,
   Effect,
   Layer,
   PubSub,
   Ref,
+  Result,
   Scope,
   Semaphore,
   Stream,
@@ -152,3 +155,110 @@ export const makePokeHub: Effect.Effect<
       Stream.unwrap(hubFor(clientGroupId).pipe(Effect.map((hub) => Stream.fromPubSub(hub)))),
   };
 });
+
+/** Only a TransportError signals carrier trouble; version rejections pass through. */
+const isTransportError = (error: TransportError | VersionNotSupportedError): boolean =>
+  error._tag === "TransportError";
+
+/**
+ * Wrap a transport with connectivity inferred from observed behaviour:
+ * `"connecting"` until the first push/pull settles, then `"connected"` after
+ * each success and `"disconnected"` after each `TransportError`. Carriers
+ * that report their own status (the in-memory pair, a status-aware socket)
+ * don't need this; the default RPC carrier does — it reports permanently
+ * `"connected"` (RpcTransport.ts), so wrap it with this to give the engine's
+ * reconnect trigger something real to react to.
+ */
+export const withInferredStatus = (
+  transport: ClientTransport
+): Effect.Effect<ClientTransport, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
+    const observe = <A>(
+      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+      effect.pipe(
+        Effect.tap(() => SubscriptionRef.set(status, "connected")),
+        Effect.tapError((error) =>
+          isTransportError(error) ? SubscriptionRef.set(status, "disconnected") : Effect.void
+        )
+      );
+    return {
+      push: (request) => observe(transport.push(request)),
+      pull: (request) => observe(transport.pull(request)),
+      pokes: transport.pokes,
+      status: SubscriptionRef.get(status),
+      // Dedup consecutive repeats so a burst of successful calls doesn't spam
+      // the engine's reconnect trigger with "connected" re-emissions.
+      statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
+    };
+  });
+
+/** Options for {@link withFallback}. */
+export interface FallbackOptions {
+  /**
+   * How long a failed primary is sidelined before a call probes it again.
+   * Default 30 seconds.
+   */
+  readonly restoreAfter?: Duration.Input;
+}
+
+/**
+ * Layer a fallback carrier under a primary one (e.g. plain HTTP under
+ * WebSockets): each push/pull tries the primary and falls back on a
+ * `TransportError`. After a primary failure the primary is sidelined for
+ * `restoreAfter`, so subsequent calls go straight to the fallback until the
+ * cooldown elapses and a call probes the primary again.
+ *
+ * Status is inferred from observed behaviour: `"connected"` while either
+ * carrier serves (sync is a progressive enhancement — a working fallback IS
+ * connected), `"disconnected"` once a call exhausts both. Pokes from both
+ * carriers are merged (they are contentless hints; duplicates cost at most a
+ * redundant pull) and a failing primary poke stream is dropped rather than
+ * killing the fallback's. A `VersionNotSupportedError` propagates without
+ * falling back — it is the server's verdict, not carrier trouble.
+ */
+export const withFallback = (
+  primary: ClientTransport,
+  fallback: ClientTransport,
+  options?: FallbackOptions
+): Effect.Effect<ClientTransport, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const restoreAfterMillis = Duration.toMillis(options?.restoreAfter ?? "30 seconds");
+    const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
+    const sidelinedUntil = yield* Ref.make(0);
+
+    const call = <A>(
+      f: (transport: ClientTransport) => Effect.Effect<A, TransportError | VersionNotSupportedError>
+    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        if ((yield* Ref.get(sidelinedUntil)) <= now) {
+          const first = yield* Effect.result(f(primary));
+          if (Result.isSuccess(first)) {
+            yield* SubscriptionRef.set(status, "connected");
+            return first.success;
+          }
+          if (!isTransportError(first.failure)) return yield* Effect.fail(first.failure);
+          yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
+        }
+        const second = yield* Effect.result(f(fallback));
+        if (Result.isSuccess(second)) {
+          yield* SubscriptionRef.set(status, "connected");
+          return second.success;
+        }
+        if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
+        return yield* Effect.fail(second.failure);
+      });
+
+    return {
+      push: (request) => call((transport) => transport.push(request)),
+      pull: (request) => call((transport) => transport.pull(request)),
+      pokes: Stream.merge(
+        primary.pokes.pipe(Stream.catchCause(() => Stream.empty)),
+        fallback.pokes
+      ),
+      status: SubscriptionRef.get(status),
+      statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
+    };
+  });
