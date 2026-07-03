@@ -19,6 +19,7 @@ import {
   Authorization,
   Backend,
   ClientEngine,
+  ClientView,
   ClientStore,
   Cvr,
   InvalidationBus,
@@ -223,7 +224,9 @@ export const createWorld = (): Promise<World> =>
       yield* engine.runSync;
 
       const runtime: EffectSyncRuntime = ManagedRuntime.make(
-        Layer.succeed(ClientEngine.ClientEngine, engine)
+        Layer.succeed(ClientEngine.ClientEngine, engine).pipe(
+          Layer.merge(Layer.succeed(ClientView.ClientView)(ClientView.fromEngine(engine)))
+        )
       );
 
       const world: World = {

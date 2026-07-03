@@ -5,9 +5,11 @@ Idiomatic Svelte bindings for the
 
 Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
-- **`setEngineRuntime(runtime)`** — supply a `ManagedRuntime` that can run
-  `ClientEngine` effects (build it from a core composition or
-  `JsonApiSync.layer`). Call once, high in the tree, before any query.
+- **`setEngineRuntime(runtime)`** — supply a `ManagedRuntime` that provides a
+  `ClientView` (the narrow engine surface, ADR-0021): an engine-backed app
+  composes `ClientView.layer.pipe(Layer.provideMerge(engineLayer))`; a
+  service-worker deployment provides its `TabMirror` directly. Call once,
+  high in the tree, before any query.
 - **`query(subset)`** / **`namedQuery(name, args)`** — live results as a Svelte
   `Readable` store; read with `$store` auto-subscription and the component
   re-renders on every local change. The `observe` fiber is torn down when the

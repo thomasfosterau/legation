@@ -24,6 +24,7 @@ import {
   Authorization,
   Backend,
   ClientEngine,
+  ClientView,
   ClientStore,
   Cvr,
   InvalidationBus,
@@ -224,7 +225,9 @@ export const createWorld = (): Promise<World> =>
       // engine we just built; its scope (and the forked sync loop) stays alive
       // because this program ends in `Effect.never`.
       const runtime: EffectSyncRuntime = ManagedRuntime.make(
-        Layer.succeed(ClientEngine.ClientEngine, engine)
+        Layer.succeed(ClientEngine.ClientEngine, engine).pipe(
+          Layer.merge(Layer.succeed(ClientView.ClientView)(ClientView.fromEngine(engine)))
+        )
       );
 
       // Authoritative writes from a "remote" client share the backend; their

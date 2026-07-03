@@ -19,16 +19,18 @@ import { untrack } from "svelte";
 import { Cause, Effect, Fiber, Option, Stream } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
-  type Aggregate,
+  Aggregate,
   ClientEngine,
+  ClientView,
   type Collection,
   type MutatorError,
   type QueryError,
   Related,
   type StoreError,
   type Subset,
+  type TransportError,
 } from "@legation/effect";
-import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
+import { getEngineRuntime, withEngine, type EffectSyncRuntime } from "./runtime.js";
 import { getMutate, getMutateWithAck } from "./mutation.js";
 import type { Rows } from "./query.js";
 
@@ -54,8 +56,8 @@ export interface LiveOptions<A> {
   readonly initial?: A;
 }
 
-/** The error channel of engine reads. */
-export type LiveError = StoreError | MutatorError;
+/** The error channel of view reads (engine or mirror). */
+export type LiveError = StoreError | MutatorError | TransportError;
 
 /**
  * Core plumbing: re-run `makeProgram` inside `$effect` (tracking the reactive
@@ -65,7 +67,7 @@ export type LiveError = StoreError | MutatorError;
  */
 const live = <A, E>(
   runtime: EffectSyncRuntime,
-  makeStream: () => (engine: ClientEngine.ClientEngine) => Stream.Stream<A, E>,
+  makeStream: () => (view: ClientView.ClientView) => Stream.Stream<A, E>,
   options?: LiveOptions<A>
 ): Live<A, E> => {
   let current = $state.raw<AsyncResult.AsyncResult<A, E>>(
@@ -77,8 +79,8 @@ const live = <A, E>(
     const toStream = makeStream();
     current = AsyncResult.waitingFrom(Option.some(untrack(() => current)));
     const fiber = runtime.runFork(
-      Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-        Stream.runForEach(toStream(engine), (value) =>
+      Effect.flatMap(ClientView.ClientView, (view) =>
+        Stream.runForEach(toStream(view), (value) =>
           Effect.sync(() => {
             current = AsyncResult.success(value);
           })
@@ -125,7 +127,7 @@ export function useQuery(
     getEngineRuntime(),
     () => {
       const value = subset();
-      return (engine) => engine.observe(value);
+      return (view) => view.observe(value);
     },
     options
   );
@@ -140,7 +142,7 @@ export const useNamedQuery = (
     getEngineRuntime(),
     () => {
       const { name, args } = query();
-      return (engine) => engine.observeNamed(name, args);
+      return withEngine("useNamedQuery", (engine) => engine.observeNamed(name, args));
     },
     options
   );
@@ -158,7 +160,7 @@ export const useAggregate = (
     getEngineRuntime(),
     () => {
       const value = subset();
-      return (engine) => engine.observeAggregate(value, aggregate);
+      return (view) => Aggregate.observe(view.observe(value), aggregate);
     },
     options
   );
@@ -174,7 +176,7 @@ export const useAggregateGrouped = (
     getEngineRuntime(),
     () => {
       const value = subset();
-      return (engine) => engine.observeAggregateGrouped(value, aggregate, groupBy);
+      return (view) => Aggregate.observeGrouped(view.observe(value), aggregate, groupBy);
     },
     options
   );
@@ -203,10 +205,13 @@ export const useRelated = (
     () => {
       const { registry, collection, subset, names } = inputs();
       return options?.subscribe === true
-        ? // `Stream.unwrap` scopes the auto-subscriptions to the stream's
+        ? // Auto-subscription needs the full engine (subscribe + pull);
+          // `Stream.unwrap` scopes the subscriptions to the stream's
           // lifetime: interrupting the hook's fiber unsubscribes them.
-          (engine) => Stream.unwrap(Related.related(engine, registry, collection, subset, names))
-        : (engine) => Related.observe(engine, registry, collection, subset, names);
+          withEngine("useRelated({ subscribe: true })", (engine) =>
+            Stream.unwrap(Related.related(engine, registry, collection, subset, names))
+          )
+        : (view) => Related.observe(view, registry, collection, subset, names);
     },
     options
   );

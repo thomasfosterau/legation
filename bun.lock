@@ -240,6 +240,7 @@
         "@legation/effect": "workspace:^",
       },
       "devDependencies": {
+        "@legation/browser": "workspace:^",
         "effect": "catalog:",
         "svelte": "^5",
       },

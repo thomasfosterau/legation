@@ -47,11 +47,12 @@ The engine follows the mutation-log/rebase sync model (ADR-0008): named write in
 
 ### Reads
 
-| Term            | Meaning                                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Live query**  | A declarative query (data, not an opaque function) over local collections whose results re-emit when rows it depends on change.                                                            |
-| **Mirror**      | A tab's in-memory copy of its subscribed rows, hydrated from the shared store and kept current by engine broadcasts. Live queries and the optimistic overlay run synchronously against it. |
-| **Engine host** | Where the sync engine runs. In browsers the recommended host is a service worker (the per-origin singleton); the engine itself is host-agnostic.                                           |
+| Term            | Meaning                                                                                                                                                                                                                    |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Live query**  | A declarative query (data, not an opaque function) over local collections whose results re-emit when rows it depends on change.                                                                                            |
+| **Mirror**      | A tab's in-memory copy of its subscribed rows, hydrated from the shared store and kept current by engine broadcasts. Live queries and the optimistic overlay run synchronously against it.                                 |
+| **Engine host** | Where the sync engine runs. In browsers the recommended host is a service worker (the per-origin singleton); the engine itself is host-agnostic.                                                                           |
+| **Client view** | The narrow surface component bindings consume — local reads (query/observe), subscription registration, write intents — satisfied by the engine directly or by a tab's mirror, so components are host-agnostic (ADR-0021). |
 
 ### Server
 

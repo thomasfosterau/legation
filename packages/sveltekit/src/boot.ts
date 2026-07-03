@@ -11,7 +11,7 @@
  * `setEngineRuntime` expects.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { ClientEngine, ClientStore, Hydration, type Transport } from "@legation/effect";
+import { ClientEngine, ClientStore, ClientView, Hydration, type Transport } from "@legation/effect";
 
 /** Options for {@link engineRuntime}. */
 export interface EngineRuntimeOptions {
@@ -43,15 +43,21 @@ const hydratedStore = (
 
 /**
  * Build the engine runtime for the browser: store (snapshot-hydrated when
- * empty) → transport → engine. Hand the result to `setEngineRuntime` from
+ * empty) → transport → engine, with the narrow {@link ClientView} derived on
+ * top (what the bindings consume) alongside the full engine (what engine-only
+ * helpers look up). Hand the result to `setEngineRuntime` from
  * `@legation/svelte`, and dispose it when the app tears down.
  */
 export const engineRuntime = (
   options: EngineRuntimeOptions
-): ManagedRuntime.ManagedRuntime<ClientEngine.ClientEngine, never> =>
+): ManagedRuntime.ManagedRuntime<ClientView.ClientView | ClientEngine.ClientEngine, never> =>
   ManagedRuntime.make(
-    ClientEngine.layer(options.engine).pipe(
-      Layer.provide(options.transport),
-      Layer.provide(hydratedStore(options.store, options.snapshot))
+    ClientView.layer.pipe(
+      Layer.provideMerge(
+        ClientEngine.layer(options.engine).pipe(
+          Layer.provide(options.transport),
+          Layer.provide(hydratedStore(options.store, options.snapshot))
+        )
+      )
     )
   );
