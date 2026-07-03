@@ -238,7 +238,12 @@ export const observeWith = (
             [...targets].map(([collection, target]) =>
               engine.observe(Subset.make({ collection })).pipe(
                 Stream.orDie,
-                Stream.drop(1),
+                // The observer's initial current-rows emission is NOT dropped:
+                // a write landing between `primeIndex` and this subscription
+                // would otherwise be swallowed, leaving the join stale until
+                // the next foreign write. Rebuilding from an unchanged initial
+                // emission re-hydrates to the same join, which `changesWith`
+                // dedups away.
                 Stream.map((rows) => {
                   index.set(collection, groupByField(rows, target.field));
                   return hydrate(strategy, base, index);
