@@ -36,7 +36,9 @@ export default defineConfig({
         // The Svelte bindings mount real components, so this project compiles
         // `.svelte` fixtures and resolves Svelte's client (browser) build.
         extends: true,
-        plugins: [svelte()],
+        // `experimental.async` so fixtures can exercise the binding's
+        // awaitable surface (`Live.promise`) inside <svelte:boundary>.
+        plugins: [svelte({ compilerOptions: { experimental: { async: true } } })],
         resolve: {
           conditions: ["browser"],
         },

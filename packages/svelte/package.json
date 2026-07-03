@@ -46,7 +46,7 @@
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84",
-    "svelte": ">=4"
+    "svelte": ">=5.40"
   },
   "devDependencies": {
     "effect": "catalog:",

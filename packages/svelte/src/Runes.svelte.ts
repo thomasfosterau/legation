@@ -38,6 +38,17 @@ export interface Live<A, E = never> {
    * result is kept with `waiting: true` (stale-while-revalidate).
    */
   readonly current: AsyncResult.AsyncResult<A, E>;
+  /**
+   * The awaitable view of the same result, for Async Svelte
+   * (`experimental.async`): pending until the first data arrives — so
+   * `await rows.promise` in a derived or template suspends the enclosing
+   * `<svelte:boundary>`'s `pending` snippet — then an already-resolved
+   * promise replaced on every emission (and on input change), so awaiting
+   * expressions re-run with fresh rows while Svelte keeps the previous UI
+   * on screen (stale-while-revalidate). A failed stream rejects it, which
+   * the boundary's `failed` snippet catches.
+   */
+  readonly promise: Promise<A>;
 }
 
 /** Options shared by the live hooks. */
@@ -61,6 +72,25 @@ export type LiveError = ClientView.ClientViewError;
  * interrupting it on re-run/unmount. Emissions land in a raw `$state` — the
  * results are engine snapshots, not something to deep-proxy.
  */
+interface Pending<A> {
+  readonly promise: Promise<A>;
+  readonly resolve: (value: A) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+const makePending = <A>(): Pending<A> => {
+  let resolve!: (value: A) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<A>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  // A rejection nobody awaited yet must not crash the process; awaiting
+  // consumers still receive it.
+  promise.catch(() => undefined);
+  return { promise, resolve, reject };
+};
+
 const live = <A, E>(
   runtime: EffectSyncRuntime,
   makeStream: () => (view: ClientView.ClientView) => Stream.Stream<A, E>,
@@ -71,23 +101,53 @@ const live = <A, E>(
       ? AsyncResult.success(options.initial, { waiting: true })
       : AsyncResult.initial(true)
   );
+  // The awaitable twin of `current`: pending until data, an already-resolved
+  // promise afterwards, replaced per emission so awaiting deriveds re-run.
+  let settle: Pending<A> | undefined =
+    options?.initial !== undefined ? undefined : makePending<A>();
+  let promise = $state.raw<Promise<A>>(
+    options?.initial !== undefined ? Promise.resolve(options.initial) : settle!.promise
+  );
+  const emit = (value: A) => {
+    current = AsyncResult.success(value);
+    if (settle !== undefined) {
+      settle.resolve(value);
+      settle = undefined;
+    }
+    promise = Promise.resolve(value);
+  };
+  const fail = (cause: Cause.Cause<E>) => {
+    current = AsyncResult.failure(cause);
+    const error = Cause.squash(cause);
+    if (settle !== undefined) {
+      settle.reject(error);
+      settle = undefined;
+      return;
+    }
+    const rejected = Promise.reject(error);
+    rejected.catch(() => undefined);
+    promise = rejected;
+  };
   $effect(() => {
     const toStream = makeStream();
     current = AsyncResult.waitingFrom(Option.some(untrack(() => current)));
+    // Re-subscribing: awaiting expressions suspend on a fresh pending promise
+    // (Svelte keeps the previous UI on screen) until the new inputs' first
+    // emission — unless nothing was ever emitted, where the original pending
+    // promise keeps waiting.
+    if (settle === undefined) {
+      const next = makePending<A>();
+      settle = next;
+      promise = next.promise;
+    }
     const fiber = runtime.runFork(
       Effect.flatMap(ClientView.ClientView, (view) =>
-        Stream.runForEach(toStream(view), (value) =>
-          Effect.sync(() => {
-            current = AsyncResult.success(value);
-          })
-        )
+        Stream.runForEach(toStream(view), (value) => Effect.sync(() => emit(value)))
       ).pipe(
         Effect.catchCause((cause) =>
           // Interruption is the hook's own teardown, not a failure.
           Cause.hasFails(cause) || Cause.hasDies(cause)
-            ? Effect.sync(() => {
-                current = AsyncResult.failure(cause as Cause.Cause<E>);
-              })
+            ? Effect.sync(() => fail(cause as Cause.Cause<E>))
             : Effect.void
         )
       )
@@ -99,6 +159,9 @@ const live = <A, E>(
   return {
     get current() {
       return current;
+    },
+    get promise() {
+      return promise;
     },
   };
 };
