@@ -2,7 +2,7 @@
  * ServiceWorkerHost
  *
  * The recommended engine host (ADR-0010): runs the ClientEngine inside the
- * per-origin service-worker singleton — engine sync loop + tab-mirror
+ * per-origin service-worker singleton — engine sync loop + mirror
  * serving over a BroadcastChannel. Durable state belongs in the
  * IndexedDbClientStore layer, so a killed worker rehydrates losslessly.
  *
@@ -29,21 +29,21 @@ import { Effect, Scope } from "effect";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 
 export interface ServiceWorkerHostOptions {
-  /** BroadcastChannel name shared with tab mirrors. */
+  /** BroadcastChannel name shared with the mirrors it serves. */
   readonly channelName?: string;
   /**
-   * The collection registry tabs' `related` registrations resolve against
-   * (forwarded to {@link EngineHost.run}). Pass it whenever tabs use
+   * The collection registry mirrors' `related` registrations resolve against
+   * (forwarded to {@link EngineHost.run}). Pass it whenever mirrors use
    * relational reads.
    */
   readonly registry?: Collection.CollectionRegistry;
 }
 
-/** The default channel name; TabMirror setups should use the same one. */
+/** The default channel name; Mirror setups should use the same one. */
 export const defaultChannelName = "legation";
 
 /**
- * Run the host: serve tab mirrors over the broadcast channel and start the
+ * Run the host: serve mirrors over the broadcast channel and start the
  * engine's sync loop (pull on poke, push+pull on reconnect). NEVER returns —
  * both the host and `runSync` fork their fibers into the surrounding scope,
  * so returning would let a caller's `Effect.scoped` tear the whole host down

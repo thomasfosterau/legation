@@ -1,5 +1,5 @@
 /**
- * Tab-side backend outcomes (#36): `TabMirror.mutateWithAck` resolves with the
+ * Tab-side backend outcomes (#36): `Mirror.mutateWithAck` resolves with the
  * mutation's authoritative outcome (applied or permanently rejected), forwarded
  * from the host over the mirror. Wiring mirrors `tab-mirror.test.ts`; the
  * rejecting backend mirrors the engine's `poison-mutations.test.ts`.
@@ -17,7 +17,7 @@ import {
   MutationRejected,
   Mutator,
   SyncServer,
-  TabMirror,
+  Mirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -86,13 +86,13 @@ const makeEngine = Effect.gen(function* () {
   return { engine, store };
 });
 
-describe("TabMirror.mutateWithAck (#36)", () => {
+describe("Mirror.mutateWithAck (#36)", () => {
   it.effect("resolves applied once the host forwards the backend outcome", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tab, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       // The call blocks on the backend outcome, so run it on a fibre and drive
       // the push once the host has journaled it.
@@ -109,9 +109,9 @@ describe("TabMirror.mutateWithAck (#36)", () => {
   it.effect("resolves rejected with the backend reason", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tab, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       const outcome = yield* Effect.forkChild(
         mirror.mutateWithAck("todo/forbidden", { id: "x", title: "doomed", done: false })

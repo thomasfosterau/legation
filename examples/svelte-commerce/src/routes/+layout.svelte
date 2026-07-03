@@ -5,7 +5,7 @@
 
   const { data, children } = $props();
 
-  // The tab's whole data layer is a TabMirror over the service worker's
+  // The tab's whole data layer is a Mirror over the service worker's
   // engine — boot broadcasts the config handshake and registers the shell
   // subsets. SSR renders come entirely from the hooks' `initial` seeds, so
   // the server gets a loud stub instead of a runtime.

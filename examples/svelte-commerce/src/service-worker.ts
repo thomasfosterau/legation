@@ -4,7 +4,7 @@
  *
  * The ClientEngine lives HERE, over IndexedDB (durable journal + rows, all
  * IndexedDB access off the main thread) and the WebSocket→HTTP transport
- * stack. Tabs hold no engine at all: each runs a thin `TabMirror` over a
+ * stack. Tabs hold no engine at all: each runs a thin `Mirror` over a
  * BroadcastChannel, receiving materialized rows and resolved joins from
  * this host (`ServiceWorkerHost`), so the main thread does little besides
  * rendering. A killed worker rehydrates losslessly from IndexedDB.

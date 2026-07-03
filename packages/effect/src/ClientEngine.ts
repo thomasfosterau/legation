@@ -313,7 +313,7 @@ export interface ClientEngine {
   ) => Effect.Effect<void, MutatorError | StoreError>;
   /**
    * Run a mutator whose args are already in encoded (wire) form — the
-   * entry point for remote surfaces (tab mirrors, devtools) forwarding
+   * entry point for remote surfaces (mirrors, devtools) forwarding
    * mutations over a carrier. Args are validated by decoding.
    */
   readonly mutateEncoded: (

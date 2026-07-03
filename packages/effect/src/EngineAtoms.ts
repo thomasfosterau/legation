@@ -11,7 +11,7 @@
  * they do not re-implement reactivity.
  *
  * For binding against a *resolved* observe-source instance (a `ClientEngine`
- * value, or a browser `TabMirror`) rather than the engine layer, see
+ * value, or a browser `Mirror`) rather than the engine layer, see
  * `LiveQuery`, which wraps `source.observe(subset)` with the registry's
  * default runtime.
  */

@@ -1,5 +1,5 @@
 /**
- * The engine host, host-agnostically: the same composition serves tab
+ * The engine host, host-agnostically: the same composition serves
  * mirrors from the service worker (production — see src/service-worker.ts)
  * and from a dev tab's main thread (Vite's dev service workers can't
  * evaluate module graphs containing dynamic imports, so `+layout.svelte`
@@ -61,7 +61,7 @@ const transportLayer = (options: HostOptions): Layer.Layer<Transport.ClientTrans
     })
   );
 
-/** Serve tab mirrors + run the sync loop until the scope closes. */
+/** Serve mirrors + run the sync loop until the scope closes. */
 export const runHost = (options: HostOptions): Effect.Effect<never> =>
   ServiceWorkerHost.run({ registry }).pipe(
     Effect.provide(

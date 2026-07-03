@@ -13,16 +13,16 @@
  * to have one per window; it holds no durable state (a mirror that dies
  * loses nothing — a new one re-registers and rehydrates) and can only
  * answer for registered keys (hence observing auto-registers). Mutations, subset subscriptions, named-query registrations,
- * and relational (`related`) registrations flow tab → host;
+ * and relational (`related`) registrations flow mirror → host;
  * acknowledgements, mirror updates (materialized subset rows, already
  * overlay-applied by the engine), and resolved relational updates flow
- * host → tabs.
+ * host → mirrors.
  *
- * Registrations carry a `tabId` so the host can refcount them across tabs
- * (tear an engine registration down only when its last tab leaves) and
- * release everything a departing tab held via `Disconnect`.
+ * Registrations carry a `mirrorId` so the host can refcount them across
+ * mirrors (tear an engine registration down only when the last mirror
+ * leaves) and release everything a departing mirror held via `Disconnect`.
  *
- * Mutator args travel in encoded (wire) form: the tab validates/encodes
+ * Mutator args travel in encoded (wire) form: the mirror validates/encodes
  * against its registry before posting, the host re-validates by decoding
  * (`ClientEngine.mutateEncoded`). Named-query args travel encoded the same
  * way (the host's engine decodes against its query registry).
@@ -47,49 +47,49 @@ export const relatedKey = (
   names: ReadonlyArray<string>
 ): string => `related:${collection}:${Subset.hash(subset)}:${[...names].sort().join("+")}`;
 
-// ─── Tab → host ──────────────────────────────────────────────────────────────
+// ─── Mirror → host ────────────────────────────────────────────────────────────
 
-export type TabMessage =
+export type MirrorMessage =
   | {
       readonly _tag: "Mutate";
       readonly requestId: number;
       readonly mutator: string;
       readonly args: unknown;
     }
-  | { readonly _tag: "Subscribe"; readonly tabId: string; readonly subset: Subset.Subset }
-  | { readonly _tag: "Unsubscribe"; readonly tabId: string; readonly subset: Subset.Subset }
+  | { readonly _tag: "Subscribe"; readonly mirrorId: string; readonly subset: Subset.Subset }
+  | { readonly _tag: "Unsubscribe"; readonly mirrorId: string; readonly subset: Subset.Subset }
   | {
       readonly _tag: "SubscribeNamed";
-      readonly tabId: string;
+      readonly mirrorId: string;
       readonly name: string;
       readonly args: unknown;
     }
   | {
       readonly _tag: "UnsubscribeNamed";
-      readonly tabId: string;
+      readonly mirrorId: string;
       readonly name: string;
       readonly args: unknown;
     }
   | {
       readonly _tag: "SubscribeRelated";
-      readonly tabId: string;
+      readonly mirrorId: string;
       readonly collection: string;
       readonly subset: Subset.Subset;
       readonly names: ReadonlyArray<string>;
     }
   | {
       readonly _tag: "UnsubscribeRelated";
-      readonly tabId: string;
+      readonly mirrorId: string;
       readonly collection: string;
       readonly subset: Subset.Subset;
       readonly names: ReadonlyArray<string>;
     }
-  /** A tab leaving: release every subscription it held. */
-  | { readonly _tag: "Disconnect"; readonly tabId: string }
-  /** Liveness ping: lets the host reclaim subsets from tabs that crash. */
-  | { readonly _tag: "Heartbeat"; readonly tabId: string };
+  /** A mirror leaving: release every subscription it held. */
+  | { readonly _tag: "Disconnect"; readonly mirrorId: string }
+  /** Liveness ping: lets the host reclaim subsets from mirrors that crash. */
+  | { readonly _tag: "Heartbeat"; readonly mirrorId: string };
 
-export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
+export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Mutate"),
     requestId: Schema.Number,
@@ -98,45 +98,45 @@ export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
   }),
   Schema.Struct({
     _tag: Schema.tag("Subscribe"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     subset: Subset.SubsetSchema,
   }),
   Schema.Struct({
     _tag: Schema.tag("Unsubscribe"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     subset: Subset.SubsetSchema,
   }),
   Schema.Struct({
     _tag: Schema.tag("SubscribeNamed"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     name: Schema.String,
     args: Schema.Unknown,
   }),
   Schema.Struct({
     _tag: Schema.tag("UnsubscribeNamed"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     name: Schema.String,
     args: Schema.Unknown,
   }),
   Schema.Struct({
     _tag: Schema.tag("SubscribeRelated"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     collection: Schema.String,
     subset: Subset.SubsetSchema,
     names: Schema.Array(Schema.String),
   }),
   Schema.Struct({
     _tag: Schema.tag("UnsubscribeRelated"),
-    tabId: Schema.String,
+    mirrorId: Schema.String,
     collection: Schema.String,
     subset: Subset.SubsetSchema,
     names: Schema.Array(Schema.String),
   }),
-  Schema.Struct({ _tag: Schema.tag("Disconnect"), tabId: Schema.String }),
-  Schema.Struct({ _tag: Schema.tag("Heartbeat"), tabId: Schema.String }),
-]) as Schema.Codec<TabMessage>;
+  Schema.Struct({ _tag: Schema.tag("Disconnect"), mirrorId: Schema.String }),
+  Schema.Struct({ _tag: Schema.tag("Heartbeat"), mirrorId: Schema.String }),
+]) as Schema.Codec<MirrorMessage>;
 
-// ─── Host → tabs ─────────────────────────────────────────────────────────────
+// ─── Host → mirrors ───────────────────────────────────────────────────────────
 
 export interface MirrorRow {
   readonly id: string;
@@ -152,9 +152,9 @@ export interface MirrorRelatedRow {
 
 export type HostMessage =
   /**
-   * Broadcast once when a host starts serving. Tabs answer by re-posting
+   * Broadcast once when a host starts serving. Mirrors answer by re-posting
    * every registration they hold, so subscriptions survive a host that
-   * (re)starts after the tab — a killed service worker, or a dev-mode tab
+   * (re)starts after the mirror — a killed service worker, or a client context
    * that raced the worker's boot.
    */
   | { readonly _tag: "HostReady" }
@@ -163,7 +163,7 @@ export type HostMessage =
   /**
    * The backend's authoritative outcome for a forwarded mutation, correlated by
    * `requestId`. Sent in addition to `MutateAck` (which still fires on journal),
-   * so a tab can await the backend verdict via `TabMirror.mutateWithAck`.
+   * so a mirror can await the backend verdict via `Mirror.mutateWithAck`.
    */
   | {
       readonly _tag: "MutateSettled";
@@ -236,11 +236,11 @@ export const relatedUpdate = (
   rows: rows.map((row) => ({ id: row.id, value: row.value, related: row.related })),
 });
 
-const decodeTab = Schema.decodeUnknownEffect(TabMessageSchema);
+const decodeTab = Schema.decodeUnknownEffect(MirrorMessageSchema);
 const decodeHost = Schema.decodeUnknownEffect(HostMessageSchema);
 
-/** Decode an inbound tab message; `undefined` for foreign traffic. */
-export const decodeTabMessage = (input: unknown): Effect.Effect<TabMessage | undefined> =>
+/** Decode an inbound mirror message; `undefined` for foreign traffic. */
+export const decodeMirrorMessage = (input: unknown): Effect.Effect<MirrorMessage | undefined> =>
   decodeTab(input).pipe(Effect.orElseSucceed(() => undefined));
 
 /** Decode an inbound host message; `undefined` for foreign traffic. */

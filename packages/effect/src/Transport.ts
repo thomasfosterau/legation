@@ -4,7 +4,7 @@
  * The customisable carrier seam for protocol messages (CONTEXT.md: "sync
  * transport"). Core defines the service interfaces and an in-memory pair;
  * the RPC-backed implementation (RpcTransport.ts) is the shipped default,
- * and alternative carriers (HttpApi + SSE, BroadcastChannel tab↔service-
+ * and alternative carriers (HttpApi + SSE, BroadcastChannel mirror↔service-
  * worker, bespoke) implement the same interfaces.
  */
 

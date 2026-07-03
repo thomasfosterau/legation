@@ -5,10 +5,10 @@
  * `observe`), subscription registration, write intents, named queries, and
  * auto-subscribing relational reads — abstracted over *where* the engine
  * runs. A main-thread {@link ClientEngine} satisfies it via
- * {@link fromEngine}; a tab's mirror (`TabMirror` in `@legation/browser`,
+ * {@link fromEngine}; a client context's mirror (`Mirror`,
  * whose shape this interface is drawn from) satisfies it structurally. The
  * same bindings therefore drive both hosts of ADR-0010's deployment —
- * engine-in-the-tab and engine-in-the-service-worker — without changing
+ * engine-in-the-UI-context and engine-in-the-service-worker — without changing
  * component code (ADR-0021).
  *
  * `mutateWithAck` has awaited-outcome semantics (it resolves with the
@@ -18,7 +18,7 @@
  * Named queries and `related` cross the mirror protocol since ADR-0021's
  * follow-up landed: a mirror forwards the registration to its host, which
  * owns the server round-trip (and, for `related`, the reconcile loop and the
- * join itself — tabs receive resolved rows, keeping join work off the main
+ * join itself — mirrors receive resolved rows, keeping join work off the main
  * thread). Engine-only capabilities that remain (explicit push/pull, undo
  * history) still require the full engine from context.
  */

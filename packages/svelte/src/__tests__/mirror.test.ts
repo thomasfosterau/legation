@@ -1,16 +1,16 @@
 /**
  * The same components over a service-worker-shaped deployment (ADR-0021):
- * the runtime's ClientView is a TabMirror talking to an EngineHost over a
+ * the runtime's ClientView is a Mirror talking to an EngineHost over a
  * loopback channel — no ClientEngine in the runtime at all. `query`,
  * `aggregate` (derived over the view), and `getMutate` behave identically to
- * the main-thread engine, proving TabMirror satisfies the ClientView surface
+ * the main-thread engine, proving Mirror satisfies the ClientView surface
  * structurally.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { ClientEngine, ClientView, Subset } from "@legation/effect";
-import { EngineHost, MirrorChannel, TabMirror } from "@legation/effect";
+import { EngineHost, MirrorChannel, Mirror } from "@legation/effect";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
@@ -34,9 +34,9 @@ const makeMirrorRuntime = (): EffectSyncRuntime =>
         // before the mirror posts its first message. The registry lets the
         // host resolve tabs' `related` registrations.
         yield* EngineHost.run({ channel: pair.host, engine, registry: collections });
-        // TabMirror satisfies ClientView structurally — this return is the
+        // Mirror satisfies ClientView structurally — this return is the
         // type-level proof.
-        return yield* TabMirror.make({ channel: pair.tab, mutators });
+        return yield* Mirror.make({ channel: pair.mirror, mutators });
       })
     ).pipe(Layer.provide(engineLayer))
   );

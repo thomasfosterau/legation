@@ -1,10 +1,12 @@
 /**
- * TabMirror
+ * Mirror
  *
- * The tab side of ADR-0010: an in-memory mirror of subscribed subsets,
+ * The consumer side of ADR-0010: an in-memory copy of subscribed subsets
+ * held by a client context — a browser tab, an Electron window, an
+ * extension, a CLI instance —
  * hydrated and kept current by engine-host broadcasts, with queries served
  * synchronously from the mirror. Mutations validate locally against the
- * shared mutator registry (fail fast in the tab), then forward to the host
+ * shared mutator registry (fail fast in the mirror), then forward to the host
  * journal in encoded form and await the host's acknowledgement.
  */
 
@@ -30,18 +32,18 @@ import {
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
-export interface TabMirrorOptions {
+export interface MirrorOptions {
   readonly channel: MirrorChannel;
   /** The shared mutator registry (same definitions the host engine runs). */
   readonly mutators: Mutator.MutatorRegistry;
   /**
    * How often to send a liveness heartbeat to the host. Keep it shorter
-   * than the host's `tabTimeout` so a live tab is never reclaimed. Defaults
+   * than the host's `mirrorTimeout` so a live mirror is never reclaimed. Defaults
    * to 10 seconds.
    */
   readonly heartbeatInterval?: Duration.Input;
   /**
-   * Capacity of the bounded change hub (#44). A stalled tab observer cannot
+   * Capacity of the bounded change hub (#44). A stalled observer cannot
    * make the hub grow without limit: at capacity the hub drops the newest
    * subset keys, and the observer collapses the resulting seq gap into a full
    * re-read of its subset — lossless because the newest rows live in the
@@ -53,7 +55,7 @@ export interface TabMirrorOptions {
 /**
  * Default bound for the mirror's change hub. Large enough that no realistic
  * burst of mirror updates fills it under normal consumption, so behaviour is
- * identical to the old unbounded hub until a tab observer genuinely stalls.
+ * identical to the old unbounded hub until an observer genuinely stalls.
  */
 const DEFAULT_CHANGE_HUB_CAPACITY = 1024;
 
@@ -76,7 +78,7 @@ const outcomeOf = (
     ? { _tag: "applied" }
     : { _tag: "rejected", reason: message.reason ?? "" };
 
-export interface TabMirror {
+export interface Mirror {
   /** Validate args locally, forward to the host journal, await the ack. */
   readonly mutate: (
     mutator: string,
@@ -116,7 +118,7 @@ export interface TabMirror {
   ) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
   /**
    * Auto-subscribing relational read: the HOST syncs the base and narrowed
-   * foreign subsets and computes the join — this tab receives resolved rows
+   * foreign subsets and computes the join — the mirror receives resolved rows
    * (main-thread work stays minimal). The registration is released when the
    * scope closes. The `registry` parameter exists for {@link ClientView}
    * signature parity; the host resolves against its own registry.
@@ -129,29 +131,30 @@ export interface TabMirror {
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
 }
 
-export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never, Scope.Scope> =>
+export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { channel, mutators } = options;
-    const tabId = crypto.randomUUID();
+    const mirrorId = crypto.randomUUID();
     const inbox = yield* channel.subscribe;
-    // Release every subscription this tab holds when its scope closes — the
-    // host refcounts subsets by tab and tears down the last one's fiber.
+    // Release every subscription this mirror holds when its scope closes —
+    // the host refcounts subsets by mirror and tears down the last one's fiber.
     yield* Effect.addFinalizer(() =>
-      channel.post({ _tag: "Disconnect", tabId }).pipe(Effect.ignore)
+      channel.post({ _tag: "Disconnect", mirrorId }).pipe(Effect.ignore)
     );
-    // Heartbeat so the host keeps this tab's subsets alive (and reclaims
-    // them if the tab crashes without disconnecting). Fires immediately,
+    // Heartbeat so the host keeps this mirror's subsets alive (and reclaims
+    // them if the mirror's context crashes without disconnecting). Fires immediately,
     // then on the interval.
     const heartbeatInterval = options.heartbeatInterval ?? "10 seconds";
     yield* Effect.forkScoped(
       Effect.forever(
         channel
-          .post({ _tag: "Heartbeat", tabId })
+          .post({ _tag: "Heartbeat", mirrorId })
           .pipe(Effect.ignore, Effect.andThen(Effect.sleep(heartbeatInterval)))
       )
     );
-    // This tab's interest ledger, keyed by mirror key. The host refcounts by
-    // TAB (a set), so this side must speak with one voice per key: Subscribe
+    // This mirror's interest ledger, keyed by subscription key. The host
+    // refcounts by MIRROR (a set), so this side must speak with one voice
+    // per key: Subscribe
     // when the first local interest appears (an explicit `subscribe` or an
     // observer's stream starting), Unsubscribe only when the LAST one ends.
     // The ledger doubles as the replay set for a host that (re)starts after
@@ -161,14 +164,17 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
       readonly observers: number;
       /** Pinned by an explicit `subscribe` (survives observer teardowns). */
       readonly explicit: boolean;
-      readonly subscribe: MirrorProtocol.TabMessage;
-      readonly unsubscribe: MirrorProtocol.TabMessage;
+      readonly subscribe: MirrorProtocol.MirrorMessage;
+      readonly unsubscribe: MirrorProtocol.MirrorMessage;
     }
     const interests = yield* Ref.make(new Map<string, Interest>());
     /** Add one unit of interest; posts Subscribe when it is the first. */
     const acquireInterest = (
       key: string,
-      messages: { subscribe: MirrorProtocol.TabMessage; unsubscribe: MirrorProtocol.TabMessage },
+      messages: {
+        subscribe: MirrorProtocol.MirrorMessage;
+        unsubscribe: MirrorProtocol.MirrorMessage;
+      },
       kind: "observer" | "explicit"
     ) =>
       Ref.modify(interests, (map) => {
@@ -335,7 +341,7 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
     const readRelated = (key: string) =>
       Ref.get(relatedRows).pipe(Effect.map((map) => map.get(key) ?? []));
 
-    // Validate + encode args against the shared registry (fail fast in the tab;
+    // Validate + encode args against the shared registry (fail fast in the mirror;
     // the host re-validates by decoding), then forward as a `Mutate` message and
     // register a deferred so the correlated reply resolves the caller.
     const encodeArgs = (mutator: string, args: unknown) =>
@@ -421,8 +427,8 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         acquireInterest(
           Subset.hash(subset),
           {
-            subscribe: { _tag: "Subscribe", tabId, subset },
-            unsubscribe: { _tag: "Unsubscribe", tabId, subset },
+            subscribe: { _tag: "Subscribe", mirrorId, subset },
+            unsubscribe: { _tag: "Unsubscribe", mirrorId, subset },
           },
           "explicit"
         ),
@@ -431,8 +437,8 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         acquireInterest(
           MirrorProtocol.namedKey(name, args),
           {
-            subscribe: { _tag: "SubscribeNamed", tabId, name, args },
-            unsubscribe: { _tag: "UnsubscribeNamed", tabId, name, args },
+            subscribe: { _tag: "SubscribeNamed", mirrorId, name, args },
+            unsubscribe: { _tag: "UnsubscribeNamed", mirrorId, name, args },
           },
           "explicit"
         ),
@@ -451,8 +457,8 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
             acquireInterest(
               key,
               {
-                subscribe: { _tag: "Subscribe", tabId, subset },
-                unsubscribe: { _tag: "Unsubscribe", tabId, subset },
+                subscribe: { _tag: "Subscribe", mirrorId, subset },
+                unsubscribe: { _tag: "Unsubscribe", mirrorId, subset },
               },
               "observer"
             ),
@@ -467,8 +473,8 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
             acquireInterest(
               key,
               {
-                subscribe: { _tag: "SubscribeNamed", tabId, name, args },
-                unsubscribe: { _tag: "UnsubscribeNamed", tabId, name, args },
+                subscribe: { _tag: "SubscribeNamed", mirrorId, name, args },
+                unsubscribe: { _tag: "UnsubscribeNamed", mirrorId, name, args },
               },
               "observer"
             ),
@@ -484,14 +490,14 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
             {
               subscribe: {
                 _tag: "SubscribeRelated",
-                tabId,
+                mirrorId,
                 collection: collectionName,
                 subset,
                 names,
               },
               unsubscribe: {
                 _tag: "UnsubscribeRelated",
-                tabId,
+                mirrorId,
                 collection: collectionName,
                 subset,
                 names,

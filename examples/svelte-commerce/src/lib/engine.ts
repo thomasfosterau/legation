@@ -2,7 +2,7 @@
  * Tab boot — the thin side of ADR-0010's deployment.
  *
  * The engine, its IndexedDB store, and the sync transport all live in the
- * service worker (src/service-worker.ts). A tab holds only a `TabMirror`
+ * service worker (src/service-worker.ts). A tab holds only a `Mirror`
  * over the shared BroadcastChannel: the bindings' runtime provides it as
  * the `ClientView`, so every hook — queries, aggregates, named queries,
  * auto-subscribing joins, mutations — talks to the worker and the main
@@ -10,12 +10,12 @@
  *
  * Boot also (1) broadcasts the config handshake that starts the worker's
  * engine (the worker can't read the client-group cookie) and (2) registers
- * the shell's subsets — subscriptions are client state, refcounted per tab
+ * the shell's subsets — subscriptions are client state, refcounted per mirror
  * by the host.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { ClientView } from "@legation/effect";
-import { TabMirror } from "@legation/effect";
+import { Mirror } from "@legation/effect";
 import { BroadcastMirrorChannel, ServiceWorkerHost } from "@legation/browser";
 import type { Runtime } from "@legation/svelte";
 type EffectSyncRuntime = Runtime.EffectSyncRuntime;
@@ -39,8 +39,8 @@ export const boot = (options: {
         const channel = yield* BroadcastMirrorChannel.make(
           ServiceWorkerHost.defaultChannelName
         );
-        // TabMirror satisfies ClientView structurally (ADR-0021).
-        return yield* TabMirror.make({ channel, mutators });
+        // Mirror satisfies ClientView structurally (ADR-0021).
+        return yield* Mirror.make({ channel, mutators });
       })
     )
   );

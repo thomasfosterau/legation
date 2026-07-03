@@ -4,7 +4,7 @@
  * The query stores and the mutate helpers run their effects through a
  * `ManagedRuntime` that provides a {@link ClientView} — the narrow engine
  * surface both hosts satisfy, so the same components work over a main-thread
- * `ClientEngine` and over a service-worker-hosted engine's `TabMirror`
+ * `ClientEngine` and over a service-worker-hosted engine's `Mirror`
  * (ADR-0021). The app builds the runtime and hands it to the component tree
  * via {@link setEngineRuntime}; the helpers read it back with
  * {@link getEngineRuntime}, so they must be called during component
