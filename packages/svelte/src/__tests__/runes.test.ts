@@ -6,7 +6,7 @@
  * `subscribe: true` variant that syncs its own subsets.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { flushSync, mount, unmount } from "svelte";
+import { mount, unmount } from "svelte";
 import { Subset } from "@legation/effect";
 import RunesQueryHarness from "./fixtures/RunesQueryHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
