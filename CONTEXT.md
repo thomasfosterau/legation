@@ -2,7 +2,7 @@
 
 The legation monorepo implements a data synchronization engine built on Effect. This glossary defines the project's vocabulary; use these terms (not synonyms) in code, issues, and docs.
 
-Coming from TanStack Query, SwiftData, SWR, or Apollo? [`docs/coming-from-tanstack-query.md`](docs/coming-from-tanstack-query.md) translates those libraries' vocabulary into the terms below. This file is the internal law; that guide is the outward-facing translation. For how legation relates to Convex, Zero, TanStack DB, Replicache, and ElectricSQL, see [`docs/comparisons/`](docs/comparisons/README.md).
+Coming from TanStack Query, SwiftData, SWR, or Apollo? [`docs/coming-from-tanstack-query.md`](docs/coming-from-tanstack-query.md) translates those libraries' vocabulary into the terms below. This file is the internal law; that guide is the outward-facing translation. For how legation relates to Convex, Zero, TanStack DB, Replicache, ElectricSQL, and the native-platform stacks (SwiftData, Room), see [`docs/comparisons/`](docs/comparisons/README.md).
 
 The engine follows the mutation-log/rebase sync model (ADR-0008): named write intents flow up, server-computed state patches flow down, and the client rebases pending intents on top of authoritative state.
 

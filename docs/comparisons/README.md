@@ -15,6 +15,11 @@ one document per system, each honest about where the other side wins:
 - [**Replicache + ElectricSQL**](replicache-electric.md) — the two halves
   (write path, read path) legation integrates, including the genealogy:
   ADR-0008 descends from Replicache's design.
+- [**SwiftData + CloudKit / Room + Firestore**](swiftdata-room.md) — the
+  native platforms' local-store-with-live-queries frameworks: the read
+  model legation shares, the state-based last-writer-wins sync it doesn't,
+  and the web-only platform reality (ADR-0012/0013 withdrawn; ADR-0017
+  spec export for bespoke native clients).
 
 Vocabulary in these documents follows [`CONTEXT.md`](../../CONTEXT.md);
 the architecture decisions they cite live in [`docs/adr/`](../adr/). For a
