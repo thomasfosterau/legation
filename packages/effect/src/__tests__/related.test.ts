@@ -249,6 +249,48 @@ describe("Related.query / observe", () => {
       )
     );
   }, 10000);
+
+  // Regression: a foreign-row write landing
+  // between the join's index priming and its foreign observers subscribing
+  // must not be lost. The write happens inside the consumer of the FIRST
+  // emission — strictly before the concat proceeds to the merged foreign
+  // observers — which an initial-emission drop would swallow, leaving the
+  // join stale until the next foreign write.
+  it("does not lose a foreign write racing the observer subscription", async () => {
+    const settle = Effect.sleep(Duration.millis(100));
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handler = yield* makeServer;
+          const { engine } = yield* makeClient(handler, "race");
+          yield* seed(engine);
+          yield* syncAll(engine);
+
+          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(
+              Related.observe(engine, registry, "issues", issues, ["author"]),
+              (rows) =>
+                Effect.gen(function* () {
+                  const names = rows
+                    .map((row) => (row.related.author as Person | null)?.name ?? "nobody")
+                    .join(",");
+                  const priors = yield* Ref.getAndUpdate(seen, (acc) => [...acc, names]);
+                  if (priors.length === 0) {
+                    yield* engine.mutate("person/set", { id: "p1", name: "Grace" });
+                  }
+                })
+            )
+          );
+          yield* settle;
+
+          const emissions = yield* Ref.get(seen);
+          expect(emissions[0]).toBe("Ada,Ada");
+          expect(emissions[emissions.length - 1]).toBe("Grace,Grace");
+        })
+      )
+    );
+  }, 10000);
 });
 
 describe("Related.related", () => {
