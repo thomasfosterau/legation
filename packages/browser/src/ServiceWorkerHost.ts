@@ -24,7 +24,7 @@
  * ```
  */
 
-import { ClientEngine } from "@legation/effect";
+import { ClientEngine, type Collection } from "@legation/effect";
 import { Effect, Scope } from "effect";
 import * as EngineHost from "./EngineHost.js";
 import * as MirrorChannel from "./MirrorChannel.js";
@@ -32,6 +32,12 @@ import * as MirrorChannel from "./MirrorChannel.js";
 export interface ServiceWorkerHostOptions {
   /** BroadcastChannel name shared with tab mirrors. */
   readonly channelName?: string;
+  /**
+   * The collection registry tabs' `related` registrations resolve against
+   * (forwarded to {@link EngineHost.run}). Pass it whenever tabs use
+   * relational reads.
+   */
+  readonly registry?: Collection.CollectionRegistry;
 }
 
 /** The default channel name; TabMirror setups should use the same one. */
@@ -50,6 +56,10 @@ export const run = (
     const channel = yield* MirrorChannel.makeBroadcastChannel(
       options?.channelName ?? defaultChannelName
     );
-    yield* EngineHost.run({ channel, engine });
+    yield* EngineHost.run({
+      channel,
+      engine,
+      ...(options?.registry ? { registry: options.registry } : {}),
+    });
     yield* engine.runSync.pipe(Effect.ignore);
   });
