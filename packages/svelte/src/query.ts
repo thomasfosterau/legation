@@ -9,9 +9,8 @@
  * component re-renders on every local change (mutation, push ack, pull/rebase).
  *
  * The stores run over the runtime's {@link ClientView} — a main-thread engine
- * or a tab mirror equally (ADR-0021). `namedQuery` is engine-only (a named
- * subscription registers server-side through the engine) and dies with an
- * actionable error over a mirror-only runtime.
+ * or a tab mirror equally (ADR-0021), including `namedQuery` and `related`
+ * (a mirror forwards the registration to its host over the protocol).
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
@@ -23,7 +22,7 @@ import {
   Related,
   type Subset,
 } from "@legation/effect";
-import { getEngineRuntime, withEngine, type EffectSyncRuntime } from "./runtime.js";
+import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */
 export type Rows = ReadonlyArray<ClientEngine.LocalRow>;
@@ -57,13 +56,9 @@ export function query(subset: Subset.Subset): Readable<Rows> {
   return makeStore(getEngineRuntime(), EMPTY, (view) => view.observe(subset));
 }
 
-/** Live result of a named query (Query.ts). Engine-only (see module docs). */
+/** Live result of a named query (Query.ts), over either view host. */
 export const namedQuery = (name: string, args: unknown): Readable<Rows> =>
-  makeStore(
-    getEngineRuntime(),
-    EMPTY,
-    withEngine("namedQuery", (engine) => engine.observeNamed(name, args))
-  );
+  makeStore(getEngineRuntime(), EMPTY, (view) => view.observeNamed(name, args));
 
 /**
  * Live aggregate over a subset (count/sum/min/max/avg), re-emitting only when

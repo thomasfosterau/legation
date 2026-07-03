@@ -10,7 +10,9 @@
 
 import {
   ClientEngine,
+  type Collection,
   MutatorError,
+  type Related,
   Subset,
   Telemetry,
   TransportError,
@@ -95,10 +97,39 @@ export interface TabMirror {
   /** Register a subset with the host; rows arrive as mirror updates. */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
+  /**
+   * Register a named query with the host (which owns the server-authoritative
+   * resolution); results arrive as mirror updates under the named key.
+   */
+  readonly subscribeQuery: (name: string, args: unknown) => Effect.Effect<void, TransportError>;
+  readonly unsubscribeQuery: (name: string, args: unknown) => Effect.Effect<void, TransportError>;
   /** The mirror's current rows for a subset (empty until hydrated). */
   readonly query: (subset: Subset.Subset) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
+  /** The mirror's current rows for a named query (empty until hydrated). */
+  readonly queryNamed: (
+    name: string,
+    args: unknown
+  ) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
   /** Emits the current rows now and on every mirror update for the subset. */
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /** Emits the named query's current rows now and on every mirror update. */
+  readonly observeNamed: (
+    name: string,
+    args: unknown
+  ) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /**
+   * Auto-subscribing relational read: the HOST syncs the base and narrowed
+   * foreign subsets and computes the join — this tab receives resolved rows
+   * (main-thread work stays minimal). The registration is released when the
+   * scope closes. The `registry` parameter exists for {@link ClientView}
+   * signature parity; the host resolves against its own registry.
+   */
+  readonly related: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    names: ReadonlyArray<string>
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
 }
 
 export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never, Scope.Scope> =>
@@ -123,6 +154,9 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
       )
     );
     const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
+    // Resolved relational rows, keyed by the host's related key. Kept apart
+    // from `rows` because the row shape differs (base value + resolved names).
+    const relatedRows = yield* Ref.make(new Map<string, ReadonlyArray<Related.RelatedRow>>());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -190,6 +224,17 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
                     message.rows.map((row) => ({ id: row.id, value: row.value }))
                   )
                 ).pipe(Effect.andThen(publishKey(message.key)));
+              case "RelatedUpdate":
+                return Ref.update(relatedRows, (map) =>
+                  new Map(map).set(
+                    message.key,
+                    message.rows.map((row) => ({
+                      id: row.id,
+                      value: row.value,
+                      related: row.related as Record<string, Related.RelatedValue>,
+                    }))
+                  )
+                ).pipe(Effect.andThen(publishKey(message.key)));
               case "MutateAck":
                 return resolveIn(pending, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, undefined)
@@ -220,6 +265,9 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
 
     const query = (subset: Subset.Subset) =>
       Ref.get(rows).pipe(Effect.map((map) => map.get(Subset.hash(subset)) ?? []));
+    const readKey = (key: string) => Ref.get(rows).pipe(Effect.map((map) => map.get(key) ?? []));
+    const readRelated = (key: string) =>
+      Ref.get(relatedRows).pipe(Effect.map((map) => map.get(key) ?? []));
 
     // Validate + encode args against the shared registry (fail fast in the tab;
     // the host re-validates by decoding), then forward as a `Mutate` message and
@@ -255,6 +303,41 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         return yield* Deferred.await(deferred);
       });
 
+    // Emits `read`'s current value now and again whenever `key` changes on the
+    // hub. Decide whether one sequenced key warrants re-emitting: skip a
+    // stale/duplicate seq; on a gap (a dropped key) refresh (the dropped key
+    // might have been ours — the backing Ref holds latest); otherwise emit
+    // only when our own key changed. Under no pressure (contiguous seqs) this
+    // is exactly a key-filter.
+    const observeKey = <A>(key: string, read: Effect.Effect<A>): Stream.Stream<A> => {
+      const decide = (
+        lastSeenRef: Ref.Ref<number>,
+        item: SeqKey
+      ): Effect.Effect<Option.Option<A>> =>
+        Effect.gen(function* () {
+          const lastSeen = yield* Ref.get(lastSeenRef);
+          if (item.seq <= lastSeen) return Option.none();
+          const gapped = item.seq > lastSeen + 1;
+          yield* Ref.set(lastSeenRef, item.seq);
+          if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
+          return gapped || item.key === key ? Option.some(yield* read) : Option.none();
+        });
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          const startSeq = yield* Ref.get(keySeq);
+          const lastSeenRef = yield* Ref.make(startSeq);
+          return Stream.concat(
+            Stream.fromEffect(read),
+            Stream.fromPubSub(keyHub).pipe(
+              Stream.mapEffect((item) => decide(lastSeenRef, item)),
+              Stream.filter(Option.isSome),
+              Stream.map((option) => option.value)
+            )
+          );
+        })
+      );
+    };
+
     return {
       mutate: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
@@ -266,40 +349,34 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         ),
       subscribe: (subset) => channel.post({ _tag: "Subscribe", tabId, subset }),
       unsubscribe: (subset) => channel.post({ _tag: "Unsubscribe", tabId, subset }),
+      subscribeQuery: (name, args) => channel.post({ _tag: "SubscribeNamed", tabId, name, args }),
+      unsubscribeQuery: (name, args) =>
+        channel.post({ _tag: "UnsubscribeNamed", tabId, name, args }),
       query,
-      observe: (subset) => {
-        const key = Subset.hash(subset);
-        // Decide whether one sequenced key warrants re-emitting this subset's
-        // rows: skip a stale/duplicate seq; on a gap (a dropped key) refresh
-        // (the dropped key might have been ours — the `rows` Ref holds latest);
-        // otherwise emit only when our own key changed. Under no pressure
-        // (contiguous seqs) this is exactly the old key-filter behaviour.
-        const decide = (
-          lastSeenRef: Ref.Ref<number>,
-          item: SeqKey
-        ): Effect.Effect<Option.Option<ReadonlyArray<ClientEngine.LocalRow>>> =>
-          Effect.gen(function* () {
-            const lastSeen = yield* Ref.get(lastSeenRef);
-            if (item.seq <= lastSeen) return Option.none();
-            const gapped = item.seq > lastSeen + 1;
-            yield* Ref.set(lastSeenRef, item.seq);
-            if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
-            return gapped || item.key === key ? Option.some(yield* query(subset)) : Option.none();
-          });
-        return Stream.unwrap(
-          Effect.gen(function* () {
-            const startSeq = yield* Ref.get(keySeq);
-            const lastSeenRef = yield* Ref.make(startSeq);
-            return Stream.concat(
-              Stream.fromEffect(query(subset)),
-              Stream.fromPubSub(keyHub).pipe(
-                Stream.mapEffect((item) => decide(lastSeenRef, item)),
-                Stream.filter(Option.isSome),
-                Stream.map((option) => option.value)
-              )
-            );
-          })
-        );
+      queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
+      observe: (subset) => observeKey(Subset.hash(subset), query(subset)),
+      observeNamed: (name, args) => {
+        const key = MirrorProtocol.namedKey(name, args);
+        return observeKey(key, readKey(key));
       },
+      related: (_registry, collectionName, subset, names) =>
+        Effect.gen(function* () {
+          const key = MirrorProtocol.relatedKey(collectionName, subset, names);
+          yield* channel
+            .post({ _tag: "SubscribeRelated", tabId, collection: collectionName, subset, names })
+            .pipe(Effect.orDie);
+          yield* Effect.addFinalizer(() =>
+            channel
+              .post({
+                _tag: "UnsubscribeRelated",
+                tabId,
+                collection: collectionName,
+                subset,
+                names,
+              })
+              .pipe(Effect.ignore)
+          );
+          return observeKey(key, readRelated(key));
+        }),
     };
   });

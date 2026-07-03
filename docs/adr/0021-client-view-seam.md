@@ -39,10 +39,18 @@ Bindings consume `ClientView`: the Svelte runtime context becomes
 `ManagedRuntime<ClientView>`. Aggregates derive over `observe`
 (`Aggregate.observe`/`observeGrouped`, extracted from the engine), and
 `Related`'s read-side takes a `ClientView.Reader` (`query` + `observe`), so
-joins and aggregates work over mirrors unchanged. Engine-only capabilities —
-named queries (their server-authoritative registration), auto-subscribing
-relational reads (`pull`), undo — look the full `ClientEngine` up in context
-and die with an actionable message when only a mirror is present.
+joins and aggregates work over mirrors unchanged.
+
+Named queries and auto-subscribing relational reads are part of the seam
+(added by the mirror-protocol extension that followed this ADR): the view
+carries `subscribeQuery`/`queryNamed`/`observeNamed` and `related`. A mirror
+forwards the registration to its host — `SubscribeNamed` registers the named
+query with the host engine (which owns the server round-trip);
+`SubscribeRelated` runs the reconcile loop AND the join host-side, and the
+tab receives resolved rows (`RelatedUpdate`), keeping data work off the main
+thread. Registrations are refcounted per tab like subset subscriptions.
+Engine-only capabilities that remain — explicit push/pull, undo — look the
+full `ClientEngine` up in context.
 
 ## Consequences
 
@@ -52,9 +60,9 @@ and die with an actionable message when only a mirror is present.
 - Breaking for `@legation/svelte` (0.x): engine-backed apps compose
   `ClientView.layer.pipe(Layer.provideMerge(engineLayer))` when building the
   runtime.
-- The named-query and auto-subscribe gaps over mirrors are now _visible_
-  (actionable runtime errors) rather than structural: closing them means
-  extending the tab↔host mirror protocol (subscribeQuery forwarding, host-side
-  pull), future work.
+- The named-query and auto-subscribe gaps over mirrors are closed: the
+  mirror protocol carries `SubscribeNamed`/`SubscribeRelated` (host-resolved,
+  tab receives resolved rows), so the full binding surface works in the
+  SW-hosted deployment.
 - The React binding still consumes `ClientEngine` via its atoms; migrating it
   to the seam is follow-up work.

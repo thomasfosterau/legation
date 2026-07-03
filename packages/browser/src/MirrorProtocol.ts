@@ -2,21 +2,37 @@
  * MirrorProtocol
  *
  * Schema-defined messages between tab mirrors and the engine host
- * (ADR-0010). Mutations and subscription registrations flow tab → host;
- * acknowledgements and mirror updates (materialized subset rows, already
- * overlay-applied by the engine) flow host → tabs.
+ * (ADR-0010). Mutations, subset subscriptions, named-query registrations,
+ * and relational (`related`) registrations flow tab → host;
+ * acknowledgements, mirror updates (materialized subset rows, already
+ * overlay-applied by the engine), and resolved relational updates flow
+ * host → tabs.
  *
- * Subscriptions carry a `tabId` so the host can refcount subsets across
- * tabs (tear an engine subscription down only when its last tab leaves) and
+ * Registrations carry a `tabId` so the host can refcount them across tabs
+ * (tear an engine registration down only when its last tab leaves) and
  * release everything a departing tab held via `Disconnect`.
  *
  * Mutator args travel in encoded (wire) form: the tab validates/encodes
  * against its registry before posting, the host re-validates by decoding
- * (`ClientEngine.mutateEncoded`).
+ * (`ClientEngine.mutateEncoded`). Named-query args travel encoded the same
+ * way (the host's engine decodes against its query registry).
  */
 
-import { ClientEngine, Subset } from "@legation/effect";
+import { ClientEngine, Hash, Related, Subset } from "@legation/effect";
 import { Effect, Schema } from "effect";
+
+// ─── Broadcast keys ──────────────────────────────────────────────────────────
+
+/** The broadcast key a named query's results are mirrored under. */
+export const namedKey = (name: string, args: unknown): string =>
+  `named:${name}:${Hash.contentHash(args)}`;
+
+/** The broadcast key a `related` registration's resolved rows are mirrored under. */
+export const relatedKey = (
+  collection: string,
+  subset: Subset.Subset,
+  names: ReadonlyArray<string>
+): string => `related:${collection}:${Subset.hash(subset)}:${[...names].sort().join("+")}`;
 
 // ─── Tab → host ──────────────────────────────────────────────────────────────
 
@@ -29,6 +45,32 @@ export type TabMessage =
     }
   | { readonly _tag: "Subscribe"; readonly tabId: string; readonly subset: Subset.Subset }
   | { readonly _tag: "Unsubscribe"; readonly tabId: string; readonly subset: Subset.Subset }
+  | {
+      readonly _tag: "SubscribeNamed";
+      readonly tabId: string;
+      readonly name: string;
+      readonly args: unknown;
+    }
+  | {
+      readonly _tag: "UnsubscribeNamed";
+      readonly tabId: string;
+      readonly name: string;
+      readonly args: unknown;
+    }
+  | {
+      readonly _tag: "SubscribeRelated";
+      readonly tabId: string;
+      readonly collection: string;
+      readonly subset: Subset.Subset;
+      readonly names: ReadonlyArray<string>;
+    }
+  | {
+      readonly _tag: "UnsubscribeRelated";
+      readonly tabId: string;
+      readonly collection: string;
+      readonly subset: Subset.Subset;
+      readonly names: ReadonlyArray<string>;
+    }
   /** A tab leaving: release every subscription it held. */
   | { readonly _tag: "Disconnect"; readonly tabId: string }
   /** Liveness ping: lets the host reclaim subsets from tabs that crash. */
@@ -51,6 +93,32 @@ export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
     tabId: Schema.String,
     subset: Subset.SubsetSchema,
   }),
+  Schema.Struct({
+    _tag: Schema.tag("SubscribeNamed"),
+    tabId: Schema.String,
+    name: Schema.String,
+    args: Schema.Unknown,
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("UnsubscribeNamed"),
+    tabId: Schema.String,
+    name: Schema.String,
+    args: Schema.Unknown,
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("SubscribeRelated"),
+    tabId: Schema.String,
+    collection: Schema.String,
+    subset: Subset.SubsetSchema,
+    names: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("UnsubscribeRelated"),
+    tabId: Schema.String,
+    collection: Schema.String,
+    subset: Subset.SubsetSchema,
+    names: Schema.Array(Schema.String),
+  }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), tabId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Heartbeat"), tabId: Schema.String }),
 ]) as Schema.Codec<TabMessage>;
@@ -60,6 +128,13 @@ export const TabMessageSchema: Schema.Codec<TabMessage> = Schema.Union([
 export interface MirrorRow {
   readonly id: string;
   readonly value: unknown;
+}
+
+/** A resolved relational row on the wire: base row + its resolved names. */
+export interface MirrorRelatedRow {
+  readonly id: string;
+  readonly value: unknown;
+  readonly related: Readonly<Record<string, unknown>>;
 }
 
 export type HostMessage =
@@ -78,9 +153,15 @@ export type HostMessage =
     }
   | {
       readonly _tag: "MirrorUpdate";
-      /** `Subset.hash` of the subset these rows materialize. */
+      /** `Subset.hash` of the subset (or {@link namedKey}) these rows materialize. */
       readonly key: string;
       readonly rows: ReadonlyArray<MirrorRow>;
+    }
+  | {
+      readonly _tag: "RelatedUpdate";
+      /** {@link relatedKey} of the registration these resolved rows materialize. */
+      readonly key: string;
+      readonly rows: ReadonlyArray<MirrorRelatedRow>;
     };
 
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
@@ -101,6 +182,17 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
     key: Schema.String,
     rows: Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.Unknown })),
   }),
+  Schema.Struct({
+    _tag: Schema.tag("RelatedUpdate"),
+    key: Schema.String,
+    rows: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        value: Schema.Unknown,
+        related: Schema.Record(Schema.String, Schema.Unknown),
+      })
+    ),
+  }),
 ]) as Schema.Codec<HostMessage>;
 
 /** Build a MirrorUpdate from materialized engine rows. */
@@ -111,6 +203,16 @@ export const mirrorUpdate = (
   _tag: "MirrorUpdate",
   key,
   rows: rows.map((row) => ({ id: row.id, value: row.value })),
+});
+
+/** Build a RelatedUpdate from resolved relational rows. */
+export const relatedUpdate = (
+  key: string,
+  rows: ReadonlyArray<Related.RelatedRow>
+): HostMessage => ({
+  _tag: "RelatedUpdate",
+  key,
+  rows: rows.map((row) => ({ id: row.id, value: row.value, related: row.related })),
 });
 
 const decodeTab = Schema.decodeUnknownEffect(TabMessageSchema);

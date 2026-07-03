@@ -2,8 +2,9 @@
  * Client view
  *
  * The narrow surface a component binding needs — local reads (`query` /
- * `observe`), subscription registration, and write intents — abstracted over
- * *where* the engine runs. A main-thread {@link ClientEngine} satisfies it via
+ * `observe`), subscription registration, write intents, named queries, and
+ * auto-subscribing relational reads — abstracted over *where* the engine
+ * runs. A main-thread {@link ClientEngine} satisfies it via
  * {@link fromEngine}; a tab's mirror (`TabMirror` in `@legation/browser`,
  * whose shape this interface is drawn from) satisfies it structurally. The
  * same bindings therefore drive both hosts of ADR-0010's deployment —
@@ -14,22 +15,26 @@
  * backend's authoritative {@link MutationOutcome}), matching the mirror; the
  * engine's handle-based variant is folded by {@link fromEngine}.
  *
- * Engine-only capabilities (named queries' server-authoritative registration,
- * explicit push/pull, undo history) are deliberately not part of this
- * surface — bindings that need them look the full engine up in context and
- * degrade with an actionable error when only a mirror is available.
+ * Named queries and `related` cross the mirror protocol since ADR-0021's
+ * follow-up landed: a mirror forwards the registration to its host, which
+ * owns the server round-trip (and, for `related`, the reconcile loop and the
+ * join itself — tabs receive resolved rows, keeping join work off the main
+ * thread). Engine-only capabilities that remain (explicit push/pull, undo
+ * history) still require the full engine from context.
  */
-import { Context, Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer, Scope, Stream } from "effect";
 import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
-import type { MutatorError, StoreError, TransportError } from "./Errors.js";
+import type * as Collection from "./Collection.js";
+import type { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
+import * as Related from "./Related.js";
 import type * as Subset from "./Subset.js";
 
 /**
  * The union of what either host may fail a view operation with: the engine
- * fails on its store/mutators, a mirror on its channel. Each implementation's
- * channels are narrower.
+ * fails on its store/mutators/query registry, a mirror on its channel. Each
+ * implementation's channels are narrower.
  */
-export type ClientViewError = MutatorError | StoreError | TransportError;
+export type ClientViewError = MutatorError | StoreError | TransportError | QueryError;
 
 /** {@inheritDoc ClientViewError} */
 export interface ClientView {
@@ -44,6 +49,34 @@ export interface ClientView {
   /** Register/release a subscription (synced by the engine host). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
+  /**
+   * Register/release a named query (Query.ts). The engine host owns the
+   * server-authoritative resolution; results render locally.
+   */
+  readonly subscribeQuery: (name: string, args: unknown) => Effect.Effect<void, ClientViewError>;
+  readonly unsubscribeQuery: (name: string, args: unknown) => Effect.Effect<void, ClientViewError>;
+  /** A named query's current local result. */
+  readonly queryNamed: (
+    name: string,
+    args: unknown
+  ) => Effect.Effect<ReadonlyArray<LocalRow>, ClientViewError>;
+  /** Live named query results, emitting current rows first. */
+  readonly observeNamed: (
+    name: string,
+    args: unknown
+  ) => Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
+  /**
+   * Auto-subscribing relational read over a subset's declared relationships:
+   * the host syncs the base and the narrowed foreign subsets, tracks the live
+   * linkage, and tears the subscriptions down when the scope closes. The
+   * stream emits resolved {@link Related.RelatedRow}s.
+   */
+  readonly related: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    names: ReadonlyArray<string>
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (mutator: string, args: unknown) => Effect.Effect<void, ClientViewError>;
   /** Like {@link ClientView.mutate}, resolving with the backend's authoritative outcome. */
@@ -64,6 +97,12 @@ export const fromEngine = (engine: ClientEngine): ClientView => ({
   observe: (subset) => engine.observe(subset),
   subscribe: (subset) => engine.subscribe(subset),
   unsubscribe: (subset) => engine.unsubscribe(subset),
+  subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
+  unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
+  queryNamed: (name, args) => engine.queryNamed(name, args),
+  observeNamed: (name, args) => engine.observeNamed(name, args),
+  related: (registry, collectionName, subset, names) =>
+    Related.related(engine, registry, collectionName, subset, names),
   mutate: (mutator, args) => engine.mutate(mutator, args),
   mutateWithAck: (mutator, args) =>
     engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),
