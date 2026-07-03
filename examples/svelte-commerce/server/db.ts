@@ -1,128 +1,130 @@
 /**
  * SQLite database — the app's authoritative storage.
  *
- * A `node:sqlite` implementation of `@legation/sql`'s `SqlExecutor` seam plus
- * the schema DDL and catalog seed. WAL mode so the SvelteKit server process
- * (SSR loads, no-JS form actions) and the sync server process share the file.
+ * Built on Effect's SQL packages: `@effect/sql-sqlite-node` provides the
+ * `SqlClient` (WAL on by default, so the SvelteKit server process and the
+ * sync server process share the file), and `@legation/sql`'s `SqlExecutor`
+ * seam is a thin adapter over that client. Schema DDL and the catalog seed
+ * run as an idempotent migration effect.
  */
-import { DatabaseSync } from "node:sqlite";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError } from "@legation/effect";
 import type { SqlBackend } from "@legation/sql";
 
-export const openDatabase = (path: string): DatabaseSync => {
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec(DDL);
-  return db;
-};
+/** The SQLite client layer both server processes build their stack on. */
+export const clientLayer = (
+  filename: string
+): Layer.Layer<SqliteClient.SqliteClient | SqlClient> => SqliteClient.layer({ filename });
 
-/** `SqlExecutor` over a synchronous `node:sqlite` handle. */
-export const makeExecutor = (db: DatabaseSync): SqlBackend.SqlExecutor => {
-  const fail = (message: string) => (cause: unknown) => new BackendError({ message, cause });
+/** `SqlExecutor` over the Effect SQL client (fragments → unsafe statements). */
+export const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
+  const asBackendError = (message: string) => (cause: unknown) =>
+    new BackendError({ message, cause });
   return {
     query: (fragment) =>
-      Effect.try({
-        try: () =>
-          db.prepare(fragment.text).all(...(fragment.params as Array<never>)) as Array<
-            Record<string, unknown>
-          >,
-        catch: fail(`query failed: ${fragment.text}`),
-      }),
+      sql
+        .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)
+        .pipe(Effect.mapError(asBackendError(`query failed: ${fragment.text}`))),
     run: (fragment) =>
-      Effect.try({
-        try: () => void db.prepare(fragment.text).run(...(fragment.params as Array<never>)),
-        catch: fail(`statement failed: ${fragment.text}`),
-      }),
+      sql
+        .unsafe(fragment.text, fragment.params)
+        .pipe(Effect.asVoid, Effect.mapError(asBackendError(`statement failed: ${fragment.text}`))),
     transaction: (effect) =>
-      Effect.acquireUseRelease(
-        Effect.try({ try: () => db.exec("BEGIN IMMEDIATE"), catch: fail("BEGIN failed") }),
-        () => effect,
-        (_, exit) =>
-          Effect.sync(() => {
-            db.exec(exit._tag === "Success" ? "COMMIT" : "ROLLBACK");
-          })
+      sql.withTransaction(effect).pipe(
+        Effect.catchTag("SqlError", (error) =>
+          Effect.fail(new BackendError({ message: "transaction failed", cause: error }))
+        )
       ),
   };
 };
 
-const DDL = /* sql */ `
-CREATE TABLE IF NOT EXISTS categories (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE
-);
-CREATE TABLE IF NOT EXISTS sellers (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS products (
-  id TEXT PRIMARY KEY, categoryId TEXT NOT NULL, sellerId TEXT NOT NULL,
-  name TEXT NOT NULL, description TEXT NOT NULL, priceCents INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS variants (
-  id TEXT PRIMARY KEY, productId TEXT NOT NULL, sku TEXT NOT NULL,
-  name TEXT NOT NULL, priceCents INTEGER NOT NULL, stock INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS reviews (
-  id TEXT PRIMARY KEY, productId TEXT NOT NULL, userId TEXT NOT NULL,
-  authorName TEXT NOT NULL, rating INTEGER NOT NULL, body TEXT NOT NULL, createdAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS profiles (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cartItems (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, variantId TEXT NOT NULL, qty INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS orders (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL,
-  totalCents INTEGER NOT NULL, createdAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS orderItems (
-  id TEXT PRIMARY KEY, orderId TEXT NOT NULL, userId TEXT NOT NULL,
-  variantId TEXT NOT NULL, qty INTEGER NOT NULL, priceCents INTEGER NOT NULL
-);
--- Per-client mutation-id ledger (SqlBackend's exactly-once bookkeeping).
-CREATE TABLE IF NOT EXISTS sync_mutations (
-  client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
-  PRIMARY KEY (client_group_id, client_id)
-);
--- The browser's client group → authenticated user binding (IdentityResolver).
-CREATE TABLE IF NOT EXISTS client_groups (
-  clientGroupId TEXT PRIMARY KEY, userId TEXT NOT NULL
-);
-`;
+const DDL: ReadonlyArray<string> = [
+  `CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS sellers (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS products (
+    id TEXT PRIMARY KEY, categoryId TEXT NOT NULL, sellerId TEXT NOT NULL,
+    name TEXT NOT NULL, description TEXT NOT NULL, priceCents INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS variants (
+    id TEXT PRIMARY KEY, productId TEXT NOT NULL, sku TEXT NOT NULL,
+    name TEXT NOT NULL, priceCents INTEGER NOT NULL, stock INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reviews (
+    id TEXT PRIMARY KEY, productId TEXT NOT NULL, userId TEXT NOT NULL,
+    authorName TEXT NOT NULL, rating INTEGER NOT NULL, body TEXT NOT NULL, createdAt TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS profiles (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS cartItems (
+    id TEXT PRIMARY KEY, userId TEXT NOT NULL, variantId TEXT NOT NULL, qty INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL,
+    totalCents INTEGER NOT NULL, createdAt TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS orderItems (
+    id TEXT PRIMARY KEY, orderId TEXT NOT NULL, userId TEXT NOT NULL,
+    variantId TEXT NOT NULL, qty INTEGER NOT NULL, priceCents INTEGER NOT NULL
+  )`,
+  // Per-client mutation-id ledger (SqlBackend's exactly-once bookkeeping).
+  `CREATE TABLE IF NOT EXISTS sync_mutations (
+    client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    PRIMARY KEY (client_group_id, client_id)
+  )`,
+  // The browser's client group → authenticated user binding (IdentityResolver).
+  `CREATE TABLE IF NOT EXISTS client_groups (
+    clientGroupId TEXT PRIMARY KEY, userId TEXT NOT NULL
+  )`,
+];
 
-const SEED = /* sql */ `
-INSERT INTO categories (id, name, slug) VALUES
-  ('c-audio', 'Audio', 'audio'),
-  ('c-keyboards', 'Keyboards', 'keyboards'),
-  ('c-desks', 'Desks', 'desks');
-INSERT INTO sellers (id, name) VALUES
-  ('s-acme', 'Acme Peripherals'),
-  ('s-nordic', 'Nordic Workshop');
-INSERT INTO products (id, categoryId, sellerId, name, description, priceCents) VALUES
-  ('p-01', 'c-audio', 's-acme', 'Studio Headphones', 'Closed-back monitoring headphones.', 14900),
-  ('p-02', 'c-audio', 's-acme', 'USB Microphone', 'Cardioid condenser microphone.', 9900),
-  ('p-03', 'c-keyboards', 's-acme', 'Tenkeyless Keyboard', 'Hot-swappable TKL board.', 12900),
-  ('p-04', 'c-keyboards', 's-nordic', 'Ergonomic Split Keyboard', 'Columnar split with tenting.', 24900),
-  ('p-05', 'c-desks', 's-nordic', 'Standing Desk', 'Dual-motor sit-stand desk.', 54900),
-  ('p-06', 'c-desks', 's-nordic', 'Desk Shelf', 'Solid oak monitor shelf.', 8900);
-INSERT INTO variants (id, productId, sku, name, priceCents, stock) VALUES
-  ('v-01a', 'p-01', 'HP-BLK', 'Black', 14900, 12),
-  ('v-01b', 'p-01', 'HP-WHT', 'White', 14900, 3),
-  ('v-02a', 'p-02', 'MIC-STD', 'Standard', 9900, 20),
-  ('v-03a', 'p-03', 'KB-TKL-R', 'Red switches', 12900, 8),
-  ('v-03b', 'p-03', 'KB-TKL-B', 'Brown switches', 12900, 0),
-  ('v-04a', 'p-04', 'KB-SPL', 'Kit', 24900, 5),
-  ('v-05a', 'p-05', 'DSK-120', '120 cm', 54900, 2),
-  ('v-05b', 'p-05', 'DSK-160', '160 cm', 59900, 4),
-  ('v-06a', 'p-06', 'SHL-STD', 'Standard', 8900, 15);
-INSERT INTO reviews (id, productId, userId, authorName, rating, body, createdAt) VALUES
-  ('r-01', 'p-01', 'seed-user', 'Ada', 5, 'Flat response, comfy pads.', '2026-06-01T10:00:00Z'),
-  ('r-02', 'p-03', 'seed-user', 'Grace', 4, 'Great board, stabilisers need lube.', '2026-06-10T09:30:00Z'),
-  ('r-03', 'p-05', 'seed-user', 'Alan', 5, 'Rock solid at full height.', '2026-06-15T16:45:00Z');
-`;
+/** Create the schema and seed the catalog once (idempotent). */
+export const migrate = Effect.gen(function* () {
+  const sql = yield* SqlClientService;
+  for (const statement of DDL) {
+    yield* sql.unsafe(statement).unprepared;
+  }
+  const existing = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM categories`;
+  if (existing[0]!.n > 0) return;
 
-/** Seed the catalog once (idempotent via the categories sentinel row). */
-export const seed = (db: DatabaseSync): void => {
-  const existing = db.prepare("SELECT COUNT(*) AS n FROM categories").get() as { n: number };
-  if (existing.n === 0) db.exec(SEED);
-};
+  yield* sql`INSERT INTO categories ${sql.insert([
+    { id: "c-audio", name: "Audio", slug: "audio" },
+    { id: "c-keyboards", name: "Keyboards", slug: "keyboards" },
+    { id: "c-desks", name: "Desks", slug: "desks" },
+  ])}`;
+  yield* sql`INSERT INTO sellers ${sql.insert([
+    { id: "s-acme", name: "Acme Peripherals" },
+    { id: "s-nordic", name: "Nordic Workshop" },
+  ])}`;
+  yield* sql`INSERT INTO products ${sql.insert([
+    { id: "p-01", categoryId: "c-audio", sellerId: "s-acme", name: "Studio Headphones", description: "Closed-back monitoring headphones.", priceCents: 14900 },
+    { id: "p-02", categoryId: "c-audio", sellerId: "s-acme", name: "USB Microphone", description: "Cardioid condenser microphone.", priceCents: 9900 },
+    { id: "p-03", categoryId: "c-keyboards", sellerId: "s-acme", name: "Tenkeyless Keyboard", description: "Hot-swappable TKL board.", priceCents: 12900 },
+    { id: "p-04", categoryId: "c-keyboards", sellerId: "s-nordic", name: "Ergonomic Split Keyboard", description: "Columnar split with tenting.", priceCents: 24900 },
+    { id: "p-05", categoryId: "c-desks", sellerId: "s-nordic", name: "Standing Desk", description: "Dual-motor sit-stand desk.", priceCents: 54900 },
+    { id: "p-06", categoryId: "c-desks", sellerId: "s-nordic", name: "Desk Shelf", description: "Solid oak monitor shelf.", priceCents: 8900 },
+  ])}`;
+  yield* sql`INSERT INTO variants ${sql.insert([
+    { id: "v-01a", productId: "p-01", sku: "HP-BLK", name: "Black", priceCents: 14900, stock: 12 },
+    { id: "v-01b", productId: "p-01", sku: "HP-WHT", name: "White", priceCents: 14900, stock: 3 },
+    { id: "v-02a", productId: "p-02", sku: "MIC-STD", name: "Standard", priceCents: 9900, stock: 20 },
+    { id: "v-03a", productId: "p-03", sku: "KB-TKL-R", name: "Red switches", priceCents: 12900, stock: 8 },
+    { id: "v-03b", productId: "p-03", sku: "KB-TKL-B", name: "Brown switches", priceCents: 12900, stock: 0 },
+    { id: "v-04a", productId: "p-04", sku: "KB-SPL", name: "Kit", priceCents: 24900, stock: 5 },
+    { id: "v-05a", productId: "p-05", sku: "DSK-120", name: "120 cm", priceCents: 54900, stock: 2 },
+    { id: "v-05b", productId: "p-05", sku: "DSK-160", name: "160 cm", priceCents: 59900, stock: 4 },
+    { id: "v-06a", productId: "p-06", sku: "SHL-STD", name: "Standard", priceCents: 8900, stock: 15 },
+  ])}`;
+  yield* sql`INSERT INTO reviews ${sql.insert([
+    { id: "r-01", productId: "p-01", userId: "seed-user", authorName: "Ada", rating: 5, body: "Flat response, comfy pads.", createdAt: "2026-06-01T10:00:00Z" },
+    { id: "r-02", productId: "p-03", userId: "seed-user", authorName: "Grace", rating: 4, body: "Great board, stabilisers need lube.", createdAt: "2026-06-10T09:30:00Z" },
+    { id: "r-03", productId: "p-05", userId: "seed-user", authorName: "Alan", rating: 5, body: "Rock solid at full height.", createdAt: "2026-06-15T16:45:00Z" },
+  ])}`;
+});

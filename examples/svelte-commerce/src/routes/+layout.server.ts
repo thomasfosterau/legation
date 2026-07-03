@@ -11,30 +11,19 @@ import { Transport } from "@legation/effect";
 import { loadSnapshot } from "@legation/sveltekit";
 import { mutators, shellSubsets } from "../lib/domain.js";
 
-const currentUser = (db: App.Locals["db"], clientGroupId: string): string | undefined => {
-  const row = db
-    .prepare("SELECT userId FROM client_groups WHERE clientGroupId = ?")
-    .get(clientGroupId) as { userId: string } | undefined;
-  return row?.userId;
-};
-
 export const load: LayoutServerLoad = async ({ cookies, locals }) => {
-  const program = Effect.gen(function* () {
-    const anonymous = yield* loadSnapshot(cookies, {
-      subsets: shellSubsets(undefined),
-      mutators,
-    });
-    const userId = currentUser(locals.db, anonymous.clientGroupId);
-    if (userId === undefined) return { ...anonymous, userId: undefined };
-    // Signed in: re-snapshot including the private subsets (same group, so
-    // the cookie still continues the CVR conversation).
-    const withPrivate = yield* loadSnapshot(cookies, {
-      subsets: shellSubsets(userId),
-      mutators,
-    });
-    return { ...withPrivate, userId };
-  }).pipe(Effect.provideService(Transport.ServerHandler, locals.handler));
+  const snapshotFor = (userId: string | undefined) =>
+    Effect.runPromise(
+      loadSnapshot(cookies, { subsets: shellSubsets(userId), mutators }).pipe(
+        Effect.provideService(Transport.ServerHandler, locals.handler)
+      )
+    );
 
-  const { snapshot, clientGroupId, userId } = await Effect.runPromise(program);
-  return { snapshot, clientGroupId, userId };
+  const anonymous = await snapshotFor(undefined);
+  const userId = await locals.userFor(anonymous.clientGroupId);
+  if (userId === undefined) return { ...anonymous, userId: undefined };
+  // Signed in: re-snapshot including the private subsets (same group, so
+  // the cookie still continues the CVR conversation).
+  const withPrivate = await snapshotFor(userId);
+  return { ...withPrivate, userId };
 };

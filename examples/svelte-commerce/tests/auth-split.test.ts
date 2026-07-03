@@ -1,6 +1,7 @@
 /**
  * The public/private auth split over the real stack (SyncServer + SqlBackend
- * over node:sqlite + IdentityResolver from the client-group binding):
+ * over the Effect SQL sqlite client + IdentityResolver from the client-group
+ * binding):
  *
  * - anonymous clients sync the public catalog and get an EMPTY result — not
  *   an error — for private subsets (the deliberate `allowAll` opt-in against
@@ -16,8 +17,9 @@
  *   cart sync back).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { DatabaseSync } from "node:sqlite";
 import { Context, Effect, Layer } from "effect";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { ClientEngine, ClientStore, Transport } from "@legation/effect";
 import {
   allVariants,
@@ -30,14 +32,18 @@ import {
   type Order,
   type Variant,
 } from "../src/lib/domain.js";
-import { openDatabase, seed } from "../server/db.js";
+import { migrate } from "../server/db.js";
 import { bindClientGroup, syncLayer } from "../server/runtime.js";
 
 const makeWorld = Effect.fnUntraced(function* () {
-  const db = openDatabase(":memory:");
-  seed(db);
-  const context = yield* Layer.build(syncLayer(db));
-  return { db, handler: Context.get(context, Transport.ServerHandler) };
+  const context = yield* Layer.build(
+    syncLayer.pipe(Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })))
+  );
+  const sql = Context.get(context, SqlClient);
+  yield* migrate.pipe(Effect.provideService(SqlClient, sql));
+  const bind = (clientGroupId: string, userId: string | undefined) =>
+    bindClientGroup(clientGroupId, userId).pipe(Effect.provideService(SqlClient, sql));
+  return { sql, bind, handler: Context.get(context, Transport.ServerHandler) };
 });
 
 const makeClient = (handler: Transport.ServerHandler, clientId: string, clientGroupId: string) =>
@@ -71,11 +77,10 @@ describe("public/private auth split", () => {
   it.effect("a bound group syncs exactly its own rows; foreign subsets yield nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { db, handler } = yield* makeWorld();
-        db.prepare(
-          "INSERT INTO cartItems (id, userId, variantId, qty) VALUES ('ci-1', 'u1', 'v-01a', 1), ('ci-2', 'u2', 'v-02a', 2)"
-        ).run();
-        bindClientGroup(db, "group-u1", "u1");
+        const { sql, bind, handler } = yield* makeWorld();
+        yield* sql`INSERT INTO cartItems (id, userId, variantId, qty)
+          VALUES ('ci-1', 'u1', 'v-01a', 1), ('ci-2', 'u2', 'v-02a', 2)`;
+        yield* bind("group-u1", "u1");
 
         const client = yield* makeClient(handler, "c-u1", "group-u1");
         yield* client.subscribe(myCartItems("u1"));
@@ -93,8 +98,8 @@ describe("public/private auth split", () => {
   it.live("a push claiming another user's id is permanently rejected", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { db, handler } = yield* makeWorld();
-        bindClientGroup(db, "group-u1", "u1");
+        const { sql, bind, handler } = yield* makeWorld();
+        yield* bind("group-u1", "u1");
         const client = yield* makeClient(handler, "c-u1", "group-u1");
         yield* client.subscribe(myCartItems("u2"));
 
@@ -111,8 +116,8 @@ describe("public/private auth split", () => {
         });
 
         // Nothing landed server-side.
-        const rows = db.prepare("SELECT COUNT(*) AS n FROM cartItems").get() as { n: number };
-        expect(rows.n).toBe(0);
+        const rows = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM cartItems`;
+        expect(rows[0]!.n).toBe(0);
       })
     )
   );
@@ -120,8 +125,8 @@ describe("public/private auth split", () => {
   it.live("order/place round-trips: server recomputes, stock decrements, cart clears", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { db, handler } = yield* makeWorld();
-        bindClientGroup(db, "group-u1", "u1");
+        const { bind, handler } = yield* makeWorld();
+        yield* bind("group-u1", "u1");
         const client = yield* makeClient(handler, "c-u1", "group-u1");
         yield* client.subscribe(myCartItems("u1"));
         yield* client.subscribe(myOrders("u1"));

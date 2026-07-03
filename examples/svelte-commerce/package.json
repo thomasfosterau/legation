@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "4.0.0-beta.84",
     "@legation/browser": "workspace:*",
     "@legation/effect": "workspace:*",
     "@legation/node": "workspace:*",

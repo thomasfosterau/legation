@@ -1,26 +1,28 @@
 /**
  * ADR-0009's law: every backend must pass `verifyBackendContract`. This runs
  * the executable contract suite against the app's real storage — `SqlBackend`
- * over the `node:sqlite` executor — proving in-order application, idempotent
- * skips, atomic id-bumps (transient aborts leave nothing), permanent
- * rejections that stage-and-rollback, subset evaluation, and row versions.
+ * over the Effect SQL sqlite client — proving in-order application,
+ * idempotent skips, atomic id-bumps (transient aborts leave nothing),
+ * permanent rejections that stage-and-rollback, subset evaluation, and row
+ * versions.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { DatabaseSync } from "node:sqlite";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendContract, BackendError, MutationRejected, Mutator } from "@legation/effect";
 import { SqlBackend } from "@legation/sql";
 import { makeExecutor } from "../server/db.js";
 
 /** Contract collections live in their own two-column tables (id + n). */
-const CONTRACT_DDL = `
-CREATE TABLE __contract (id TEXT PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT);
-CREATE TABLE __contract_eval (id TEXT PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT);
-CREATE TABLE sync_mutations (
-  client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
-  PRIMARY KEY (client_group_id, client_id)
-);
-`;
+const CONTRACT_DDL: ReadonlyArray<string> = [
+  `CREATE TABLE __contract (id TEXT PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT)`,
+  `CREATE TABLE __contract_eval (id TEXT PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT)`,
+  `CREATE TABLE sync_mutations (
+    client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    PRIMARY KEY (client_group_id, client_id)
+  )`,
+];
 
 const TABLES: Record<string, string> = {
   __contract: "__contract",
@@ -79,21 +81,26 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
 };
 
 describe("commerce SQL backend", () => {
-  it.effect("passes verifyBackendContract over the node:sqlite executor", () =>
-    Effect.gen(function* () {
-      const db = new DatabaseSync(":memory:");
-      db.exec(CONTRACT_DDL);
-      const backend = SqlBackend.make({
-        executor: makeExecutor(db),
-        tables: {
-          __contract: { table: "__contract" },
-          __contract_eval: { table: "__contract_eval" },
-        },
-        mutators: contractMutators,
-        handlers,
-      });
-      yield* BackendContract.verifyBackendContract(backend);
-      expect(true).toBe(true);
-    })
+  it.effect("passes verifyBackendContract over the Effect SQL sqlite client", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
+        const sql = Context.get(context, SqlClient);
+        for (const statement of CONTRACT_DDL) {
+          yield* sql.unsafe(statement).unprepared;
+        }
+        const backend = SqlBackend.make({
+          executor: makeExecutor(sql),
+          tables: {
+            __contract: { table: "__contract" },
+            __contract_eval: { table: "__contract_eval" },
+          },
+          mutators: contractMutators,
+          handlers,
+        });
+        yield* BackendContract.verifyBackendContract(backend);
+        expect(true).toBe(true);
+      })
+    )
   );
 });

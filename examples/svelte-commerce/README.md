@@ -16,9 +16,9 @@ becomes offline-first and live.
 | Category filter + pagination | reactive rune-hook inputs re-subscribing typed subsets; cursor+limit windows (`Subset.window`) on both tiers |
 | Instant writes, offline queueing | named mutators journaled + optimistic overlay; `order/place` recomputed server-side from the authoritative cart (conflict resolution is replay, ADR-0008) |
 | Live sync over WebSockets, degrading to HTTP | `RpcTransport` over WS (`/sync-ws`) with `Transport.withFallback` to plain HTTP POST (`/sync`), `withBrowserConnectivity` folding in `navigator.onLine` |
-| No-JS writes | plain form actions writing SQLite in the Kit process — out-of-band writers the sync server only sees via `PollingHintSource` (ADR-0019 tier 2) |
+| No-JS writes | plain form actions calling the sync server's `/api` surface (an Effect v4 `HttpApi`, consumed through the derived `HttpApiClient`) — out-of-band writers committing where the invalidation bus lives (ADR-0019), with `PollingHintSource` (tier 2) as the safety net |
 | Order-status notifications | a non-UI live-query consumer watching `orders`; the fulfilment worker advances statuses out-of-band on the sync server |
-| Durable storage | `SqlBackend` over a `node:sqlite` executor that **passes `verifyBackendContract`** (see `tests/`); client side on IndexedDB |
+| Durable storage | `SqlBackend` over Effect's SQL packages (`@effect/sql-sqlite-node`'s `SqlClient`; the `SqlExecutor` seam is a thin adapter) that **passes `verifyBackendContract`** (see `tests/`); client side on IndexedDB |
 | HTTP cache | the service worker serves assets cache-first and pages stale-while-revalidate via `CacheApiHttpCache` |
 
 ## Running it
