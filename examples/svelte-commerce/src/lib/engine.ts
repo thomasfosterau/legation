@@ -50,7 +50,12 @@ const transportLayer = (clientGroupId: string): Layer.Layer<Transport.ClientTran
         )
       );
       const http = yield* RpcTransport.make(options).pipe(Effect.provide(httpContext));
-      const combined = yield* Transport.withFallback(ws, http, { restoreAfter: "30 seconds" });
+      // primaryTimeout: a WebSocket that hangs (rather than fails) must not
+      // stall sync — time it out, sideline it, and serve through HTTP.
+      const combined = yield* Transport.withFallback(ws, http, {
+        restoreAfter: "30 seconds",
+        primaryTimeout: "10 seconds",
+      });
       return yield* BrowserConnectivity.withBrowserConnectivity(combined);
     })
   );
