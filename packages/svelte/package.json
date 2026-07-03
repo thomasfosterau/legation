@@ -20,7 +20,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc -b tsconfig.json"
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project svelte"
   },
   "keywords": [
     "effect",

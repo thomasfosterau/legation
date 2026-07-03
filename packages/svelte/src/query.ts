@@ -10,7 +10,13 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
-import { type Aggregate, ClientEngine, type Subset } from "@legation/effect";
+import {
+  type Aggregate,
+  ClientEngine,
+  type Collection,
+  Related,
+  type Subset,
+} from "@legation/effect";
 import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */
@@ -60,6 +66,23 @@ export const aggregate = (
 ): Readable<Aggregate.AggregateValue> =>
   makeStore<Aggregate.AggregateValue>(getEngineRuntime(), undefined, (engine) =>
     engine.observeAggregate(subset, agg)
+  );
+
+/**
+ * Live join over a subset's declared relationships ({@link Related.observe}
+ * as a store): each emission carries the base rows with their related rows
+ * resolved by name, re-emitting when the base or a referenced foreign row
+ * changes. The base and foreign collections must already be subscribed — this
+ * reads the mirror, it does not subscribe.
+ */
+export const related = (
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  subset: Subset.Subset,
+  names: ReadonlyArray<string>
+): Readable<ReadonlyArray<Related.RelatedRow>> =>
+  makeStore<ReadonlyArray<Related.RelatedRow>>(getEngineRuntime(), [], (engine) =>
+    Related.observe(engine, registry, collectionName, subset, names)
   );
 
 /** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
