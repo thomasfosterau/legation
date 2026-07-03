@@ -20,7 +20,7 @@ import { engineRuntime } from "@legation/sveltekit";
 import { FetchHttpClient } from "effect/unstable/http";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
-import { mutators } from "./domain.js";
+import { mutators, shellSubsets } from "./domain.js";
 
 const SYNC_HTTP = "/sync";
 const SYNC_WS = () =>
@@ -31,23 +31,25 @@ const transportLayer = (clientGroupId: string): Layer.Layer<Transport.ClientTran
   Layer.effect(Transport.ClientTransport)(
     Effect.gen(function* () {
       const options = { clientGroupId };
-      const ws = yield* RpcTransport.make(options).pipe(
-        Effect.provide(
-          RpcClient.layerProtocolSocket().pipe(
-            Layer.provide(Socket.layerWebSocket(SYNC_WS())),
-            Layer.provide(Socket.layerWebSocketConstructorGlobal),
-            Layer.provide(RpcSerialization.layerNdjson)
-          )
+      // Layer.build ties each protocol's resources (sockets, queues) to the
+      // enclosing layer scope — `Effect.provide` here would finalize them the
+      // moment this constructor returns, leaving a transport whose every
+      // call hangs on torn-down machinery.
+      const wsContext = yield* Layer.build(
+        RpcClient.layerProtocolSocket().pipe(
+          Layer.provide(Socket.layerWebSocket(SYNC_WS())),
+          Layer.provide(Socket.layerWebSocketConstructorGlobal),
+          Layer.provide(RpcSerialization.layerNdjson)
         )
       );
-      const http = yield* RpcTransport.make(options).pipe(
-        Effect.provide(
-          RpcClient.layerProtocolHttp({ url: SYNC_HTTP }).pipe(
-            Layer.provide(RpcSerialization.layerNdjson),
-            Layer.provide(FetchHttpClient.layer)
-          )
+      const ws = yield* RpcTransport.make(options).pipe(Effect.provide(wsContext));
+      const httpContext = yield* Layer.build(
+        RpcClient.layerProtocolHttp({ url: SYNC_HTTP }).pipe(
+          Layer.provide(RpcSerialization.layerNdjson),
+          Layer.provide(FetchHttpClient.layer)
         )
       );
+      const http = yield* RpcTransport.make(options).pipe(Effect.provide(httpContext));
       const combined = yield* Transport.withFallback(ws, http, { restoreAfter: "30 seconds" });
       return yield* BrowserConnectivity.withBrowserConnectivity(combined);
     })
@@ -56,6 +58,7 @@ const transportLayer = (clientGroupId: string): Layer.Layer<Transport.ClientTran
 export interface BootData {
   readonly snapshot: Hydration.Snapshot;
   readonly clientGroupId: string;
+  readonly userId: string | undefined;
 }
 
 /** The app runtime: the bindings' ClientView plus the full engine. */
@@ -92,10 +95,23 @@ export const ssrStub = (): AppRuntime =>
   });
 
 /** Run the sync loop for the app's lifetime (call once, client-side). */
-export const startSync = (runtime: AppRuntime): void => {
+export const startSync = (runtime: AppRuntime, userId: string | undefined): void => {
+  // runSync forks its loops into the surrounding scope and returns — hold the
+  // scope open for the page's lifetime (closing it would kill every fiber).
   void runtime.runPromise(
-    Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-      Effect.scoped(engine.runSync.pipe(Effect.catchCause(() => Effect.void)))
-    )
+    Effect.scoped(
+      Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
+        Effect.gen(function* () {
+          // Subscriptions are client state (the snapshot carries rows + the
+          // CVR cookie, not the subscription set): register the shell's
+          // subsets before the first pull, or that pull unsyncs everything.
+          for (const subset of shellSubsets(userId)) {
+            yield* engine.subscribe(subset);
+          }
+          yield* engine.runSync;
+          yield* Effect.never;
+        })
+      )
+    ).pipe(Effect.catchCause(() => Effect.void))
   );
 };

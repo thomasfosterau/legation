@@ -13,8 +13,8 @@
   let runtime: AppRuntime | undefined;
   if (browser) {
   // svelte-ignore state_referenced_locally
-  runtime = boot({ snapshot: data.snapshot, clientGroupId: data.clientGroupId });
-    startSync(runtime);
+  runtime = boot({ snapshot: data.snapshot, clientGroupId: data.clientGroupId, userId: data.userId });
+    startSync(runtime, data.userId);
     registerServiceWorker();
   }
   // SSR renders never run $effect, so hooks only read `initial` seeds — a

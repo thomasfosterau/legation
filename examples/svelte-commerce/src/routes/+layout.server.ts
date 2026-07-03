@@ -9,18 +9,7 @@ import type { LayoutServerLoad } from "./$types";
 import { Effect } from "effect";
 import { Transport } from "@legation/effect";
 import { loadSnapshot } from "@legation/sveltekit";
-import {
-  allCategories,
-  allSellers,
-  allVariants,
-  allReviews,
-  mutators,
-  myCartItems,
-  myOrderItems,
-  myOrders,
-  myProfile,
-  productPage,
-} from "../lib/domain.js";
+import { mutators, shellSubsets } from "../lib/domain.js";
 
 const currentUser = (db: App.Locals["db"], clientGroupId: string): string | undefined => {
   const row = db
@@ -31,26 +20,16 @@ const currentUser = (db: App.Locals["db"], clientGroupId: string): string | unde
 
 export const load: LayoutServerLoad = async ({ cookies, locals }) => {
   const program = Effect.gen(function* () {
-    const shellSubsets = [
-      productPage({ limit: 100 }),
-      allCategories,
-      allSellers,
-      allVariants,
-      allReviews,
-    ];
-    const first = yield* loadSnapshot(cookies, { subsets: shellSubsets, mutators });
-    const userId = currentUser(locals.db, first.clientGroupId);
-    if (userId === undefined) return { ...first, userId: undefined };
+    const anonymous = yield* loadSnapshot(cookies, {
+      subsets: shellSubsets(undefined),
+      mutators,
+    });
+    const userId = currentUser(locals.db, anonymous.clientGroupId);
+    if (userId === undefined) return { ...anonymous, userId: undefined };
     // Signed in: re-snapshot including the private subsets (same group, so
     // the cookie still continues the CVR conversation).
     const withPrivate = yield* loadSnapshot(cookies, {
-      subsets: [
-        ...shellSubsets,
-        myCartItems(userId),
-        myOrders(userId),
-        myOrderItems(userId),
-        myProfile(userId),
-      ],
+      subsets: shellSubsets(userId),
       mutators,
     });
     return { ...withPrivate, userId };

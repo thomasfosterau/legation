@@ -234,6 +234,23 @@ export const myOrderItems = (userId: string) =>
 
 export const myProfile = (userId: string) => Profiles.make({ where: (p) => p.eq("id", userId) });
 
+/**
+ * Everything the app shell needs synced — used identically by the SSR load
+ * (to snapshot) and the client boot (to register subscriptions: they are
+ * client state, not part of the snapshot, and a pull with no subscriptions
+ * would unsync everything).
+ */
+export const shellSubsets = (userId: string | undefined) => [
+  productPage({ limit: 100 }),
+  allCategories,
+  allSellers,
+  allVariants,
+  allReviews,
+  ...(userId === undefined
+    ? []
+    : [myCartItems(userId), myOrders(userId), myOrderItems(userId), myProfile(userId)]),
+];
+
 // ─── Mutators (client-optimistic handlers; SQL handlers on the server) ──────
 
 export const CartAddArgs = Schema.Struct({
