@@ -28,7 +28,13 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          include: ["packages/*/src/**/*.test.ts", "tests/**/*.test.ts"],
+          // Materializes the example app's generated tsconfig on fresh clones.
+          globalSetup: ["./vitest.global-setup.ts"],
+          include: [
+            "packages/*/src/**/*.test.ts",
+            "tests/**/*.test.ts",
+            "examples/svelte-commerce/tests/**/*.test.ts",
+          ],
           exclude: ["**/node_modules/**", "packages/svelte/**"],
         },
       },

@@ -13,7 +13,8 @@
       "examples/react-realworld",
       "examples/svelte-realworld",
       "examples/react-northwind",
-      "examples/svelte-northwind"
+      "examples/svelte-northwind",
+      "examples/svelte-commerce"
     ],
     "catalog": {
       "effect": "4.0.0-beta.84",
