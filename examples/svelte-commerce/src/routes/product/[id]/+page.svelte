@@ -1,0 +1,133 @@
+<script lang="ts">
+  import { page as kitPage } from "$app/state";
+  import { Aggregate, Predicate, Subset } from "@legation/effect";
+  import { useAggregate, useMutationWithAck, useRelated } from "@legation/svelte/Runes";
+  import {
+    registry,
+    Products,
+    type Product,
+    type Review,
+    type Seller,
+    type Variant,
+  } from "../../../lib/domain.js";
+  import { toRow, variantRows } from "../../../lib/rows.js";
+
+  const { data } = $props();
+
+  // A live join over declared relationships: variants, reviews and the
+  // seller resolve in the ENGINE HOST (the service worker — this tab only
+  // receives resolved rows) and re-emit when any of them change. Reactive
+  // to route changes through the thunk; seeded by the JSON:API load.
+  // svelte-ignore state_referenced_locally
+  const detail = useRelated(
+    () => ({
+      registry,
+      collection: "products",
+      subset: Products.make({ where: (p) => p.eq("id", kitPage.params.id!) }),
+      names: ["variants", "reviews", "seller"],
+    }),
+    {
+      subscribe: true,
+      initial: [
+        {
+          ...toRow(data.product, ["category", "seller"]),
+          related: {
+            variants: variantRows(data.variants).map((row) => row.value),
+            reviews: data.reviews.map((review) => toRow(review, ["product"]).value),
+            seller: null,
+          },
+        },
+      ],
+    }
+  );
+
+  // Live average rating over this product's synced reviews.
+  // svelte-ignore state_referenced_locally
+  const rating = useAggregate(
+    () =>
+      Subset.make({
+        collection: "reviews",
+        where: Predicate.eq("productId", kitPage.params.id!),
+      }),
+    Aggregate.avg("rating"),
+    {
+      initial:
+        data.reviews.length === 0
+          ? undefined
+          : data.reviews.reduce((sum, review) => sum + Number(review.attributes.rating), 0) /
+            data.reviews.length,
+    }
+  );
+
+  const mutateWithAck = useMutationWithAck();
+  let added = $state("");
+  const addToCart = (variant: Variant) => {
+    if (data.user === undefined) return;
+    void mutateWithAck("cart/add", {
+      id: `ci-${crypto.randomUUID()}`,
+      userId: data.user.id,
+      variantId: variant.id,
+      qty: 1,
+    }).catch(() => undefined);
+    added = variant.id;
+  };
+</script>
+
+<svelte:boundary>
+  {@const row = (await detail.promise)[0]}
+  {@const product = row?.value as Product | undefined}
+  {@const variants = (row?.related["variants"] as ReadonlyArray<Variant>) ?? []}
+  {@const reviews = (row?.related["reviews"] as ReadonlyArray<Review>) ?? []}
+  {@const seller = row?.related["seller"] as Seller | null}
+
+  {#if product}
+    <h1>{product.name}</h1>
+    <p>{product.description}</p>
+    <p>
+      Sold by {seller?.name ?? "…"}
+      {#await rating.promise then average}
+        {#if average !== undefined}— rated {Number(average).toFixed(1)}/5{/if}
+      {/await}
+    </p>
+
+    <h2>Variants</h2>
+    <ul>
+      {#each variants as variant (variant.id)}
+        <li>
+          {variant.name} — ${(variant.priceCents / 100).toFixed(2)} — stock {variant.stock}
+          {#if data.user}
+            <!-- Enhanced: the sync mutator (offline-capable journal). The
+                 plain form below is the no-JS path through the JSON:API. -->
+            <button onclick={() => addToCart(variant)} disabled={variant.stock === 0}>
+              {added === variant.id ? "Added ✓" : "Add to cart"}
+            </button>
+          {:else}
+            <form method="post" action="?/addToCart" style="display:inline">
+              <input type="hidden" name="variantId" value={variant.id} />
+              <button disabled={variant.stock === 0}>Add to cart</button>
+            </form>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+
+    <h2>Reviews ({reviews.length})</h2>
+    <ul>
+      {#each reviews as review (review.id)}
+        <li>{review.rating}/5 — {review.body} — {review.authorName}</li>
+      {/each}
+    </ul>
+
+    {#if data.user}
+      <form method="post" action="?/review">
+        <label>Rating <input type="number" name="rating" min="1" max="5" value="5" /></label>
+        <input name="body" placeholder="Write a review…" required />
+        <button>Post review</button>
+      </form>
+    {:else}
+      <p><a href="/account">Sign in</a> to buy or review.</p>
+    {/if}
+  {:else}
+    <p>No such product.</p>
+  {/if}
+</svelte:boundary>
