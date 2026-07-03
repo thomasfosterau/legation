@@ -136,4 +136,5 @@ export const span = {
   clientPush: "legation.client.push",
   serverPull: "legation.server.pull",
   serverPush: "legation.server.push",
+  serverRead: "legation.server.read",
 } as const;

@@ -100,6 +100,12 @@ export type MirrorMessage =
       readonly subset: Subset.Subset;
       readonly edges: ReadonlyArray<Related.EdgeSelect>;
     }
+  /** A server-fallthrough read (ADR-0025), answered by `ReadResult`. */
+  | {
+      readonly _tag: "Read";
+      readonly requestId: number;
+      readonly subsets: ReadonlyArray<Subset.Subset>;
+    }
   /** A mirror leaving: release every subscription it held. */
   | { readonly _tag: "Disconnect"; readonly mirrorId: string }
   /** Liveness ping: lets the host reclaim subsets from mirrors that crash. */
@@ -147,6 +153,11 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     collection: Schema.String,
     subset: Subset.SubsetSchema,
     edges: Schema.Array(EdgeSelectSchema),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("Read"),
+    requestId: Schema.Number,
+    subsets: Schema.Array(Subset.SubsetSchema),
   }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Heartbeat"), mirrorId: Schema.String }),
@@ -198,6 +209,18 @@ export type HostMessage =
       /** {@link relatedKey} of the registration these resolved rows materialize. */
       readonly key: string;
       readonly rows: ReadonlyArray<MirrorRelatedRow>;
+    }
+  /** The answer to a `Read` request (ADR-0025), correlated by `requestId`. */
+  | {
+      readonly _tag: "ReadResult";
+      readonly requestId: number;
+      readonly rows: ReadonlyArray<{
+        readonly collection: string;
+        readonly id: string;
+        readonly value: unknown;
+      }>;
+      /** Set instead of rows when the host could not serve the read. */
+      readonly error?: string;
     };
 
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
@@ -229,6 +252,18 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
         related: Schema.Record(Schema.String, Schema.Unknown),
       })
     ),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("ReadResult"),
+    requestId: Schema.Number,
+    rows: Schema.Array(
+      Schema.Struct({
+        collection: Schema.String,
+        id: Schema.String,
+        value: Schema.Unknown,
+      })
+    ),
+    error: Schema.optional(Schema.String),
   }),
 ]) as Schema.Codec<HostMessage>;
 

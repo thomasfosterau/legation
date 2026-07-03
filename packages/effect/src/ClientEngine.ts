@@ -46,6 +46,7 @@ import type {
   PatchOp,
   PullResponse,
   PushResponse,
+  ReadResponse,
 } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
@@ -301,6 +302,9 @@ interface SeqChange {
   readonly change: ViewChange;
 }
 
+/** One row of a fallthrough read (ADR-0025). */
+export type ReadRow = ReadResponse["rows"][number];
+
 export interface ClientEngine {
   /**
    * Run a mutator optimistically and journal it for push. Args are
@@ -476,6 +480,15 @@ export interface ClientEngine {
     void,
     TransportError | StoreError | MutatorError | VersionNotSupportedError
   >;
+  /**
+   * Point-in-time fallthrough read over the transport (ADR-0025): the
+   * server evaluates the subsets under its auth filters, with no CVR
+   * involvement; results are returned to the caller and **never** written
+   * to the local store. Present only when the transport offers `read`.
+   */
+  readonly readThrough?: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<ReadRow>, TransportError | VersionNotSupportedError>;
   /** Run the sync loop: pull on poke; push+pull on reconnect. */
   readonly runSync: Effect.Effect<void, TransportError | StoreError | MutatorError, Scope.Scope>;
   /**
@@ -1440,6 +1453,18 @@ export const make = (
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
       pull,
+      ...(transport.read === undefined
+        ? {}
+        : {
+            readThrough: (subsets: ReadonlyArray<Subset.Subset>) =>
+              transport.read!({
+                clientGroupId: options.clientGroupId,
+                subsets,
+                ...(options.schemaVersion === undefined
+                  ? {}
+                  : { schemaVersion: options.schemaVersion }),
+              }).pipe(Effect.map((response) => response.rows)),
+          }),
       runSync,
       syncFailures: Stream.fromPubSub(failures),
       engineEvents: Stream.fromPubSub(engineEventsHub),

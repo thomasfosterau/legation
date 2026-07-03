@@ -19,6 +19,8 @@ import {
   PullResponseSchema,
   PushRequestSchema,
   PushResponseSchema,
+  ReadRequestSchema,
+  ReadResponseSchema,
 } from "./Protocol.js";
 import { ClientTransport, ServerHandler } from "./Transport.js";
 
@@ -40,6 +42,11 @@ export const SyncRpcs = RpcGroup.make(
   Rpc.make("pull", {
     payload: PullRequestSchema,
     success: PullResponseSchema,
+    error: SyncRpcError,
+  }),
+  Rpc.make("read", {
+    payload: ReadRequestSchema,
+    success: ReadResponseSchema,
     error: SyncRpcError,
   }),
   Rpc.make("pokes", {
@@ -73,6 +80,7 @@ export const layerHandlers: Layer.Layer<
     return SyncRpcs.of({
       push: (request) => handler.handlePush(request).pipe(Effect.mapError(toRpcError)),
       pull: (request) => handler.handlePull(request).pipe(Effect.mapError(toRpcError)),
+      read: (request) => handler.handleRead(request).pipe(Effect.mapError(toRpcError)),
       pokes: ({ clientGroupId }) => handler.pokes(clientGroupId),
     });
   })
@@ -99,6 +107,7 @@ export const fromRpcClient = <E extends { readonly message: string }>(
 ): ClientTransport => ({
   push: (request) => client.push(request).pipe(Effect.mapError(asTransportError)),
   pull: (request) => client.pull(request).pipe(Effect.mapError(asTransportError)),
+  read: (request) => client.read(request).pipe(Effect.mapError(asTransportError)),
   pokes: client
     .pokes({ clientGroupId: options.clientGroupId })
     .pipe(Stream.mapError(asTransportError)),

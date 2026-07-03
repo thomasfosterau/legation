@@ -1,7 +1,7 @@
 # ADR-0024: Paginated-edge sync windows
 
 Date: 2026-07-03
-Status: Proposed (design note for ADR-0022 program step 5)
+Status: Accepted (design note for ADR-0022 program step 5; landed in #95)
 
 ## Context
 

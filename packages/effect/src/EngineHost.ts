@@ -31,6 +31,7 @@
 
 import * as ClientEngine from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
+import { TransportError } from "./Errors.js";
 import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import { Clock, Duration, Effect, Fiber, Ref, Scope, Stream } from "effect";
@@ -236,6 +237,30 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       );
     };
 
+    // The server-fallthrough read (ADR-0025): the host owns the transport, so
+    // it performs the read and answers point-in-time. Nothing is registered
+    // and nothing enters the store — errors travel back as the result.
+    const handleRead = (requestId: number, subsets: ReadonlyArray<Subset.Subset>) =>
+      (engine.readThrough === undefined
+        ? Effect.fail(new TransportError({ message: "Host transport does not support reads" }))
+        : engine.readThrough(subsets)
+      ).pipe(
+        Effect.flatMap((rows) =>
+          channel.post({
+            _tag: "ReadResult",
+            requestId,
+            rows: rows.map((row) => ({
+              collection: row.collection,
+              id: row.id,
+              value: row.value,
+            })),
+          })
+        ),
+        Effect.catch((error) =>
+          channel.post({ _tag: "ReadResult", requestId, rows: [], error: error.message })
+        )
+      );
+
     const handleDisconnect = (mirrorId: string) =>
       Effect.gen(function* () {
         const keys = [...(yield* Ref.get(active))]
@@ -324,6 +349,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
               )
             )
           );
+        case "Read":
+          return handleRead(message.requestId, message.subsets);
         case "Disconnect":
           return handleDisconnect(message.mirrorId);
         case "Heartbeat":

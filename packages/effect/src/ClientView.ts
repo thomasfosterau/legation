@@ -24,8 +24,10 @@
  */
 import { Context, Effect, Layer, Scope, Stream } from "effect";
 import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
+import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
-import type { MutatorError, QueryError, StoreError, TransportError } from "./Errors.js";
+import { TransportError } from "./Errors.js";
+import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Related from "./Related.js";
 import type * as Subset from "./Subset.js";
 
@@ -77,6 +79,15 @@ export interface ClientView {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  /**
+   * Point-in-time server-fallthrough read (ADR-0025): auth-filtered,
+   * no CVR, results never enter the replica. Present only when the
+   * underlying tier can reach a server (a transport with `read`, or a
+   * host that forwards).
+   */
+  readonly read?: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<ClientEngineModule.ReadRow>, ClientViewError>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (mutator: string, args: unknown) => Effect.Effect<void, ClientViewError>;
   /** Like {@link ClientView.mutate}, resolving with the backend's authoritative outcome. */
@@ -103,6 +114,18 @@ export const fromEngine = (engine: ClientEngine): ClientView => ({
   observeNamed: (name, args) => engine.observeNamed(name, args),
   related: (registry, collectionName, subset, edges) =>
     Related.related(engine, registry, collectionName, subset, edges),
+  ...(engine.readThrough === undefined
+    ? {}
+    : {
+        read: (subsets: ReadonlyArray<Subset.Subset>) =>
+          engine.readThrough!(subsets).pipe(
+            Effect.mapError((error) =>
+              error._tag === "VersionNotSupportedError"
+                ? new TransportError({ message: error.message, cause: error })
+                : error
+            )
+          ),
+      }),
   mutate: (mutator, args) => engine.mutate(mutator, args),
   mutateWithAck: (mutator, args) =>
     engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),

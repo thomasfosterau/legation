@@ -131,6 +131,37 @@ export const PullResponseSchema = Schema.Struct({
 /** {@inheritDoc PullResponseSchema} */
 export type PullResponse = typeof PullResponseSchema.Type;
 
+/**
+ * Read request: a point-in-time batch subset evaluation (ADR-0025) — the
+ * server-fallthrough tier. Evaluated under the same auth filters as pull,
+ * with **no CVR involvement**: no cookie, no registration, no
+ * `lastMutationIds`.
+ */
+export const ReadRequestSchema = Schema.Struct({
+  clientGroupId: Schema.String,
+  subsets: Schema.Array(SubsetSchema),
+  /** {@inheritDoc PushRequestSchema.schemaVersion} */
+  schemaVersion: Schema.optional(Schema.String),
+});
+
+/** {@inheritDoc ReadRequestSchema} */
+export type ReadRequest = typeof ReadRequestSchema.Type;
+
+/** Read response: the matching rows, point-in-time. */
+export const ReadResponseSchema = Schema.Struct({
+  rows: Schema.Array(
+    Schema.Struct({
+      collection: Schema.String,
+      id: Schema.String,
+      version: Schema.Union([Schema.String, Schema.Number]),
+      value: Schema.Unknown,
+    })
+  ),
+});
+
+/** {@inheritDoc ReadResponseSchema} */
+export type ReadResponse = typeof ReadResponseSchema.Type;
+
 /** A contentless "pull soon" hint. */
 export const PokeSchema = Schema.Struct({
   reason: Schema.optional(Schema.String),
@@ -150,6 +181,7 @@ const decodeWith =
 
 export const decodePushRequest = decodeWith(PushRequestSchema, "push request");
 export const decodePullRequest = decodeWith(PullRequestSchema, "pull request");
+export const decodeReadRequest = decodeWith(ReadRequestSchema, "read request");
 export const decodePushResponse = decodeWith(PushResponseSchema, "push response");
 export const decodePullResponse = decodeWith(PullResponseSchema, "pull response");
 export const decodePatchOp = decodeWith(PatchOpSchema, "patch op");
