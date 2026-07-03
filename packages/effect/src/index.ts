@@ -20,6 +20,8 @@
 
 // ─── Shared model ────────────────────────────────────────────────────────────
 export * from "./Errors.js";
+export * as Node from "./Node.js";
+export * as Edge from "./Edge.js";
 export * as Collection from "./Collection.js";
 export * as Predicate from "./Predicate.js";
 export * as Subset from "./Subset.js";
