@@ -45,12 +45,15 @@ export const defaultChannelName = "legation";
 
 /**
  * Run the host: serve tab mirrors over the broadcast channel and start the
- * engine's sync loop (pull on poke, push+pull on reconnect). Runs until
- * the scope closes.
+ * engine's sync loop (pull on poke, push+pull on reconnect). NEVER returns —
+ * both the host and `runSync` fork their fibers into the surrounding scope,
+ * so returning would let a caller's `Effect.scoped` tear the whole host down
+ * immediately (a real bug the svelte-commerce harness hit twice). Interrupt
+ * it / close the scope to stop serving.
  */
 export const run = (
   options: ServiceWorkerHostOptions = {}
-): Effect.Effect<void, never, ClientEngine.ClientEngine | Scope.Scope> =>
+): Effect.Effect<never, never, ClientEngine.ClientEngine | Scope.Scope> =>
   Effect.gen(function* () {
     const { channelName = defaultChannelName, registry } = options;
     const engine = yield* ClientEngine.ClientEngine;
@@ -59,4 +62,5 @@ export const run = (
       ? EngineHost.run({ channel, engine })
       : EngineHost.run({ channel, engine, registry });
     yield* engine.runSync.pipe(Effect.ignore);
+    return yield* Effect.never;
   });
