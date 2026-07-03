@@ -14,6 +14,9 @@ round-trip) and `SubscribeRelated`/`UnsubscribeRelated`, where the host runs
 the reconcile loop AND the join and the tab receives resolved rows
 (`RelatedUpdate`) — data work stays off the main thread. `EngineHost` takes
 an optional `registry` for relational resolution and refcounts all
-registration kinds per tab. In `@legation/svelte`, `namedQuery`,
+registration kinds per tab. A new `HostReady` announcement makes
+registrations survive host restarts: a starting host broadcasts it and
+every mirror replays the registrations it holds — covering killed service
+workers and tabs that raced the worker's boot. In `@legation/svelte`, `namedQuery`,
 `useNamedQuery`, and `useRelated({ subscribe: true })` now work over
 mirror-only runtimes (the internal engine-lookup fallback is removed).

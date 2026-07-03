@@ -344,4 +344,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
         )
       )
     );
+
+    // Announce readiness LAST: tabs that raced this host's boot (or survived
+    // a previous host) answer by re-posting their registrations.
+    yield* channel.post({ _tag: "HostReady" }).pipe(Effect.ignore);
   });

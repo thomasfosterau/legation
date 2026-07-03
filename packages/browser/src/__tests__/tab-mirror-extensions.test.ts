@@ -284,3 +284,33 @@ describe("ServiceWorkerHost", () => {
     20_000
   );
 });
+
+describe("HostReady replay", () => {
+  it.effect(
+    "a tab that subscribed before the host started hydrates once the host announces",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* makeEngine;
+        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+
+        // The tab races ahead of the host: these registrations go nowhere.
+        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        yield* mirror.subscribe(allTodos);
+        yield* mirror.subscribeQuery("todos/open", {});
+        yield* sleepReal(50);
+
+        // The host starts late and announces; the tab replays everything.
+        yield* EngineHost.run({ channel: host, engine, registry: collections });
+        yield* mirror.mutate("todo/set", { id: "1", title: "late", done: false, authorId: "u1" });
+
+        const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
+        expect((rows[0]!.value as Todo).title).toBe("late");
+        const named = yield* eventually(
+          mirror.queryNamed("todos/open", {}),
+          (current) => current.length === 1
+        );
+        expect((named[0]!.value as Todo).done).toBe(false);
+      }),
+    20_000
+  );
+});

@@ -138,6 +138,13 @@ export interface MirrorRelatedRow {
 }
 
 export type HostMessage =
+  /**
+   * Broadcast once when a host starts serving. Tabs answer by re-posting
+   * every registration they hold, so subscriptions survive a host that
+   * (re)starts after the tab — a killed service worker, or a dev-mode tab
+   * that raced the worker's boot.
+   */
+  | { readonly _tag: "HostReady" }
   | { readonly _tag: "MutateAck"; readonly requestId: number }
   | { readonly _tag: "MutateError"; readonly requestId: number; readonly message: string }
   /**
@@ -165,6 +172,7 @@ export type HostMessage =
     };
 
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
+  Schema.Struct({ _tag: Schema.tag("HostReady") }),
   Schema.Struct({ _tag: Schema.tag("MutateAck"), requestId: Schema.Number }),
   Schema.Struct({
     _tag: Schema.tag("MutateError"),
