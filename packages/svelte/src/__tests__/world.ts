@@ -11,6 +11,7 @@ import {
   Backend,
   ClientEngine,
   ClientStore,
+  ClientView,
   Collection,
   MemoryBackend,
   MutationRejected,
@@ -21,7 +22,6 @@ import {
   SyncRoom,
   Transport,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "../index.js";
 
 export interface Todo {
   readonly id: string;
@@ -57,7 +57,7 @@ export const collections = Collection.registry([
   }),
 ]);
 
-const mutators = Mutator.registry([
+export const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
     local: (args, writer) => writer.put("todos", (args as Todo).id, args),
@@ -88,7 +88,7 @@ const queries = Query.registry([
   },
 ]);
 
-const engineLayer = ClientEngine.layer({
+export const engineLayer = ClientEngine.layer({
   clientId: "c1",
   clientGroupId: "group-1",
   mutators,
@@ -114,12 +114,23 @@ const engineLayer = ClientEngine.layer({
   Layer.provide(ClientStore.layerMemory)
 );
 
+/**
+ * The tests' runtime carries both the narrow view (what the bindings consume)
+ * and the full engine (what the tests drive push/pull through) — the same
+ * composition an engine-backed app uses.
+ */
+export type WorldRuntime = ManagedRuntime.ManagedRuntime<
+  ClientView.ClientView | ClientEngine.ClientEngine,
+  never
+>;
+
 /** A fresh, isolated engine runtime per test. Dispose it when done. */
-export const makeRuntime = (): EffectSyncRuntime => ManagedRuntime.make(engineLayer);
+export const makeRuntime = (): WorldRuntime =>
+  ManagedRuntime.make(ClientView.layer.pipe(Layer.provideMerge(engineLayer)));
 
 /** Run an effect against the runtime's engine. */
 export const run = <A, E>(
-  runtime: EffectSyncRuntime,
+  runtime: WorldRuntime,
   f: (engine: ClientEngine.ClientEngine) => Effect.Effect<A, E>
 ): Promise<A> => runtime.runPromise(Effect.flatMap(ClientEngine.ClientEngine, f));
 

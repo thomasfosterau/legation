@@ -1304,22 +1304,6 @@ export const make = (
       return base.pipe(Stream.map(options.select), Stream.changesWith(equals));
     };
 
-    // A change that leaves the scalar aggregate unchanged must not re-emit;
-    // `Object.is` treats `undefined`/`NaN` correctly (unlike `===`).
-    const sameScalar = (a: Aggregate.AggregateValue, b: Aggregate.AggregateValue): boolean =>
-      Object.is(a, b);
-    // Structural equality for a grouped aggregate: same keys, same values.
-    const sameGrouped = (
-      a: Record<string, Aggregate.AggregateValue>,
-      b: Record<string, Aggregate.AggregateValue>
-    ): boolean => {
-      const keys = Object.keys(a);
-      return (
-        keys.length === Object.keys(b).length &&
-        keys.every((key) => Object.hasOwn(b, key) && Object.is(a[key], b[key]))
-      );
-    };
-
     const queryAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
       query(subset).pipe(Effect.map((rows) => Aggregate.compute(agg, rows)));
     const queryAggregateGrouped = (
@@ -1328,19 +1312,12 @@ export const make = (
       groupBy: string
     ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
     const observeAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
-      observeSubset(subset).pipe(
-        Stream.map((rows) => Aggregate.compute(agg, rows)),
-        Stream.changesWith(sameScalar)
-      );
+      Aggregate.observe(observeSubset(subset), agg);
     const observeAggregateGrouped = (
       subset: Subset.Subset,
       agg: Aggregate.Aggregate,
       groupBy: string
-    ) =>
-      observeSubset(subset).pipe(
-        Stream.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)),
-        Stream.changesWith(sameGrouped)
-      );
+    ) => Aggregate.observeGrouped(observeSubset(subset), agg, groupBy);
 
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });

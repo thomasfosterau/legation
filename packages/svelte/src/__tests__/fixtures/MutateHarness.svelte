@@ -22,16 +22,24 @@
   const mutateWithAck = getMutateWithAck();
 </script>
 
-<button onclick={() => void mutate("todo/set", { id: "2", title: "added" })}>add</button>
+<!-- Fire-and-forget clicks: swallow rejections (the runtime may dispose
+     mid-flight when a test tears down before an ack lands). -->
+<button onclick={() => void mutate("todo/set", { id: "2", title: "added" }).catch(() => undefined)}>
+  add
+</button>
 <button
   onclick={() =>
-    void mutateWithAck("todo/set", { id: "3", title: "awaited" }).then(onOutcome)}
+    void mutateWithAck("todo/set", { id: "3", title: "awaited" })
+      .then(onOutcome)
+      .catch(() => undefined)}
 >
   ack
 </button>
 <button
   onclick={() =>
-    void mutateWithAck("todo/reject", { id: "9", title: "doomed" }).then(onOutcome)}
+    void mutateWithAck("todo/reject", { id: "9", title: "doomed" })
+      .then(onOutcome)
+      .catch(() => undefined)}
 >
   reject
 </button>

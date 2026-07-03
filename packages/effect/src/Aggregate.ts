@@ -12,7 +12,7 @@
  * {@link compute} / {@link computeGrouped}.
  */
 
-import { Schema } from "effect";
+import { Schema, Stream } from "effect";
 
 /**
  * An aggregate descriptor.
@@ -133,3 +133,43 @@ export const computeGrouped = (
   for (const [key, bucket] of buckets) result[key] = compute(agg, bucket);
   return result;
 };
+
+/** Value equality for a scalar aggregate (`Object.is`, so `NaN` is stable). */
+export const sameValue = (a: AggregateValue, b: AggregateValue): boolean => Object.is(a, b);
+
+/** Structural equality for a grouped aggregate: same keys, same values. */
+export const sameGroupedValue = (
+  a: Record<string, AggregateValue>,
+  b: Record<string, AggregateValue>
+): boolean => {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && Object.is(a[key], b[key]))
+  );
+};
+
+/**
+ * Live aggregate over a stream of row pages (any {@link ClientView.observe}
+ * source — engine or mirror): {@link compute} per emission, deduped so the
+ * stream re-emits only when the value actually changes.
+ */
+export const observe = <E>(
+  rows: Stream.Stream<ReadonlyArray<{ readonly value: unknown }>, E>,
+  agg: Aggregate
+): Stream.Stream<AggregateValue, E> =>
+  rows.pipe(
+    Stream.map((page) => compute(agg, page)),
+    Stream.changesWith(sameValue)
+  );
+
+/** Live grouped aggregate over a stream of row pages; see {@link observe}. */
+export const observeGrouped = <E>(
+  rows: Stream.Stream<ReadonlyArray<{ readonly value: unknown }>, E>,
+  agg: Aggregate,
+  groupBy: string
+): Stream.Stream<Record<string, AggregateValue>, E> =>
+  rows.pipe(
+    Stream.map((page) => computeGrouped(agg, page, groupBy)),
+    Stream.changesWith(sameGroupedValue)
+  );

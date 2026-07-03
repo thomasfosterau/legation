@@ -22,6 +22,7 @@
 import { Effect, Ref, Scope, Stream } from "effect";
 import * as Collection from "./Collection.js";
 import type { ClientEngine, LocalRow } from "./ClientEngine.js";
+import type * as ClientView from "./ClientView.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
 
@@ -186,13 +187,13 @@ const hydrate = (
 
 /** Prime one index entry per targeted collection from the current local view. */
 const primeIndex = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   targets: ReadonlyMap<string, Target>
 ): Effect.Effect<Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>, never> =>
   Effect.gen(function* () {
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     for (const [collection, target] of targets) {
-      const rows = yield* engine.query(Subset.make({ collection })).pipe(Effect.orDie);
+      const rows = yield* view.query(Subset.make({ collection })).pipe(Effect.orDie);
       index.set(collection, groupByField(rows, target.field));
     }
     return index;
@@ -203,13 +204,13 @@ const primeIndex = (
  * targeted collections from the engine's local view (one-shot).
  */
 export const queryWith = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
 ): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
   Effect.gen(function* () {
-    const base = yield* engine.query(subset).pipe(Effect.orDie);
-    const index = yield* primeIndex(engine, strategy.targets(base));
+    const base = yield* view.query(subset).pipe(Effect.orDie);
+    const index = yield* primeIndex(view, strategy.targets(base));
     return hydrate(strategy, base, index);
   });
 
@@ -223,20 +224,20 @@ export const queryWith = (
  * changes that don't move the resolved result are deduped away.
  */
 export const observeWith = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
-  engine.observe(subset).pipe(
+  view.observe(subset).pipe(
     Stream.orDie,
     Stream.switchMap((base) => {
       const targets = strategy.targets(base);
       return Stream.unwrap(
         Effect.gen(function* () {
-          const index = yield* primeIndex(engine, targets);
+          const index = yield* primeIndex(view, targets);
           const updates = Stream.mergeAll(
             [...targets].map(([collection, target]) =>
-              engine.observe(Subset.make({ collection })).pipe(
+              view.observe(Subset.make({ collection })).pipe(
                 Stream.orDie,
                 // The observer's initial current-rows emission is NOT dropped:
                 // a write landing between `primeIndex` and this subscription
@@ -340,28 +341,28 @@ export const relatedWith = (
 
 /** Resolve a subset's declared relationships against the mirror (one-shot). */
 export const query = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
   queryWith(
-    engine,
+    view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, names)),
     subset
   );
 
 /** Live, incrementally-maintained join over a subset's declared relationships. */
 export const observe = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
   observeWith(
-    engine,
+    view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, names)),
     subset
   );
@@ -392,11 +393,11 @@ export const related = (
  * filtered by `Predicate.exists` evaluates correctly on the client.
  */
 export const resolveExistsLocally = (
-  engine: ClientEngine,
+  view: ClientView.Reader,
   predicate: Predicate.Predicate
 ): Effect.Effect<Predicate.Predicate, never> =>
   Predicate.resolveExists(predicate, (node) =>
-    engine.query(Subset.make({ collection: node.collection })).pipe(
+    view.query(Subset.make({ collection: node.collection })).pipe(
       Effect.map((rows) =>
         Predicate.existsValues(
           node,

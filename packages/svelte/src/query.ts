@@ -3,21 +3,27 @@
  *
  * `query` / `namedQuery` bridge a live query (an Effect `Stream` over the
  * mirror) to a Svelte `Readable` store: the store's `start` callback forks the
- * engine's `observe` in a fiber and pushes each snapshot through `set`; the
+ * view's `observe` in a fiber and pushes each snapshot through `set`; the
  * returned `stop` callback interrupts that fiber when the last subscriber
  * unsubscribes. Read them with Svelte's `$store` auto-subscription, so the
  * component re-renders on every local change (mutation, push ack, pull/rebase).
+ *
+ * The stores run over the runtime's {@link ClientView} — a main-thread engine
+ * or a tab mirror equally (ADR-0021). `namedQuery` is engine-only (a named
+ * subscription registers server-side through the engine) and dies with an
+ * actionable error over a mirror-only runtime.
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
 import {
-  type Aggregate,
+  Aggregate,
   ClientEngine,
+  ClientView,
   type Collection,
   Related,
   type Subset,
 } from "@legation/effect";
-import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
+import { getEngineRuntime, withEngine, type EffectSyncRuntime } from "./runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */
 export type Rows = ReadonlyArray<ClientEngine.LocalRow>;
@@ -26,11 +32,11 @@ const EMPTY: Rows = [];
 const makeStore = <T>(
   runtime: EffectSyncRuntime,
   initial: T,
-  toStream: (engine: ClientEngine.ClientEngine) => Stream.Stream<T, unknown>
+  toStream: (view: ClientView.ClientView) => Stream.Stream<T, unknown>
 ): Readable<T> =>
   readable<T>(initial, (set) => {
-    const run = Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-      Stream.runForEach(toStream(engine), (value) => Effect.sync(() => set(value)))
+    const run = Effect.flatMap(ClientView.ClientView, (view) =>
+      Stream.runForEach(toStream(view), (value) => Effect.sync(() => set(value)))
     ).pipe(Effect.catchCause(() => Effect.void));
     const fiber = runtime.runFork(run);
     return () => {
@@ -48,12 +54,16 @@ export function query<A>(
 ): Readable<ReadonlyArray<ClientEngine.TypedRow<A>>>;
 export function query(subset: Subset.Subset): Readable<Rows>;
 export function query(subset: Subset.Subset): Readable<Rows> {
-  return makeStore(getEngineRuntime(), EMPTY, (engine) => engine.observe(subset));
+  return makeStore(getEngineRuntime(), EMPTY, (view) => view.observe(subset));
 }
 
-/** Live result of a named query (Query.ts). */
+/** Live result of a named query (Query.ts). Engine-only (see module docs). */
 export const namedQuery = (name: string, args: unknown): Readable<Rows> =>
-  makeStore(getEngineRuntime(), EMPTY, (engine) => engine.observeNamed(name, args));
+  makeStore(
+    getEngineRuntime(),
+    EMPTY,
+    withEngine("namedQuery", (engine) => engine.observeNamed(name, args))
+  );
 
 /**
  * Live aggregate over a subset (count/sum/min/max/avg), re-emitting only when
@@ -64,8 +74,18 @@ export const aggregate = (
   subset: Subset.Subset,
   agg: Aggregate.Aggregate
 ): Readable<Aggregate.AggregateValue> =>
-  makeStore<Aggregate.AggregateValue>(getEngineRuntime(), undefined, (engine) =>
-    engine.observeAggregate(subset, agg)
+  makeStore<Aggregate.AggregateValue>(getEngineRuntime(), undefined, (view) =>
+    Aggregate.observe(view.observe(subset), agg)
+  );
+
+/** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
+export const aggregateGrouped = (
+  subset: Subset.Subset,
+  agg: Aggregate.Aggregate,
+  groupBy: string
+): Readable<Record<string, Aggregate.AggregateValue>> =>
+  makeStore<Record<string, Aggregate.AggregateValue>>(getEngineRuntime(), {}, (view) =>
+    Aggregate.observeGrouped(view.observe(subset), agg, groupBy)
   );
 
 /**
@@ -81,16 +101,6 @@ export const related = (
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Readable<ReadonlyArray<Related.RelatedRow>> =>
-  makeStore<ReadonlyArray<Related.RelatedRow>>(getEngineRuntime(), [], (engine) =>
-    Related.observe(engine, registry, collectionName, subset, names)
-  );
-
-/** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
-export const aggregateGrouped = (
-  subset: Subset.Subset,
-  agg: Aggregate.Aggregate,
-  groupBy: string
-): Readable<Record<string, Aggregate.AggregateValue>> =>
-  makeStore<Record<string, Aggregate.AggregateValue>>(getEngineRuntime(), {}, (engine) =>
-    engine.observeAggregateGrouped(subset, agg, groupBy)
+  makeStore<ReadonlyArray<Related.RelatedRow>>(getEngineRuntime(), [], (view) =>
+    Related.observe(view, registry, collectionName, subset, names)
   );

@@ -4,10 +4,13 @@
  * Signals belong at the transport seam, not in core (issue #33). This layers
  * the browser's connectivity and focus signals onto any `ClientTransport`:
  *
- * - `navigator.onLine` + `online`/`offline` events drive a truthful
- *   `statusChanges` stream, so the sync loop's push+pull-on-reconnect trigger
- *   actually fires for carriers (like the RPC transport) that otherwise report
- *   themselves permanently "connected".
+ * - `navigator.onLine` + `online`/`offline` events are **combined with the
+ *   wrapped transport's own status** (worst of the two wins), so a carrier
+ *   with real awareness — `Transport.withInferredStatus`, `withFallback`, a
+ *   status-aware socket — keeps its signal, while the browser adds what only
+ *   it knows (the radio is off). For carriers that report themselves
+ *   permanently "connected" (the plain RPC transport), the navigator signal
+ *   is the truthful one.
  * - `visibilitychange` to visible surfaces a poke ("pull soon"), so returning
  *   to a tab converges it — the browser analogue of TanStack Query's window
  *   focus refetching.
@@ -44,10 +47,22 @@ const onEvent = (
         () => Effect.sync(() => target.removeEventListener(type, handler))
       ).pipe(Effect.asVoid);
 
+/** The pessimistic combination of two status signals. */
+const worst = (
+  a: Transport.ConnectionStatus,
+  b: Transport.ConnectionStatus
+): Transport.ConnectionStatus =>
+  a === "disconnected" || b === "disconnected"
+    ? "disconnected"
+    : a === "connecting" || b === "connecting"
+      ? "connecting"
+      : "connected";
+
 /**
- * Wrap a `ClientTransport` so its connection status tracks `navigator.onLine`
- * and a return-to-visible surfaces a poke. Scoped: forked fibres and DOM
- * listeners are torn down when the scope closes.
+ * Wrap a `ClientTransport` so its connection status combines
+ * `navigator.onLine` with the transport's own signal, and a return-to-visible
+ * surfaces a poke. Scoped: forked fibres and DOM listeners are torn down when
+ * the scope closes.
  */
 export const withBrowserConnectivity = (
   transport: Transport.ClientTransport
@@ -82,7 +97,15 @@ export const withBrowserConnectivity = (
       push: transport.push,
       pull: transport.pull,
       pokes: Stream.merge(transport.pokes, Stream.fromQueue(focusPokes)),
-      status: SubscriptionRef.get(status),
-      statusChanges: SubscriptionRef.changes(status),
+      status: Effect.zipWith(SubscriptionRef.get(status), transport.status, worst),
+      // Both sources emit their current value first (the seam's contract), so
+      // the combination emits promptly; dedup keeps reconnect triggers calm.
+      statusChanges: Stream.zipLatest(
+        SubscriptionRef.changes(status),
+        transport.statusChanges
+      ).pipe(
+        Stream.map(([navigatorStatus, transportStatus]) => worst(navigatorStatus, transportStatus)),
+        Stream.changesWith((a, b) => a === b)
+      ),
     };
   });

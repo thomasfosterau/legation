@@ -42,9 +42,14 @@
  */
 
 import { Effect, Schema } from "effect";
-import { StoredRowSchema, type ClientStore } from "./ClientStore.js";
+import * as ClientEngineModule from "./ClientEngine.js";
+import { ClientStore, makeMemory, StoredRowSchema } from "./ClientStore.js";
+import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
+import * as Mutator from "./Mutator.js";
 import { MutationSchema } from "./Protocol.js";
+import * as Subset from "./Subset.js";
+import { ClientTransport, makeInMemory, ServerHandler } from "./Transport.js";
 
 /**
  * One dehydrated row: a {@link StoredRow} tagged with the collection it belongs
@@ -117,3 +122,109 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       yield* store.appendMutation(mutation);
     }
   });
+
+/**
+ * Whether a store holds nothing: no rows, no cookie, no journalled mutations.
+ * The "fresh browser" test {@link hydrateIfEmpty} gates on.
+ */
+export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> =>
+  Effect.gen(function* () {
+    if ((yield* store.getCookie) !== undefined) return false;
+    if ((yield* store.pendingMutations).length > 0) return false;
+    for (const collection of yield* store.listCollections) {
+      if ((yield* store.listRows(collection)).length > 0) return false;
+    }
+    return true;
+  });
+
+/**
+ * {@link hydrate}, but only into an empty store; returns whether it hydrated.
+ *
+ * This is the right client-boot default over a *durable* store: on a repeat
+ * visit the store already holds rows, a cookie, and possibly journalled
+ * offline mutations that are all fresher than the SSR snapshot — hydrating
+ * over them would regress the cookie (and with it the CVR conversation) and
+ * clobber newer confirmed rows. An empty store (first visit, cleared storage)
+ * takes the snapshot wholesale.
+ */
+export const hydrateIfEmpty = (
+  store: ClientStore,
+  snapshot: Snapshot
+): Effect.Effect<boolean, StoreError> =>
+  Effect.gen(function* () {
+    if (!(yield* isEmpty(store))) return false;
+    yield* hydrate(store, snapshot);
+    return true;
+  });
+
+/**
+ * Project a snapshot onto a subset, locally and synchronously:
+ * the snapshot's rows for the subset's collection, filtered/sorted/windowed
+ * by {@link Subset.apply}. This is how a component derives its initial value
+ * (e.g. the rune hooks' `initial` option) from the page's snapshot — during
+ * SSR and on first client render — without touching an engine.
+ */
+export const rowsFor = (
+  snapshot: Snapshot,
+  subset: Subset.Subset
+): ReadonlyArray<ClientEngineModule.LocalRow> =>
+  Subset.apply(
+    snapshot.rows
+      .filter((row) => row.collection === subset.collection)
+      .map((row) => ({ id: row.id, value: row.value })),
+    subset
+  );
+
+/** Options for {@link snapshot}. */
+export interface SnapshotOptions {
+  /**
+   * The client group the render belongs to — the browser's group id (e.g.
+   * carried in an HTTP cookie), so the cookie in the produced snapshot
+   * continues that group's CVR conversation on the client's first pull.
+   */
+  readonly clientGroupId: string;
+  /** Client id for the request-scoped engine (never pushes). Default `"ssr"`. */
+  readonly clientId?: string;
+  /** The subsets the page needs — subscribed and pulled once. */
+  readonly subsets: ReadonlyArray<Subset.Subset>;
+  /** Mutator registry for the request-scoped engine. Default: none. */
+  readonly mutators?: Mutator.MutatorRegistry;
+}
+
+/**
+ * Produce an SSR snapshot over a request-scoped engine: build an in-memory
+ * {@link ClientStore} and an in-process transport to the in-context
+ * {@link ServerHandler}, subscribe the page's subsets, pull once, and
+ * {@link dehydrate}. Everything is scoped to the call — nothing outlives it.
+ *
+ * This is the server half of the SSR flow described above; run it inside a
+ * request handler (a SvelteKit `load`, a Next.js loader) with the app's sync
+ * server provided as `ServerHandler`.
+ */
+export const snapshot = (
+  options: SnapshotOptions
+): Effect.Effect<
+  Snapshot,
+  StoreError | TransportError | MutatorError | VersionNotSupportedError,
+  ServerHandler
+> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* ServerHandler;
+      const store = yield* makeMemory;
+      const transport = yield* makeInMemory(handler, options.clientGroupId);
+      const engine = yield* ClientEngineModule.make({
+        clientId: options.clientId ?? "ssr",
+        clientGroupId: options.clientGroupId,
+        mutators: options.mutators ?? Mutator.registry([]),
+      }).pipe(
+        Effect.provideService(ClientStore, store),
+        Effect.provideService(ClientTransport, transport)
+      );
+      for (const subset of options.subsets) {
+        yield* engine.subscribe(subset);
+      }
+      yield* engine.pull;
+      return yield* dehydrate(store);
+    })
+  );

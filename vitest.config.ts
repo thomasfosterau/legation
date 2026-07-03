@@ -13,6 +13,7 @@ const alias = {
   "@legation/sql": pkg("sql"),
   "@legation/react": pkg("react"),
   "@legation/svelte": pkg("svelte"),
+  "@legation/sveltekit": pkg("sveltekit"),
 };
 
 export default defineConfig({
