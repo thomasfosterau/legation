@@ -9,8 +9,9 @@
  * module.
  */
 import * as React from "react";
+import type * as ManagedRuntime from "effect/ManagedRuntime";
 import { AtomRegistry } from "effect/unstable/reactivity";
-import type { EngineAtoms } from "@legation/effect";
+import type { ClientEngine, EngineAtoms } from "@legation/effect";
 
 const RegistryContext = React.createContext<AtomRegistry.AtomRegistry | null>(null);
 const AtomsContext = React.createContext<EngineAtoms.EngineAtoms | null>(null);
@@ -51,3 +52,10 @@ export const useEngineAtoms = (): EngineAtoms.EngineAtoms => {
   }
   return atoms;
 };
+
+/**
+ * A runtime handle apps use to run engine effects outside components (world
+ * setup, demo controls). The React hooks themselves run over the provider's
+ * atoms — this alias exists for app plumbing parity with `@legation/svelte`.
+ */
+export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientEngine.ClientEngine, never>;

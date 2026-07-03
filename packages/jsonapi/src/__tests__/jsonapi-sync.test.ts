@@ -14,7 +14,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { ClientEngine, Subset } from "@legation/effect";
+import { ClientEngine, ClientStore, Subset } from "@legation/effect";
 import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 
@@ -250,5 +250,34 @@ describe("end-to-end client-direct sync", () => {
       ),
       Effect.scoped
     );
+  });
+});
+
+describe("JsonApiSync.layer store option", () => {
+  it.effect("writes through a supplied durable client store", () => {
+    const server = makeServer();
+    return Effect.gen(function* () {
+      // The app's own store instance, injected via the new `store` option —
+      // journalled mutations must land in it (offline durability seam).
+      const appStore = yield* ClientStore.makeMemory;
+      yield* Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        yield* engine.mutate("todos/create", {
+          type: "todos",
+          id: "1",
+          attributes: { title: "queued" },
+        });
+      }).pipe(
+        Effect.provide(
+          JsonApiSync.layer(api, {
+            baseUrl: "http://api.test",
+            clientId: "client-1",
+            clientGroupId: "group-1",
+            store: Layer.succeed(ClientStore.ClientStore)(appStore),
+          }).pipe(Layer.provide(server.layer))
+        )
+      );
+      expect((yield* appStore.pendingMutations).map((m) => m.mutator)).toEqual(["todos/create"]);
+    }).pipe(Effect.scoped);
   });
 });

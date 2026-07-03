@@ -58,6 +58,13 @@ export interface JsonApiSyncOptions {
    * (coalesced) without an app-level `push` call.
    */
   readonly pushDebounce?: Duration.Input;
+  /**
+   * The client store backing the engine. Defaults to the in-memory store —
+   * supply a durable one (e.g. `IndexedDbClientStore.layerWindow()` from
+   * `@legation/browser`, or `ClientStore.layerKeyValue` over localStorage) so
+   * the journal and confirmed rows survive reloads (offline-first).
+   */
+  readonly store?: Layer.Layer<ClientStore.ClientStore>;
 }
 
 /** Reflect + derive an api's resources, collections, mutators, operations. */
@@ -75,8 +82,8 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
 /**
  * The full client-direct stack as a layer: provide an `HttpClient`, get a
  * ready `ClientEngine`. CVR store and invalidation bus are in-process; the
- * client store is in-memory (swap in a durable `ClientStore` layer for
- * offline persistence across reloads).
+ * client store defaults to in-memory (pass `store` for durable offline
+ * persistence across reloads).
  */
 export const layer = (
   api: JsonApi,
@@ -115,7 +122,7 @@ export const layer = (
     clientGroupId: options.clientGroupId,
     mutators: registry,
     syncLoop,
-  }).pipe(Layer.provide(transportLayer), Layer.provide(ClientStore.layerMemory));
+  }).pipe(Layer.provide(transportLayer), Layer.provide(options.store ?? ClientStore.layerMemory));
 };
 
 /**

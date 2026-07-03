@@ -38,6 +38,7 @@ import {
   SyncServer,
   Transport,
   TransportError,
+  type VersionNotSupportedError,
 } from "@legation/effect";
 
 import {
@@ -115,8 +116,8 @@ const makeOfflineTransport = (
   online: SubscriptionRef.SubscriptionRef<boolean>
 ): Transport.ClientTransport => {
   const whenOnline = <A>(
-    effect: Effect.Effect<A, TransportError>
-  ): Effect.Effect<A, TransportError> =>
+    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
     SubscriptionRef.get(online).pipe(
       Effect.flatMap((on) =>
         on ? effect : Effect.fail(new TransportError({ message: "Client is offline" }))
