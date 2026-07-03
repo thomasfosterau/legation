@@ -17,14 +17,16 @@
  * `useRelated` need no engine — the view carries them over either host
  * (mirror-protocol extension, ADR-0021).
  */
-import { getContext, setContext } from "svelte";
+import { createContext } from "svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ClientView } from "@legation/effect";
 
 /** A runtime that can run {@link ClientView} effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientView.ClientView, never>;
 
-const RUNTIME_KEY = Symbol("@legation/svelte/runtime");
+// Svelte's type-safe context pair: one instance per module evaluation, so the
+// key can't collide with app contexts and the value needs no cast on read.
+const [readRuntime, writeRuntime] = createContext<EffectSyncRuntime>();
 
 /**
  * Provide the engine runtime to descendant components. Call once, high in the
@@ -32,16 +34,18 @@ const RUNTIME_KEY = Symbol("@legation/svelte/runtime");
  * `getMutate` call.
  */
 export const setEngineRuntime = (runtime: EffectSyncRuntime): void => {
-  setContext(RUNTIME_KEY, runtime);
+  writeRuntime(runtime);
 };
 
 /** Read the engine runtime put in context by {@link setEngineRuntime}. */
 export const getEngineRuntime = (): EffectSyncRuntime => {
-  const runtime = getContext<EffectSyncRuntime | undefined>(RUNTIME_KEY);
-  if (runtime === undefined) {
+  try {
+    return readRuntime();
+  } catch {
+    // Svelte's context getter throws when no ancestor provided the pair —
+    // replace its message with an actionable one.
     throw new Error(
       "@legation/svelte: call setEngineRuntime(runtime) higher in the component tree before query()/getMutate()"
     );
   }
-  return runtime;
 };

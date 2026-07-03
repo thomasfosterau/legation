@@ -81,10 +81,31 @@ renders, and on the client it makes the first render match the server markup
 </script>
 ```
 
+### Async Svelte
+
+Every live hook also exposes an awaitable **`promise`** for Svelte's
+`experimental.async` mode: it stays pending until the first data arrives —
+so `await` inside a `<svelte:boundary>` renders the boundary's `pending`
+snippet — and is replaced with an already-resolved promise on every
+emission, so awaiting expressions re-run with fresh rows while Svelte keeps
+the previous UI on screen (no pending flash after first load). A failed
+stream rejects it into the boundary's `failed` snippet.
+
+```svelte
+<svelte:boundary>
+  <ul>
+    {#each await page.promise as row (row.id)}
+      <li>{row.value.name}</li>
+    {/each}
+  </ul>
+  {#snippet pending()}<p>Loading…</p>{/snippet}
+</svelte:boundary>
+```
+
 The runes entry point ships as an uncompiled `.svelte.js` module (compiled by
-your bundler's Svelte plugin, the standard Svelte-library convention) and
-requires Svelte 5; the store API on the package root remains Svelte-4
-compatible.
+your bundler's Svelte plugin, the standard Svelte-library convention). The
+package requires Svelte 5.40+ (its runtime context rides Svelte's
+`createContext`).
 
 ```bash
 npm install @legation/svelte @legation/effect effect svelte

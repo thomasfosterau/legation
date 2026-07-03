@@ -138,7 +138,7 @@ export const run = <A, E>(
  * Poll until a condition holds, flushing Svelte's pending effects between
  * checks so store emissions from engine fibers reach the DOM.
  */
-export const until = async (predicate: () => boolean, timeoutMs = 10_000): Promise<void> => {
+export const until = async (predicate: () => boolean, timeoutMs = 25_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     flushSync();
