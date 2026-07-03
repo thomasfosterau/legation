@@ -1,7 +1,7 @@
 # ADR-0022: The resource-graph public API — Node, Collection, Query, Mutation, Client, Server
 
 Date: 2026-07-03
-Status: Proposed
+Status: Accepted
 
 ## Context
 
