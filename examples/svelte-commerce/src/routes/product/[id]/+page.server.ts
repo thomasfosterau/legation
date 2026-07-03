@@ -1,26 +1,69 @@
 /**
- * No-JS add-to-cart: a plain form post that commits through the sync
- * server's cart API (ADR-0019's out-of-band writer, done right: the write
- * lands in the process whose invalidation bus pokes live clients, so no
- * polling round-trip is needed). The next full-page load re-snapshots
- * regardless (pull is the correctness path).
+ * Product detail — the naive tier loads the product (variants included) and
+ * its reviews from the JSON:API; the no-JS forms write back through it
+ * (cart add, review post). Signed-out writes bounce to /account.
  */
-import type { Actions } from "./$types";
-import { redirect } from "@sveltejs/kit";
+import type { Actions, PageServerLoad } from "./$types";
+import { error, redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { clientGroupId } from "@legation/sveltekit";
+import { productId, variantId } from "../../../../server/jsonapi.js";
+
+export const load: PageServerLoad = async ({ locals, params }) => {
+  const [product, reviews] = await Promise.all([
+    Effect.runPromise(
+      locals.api.products.get({ params: { id: productId(params.id) }, query: { include: ["variants"] } }).pipe(
+        Effect.catchTag("NotFound", () => Effect.succeed(undefined))
+      )
+    ),
+    Effect.runPromise(locals.api.reviews.list({ query: { filter: { productId: params.id } } })),
+  ]);
+  if (product?.data == null) error(404, "no such product");
+  return {
+    product: product.data,
+    variants: product.included ?? [],
+    reviews: reviews.data,
+  };
+};
 
 export const actions: Actions = {
-  addToCart: async ({ request, cookies, locals }) => {
+  addToCart: async ({ request, locals }) => {
+    if (locals.user === undefined) redirect(303, "/account");
     const form = await request.formData();
-    const variantId = String(form.get("variantId") ?? "");
-    const result = await Effect.runPromise(
-      locals.api.cart.add({ payload: { clientGroupId: clientGroupId(cookies), variantId } }).pipe(
-        Effect.map(() => "ok" as const),
-        Effect.catchTag("Unauthorized", () => Effect.succeed("anonymous" as const))
-      )
+    const variantIdRaw = String(form.get("variantId") ?? "");
+    await Effect.runPromise(
+      locals.api.cartItems
+        .create({
+          payload: {
+            data: {
+              type: "cartItems",
+              attributes: { qty: 1 },
+              relationships: { variant: { data: { type: "variants", id: variantId(variantIdRaw) } } },
+            },
+          },
+        })
+        .pipe(Effect.catchTag("BadRequest", () => Effect.succeed(undefined)))
     );
-    if (result === "anonymous") redirect(303, "/account");
     redirect(303, "/cart");
+  },
+  review: async ({ request, locals, params }) => {
+    if (locals.user === undefined) redirect(303, "/account");
+    const form = await request.formData();
+    await Effect.runPromise(
+      locals.api.reviews.create({
+        payload: {
+          data: {
+            type: "reviews",
+            attributes: {
+              authorName: locals.user.name,
+              rating: Number(form.get("rating") ?? 5),
+              body: String(form.get("body") ?? ""),
+              createdAt: new Date().toISOString(),
+            },
+            relationships: { product: { data: { type: "products", id: productId(params.id) } } },
+          },
+        },
+      })
+    );
+    redirect(303, `/product/${params.id}`);
   },
 };

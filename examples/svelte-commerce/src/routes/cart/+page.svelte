@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { AsyncResult } from "effect/unstable/reactivity";
-  import { Hydration } from "@legation/effect";
   import { useMutation, useRelated } from "@legation/svelte/runes";
   import { myCartItems, registry, type CartItem, type Variant } from "../../lib/domain.js";
+  import { cartItemRows, variantRows } from "../../lib/rows.js";
 
   const { data } = $props();
-  const userId = $derived(data.userId);
+  const userId = $derived(data.user?.id);
 
-  // Live join: each cart line resolves its variant (name, price, stock).
-// svelte-ignore state_referenced_locally
+  // Live join: each cart line resolves its variant (name, price, stock) in
+  // the service-worker host; seeded from the JSON:API load.
+  // svelte-ignore state_referenced_locally
   const cart = useRelated(
     () => ({
       registry,
@@ -17,25 +17,12 @@
       names: ["variant"],
     }),
     {
-      initial:
-        userId === undefined
-          ? []
-          : Hydration.rowsFor(data.snapshot, myCartItems(userId)).map((row) => ({
-              id: row.id,
-              value: row.value,
-              related: {},
-            })),
+      initial: cartItemRows(data.lines).map((row) => {
+        const variantId = (row.value as CartItem).variantId;
+        const variant = variantRows(data.variants).find((v) => v.id === variantId)?.value ?? null;
+        return { id: row.id, value: row.value, related: { variant } };
+      }),
     }
-  );
-
-  const lines = $derived(
-    AsyncResult.getOrElse(cart.current, () => []).map((row) => ({
-      item: row.value as CartItem,
-      variant: row.related["variant"] as Variant | undefined,
-    }))
-  );
-  const total = $derived(
-    lines.reduce((sum, line) => sum + (line.variant?.priceCents ?? 0) * line.item.qty, 0)
   );
 
   const mutate = useMutation();
@@ -48,18 +35,24 @@
     ).catch(() => undefined);
   };
 
-  const placeOrder = () => {
-    if (userId === undefined || lines.length === 0) return;
+  const placeOrder = async () => {
+    if (userId === undefined) return;
+    const rows = await cart.promise;
+    if (rows.length === 0) return;
     void mutate("order/place", {
       orderId: `o-${crypto.randomUUID()}`,
       userId,
       createdAt: new Date().toISOString(),
-      items: lines.map((line) => ({
-        cartItemId: line.item.id,
-        variantId: line.item.variantId,
-        qty: line.item.qty,
-        priceCents: line.variant?.priceCents ?? 0,
-      })),
+      items: rows.map((row) => {
+        const item = row.value as CartItem;
+        const variant = row.related["variant"] as Variant | null;
+        return {
+          cartItemId: item.id,
+          variantId: item.variantId,
+          qty: item.qty,
+          priceCents: variant?.priceCents ?? 0,
+        };
+      }),
     }).catch(() => undefined);
   };
 </script>
@@ -68,21 +61,40 @@
 
 {#if userId === undefined}
   <p><a href="/account">Sign in</a> to use the cart.</p>
-{:else if lines.length === 0}
-  <p>Cart is empty — <a href="/">browse the catalog</a>.</p>
 {:else}
-  <ul>
-    {#each lines as line (line.item.id)}
-      <li>
-        {line.variant?.name ?? line.item.variantId} × {line.item.qty}
-        — ${(((line.variant?.priceCents ?? 0) * line.item.qty) / 100).toFixed(2)}
-        <button onclick={() => setQty(line.item, line.item.qty + 1)}>+</button>
-        <button onclick={() => setQty(line.item, line.item.qty - 1)}>−</button>
-        <button onclick={() => setQty(line.item, 0)}>Remove</button>
-      </li>
-    {/each}
-  </ul>
-  <p>Total: ${(total / 100).toFixed(2)}</p>
-  <button onclick={placeOrder}>Place order</button>
-  <p><em>Works offline: the order journals locally and pushes on reconnect.</em></p>
+  <svelte:boundary>
+    {@const rows = await cart.promise}
+    {#if rows.length === 0}
+      <p>Cart is empty — <a href="/">browse the catalog</a>.</p>
+    {:else}
+      <ul>
+        {#each rows as row (row.id)}
+          {@const item = row.value as CartItem}
+          {@const variant = row.related["variant"] as Variant | null}
+          <li>
+            {variant?.name ?? item.variantId} × {item.qty}
+            — ${(((variant?.priceCents ?? 0) * item.qty) / 100).toFixed(2)}
+            <button onclick={() => setQty(item, item.qty + 1)}>+</button>
+            <button onclick={() => setQty(item, item.qty - 1)}>−</button>
+            <button onclick={() => setQty(item, 0)}>Remove</button>
+          </li>
+        {/each}
+      </ul>
+      <p>
+        Total: ${(
+          rows.reduce((sum, row) => {
+            const item = row.value as CartItem;
+            const variant = row.related["variant"] as Variant | null;
+            return sum + (variant?.priceCents ?? 0) * item.qty;
+          }, 0) / 100
+        ).toFixed(2)}
+      </p>
+      <button onclick={placeOrder}>Place order</button>
+      <p><em>Works offline: the order journals locally and pushes on reconnect.</em></p>
+    {/if}
+
+    {#snippet pending()}
+      <p>Loading cart…</p>
+    {/snippet}
+  </svelte:boundary>
 {/if}

@@ -1,25 +1,22 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { setEngineRuntime } from "@legation/svelte";
-  import { boot, ssrStub, startSync, type AppRuntime } from "../lib/engine.js";
-  import { registerServiceWorker } from "../lib/sw.js";
+  import { boot, registerDevServiceWorker, ssrStub, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();
 
-  // Boot once per app lifetime: IndexedDB store (snapshot hydrates only when
-  // empty), WS transport with HTTP fallback. On the server, hooks render from
-  // the snapshot via their `initial` seeds — no runtime needed there, but the
-  // context must exist, so provide a lazy one-time boot.
+  // The tab's whole data layer is a TabMirror over the service worker's
+  // engine — boot broadcasts the config handshake and registers the shell
+  // subsets. SSR renders come entirely from the hooks' `initial` seeds, so
+  // the server gets a loud stub instead of a runtime.
   let runtime: AppRuntime | undefined;
   if (browser) {
+    // SvelteKit registers the worker itself in production builds; dev needs
+    // the documented manual module registration.
+    registerDevServiceWorker();
     // svelte-ignore state_referenced_locally
-    runtime = boot({ snapshot: data.snapshot, clientGroupId: data.clientGroupId, userId: data.userId });
-    // svelte-ignore state_referenced_locally
-    startSync(runtime, data.userId);
-    registerServiceWorker();
+    runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
   }
-  // SSR renders never run $effect, so hooks only read `initial` seeds — a
-  // server-side runtime is never exercised; the stub makes any misuse loud.
   setEngineRuntime(runtime ?? ssrStub());
 </script>
 
@@ -27,8 +24,8 @@
   <a href="/">Catalog</a>
   <a href="/cart">Cart</a>
   <a href="/orders">Orders</a>
-  {#if data.userId}
-    <span>signed in as {data.userId}</span>
+  {#if data.user}
+    <span>signed in as {data.user.name}</span>
     <form method="post" action="/account?/signout" style="display:inline">
       <button>Sign out</button>
     </form>

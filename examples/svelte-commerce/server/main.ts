@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { HintSource } from "@legation/effect";
 import { HttpSyncServer } from "@legation/node";
 import { PollingHintSource } from "@legation/sql";
-import { apiLive } from "./api.js";
+import { jsonApiLive } from "./jsonapi.js";
 import { clientLayer, makeExecutor, migrate } from "./db.js";
 import { tables } from "./handlers.js";
 import { syncLayer } from "./runtime.js";
@@ -61,11 +61,11 @@ const main = Effect.gen(function* () {
   });
   yield* Effect.forkScoped(HintSource.run(hints));
   yield* Effect.forkScoped(fulfilment.pipe(Effect.orDie));
-  yield* Effect.log(`commerce sync server on :${PORT} (ws /sync-ws, http /sync, api /api)`);
+  yield* Effect.log(`commerce sync server on :${PORT} (ws /sync-ws, http /sync, jsonapi /jsonapi)`);
   return yield* Effect.never;
 }).pipe(
   Effect.provide(
-    HttpRouter.serve(Layer.mergeAll(carriers, apiLive)).pipe(
+    HttpRouter.serve(Layer.mergeAll(carriers, jsonApiLive)).pipe(
       Layer.provide(NodeHttpServer.layer(createServer, { port: PORT })),
       Layer.provideMerge(syncLayer),
       Layer.provideMerge(database)

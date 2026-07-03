@@ -1,33 +1,51 @@
 /**
- * Sign-in/out as plain form actions — the app's auth boundary and part of
- * the no-JS baseline. Both call the sync server's account API (the typed
- * `HttpApiClient` in `locals.api`): signing in binds the browser's client
- * group to the user (`client_groups`), which is what the server-side
- * `IdentityResolver` consults on every push and pull; the client never
- * asserts its own identity. Signing out unbinds — the next pull's auth
- * filters collapse the private subsets to empty allow-sets.
+ * Sign-up/in/out as plain form actions over Better Auth — the app's auth
+ * boundary and part of the no-JS baseline. `auth.api.*` runs server-side;
+ * the `sveltekitCookies` plugin sets the session cookies on the response.
+ * The sync engine never sees any of this directly: hooks.server.ts aligns
+ * the `client_groups` binding with the session on the next request, which
+ * is what the engine's `IdentityResolver` consults.
  */
 import type { Actions } from "./$types";
-import { redirect } from "@sveltejs/kit";
-import { Effect } from "effect";
-import { clientGroupId } from "@legation/sveltekit";
+import { fail, redirect } from "@sveltejs/kit";
+import { APIError } from "better-auth";
+import { auth } from "$lib/server/auth.js";
+
+const submitted = async (request: Request) => {
+  const form = await request.formData();
+  return {
+    email: String(form.get("email") ?? "").trim(),
+    password: String(form.get("password") ?? ""),
+    name: String(form.get("name") ?? "").trim(),
+  };
+};
 
 export const actions: Actions = {
-  signin: async ({ request, cookies, locals }) => {
-    const form = await request.formData();
-    const username = String(form.get("username") ?? "").trim();
-    if (username === "") return { error: "enter a username" };
-    await Effect.runPromise(
-      locals.api.account.signin({
-        payload: { username, clientGroupId: clientGroupId(cookies) },
-      })
-    );
+  signup: async ({ request }) => {
+    const { email, password, name } = await submitted(request);
+    try {
+      await auth.api.signUpEmail({
+        body: { email, password, name: name === "" ? email : name },
+        headers: request.headers,
+      });
+    } catch (error) {
+      if (error instanceof APIError) return fail(400, { error: error.message });
+      throw error;
+    }
     redirect(303, "/");
   },
-  signout: async ({ cookies, locals }) => {
-    await Effect.runPromise(
-      locals.api.account.signout({ payload: { clientGroupId: clientGroupId(cookies) } })
-    );
+  signin: async ({ request }) => {
+    const { email, password } = await submitted(request);
+    try {
+      await auth.api.signInEmail({ body: { email, password }, headers: request.headers });
+    } catch (error) {
+      if (error instanceof APIError) return fail(400, { error: error.message });
+      throw error;
+    }
+    redirect(303, "/");
+  },
+  signout: async ({ request }) => {
+    await auth.api.signOut({ headers: request.headers }).catch(() => undefined);
     redirect(303, "/");
   },
 };
