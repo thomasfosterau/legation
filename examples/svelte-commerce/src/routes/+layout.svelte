@@ -12,8 +12,9 @@
   // context must exist, so provide a lazy one-time boot.
   let runtime: AppRuntime | undefined;
   if (browser) {
-  // svelte-ignore state_referenced_locally
-  runtime = boot({ snapshot: data.snapshot, clientGroupId: data.clientGroupId, userId: data.userId });
+    // svelte-ignore state_referenced_locally
+    runtime = boot({ snapshot: data.snapshot, clientGroupId: data.clientGroupId, userId: data.userId });
+    // svelte-ignore state_referenced_locally
     startSync(runtime, data.userId);
     registerServiceWorker();
   }
