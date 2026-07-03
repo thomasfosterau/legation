@@ -77,7 +77,7 @@ export const changeCollapsesTotal = Metric.counter("legation_change_collapses_to
 });
 
 /**
- * Times a stalled tab-mirror observer's bounded change hub dropped a subset
+ * Times a stalled mirror observer's bounded change hub dropped a subset
  * key, forcing a full re-read of the observed subset. The newest rows live in
  * the mirror's `Ref`, so the re-read is lossless; this counts refreshes forced
  * by backpressure.

@@ -4,7 +4,7 @@
  * Move a client's durable state across a serialisation boundary: `dehydrate`
  * reads a {@link ClientStore} into a plain {@link Snapshot}; `hydrate` writes a
  * snapshot back into a store. Between the two the snapshot is JSON — the value
- * an SSR response embeds, a devtools export writes to disk, or a tab hands to a
+ * an SSR response embeds, a devtools export writes to disk, or a client hands to a
  * worker.
  *
  * ## SSR flow

@@ -1,6 +1,6 @@
 /**
  * Tab-mirror tests: a real ClientEngine served by EngineHost, consumed by
- * TabMirror — over the loopback pair and over a Node BroadcastChannel.
+ * Mirror — over the loopback pair and over a Node BroadcastChannel.
  * Mirror updates arrive on background fibers, so assertions poll with real
  * timers (clock-independent under the test environment).
  */
@@ -17,7 +17,7 @@ import {
   Mutator,
   Subset,
   SyncServer,
-  TabMirror,
+  Mirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -81,13 +81,13 @@ const makeEngine = Effect.gen(function* () {
   return { engine, store };
 });
 
-describe("EngineHost ↔ TabMirror (loopback)", () => {
+describe("EngineHost ↔ Mirror (loopback)", () => {
   it.effect("subscribe hydrates; mutate is acked and broadcast optimistically", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tab, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       yield* mirror.subscribe(allTodos);
       // The mutate ack means the host journaled it (optimistic write).
@@ -112,17 +112,17 @@ describe("EngineHost ↔ TabMirror (loopback)", () => {
   it.effect("a second mirror hydrates an already-active subset", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
 
-      const first = yield* TabMirror.make({ channel: tab, mutators });
+      const first = yield* Mirror.make({ channel: mirrorChannel, mutators });
       yield* first.subscribe(allTodos);
       yield* first.mutate("todo/set", { id: "1", title: "before", done: false });
       yield* eventually(first.query(allTodos), (current) => current.length === 1);
 
       // Loopback broadcasts reach every subscriber on the tab side, so a
       // late mirror on the same channel hydrates from the re-broadcast.
-      const second = yield* TabMirror.make({ channel: tab, mutators });
+      const second = yield* Mirror.make({ channel: mirrorChannel, mutators });
       yield* second.subscribe(allTodos);
       const rows = yield* eventually(second.query(allTodos), (current) => current.length === 1);
       expect(rows.map((row) => (row.value as Todo).title)).toEqual(["before"]);
@@ -132,9 +132,9 @@ describe("EngineHost ↔ TabMirror (loopback)", () => {
   it.effect("invalid args fail in the tab; host validation errors come back", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tab, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       const local = yield* Effect.flip(mirror.mutate("todo/set", { id: 1 }));
       expect(local._tag).toBe("MutatorError");
@@ -147,12 +147,12 @@ describe("EngineHost ↔ TabMirror (loopback)", () => {
   it.effect("foreign traffic on the channel is ignored", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tab, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
-      yield* tab.post({ some: "other library's message" });
-      yield* tab.post("not even an object");
+      yield* mirrorChannel.post({ some: "other library's message" });
+      yield* mirrorChannel.post("not even an object");
       yield* mirror.subscribe(allTodos);
       yield* mirror.mutate("todo/set", { id: "1", title: "still works", done: false });
       yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
@@ -175,16 +175,16 @@ describe("EngineHost subset refcounting", () => {
           Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
       } satisfies typeof engine;
 
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine: counted });
-      const one = yield* TabMirror.make({ channel: tab, mutators });
+      const one = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       // Two tabs share the same subset: one engine subscription.
       yield* one.subscribe(allTodos);
       yield* eventually(Ref.get(subs), (n) => n === 1);
       const two = yield* Effect.scoped(
         Effect.gen(function* () {
-          const second = yield* TabMirror.make({ channel: tab, mutators });
+          const second = yield* Mirror.make({ channel: mirrorChannel, mutators });
           yield* second.subscribe(allTodos);
           // No second engine subscription, no teardown while both are present.
           yield* sleepReal(30);
@@ -208,7 +208,7 @@ describe("EngineHost subset refcounting", () => {
 });
 
 describe("EngineHost liveness (heartbeat)", () => {
-  const liveness = { tabTimeout: "60 millis", sweepInterval: "15 millis" } as const;
+  const liveness = { mirrorTimeout: "60 millis", sweepInterval: "15 millis" } as const;
 
   // Real clock: heartbeat/sweep run on Effect.sleep, which the TestClock
   // would freeze. `it.live` uses wall time, so the short intervals fire.
@@ -222,12 +222,12 @@ describe("EngineHost liveness (heartbeat)", () => {
           Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
       } satisfies typeof engine;
 
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine: counted, liveness });
 
       // A "ghost" tab subscribes directly on the channel and never
       // heartbeats — modelling a crashed tab that can't send Disconnect.
-      yield* tab.post({ _tag: "Subscribe", tabId: "ghost", subset: allTodos });
+      yield* mirrorChannel.post({ _tag: "Subscribe", mirrorId: "ghost", subset: allTodos });
 
       // The sweep reclaims it once its last-seen passes the timeout.
       yield* eventually(Ref.get(unsubs), (n) => n === 1);
@@ -244,11 +244,11 @@ describe("EngineHost liveness (heartbeat)", () => {
           Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
       } satisfies typeof engine;
 
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine: counted, liveness });
       // A real mirror heartbeats faster than the timeout.
-      const mirror = yield* TabMirror.make({
-        channel: tab,
+      const mirror = yield* Mirror.make({
+        channel: mirrorChannel,
         mutators,
         heartbeatInterval: "15 millis",
       });
@@ -262,15 +262,15 @@ describe("EngineHost liveness (heartbeat)", () => {
   );
 });
 
-describe("EngineHost ↔ TabMirror (BroadcastChannel)", () => {
+describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
   it.effect("syncs tab to host over a real BroadcastChannel pair", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
       const name = `legation-test-${Date.now()}`;
       const host = yield* BroadcastMirrorChannel.make(name);
-      const tabChannel = yield* BroadcastMirrorChannel.make(name);
+      const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
       yield* EngineHost.run({ channel: host, engine });
-      const mirror = yield* TabMirror.make({ channel: tabChannel, mutators });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       yield* mirror.subscribe(allTodos);
       yield* mirror.mutate("todo/set", { id: "1", title: "broadcast", done: false });

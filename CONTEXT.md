@@ -47,12 +47,12 @@ The engine follows the mutation-log/rebase sync model (ADR-0008): named write in
 
 ### Reads
 
-| Term            | Meaning                                                                                                                                                                                                                    |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Live query**  | A declarative query (data, not an opaque function) over local collections whose results re-emit when rows it depends on change.                                                                                            |
-| **Mirror**      | A tab's in-memory copy of its subscribed rows, hydrated from the shared store and kept current by engine broadcasts. Live queries and the optimistic overlay run synchronously against it.                                 |
-| **Engine host** | Where the sync engine runs. In browsers the recommended host is a service worker (the per-origin singleton); the engine itself is host-agnostic.                                                                           |
-| **Client view** | The narrow surface component bindings consume — local reads (query/observe), subscription registration, write intents — satisfied by the engine directly or by a tab's mirror, so components are host-agnostic (ADR-0021). |
+| Term            | Meaning                                                                                                                                                                                                                                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Live query**  | A declarative query (data, not an opaque function) over local collections whose results re-emit when rows it depends on change.                                                                                                                                                                                             |
+| **Mirror**      | A client context's in-memory copy of its subscribed rows — one per browser tab, Electron window, extension, or CLI instance — hydrated and kept current by engine-host broadcasts. Live queries and the optimistic overlay run synchronously against it; it holds no durable state and can only answer for registered keys. |
+| **Engine host** | Where the sync engine runs. In browsers the recommended host is a service worker (the per-origin singleton); the engine itself is host-agnostic.                                                                                                                                                                            |
+| **Client view** | The narrow surface component bindings consume — local reads (query/observe), subscription registration, write intents — satisfied by the engine directly or by a tab's mirror, so components are host-agnostic (ADR-0021).                                                                                                  |
 
 ### Server
 
@@ -89,7 +89,7 @@ convergence — a dropped hint or poke only delays the next pull, and a dropped
 | **Poke hub** (`Transport.makePokeHub`)   | `sliding(1)` per client group, replay 1 | A poke is a contentless "pull soon" hint, so a storm collapses to one queued poke per group: an outstanding poke absorbs any number of fresh ones. A missed poke only delays the next pull. Replay 1 covers the reconnect race.                |
 | **Invalidation bus** (`InvalidationBus`) | `dropping` at a configurable capacity   | A dropped hint only delays the next pull, which recovers the missed change (ADR-0009). Drops are counted in `legation_hints_dropped_total`.                                                                                                    |
 | **Engine change hub** (`ClientEngine`)   | `dropping` at a configurable capacity   | Each view-change carries a monotonic seq; a consumer that sees a seq gap (a drop) collapses it into a full `Rebuild`, which subsumes the dropped `Patch`es. Lossless. Collapses are counted in `legation_change_collapses_total`.              |
-| **Mirror change hub** (`TabMirror`)      | `dropping` at a configurable capacity   | The hub carries subset keys; the newest rows live in a `Ref`. A seq gap makes the observer re-read its subset from the `Ref` — a full refresh, lossless because the `Ref` holds the latest rows. Counted in `legation_mirror_refreshes_total`. |
+| **Mirror change hub** (`Mirror`)         | `dropping` at a configurable capacity   | The hub carries subset keys; the newest rows live in a `Ref`. A seq gap makes the observer re-read its subset from the `Ref` — a full refresh, lossless because the `Ref` holds the latest rows. Counted in `legation_mirror_refreshes_total`. |
 
 A `Patch` view-change is never silently dropped: the change hub only ever sheds
 a `Patch` behind a seq gap, and the gap forces a `Rebuild` before the view is

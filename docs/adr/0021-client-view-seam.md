@@ -6,8 +6,10 @@ Status: Accepted
 ## Context
 
 ADR-0010's recommended deployment splits the client across two hosts: the
-engine in a per-origin service worker, and per-tab in-memory mirrors updated
-by broadcast. `TabMirror` deliberately mirrors the shape of `ClientEngine`
+engine in a per-origin service worker, and per-context in-memory mirrors
+updated by broadcast. `Mirror` (called `TabMirror` until the seam moved to
+core — the party need not be a browser tab) deliberately mirrors the shape
+of `ClientEngine`
 (`query`/`observe`/`subscribe`/`mutate`), but it was a distinct type — and
 the framework bindings were hard-wired to `ManagedRuntime<ClientEngine>`, so
 a tab in the recommended deployment could not drive `@legation/svelte` (or
@@ -31,7 +33,7 @@ Core defines **`ClientView`** — the narrow surface a component binding needs:
 
 The error channel is the union of what either host can fail with
 (`MutatorError | StoreError | TransportError`); each implementation's is
-narrower. `TabMirror` satisfies the interface **structurally**;
+narrower. `Mirror` satisfies the interface **structurally**;
 `ClientView.layer` derives the view from an in-context engine, composed with
 `Layer.provideMerge(engineLayer)` so an engine-backed runtime exposes both.
 
@@ -47,35 +49,36 @@ carries `subscribeQuery`/`queryNamed`/`observeNamed` and `related`. A mirror
 forwards the registration to its host — `SubscribeNamed` registers the named
 query with the host engine (which owns the server round-trip);
 `SubscribeRelated` runs the reconcile loop AND the join host-side, and the
-tab receives resolved rows (`RelatedUpdate`), keeping data work off the main
-thread. Registrations are refcounted per tab like subset subscriptions.
+mirror receives resolved rows (`RelatedUpdate`), keeping data work off the
+main thread. Registrations are refcounted per mirror like subset
+subscriptions.
 Engine-only capabilities that remain — explicit push/pull, undo — look the
 full `ClientEngine` up in context.
 
 Two asymmetries between the hosts shape the mirror side of the seam. First,
-a mirror only carries keys some tab registered — unlike an engine it cannot
+a mirror only carries keys somebody registered — unlike an engine it cannot
 evaluate an arbitrary subset locally — so on a mirror **observing IS
 subscribing**: `observe`/`observeNamed`/`related` register their subject
 with the host for the stream's lifetime. Second, the host refcounts
-registrations per TAB (a set): any `Unsubscribe` drops the tab's whole
-claim on that key, so the tab keeps a per-key interest ledger (observer
-count + explicit pin) and speaks with one voice — `Subscribe` on first
+registrations per MIRROR (a set): any `Unsubscribe` drops the mirror's
+whole claim on that key, so the mirror keeps a per-key interest ledger
+(observer count + explicit pin) and speaks with one voice — `Subscribe` on first
 interest, `Unsubscribe` only when the last observer ends and no explicit
 `subscribe` pins the key. The ledger doubles as the replay set for
 `HostReady`, the announcement a starting host broadcasts so registrations
-survive service-worker restarts and tabs that raced the worker's boot.
+survive service-worker restarts and mirrors that raced the worker's boot.
 
 ## Consequences
 
 - The same components run over a main-thread engine and a SW-hosted mirror
   with zero component changes — verified by a binding test whose runtime
-  holds only a `TabMirror`.
+  holds only a `Mirror`.
 - Breaking for `@legation/svelte` (0.x): engine-backed apps compose
   `ClientView.layer.pipe(Layer.provideMerge(engineLayer))` when building the
   runtime.
 - The named-query and auto-subscribe gaps over mirrors are closed: the
   mirror protocol carries `SubscribeNamed`/`SubscribeRelated` (host-resolved,
-  tab receives resolved rows), so the full binding surface works in the
+  the mirror receives resolved rows), so the full binding surface works in the
   SW-hosted deployment.
 - The React binding still consumes `ClientEngine` via its atoms; migrating it
   to the seam is follow-up work.

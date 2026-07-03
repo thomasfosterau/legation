@@ -37,18 +37,18 @@ export interface MirrorChannel {
  * for environments without service workers).
  */
 export const makeLoopbackPair: Effect.Effect<
-  { readonly host: MirrorChannel; readonly tab: MirrorChannel },
+  { readonly host: MirrorChannel; readonly mirror: MirrorChannel },
   never,
   Scope.Scope
 > = Effect.gen(function* () {
   const makeHub = Effect.acquireRelease(PubSub.unbounded<unknown>(), (hub) => PubSub.shutdown(hub));
   const toHost = yield* makeHub;
-  const toTab = yield* makeHub;
-  const side = (outbound: typeof toHost, inbound: typeof toTab): MirrorChannel => ({
+  const toMirror = yield* makeHub;
+  const side = (outbound: typeof toHost, inbound: typeof toMirror): MirrorChannel => ({
     post: (message) => Effect.asVoid(PubSub.publish(outbound, message)),
     subscribe: PubSub.subscribe(inbound).pipe(
       Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
     ),
   });
-  return { host: side(toTab, toHost), tab: side(toHost, toTab) };
+  return { host: side(toMirror, toHost), mirror: side(toHost, toMirror) };
 });

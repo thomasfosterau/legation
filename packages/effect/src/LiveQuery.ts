@@ -9,8 +9,8 @@
  *
  * The binding is host-agnostic: anything exposing `observe(subset) ->
  * Stream<rows>` qualifies — the in-process `ClientEngine` and the browser
- * `TabMirror` both do — so the same `LiveQuery.make(source).atom(subset)`
- * works on the main thread, in a worker, or against a tab mirror.
+ * `Mirror` both do — so the same `LiveQuery.make(source).atom(subset)`
+ * works on the main thread, in a worker, or against a mirror.
  */
 
 import type { Cause, Stream } from "effect";

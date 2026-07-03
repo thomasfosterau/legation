@@ -9,7 +9,7 @@
  * component re-renders on every local change (mutation, push ack, pull/rebase).
  *
  * The stores run over the runtime's {@link ClientView} — a main-thread engine
- * or a tab mirror equally (ADR-0021), including `namedQuery` and `related`
+ * or a mirror equally (ADR-0021), including `namedQuery` and `related`
  * (a mirror forwards the registration to its host over the protocol).
  */
 import { readable, type Readable } from "svelte/store";

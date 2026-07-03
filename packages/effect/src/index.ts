@@ -52,7 +52,7 @@ export * as PromiseFacade from "./PromiseFacade.js";
 export * as MirrorProtocol from "./MirrorProtocol.js";
 export * as MirrorChannel from "./MirrorChannel.js";
 export * as EngineHost from "./EngineHost.js";
-export * as TabMirror from "./TabMirror.js";
+export * as Mirror from "./Mirror.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 export * as Backend from "./Backend.js";

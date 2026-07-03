@@ -19,7 +19,7 @@ import {
   Mutator,
   Subset,
   SyncServer,
-  TabMirror,
+  Mirror,
   Telemetry,
   Transport,
 } from "@legation/effect";
@@ -77,14 +77,14 @@ const makeEngine = Effect.gen(function* () {
   return engine;
 });
 
-describe("TabMirror backpressure (#44)", () => {
+describe("Mirror backpressure (#44)", () => {
   it.live("a stalled tab observer bounds its queue and refreshes to latest rows", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine;
-      const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+      const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       // Small bound → a burst of mirror updates overruns it, forcing drops.
-      const mirror = yield* TabMirror.make({ channel: tab, mutators, changeHubCapacity: 4 });
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators, changeHubCapacity: 4 });
       yield* mirror.subscribe(allTodos);
 
       const observed = yield* Ref.make<Array<number>>([]);

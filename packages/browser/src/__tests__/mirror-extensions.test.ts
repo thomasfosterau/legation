@@ -1,6 +1,6 @@
 /**
  * Mirror-protocol extensions (ADR-0021 follow-up): named queries and
- * auto-subscribing relational reads over EngineHost ↔ TabMirror. The host
+ * auto-subscribing relational reads over EngineHost ↔ Mirror. The host
  * owns the server round-trip (named-query registration) and the whole
  * relational read (reconcile loop + join) — tabs receive resolved rows.
  */
@@ -20,7 +20,7 @@ import {
   Query,
   Subset,
   SyncServer,
-  TabMirror,
+  Mirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -134,15 +134,15 @@ const makeEngine = Effect.gen(function* () {
   return engine;
 });
 
-describe("EngineHost ↔ TabMirror extensions", () => {
+describe("EngineHost ↔ Mirror extensions", () => {
   it.effect(
     "a named query registers through the host and mirrors its filtered rows",
     () =>
       Effect.gen(function* () {
         const engine = yield* makeEngine;
-        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
-        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
         yield* mirror.subscribeQuery("todos/open", {});
         yield* mirror.mutate("todo/set", { id: "1", title: "open", done: false, authorId: "u1" });
@@ -174,9 +174,9 @@ describe("EngineHost ↔ TabMirror extensions", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const engine = yield* makeEngine;
-          const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+          const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
           yield* EngineHost.run({ channel: host, engine, registry: collections });
-          const mirror = yield* TabMirror.make({ channel: tab, mutators });
+          const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
           yield* mirror.mutate("user/set", { id: "u1", name: "Ada" });
           yield* mirror.mutate("todo/set", {
@@ -219,9 +219,9 @@ describe("EngineHost ↔ TabMirror extensions", () => {
     () =>
       Effect.gen(function* () {
         const engine = yield* makeEngine;
-        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
-        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
         yield* mirror.mutate("user/set", { id: "u1", name: "Ada" });
         yield* mirror.mutate("todo/set", { id: "1", title: "t", done: false, authorId: "u1" });
@@ -246,15 +246,15 @@ describe("EngineHost ↔ TabMirror extensions", () => {
   );
 });
 
-describe("TabMirror interest ledger", () => {
+describe("Mirror interest ledger", () => {
   it.effect(
     "observing auto-registers the subset and releases it when the stream ends",
     () =>
       Effect.gen(function* () {
         const engine = yield* makeEngine;
-        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
-        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
         yield* mirror.mutate("todo/set", { id: "1", title: "auto", done: false, authorId: "u1" });
 
@@ -289,9 +289,9 @@ describe("TabMirror interest ledger", () => {
     () =>
       Effect.gen(function* () {
         const engine = yield* makeEngine;
-        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
-        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
         yield* mirror.subscribe(allTodos);
         yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
@@ -333,8 +333,8 @@ describe("ServiceWorkerHost", () => {
           );
           yield* sleepReal(200);
 
-          const tabChannel = yield* BroadcastMirrorChannel.make(name);
-          const mirror = yield* TabMirror.make({ channel: tabChannel, mutators });
+          const mirrorChannel2 = yield* BroadcastMirrorChannel.make(name);
+          const mirror = yield* Mirror.make({ channel: mirrorChannel2, mutators });
           yield* mirror.mutate("user/set", { id: "u1", name: "Ada" });
           yield* mirror.mutate("todo/set", { id: "1", title: "sw", done: false, authorId: "u1" });
 
@@ -361,10 +361,10 @@ describe("HostReady replay", () => {
     () =>
       Effect.gen(function* () {
         const engine = yield* makeEngine;
-        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
 
         // The tab races ahead of the host: these registrations go nowhere.
-        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
         yield* mirror.subscribe(allTodos);
         yield* mirror.subscribeQuery("todos/open", {});
         yield* sleepReal(50);

@@ -5,7 +5,7 @@
  * handlers: it runs the view's optimistic `mutate` on the context runtime and
  * resolves once the mutation is journaled (and rendered through the overlay).
  * Both helpers run over the runtime's {@link ClientView}, so they work over a
- * main-thread engine and a tab mirror equally (ADR-0021).
+ * main-thread engine and a mirror equally (ADR-0021).
  */
 import { Effect } from "effect";
 import { ClientEngine, ClientView } from "@legation/effect";
