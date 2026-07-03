@@ -390,11 +390,15 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         });
       return Stream.unwrap(
         Effect.gen(function* () {
+          // Subscribe BEFORE the first read (#84): a key published while the
+          // initial read runs must land in this subscription's buffer, or a
+          // quiet mirror never re-reads (gap detection needs a next item).
+          const subscription = yield* PubSub.subscribe(keyHub);
           const startSeq = yield* Ref.get(keySeq);
           const lastSeenRef = yield* Ref.make(startSeq);
           return Stream.concat(
             Stream.fromEffect(read),
-            Stream.fromPubSub(keyHub).pipe(
+            Stream.fromSubscription(subscription).pipe(
               Stream.mapEffect((item) => decide(lastSeenRef, item)),
               Stream.filter(Option.isSome),
               Stream.map((option) => option.value)

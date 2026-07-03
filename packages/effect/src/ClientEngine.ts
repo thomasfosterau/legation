@@ -1272,6 +1272,14 @@ export const make = (
     const observeSubset = (subset: Subset.Subset) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          // Subscribe BEFORE snapshotting (#84): the hub only delivers to
+          // live subscribers, so a change published while we materialize
+          // must land in this subscription's buffer — subscribing after the
+          // snapshot silently loses it, and with no later change to reveal
+          // the seq gap the observer sleeps through the write forever. A
+          // buffered change the snapshot already reflects steps as a stale
+          // seq (skip) or an idempotent re-apply.
+          const subscription = yield* PubSub.subscribe(changes);
           // Capture the seq before materializing: the view then reflects the
           // store at ≥ this seq, so the first live change is contiguous.
           const startSeq = yield* Ref.get(changeSeq);
@@ -1284,7 +1292,7 @@ export const make = (
           // (e.g. a change outside the limit window, or a skipped stale seq).
           return Stream.concat(
             Stream.succeed(initial),
-            Stream.fromPubSub(changes).pipe(
+            Stream.fromSubscription(subscription).pipe(
               Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, subset, item))
             )
           ).pipe(Stream.changesWith(sameResult));

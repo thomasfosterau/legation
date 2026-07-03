@@ -99,6 +99,17 @@ const makeClient = (
 
 const allTodos = Subset.make({ collection: "todos" });
 
+// Poll until the condition holds (generous under parallel-suite load; passing
+// runs exit early) — fixed post-debounce sleeps flake when workers contend.
+const eventually = (condition: Effect.Effect<boolean>) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      if (yield* condition) return;
+      yield* Effect.sleep(Duration.millis(10));
+    }
+    return yield* Effect.die(new Error("eventually: condition never held"));
+  });
+
 describe("sync-loop scheduling (#33)", () => {
   it.live("auto-pushes a mutation with no app-level push call", () =>
     Effect.gen(function* () {
@@ -114,11 +125,11 @@ describe("sync-loop scheduling (#33)", () => {
       yield* engine.subscribe(allTodos);
       yield* engine.runSync;
       // Let the initial connect-triggered push+pull (empty journal) settle.
-      yield* Effect.sleep(Duration.millis(15));
+      yield* Effect.sleep(Duration.millis(30));
 
       yield* engine.mutate("todo/set", { id: "1", title: "auto", done: false });
       // After the debounce window the journal drains without an app push.
-      yield* Effect.sleep(Duration.millis(80));
+      yield* eventually(Effect.map(Ref.get(push), (count) => count === 1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
@@ -132,22 +143,22 @@ describe("sync-loop scheduling (#33)", () => {
       const { engine, store } = yield* makeClient(
         handler,
         "a",
-        { pushDebounce: Duration.millis(40) },
+        { pushDebounce: Duration.millis(150) },
         { counters: { push, pull } }
       );
       yield* engine.subscribe(allTodos);
       yield* engine.runSync;
-      yield* Effect.sleep(Duration.millis(15));
+      yield* Effect.sleep(Duration.millis(30));
 
       yield* engine.mutate("todo/set", { id: "1", title: "a", done: false });
       yield* engine.mutate("todo/set", { id: "2", title: "b", done: false });
       yield* engine.mutate("todo/set", { id: "3", title: "c", done: false });
-      // Inside the window nothing has been pushed yet.
-      yield* Effect.sleep(Duration.millis(10));
+      // Inside the (widened) window nothing has been pushed yet.
+      yield* Effect.sleep(Duration.millis(20));
       expect(yield* Ref.get(push)).toBe(0);
       expect(yield* store.pendingMutations).toHaveLength(3);
       // The window closes: exactly one push drains all three.
-      yield* Effect.sleep(Duration.millis(90));
+      yield* eventually(Effect.map(Ref.get(push), (count) => count >= 1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
