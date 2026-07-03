@@ -26,9 +26,9 @@ import {
   Related,
   type Subset,
 } from "@legation/effect";
-import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
-import { getMutate, getMutateWithAck } from "./mutation.js";
-import type { Rows } from "./query.js";
+import { getEngineRuntime, type EffectSyncRuntime } from "./Runtime.js";
+import { getMutate, getMutateWithAck } from "./Mutation.js";
+import type { Rows } from "./Query.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
 export interface Live<A, E = never> {

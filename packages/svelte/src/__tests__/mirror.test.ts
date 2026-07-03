@@ -15,7 +15,7 @@ import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
 import { buttonByLabel, collections, engineLayer, mutators, until } from "./world.js";
-import type { EffectSyncRuntime } from "../index.js";
+import type { EffectSyncRuntime } from "../Runtime.js";
 
 const allTodos = Subset.make({ collection: "todos" });
 const text = () => document.body.textContent ?? "";

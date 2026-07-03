@@ -22,7 +22,7 @@ import {
   Related,
   type Subset,
 } from "@legation/effect";
-import { getEngineRuntime, type EffectSyncRuntime } from "./runtime.js";
+import { getEngineRuntime, type EffectSyncRuntime } from "./Runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */
 export type Rows = ReadonlyArray<ClientEngine.LocalRow>;

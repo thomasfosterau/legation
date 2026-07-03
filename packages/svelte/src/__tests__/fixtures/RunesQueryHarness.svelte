@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Aggregate, Predicate, Subset } from "@legation/effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../index.js";
-  import { useAggregate, useQuery } from "../../runes.svelte.js";
+  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import { useAggregate, useQuery } from "../../Runes.svelte.js";
 
   const {
     runtime,

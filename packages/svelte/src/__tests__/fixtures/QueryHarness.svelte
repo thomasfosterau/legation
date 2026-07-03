@@ -1,12 +1,7 @@
 <script lang="ts">
   import { Aggregate, type Subset } from "@legation/effect";
-  import {
-    aggregate,
-    aggregateGrouped,
-    query,
-    setEngineRuntime,
-    type EffectSyncRuntime,
-  } from "../../index.js";
+  import { aggregate, aggregateGrouped, query } from "../../Query.js";
+  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
 
   const {
     runtime,
