@@ -9,7 +9,7 @@
  */
 import { Effect } from "effect";
 import { ClientEngine, ClientView } from "@legation/effect";
-import { getEngineRuntime } from "./runtime.js";
+import { getEngineRuntime } from "./Runtime.js";
 
 /** A `mutate(mutator, args)` bound to the context runtime. */
 export const getMutate = (): ((mutator: string, args: unknown) => Promise<void>) => {

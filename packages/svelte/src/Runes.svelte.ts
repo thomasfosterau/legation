@@ -23,16 +23,12 @@ import {
   ClientEngine,
   ClientView,
   type Collection,
-  type MutatorError,
-  type QueryError,
   Related,
-  type StoreError,
   type Subset,
-  type TransportError,
 } from "@legation/effect";
-import { getEngineRuntime, withEngine, type EffectSyncRuntime } from "./runtime.js";
-import { getMutate, getMutateWithAck } from "./mutation.js";
-import type { Rows } from "./query.js";
+import { getEngineRuntime, type EffectSyncRuntime } from "./Runtime.js";
+import { getMutate, getMutateWithAck } from "./Mutation.js";
+import type { Rows } from "./Query.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
 export interface Live<A, E = never> {
@@ -57,7 +53,7 @@ export interface LiveOptions<A> {
 }
 
 /** The error channel of view reads (engine or mirror). */
-export type LiveError = StoreError | MutatorError | TransportError;
+export type LiveError = ClientView.ClientViewError;
 
 /**
  * Core plumbing: re-run `makeProgram` inside `$effect` (tracking the reactive
@@ -137,12 +133,12 @@ export function useQuery(
 export const useNamedQuery = (
   query: () => { readonly name: string; readonly args: unknown },
   options?: LiveOptions<Rows>
-): Live<Rows, LiveError | QueryError> =>
+): Live<Rows, LiveError> =>
   live(
     getEngineRuntime(),
     () => {
       const { name, args } = query();
-      return withEngine("useNamedQuery", (engine) => engine.observeNamed(name, args));
+      return (view) => view.observeNamed(name, args);
     },
     options
   );
@@ -205,12 +201,11 @@ export const useRelated = (
     () => {
       const { registry, collection, subset, names } = inputs();
       return options?.subscribe === true
-        ? // Auto-subscription needs the full engine (subscribe + pull);
-          // `Stream.unwrap` scopes the subscriptions to the stream's
-          // lifetime: interrupting the hook's fiber unsubscribes them.
-          withEngine("useRelated({ subscribe: true })", (engine) =>
-            Stream.unwrap(Related.related(engine, registry, collection, subset, names))
-          )
+        ? // Auto-subscription registers with the view's host (the engine
+          // directly, or a mirror's host over the protocol); `Stream.unwrap`
+          // scopes the registration to the stream's lifetime: interrupting
+          // the hook's fiber releases it.
+          (view) => Stream.unwrap(view.related(registry, collection, subset, names))
         : (view) => Related.observe(view, registry, collection, subset, names);
     },
     options

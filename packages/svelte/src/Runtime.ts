@@ -12,44 +12,17 @@
  *
  * Engine-backed apps compose `ClientView.layer` over their engine layer
  * (`ClientView.layer.pipe(Layer.provideMerge(engineLayer))`) so the runtime
- * also carries the full `ClientEngine` — which the engine-only helpers
- * (`namedQuery`, auto-subscribing `useRelated`) look up when present.
+ * also carries the full `ClientEngine` for engine-only capabilities
+ * (explicit push/pull, undo history). Named queries and auto-subscribing
+ * `useRelated` need no engine — the view carries them over either host
+ * (mirror-protocol extension, ADR-0021).
  */
 import { getContext, setContext } from "svelte";
-import { Effect, Option, Stream } from "effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
-import { ClientEngine, type ClientView } from "@legation/effect";
+import type { ClientView } from "@legation/effect";
 
 /** A runtime that can run {@link ClientView} effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientView.ClientView, never>;
-
-/**
- * Present an engine-only stream over the view surface: resolved against the
- * runtime's full `ClientEngine` when present, a defect (with an actionable
- * message) when the runtime only holds a mirror.
- *
- * @internal shared by the store and rune modules; not part of the public API.
- */
-export const withEngine =
-  <T, E>(
-    feature: string,
-    f: (engine: ClientEngine.ClientEngine) => Stream.Stream<T, E>
-  ): ((view: ClientView.ClientView) => Stream.Stream<T, E>) =>
-  () =>
-    Stream.unwrap(
-      Effect.flatMap(
-        Effect.serviceOption(ClientEngine.ClientEngine),
-        Option.match({
-          onNone: () =>
-            Effect.die(
-              new Error(
-                `@legation/svelte: ${feature} requires a full ClientEngine runtime (it is not available over a tab mirror)`
-              )
-            ),
-          onSome: (engine) => Effect.succeed(f(engine)),
-        })
-      )
-    );
 
 const RUNTIME_KEY = Symbol("@legation/svelte/runtime");
 

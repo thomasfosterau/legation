@@ -10,11 +10,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { ClientEngine, ClientView, Subset } from "@legation/effect";
-import { EngineHost, MirrorChannel, TabMirror } from "@legation/browser";
+import { EngineHost, MirrorChannel, TabMirror } from "@legation/effect";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
-import { buttonByLabel, engineLayer, mutators, until } from "./world.js";
-import type { EffectSyncRuntime } from "../index.js";
+import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
+import { buttonByLabel, collections, engineLayer, mutators, until } from "./world.js";
+import type { EffectSyncRuntime } from "../Runtime.js";
 
 const allTodos = Subset.make({ collection: "todos" });
 const text = () => document.body.textContent ?? "";
@@ -30,8 +31,9 @@ const makeMirrorRuntime = (): EffectSyncRuntime =>
         const engine = yield* ClientEngine.ClientEngine;
         const pair = yield* MirrorChannel.makeLoopbackPair;
         // Wires its inbox eagerly and forks its own scoped loop — must run
-        // before the mirror posts its first message.
-        yield* EngineHost.run({ channel: pair.host, engine });
+        // before the mirror posts its first message. The registry lets the
+        // host resolve tabs' `related` registrations.
+        yield* EngineHost.run({ channel: pair.host, engine, registry: collections });
         // TabMirror satisfies ClientView structurally — this return is the
         // type-level proof.
         return yield* TabMirror.make({ channel: pair.tab, mutators });
@@ -71,6 +73,39 @@ describe("bindings over a tab mirror (ADR-0021)", () => {
 
     unmount(buttons);
     unmount(list);
+    await runtime.dispose();
+  });
+
+  it("useRelated({ subscribe: true }) joins over a mirror-only runtime (host-resolved)", async () => {
+    const runtime = makeMirrorRuntime();
+    // Seed through the mirror: an author and a todo pointing at them.
+    await runtime.runPromise(
+      Effect.flatMap(ClientView.ClientView, (view) =>
+        Effect.andThen(
+          view.mutate("user/set", { id: "u1", name: "Ada" }),
+          view.mutate("todo/set", { id: "1", title: "join", authorId: "u1" })
+        )
+      )
+    );
+
+    const harness = mount(RunesRelatedHarness, {
+      target: document.body,
+      props: {
+        runtime,
+        registry: collections,
+        collection: "todos",
+        subset: allTodos,
+        names: ["author"],
+        subscribe: true,
+      },
+    });
+
+    // The host runs the reconcile loop AND the join; the tab renders the
+    // resolved rows it receives — no engine in this runtime at all.
+    await until(() => text().includes("join:Ada"));
+    expect(text()).toContain("join:Ada");
+
+    unmount(harness);
     await runtime.dispose();
   });
 });

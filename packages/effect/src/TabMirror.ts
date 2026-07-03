@@ -8,14 +8,13 @@
  * journal in encoded form and await the host's acknowledgement.
  */
 
-import {
-  ClientEngine,
-  MutatorError,
-  Subset,
-  Telemetry,
-  TransportError,
-  type Mutator,
-} from "@legation/effect";
+import type * as ClientEngine from "./ClientEngine.js";
+import type * as Collection from "./Collection.js";
+import { MutatorError, TransportError } from "./Errors.js";
+import type * as Mutator from "./Mutator.js";
+import type * as Related from "./Related.js";
+import * as Subset from "./Subset.js";
+import * as Telemetry from "./Telemetry.js";
 import {
   Deferred,
   type Duration,
@@ -95,10 +94,39 @@ export interface TabMirror {
   /** Register a subset with the host; rows arrive as mirror updates. */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
+  /**
+   * Register a named query with the host (which owns the server-authoritative
+   * resolution); results arrive as mirror updates under the named key.
+   */
+  readonly subscribeQuery: (name: string, args: unknown) => Effect.Effect<void, TransportError>;
+  readonly unsubscribeQuery: (name: string, args: unknown) => Effect.Effect<void, TransportError>;
   /** The mirror's current rows for a subset (empty until hydrated). */
   readonly query: (subset: Subset.Subset) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
+  /** The mirror's current rows for a named query (empty until hydrated). */
+  readonly queryNamed: (
+    name: string,
+    args: unknown
+  ) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
   /** Emits the current rows now and on every mirror update for the subset. */
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /** Emits the named query's current rows now and on every mirror update. */
+  readonly observeNamed: (
+    name: string,
+    args: unknown
+  ) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /**
+   * Auto-subscribing relational read: the HOST syncs the base and narrowed
+   * foreign subsets and computes the join — this tab receives resolved rows
+   * (main-thread work stays minimal). The registration is released when the
+   * scope closes. The `registry` parameter exists for {@link ClientView}
+   * signature parity; the host resolves against its own registry.
+   */
+  readonly related: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    names: ReadonlyArray<string>
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
 }
 
 export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never, Scope.Scope> =>
@@ -122,7 +150,69 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
           .pipe(Effect.ignore, Effect.andThen(Effect.sleep(heartbeatInterval)))
       )
     );
+    // This tab's interest ledger, keyed by mirror key. The host refcounts by
+    // TAB (a set), so this side must speak with one voice per key: Subscribe
+    // when the first local interest appears (an explicit `subscribe` or an
+    // observer's stream starting), Unsubscribe only when the LAST one ends.
+    // The ledger doubles as the replay set for a host that (re)starts after
+    // us (HostReady).
+    interface Interest {
+      /** Live observers of this key. */
+      readonly observers: number;
+      /** Pinned by an explicit `subscribe` (survives observer teardowns). */
+      readonly explicit: boolean;
+      readonly subscribe: MirrorProtocol.TabMessage;
+      readonly unsubscribe: MirrorProtocol.TabMessage;
+    }
+    const interests = yield* Ref.make(new Map<string, Interest>());
+    /** Add one unit of interest; posts Subscribe when it is the first. */
+    const acquireInterest = (
+      key: string,
+      messages: { subscribe: MirrorProtocol.TabMessage; unsubscribe: MirrorProtocol.TabMessage },
+      kind: "observer" | "explicit"
+    ) =>
+      Ref.modify(interests, (map) => {
+        const next = new Map(map);
+        const current = next.get(key);
+        const updated: Interest = {
+          observers: (current?.observers ?? 0) + (kind === "observer" ? 1 : 0),
+          explicit: (current?.explicit ?? false) || kind === "explicit",
+          subscribe: messages.subscribe,
+          unsubscribe: messages.unsubscribe,
+        };
+        next.set(key, updated);
+        return [current === undefined, next] as const;
+      }).pipe(
+        Effect.flatMap((first) =>
+          first ? channel.post(messages.subscribe).pipe(Effect.ignore) : Effect.void
+        )
+      );
+    /** Drop one unit of interest; posts Unsubscribe when it was the last. */
+    const releaseInterest = (key: string, kind: "observer" | "explicit") =>
+      Ref.modify(interests, (map) => {
+        const current = map.get(key);
+        if (current === undefined) return [undefined, map] as const;
+        const updated: Interest = {
+          ...current,
+          observers: Math.max(0, current.observers - (kind === "observer" ? 1 : 0)),
+          explicit: kind === "explicit" ? false : current.explicit,
+        };
+        const next = new Map(map);
+        if (updated.observers === 0 && !updated.explicit) {
+          next.delete(key);
+          return [current.unsubscribe, next] as const;
+        }
+        next.set(key, updated);
+        return [undefined, next] as const;
+      }).pipe(
+        Effect.flatMap((unsubscribe) =>
+          unsubscribe === undefined ? Effect.void : channel.post(unsubscribe).pipe(Effect.ignore)
+        )
+      );
     const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
+    // Resolved relational rows, keyed by the host's related key. Kept apart
+    // from `rows` because the row shape differs (base value + resolved names).
+    const relatedRows = yield* Ref.make(new Map<string, ReadonlyArray<Related.RelatedRow>>());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -183,11 +273,32 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
           Effect.flatMap((message) => {
             if (message === undefined) return Effect.void;
             switch (message._tag) {
+              case "HostReady":
+                // A host (re)started: replay every interest we hold.
+                return Ref.get(interests).pipe(
+                  Effect.flatMap((map) =>
+                    Effect.forEach(map.values(), (interest) =>
+                      channel.post(interest.subscribe).pipe(Effect.ignore)
+                    )
+                  ),
+                  Effect.asVoid
+                );
               case "MirrorUpdate":
                 return Ref.update(rows, (map) =>
                   new Map(map).set(
                     message.key,
                     message.rows.map((row) => ({ id: row.id, value: row.value }))
+                  )
+                ).pipe(Effect.andThen(publishKey(message.key)));
+              case "RelatedUpdate":
+                return Ref.update(relatedRows, (map) =>
+                  new Map(map).set(
+                    message.key,
+                    message.rows.map((row) => ({
+                      id: row.id,
+                      value: row.value,
+                      related: row.related as Record<string, Related.RelatedValue>,
+                    }))
                   )
                 ).pipe(Effect.andThen(publishKey(message.key)));
               case "MutateAck":
@@ -220,6 +331,9 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
 
     const query = (subset: Subset.Subset) =>
       Ref.get(rows).pipe(Effect.map((map) => map.get(Subset.hash(subset)) ?? []));
+    const readKey = (key: string) => Ref.get(rows).pipe(Effect.map((map) => map.get(key) ?? []));
+    const readRelated = (key: string) =>
+      Ref.get(relatedRows).pipe(Effect.map((map) => map.get(key) ?? []));
 
     // Validate + encode args against the shared registry (fail fast in the tab;
     // the host re-validates by decoding), then forward as a `Mutate` message and
@@ -255,6 +369,45 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         return yield* Deferred.await(deferred);
       });
 
+    // Emits `read`'s current value now and again whenever `key` changes on the
+    // hub. Decide whether one sequenced key warrants re-emitting: skip a
+    // stale/duplicate seq; on a gap (a dropped key) refresh (the dropped key
+    // might have been ours — the backing Ref holds latest); otherwise emit
+    // only when our own key changed. Under no pressure (contiguous seqs) this
+    // is exactly a key-filter.
+    const observeKey = <A>(key: string, read: Effect.Effect<A>): Stream.Stream<A> => {
+      const decide = (
+        lastSeenRef: Ref.Ref<number>,
+        item: SeqKey
+      ): Effect.Effect<Option.Option<A>> =>
+        Effect.gen(function* () {
+          const lastSeen = yield* Ref.get(lastSeenRef);
+          if (item.seq <= lastSeen) return Option.none();
+          const gapped = item.seq > lastSeen + 1;
+          yield* Ref.set(lastSeenRef, item.seq);
+          if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
+          return gapped || item.key === key ? Option.some(yield* read) : Option.none();
+        });
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          // Subscribe BEFORE the first read (#84): a key published while the
+          // initial read runs must land in this subscription's buffer, or a
+          // quiet mirror never re-reads (gap detection needs a next item).
+          const subscription = yield* PubSub.subscribe(keyHub);
+          const startSeq = yield* Ref.get(keySeq);
+          const lastSeenRef = yield* Ref.make(startSeq);
+          return Stream.concat(
+            Stream.fromEffect(read),
+            Stream.fromSubscription(subscription).pipe(
+              Stream.mapEffect((item) => decide(lastSeenRef, item)),
+              Stream.filter(Option.isSome),
+              Stream.map((option) => option.value)
+            )
+          );
+        })
+      );
+    };
+
     return {
       mutate: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
@@ -264,42 +417,90 @@ export const make = (options: TabMirrorOptions): Effect.Effect<TabMirror, never,
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pendingSettled, mutator, encoded))
         ),
-      subscribe: (subset) => channel.post({ _tag: "Subscribe", tabId, subset }),
-      unsubscribe: (subset) => channel.post({ _tag: "Unsubscribe", tabId, subset }),
+      subscribe: (subset) =>
+        acquireInterest(
+          Subset.hash(subset),
+          {
+            subscribe: { _tag: "Subscribe", tabId, subset },
+            unsubscribe: { _tag: "Unsubscribe", tabId, subset },
+          },
+          "explicit"
+        ),
+      unsubscribe: (subset) => releaseInterest(Subset.hash(subset), "explicit"),
+      subscribeQuery: (name, args) =>
+        acquireInterest(
+          MirrorProtocol.namedKey(name, args),
+          {
+            subscribe: { _tag: "SubscribeNamed", tabId, name, args },
+            unsubscribe: { _tag: "UnsubscribeNamed", tabId, name, args },
+          },
+          "explicit"
+        ),
+      unsubscribeQuery: (name, args) =>
+        releaseInterest(MirrorProtocol.namedKey(name, args), "explicit"),
       query,
+      queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
+      // Observing auto-registers with the host for the stream's lifetime:
+      // the mirror only carries keys someone subscribed, so a live read IS a
+      // subscription intent (refcounted; an explicit `subscribe` still pins a
+      // subset beyond any observer's lifetime).
       observe: (subset) => {
         const key = Subset.hash(subset);
-        // Decide whether one sequenced key warrants re-emitting this subset's
-        // rows: skip a stale/duplicate seq; on a gap (a dropped key) refresh
-        // (the dropped key might have been ours — the `rows` Ref holds latest);
-        // otherwise emit only when our own key changed. Under no pressure
-        // (contiguous seqs) this is exactly the old key-filter behaviour.
-        const decide = (
-          lastSeenRef: Ref.Ref<number>,
-          item: SeqKey
-        ): Effect.Effect<Option.Option<ReadonlyArray<ClientEngine.LocalRow>>> =>
-          Effect.gen(function* () {
-            const lastSeen = yield* Ref.get(lastSeenRef);
-            if (item.seq <= lastSeen) return Option.none();
-            const gapped = item.seq > lastSeen + 1;
-            yield* Ref.set(lastSeenRef, item.seq);
-            if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
-            return gapped || item.key === key ? Option.some(yield* query(subset)) : Option.none();
-          });
         return Stream.unwrap(
-          Effect.gen(function* () {
-            const startSeq = yield* Ref.get(keySeq);
-            const lastSeenRef = yield* Ref.make(startSeq);
-            return Stream.concat(
-              Stream.fromEffect(query(subset)),
-              Stream.fromPubSub(keyHub).pipe(
-                Stream.mapEffect((item) => decide(lastSeenRef, item)),
-                Stream.filter(Option.isSome),
-                Stream.map((option) => option.value)
-              )
-            );
-          })
+          Effect.acquireRelease(
+            acquireInterest(
+              key,
+              {
+                subscribe: { _tag: "Subscribe", tabId, subset },
+                unsubscribe: { _tag: "Unsubscribe", tabId, subset },
+              },
+              "observer"
+            ),
+            () => releaseInterest(key, "observer")
+          ).pipe(Effect.as(observeKey(key, query(subset))))
         );
       },
+      observeNamed: (name, args) => {
+        const key = MirrorProtocol.namedKey(name, args);
+        return Stream.unwrap(
+          Effect.acquireRelease(
+            acquireInterest(
+              key,
+              {
+                subscribe: { _tag: "SubscribeNamed", tabId, name, args },
+                unsubscribe: { _tag: "UnsubscribeNamed", tabId, name, args },
+              },
+              "observer"
+            ),
+            () => releaseInterest(key, "observer")
+          ).pipe(Effect.as(observeKey(key, readKey(key))))
+        );
+      },
+      related: (_registry, collectionName, subset, names) =>
+        Effect.gen(function* () {
+          const key = MirrorProtocol.relatedKey(collectionName, subset, names);
+          yield* acquireInterest(
+            key,
+            {
+              subscribe: {
+                _tag: "SubscribeRelated",
+                tabId,
+                collection: collectionName,
+                subset,
+                names,
+              },
+              unsubscribe: {
+                _tag: "UnsubscribeRelated",
+                tabId,
+                collection: collectionName,
+                subset,
+                names,
+              },
+            },
+            "observer"
+          );
+          yield* Effect.addFinalizer(() => releaseInterest(key, "observer"));
+          return observeKey(key, readRelated(key));
+        }),
     };
   });

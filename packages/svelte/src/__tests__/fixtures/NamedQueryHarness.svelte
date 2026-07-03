@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { namedQuery, setEngineRuntime, type EffectSyncRuntime } from "../../index.js";
+  import { namedQuery } from "../../Query.js";
+  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
 
   const {
     runtime,

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import { Subset, Undo } from "@legation/effect";
 import { get } from "svelte/store";
-import { undoControls } from "../index.js";
+import { undoControls } from "../Undo.js";
 import { makeRuntime, run, until } from "./world.js";
 
 const allTodos = Subset.make({ collection: "todos" });

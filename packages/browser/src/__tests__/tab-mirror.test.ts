@@ -10,18 +10,19 @@ import {
   ClientEngine,
   ClientStore,
   Cvr,
+  EngineHost,
   InvalidationBus,
   MemoryBackend,
+  MirrorChannel,
   Mutator,
   Subset,
   SyncServer,
+  TabMirror,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
-import * as EngineHost from "../EngineHost.js";
-import * as MirrorChannel from "../MirrorChannel.js";
-import * as TabMirror from "../TabMirror.js";
+import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
@@ -266,8 +267,8 @@ describe("EngineHost ↔ TabMirror (BroadcastChannel)", () => {
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
       const name = `legation-test-${Date.now()}`;
-      const host = yield* MirrorChannel.makeBroadcastChannel(name);
-      const tabChannel = yield* MirrorChannel.makeBroadcastChannel(name);
+      const host = yield* BroadcastMirrorChannel.make(name);
+      const tabChannel = yield* BroadcastMirrorChannel.make(name);
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* TabMirror.make({ channel: tabChannel, mutators });
 

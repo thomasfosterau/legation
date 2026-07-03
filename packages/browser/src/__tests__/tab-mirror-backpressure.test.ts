@@ -12,19 +12,19 @@ import {
   ClientEngine,
   ClientStore,
   Cvr,
+  EngineHost,
   InvalidationBus,
   MemoryBackend,
+  MirrorChannel,
   Mutator,
   Subset,
   SyncServer,
+  TabMirror,
   Telemetry,
   Transport,
 } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Metric, Ref, Schema, Stream } from "effect";
-import * as EngineHost from "../EngineHost.js";
-import * as MirrorChannel from "../MirrorChannel.js";
-import * as TabMirror from "../TabMirror.js";
 
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 type Todo = typeof TodoArgs.Type;
