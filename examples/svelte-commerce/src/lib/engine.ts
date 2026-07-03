@@ -14,12 +14,11 @@
  * by the host.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { ClientView } from "@legation/effect";
-import { Mirror } from "@legation/effect";
+import { Client, ClientView } from "@legation/effect";
 import { BroadcastMirrorChannel, ServiceWorkerHost } from "@legation/browser";
 import type { Runtime } from "@legation/svelte";
 type EffectSyncRuntime = Runtime.EffectSyncRuntime;
-import { mutators, shellSubsets } from "./domain.js";
+import { mutators, nodes, shellReads } from "./domain.js";
 
 export type AppRuntime = EffectSyncRuntime;
 
@@ -39,8 +38,15 @@ export const boot = (options: {
         const channel = yield* BroadcastMirrorChannel.make(
           ServiceWorkerHost.defaultChannelName
         );
-        // Mirror satisfies ClientView structurally (ADR-0021).
-        return yield* Mirror.make({ channel, mutators });
+        // The Client joins the worker-hosted engine over the channel
+        // (ADR-0022); the bindings still consume its view until the
+        // program's bindings step moves them onto the Client itself.
+        const client = yield* Client.connect({ nodes, mutations: mutators, channel });
+        // Boot-time shell pins; a failure here is a bug, not app state.
+        yield* Effect.forEach(shellReads(options.userId), (read) => client.subscribe(read), {
+          discard: true,
+        }).pipe(Effect.orDie);
+        return client.view;
       })
     )
   );
@@ -55,15 +61,8 @@ export const boot = (options: {
     clearInterval(timer);
     config.close();
   }, 20_000);
-  void runtime
-    .runPromise(
-      Effect.flatMap(ClientView.ClientView, (view) =>
-        Effect.forEach(shellSubsets(options.userId), (subset) => view.subscribe(subset), {
-          discard: true,
-        })
-      )
-    )
-    .catch(() => undefined);
+  // Touch the runtime so the Client (and its shell subscriptions) boot now.
+  void runtime.runPromise(Effect.asVoid(ClientView.ClientView)).catch(() => undefined);
   if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
   return runtime;
 };

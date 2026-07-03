@@ -1,20 +1,28 @@
 /**
- * Shared domain — collections, subsets, mutators
+ * Shared domain — the node graph, reads, mutators
  *
  * One module, imported by both sides: the SvelteKit app (optimistic client
- * mutators, typed subsets for pages) and the Effect server (schemas for
- * validating pushed args; the authoritative SQL handlers live in
- * `server/handlers.ts`). Mutators are defined once and executed twice
- * (ADR-0008) — the client handlers here write the optimistic overlay, the
- * server handlers write SQL.
+ * mutators, reads for pages) and the Effect server (schemas for validating
+ * pushed args; the authoritative SQL handlers live in `server/handlers.ts`).
+ * Mutators are defined once and executed twice (ADR-0008) — the client
+ * handlers here write the optimistic overlay, the server handlers write SQL.
+ *
+ * The graph is declared as **Nodes and Edges** (ADR-0022): each foreign key
+ * is declared exactly once, on the child (`Edge.one(..., { via })`), and the
+ * parent names the inverse — the engine registry, the joins, the sync
+ * windows, and the fan-out topics all derive from the same declarations
+ * (the old hand-written both-directions `Collection.relationships` are
+ * gone). `reviews` is a **paginated** edge: its order is part of the edge's
+ * identity, and a windowed include syncs per-parent windows (ADR-0024).
  *
  * Public catalog collections (products, variants, categories, sellers,
  * reviews) are readable by anyone; private collections (profiles, cartItems,
  * orders, orderItems) carry a `userId` the auth filters scope by
- * (ADR-0015's denormalized key).
+ * (ADR-0015's denormalized key) — declared as `hintKeys`, so ADR-0023's
+ * fine fan-out topics can use the same field.
  */
 import { Effect, Schema } from "effect";
-import { Collection, Mutator, Subset } from "@legation/effect";
+import { Edge, Mutator, Node, Query, Subset } from "@legation/effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -95,81 +103,80 @@ export const OrderItemSchema = Schema.Struct({
 });
 export type OrderItem = typeof OrderItemSchema.Type;
 
-// ─── Collections (with declared relationships) ──────────────────────────────
+// ─── The node graph (ADR-0022: declare each key once, name both directions) ──
 
-export const categories = Collection.make({
-  name: "categories",
-  schema: CategorySchema,
-  id: (row) => row.id,
+const { id: _categoryId, ...categoryAttributes } = CategorySchema.fields;
+const { id: _sellerId, ...sellerAttributes } = SellerSchema.fields;
+const {
+  id: _productId,
+  categoryId: _productCategoryId,
+  sellerId: _productSellerId,
+  ...productAttributes
+} = ProductSchema.fields;
+const { id: _variantId, productId: _variantProductId, ...variantAttributes } = VariantSchema.fields;
+const { id: _reviewId, productId: _reviewProductId, ...reviewAttributes } = ReviewSchema.fields;
+const { id: _profileId, ...profileAttributes } = ProfileSchema.fields;
+const { id: _cartItemId, variantId: _cartVariantId, ...cartItemAttributes } = CartItemSchema.fields;
+const { id: _orderId, ...orderAttributes } = OrderSchema.fields;
+const {
+  id: _orderItemId,
+  orderId: _itemOrderId,
+  variantId: _itemVariantId,
+  ...orderItemAttributes
+} = OrderItemSchema.fields;
+
+export const categories = Node.make("categories", { attributes: categoryAttributes });
+
+export const sellers = Node.make("sellers", { attributes: sellerAttributes });
+
+export const products = Node.make("products", {
+  attributes: productAttributes,
+  edges: {
+    category: Edge.one("categories", { via: "categoryId" }),
+    seller: Edge.one("sellers", { via: "sellerId" }),
+    variants: Edge.many("variants", { inverse: "product" }),
+    // Order is part of the edge's identity (cursor windows need it) — the
+    // newest-first review feed is declared here, not per query.
+    reviews: Edge.paginated("reviews", { inverse: "product", order: ["-createdAt"] }),
+  },
 });
 
-export const sellers = Collection.make({
-  name: "sellers",
-  schema: SellerSchema,
-  id: (row) => row.id,
+export const variants = Node.make("variants", {
+  attributes: variantAttributes,
+  edges: { product: Edge.one("products", { via: "productId" }) },
 });
 
-export const products = Collection.make({
-  name: "products",
-  schema: ProductSchema,
-  id: (row) => row.id,
-  relationships: [
-    { name: "category", kind: "one", collection: "categories", localField: "categoryId", foreignField: "id" },
-    { name: "seller", kind: "one", collection: "sellers", localField: "sellerId", foreignField: "id" },
-    { name: "variants", kind: "many", collection: "variants", localField: "id", foreignField: "productId" },
-    { name: "reviews", kind: "many", collection: "reviews", localField: "id", foreignField: "productId" },
-  ],
+export const reviews = Node.make("reviews", {
+  attributes: reviewAttributes,
+  edges: { product: Edge.one("products", { via: "productId" }) },
+  hintKeys: ["userId"],
 });
 
-export const variants = Collection.make({
-  name: "variants",
-  schema: VariantSchema,
-  id: (row) => row.id,
-  relationships: [
-    { name: "product", kind: "one", collection: "products", localField: "productId", foreignField: "id" },
-  ],
+export const profiles = Node.make("profiles", { attributes: profileAttributes });
+
+export const cartItems = Node.make("cartItems", {
+  attributes: cartItemAttributes,
+  edges: { variant: Edge.one("variants", { via: "variantId" }) },
+  hintKeys: ["userId"],
 });
 
-export const reviews = Collection.make({
-  name: "reviews",
-  schema: ReviewSchema,
-  id: (row) => row.id,
+export const orders = Node.make("orders", {
+  attributes: orderAttributes,
+  edges: { items: Edge.many("orderItems", { inverse: "order" }) },
+  hintKeys: ["userId"],
 });
 
-export const profiles = Collection.make({
-  name: "profiles",
-  schema: ProfileSchema,
-  id: (row) => row.id,
+export const orderItems = Node.make("orderItems", {
+  attributes: orderItemAttributes,
+  edges: {
+    order: Edge.one("orders", { via: "orderId" }),
+    variant: Edge.one("variants", { via: "variantId" }),
+  },
+  hintKeys: ["userId"],
 });
 
-export const cartItems = Collection.make({
-  name: "cartItems",
-  schema: CartItemSchema,
-  id: (row) => row.id,
-  relationships: [
-    { name: "variant", kind: "one", collection: "variants", localField: "variantId", foreignField: "id" },
-  ],
-});
-
-export const orders = Collection.make({
-  name: "orders",
-  schema: OrderSchema,
-  id: (row) => row.id,
-  relationships: [
-    { name: "items", kind: "many", collection: "orderItems", localField: "id", foreignField: "orderId" },
-  ],
-});
-
-export const orderItems = Collection.make({
-  name: "orderItems",
-  schema: OrderItemSchema,
-  id: (row) => row.id,
-  relationships: [
-    { name: "variant", kind: "one", collection: "variants", localField: "variantId", foreignField: "id" },
-  ],
-});
-
-export const registry = Collection.registry([
+/** The closed, validated graph: nodes + the derived engine registry. */
+export const nodes = Node.registry([
   categories,
   sellers,
   products,
@@ -181,74 +188,74 @@ export const registry = Collection.registry([
   orderItems,
 ]);
 
+/** The engine's collection registry, derived edge-for-edge from the graph. */
+export const registry = nodes.collections;
+
 /** Names of the public catalog collections (auth: allow all). */
 export const publicCollections = ["categories", "sellers", "products", "variants", "reviews"] as const;
 /** Names of the private, identity-scoped collections. */
 export const privateCollections = ["profiles", "cartItems", "orders", "orderItems"] as const;
 
-// ─── Subsets ─────────────────────────────────────────────────────────────────
+// ─── Reads ───────────────────────────────────────────────────────────────────
+//
+// Declarative reads (Query.Read) are the app's read vocabulary; the page
+// hooks still speak the plan's Subset representation until the bindings
+// move onto the Client (ADR-0022 step 8), so each read is compiled with
+// `Query.plan` where a subset is needed.
 
-export const Products = Subset.for(products);
-export const Variants = Subset.for(variants);
-export const Categories = Subset.for(categories);
-export const Sellers = Subset.for(sellers);
-export const Reviews = Subset.for(reviews);
-export const CartItems = Subset.for(cartItems);
-export const Orders = Subset.for(orders);
-export const OrderItems = Subset.for(orderItems);
-export const Profiles = Subset.for(profiles);
+const subsetOf = (read: Query.Read): Subset.Subset => Query.plan(nodes, read).root;
 
-export const allCategories = Categories.make({ orderBy: [{ field: "name", direction: "asc" }] });
-export const allSellers = Sellers.make({});
-export const allVariants = Variants.make({});
-export const allReviews = Reviews.make({});
+export const allCategories = subsetOf({ collection: "categories", order: ["name"] });
+export const allSellers = subsetOf({ collection: "sellers" });
+export const allVariants = subsetOf({ collection: "variants" });
+export const allReviews = subsetOf({ collection: "reviews" });
+
+export const productById = (id: string) =>
+  subsetOf({ collection: "products", where: { id } });
 
 /** One catalog page: ordered by id, cursor + limit windowed (Subset.window). */
 export const productPage = (options: { categoryId?: string; cursor?: string; limit?: number }) =>
-  Products.make({
-    ...(options.categoryId !== undefined
-      ? { where: (p) => p.eq("categoryId", options.categoryId!) }
-      : {}),
-    orderBy: [{ field: "id", direction: "asc" }],
-    limit: options.limit ?? 12,
-    ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+  subsetOf({
+    collection: "products",
+    ...(options.categoryId !== undefined ? { where: { categoryId: options.categoryId } } : {}),
+    order: ["id"],
+    first: options.limit ?? 12,
+    ...(options.cursor !== undefined ? { after: options.cursor } : {}),
   });
 
 export const productReviews = (productId: string) =>
-  Reviews.make({
-    where: (p) => p.eq("productId", productId),
-    orderBy: [{ field: "createdAt", direction: "desc" }],
-  });
+  subsetOf({ collection: "reviews", where: { productId }, order: ["-createdAt"] });
 
 export const myCartItems = (userId: string) =>
-  CartItems.make({ where: (p) => p.eq("userId", userId) });
+  subsetOf({ collection: "cartItems", where: { userId } });
 
 export const myOrders = (userId: string) =>
-  Orders.make({
-    where: (p) => p.eq("userId", userId),
-    orderBy: [{ field: "createdAt", direction: "desc" }],
-  });
+  subsetOf({ collection: "orders", where: { userId }, order: ["-createdAt"] });
 
 export const myOrderItems = (userId: string) =>
-  OrderItems.make({ where: (p) => p.eq("userId", userId) });
+  subsetOf({ collection: "orderItems", where: { userId } });
 
-export const myProfile = (userId: string) => Profiles.make({ where: (p) => p.eq("id", userId) });
+export const myProfile = (userId: string) =>
+  subsetOf({ collection: "profiles", where: { id: userId } });
 
 /**
- * Everything the app shell needs synced — used identically by the SSR load
- * (to snapshot) and the client boot (to register subscriptions: they are
- * client state, not part of the snapshot, and a pull with no subscriptions
- * would unsync everything).
+ * Everything the app shell keeps live — the reads the tab's Client pins at
+ * boot (subscriptions are client state, refcounted per mirror by the host).
  */
-export const shellSubsets = (userId: string | undefined) => [
-  productPage({ limit: 100 }),
-  allCategories,
-  allSellers,
-  allVariants,
-  allReviews,
+export const shellReads = (userId: string | undefined): ReadonlyArray<Query.Read> => [
+  { collection: "products", order: ["id"], first: 100 },
+  { collection: "categories", order: ["name"] },
+  { collection: "sellers" },
+  { collection: "variants" },
+  { collection: "reviews" },
   ...(userId === undefined
     ? []
-    : [myCartItems(userId), myOrders(userId), myOrderItems(userId), myProfile(userId)]),
+    : ([
+        { collection: "cartItems", where: { userId } },
+        { collection: "orders", where: { userId }, order: ["-createdAt"] },
+        { collection: "orderItems", where: { userId } },
+        { collection: "profiles", where: { id: userId } },
+      ] satisfies ReadonlyArray<Query.Read>)),
 ];
 
 // ─── Mutators (client-optimistic handlers; SQL handlers on the server) ──────

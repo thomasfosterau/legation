@@ -1,6 +1,6 @@
 /**
- * The sync stack both processes share: SqlBackend over the Effect SQL
- * client, the public/private auth split, and the identity seam.
+ * The sync stack both processes share: one `Server.make` (ADR-0022) over
+ * the SqlBackend, the public/private auth split, and the identity seam.
  *
  * - Public catalog collections are `allowAll` — the deliberate opt-in for
  *   anonymous readers (deny-by-default holds everywhere else).
@@ -11,18 +11,15 @@
  *   authenticated user), written by the sync server's account API and read
  *   here by the `IdentityResolver` — never from anything the client sends
  *   in a push.
+ *
+ * The invalidation bus is created here and passed INTO `Server.make`, so
+ * the polling hint source (ADR-0019 tier 2) publishes into the same bus the
+ * server's fan-out listens to, and `server.broadcast` is available to
+ * out-of-band writers (the fulfilment worker).
  */
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer, Scope } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
-import {
-  Authorization,
-  Backend,
-  Cvr,
-  InvalidationBus,
-  Predicate,
-  SyncServer,
-  Transport,
-} from "@legation/effect";
+import { Authorization, InvalidationBus, Predicate, Server, Transport } from "@legation/effect";
 import { SqlBackend } from "@legation/sql";
 import { mutators, privateCollections, publicCollections } from "../src/lib/domain.js";
 import { makeExecutor } from "./db.js";
@@ -67,48 +64,51 @@ export const bindClientGroup = (clientGroupId: string, userId: string | undefine
     }
   });
 
-const identityResolverLayer = Layer.effect(Authorization.IdentityResolver)(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    return {
-      resolve: (clientGroupId) =>
-        currentUser(clientGroupId).pipe(
-          Effect.provideService(SqlClient, sql),
-          // An unreadable binding table is a server bug, not an auth verdict.
-          Effect.orDie
-        ),
-    };
-  })
-);
-
-const backendLayer = Layer.effect(Backend.Backend)(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    return SqlBackend.make({
-      executor: makeExecutor(sql),
-      tables,
-      mutators: mutators.mutators,
-      handlers: makeHandlers(sql),
-    });
-  })
-);
+/** The app's Server (handler + broadcast) and the bus hint sources share. */
+export interface CommerceSync {
+  readonly server: Server.Server;
+  readonly bus: InvalidationBus.InvalidationBus;
+}
+export const CommerceSync = Context.Service<CommerceSync>("commerce/CommerceSync");
 
 /**
- * The full ServerHandler stack over the in-context `SqlClient`, with the
- * invalidation bus exposed alongside so hint sources publish into the same
- * bus the fan-out listens to. CVR storage and the bus are per-process
- * (in-memory) — a lost cookie degrades to a reset patch (ADR-0008), and
- * cross-process writes are covered by the polling hint source in the sync
- * server.
+ * The one server-side object (ADR-0022): `Server.make` over the SqlBackend
+ * and the auth seams. CVR storage defaults to per-process memory — a lost
+ * cookie degrades to a reset patch (ADR-0008); cross-process writes are
+ * covered by the polling hint source publishing into the shared bus.
  */
+const commerceSync: Effect.Effect<CommerceSync, never, SqlClient | Scope.Scope> =
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const bus = yield* InvalidationBus.makeInProcess;
+    const server = yield* Server.make({
+      backend: SqlBackend.make({
+        executor: makeExecutor(sql),
+        tables,
+        mutators: mutators.mutators,
+        handlers: makeHandlers(sql),
+      }),
+      auth: {
+        policy: authPolicy,
+        identity: {
+          resolve: (clientGroupId) =>
+            currentUser(clientGroupId).pipe(
+              Effect.provideService(SqlClient, sql),
+              // An unreadable binding table is a server bug, not an auth verdict.
+              Effect.orDie
+            ),
+        },
+      },
+      bus,
+    });
+    return { server, bus };
+  });
+
 export const syncLayer: Layer.Layer<
-  Transport.ServerHandler | InvalidationBus.InvalidationBus,
+  Transport.ServerHandler | InvalidationBus.InvalidationBus | CommerceSync,
   never,
   SqlClient
-> = SyncServer.layer.pipe(
-  Layer.provide(Cvr.layerMemoryStore),
-  Layer.provideMerge(InvalidationBus.layerInProcess),
-  Layer.provide(backendLayer),
-  Layer.provide(Layer.succeed(Authorization.AuthPolicy)(authPolicy)),
-  Layer.provide(identityResolverLayer)
-);
+> = Layer.mergeAll(
+  Layer.effect(Transport.ServerHandler)(Effect.map(CommerceSync, (s) => s.server.handler)),
+  Layer.effect(InvalidationBus.InvalidationBus)(Effect.map(CommerceSync, (s) => s.bus))
+).pipe(Layer.provideMerge(Layer.effect(CommerceSync)(commerceSync)));
