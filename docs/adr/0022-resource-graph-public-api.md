@@ -158,6 +158,33 @@ anything bypassing mutations) call it explicitly. Underneath it is
 unchanged ADR-0019 machinery — hint → poke → pull, hints droppable because
 pull is the correctness path — but the developer story is one line.
 
+#### Deployment shape: Cloudflare Workers as the reference topology
+
+`Server` is a **logical** object whose parts deploy separately; the
+reference distributed topology (a `@legation/cloudflare` adapter, the
+server-side sibling of `@legation/browser`'s `ServiceWorkerHost`):
+
+- A stateless **Worker fetch handler** serves the REST/JSON:API baseline
+  against the backend and routes `/sync` WebSocket upgrades to the user's
+  Durable Object.
+- A **per-user Durable Object** is the sync room: it holds the user's
+  WebSockets (hibernation-friendly — pokes are contentless), runs
+  `server.handler` for push/pull, and keeps that user's CVRs in DO
+  transactional storage (co-located, superseding ADR-0011's shared-KV
+  variant for this topology).
+- **Per-collection/edge Durable Objects** are the invalidation bus,
+  sharded: `broadcast` publishes to the shard, the shard pokes registered
+  user DOs. Fan-out is hint-only — pull through the user DO remains the
+  correctness path. Sharding is collection/edge-level at the base (an
+  insert matches predicate windows no per-node shard knows about), with
+  per-node shards as an optimization for hot documents; the Node/Edge
+  graph makes hint routing derivable (a `reviews` write carrying
+  `productId` touches the `(products/id).reviews` edge window).
+- **Authoritative data stays in the backend** (D1 fits the existing SQLite
+  executor seam) — Durable Objects hold connections, CVRs, and fan-out
+  registrations, never the source of truth, keeping predicate evaluation
+  in one place and the BYO backend contract intact.
+
 ### What leaves the index
 
 `LiveView`, `LiveQuery`, `Subscriptions`, `EngineAtoms`, `PromiseFacade`,
