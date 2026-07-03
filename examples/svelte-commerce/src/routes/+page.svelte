@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
-  import { useAggregateGrouped, useQuery } from "@legation/svelte/runes";
+  import { useAggregateGrouped, useQuery } from "@legation/svelte/Runes";
   import { AsyncResult } from "effect/unstable/reactivity";
   import { Aggregate } from "@legation/effect";
   import { allCategories, allVariants, productPage, type Category, type Product } from "../lib/domain.js";

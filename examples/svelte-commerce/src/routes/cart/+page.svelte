@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useMutation, useRelated } from "@legation/svelte/runes";
+  import { useMutation, useRelated } from "@legation/svelte/Runes";
   import { myCartItems, registry, type CartItem, type Variant } from "../../lib/domain.js";
   import { cartItemRows, variantRows } from "../../lib/rows.js";
 

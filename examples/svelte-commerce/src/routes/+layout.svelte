@@ -1,6 +1,6 @@
 <script lang="ts">
   import { browser } from "$app/environment";
-  import { setEngineRuntime } from "@legation/svelte";
+  import { Runtime } from "@legation/svelte";
   import { boot, ssrStub, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();
@@ -14,7 +14,7 @@
     // svelte-ignore state_referenced_locally
     runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
   }
-  setEngineRuntime(runtime ?? ssrStub());
+  Runtime.setEngineRuntime(runtime ?? ssrStub());
 </script>
 
 <nav>

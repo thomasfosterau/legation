@@ -15,8 +15,10 @@
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { ClientView } from "@legation/effect";
-import { MirrorChannel, ServiceWorkerHost, TabMirror } from "@legation/browser";
-import type { EffectSyncRuntime } from "@legation/svelte";
+import { TabMirror } from "@legation/effect";
+import { BroadcastMirrorChannel, ServiceWorkerHost } from "@legation/browser";
+import type { Runtime } from "@legation/svelte";
+type EffectSyncRuntime = Runtime.EffectSyncRuntime;
 import { mutators, shellSubsets } from "./domain.js";
 
 export type AppRuntime = EffectSyncRuntime;
@@ -34,7 +36,7 @@ export const boot = (options: {
   const runtime = ManagedRuntime.make(
     Layer.effect(ClientView.ClientView)(
       Effect.gen(function* () {
-        const channel = yield* MirrorChannel.makeBroadcastChannel(
+        const channel = yield* BroadcastMirrorChannel.make(
           ServiceWorkerHost.defaultChannelName
         );
         // TabMirror satisfies ClientView structurally (ADR-0021).

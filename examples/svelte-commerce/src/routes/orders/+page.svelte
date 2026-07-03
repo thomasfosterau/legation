@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useQuery } from "@legation/svelte/runes";
+  import { useQuery } from "@legation/svelte/Runes";
   import { myOrders, type Order } from "../../lib/domain.js";
   import { orderRows } from "../../lib/rows.js";
 

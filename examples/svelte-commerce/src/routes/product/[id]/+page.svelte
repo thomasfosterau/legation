@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
   import { Aggregate, Predicate, Subset } from "@legation/effect";
-  import { useAggregate, useMutationWithAck, useRelated } from "@legation/svelte/runes";
+  import { useAggregate, useMutationWithAck, useRelated } from "@legation/svelte/Runes";
   import {
     registry,
     Products,
