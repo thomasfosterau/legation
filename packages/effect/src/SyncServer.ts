@@ -35,7 +35,15 @@ import {
   TransportError,
   VersionNotSupportedError,
 } from "./Errors.js";
-import type { PatchOp, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
+import type {
+  PatchOp,
+  PullRequest,
+  PullResponse,
+  PushRequest,
+  PushResponse,
+  ReadRequest,
+  ReadResponse,
+} from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
@@ -419,9 +427,41 @@ export const makeWithIntrospectionWith = (
         Effect.withSpan(Telemetry.span.serverPull)
       );
 
+    // The fallthrough read (ADR-0025): pull's front half — identity,
+    // middleware, deny-by-default auth — then evaluate + fetch. No cookie,
+    // no CVR read or write, no lastMutationIds: a read never perturbs sync
+    // state, so the worst it can be is stale (pull stays the correctness path).
+    const handleRead = (
+      request: ReadRequest
+    ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
+      checkVersion(request.schemaVersion).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const context = yield* contextFor(request.clientGroupId);
+            const checked = yield* (
+              middleware.onRead ?? ((_, r: ReadRequest) => Effect.succeed(r))
+            )(context, request);
+            const authorized: Array<Subset> = [];
+            for (const subset of checked.subsets) {
+              authorized.push(yield* authorize(authPolicy, context, subset));
+            }
+            const rows: ReadResponse["rows"][number][] = [];
+            for (const subset of authorized) {
+              const ids = (yield* backend.evaluate(context, subset)).map((entry) => entry.id);
+              for (const row of yield* backend.getRows(context, subset.collection, ids)) {
+                rows.push({ collection: subset.collection, ...row });
+              }
+            }
+            return { rows };
+          }).pipe(Effect.mapError(asTransportError))
+        ),
+        Effect.withSpan(Telemetry.span.serverRead)
+      );
+
     const handler = ServerHandler.of({
       handlePush,
       handlePull,
+      handleRead,
       pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
     });
 

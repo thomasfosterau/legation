@@ -20,8 +20,14 @@
  * on a connected engine, locally on an owned one — with the plan's edge
  * windows applied.
  *
- * The server-fallthrough read tier (ADR-0022's third tier) is a later
- * program step; until then uncovered reads answer from the local replica.
+ * **Reads have three tiers and the UI sees none of them** (ADR-0025):
+ * `query` answers from the replica when the read's root window is in this
+ * Client's ledger; otherwise it falls through to the server — point-in-time,
+ * auth-filtered, no CVR, results never entering the replica — degrading
+ * back to the local answer when no transport read is available or the
+ * server is unreachable (offline-first: local is always an answer).
+ * `observe` never falls through: observing subscribes, which IS the
+ * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
 import { Effect, Ref, Stream } from "effect";
@@ -33,7 +39,7 @@ import type * as Mutator from "./Mutator.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
 import type * as QueryModule from "./Query.js";
-import type * as Related from "./Related.js";
+import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as Mirror from "./Mirror.js";
@@ -121,6 +127,40 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       Effect.flatMap((last) => (last ? view.unsubscribe(subset).pipe(Effect.ignore) : Effect.void))
     );
 
+  const selectsOf = (compiled: Query.Plan): ReadonlyArray<Related.EdgeSelect> =>
+    compiled.edges.map((edge) => ({
+      name: edge.edge,
+      ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
+    }));
+
+  // The three-tier read (ADR-0025): replica when the root window is in the
+  // ledger; server fallthrough otherwise; local again when fallthrough is
+  // unavailable or fails (offline-first — local is always an answer).
+  const queryOnce = (
+    read: QueryModule.Read
+  ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
+    const local = Query.run(view, nodes, read);
+    const readThrough = view.read;
+    if (readThrough === undefined) return local;
+    const compiled = Query.plan(nodes, read);
+    return Ref.get(ledger).pipe(
+      Effect.flatMap((interests) =>
+        interests.has(Subset.hash(compiled.root))
+          ? local
+          : Related.queryVia(
+              readThrough,
+              nodes.collections,
+              read.collection,
+              compiled.root,
+              selectsOf(compiled)
+            ).pipe(
+              Effect.map((rows) => Query.applyWindows(compiled, rows)),
+              Effect.catch(() => local)
+            )
+      )
+    );
+  };
+
   const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
     const compiled = Query.plan(nodes, read);
     if (compiled.edges.length === 0) {
@@ -159,7 +199,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
   };
 
   return {
-    query: (read) => Query.run(view, nodes, read),
+    query: queryOnce,
     observe,
     subscribe: (read) => acquire(Query.plan(nodes, read).root, "explicit"),
     unsubscribe: (read) => release(Query.plan(nodes, read).root, "explicit"),

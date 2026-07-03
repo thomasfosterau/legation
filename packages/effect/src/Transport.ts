@@ -24,7 +24,15 @@ import {
 } from "effect";
 import { TransportError } from "./Errors.js";
 import type { VersionNotSupportedError } from "./Errors.js";
-import type { Poke, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
+import type {
+  Poke,
+  PullRequest,
+  PullResponse,
+  PushRequest,
+  PushResponse,
+  ReadRequest,
+  ReadResponse,
+} from "./Protocol.js";
 
 /** Connectivity of a client transport. */
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -37,6 +45,14 @@ export interface ClientTransport {
   readonly pull: (
     request: PullRequest
   ) => Effect.Effect<PullResponse, TransportError | VersionNotSupportedError>;
+  /**
+   * Point-in-time fallthrough read (ADR-0025). Optional: carriers that
+   * don't offer it simply don't serve the third read tier — the Client
+   * degrades to answering locally.
+   */
+  readonly read?: (
+    request: ReadRequest
+  ) => Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError>;
   /** Pokes from the server; may be empty for pull-only carriers. */
   readonly pokes: Stream.Stream<Poke, TransportError>;
   readonly status: Effect.Effect<ConnectionStatus>;
@@ -58,6 +74,10 @@ export interface ServerHandler {
   readonly handlePull: (
     request: PullRequest
   ) => Effect.Effect<PullResponse, TransportError | VersionNotSupportedError>;
+  /** Point-in-time fallthrough read (ADR-0025): auth-filtered, no CVR. */
+  readonly handleRead: (
+    request: ReadRequest
+  ) => Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError>;
   /** Pokes addressed to one client group. */
   readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
 }
@@ -81,6 +101,7 @@ export const makeInMemory = (
     return {
       push: (request) => handler.handlePush(request),
       pull: (request) => handler.handlePull(request),
+      read: (request) => handler.handleRead(request),
       pokes: handler.pokes(clientGroupId),
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status),

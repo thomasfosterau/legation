@@ -18,7 +18,7 @@ import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
 import type { Predicate } from "./Predicate.js";
 import * as Predicates from "./Predicate.js";
-import type { PullRequest, PushRequest } from "./Protocol.js";
+import type { PullRequest, PushRequest, ReadRequest } from "./Protocol.js";
 import type { Subset } from "./Subset.js";
 
 /** Produce the mandatory predicate for a collection, per request. */
@@ -58,7 +58,7 @@ export const authorize = (
   );
 };
 
-/** Interception seam around push/pull handling. */
+/** Interception seam around push/pull/read handling. */
 export interface SyncMiddleware {
   readonly onPush: (
     context: SyncContext,
@@ -68,6 +68,14 @@ export interface SyncMiddleware {
     context: SyncContext,
     request: PullRequest
   ) => Effect.Effect<PullRequest, AuthorizationError>;
+  /**
+   * Around fallthrough reads (ADR-0025). Optional — absent means
+   * passthrough — so middleware written before the read tier keeps working.
+   */
+  readonly onRead?: (
+    context: SyncContext,
+    request: ReadRequest
+  ) => Effect.Effect<ReadRequest, AuthorizationError>;
 }
 
 export const SyncMiddleware = Context.Service<SyncMiddleware>("@legation/effect/SyncMiddleware");
@@ -76,6 +84,7 @@ export const SyncMiddleware = Context.Service<SyncMiddleware>("@legation/effect/
 export const passthroughMiddleware: SyncMiddleware = {
   onPush: (_context, request) => Effect.succeed(request),
   onPull: (_context, request) => Effect.succeed(request),
+  onRead: (_context, request) => Effect.succeed(request),
 };
 
 /**

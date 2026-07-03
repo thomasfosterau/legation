@@ -140,22 +140,6 @@ const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): b
 
 // ─── Field-mapping strategy ──────────────────────────────────────────────────
 
-/**
- * A resolution strategy over declared field mappings: `targets` pins each
- * relationship's foreign collection by its `foreignField` and the base rows'
- * `localField` values; `resolveRow` looks each base row up in the index by its
- * `localField` value, yielding the single foreign row (`"one"`) or the array of
- * them (`"many"`).
- *
- * All relationships pointing at the same collection are expected to share a
- * `foreignField` (the usual case: `"id"` for `"one"`, one FK for `"many"`);
- * `targets` pins the collection by the first relationship's `foreignField`.
- *
- * A `"paginated"` relationship carrying a `first` pins a **windowed** target
- * (its declared order + the read's limit — ADR-0024). When two relationships
- * pin the same collection, the target falls back to the unwindowed superset:
- * sound, merely over-syncs.
- */
 /** The per-parent window a selected relationship pins, when it does. */
 const windowOf = (
   relationship: Collection.Relationship & { readonly first?: number }
@@ -179,6 +163,22 @@ const pinIds = (
   }
 };
 
+/**
+ * A resolution strategy over declared field mappings: `targets` pins each
+ * relationship's foreign collection by its `foreignField` and the base rows'
+ * `localField` values; `resolveRow` looks each base row up in the index by its
+ * `localField` value, yielding the single foreign row (`"one"`) or the array of
+ * them (`"many"`).
+ *
+ * All relationships pointing at the same collection are expected to share a
+ * `foreignField` (the usual case: `"id"` for `"one"`, one FK for `"many"`);
+ * `targets` pins the collection by the first relationship's `foreignField`.
+ *
+ * A `"paginated"` relationship carrying a `first` pins a **windowed** target
+ * (its declared order + the read's limit — ADR-0024). When two relationships
+ * pin the same collection, the target falls back to the unwindowed superset:
+ * sound, merely over-syncs.
+ */
 export const fieldMappingStrategy = (
   relationships: ReadonlyArray<Collection.Relationship & { readonly first?: number }>
 ): Strategy => ({
@@ -340,8 +340,11 @@ export const observeWith = (
 const desiredSubsets = (
   strategy: Strategy,
   base: ReadonlyArray<LocalRow>
-): ReadonlyArray<Subset.Subset> =>
-  [...strategy.targets(base)]
+): ReadonlyArray<Subset.Subset> => subsetsForTargets(strategy.targets(base));
+
+/** The narrowed subsets a set of targets pins (see {@link desiredSubsets}). */
+const subsetsForTargets = (targets: ReadonlyMap<string, Target>): ReadonlyArray<Subset.Subset> =>
+  [...targets]
     .filter(([, target]) => target.ids.size > 0)
     .flatMap(([collection, target]) =>
       target.window === undefined
@@ -420,6 +423,51 @@ export const relatedWith = (
     // keep the subscriptions tracking the live linkage as it changes.
     yield* refresh;
     return observeWith(engine, strategy, subset).pipe(Stream.tap(() => refresh));
+  });
+
+/** A row from an external source, tagged with its collection. */
+export interface SourcedRow {
+  readonly collection: string;
+  readonly id: string;
+  readonly value: unknown;
+}
+
+/**
+ * One-shot relational read over an **external row source** — the
+ * server-fallthrough tier (ADR-0025). Fetches the base subset, derives the
+ * foreign subsets exactly as the auto-subscribing read would (including
+ * ADR-0024's per-parent windows), fetches them in one batch, and assembles
+ * the join with the same field-mapping resolution. Nothing is subscribed
+ * and nothing enters the replica.
+ */
+export const queryVia = <E>(
+  fetch: (subsets: ReadonlyArray<Subset.Subset>) => Effect.Effect<ReadonlyArray<SourcedRow>, E>,
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  subset: Subset.Subset,
+  edges: ReadonlyArray<string | EdgeSelect>
+): Effect.Effect<ReadonlyArray<RelatedRow>, E> =>
+  Effect.gen(function* () {
+    const strategy = fieldMappingStrategy(selectRelationships(registry, collectionName, edges));
+    const base = (yield* fetch([subset]))
+      .filter((row) => row.collection === subset.collection)
+      .map(({ id, value }) => ({ id, value }));
+    const targets = strategy.targets(base);
+    const foreignSubsets = subsetsForTargets(targets);
+    const foreign = foreignSubsets.length === 0 ? [] : yield* fetch(foreignSubsets);
+    const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
+    for (const [collection, target] of targets) {
+      index.set(
+        collection,
+        groupByField(
+          foreign
+            .filter((row) => row.collection === collection)
+            .map(({ id, value }) => ({ id, value })),
+          target.field
+        )
+      );
+    }
+    return hydrate(strategy, base, index);
   });
 
 // ─── Public API (declared field mappings) ────────────────────────────────────

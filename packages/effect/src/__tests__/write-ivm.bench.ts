@@ -39,6 +39,7 @@ const top = Subset.make({
 const noopHandler: ServerHandler = {
   handlePush: () => Effect.succeed({ lastMutationIds: {} }),
   handlePull: () => Effect.succeed({ patch: [], cookie: "c", lastMutationIds: {} }),
+  handleRead: () => Effect.succeed({ rows: [] }),
   pokes: () => Stream.empty,
 };
 

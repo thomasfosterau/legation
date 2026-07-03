@@ -104,6 +104,13 @@ export interface Mirror {
   readonly unsubscribeQuery: (name: string, args: unknown) => Effect.Effect<void, TransportError>;
   /** The mirror's current rows for a subset (empty until hydrated). */
   readonly query: (subset: Subset.Subset) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
+  /**
+   * Server-fallthrough read (ADR-0025), forwarded to the host — which owns
+   * the transport — and answered point-in-time, never entering the mirror.
+   */
+  readonly read: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<ClientEngine.ReadRow>, MutatorError | TransportError>;
   /** The mirror's current rows for a named query (empty until hydrated). */
   readonly queryNamed: (
     name: string,
@@ -249,6 +256,14 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         Deferred.Deferred<ClientEngine.MutationOutcome, MutatorError | TransportError>
       >()
     );
+    // Fallthrough reads awaiting their host answer (ADR-0025), same
+    // requestId space.
+    const pendingReads = yield* Ref.make(
+      new Map<
+        number,
+        Deferred.Deferred<ReadonlyArray<ClientEngine.ReadRow>, MutatorError | TransportError>
+      >()
+    );
     const requestIds = yield* Ref.make(0);
 
     // Take a request's deferred out of its map and complete it. A no-op when the
@@ -328,6 +343,15 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               case "MutateSettled":
                 return resolveIn(pendingSettled, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, outcomeOf(message))
+                );
+              case "ReadResult":
+                return resolveIn(pendingReads, message.requestId, (deferred) =>
+                  message.error === undefined
+                    ? Deferred.succeed(
+                        deferred,
+                        message.rows.map((row) => ({ ...row, version: "" }))
+                      )
+                    : Deferred.fail(deferred, new TransportError({ message: message.error }))
                 );
             }
           })
@@ -445,6 +469,19 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       unsubscribeQuery: (name, args) =>
         releaseInterest(MirrorProtocol.namedKey(name, args), "explicit"),
       query,
+      // The server-fallthrough read (ADR-0025): forwarded to the host, which
+      // owns the transport; correlated by requestId like mutations.
+      read: (subsets) =>
+        Effect.gen(function* () {
+          const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
+          const deferred = yield* Deferred.make<
+            ReadonlyArray<ClientEngine.ReadRow>,
+            MutatorError | TransportError
+          >();
+          yield* Ref.update(pendingReads, (map) => new Map(map).set(requestId, deferred));
+          yield* channel.post({ _tag: "Read", requestId, subsets });
+          return yield* Deferred.await(deferred);
+        }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
       // Observing auto-registers with the host for the stream's lifetime:
       // the mirror only carries keys someone subscribed, so a live read IS a
