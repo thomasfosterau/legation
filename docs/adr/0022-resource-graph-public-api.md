@@ -70,6 +70,46 @@ and query — derived directly from the Node definition plus per-collection
 concerns (id extraction where non-standard, denormalized auth keys). The
 registry of collections is the shared domain module both sides import.
 
+### Edges are dependent collections
+
+A `many` or `paginated` edge from `products` to `reviews` **is** the
+dependent collection `reviews where productId = <parent id>` — an edge is
+a _view_, never storage. The foreign key on the child node is the single
+source of truth; a `one` edge is the reference side of the same key. This
+identity is what makes the rest of the system line up: the edge's sync
+window is a subset with an equality predicate on the key, ADR-0023's fine
+fan-out topic is that same equality, and ADR-0015's relationship-scoped
+auth keys (`cartItems.userId`) are edges too. **One foreign key powers the
+join, the sync window, the auth scope, and the fan-out topic.**
+
+Consequences of taking that seriously:
+
+- **Declare the key once, name both directions.** The child declares the
+  reference (`product: Edge.one("products", { via: "productId" })`); the
+  parent's collection-valued edge is declared as its **inverse**
+  (`reviews: Edge.paginated("reviews", { inverse: "product" })`) rather
+  than as an independent fact that can drift (the commerce app currently
+  declares `variants.productId` and `products.variants` separately, by
+  hand). Edges reference their target **by name**, closed through the
+  registry — which also removes the type-level recursion that eager
+  resource-type expansion forces on mutually-referencing definitions.
+- **The replica is normalized.** A node lives exactly once in its
+  collection; root and edge windows hold _memberships_, never copies. A
+  review reached through a product's edge and through a root query is one
+  row — one update, and every window containing it re-emits. (The
+  deliberate contrast with document-store nesting.)
+- **Order belongs to the paginated edge's declaration**
+  (`Edge.paginated("reviews", { order: ["-createdAt"] })`): connection
+  cursors need a stable order, so it is part of the edge's identity, not a
+  per-query choice.
+- **Many-to-many is modeled explicitly** through an edge node — a
+  join-table Node with two `one` edges — traversed as two hops. A
+  `through` shorthand that flattens the hop is future sugar, not model.
+- **Dependency is not cascade.** Deleting a parent is the backend's rule
+  (Postgres `ON DELETE ...`); the replica converges through ordinary
+  window diffs. The engine defines what an edge _shows_, never what a
+  write _does_.
+
 ### Query — the read
 
 One declarative read concept, replacing `Subset` + `Predicate` + named
