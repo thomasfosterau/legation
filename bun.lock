@@ -268,6 +268,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@legation/effect": "workspace:^",
+        "@thomasfosterau/effect-svelte": "^0.3.1",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -718,6 +719,8 @@
     "@testing-library/react": ["@testing-library/react@16.3.2", "", { "dependencies": { "@babel/runtime": "^7.12.5" }, "peerDependencies": { "@testing-library/dom": "^10.0.0", "@types/react": "^18.0.0 || ^19.0.0", "@types/react-dom": "^18.0.0 || ^19.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g=="],
 
     "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.6.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.84" } }, "sha512-QmZQ3MrSph/Oi6J8CEOw38cwdCtQ/6SidfcEehwLfLzAwwfrX7nhlTzTWdNf6E5y0S+Ddymn3a6bZVgTIOjKCw=="],
+
+    "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.3.1", "", { "peerDependencies": { "effect": "^4.0.0-beta.75", "svelte": "^5.40.0" } }, "sha512-4eWjPgB1ED0mU6a74c2kz0IM4hY3e2GzPAkgVBgAockYwaGQparX7rJeH+H8G5sBZXyzT4pMJdmYos5X3jYe3Q=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 

@@ -52,6 +52,15 @@ export default defineConfig({
           name: "svelte",
           environment: "jsdom",
           include: ["packages/svelte/src/**/*.test.ts"],
+          server: {
+            deps: {
+              // Process effect-svelte through vite (browser conditions):
+              // externalized, its `import "svelte"` would load Svelte's
+              // SERVER runtime and every setContext call would throw
+              // lifecycle_outside_component.
+              inline: ["@thomasfosterau/effect-svelte"],
+            },
+          },
           // Component tests poll the DOM while engine fibers settle; leave
           // headroom for cold-start transform/import under parallel workers.
           testTimeout: 30_000,

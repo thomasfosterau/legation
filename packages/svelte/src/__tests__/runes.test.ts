@@ -56,11 +56,13 @@ describe("rune hooks", () => {
     });
 
     // Rendered synchronously from the seed at mount, before $effect ever
-    // runs — no Initial flash, and marked waiting (the live take-over is
-    // pending). This is also exactly what SSR renders, where $effect never
-    // runs at all.
+    // runs — no Initial flash. The seed is a NON-waiting Success ("we have
+    // data": no spinner over server-rendered content); the live stream's
+    // first emission replaces it. This is also exactly what SSR renders,
+    // where $effect never runs at all.
     expect(text()).toContain("row:match");
-    expect(text()).toContain("state:Success:waiting");
+    expect(text()).toContain("state:Success");
+    expect(text()).not.toContain(":waiting");
 
     // The live subscription then takes over (the engine has no such row).
     await until(() => !text().includes("row:match"));

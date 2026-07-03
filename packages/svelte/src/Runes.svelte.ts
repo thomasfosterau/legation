@@ -15,9 +15,9 @@
  * the engine runtime from context ({@link setEngineRuntime}) and register a
  * `$effect`.
  */
-import { untrack } from "svelte";
-import { Cause, Effect, Fiber, Option, Stream } from "effect";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { useLiveStream } from "@thomasfosterau/effect-svelte";
+import { Effect, Stream } from "effect";
+import type { AsyncResult } from "effect/unstable/reactivity";
 import {
   Aggregate,
   ClientEngine,
@@ -35,7 +35,9 @@ export interface Live<A, E = never> {
   /**
    * The current result. `Initial` until the first emission, then `Success`
    * per emission; while re-subscribing after an input change the previous
-   * result is kept with `waiting: true` (stale-while-revalidate).
+   * result is kept with `waiting: true` (stale-while-revalidate). An
+   * `initial` seed starts as a non-waiting `Success` — "we have data", no
+   * spinner over server-rendered content — until the first real emission.
    */
   readonly current: AsyncResult.AsyncResult<A, E>;
   /**
@@ -67,98 +69,28 @@ export interface LiveOptions<A> {
 export type LiveError = ClientView.ClientViewError;
 
 /**
- * Core plumbing: re-run `makeProgram` inside `$effect` (tracking the reactive
- * state it reads), forking the produced stream on the context runtime and
- * interrupting it on re-run/unmount. Emissions land in a raw `$state` — the
- * results are engine snapshots, not something to deep-proxy.
+ * Core plumbing — effect-svelte's `useLiveStream` does the work (thunk
+ * tracked inside `$effect`, interrupt-and-resubscribe on input change with
+ * the previous value kept as a waiting result, emissions in `$state.raw`,
+ * teardown interruption never surfacing as a failure, `initial` seeding a
+ * synchronous `Success`). This adapter resolves the engine view from the
+ * context runtime and keeps the SSR seam below.
  */
-interface Pending<A> {
-  readonly promise: Promise<A>;
-  readonly resolve: (value: A) => void;
-  readonly reject: (error: unknown) => void;
-}
-
-const makePending = <A>(): Pending<A> => {
-  let resolve!: (value: A) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<A>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  // A rejection nobody awaited yet must not crash the process; awaiting
-  // consumers still receive it.
-  promise.catch(() => undefined);
-  return { promise, resolve, reject };
-};
-
 const live = <A, E>(
   runtime: EffectSyncRuntime,
   makeStream: () => (view: ClientView.ClientView) => Stream.Stream<A, E>,
   options?: LiveOptions<A>
 ): Live<A, E> => {
-  let current = $state.raw<AsyncResult.AsyncResult<A, E>>(
-    options?.initial !== undefined
-      ? AsyncResult.success(options.initial, { waiting: true })
-      : AsyncResult.initial(true)
+  const result = useLiveStream(
+    () => {
+      const toStream = makeStream();
+      return Stream.unwrap(Effect.map(ClientView.ClientView, (view) => toStream(view)));
+    },
+    { runtime, ...(options?.initial === undefined ? {} : { initial: options.initial }) }
   );
-  // The awaitable twin of `current`: pending until data, an already-resolved
-  // promise afterwards, replaced per emission so awaiting deriveds re-run.
-  let settle: Pending<A> | undefined =
-    options?.initial !== undefined ? undefined : makePending<A>();
-  let promise = $state.raw<Promise<A>>(
-    options?.initial !== undefined ? Promise.resolve(options.initial) : settle!.promise
-  );
-  const emit = (value: A) => {
-    current = AsyncResult.success(value);
-    if (settle !== undefined) {
-      settle.resolve(value);
-      settle = undefined;
-    }
-    promise = Promise.resolve(value);
-  };
-  const fail = (cause: Cause.Cause<E>) => {
-    current = AsyncResult.failure(cause);
-    const error = Cause.squash(cause);
-    if (settle !== undefined) {
-      settle.reject(error);
-      settle = undefined;
-      return;
-    }
-    const rejected = Promise.reject(error);
-    rejected.catch(() => undefined);
-    promise = rejected;
-  };
-  $effect(() => {
-    const toStream = makeStream();
-    current = AsyncResult.waitingFrom(Option.some(untrack(() => current)));
-    // Re-subscribing: awaiting expressions suspend on a fresh pending promise
-    // (Svelte keeps the previous UI on screen) until the new inputs' first
-    // emission — unless nothing was ever emitted, where the original pending
-    // promise keeps waiting.
-    if (settle === undefined) {
-      const next = makePending<A>();
-      settle = next;
-      promise = next.promise;
-    }
-    const fiber = runtime.runFork(
-      Effect.flatMap(ClientView.ClientView, (view) =>
-        Stream.runForEach(toStream(view), (value) => Effect.sync(() => emit(value)))
-      ).pipe(
-        Effect.catchCause((cause) =>
-          // Interruption is the hook's own teardown, not a failure.
-          Cause.hasFails(cause) || Cause.hasDies(cause)
-            ? Effect.sync(() => fail(cause as Cause.Cause<E>))
-            : Effect.void
-        )
-      )
-    );
-    return () => {
-      runtime.runFork(Fiber.interrupt(fiber));
-    };
-  });
   return {
     get current() {
-      return current;
+      return result.current;
     },
     get promise() {
       // During SSR (no `$effect`, so no live stream) a seeded hook exposes
@@ -169,7 +101,7 @@ const live = <A, E>(
       if (typeof document === "undefined" && options?.initial !== undefined) {
         return options.initial as unknown as Promise<A>;
       }
-      return promise;
+      return result.promise;
     },
   };
 };
