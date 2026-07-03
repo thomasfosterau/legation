@@ -101,13 +101,15 @@ describe("Node model", () => {
       localField: "categoryId",
       foreignField: "id",
     });
-    // The paginated edge's key is resolved from its INVERSE on the child.
+    // The paginated edge's key is resolved from its INVERSE on the child;
+    // its kind and declared order survive into the registry (ADR-0024).
     expect(products.relationships).toContainEqual({
       name: "reviews",
-      kind: "many",
+      kind: "paginated",
       collection: "reviews",
       localField: "id",
       foreignField: "productId",
+      order: [{ field: "createdAt", direction: "desc" }],
     });
   });
 });

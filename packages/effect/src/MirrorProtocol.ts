@@ -34,18 +34,33 @@ import type * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import { Effect, Schema } from "effect";
 
+/** Wire codec for one selected edge of a `related` registration. */
+export const EdgeSelectSchema = Schema.Struct({
+  name: Schema.String,
+  first: Schema.optional(Schema.Number),
+});
+
 // ─── Broadcast keys ──────────────────────────────────────────────────────────
 
 /** The broadcast key a named query's results are mirrored under. */
 export const namedKey = (name: string, args: unknown): string =>
   `named:${name}:${Hash.contentHash(args)}`;
 
-/** The broadcast key a `related` registration's resolved rows are mirrored under. */
+/**
+ * The broadcast key a `related` registration's resolved rows are mirrored
+ * under. Each edge's window (`first`) is part of the key: reads differing
+ * only in window are distinct registrations (ADR-0024).
+ */
 export const relatedKey = (
   collection: string,
   subset: Subset.Subset,
-  names: ReadonlyArray<string>
-): string => `related:${collection}:${Subset.hash(subset)}:${[...names].sort().join("+")}`;
+  edges: ReadonlyArray<string | Related.EdgeSelect>
+): string => {
+  const parts = edges
+    .map((input) => (typeof input === "string" ? { name: input } : input))
+    .map((select) => (select.first === undefined ? select.name : `${select.name}#${select.first}`));
+  return `related:${collection}:${Subset.hash(subset)}:${parts.sort().join("+")}`;
+};
 
 // ─── Mirror → host ────────────────────────────────────────────────────────────
 
@@ -75,14 +90,15 @@ export type MirrorMessage =
       readonly mirrorId: string;
       readonly collection: string;
       readonly subset: Subset.Subset;
-      readonly names: ReadonlyArray<string>;
+      /** The selected edges, each optionally windowed (ADR-0024). */
+      readonly edges: ReadonlyArray<Related.EdgeSelect>;
     }
   | {
       readonly _tag: "UnsubscribeRelated";
       readonly mirrorId: string;
       readonly collection: string;
       readonly subset: Subset.Subset;
-      readonly names: ReadonlyArray<string>;
+      readonly edges: ReadonlyArray<Related.EdgeSelect>;
     }
   /** A mirror leaving: release every subscription it held. */
   | { readonly _tag: "Disconnect"; readonly mirrorId: string }
@@ -123,14 +139,14 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     mirrorId: Schema.String,
     collection: Schema.String,
     subset: Subset.SubsetSchema,
-    names: Schema.Array(Schema.String),
+    edges: Schema.Array(EdgeSelectSchema),
   }),
   Schema.Struct({
     _tag: Schema.tag("UnsubscribeRelated"),
     mirrorId: Schema.String,
     collection: Schema.String,
     subset: Subset.SubsetSchema,
-    names: Schema.Array(Schema.String),
+    edges: Schema.Array(EdgeSelectSchema),
   }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Heartbeat"), mirrorId: Schema.String }),

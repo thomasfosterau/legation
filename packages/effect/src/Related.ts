@@ -39,13 +39,37 @@ export interface RelatedRow {
 /**
  * The foreign rows a set of base rows pin in one collection: the `foreignField`
  * to match on, and the values it must take. Drives both which collection to
- * index and the narrowed `foreignField IN (...)` subset an auto-subscription
- * registers.
+ * index and the narrowed subsets an auto-subscription registers — one
+ * `foreignField IN (...)` subset, or with a {@link Target.window}, one windowed
+ * `foreignField = value` subset **per value** (ADR-0024).
  */
 export interface Target {
   readonly field: string;
   readonly ids: ReadonlySet<Predicate.Literal>;
+  /**
+   * The per-parent sync window a paginated edge declares: each pinned value
+   * registers its own `(field = value, orderBy, limit)` subset, so the
+   * replica syncs the window instead of the whole dependent collection.
+   */
+  readonly window?: {
+    readonly orderBy: ReadonlyArray<Subset.OrderBy>;
+    readonly limit: number;
+  };
 }
+
+/**
+ * One edge of a relational read: the relationship name, plus the read's
+ * per-edge window (`first`) for paginated edges. A bare string selects the
+ * edge unwindowed.
+ */
+export interface EdgeSelect {
+  readonly name: string;
+  readonly first?: number;
+}
+
+/** Normalize an edge selection input. */
+export const edgeSelect = (input: string | EdgeSelect): EdgeSelect =>
+  typeof input === "string" ? { name: input } : input;
 
 /**
  * The per-collection lookup the plumbing maintains: for each targeted
@@ -126,22 +150,63 @@ const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): b
  * All relationships pointing at the same collection are expected to share a
  * `foreignField` (the usual case: `"id"` for `"one"`, one FK for `"many"`);
  * `targets` pins the collection by the first relationship's `foreignField`.
+ *
+ * A `"paginated"` relationship carrying a `first` pins a **windowed** target
+ * (its declared order + the read's limit — ADR-0024). When two relationships
+ * pin the same collection, the target falls back to the unwindowed superset:
+ * sound, merely over-syncs.
  */
+/** The per-parent window a selected relationship pins, when it does. */
+const windowOf = (
+  relationship: Collection.Relationship & { readonly first?: number }
+): Target["window"] | undefined =>
+  relationship.kind === "paginated" &&
+  relationship.first !== undefined &&
+  relationship.order !== undefined &&
+  relationship.order.length > 0
+    ? { orderBy: relationship.order, limit: relationship.first }
+    : undefined;
+
+/** Collect the non-null `localField` values a relationship pins. */
+const pinIds = (
+  ids: Set<Predicate.Literal>,
+  baseRows: ReadonlyArray<LocalRow>,
+  localField: string
+): void => {
+  for (const row of baseRows) {
+    const value = fieldOf(row.value, localField);
+    if (value !== undefined && value !== null) ids.add(value as Predicate.Literal);
+  }
+};
+
 export const fieldMappingStrategy = (
-  relationships: ReadonlyArray<Collection.Relationship>
+  relationships: ReadonlyArray<Collection.Relationship & { readonly first?: number }>
 ): Strategy => ({
   targets: (baseRows) => {
-    const map = new Map<string, { field: string; ids: Set<Predicate.Literal> }>();
+    const entries = new Map<
+      string,
+      { field: string; ids: Set<Predicate.Literal>; window: Target["window"] | undefined }
+    >();
     for (const relationship of relationships) {
-      const entry = map.get(relationship.collection) ?? {
+      const existing = entries.get(relationship.collection);
+      const entry = existing ?? {
         field: relationship.foreignField,
         ids: new Set<Predicate.Literal>(),
+        window: windowOf(relationship),
       };
-      for (const row of baseRows) {
-        const value = fieldOf(row.value, relationship.localField);
-        if (value !== undefined && value !== null) entry.ids.add(value as Predicate.Literal);
-      }
-      map.set(relationship.collection, entry);
+      // A second relationship pinning the same collection: fall back to the
+      // unwindowed superset (sound, merely over-syncs).
+      if (existing !== undefined) entry.window = undefined;
+      pinIds(entry.ids, baseRows, relationship.localField);
+      entries.set(relationship.collection, entry);
+    }
+    const map = new Map<string, Target>();
+    for (const [collection, entry] of entries) {
+      map.set(collection, {
+        field: entry.field,
+        ids: entry.ids,
+        ...(entry.window === undefined ? {} : { window: entry.window }),
+      });
     }
     return map;
   },
@@ -161,17 +226,23 @@ export const fieldMappingStrategy = (
   },
 });
 
-/** The declared relationships selected by name (unknown names are skipped). */
+/** The declared relationships an edge selection picks (unknown names skipped). */
 const selectRelationships = (
   registry: Collection.CollectionRegistry,
   collectionName: string,
-  names: ReadonlyArray<string>
-): ReadonlyArray<Collection.Relationship> => {
+  edges: ReadonlyArray<string | EdgeSelect>
+): ReadonlyArray<Collection.Relationship & { readonly first?: number }> => {
   const all = Collection.relationshipsOf(registry, collectionName);
-  const selected: Array<Collection.Relationship> = [];
-  for (const name of names) {
-    const relationship = all.get(name);
-    if (relationship !== undefined) selected.push(relationship);
+  const selected: Array<Collection.Relationship & { readonly first?: number }> = [];
+  for (const input of edges) {
+    const select = edgeSelect(input);
+    const relationship = all.get(select.name);
+    if (relationship !== undefined) {
+      selected.push({
+        ...relationship,
+        ...(select.first === undefined ? {} : { first: select.first }),
+      });
+    }
   }
   return selected;
 };
@@ -260,15 +331,29 @@ export const observeWith = (
     Stream.changesWith(sameJoin)
   );
 
-/** The narrowed `foreignField IN (...)` subsets a base page's targets pin. */
+/**
+ * The narrowed subsets a base page's targets pin: one `foreignField IN (...)`
+ * subset per unwindowed target; for windowed targets, one
+ * `(foreignField = value, orderBy, limit)` subset **per pinned value** — the
+ * per-parent sync windows of ADR-0024.
+ */
 const desiredSubsets = (
   strategy: Strategy,
   base: ReadonlyArray<LocalRow>
 ): ReadonlyArray<Subset.Subset> =>
   [...strategy.targets(base)]
     .filter(([, target]) => target.ids.size > 0)
-    .map(([collection, target]) =>
-      Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
+    .flatMap(([collection, target]) =>
+      target.window === undefined
+        ? [Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })]
+        : [...target.ids].map((id) =>
+            Subset.make({
+              collection,
+              where: Predicate.eq(target.field, id),
+              orderBy: target.window!.orderBy,
+              limit: target.window!.limit,
+            })
+          )
     );
 
 const hasSubset = (list: ReadonlyArray<Subset.Subset>, subset: Subset.Subset): boolean =>
@@ -345,11 +430,11 @@ export const query = (
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
-  names: ReadonlyArray<string>
+  edges: ReadonlyArray<string | EdgeSelect>
 ): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
   queryWith(
     view,
-    fieldMappingStrategy(selectRelationships(registry, collectionName, names)),
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
     subset
   );
 
@@ -359,11 +444,11 @@ export const observe = (
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
-  names: ReadonlyArray<string>
+  edges: ReadonlyArray<string | EdgeSelect>
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
   observeWith(
     view,
-    fieldMappingStrategy(selectRelationships(registry, collectionName, names)),
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
     subset
   );
 
@@ -377,11 +462,11 @@ export const related = (
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
-  names: ReadonlyArray<string>
+  edges: ReadonlyArray<string | EdgeSelect>
 ): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never>, never, Scope.Scope> =>
   relatedWith(
     engine,
-    fieldMappingStrategy(selectRelationships(registry, collectionName, names)),
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
     subset
   );
 

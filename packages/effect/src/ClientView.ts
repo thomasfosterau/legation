@@ -75,7 +75,7 @@ export interface ClientView {
     registry: Collection.CollectionRegistry,
     collectionName: string,
     subset: Subset.Subset,
-    names: ReadonlyArray<string>
+    edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (mutator: string, args: unknown) => Effect.Effect<void, ClientViewError>;
@@ -101,8 +101,8 @@ export const fromEngine = (engine: ClientEngine): ClientView => ({
   unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
   queryNamed: (name, args) => engine.queryNamed(name, args),
   observeNamed: (name, args) => engine.observeNamed(name, args),
-  related: (registry, collectionName, subset, names) =>
-    Related.related(engine, registry, collectionName, subset, names),
+  related: (registry, collectionName, subset, edges) =>
+    Related.related(engine, registry, collectionName, subset, edges),
   mutate: (mutator, args) => engine.mutate(mutator, args),
   mutateWithAck: (mutator, args) =>
     engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),

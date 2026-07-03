@@ -23,19 +23,24 @@ export type RowId = string;
  *   `localField` value (e.g. `comment.issueId → issues.id`).
  * - `"many"`: the foreign rows whose `foreignField` equals this row's
  *   `localField` value (e.g. `issue.id → comments.issueId`).
+ * - `"paginated"`: `"many"` with a declared stable `order` — the shape a
+ *   per-parent sync window needs (ADR-0024): windowed reads register one
+ *   `(foreignField = parent, order, limit)` subset per parent row.
  *
  * The mapping is deliberately symmetric so both directions declare the same
  * shape; only `kind` and which side holds the key differ.
  */
 export interface Relationship {
   readonly name: string;
-  readonly kind: "one" | "many";
+  readonly kind: "one" | "many" | "paginated";
   /** The foreign collection this relationship resolves against. */
   readonly collection: string;
   /** The local row field holding the join value (`"issueId"`, or `"id"` for `"many"`). */
   readonly localField: string;
   /** The foreign row field the join matches (`"id"` for `"one"`, the FK for `"many"`). */
   readonly foreignField: string;
+  /** The declared sort for `"paginated"` — part of the edge's identity (ADR-0022). */
+  readonly order?: ReadonlyArray<{ readonly field: string; readonly direction: "asc" | "desc" }>;
 }
 
 /**

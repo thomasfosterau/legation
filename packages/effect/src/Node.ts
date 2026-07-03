@@ -24,6 +24,7 @@ import { Schema } from "effect";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
+import * as Subset from "./Subset.js";
 
 /** The branded id schema for a node type: `string & Brand<"<type>/id">`. */
 export interface Id<Type extends string> extends Schema.brand<Schema.String, `${Type}/id`> {}
@@ -164,10 +165,11 @@ const toCollection = (
     } else {
       relationships.push({
         name,
-        kind: "many",
+        kind: edge.kind,
         collection: edge.target,
         localField: "id",
         foreignField: inverseVia(node, name, edge, nodes),
+        ...(edge.kind === "paginated" ? { order: Subset.parseOrder(edge.order) } : {}),
       });
     }
   }
