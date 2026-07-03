@@ -23,9 +23,11 @@
  * the *authoritative* window it syncs, with the request's identity in hand
  * (ADR-0009's "what only the app can know").
  *
- * Staging note (ADR-0022 program): per-edge `first` windows are applied to
- * the resolved join client-side in this step; true per-edge sync windows
- * (own CVR windows and cursors) land with the paginated-edge step.
+ * A paginated edge's `first` is a true sync window (ADR-0024): plan
+ * execution registers one windowed subset per parent row, so the replica
+ * syncs the window — not the dependent collection — and the same
+ * `(order, first)` is re-applied to the resolved join locally (the replica
+ * is normalized and may hold rows beyond one parent's window).
  */
 
 import { Context, Effect, Schema, Stream } from "effect";
@@ -94,12 +96,18 @@ export function make(
 }
 
 /** Parse `order` tokens ("name", "-createdAt") into sort terms. */
-const orderBy = (tokens: ReadonlyArray<string> | undefined): ReadonlyArray<Subset.OrderBy> =>
-  (tokens ?? []).map((token) =>
-    token.startsWith("-")
-      ? { field: token.slice(1), direction: "desc" as const }
-      : { field: token, direction: "asc" as const }
-  );
+const orderBy = Subset.parseOrder;
+
+/**
+ * A plan's edge selections for the relational read: paginated edges carry
+ * their window (`first`), so each parent registers its own windowed subset
+ * (ADR-0024); other kinds select unwindowed.
+ */
+const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =>
+  compiled.edges.map((edge) => ({
+    name: edge.edge,
+    ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
+  }));
 
 /** Compile a `where` to the plan's predicate representation. */
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
@@ -116,7 +124,7 @@ export interface EdgePlan {
   readonly edge: string;
   readonly kind: "one" | "many" | "paginated";
   readonly target: string;
-  /** The edge's window, applied to the resolved rows (see staging note). */
+  /** The edge's window: a per-parent sync window for paginated edges (ADR-0024). */
   readonly first?: number;
   /** The edge's declared order (paginated edges own their order). */
   readonly order: ReadonlyArray<Subset.OrderBy>;
@@ -229,7 +237,7 @@ export const run = (
     nodes.collections,
     read.collection,
     compiled.root,
-    compiled.edges.map((edge) => edge.edge)
+    edgeSelects(compiled)
   ).pipe(Effect.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
 };
 
@@ -254,7 +262,7 @@ export const observe = (
     nodes.collections,
     read.collection,
     compiled.root,
-    compiled.edges.map((edge) => edge.edge)
+    edgeSelects(compiled)
   ).pipe(Stream.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
 };
 

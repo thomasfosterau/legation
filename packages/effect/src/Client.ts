@@ -145,7 +145,10 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
           nodes.collections,
           read.collection,
           compiled.root,
-          compiled.edges.map((edge) => edge.edge)
+          compiled.edges.map((edge) => ({
+            name: edge.edge,
+            ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
+          }))
         )
         .pipe(
           Effect.map((stream) =>

@@ -205,9 +205,9 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       mirrorId: string,
       collection: string,
       subset: Subset.Subset,
-      names: ReadonlyArray<string>
+      edges: ReadonlyArray<Related.EdgeSelect>
     ) => {
-      const key = MirrorProtocol.relatedKey(collection, subset, names);
+      const key = MirrorProtocol.relatedKey(collection, subset, edges);
       const registry = options.registry;
       if (registry === undefined) {
         return Effect.logWarning(
@@ -223,12 +223,12 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
           // interrupting the fiber releases everything.
           loop: Effect.scoped(
             Effect.gen(function* () {
-              const stream = yield* Related.related(engine, registry, collection, subset, names);
+              const stream = yield* Related.related(engine, registry, collection, subset, edges);
               yield* Stream.runForEach(stream, (rows) => broadcastRelated(key, rows));
             })
           ),
           teardown: Effect.void,
-          hydrate: Related.query(engine, registry, collection, subset, names).pipe(
+          hydrate: Related.query(engine, registry, collection, subset, edges).pipe(
             Effect.flatMap((rows) => broadcastRelated(key, rows)),
             Effect.ignore
           ),
@@ -311,7 +311,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
                 message.mirrorId,
                 message.collection,
                 message.subset,
-                message.names
+                message.edges
               )
             )
           );
@@ -320,7 +320,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
             Effect.andThen(
               release(
                 message.mirrorId,
-                MirrorProtocol.relatedKey(message.collection, message.subset, message.names)
+                MirrorProtocol.relatedKey(message.collection, message.subset, message.edges)
               )
             )
           );

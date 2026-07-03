@@ -14,7 +14,7 @@ import type * as ClientEngine from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import { MutatorError, TransportError } from "./Errors.js";
 import type * as Mutator from "./Mutator.js";
-import type * as Related from "./Related.js";
+import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import * as Telemetry from "./Telemetry.js";
 import {
@@ -127,7 +127,7 @@ export interface Mirror {
     registry: Collection.CollectionRegistry,
     collectionName: string,
     subset: Subset.Subset,
-    names: ReadonlyArray<string>
+    edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
 }
 
@@ -482,9 +482,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           ).pipe(Effect.as(observeKey(key, readKey(key))))
         );
       },
-      related: (_registry, collectionName, subset, names) =>
+      related: (_registry, collectionName, subset, edgeInputs) =>
         Effect.gen(function* () {
-          const key = MirrorProtocol.relatedKey(collectionName, subset, names);
+          const edges = edgeInputs.map(Related.edgeSelect);
+          const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
           yield* acquireInterest(
             key,
             {
@@ -493,14 +494,14 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                 mirrorId,
                 collection: collectionName,
                 subset,
-                names,
+                edges,
               },
               unsubscribe: {
                 _tag: "UnsubscribeRelated",
                 mirrorId,
                 collection: collectionName,
                 subset,
-                names,
+                edges,
               },
             },
             "observer"

@@ -23,6 +23,14 @@ export const OrderBySchema = Schema.Struct({
 /** One sort term: a top-level row field plus direction. */
 export type OrderBy = typeof OrderBySchema.Type;
 
+/** Parse order tokens (`"name"`, `"-createdAt"`) into sort terms. */
+export const parseOrder = (tokens: ReadonlyArray<string> | undefined): ReadonlyArray<OrderBy> =>
+  (tokens ?? []).map((token) =>
+    token.startsWith("-")
+      ? { field: token.slice(1), direction: "desc" as const }
+      : { field: token, direction: "asc" as const }
+  );
+
 /**
  * Wire codec for {@link Subset}. The schema is the source of truth: the
  * `Subset` type is derived from it (`typeof SubsetSchema.Type`) so the two
@@ -180,17 +188,20 @@ const fieldOf = (value: unknown, field: string): unknown =>
  * orderBy, so it can both sort a set and place a single row incrementally
  * (LiveView).
  */
+/** Compare two field values ascending; null/undefined sort first. */
+const compareValues = (left: unknown, right: unknown): number => {
+  if (left === right) return 0;
+  if (left === undefined || left === null) return -1;
+  if (right === undefined || right === null) return 1;
+  return (left as number | string) < (right as number | string) ? -1 : 1;
+};
+
 export const comparator =
   (orderBy: ReadonlyArray<OrderBy>) =>
   (a: unknown, b: unknown): number => {
     for (const term of orderBy) {
-      const left = fieldOf(a, term.field);
-      const right = fieldOf(b, term.field);
-      if (left === right) continue;
-      if (left === undefined || left === null) return term.direction === "asc" ? -1 : 1;
-      if (right === undefined || right === null) return term.direction === "asc" ? 1 : -1;
-      const ordered = (left as number | string) < (right as number | string) ? -1 : 1;
-      return term.direction === "asc" ? ordered : -ordered;
+      const ordered = compareValues(fieldOf(a, term.field), fieldOf(b, term.field));
+      if (ordered !== 0) return term.direction === "asc" ? ordered : -ordered;
     }
     return 0;
   };
