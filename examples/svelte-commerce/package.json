@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run --root ../.. --project node examples/svelte-commerce"
+    "test": "vitest run --root ../.. --project node examples/svelte-commerce",
+    "prepare": "svelte-kit sync"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

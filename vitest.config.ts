@@ -28,6 +28,8 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
+          // Materializes the example app's generated tsconfig on fresh clones.
+          globalSetup: ["./vitest.global-setup.ts"],
           include: [
             "packages/*/src/**/*.test.ts",
             "tests/**/*.test.ts",
