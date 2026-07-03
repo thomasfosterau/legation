@@ -1,7 +1,7 @@
 # ADR-0023: Topic-derived fan-out
 
 Date: 2026-07-03
-Status: Proposed (companion to ADR-0022)
+Status: Accepted (companion to ADR-0022)
 
 ## Context
 
