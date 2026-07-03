@@ -24,6 +24,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
 import * as EngineHost from "../EngineHost.js";
 import * as MirrorChannel from "../MirrorChannel.js";
+import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import * as TabMirror from "../TabMirror.js";
 
 interface Todo {
@@ -240,6 +241,46 @@ describe("EngineHost ↔ TabMirror extensions", () => {
         );
         expect(remaining).toHaveLength(0);
       }),
+    20_000
+  );
+});
+
+describe("ServiceWorkerHost", () => {
+  it.effect(
+    "serves mirrors over its broadcast channel with the registry forwarded",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* makeEngine;
+          const name = `legation-swh-${Math.random().toString(36).slice(2)}`;
+          // The host wires its channel inside the forked fiber; give it a
+          // beat before the mirror posts (BroadcastChannel drops unheard
+          // messages).
+          yield* Effect.forkScoped(
+            ServiceWorkerHost.run({ channelName: name, registry: collections }).pipe(
+              Effect.provideService(ClientEngine.ClientEngine, engine)
+            )
+          );
+          yield* sleepReal(200);
+
+          const tabChannel = yield* MirrorChannel.makeBroadcastChannel(name);
+          const mirror = yield* TabMirror.make({ channel: tabChannel, mutators });
+          yield* mirror.mutate("user/set", { id: "u1", name: "Ada" });
+          yield* mirror.mutate("todo/set", { id: "1", title: "sw", done: false, authorId: "u1" });
+
+          // Registry pass-through: related resolves through the SW host.
+          const latest = yield* Ref.make<ReadonlyArray<{ related: Record<string, unknown> }>>([]);
+          const stream = yield* mirror.related(collections, "todos", allTodos, ["author"]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(stream, (rows) => Ref.set(latest, rows)).pipe(Effect.ignore)
+          );
+          const joined = yield* eventually(
+            Ref.get(latest),
+            (rows) => rows.length === 1 && (rows[0]!.related["author"] as User)?.name === "Ada"
+          );
+          expect((joined[0]!.related["author"] as User).name).toBe("Ada");
+        })
+      ),
     20_000
   );
 });

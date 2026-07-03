@@ -49,17 +49,14 @@ export const defaultChannelName = "legation";
  * the scope closes.
  */
 export const run = (
-  options?: ServiceWorkerHostOptions
+  options: ServiceWorkerHostOptions = {}
 ): Effect.Effect<void, never, ClientEngine.ClientEngine | Scope.Scope> =>
   Effect.gen(function* () {
+    const { channelName = defaultChannelName, registry } = options;
     const engine = yield* ClientEngine.ClientEngine;
-    const channel = yield* MirrorChannel.makeBroadcastChannel(
-      options?.channelName ?? defaultChannelName
-    );
-    yield* EngineHost.run({
-      channel,
-      engine,
-      ...(options?.registry ? { registry: options.registry } : {}),
-    });
+    const channel = yield* MirrorChannel.makeBroadcastChannel(channelName);
+    yield* registry === undefined
+      ? EngineHost.run({ channel, engine })
+      : EngineHost.run({ channel, engine, registry });
     yield* engine.runSync.pipe(Effect.ignore);
   });
