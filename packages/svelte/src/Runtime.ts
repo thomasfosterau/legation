@@ -17,16 +17,19 @@
  * `useRelated` need no engine — the view carries them over either host
  * (mirror-protocol extension, ADR-0021).
  */
-import { createContext } from "svelte";
+import { createRuntimeContext } from "@thomasfosterau/effect-svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ClientView } from "@legation/effect";
 
 /** A runtime that can run {@link ClientView} effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientView.ClientView, never>;
 
-// Svelte's type-safe context pair: one instance per module evaluation, so the
-// key can't collide with app contexts and the value needs no cast on read.
-const [readRuntime, writeRuntime] = createContext<EffectSyncRuntime>();
+// The typed runtime context is effect-svelte's `createRuntimeContext`: one
+// context instance per call, so the engine context can't collide with the
+// default untyped context or with other libraries'.
+const context = createRuntimeContext<ClientView.ClientView>(
+  "@legation/svelte — call setEngineRuntime(runtime) higher in the component tree"
+);
 
 /**
  * Provide the engine runtime to descendant components. Call once, high in the
@@ -34,18 +37,12 @@ const [readRuntime, writeRuntime] = createContext<EffectSyncRuntime>();
  * `getMutate` call.
  */
 export const setEngineRuntime = (runtime: EffectSyncRuntime): void => {
-  writeRuntime(runtime);
+  context.provide(runtime);
 };
 
 /** Read the engine runtime put in context by {@link setEngineRuntime}. */
-export const getEngineRuntime = (): EffectSyncRuntime => {
-  try {
-    return readRuntime();
-  } catch {
-    // Svelte's context getter throws when no ancestor provided the pair —
-    // replace its message with an actionable one.
-    throw new Error(
-      "@legation/svelte: call setEngineRuntime(runtime) higher in the component tree before query()/getMutate()"
-    );
-  }
-};
+export const getEngineRuntime = (): EffectSyncRuntime =>
+  // The upstream context carries `RuntimeLike` (a Context | ManagedRuntime
+  // union); `setEngineRuntime` is its only writer and takes the managed
+  // runtime, so the read narrows back to what was provided.
+  context.get() as EffectSyncRuntime;
