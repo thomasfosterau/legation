@@ -161,6 +161,14 @@ const live = <A, E>(
       return current;
     },
     get promise() {
+      // During SSR (no `$effect`, so no live stream) a seeded hook exposes
+      // its value DIRECTLY: Svelte's server renderer defers real promises to
+      // the boundary's `pending` snippet but renders awaited plain values
+      // synchronously — so seeded pages fully server-render, and unseeded
+      // ones legitimately show `pending`.
+      if (typeof document === "undefined" && options?.initial !== undefined) {
+        return options.initial as unknown as Promise<A>;
+      }
       return promise;
     },
   };
