@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Subset } from "@legation/effect";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../index.js";
-  import { useQuery } from "../../runes.svelte.js";
+  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import { useQuery } from "../../Runes.svelte.js";
 
   const {
     runtime,
