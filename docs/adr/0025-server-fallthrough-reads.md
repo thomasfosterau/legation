@@ -1,7 +1,7 @@
 # ADR-0025: Server-fallthrough reads
 
 Date: 2026-07-03
-Status: Proposed (design note for ADR-0022 program step 6)
+Status: Accepted (design note for ADR-0022 program step 6; landed in #96)
 
 ## Context
 
