@@ -205,6 +205,8 @@ internal modules or subpath exports for tooling. Target surface:
   three-tier fallthrough reads; (7) Server facade + `broadcast`; (8)
   bindings rework (dovetails with the effect-svelte upstream additions);
   (9) the jsonapi bridge package; (10) example-app migration and docs.
+- Fan-out routing is designed in the companion ADR-0023 (topic-derived
+  fan-out over the Node/Edge graph's derivable set).
 - **Paginated edges** and **server fallthrough reads** are genuinely new
   engine capabilities with their own correctness questions (per-edge CVR
   windows; staleness semantics of unsubscribed reads) — each gets its own
