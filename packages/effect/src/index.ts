@@ -41,6 +41,7 @@ export * as SpecExport from "./SpecExport.js";
 export * as ClientStore from "./ClientStore.js";
 export * as ClientEngine from "./ClientEngine.js";
 export * as ClientView from "./ClientView.js";
+export * as Client from "./Client.js";
 export * as Undo from "./Undo.js";
 export * as Introspection from "./Introspection.js";
 export * as Hydration from "./Hydration.js";
