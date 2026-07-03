@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./runes": {
+      "types": "./dist/runes.svelte.d.ts",
+      "svelte": "./dist/runes.svelte.js",
+      "import": "./dist/runes.svelte.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
