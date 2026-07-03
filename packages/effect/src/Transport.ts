@@ -22,7 +22,8 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import type { TransportError, VersionNotSupportedError } from "./Errors.js";
+import { TransportError } from "./Errors.js";
+import type { VersionNotSupportedError } from "./Errors.js";
 import type { Poke, PullRequest, PullResponse, PushRequest, PushResponse } from "./Protocol.js";
 
 /** Connectivity of a client transport. */
@@ -201,6 +202,17 @@ export interface FallbackOptions {
    * Default 30 seconds.
    */
   readonly restoreAfter?: Duration.Input;
+  /**
+   * Time budget for each primary call. A primary that neither succeeds nor
+   * fails within it is interrupted and treated as a `TransportError`:
+   * sidelined, with the call falling to the fallback. Without a budget, a
+   * carrier that hangs rather than fails stalls sync indefinitely — the
+   * fallback never gets a chance. No default: a cold-start pull over a slow
+   * link can legitimately be slow, so pick a budget suited to your payloads.
+   * (A delivered-but-timed-out push re-sent through the fallback is safe:
+   * the server's mutation ledger deduplicates by mutation id.)
+   */
+  readonly primaryTimeout?: Duration.Input;
 }
 
 /**
@@ -225,8 +237,28 @@ export const withFallback = (
 ): Effect.Effect<ClientTransport, never, Scope.Scope> =>
   Effect.gen(function* () {
     const restoreAfterMillis = Duration.toMillis(options?.restoreAfter ?? "30 seconds");
+    const primaryTimeout = options?.primaryTimeout;
     const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
     const sidelinedUntil = yield* Ref.make(0);
+
+    // A hang is carrier trouble just like a failure: interrupt the primary
+    // and surface a TransportError so the sideline-and-fall-back path runs.
+    const budgeted = <A>(
+      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+      primaryTimeout === undefined
+        ? effect
+        : Effect.timeoutOrElse(effect, {
+            duration: primaryTimeout,
+            orElse: () =>
+              Effect.fail(
+                new TransportError({
+                  message: `primary transport call exceeded ${Duration.format(
+                    Duration.fromInputUnsafe(primaryTimeout)
+                  )}`,
+                })
+              ),
+          });
 
     const call = <A>(
       f: (transport: ClientTransport) => Effect.Effect<A, TransportError | VersionNotSupportedError>
@@ -234,7 +266,7 @@ export const withFallback = (
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         if ((yield* Ref.get(sidelinedUntil)) <= now) {
-          const first = yield* Effect.result(f(primary));
+          const first = yield* Effect.result(budgeted(f(primary)));
           if (Result.isSuccess(first)) {
             yield* SubscriptionRef.set(status, "connected");
             return first.success;

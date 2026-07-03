@@ -6,7 +6,7 @@
  * inferred status. Version rejections propagate without touching either.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Stream } from "effect";
+import { Effect, Fiber, Ref, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
@@ -146,6 +146,39 @@ describe("Transport.withFallback", () => {
         const failed = yield* Effect.flip(combined.pull(pullRequest));
         expect(failed._tag).toBe("VersionNotSupportedError");
         expect(yield* Ref.get(fallback.pulls)).toBe(0);
+      })
+    )
+  );
+
+  it.effect("a hanging primary is timed out, sidelined, and served by the fallback", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fallback = yield* makeFake();
+        const hangs = yield* Ref.make(0);
+        const hanging: Transport.ClientTransport = {
+          push: () => Effect.never,
+          pull: () => Ref.update(hangs, (n) => n + 1).pipe(Effect.andThen(Effect.never)),
+          pokes: Stream.empty,
+          status: Effect.succeed("connected" as const),
+          statusChanges: Stream.succeed("connected" as const),
+        };
+        const combined = yield* Transport.withFallback(hanging, fallback.transport, {
+          primaryTimeout: "5 seconds",
+          restoreAfter: "30 seconds",
+        });
+
+        const fiber = yield* Effect.forkScoped(combined.pull(pullRequest));
+        yield* TestClock.adjust("5 seconds");
+        expect(yield* Fiber.join(fiber)).toEqual(pullResponse);
+        expect(yield* Ref.get(hangs)).toBe(1);
+        expect(yield* Ref.get(fallback.pulls)).toBe(1);
+        expect(yield* combined.status).toBe("connected");
+
+        // While sidelined, calls skip the hanging primary entirely — no
+        // timeout wait on every call.
+        yield* combined.pull(pullRequest);
+        expect(yield* Ref.get(hangs)).toBe(1);
+        expect(yield* Ref.get(fallback.pulls)).toBe(2);
       })
     )
   );
