@@ -198,7 +198,10 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       text:
         `INSERT INTO ${q(mutationsTable)} (${q("client_group_id")}, ${q("client_id")}, ${q("last_mutation_id")}) ` +
         `VALUES (${ph(1)}, ${ph(2)}, ${ph(3)}) ` +
-        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ${ph(3)}`,
+        // `excluded.` instead of re-binding ph(3): with `?` placeholders a
+        // reused index renders an extra placeholder with no matching param
+        // (found by the commerce example's contract run over node:sqlite).
+        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = excluded.${q("last_mutation_id")}`,
       params: [clientGroupId, clientId, mutationId],
     });
 

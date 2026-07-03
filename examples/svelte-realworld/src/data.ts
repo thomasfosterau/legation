@@ -7,11 +7,10 @@
  * context, so descendant components read the same live stores and combine them
  * with `$derived` + the pure helpers in `joins.ts` to compute views reactively.
  */
-import { Effect, Fiber, Stream } from "effect";
-import { derived, readable, type Readable } from "svelte/store";
+import { derived, type Readable } from "svelte/store";
 import { getContext, setContext } from "svelte";
-import { getEngineRuntime, query } from "@legation/svelte";
-import { ClientEngine, Related } from "@legation/effect";
+import { query, related } from "@legation/svelte";
+import type { Related } from "@legation/effect";
 import { allArticles, allComments, allFavorites, allFollows, allUsers, conduitRegistry } from "./domain";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 
@@ -23,28 +22,12 @@ export interface Data {
   readonly follows: Readable<ReadonlyArray<Follow>>;
   /**
    * Comments joined to their author via the declared `author` relationship —
-   * `Related.observe` maintains the join incrementally over the mirror, so this
-   * replaces the hand-rolled `users.find(...)` author lookup in `joins.ts`.
+   * the binding's `related` store maintains the join incrementally over the
+   * mirror, replacing the hand-rolled `users.find(...)` author lookup in
+   * `joins.ts`.
    */
   readonly commentsWithAuthor: Readable<ReadonlyArray<Related.RelatedRow>>;
 }
-
-/** Bridge an engine-backed `Related` stream into a live Svelte `Readable`. */
-const relatedStore = (
-  toStream: (engine: ClientEngine.ClientEngine) => Stream.Stream<ReadonlyArray<Related.RelatedRow>>
-): Readable<ReadonlyArray<Related.RelatedRow>> => {
-  const runtime = getEngineRuntime();
-  return readable<ReadonlyArray<Related.RelatedRow>>([], (set) => {
-    const fiber = runtime.runFork(
-      Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-        Stream.runForEach(toStream(engine), (rows) => Effect.sync(() => set(rows)))
-      )
-    );
-    return () => {
-      runtime.runFork(Fiber.interrupt(fiber));
-    };
-  });
-};
 
 /** Build the base collection stores. Call during init, after setEngineRuntime. */
 export const createData = (): Data => ({
@@ -53,9 +36,7 @@ export const createData = (): Data => ({
   comments: derived(query(allComments), (rows) => rows.map((r) => r.value as Comment)),
   favorites: derived(query(allFavorites), (rows) => rows.map((r) => r.value as Favorite)),
   follows: derived(query(allFollows), (rows) => rows.map((r) => r.value as Follow)),
-  commentsWithAuthor: relatedStore((engine) =>
-    Related.observe(engine, conduitRegistry, "comments", allComments, ["author"])
-  ),
+  commentsWithAuthor: related(conduitRegistry, "comments", allComments, ["author"]),
 });
 
 const DATA_KEY = Symbol("svelte-realworld/data");
