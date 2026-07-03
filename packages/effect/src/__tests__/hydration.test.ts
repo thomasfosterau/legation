@@ -20,7 +20,8 @@ import * as Mutator from "../Mutator.js";
 import type { PatchOp, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
-import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import * as Predicate from "../Predicate.js";
+import { ClientTransport, makeInMemory, ServerHandler } from "../Transport.js";
 
 interface Todo {
   readonly id: string;
@@ -219,4 +220,83 @@ describe("ClientEngine.ensureSubset (#41)", () => {
       expect(yield* Ref.get(recorder.pulls)).toBe(1);
     })
   );
+});
+
+describe("Hydration.snapshot (SSR)", () => {
+  it.effect(
+    "produces rows + cookie over a request-scoped engine; the client continues without a reset",
+    () =>
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        // Authoritative rows exist server-side, established by a writer client.
+        const writer = yield* makeClient(handler, "writer", "group-writer");
+        yield* writer.engine.subscribe(allTodos);
+        yield* writer.engine.mutate("todo/set", { id: "1", title: "first", done: false });
+        yield* writer.engine.push;
+
+        // The SSR render: a request-scoped engine under the BROWSER's group id,
+        // so the produced cookie continues that group's CVR conversation.
+        const snapshot = yield* Hydration.snapshot({
+          clientGroupId: "group-browser",
+          subsets: [allTodos],
+        }).pipe(Effect.provideService(ServerHandler, handler));
+
+        expect(snapshot.rows.map((row) => row.id)).toEqual(["1"]);
+        expect(snapshot.cookie).toBeDefined();
+        expect(snapshot.journal).toEqual([]);
+
+        // Browser boot: hydrate an empty durable store, build the engine over it.
+        const recorder: Recorder = {
+          pulls: yield* Ref.make(0),
+          patches: yield* Ref.make<ReadonlyArray<ReadonlyArray<PatchOp>>>([]),
+        };
+        const browser = yield* makeClient(handler, "browser", "group-browser", recorder);
+        expect(yield* Hydration.hydrateIfEmpty(browser.store, snapshot)).toBe(true);
+        yield* browser.engine.subscribe(allTodos);
+
+        // Snapshot rows render with no transport call.
+        expect((yield* browser.engine.query(allTodos)).map((row) => row.id)).toEqual(["1"]);
+        expect(yield* Ref.get(recorder.pulls)).toBe(0);
+
+        // Meanwhile a new authoritative write lands server-side.
+        yield* writer.engine.mutate("todo/set", { id: "2", title: "second", done: false });
+        yield* writer.engine.push;
+
+        // The first client pull continues from the carried cookie: no reset.
+        yield* browser.engine.pull;
+        const ops = (yield* Ref.get(recorder.patches)).flat();
+        expect(ops.some((op) => op._tag === "Clear")).toBe(false);
+        const ids = (yield* browser.engine.query(allTodos)).map((row) => row.id);
+        expect(ids.toSorted()).toEqual(["1", "2"]);
+
+        // A repeat boot must not regress the now-populated store.
+        expect(yield* Hydration.hydrateIfEmpty(browser.store, snapshot)).toBe(false);
+      })
+  );
+});
+
+describe("Hydration.rowsFor", () => {
+  const snapshot: Hydration.Snapshot = {
+    rows: [
+      { collection: "todos", id: "2", version: 1, value: { id: "2", title: "beta", done: false } },
+      { collection: "todos", id: "1", version: 1, value: { id: "1", title: "alpha", done: true } },
+      { collection: "todos", id: "3", version: 1, value: { id: "3", title: "gamma", done: false } },
+      { collection: "users", id: "u1", version: 1, value: { id: "u1" } },
+    ],
+    journal: [],
+  };
+
+  it("filters snapshot rows by the subset's collection and predicate", () => {
+    const open = Subset.make({ collection: "todos", where: Predicate.eq("done", false) });
+    expect(Hydration.rowsFor(snapshot, open).map((row) => row.id)).toEqual(["2", "3"]);
+  });
+
+  it("applies order and window like the engine's own evaluator", () => {
+    const firstByTitle = Subset.make({
+      collection: "todos",
+      orderBy: [{ field: "title", direction: "asc" }],
+      limit: 1,
+    });
+    expect(Hydration.rowsFor(snapshot, firstByTitle).map((row) => row.id)).toEqual(["1"]);
+  });
 });

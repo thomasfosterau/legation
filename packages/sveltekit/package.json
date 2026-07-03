@@ -1,0 +1,60 @@
+{
+  "name": "@legation/sveltekit",
+  "version": "0.1.0",
+  "description": "SvelteKit integration for the legation engine: SSR snapshot loading, client-group cookies, and hydrated engine boot",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project node packages/sveltekit"
+  },
+  "keywords": [
+    "effect",
+    "svelte",
+    "sveltekit",
+    "ssr",
+    "hydration",
+    "sync-engine",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@legation/effect": "workspace:^"
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0",
+    "effect": "4.0.0-beta.84"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "^2.0.0",
+    "effect": "catalog:"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/sveltekit"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/sveltekit#readme"
+}
