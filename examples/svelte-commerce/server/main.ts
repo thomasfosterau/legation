@@ -24,7 +24,7 @@ import { PollingHintSource } from "@legation/sql";
 import { jsonApiLive } from "./jsonapi.js";
 import { clientLayer, makeExecutor, migrate } from "./db.js";
 import { tables } from "./handlers.js";
-import { syncLayer } from "./runtime.js";
+import { CommerceSync, syncLayer } from "./runtime.js";
 
 const PORT = Number(process.env.SYNC_PORT ?? 3100);
 const DB_PATH = process.env.COMMERCE_DB ?? new URL("../commerce.db", import.meta.url).pathname;
@@ -34,9 +34,15 @@ const carriers = Layer.mergeAll(
   HttpSyncServer.layerHttp({ path: "/sync" })
 );
 
-/** Advance order statuses on a timer — an out-of-band writer by design. */
+/**
+ * Advance order statuses on a timer — an out-of-band writer by design. It
+ * bypasses mutations entirely, so it announces itself with the one server
+ * verb for that (`server.broadcast`, ADR-0022): subscribers are poked
+ * immediately instead of waiting for the polling hint source's next tick.
+ */
 const fulfilment = Effect.gen(function* () {
   const sql = yield* SqlClient;
+  const { server } = yield* CommerceSync;
   const advance = Effect.suspend(() => {
     const now = Date.now();
     const shipCutoff = new Date(now - 15_000).toISOString();
@@ -46,7 +52,11 @@ const fulfilment = Effect.gen(function* () {
       sql`UPDATE orders SET status = 'delivered' WHERE status = 'shipped' AND createdAt < ${deliverCutoff}`
     );
   });
-  yield* advance.pipe(Effect.repeat(Schedule.spaced(Duration.seconds(5))), Effect.asVoid);
+  yield* advance.pipe(
+    Effect.andThen(server.broadcast({ collection: "orders" })),
+    Effect.repeat(Schedule.spaced(Duration.seconds(5))),
+    Effect.asVoid
+  );
 });
 
 /** The client with schema + seed applied before anything depends on it. */

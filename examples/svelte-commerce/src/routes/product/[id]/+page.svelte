@@ -3,8 +3,8 @@
   import { Aggregate, Predicate, Subset } from "@legation/effect";
   import { useAggregate, useMutationWithAck, useRelated } from "@legation/svelte/Runes";
   import {
+    productById,
     registry,
-    Products,
     type Product,
     type Review,
     type Seller,
@@ -23,7 +23,7 @@
     () => ({
       registry,
       collection: "products",
-      subset: Products.make({ where: (p) => p.eq("id", kitPage.params.id!) }),
+      subset: productById(kitPage.params.id!),
       names: ["variants", "reviews", "seller"],
     }),
     {
