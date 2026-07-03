@@ -212,5 +212,6 @@ internal modules or subpath exports for tooling. Target surface:
 - ADR-0008's sync model, ADR-0009's BYO backend, ADR-0010's service-worker
   deployment, and ADR-0021's one-surface principle are all **unchanged
   underneath** — this ADR re-draws where the public API sits over them.
-- Supersedes the `TabMirror → Mirror` rename (PR #87): the mirror stops
-  being a public concept entirely, so its public name stops mattering.
+- The `TabMirror → Mirror` rename (#87, merged) remains the internal
+  vocabulary; this ADR takes `Mirror` out of the public API entirely, so
+  the app-facing name stops mattering.
