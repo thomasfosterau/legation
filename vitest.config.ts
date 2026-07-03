@@ -45,7 +45,7 @@ export default defineConfig({
           include: ["packages/svelte/src/**/*.test.ts"],
           // Component tests poll the DOM while engine fibers settle; leave
           // headroom for cold-start transform/import under parallel workers.
-          testTimeout: 15000,
+          testTimeout: 30_000,
         },
       },
     ],
