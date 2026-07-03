@@ -52,6 +52,19 @@ thread. Registrations are refcounted per tab like subset subscriptions.
 Engine-only capabilities that remain — explicit push/pull, undo — look the
 full `ClientEngine` up in context.
 
+Two asymmetries between the hosts shape the mirror side of the seam. First,
+a mirror only carries keys some tab registered — unlike an engine it cannot
+evaluate an arbitrary subset locally — so on a mirror **observing IS
+subscribing**: `observe`/`observeNamed`/`related` register their subject
+with the host for the stream's lifetime. Second, the host refcounts
+registrations per TAB (a set): any `Unsubscribe` drops the tab's whole
+claim on that key, so the tab keeps a per-key interest ledger (observer
+count + explicit pin) and speaks with one voice — `Subscribe` on first
+interest, `Unsubscribe` only when the last observer ends and no explicit
+`subscribe` pins the key. The ledger doubles as the replay set for
+`HostReady`, the announcement a starting host broadcasts so registrations
+survive service-worker restarts and tabs that raced the worker's boot.
+
 ## Consequences
 
 - The same components run over a main-thread engine and a SW-hosted mirror

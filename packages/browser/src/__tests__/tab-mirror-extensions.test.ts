@@ -245,6 +245,75 @@ describe("EngineHost ↔ TabMirror extensions", () => {
   );
 });
 
+describe("TabMirror interest ledger", () => {
+  it.effect(
+    "observing auto-registers the subset and releases it when the stream ends",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* makeEngine;
+        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        yield* EngineHost.run({ channel: host, engine, registry: collections });
+        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+
+        yield* mirror.mutate("todo/set", { id: "1", title: "auto", done: false, authorId: "u1" });
+
+        // No explicit subscribe anywhere: the observer's stream is the only
+        // interest, and it must be enough to hydrate the subset.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const latest = yield* Ref.make<ReadonlyArray<ClientEngine.LocalRow>>([]);
+            yield* Effect.forkScoped(
+              Stream.runForEach(mirror.observe(allTodos), (rows) => Ref.set(latest, rows)).pipe(
+                Effect.ignore
+              )
+            );
+            const rows = yield* eventually(Ref.get(latest), (current) => current.length === 1);
+            expect((rows[0]!.value as Todo).title).toBe("auto");
+            yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
+          })
+        );
+
+        // The stream was the last interest: its end releases the registration.
+        const remaining = yield* eventually(
+          engine.activeSubscriptions,
+          (subs) => subs.length === 0
+        );
+        expect(remaining).toHaveLength(0);
+      }),
+    20_000
+  );
+
+  it.effect(
+    "an explicit subscribe pins the subset beyond any observer's lifetime",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* makeEngine;
+        const { host, tab } = yield* MirrorChannel.makeLoopbackPair;
+        yield* EngineHost.run({ channel: host, engine, registry: collections });
+        const mirror = yield* TabMirror.make({ channel: tab, mutators });
+
+        yield* mirror.subscribe(allTodos);
+        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
+
+        // An observer comes and goes. The host refcounts registrations per
+        // TAB, so a stray Unsubscribe here would drop the whole claim — the
+        // ledger must keep quiet while the explicit pin stands.
+        yield* Stream.runHead(Stream.take(mirror.observe(allTodos), 1));
+
+        // Still registered: a later write still reaches the mirror.
+        yield* mirror.mutate("todo/set", { id: "1", title: "pinned", done: false, authorId: "u1" });
+        const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
+        expect((rows[0]!.value as Todo).title).toBe("pinned");
+        expect(yield* engine.activeSubscriptions).toHaveLength(1);
+
+        // Releasing the pin (no observers left) drops the registration.
+        yield* mirror.unsubscribe(allTodos);
+        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 0);
+      }),
+    20_000
+  );
+});
+
 describe("ServiceWorkerHost", () => {
   it.effect(
     "serves mirrors over its broadcast channel with the registry forwarded",
