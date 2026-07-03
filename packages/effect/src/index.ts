@@ -67,6 +67,7 @@ export * as InvalidationBus from "./InvalidationBus.js";
 export * as BusBrokers from "./BusBrokers.js";
 export * as HintSource from "./HintSource.js";
 export * as SyncServer from "./SyncServer.js";
+export * as Server from "./Server.js";
 export * as SyncRoom from "./SyncRoom.js";
 export * as Telemetry from "./Telemetry.js";
 
