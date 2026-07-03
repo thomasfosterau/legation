@@ -41,4 +41,5 @@ export * as Derive from "./Derive.js";
 export * as JsonApiBackend from "./JsonApiBackend.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
+export * as NodeBridge from "./NodeBridge.js";
 export * as Relationships from "./Relationships.js";
