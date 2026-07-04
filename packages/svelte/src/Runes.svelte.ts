@@ -25,7 +25,7 @@
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Stream } from "effect";
-import type { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { Aggregate, Client, Query } from "@legation/effect";
 import { ClientEngine } from "@legation/effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
@@ -66,6 +66,7 @@ export interface LiveOptions<A> {
 
 /** The rows a read resolves to: node values with their included edges. */
 export type ResolvedRows = ReadonlyArray<Client.ResolvedRow>;
+const EMPTY_ROWS: ResolvedRows = [];
 
 /**
  * Core plumbing — effect-svelte's `useLiveStream` does the work (thunk
@@ -124,6 +125,112 @@ export const useQuery = (
     },
     options
   );
+
+/** A live, growing connection over a read's root window (ADR-0024). */
+export interface Connection extends Live<ResolvedRows> {
+  /**
+   * Widen the window by one page. A no-op while a widen is still resolving
+   * or once {@link hasMore} is false — call it freely from a click handler.
+   */
+  readonly loadMore: () => void;
+  /**
+   * Whether another page may exist: `true` while the current window is
+   * saturated (it holds as many rows as it asked for). Reactive. At a dataset
+   * whose size is an exact multiple of the page size this stays `true` for one
+   * more `loadMore`, which then resolves empty and flips it `false` — the
+   * standard cost of limit-based paging without a separate total count.
+   */
+  readonly hasMore: boolean;
+  /** Whether a page (the first or a widen) is currently resolving. Reactive. */
+  readonly loading: boolean;
+  /** Collapse back to the first page. */
+  readonly reset: () => void;
+}
+
+/** Options for {@link useConnection}. */
+export interface ConnectionOptions extends LiveOptions<ResolvedRows> {
+  /** Rows per page — the window grows by this on each `loadMore`. Default 20. */
+  readonly pageSize?: number;
+}
+
+/** The base read minus its window — the hook owns `first`/`after`. */
+const connectionKey = (read: Query.Read): string => {
+  const { first: _first, after: _after, ...base } = read;
+  return JSON.stringify(base);
+};
+
+/**
+ * Connection-style paging over a read's root window: a live result that
+ * *grows* rather than jumping between detached pages. `loadMore` widens the
+ * one window by a page (ADR-0024 — "load more widens the subset"), so each
+ * page's rows accumulate and the previous ones stay on screen through the
+ * widen (stale-while-revalidate); the engine only ever syncs the current
+ * window, never the whole collection.
+ *
+ * Per-parent paging falls out of instantiating the hook per parent: scope
+ * the read's `where` to a parent id and give each parent its own
+ * `useConnection` (one per `{#each parents}` row), and each parent's list
+ * pages independently, with its own `hasMore` and window. The read thunk
+ * stays reactive — when its base (collection/where/order/include) changes the
+ * connection re-bases to the first page automatically; the window it owns
+ * (`first`/`after`) is ignored on the passed read.
+ *
+ * ```svelte
+ * const reviews = useConnection(() => productReviews(id), { pageSize: 10 });
+ * // {#each await reviews.promise as row (row.value.id)} … {/each}
+ * // <button onclick={reviews.loadMore} disabled={!reviews.hasMore}>More</button>
+ * ```
+ */
+export const useConnection = (read: () => Query.Read, options?: ConnectionOptions): Connection => {
+  const pageSize = options?.pageSize ?? 20;
+  let pages = $state(1);
+  // Non-reactive: tracks the base read so a reused hook re-bases to page 1
+  // when its inputs change (a per-parent instance never trips this).
+  let baseKey: string | undefined;
+
+  $effect(() => {
+    const key = connectionKey(read());
+    if (key !== baseKey) {
+      baseKey = key;
+      pages = 1;
+    }
+  });
+
+  const windowed = live(
+    getClientRuntime(),
+    () => {
+      const { first: _first, after: _after, ...base } = read();
+      const first = pages * pageSize;
+      return (client) => client.observe({ ...base, first });
+    },
+    options
+  );
+
+  const rows = (): ResolvedRows => AsyncResult.getOrElse(windowed.current, () => EMPTY_ROWS);
+
+  return {
+    get current() {
+      return windowed.current;
+    },
+    get promise() {
+      return windowed.promise;
+    },
+    get hasMore() {
+      return rows().length >= pages * pageSize;
+    },
+    get loading() {
+      return AsyncResult.isWaiting(windowed.current);
+    },
+    loadMore: () => {
+      if (!AsyncResult.isWaiting(windowed.current) && rows().length >= pages * pageSize) {
+        pages += 1;
+      }
+    },
+    reset: () => {
+      pages = 1;
+    },
+  };
+};
 
 /** Live result of a named query (server-resolved), with reactive name/args. */
 export const useNamedQuery = (
