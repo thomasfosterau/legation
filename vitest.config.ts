@@ -58,10 +58,13 @@ export default defineConfig({
           include: ["packages/svelte/src/**/*.test.ts"],
           server: {
             deps: {
-              // Process effect-svelte through vite (browser conditions):
-              // externalized, its `import "svelte"` would load Svelte's
-              // SERVER runtime and every setContext call would throw
-              // lifecycle_outside_component.
+              // Vitest externalizes node_modules by default — even a package
+              // carrying a `svelte` export condition — so effect-svelte must
+              // be inlined to run through vite's browser pipeline; externalized
+              // its `import "svelte"` loads the SERVER runtime and every
+              // provide()/setContext throws lifecycle_outside_component. (The
+              // app's vite build needs no such flag: the `svelte` condition on
+              // effect-svelte >= 0.3.2 makes vite-plugin-svelte handle it.)
               inline: ["@thomasfosterau/effect-svelte"],
             },
           },
