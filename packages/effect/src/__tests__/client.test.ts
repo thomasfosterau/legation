@@ -219,6 +219,85 @@ describe("Client over an owned engine", () => {
   );
 });
 
+describe("Client.make defaults (zero wiring)", () => {
+  it.effect("no store, no transport: a purely local Client just works", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Nothing provided: memory store, offline transport, no sync loop.
+        const client = yield* Client.make({ nodes, mutations });
+
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
+        const rows = yield* client.query({ collection: "products" });
+        expect(rows).toHaveLength(1);
+        expect((rows[0]!.value as { name: string }).name).toBe("Desk");
+
+        // Live reads work too — entirely against the local replica.
+        const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe({ collection: "products" }), (rows) =>
+            Ref.set(latest, rows)
+          ).pipe(Effect.ignore)
+        );
+        yield* eventually(Ref.get(latest), (current) => current.length === 1);
+      })
+    )
+  );
+
+  it.effect("store and transport as options: the sync loop drains the journal", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const handler = yield* makeHandler;
+        const store = yield* ClientStore.makeMemory;
+        const transport = yield* Transport.makeInMemory(handler, "group-options");
+        // No context provides anywhere: everything arrives as options.
+        const client = yield* Client.make({
+          nodes,
+          mutations,
+          clientGroupId: "group-options",
+          store,
+          transport,
+          syncLoop: { pushDebounce: "10 millis" },
+        });
+
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
+        yield* eventually(
+          store.pendingMutations.pipe(Effect.orDie),
+          (pending) => pending.length === 0
+        );
+      })
+    )
+  );
+
+  it.effect("options win over context", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const handler = yield* makeHandler;
+        const optionStore = yield* ClientStore.makeMemory;
+        const contextStore = yield* ClientStore.makeMemory;
+        const transport = yield* Transport.makeInMemory(handler, "group-precedence");
+        const client = yield* Client.make({
+          nodes,
+          mutations,
+          clientGroupId: "group-precedence",
+          store: optionStore,
+          transport,
+          syncLoop: { pushDebounce: "10 millis" },
+        }).pipe(Effect.provideService(ClientStore.ClientStore, contextStore));
+
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
+        // The journal lives in the OPTION store, not the context one.
+        yield* eventually(
+          optionStore.pendingMutations.pipe(Effect.orDie),
+          (pending) => pending.length === 0
+        );
+        expect(yield* contextStore.pendingMutations.pipe(Effect.orDie)).toHaveLength(0);
+        const confirmed = yield* client.query({ collection: "products" });
+        expect(confirmed).toHaveLength(1);
+      })
+    )
+  );
+});
+
 describe("Client.connect over a hosted engine", () => {
   it.effect("the same reads work over the channel, resolved host-side", () =>
     Effect.scoped(

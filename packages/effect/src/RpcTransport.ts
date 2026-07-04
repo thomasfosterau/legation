@@ -11,7 +11,9 @@
  */
 
 import { Effect, Layer, Schema, Scope, Stream } from "effect";
-import { Rpc, RpcClient, RpcGroup } from "effect/unstable/rpc";
+import { FetchHttpClient } from "effect/unstable/http";
+import { Rpc, RpcClient, RpcGroup, RpcSerialization } from "effect/unstable/rpc";
+import * as Socket from "effect/unstable/socket/Socket";
 import { TransportError } from "./Errors.js";
 import {
   PokeSchema,
@@ -23,6 +25,7 @@ import {
   ReadResponseSchema,
 } from "./Protocol.js";
 import { ClientTransport, ServerHandler } from "./Transport.js";
+import * as Transport from "./Transport.js";
 
 /** The wire-serializable failure carried on sync RPCs. */
 export class SyncRpcError extends Schema.TaggedErrorClass<SyncRpcError>()("SyncRpcError", {
@@ -126,3 +129,64 @@ export const layer = (
   options: RpcTransportOptions
 ): Layer.Layer<ClientTransport, never, RpcClient.Protocol> =>
   Layer.effect(ClientTransport)(make(options));
+
+// ─── The standard remote composition ─────────────────────────────────────────
+
+/** Options for {@link fromOrigin}. */
+export interface FromOriginOptions {
+  readonly clientGroupId: string;
+  /** The sync server's origin, e.g. `https://sync.example.com`. */
+  readonly origin: string;
+  /** The HTTP POST route (the fallback carrier). Default `/sync`. */
+  readonly httpPath?: string;
+  /** The WebSocket route (the live carrier). Default `/sync-ws`. */
+  readonly wsPath?: string;
+  /**
+   * Fallback tuning ({@link Transport.withFallback}). Defaults: sidelined
+   * primaries retry after 30 seconds; each WebSocket call gets a 10-second
+   * budget before the call falls to HTTP.
+   */
+  readonly fallback?: Transport.FallbackOptions;
+}
+
+/**
+ * The standard remote transport: sync RPCs over a WebSocket (the live
+ * path, pokes included) with plain HTTP POST as the fallback carrier —
+ * `Client.make`'s `transport: { url }` shorthand builds exactly this.
+ * Wrap with `BrowserConnectivity.withBrowserConnectivity`
+ * (`@legation/browser`) for navigator-aware status in browsers.
+ */
+export const fromOrigin = (
+  options: FromOriginOptions
+): Effect.Effect<ClientTransport, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const httpUrl = `${options.origin}${options.httpPath ?? "/sync"}`;
+    const wsUrl = `${options.origin.replace(/^http/, "ws")}${options.wsPath ?? "/sync-ws"}`;
+    // Layer.build ties each protocol's resources to the enclosing scope
+    // (Effect.provide here would finalize them on return).
+    const wsContext = yield* Layer.build(
+      RpcClient.layerProtocolSocket().pipe(
+        Layer.provide(Socket.layerWebSocket(wsUrl)),
+        Layer.provide(Socket.layerWebSocketConstructorGlobal),
+        Layer.provide(RpcSerialization.layerNdjson)
+      )
+    );
+    const ws = yield* make({ clientGroupId: options.clientGroupId }).pipe(
+      Effect.provide(wsContext)
+    );
+    const httpContext = yield* Layer.build(
+      RpcClient.layerProtocolHttp({ url: httpUrl }).pipe(
+        Layer.provide(RpcSerialization.layerNdjson),
+        Layer.provide(FetchHttpClient.layer)
+      )
+    );
+    const http = yield* make({ clientGroupId: options.clientGroupId }).pipe(
+      Effect.provide(httpContext)
+    );
+    // primaryTimeout: a hanging WebSocket must not stall sync — time it
+    // out, sideline it, serve through HTTP.
+    return yield* Transport.withFallback(ws, http, {
+      restoreAfter: options.fallback?.restoreAfter ?? "30 seconds",
+      primaryTimeout: options.fallback?.primaryTimeout ?? "10 seconds",
+    });
+  });

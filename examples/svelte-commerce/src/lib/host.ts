@@ -8,9 +8,6 @@
  * needs a BroadcastChannel).
  */
 import { Effect, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import * as Socket from "effect/unstable/socket/Socket";
 import type { IndexedDb } from "@effect/platform-browser";
 import { Transport } from "@legation/effect";
 import { ClientEngine, RpcTransport } from "@legation/effect/internal";
@@ -25,40 +22,19 @@ export interface HostOptions {
   readonly indexedDb: Layer.Layer<IndexedDb.IndexedDb>;
 }
 
-/** WS primary + HTTP fallback + connectivity, as one transport layer. */
+/**
+ * The standard remote transport (WS primary + HTTP fallback —
+ * `RpcTransport.fromOrigin`, the same composition `Client.make`'s
+ * `transport: { url }` builds), plus browser connectivity awareness.
+ */
 const transportLayer = (options: HostOptions): Layer.Layer<Transport.ClientTransport> =>
   Layer.effect(Transport.ClientTransport)(
     Effect.gen(function* () {
-      const httpUrl = `${options.syncOrigin}/sync`;
-      const wsUrl = `${options.syncOrigin.replace(/^http/, "ws")}/sync-ws`;
-      // Layer.build ties each protocol's resources to the enclosing layer
-      // scope (Effect.provide here would finalize them on return).
-      const wsContext = yield* Layer.build(
-        RpcClient.layerProtocolSocket().pipe(
-          Layer.provide(Socket.layerWebSocket(wsUrl)),
-          Layer.provide(Socket.layerWebSocketConstructorGlobal),
-          Layer.provide(RpcSerialization.layerNdjson)
-        )
-      );
-      const ws = yield* RpcTransport.make({ clientGroupId: options.clientGroupId }).pipe(
-        Effect.provide(wsContext)
-      );
-      const httpContext = yield* Layer.build(
-        RpcClient.layerProtocolHttp({ url: httpUrl }).pipe(
-          Layer.provide(RpcSerialization.layerNdjson),
-          Layer.provide(FetchHttpClient.layer)
-        )
-      );
-      const http = yield* RpcTransport.make({ clientGroupId: options.clientGroupId }).pipe(
-        Effect.provide(httpContext)
-      );
-      // primaryTimeout: a hanging WebSocket must not stall sync — time it
-      // out, sideline it, serve through HTTP.
-      const combined = yield* Transport.withFallback(ws, http, {
-        restoreAfter: "30 seconds",
-        primaryTimeout: "10 seconds",
+      const transport = yield* RpcTransport.fromOrigin({
+        clientGroupId: options.clientGroupId,
+        origin: options.syncOrigin,
       });
-      return yield* BrowserConnectivity.withBrowserConnectivity(combined);
+      return yield* BrowserConnectivity.withBrowserConnectivity(transport);
     })
   );
 

@@ -30,10 +30,11 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
-import { Context, Effect, Ref, Stream } from "effect";
+import { Context, Effect, Option, Ref, Stream } from "effect";
 import * as ClientEngine from "./ClientEngine.js";
-import type { ClientStore } from "./ClientStore.js";
-import type { ClientTransport } from "./Transport.js";
+import * as ClientStore from "./ClientStore.js";
+import * as RpcTransport from "./RpcTransport.js";
+import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
 import type * as Mutator from "./Mutator.js";
 import type * as Node from "./Node.js";
@@ -222,30 +223,79 @@ export const Client = Context.Service<Client>("@legation/effect/Client");
 export interface MakeOptions {
   readonly nodes: Node.NodeRegistry;
   readonly mutations: Mutator.MutatorRegistry;
-  readonly clientId: string;
-  readonly clientGroupId: string;
+  /**
+   * The sync-protocol client identity. Defaults to a random id — fine with
+   * the default in-memory store; give a stable id alongside a persistent
+   * store so the journal survives restarts.
+   */
+  readonly clientId?: string;
+  /**
+   * The client group (the server's CVR unit). Defaults to a random id —
+   * same caveat as {@link MakeOptions.clientId}.
+   */
+  readonly clientGroupId?: string;
+  /**
+   * Row persistence. Resolution order: this option → a `ClientStore` in
+   * context (layer-composed apps) → in-memory (the default; pair
+   * `@legation/browser`'s IndexedDB store for durability).
+   */
+  readonly store?: ClientStore.ClientStore;
+  /**
+   * The server connection. `{ url }` builds the standard remote transport
+   * (sync RPCs over WebSocket with HTTP fallback — `RpcTransport.
+   * fromOrigin`); a full `ClientTransport` plugs in any carrier.
+   * Resolution order: this option → a `ClientTransport` in context →
+   * **offline** (no server: reads and optimistic writes work locally, the
+   * journal retains every intent, and the sync loop is not started).
+   */
+  readonly transport?: Transport.ClientTransport | { readonly url: string };
   readonly queries?: QueryModule.QueryRegistry;
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
-  /** Start the sync loop automatically (the default). */
+  /**
+   * Start the sync loop automatically. Defaults to `true` with a
+   * transport, `false` when the Client defaulted to offline.
+   */
   readonly sync?: boolean;
 }
 
 /**
- * A Client that owns the engine in this thread. Store and transport come
- * from context; the sync loop starts on construction unless `sync: false`.
+ * A Client that owns the engine in this thread. Zero wiring works:
+ * `Client.make({ nodes, mutations })` is a purely local Client over an
+ * in-memory store. Add `transport: { url }` for the standard remote setup,
+ * or pass/provide full `ClientStore`/`ClientTransport` implementations for
+ * anything else — options win over context, context over defaults.
  */
-export const make = (
-  options: MakeOptions
-): Effect.Effect<Client, never, ClientStore | ClientTransport | Scope.Scope> =>
+export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.Scope> =>
   Effect.gen(function* () {
+    const store =
+      options.store ??
+      Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
+      (yield* ClientStore.makeMemory);
+
+    const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
+    const configured =
+      options.transport !== undefined && "url" in options.transport
+        ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })
+        : options.transport;
+    const contextual = Option.getOrUndefined(
+      yield* Effect.serviceOption(Transport.ClientTransport)
+    );
+    const transport = configured ?? contextual ?? Transport.offline;
+    // Defaulted offline: nothing to sync with, so the loop stays off
+    // unless the caller insists.
+    const sync = options.sync ?? (configured ?? contextual) !== undefined;
+
     const engine = yield* ClientEngine.make({
-      clientId: options.clientId,
-      clientGroupId: options.clientGroupId,
+      clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
+      clientGroupId,
       mutators: options.mutations,
       ...(options.queries === undefined ? {} : { queries: options.queries }),
       ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-    });
-    if (options.sync !== false) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
+    }).pipe(
+      Effect.provideService(ClientStore.ClientStore, store),
+      Effect.provideService(Transport.ClientTransport, transport)
+    );
+    if (sync) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
     return fromView(options.nodes, ClientView.fromEngine(engine));
   });
 
