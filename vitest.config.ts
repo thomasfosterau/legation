@@ -11,6 +11,7 @@ const alias = {
   ),
   "@legation/effect": pkg("effect"),
   "@legation/browser": pkg("browser"),
+  "@legation/cloudflare": pkg("cloudflare"),
   "@legation/node": pkg("node"),
   "@legation/jsonapi": pkg("jsonapi"),
   "@legation/sql": pkg("sql"),
