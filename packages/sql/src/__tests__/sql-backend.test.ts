@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
-import { BackendError, MutationRejected, Mutator, Predicate, Subset } from "@legation/effect";
+import { BackendError, MutationRejected, Mutator, Predicate } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 import type { Backend } from "@legation/effect";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";

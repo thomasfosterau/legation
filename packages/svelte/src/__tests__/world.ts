@@ -10,9 +10,7 @@ import {
   Authorization,
   Backend,
   Client,
-  ClientEngine,
   ClientStore,
-  ClientView,
   Collection,
   Edge,
   MemoryBackend,
@@ -21,10 +19,9 @@ import {
   Node,
   Predicate,
   Query,
-  Subset,
-  SyncRoom,
   Transport,
 } from "@legation/effect";
+import { ClientEngine, ClientView, Subset, SyncRoom } from "@legation/effect/internal";
 
 export interface Todo {
   readonly id: string;

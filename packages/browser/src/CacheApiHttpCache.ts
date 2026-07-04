@@ -12,7 +12,8 @@
  * testable without browser globals.
  */
 
-import { HttpCache, StoreError, TransportError } from "@legation/effect";
+import { StoreError, TransportError } from "@legation/effect";
+import { HttpCache } from "@legation/effect/internal";
 import { Clock, Duration, Effect } from "effect";
 
 /** The subset of the Cache API this store uses. */

@@ -11,7 +11,7 @@
  */
 import * as React from "react";
 import { Effect, Fiber, Stream } from "effect";
-import type { Undo } from "@legation/effect";
+import type { Undo } from "@legation/effect/internal";
 
 /** What {@link useUndo} returns: two commands and their live availability. */
 export interface UndoControls {

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { Collection, Subset } from "@legation/effect";
+  import type { Collection } from "@legation/effect";
+import type { Subset } from "@legation/effect/internal";
   import { related } from "../../Query.js";
   import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
 

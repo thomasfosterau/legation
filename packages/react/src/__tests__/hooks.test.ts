@@ -14,15 +14,12 @@ import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  EngineAtoms,
   MemoryBackend,
   Mutator,
-  Subset,
-  SyncRoom,
   Transport,
 } from "@legation/effect";
+import { ClientEngine, EngineAtoms, Subset, SyncRoom } from "@legation/effect/internal";
 import { EffectSyncProvider, useMutation, useMutationWithAck, useQuery } from "../index.js";
 
 const mutators = Mutator.registry([

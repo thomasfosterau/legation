@@ -10,19 +10,15 @@ import { Effect, Ref, Schema, Stream } from "effect";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  ClientView,
-  Cvr,
   Edge,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
   Node,
   Query,
-  SyncServer,
   Transport,
 } from "../index.js";
+import { ClientEngine, ClientView, Cvr, InvalidationBus, SyncServer } from "../internal.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 const Product = Node.make("products", {

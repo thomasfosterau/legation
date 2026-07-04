@@ -10,7 +10,8 @@
  */
 import type { Cookies } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { Hydration, type Transport } from "@legation/effect";
+import { type Transport } from "@legation/effect";
+import { Hydration } from "@legation/effect/internal";
 import type {
   MutatorError,
   StoreError,

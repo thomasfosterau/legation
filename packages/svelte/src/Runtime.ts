@@ -19,7 +19,8 @@
  */
 import { createRuntimeContext } from "@thomasfosterau/effect-svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
-import type { Client, ClientView } from "@legation/effect";
+import type { Client } from "@legation/effect";
+import type { ClientView } from "@legation/effect/internal";
 
 /** A runtime that can run {@link ClientView} effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientView.ClientView, never>;

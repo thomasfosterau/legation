@@ -11,7 +11,7 @@
 import * as React from "react";
 import { Effect } from "effect";
 import { AtomRegistry, type Atom } from "effect/unstable/reactivity";
-import type { ClientEngine, EngineAtoms, Subset } from "@legation/effect";
+import type { ClientEngine, EngineAtoms, Subset } from "@legation/effect/internal";
 import { useEngineAtoms, useRegistry } from "./registry.js";
 
 /** Subscribe to an atom's value, re-rendering whenever it changes. */

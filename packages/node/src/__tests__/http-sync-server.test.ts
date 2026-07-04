@@ -5,16 +5,8 @@
  */
 import { createServer } from "node:http";
 import { NodeHttpServer } from "@effect/platform-node";
-import {
-  Authorization,
-  ClientEngine,
-  ClientStore,
-  MemoryBackend,
-  Mutator,
-  RpcTransport,
-  Subset,
-  SyncRoom,
-} from "@legation/effect";
+import { Authorization, ClientStore, MemoryBackend, Mutator } from "@legation/effect";
+import { ClientEngine, RpcTransport, Subset, SyncRoom } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";

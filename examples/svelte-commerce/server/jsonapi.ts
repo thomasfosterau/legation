@@ -20,7 +20,7 @@ import { HttpServerRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { ApiError, Endpoint, Group, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
-import { InvalidationBus } from "@legation/effect";
+import { InvalidationBus } from "@legation/effect/internal";
 import { CartItem, Category, Order, OrderItem, Product, Review, Seller, Variant } from "./resources.js";
 
 // ─── Errors ──────────────────────────────────────────────────────────────────

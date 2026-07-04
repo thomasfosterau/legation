@@ -8,7 +8,7 @@
  * main-thread engine and a mirror equally (ADR-0021).
  */
 import { Effect } from "effect";
-import { ClientEngine, ClientView } from "@legation/effect";
+import { ClientEngine, ClientView } from "@legation/effect/internal";
 import { getEngineRuntime } from "./Runtime.js";
 
 /** A `mutate(mutator, args)` bound to the context runtime. */

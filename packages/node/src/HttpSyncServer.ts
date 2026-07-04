@@ -13,7 +13,8 @@
 
 import { createServer } from "node:http";
 import { NodeHttpServer } from "@effect/platform-node";
-import { RpcTransport, Transport } from "@legation/effect";
+import { Transport } from "@legation/effect";
+import { RpcTransport } from "@legation/effect/internal";
 import { Layer } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import type { ServeError } from "effect/unstable/http/HttpServerError";

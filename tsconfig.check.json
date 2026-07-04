@@ -10,6 +10,7 @@
     "baseUrl": ".",
     "paths": {
       "@legation/effect": ["packages/effect/src/index.ts"],
+      "@legation/effect/internal": ["packages/effect/src/internal.ts"],
       "@legation/browser": ["packages/browser/src/index.ts"],
       "@legation/node": ["packages/node/src/index.ts"],
       "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],

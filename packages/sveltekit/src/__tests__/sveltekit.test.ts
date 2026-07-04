@@ -11,17 +11,19 @@ import { Effect, Layer, Schema, type Scope } from "effect";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
+  MemoryBackend,
+  Mutator,
+  Transport,
+} from "@legation/effect";
+import {
+  ClientEngine,
   Cvr,
   Hydration,
   InvalidationBus,
-  MemoryBackend,
-  Mutator,
   Subset,
   SyncServer,
-  Transport,
-} from "@legation/effect";
+} from "@legation/effect/internal";
 import { clientGroupId, engineRuntime, loadSnapshot } from "../index.js";
 
 interface Todo {

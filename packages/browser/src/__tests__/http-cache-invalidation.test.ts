@@ -3,7 +3,7 @@
  * the responses tagged for that collection over the Cache API store, and
  * `collectionChanges` projects an engine's events to the touched collections.
  */
-import type { ClientEngine, HttpCache } from "@legation/effect";
+import type { ClientEngine, HttpCache } from "@legation/effect/internal";
 import { StoreError } from "@legation/effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Stream } from "effect";

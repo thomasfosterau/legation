@@ -23,7 +23,7 @@
 import { build, files, version } from "$service-worker";
 import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
-import type { HttpCache } from "@legation/effect";
+import type { HttpCache } from "@legation/effect/internal";
 import { CacheApiHttpCache } from "@legation/browser";
 import { runHost } from "./lib/host.js";
 

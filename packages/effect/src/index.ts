@@ -1,75 +1,56 @@
 /**
  * @legation/effect
  *
- * The Effect-native sync engine (v2 architecture, ADRs 0007–0010):
- * mutation-log writes with server-authoritative rebase, CVR state patches
- * downstream, typed collections with re-run live queries, and a
- * customisable schema-message protocol.
+ * An offline-first sync engine around six concepts (ADR-0022):
  *
- * - **Shared model**: collections, predicates, subsets, mutators, errors
- * - **Protocol**: push/pull/poke messages and patch operations, plus spec
- *   export (OpenAPI/AsyncAPI) for generating bespoke clients
- * - **Client**: durable store, optimistic engine with journal + rebase
- * - **Server**: BYO backend contract, auth filters + middleware, CVR
- *   bookkeeping, invalidation bus, sync rooms
- * - **HTTP cache**: the separate service-worker Request/Response cache
+ * - {@link Node} / {@link Edge} — the resource graph: typed attributes plus
+ *   `one`/`many`/`paginated` edges, each foreign key declared exactly once.
+ * - {@link Collection} — the named set of one Node type the client
+ *   materializes (derived from the graph by `Node.registry`).
+ * - {@link Query} — THE read: declarative, compiled to a plan of sync
+ *   windows; named queries are the same concept with a name and args.
+ * - {@link Mutation} — the write: a named, schema-validated intent executed
+ *   optimistically on the Client and authoritatively on the Backend.
+ * - {@link Client} — the one-per-thread object; where a read is answered
+ *   (replica, worker-hosted engine, server fallthrough) is configuration.
+ * - {@link Server} — one per backend: the protocol handler plus
+ *   `broadcast`, the single verb for out-of-band changes.
  *
- * Runtime adapters (service-worker host, IndexedDB store, Durable Object
- * rooms) live in the runtime packages.
+ * Supporting surface: {@link Backend} (the BYO storage contract) with
+ * {@link MemoryBackend} for tests and prototypes; {@link Authorization}
+ * (deny-by-default per-collection filters, expressed as
+ * {@link Predicate}s); {@link Aggregate} projections; {@link ClientStore}
+ * and {@link Transport} (the persistence and carrier seams a Client is
+ * wired with); and the typed error classes.
+ *
+ * Implementation seams — the engine, the mirror machinery, protocol
+ * codecs, server assembly — live behind `@legation/effect/internal` for
+ * adapter authors and the sibling `@legation/*` packages.
  */
 
-// ─── Shared model ────────────────────────────────────────────────────────────
-export * from "./Errors.js";
+// ─── The resource graph ──────────────────────────────────────────────────────
 export * as Node from "./Node.js";
 export * as Edge from "./Edge.js";
 export * as Collection from "./Collection.js";
-export * as Predicate from "./Predicate.js";
-export * as Subset from "./Subset.js";
-export * as Aggregate from "./Aggregate.js";
-export * as Related from "./Related.js";
-export * as Mutator from "./Mutator.js";
-export * as Query from "./Query.js";
-export * as Hash from "./Hash.js";
 
-// ─── Protocol ────────────────────────────────────────────────────────────────
-export * as Protocol from "./Protocol.js";
-export * as Transport from "./Transport.js";
-export * as RpcTransport from "./RpcTransport.js";
-export * as SpecExport from "./SpecExport.js";
+// ─── Reads and writes ────────────────────────────────────────────────────────
+export * as Query from "./Query.js";
+export * as Aggregate from "./Aggregate.js";
+export * as Mutation from "./Mutator.js";
+/** @deprecated The write concept is {@link Mutation} (ADR-0022). */
+export * as Mutator from "./Mutator.js";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
-export * as ClientStore from "./ClientStore.js";
-export * as ClientEngine from "./ClientEngine.js";
-export * as ClientView from "./ClientView.js";
 export * as Client from "./Client.js";
-export * as Undo from "./Undo.js";
-export * as Introspection from "./Introspection.js";
-export * as Hydration from "./Hydration.js";
-export * as LiveView from "./LiveView.js";
-export * as Subscriptions from "./Subscriptions.js";
-export * as LiveQuery from "./LiveQuery.js";
-export * as EngineAtoms from "./EngineAtoms.js";
-export * as PromiseFacade from "./PromiseFacade.js";
-
-// ─── Mirror seam (ADR-0010/0021) ─────────────────────────────────────────────
-export * as MirrorProtocol from "./MirrorProtocol.js";
-export * as MirrorChannel from "./MirrorChannel.js";
-export * as EngineHost from "./EngineHost.js";
-export * as Mirror from "./Mirror.js";
+export * as ClientStore from "./ClientStore.js";
+export * as Transport from "./Transport.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
+export * as Server from "./Server.js";
 export * as Backend from "./Backend.js";
-export * as BackendContract from "./BackendContract.js";
 export * as MemoryBackend from "./MemoryBackend.js";
 export * as Authorization from "./Authorization.js";
-export * as Cvr from "./Cvr.js";
-export * as InvalidationBus from "./InvalidationBus.js";
-export * as BusBrokers from "./BusBrokers.js";
-export * as HintSource from "./HintSource.js";
-export * as SyncServer from "./SyncServer.js";
-export * as Server from "./Server.js";
-export * as SyncRoom from "./SyncRoom.js";
-export * as Telemetry from "./Telemetry.js";
+export * as Predicate from "./Predicate.js";
 
-// ─── HTTP cache ──────────────────────────────────────────────────────────────
-export * as HttpCache from "./HttpCache.js";
+// ─── Errors ──────────────────────────────────────────────────────────────────
+export * from "./Errors.js";

@@ -16,15 +16,8 @@
  */
 
 import { Effect, Schema } from "effect";
-import {
-  Backend,
-  BackendError,
-  Hash,
-  MutationRejected,
-  Predicate,
-  Subset,
-  type Mutator,
-} from "@legation/effect";
+import { Backend, BackendError, MutationRejected, Predicate, type Mutator } from "@legation/effect";
+import { Hash, Subset } from "@legation/effect/internal";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).

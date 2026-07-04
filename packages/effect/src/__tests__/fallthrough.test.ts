@@ -11,20 +11,16 @@ import { Effect, Ref, Schema, Stream } from "effect";
 import {
   Authorization,
   Client,
-  ClientEngine,
   ClientStore,
-  ClientView,
   Edge,
-  EngineHost,
   MemoryBackend,
-  MirrorChannel,
   Mutator,
   Node,
   Predicate,
   Server,
-  Subset,
   Transport,
 } from "../index.js";
+import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../internal.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },

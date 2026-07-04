@@ -13,7 +13,7 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
-import type { Undo } from "@legation/effect";
+import type { Undo } from "@legation/effect/internal";
 
 /** What {@link undoControls} returns: live availability + two commands. */
 export interface UndoControls {

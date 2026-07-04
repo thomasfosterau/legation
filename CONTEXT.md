@@ -6,7 +6,7 @@ Coming from TanStack Query, SwiftData, SWR, or Apollo? [`docs/coming-from-tansta
 
 The engine follows the mutation-log/rebase sync model (ADR-0008): named write intents flow up, server-computed state patches flow down, and the client rebases pending intents on top of authoritative state.
 
-> **Transition (ADR-0022):** this glossary describes the accepted resource-graph public API — six concepts: **Node, Collection, Query, Mutation, Client, Server**. The implementation program is landing in stages, so module names in code may still carry pre-0022 vocabulary (`Mutator`, `Subset`, `ClientEngine`, `ClientView`, `Mirror`, `SyncServer`, `InvalidationBus`) until their step lands; those names are now **internal** vocabulary.
+> **ADR-0022, landed:** this glossary describes the resource-graph public API — six concepts: **Node, Collection, Query, Mutation, Client, Server** — and `@legation/effect`'s root index now exports exactly that surface (plus the Backend contract, Authorization vocabulary, wiring seams, and errors). The pre-0022 machinery (`Subset`, `ClientEngine`, `ClientView`, `Mirror`, `SyncServer`, `InvalidationBus`, …) lives behind `@legation/effect/internal` for adapter authors; `Mutator` remains as a deprecated alias of `Mutation`.
 
 ## Glossary
 

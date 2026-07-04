@@ -12,20 +12,22 @@ import {
   Authorization,
   Backend,
   Client,
-  ClientEngine,
   ClientStore,
-  ClientView,
-  Cvr,
   Edge,
-  EngineHost,
-  InvalidationBus,
   MemoryBackend,
-  MirrorChannel,
   Mutator,
   Node,
-  SyncServer,
   Transport,
 } from "../index.js";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  EngineHost,
+  InvalidationBus,
+  MirrorChannel,
+  SyncServer,
+} from "../internal.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },

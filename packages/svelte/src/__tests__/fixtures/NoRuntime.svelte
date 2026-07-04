@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Subset } from "@legation/effect";
+  import { Subset } from "@legation/effect/internal";
   import { query } from "../../Query.js";
 
   // No setEngineRuntime higher in the tree: this must throw on init.
