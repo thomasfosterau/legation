@@ -51,6 +51,15 @@ export interface ChangeHint {
    * not "all deletes".
    */
   readonly values?: ReadonlyArray<{ readonly id: RowId; readonly value: unknown }> | undefined;
+  /**
+   * The pre-write values of the changed rows, when the backend has them
+   * cheaply to hand (additive, like {@link values}). Old values let
+   * topic-derived fan-out (ADR-0023) poke the windows a row **moved away
+   * from** — an update that changes a foreign key derives both parents'
+   * fine topics; a delete derives from the old row. Backends without them
+   * degrade gracefully: moved-away windows converge on the interval pull.
+   */
+  readonly oldValues?: ReadonlyArray<{ readonly id: RowId; readonly value: unknown }> | undefined;
 }
 
 /** The (row id, row version) set an evaluated subset currently contains. */
@@ -117,15 +126,22 @@ export const Backend = Context.Service<Backend>("@legation/effect/Backend");
  * row value of every PUT there. Ids touched but absent from `puts` are deletes,
  * so they appear in `ids` but not `values`. Backends that track writes as
  * `(touched, puts)` share this to emit predicate-matchable hints (ADR-0009).
+ * Passing the pre-write rows (`olds`) additionally fills `oldValues`, which
+ * topic-derived fan-out uses to poke moved-away edge windows (ADR-0023).
  */
 export const buildChangeHints = (
   touched: ReadonlyMap<string, ReadonlySet<RowId>>,
-  puts: ReadonlyMap<string, ReadonlyMap<RowId, unknown>>
+  puts: ReadonlyMap<string, ReadonlyMap<RowId, unknown>>,
+  olds?: ReadonlyMap<string, ReadonlyMap<RowId, unknown>>
 ): ReadonlyArray<ChangeHint> =>
   [...touched].map(([collection, ids]) => {
     const putMap = puts.get(collection);
+    const oldMap = olds?.get(collection);
     const values = [...ids].flatMap((id) =>
       putMap?.has(id) === true ? [{ id, value: putMap.get(id) }] : []
     );
-    return { collection, ids: [...ids], values };
+    const oldValues = [...ids].flatMap((id) =>
+      oldMap?.has(id) === true ? [{ id, value: oldMap.get(id) }] : []
+    );
+    return { collection, ids: [...ids], values, ...(oldValues.length === 0 ? {} : { oldValues }) };
   });
