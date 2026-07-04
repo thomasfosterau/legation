@@ -109,6 +109,22 @@ export const makeInMemory = (
     };
   });
 
+/**
+ * The no-server transport: every wire call fails with a `TransportError`,
+ * pokes never arrive, status is permanently `"disconnected"`. This is
+ * `Client.make`'s default when nothing else is wired — a purely local,
+ * optimistic Client (the journal retains every intent, so attaching a real
+ * transport later pushes the backlog).
+ */
+export const offline: ClientTransport = {
+  push: () => Effect.fail(new TransportError({ message: "offline transport: no server wired" })),
+  pull: () => Effect.fail(new TransportError({ message: "offline transport: no server wired" })),
+  read: () => Effect.fail(new TransportError({ message: "offline transport: no server wired" })),
+  pokes: Stream.empty,
+  status: Effect.succeed("disconnected"),
+  statusChanges: Stream.succeed("disconnected"),
+};
+
 /** Layer wiring the in-memory transport to an in-context ServerHandler. */
 export const layerInMemory = (
   clientGroupId: string
