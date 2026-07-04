@@ -5,16 +5,9 @@ import { defineConfig } from "vite";
 // dev server proxies both sync carriers to it so the browser talks same-origin.
 export default defineConfig({
   plugins: [sveltekit()],
-  // effect-svelte ships plain compiled JS (no `svelte` export condition), so
-  // vite doesn't detect it as a Svelte library: prebundling would give it its
-  // OWN copy of svelte's context internals and every setContext call would
-  // throw lifecycle_outside_component. Keep it in the main module graph.
-  optimizeDeps: {
-    exclude: ["@thomasfosterau/effect-svelte"],
-  },
-  ssr: {
-    noExternal: ["@thomasfosterau/effect-svelte"],
-  },
+  // effect-svelte carries a `svelte` export condition (>= 0.3.2), so
+  // vite-plugin-svelte auto-detects it as a Svelte library and shares the
+  // app's single copy of svelte — no manual optimizeDeps/noExternal needed.
   server: {
     port: 5178,
     proxy: {

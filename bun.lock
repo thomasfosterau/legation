@@ -283,7 +283,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@legation/effect": "workspace:^",
-        "@thomasfosterau/effect-svelte": "^0.3.1",
+        "@thomasfosterau/effect-svelte": "^0.3.2",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -739,7 +739,7 @@
 
     "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.6.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.84" } }, "sha512-QmZQ3MrSph/Oi6J8CEOw38cwdCtQ/6SidfcEehwLfLzAwwfrX7nhlTzTWdNf6E5y0S+Ddymn3a6bZVgTIOjKCw=="],
 
-    "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.3.1", "", { "peerDependencies": { "effect": "^4.0.0-beta.75", "svelte": "^5.40.0" } }, "sha512-4eWjPgB1ED0mU6a74c2kz0IM4hY3e2GzPAkgVBgAockYwaGQparX7rJeH+H8G5sBZXyzT4pMJdmYos5X3jYe3Q=="],
+    "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.3.2", "", { "peerDependencies": { "effect": "^4.0.0-beta.75", "svelte": "^5.40.0" } }, "sha512-TTuSVgUiPVEB6/9hO2hvBFkvNi/KgbfmVhowTRm9zgkBlOw/QzPts2MVoxlCWSv/IGLfz+JE0TVjegdvpXmBNQ=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 
