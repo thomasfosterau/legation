@@ -22,7 +22,7 @@
  * fine fan-out topics can use the same field.
  */
 import { Effect, Schema } from "effect";
-import { Edge, Mutator, Node, Query, Subset } from "@legation/effect";
+import { Edge, Mutator, Node, type Query } from "@legation/effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -198,45 +198,62 @@ export const privateCollections = ["profiles", "cartItems", "orders", "orderItem
 
 // ─── Reads ───────────────────────────────────────────────────────────────────
 //
-// Declarative reads (Query.Read) are the app's read vocabulary; the page
-// hooks still speak the plan's Subset representation until the bindings
-// move onto the Client (ADR-0022 step 8), so each read is compiled with
-// `Query.plan` where a subset is needed.
+// Declarative reads (Query.Read) are the app's whole read vocabulary: the
+// rune hooks pass them to the Client, which compiles the plan, registers
+// the windows, and decides where each read is answered.
 
-const subsetOf = (read: Query.Read): Subset.Subset => Query.plan(nodes, read).root;
+export const allCategories: Query.Read = { collection: "categories", order: ["name"] };
+export const allSellers: Query.Read = { collection: "sellers" };
+export const allVariants: Query.Read = { collection: "variants" };
+export const allReviews: Query.Read = { collection: "reviews" };
 
-export const allCategories = subsetOf({ collection: "categories", order: ["name"] });
-export const allSellers = subsetOf({ collection: "sellers" });
-export const allVariants = subsetOf({ collection: "variants" });
-export const allReviews = subsetOf({ collection: "reviews" });
+/** One product with its detail-page edges resolved. */
+export const productDetail = (id: string): Query.Read => ({
+  collection: "products",
+  where: { id },
+  include: { variants: true, reviews: true, seller: true },
+});
 
-export const productById = (id: string) =>
-  subsetOf({ collection: "products", where: { id } });
+/** One catalog page: ordered by id, cursor + limit windowed. */
+export const productPage = (options: {
+  categoryId?: string;
+  cursor?: string;
+  limit?: number;
+}): Query.Read => ({
+  collection: "products",
+  ...(options.categoryId !== undefined ? { where: { categoryId: options.categoryId } } : {}),
+  order: ["id"],
+  first: options.limit ?? 12,
+  ...(options.cursor !== undefined ? { after: options.cursor } : {}),
+});
 
-/** One catalog page: ordered by id, cursor + limit windowed (Subset.window). */
-export const productPage = (options: { categoryId?: string; cursor?: string; limit?: number }) =>
-  subsetOf({
-    collection: "products",
-    ...(options.categoryId !== undefined ? { where: { categoryId: options.categoryId } } : {}),
-    order: ["id"],
-    first: options.limit ?? 12,
-    ...(options.cursor !== undefined ? { after: options.cursor } : {}),
-  });
+export const productReviews = (productId: string): Query.Read => ({
+  collection: "reviews",
+  where: { productId },
+  order: ["-createdAt"],
+});
 
-export const productReviews = (productId: string) =>
-  subsetOf({ collection: "reviews", where: { productId }, order: ["-createdAt"] });
+export const myCartItems = (userId: string): Query.Read => ({
+  collection: "cartItems",
+  where: { userId },
+  include: { variant: true },
+});
 
-export const myCartItems = (userId: string) =>
-  subsetOf({ collection: "cartItems", where: { userId } });
+export const myOrders = (userId: string): Query.Read => ({
+  collection: "orders",
+  where: { userId },
+  order: ["-createdAt"],
+});
 
-export const myOrders = (userId: string) =>
-  subsetOf({ collection: "orders", where: { userId }, order: ["-createdAt"] });
+export const myOrderItems = (userId: string): Query.Read => ({
+  collection: "orderItems",
+  where: { userId },
+});
 
-export const myOrderItems = (userId: string) =>
-  subsetOf({ collection: "orderItems", where: { userId } });
-
-export const myProfile = (userId: string) =>
-  subsetOf({ collection: "profiles", where: { id: userId } });
+export const myProfile = (userId: string): Query.Read => ({
+  collection: "profiles",
+  where: { id: userId },
+});
 
 /**
  * Everything the app shell keeps live — the reads the tab's Client pins at
@@ -244,18 +261,13 @@ export const myProfile = (userId: string) =>
  */
 export const shellReads = (userId: string | undefined): ReadonlyArray<Query.Read> => [
   { collection: "products", order: ["id"], first: 100 },
-  { collection: "categories", order: ["name"] },
-  { collection: "sellers" },
-  { collection: "variants" },
-  { collection: "reviews" },
+  allCategories,
+  allSellers,
+  allVariants,
+  allReviews,
   ...(userId === undefined
     ? []
-    : ([
-        { collection: "cartItems", where: { userId } },
-        { collection: "orders", where: { userId }, order: ["-createdAt"] },
-        { collection: "orderItems", where: { userId } },
-        { collection: "profiles", where: { id: userId } },
-      ] satisfies ReadonlyArray<Query.Read>)),
+    : [myCartItems(userId), myOrders(userId), myOrderItems(userId), myProfile(userId)]),
 ];
 
 // ─── Mutators (client-optimistic handlers; SQL handlers on the server) ──────

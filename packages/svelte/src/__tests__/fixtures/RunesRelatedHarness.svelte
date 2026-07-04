@@ -1,30 +1,22 @@
 <script lang="ts">
-  import type { Collection, Subset } from "@legation/effect";
+  import type { Query } from "@legation/effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
-  import { useRelated } from "../../Runes.svelte.js";
+  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
+  import { useQuery } from "../../Runes.svelte.js";
 
   const {
     runtime,
-    registry,
-    collection,
-    subset,
-    names,
-    subscribe = false,
+    read,
   }: {
-    runtime: EffectSyncRuntime;
-    registry: Collection.CollectionRegistry;
-    collection: string;
-    subset: Subset.Subset;
-    names: ReadonlyArray<string>;
-    subscribe?: boolean;
+    runtime: ClientRuntime;
+    read: Query.Read;
   } = $props();
 
   // svelte-ignore state_referenced_locally
-  setEngineRuntime(runtime);
+  setClientRuntime(runtime);
 
   // svelte-ignore state_referenced_locally
-  const rows = useRelated(() => ({ registry, collection, subset, names }), { subscribe });
+  const rows = useQuery(() => read);
 
   const joined = $derived(
     AsyncResult.getOrElse(rows.current, () => []).map((row) => {

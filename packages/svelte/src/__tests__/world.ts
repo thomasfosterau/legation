@@ -9,13 +9,16 @@ import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import {
   Authorization,
   Backend,
+  Client,
   ClientEngine,
   ClientStore,
   ClientView,
   Collection,
+  Edge,
   MemoryBackend,
   MutationRejected,
   Mutator,
+  Node,
   Predicate,
   Query,
   Subset,
@@ -34,28 +37,24 @@ export interface User {
   readonly name: string;
 }
 
-/** todos declare a `"one"` relationship to their author for the join tests. */
-export const collections = Collection.registry([
-  Collection.make({
-    name: "users",
-    schema: Schema.Unknown,
-    id: (value) => (value as User).id,
+/**
+ * The node graph (ADR-0022): todos reference their author (`one` edge over
+ * `authorId`); users carry the inverse dependent collection. The engine
+ * registry derives from it.
+ */
+export const nodes = Node.registry([
+  Node.make("users", {
+    attributes: { name: Schema.String },
+    edges: { todos: Edge.many("todos", { inverse: "author" }) },
   }),
-  Collection.make({
-    name: "todos",
-    schema: Schema.Unknown,
-    id: (value) => (value as Todo).id,
-    relationships: [
-      {
-        name: "author",
-        kind: "one",
-        collection: "users",
-        localField: "authorId",
-        foreignField: "id",
-      },
-    ],
+  Node.make("todos", {
+    attributes: { title: Schema.String },
+    edges: { author: Edge.one("users", { via: "authorId" }) },
   }),
 ]);
+
+/** The derived engine registry (store-API tests still consume it). */
+export const collections: Collection.CollectionRegistry = nodes.collections;
 
 export const mutators = Mutator.registry([
   {
@@ -128,9 +127,28 @@ export type WorldRuntime = ManagedRuntime.ManagedRuntime<
 export const makeRuntime = (): WorldRuntime =>
   ManagedRuntime.make(ClientView.layer.pipe(Layer.provideMerge(engineLayer)));
 
-/** Run an effect against the runtime's engine. */
-export const run = <A, E>(
-  runtime: WorldRuntime,
+/**
+ * The rune hooks' runtime: the {@link Client.Client} over the same engine,
+ * with the engine alongside for tests that drive push/pull directly.
+ */
+export type ClientWorldRuntime = ManagedRuntime.ManagedRuntime<
+  Client.Client | ClientEngine.ClientEngine,
+  never
+>;
+
+/** A fresh Client runtime per test. Dispose it when done. */
+export const makeClientRuntime = (): ClientWorldRuntime =>
+  ManagedRuntime.make(
+    Layer.effect(Client.Client)(
+      Effect.map(ClientEngine.ClientEngine, (engine) =>
+        Client.fromView(nodes, ClientView.fromEngine(engine))
+      )
+    ).pipe(Layer.provideMerge(engineLayer))
+  );
+
+/** Run an effect against the runtime's engine (any engine-carrying runtime). */
+export const run = <A, E, R = never>(
+  runtime: ManagedRuntime.ManagedRuntime<ClientEngine.ClientEngine | R, never>,
   f: (engine: ClientEngine.ClientEngine) => Effect.Effect<A, E>
 ): Promise<A> => runtime.runPromise(Effect.flatMap(ClientEngine.ClientEngine, f));
 

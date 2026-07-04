@@ -30,7 +30,7 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
-import { Effect, Ref, Stream } from "effect";
+import { Context, Effect, Ref, Stream } from "effect";
 import * as ClientEngine from "./ClientEngine.js";
 import type { ClientStore } from "./ClientStore.js";
 import type { ClientTransport } from "./Transport.js";
@@ -49,6 +49,8 @@ import type { Scope } from "effect";
 export type ResolvedRow = Related.RelatedRow;
 
 export interface Client {
+  /** The node graph this Client reads (bindings compile plans against it). */
+  readonly nodes: Node.NodeRegistry;
   /** Run a read once against the local replica (no subscription). */
   readonly query: (
     read: QueryModule.Read
@@ -199,6 +201,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
   };
 
   return {
+    nodes,
     query: queryOnce,
     observe,
     subscribe: (read) => acquire(Query.plan(nodes, read).root, "explicit"),
@@ -208,6 +211,12 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     view,
   };
 };
+
+/**
+ * The Client as a service — for runtimes and bindings that carry "the one
+ * per-thread object" in context (ADR-0022).
+ */
+export const Client = Context.Service<Client>("@legation/effect/Client");
 
 /** Options for a Client that owns its engine ({@link make}). */
 export interface MakeOptions {

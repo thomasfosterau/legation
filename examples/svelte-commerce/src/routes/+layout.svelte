@@ -14,7 +14,7 @@
     // svelte-ignore state_referenced_locally
     runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
   }
-  Runtime.setEngineRuntime(runtime ?? ssrStub());
+  Runtime.setClientRuntime(runtime ?? ssrStub());
 </script>
 
 <nav>

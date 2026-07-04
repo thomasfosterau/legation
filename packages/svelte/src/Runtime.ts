@@ -19,7 +19,7 @@
  */
 import { createRuntimeContext } from "@thomasfosterau/effect-svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
-import type { ClientView } from "@legation/effect";
+import type { Client, ClientView } from "@legation/effect";
 
 /** A runtime that can run {@link ClientView} effects. */
 export type EffectSyncRuntime = ManagedRuntime.ManagedRuntime<ClientView.ClientView, never>;
@@ -46,3 +46,29 @@ export const getEngineRuntime = (): EffectSyncRuntime =>
   // union); `setEngineRuntime` is its only writer and takes the managed
   // runtime, so the read narrows back to what was provided.
   context.get() as EffectSyncRuntime;
+
+/**
+ * A runtime carrying the {@link Client.Client} — ADR-0022's one-per-thread
+ * object. The rune hooks run over it: reads are declarative `Query.Read`s
+ * and where they are answered (replica, host, server fallthrough) is the
+ * Client's business, never the component's.
+ */
+export type ClientRuntime = ManagedRuntime.ManagedRuntime<Client.Client, never>;
+
+const clientContext = createRuntimeContext<Client.Client>(
+  "@legation/svelte — call setClientRuntime(runtime) higher in the component tree"
+);
+
+/**
+ * Provide the Client runtime to descendant components. Call once, high in
+ * the tree, before any rune hook.
+ */
+export const setClientRuntime = (runtime: ClientRuntime): void => {
+  clientContext.provide(runtime);
+};
+
+/** Read the Client runtime put in context by {@link setClientRuntime}. */
+export const getClientRuntime = (): ClientRuntime =>
+  // Narrowing as in {@link getEngineRuntime}: `setClientRuntime` is the
+  // only writer.
+  clientContext.get() as ClientRuntime;

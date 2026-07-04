@@ -1,24 +1,28 @@
 <script lang="ts">
-  import type { Subset } from "@legation/effect";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import type { Query } from "@legation/effect";
+  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
   import { useQuery } from "../../Runes.svelte.js";
 
   const {
     runtime,
-    subset,
+    read,
     initial,
   }: {
-    runtime: EffectSyncRuntime;
-    subset: Subset.Subset;
-    initial?: ReadonlyArray<{ readonly id: string; readonly value: unknown }>;
+    runtime: ClientRuntime;
+    read: Query.Read;
+    initial?: ReadonlyArray<{
+      readonly id: string;
+      readonly value: unknown;
+      readonly related: Record<string, unknown>;
+    }>;
   } = $props();
 
   // svelte-ignore state_referenced_locally
-  setEngineRuntime(runtime);
+  setClientRuntime(runtime);
 
   // svelte-ignore state_referenced_locally
   const rows = useQuery(
-    () => subset,
+    () => read,
     initial !== undefined ? { initial } : undefined
   );
 </script>
