@@ -1,0 +1,59 @@
+{
+  "name": "@legation/cloudflare",
+  "version": "0.1.0",
+  "description": "Cloudflare Workers reference topology for the legation sync engine: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "cloudflare",
+    "durable-objects",
+    "d1",
+    "sync-engine",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@legation/effect": "workspace:^",
+    "@legation/sql": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.84"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260704.1",
+    "effect": "catalog:"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/cloudflare"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/cloudflare#readme"
+}

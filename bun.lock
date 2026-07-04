@@ -195,6 +195,21 @@
         "effect": "4.0.0-beta.84",
       },
     },
+    "packages/cloudflare": {
+      "name": "@legation/cloudflare",
+      "version": "0.1.0",
+      "dependencies": {
+        "@legation/effect": "workspace:^",
+        "@legation/sql": "workspace:^",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^5.20260704.1",
+        "effect": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.84",
+      },
+    },
     "packages/effect": {
       "name": "@legation/effect",
       "version": "0.1.0",
@@ -406,6 +421,8 @@
 
     "@changesets/write": ["@changesets/write@0.4.0", "", { "dependencies": { "@changesets/types": "^6.1.0", "fs-extra": "^7.0.1", "human-id": "^4.1.1", "prettier": "^2.7.1" } }, "sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q=="],
 
+    "@cloudflare/workers-types": ["@cloudflare/workers-types@5.20260704.1", "", {}, "sha512-3yhiCWzlWjkwtvZCTrvppLTSTEY+HkaBHJ9EXOEbuA4WQduCbZxgbCnVq/AWyojHrvhYXtKpqWdHA3UIIX3POQ=="],
+
     "@csstools/color-helpers": ["@csstools/color-helpers@6.0.2", "", {}, "sha512-LMGQLS9EuADloEFkcTBR3BwV/CGHV7zyDxVRtVDTwdI2Ca4it0CCVTT9wCkxSgokjE5Ho41hEPgb8OEUwoXr6Q=="],
 
     "@csstools/css-calc": ["@csstools/css-calc@3.2.1", "", { "peerDependencies": { "@csstools/css-parser-algorithms": "^4.0.0", "@csstools/css-tokenizer": "^4.0.0" } }, "sha512-DtdHlgXh5ZkA43cwBcAm+huzgJiwx3ZTWVjBs94kwz2xKqSimDA3lBgCjphYgwgVUMWatSM0pDd8TILB1yrVVg=="],
@@ -521,6 +538,8 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@legation/browser": ["@legation/browser@workspace:packages/browser"],
+
+    "@legation/cloudflare": ["@legation/cloudflare@workspace:packages/cloudflare"],
 
     "@legation/effect": ["@legation/effect@workspace:packages/effect"],
 
