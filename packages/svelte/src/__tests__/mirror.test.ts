@@ -9,13 +9,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { ClientEngine, ClientView, Subset } from "@legation/effect";
+import { Client, ClientEngine, ClientView, Subset } from "@legation/effect";
 import { EngineHost, MirrorChannel, Mirror } from "@legation/effect";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
-import { buttonByLabel, collections, engineLayer, mutators, until } from "./world.js";
-import type { EffectSyncRuntime } from "../Runtime.js";
+import { buttonByLabel, collections, engineLayer, mutators, nodes, until } from "./world.js";
+import type { ClientRuntime, EffectSyncRuntime } from "../Runtime.js";
 
 const allTodos = Subset.make({ collection: "todos" });
 const text = () => document.body.textContent ?? "";
@@ -76,32 +76,36 @@ describe("bindings over a tab mirror (ADR-0021)", () => {
     await runtime.dispose();
   });
 
-  it("useRelated({ subscribe: true }) joins over a mirror-only runtime (host-resolved)", async () => {
-    const runtime = makeMirrorRuntime();
-    // Seed through the mirror: an author and a todo pointing at them.
+  it("an include join over a mirror-only Client resolves host-side", async () => {
+    // A Client over the mirror alone — no engine in this runtime at all.
+    const runtime: ClientRuntime = ManagedRuntime.make(
+      Layer.effect(Client.Client)(
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          const pair = yield* MirrorChannel.makeLoopbackPair;
+          yield* EngineHost.run({ channel: pair.host, engine, registry: collections });
+          const mirror = yield* Mirror.make({ channel: pair.mirror, mutators });
+          return Client.fromView(nodes, mirror);
+        })
+      ).pipe(Layer.provide(engineLayer))
+    );
+    // Seed through the Client: an author and a todo pointing at them.
     await runtime.runPromise(
-      Effect.flatMap(ClientView.ClientView, (view) =>
+      Effect.flatMap(Client.Client, (client) =>
         Effect.andThen(
-          view.mutate("user/set", { id: "u1", name: "Ada" }),
-          view.mutate("todo/set", { id: "1", title: "join", authorId: "u1" })
+          client.mutate("user/set", { id: "u1", name: "Ada" }),
+          client.mutate("todo/set", { id: "1", title: "join", authorId: "u1" })
         )
       )
     );
 
     const harness = mount(RunesRelatedHarness, {
       target: document.body,
-      props: {
-        runtime,
-        registry: collections,
-        collection: "todos",
-        subset: allTodos,
-        names: ["author"],
-        subscribe: true,
-      },
+      props: { runtime, read: { collection: "todos", include: { author: true } } },
     });
 
     // The host runs the reconcile loop AND the join; the tab renders the
-    // resolved rows it receives — no engine in this runtime at all.
+    // resolved rows it receives.
     await until(() => text().includes("join:Ada"));
     expect(text()).toContain("join:Ada");
 

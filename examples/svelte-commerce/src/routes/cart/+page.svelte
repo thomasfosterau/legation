@@ -1,21 +1,17 @@
 <script lang="ts">
-  import { useMutation, useRelated } from "@legation/svelte/Runes";
-  import { myCartItems, registry, type CartItem, type Variant } from "../../lib/domain.js";
+  import { useMutation, useQuery } from "@legation/svelte/Runes";
+  import { myCartItems, type CartItem, type Variant } from "../../lib/domain.js";
   import { cartItemRows, variantRows } from "../../lib/rows.js";
 
   const { data } = $props();
   const userId = $derived(data.user?.id);
 
-  // Live join: each cart line resolves its variant (name, price, stock) in
-  // the service-worker host; seeded from the JSON:API load.
+  // Live join: the read's `include` resolves each cart line's variant
+  // (name, price, stock) in the service-worker host; seeded from the
+  // JSON:API load.
   // svelte-ignore state_referenced_locally
-  const cart = useRelated(
-    () => ({
-      registry,
-      collection: "cartItems",
-      subset: myCartItems(userId ?? "anonymous"),
-      names: ["variant"],
-    }),
+  const cart = useQuery(
+    () => myCartItems(userId ?? "anonymous"),
     {
       initial: cartItemRows(data.lines).map((row) => {
         const variantId = (row.value as CartItem).variantId;

@@ -1,29 +1,30 @@
 <script lang="ts">
-  import { Aggregate, Predicate, Subset } from "@legation/effect";
+  import { Aggregate } from "@legation/effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
   import { useAggregate, useQuery } from "../../Runes.svelte.js";
 
   const {
     runtime,
     initial,
   }: {
-    runtime: EffectSyncRuntime;
-    initial?: ReadonlyArray<{ readonly id: string; readonly value: unknown }>;
+    runtime: ClientRuntime;
+    initial?: ReadonlyArray<{
+      readonly id: string;
+      readonly value: unknown;
+      readonly related: Record<string, unknown>;
+    }>;
   } = $props();
 
   // svelte-ignore state_referenced_locally
-  setEngineRuntime(runtime);
+  setClientRuntime(runtime);
 
-  // The hook's subset thunk reads reactive state: flipping `title` must
+  // The hook's read thunk reads reactive state: flipping `title` must
   // re-subscribe the query (the store API cannot do this).
   let title = $state("match");
   // svelte-ignore state_referenced_locally
-  const rows = useQuery(
-    () => Subset.make({ collection: "todos", where: Predicate.eq("title", title) }),
-    { initial }
-  );
-  const count = useAggregate(() => Subset.make({ collection: "todos" }), Aggregate.count);
+  const rows = useQuery(() => ({ collection: "todos", where: { title } }), { initial });
+  const count = useAggregate(() => ({ collection: "todos" }), Aggregate.count);
 
   const current = $derived(AsyncResult.getOrElse(rows.current, () => []));
 </script>

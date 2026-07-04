@@ -2,27 +2,26 @@
  * Tab boot — the thin side of ADR-0010's deployment.
  *
  * The engine, its IndexedDB store, and the sync transport all live in the
- * service worker (src/service-worker.ts). A tab holds only a `Mirror`
- * over the shared BroadcastChannel: the bindings' runtime provides it as
- * the `ClientView`, so every hook — queries, aggregates, named queries,
- * auto-subscribing joins, mutations — talks to the worker and the main
- * thread does little besides rendering.
+ * service worker (src/service-worker.ts). A tab holds only a `Client`
+ * joined to the worker's engine over the shared BroadcastChannel
+ * (ADR-0022): the rune hooks read it from context, so every read and
+ * mutation talks to the worker and the main thread does little besides
+ * rendering.
  *
  * Boot also (1) broadcasts the config handshake that starts the worker's
- * engine (the worker can't read the client-group cookie) and (2) registers
- * the shell's subsets — subscriptions are client state, refcounted per mirror
+ * engine (the worker can't read the client-group cookie) and (2) pins the
+ * shell's reads — subscriptions are client state, refcounted per mirror
  * by the host.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { Client, ClientView } from "@legation/effect";
+import { Client } from "@legation/effect";
 import { BroadcastMirrorChannel, ServiceWorkerHost } from "@legation/browser";
 import type { Runtime } from "@legation/svelte";
-type EffectSyncRuntime = Runtime.EffectSyncRuntime;
 import { mutators, nodes, shellReads } from "./domain.js";
 
-export type AppRuntime = EffectSyncRuntime;
+export type AppRuntime = Runtime.ClientRuntime;
 
-/** Build the tab's mirror runtime once (call from the root layout). */
+/** Build the tab's Client runtime once (call from the root layout). */
 export const boot = (options: {
   readonly clientGroupId: string;
   readonly userId: string | undefined;
@@ -33,20 +32,17 @@ export const boot = (options: {
     if (info !== undefined) console.warn(`[legation-sw] ${info}`);
   });
   const runtime = ManagedRuntime.make(
-    Layer.effect(ClientView.ClientView)(
+    Layer.effect(Client.Client)(
       Effect.gen(function* () {
         const channel = yield* BroadcastMirrorChannel.make(
           ServiceWorkerHost.defaultChannelName
         );
-        // The Client joins the worker-hosted engine over the channel
-        // (ADR-0022); the bindings still consume its view until the
-        // program's bindings step moves them onto the Client itself.
         const client = yield* Client.connect({ nodes, mutations: mutators, channel });
         // Boot-time shell pins; a failure here is a bug, not app state.
         yield* Effect.forEach(shellReads(options.userId), (read) => client.subscribe(read), {
           discard: true,
         }).pipe(Effect.orDie);
-        return client.view;
+        return client;
       })
     )
   );
@@ -62,7 +58,7 @@ export const boot = (options: {
     config.close();
   }, 20_000);
   // Touch the runtime so the Client (and its shell subscriptions) boot now.
-  void runtime.runPromise(Effect.asVoid(ClientView.ClientView)).catch(() => undefined);
+  void runtime.runPromise(Effect.asVoid(Client.Client)).catch(() => undefined);
   if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
   return runtime;
 };
@@ -81,4 +77,3 @@ export const ssrStub = (): AppRuntime =>
       );
     },
   });
-

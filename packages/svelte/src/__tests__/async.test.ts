@@ -8,12 +8,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import { Effect } from "effect";
-import { Subset } from "@legation/effect";
+import type { Query } from "@legation/effect";
 import AsyncQueryHarness from "./fixtures/AsyncQueryHarness.svelte";
-import { makeRuntime, run, until } from "./world.js";
+import { makeClientRuntime, run, until } from "./world.js";
 
-const allTodos = Subset.make({ collection: "todos" });
+const allTodos: Query.Read = { collection: "todos" };
 const text = () => document.body.textContent ?? "";
 
 afterEach(() => {
@@ -22,12 +21,11 @@ afterEach(() => {
 
 describe("Async Svelte over Live.promise", () => {
   it("suspends the boundary until first data, then updates without re-pending", async () => {
-    const runtime = makeRuntime();
-    await run(runtime, (engine) => engine.subscribe(allTodos));
+    const runtime = makeClientRuntime();
 
     const harness = mount(AsyncQueryHarness, {
       target: document.body,
-      props: { runtime, subset: allTodos },
+      props: { runtime, read: allTodos },
     });
 
     // Before the first emission the boundary shows its pending snippet.
@@ -49,18 +47,18 @@ describe("Async Svelte over Live.promise", () => {
   });
 
   it("keeps SSR-style initial seeds synchronous while the live stream takes over", async () => {
-    const runtime = makeRuntime();
+    const runtime = makeClientRuntime();
     await run(runtime, (engine) =>
-      Effect.andThen(
-        engine.subscribe(allTodos),
-        engine.mutate("todo/set", { id: "1", title: "seeded", authorId: "u1" })
-      )
+      engine.mutate("todo/set", { id: "1", title: "seeded", authorId: "u1" })
     );
-    const seeded = await run(runtime, (engine) => engine.query(allTodos));
 
     const harness = mount(AsyncQueryHarness, {
       target: document.body,
-      props: { runtime, subset: allTodos, initial: seeded },
+      props: {
+        runtime,
+        read: allTodos,
+        initial: [{ id: "1", value: { id: "1", title: "seeded", authorId: "u1" }, related: {} }],
+      },
     });
 
     // The seed resolves the promise synchronously — no pending snippet even

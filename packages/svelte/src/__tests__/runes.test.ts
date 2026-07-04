@@ -1,18 +1,17 @@
 /**
- * Rune-based hooks (`@legation/svelte/runes`) in mounted Svelte 5 components:
- * `useQuery` re-subscribes when its thunk's reactive inputs change (keeping
- * the previous value as a waiting result), `useAggregate` tracks counts, and
- * `useRelated` resolves declared relationships live — including the
- * `subscribe: true` variant that syncs its own subsets.
+ * Rune-based hooks (`@legation/svelte/Runes`) in mounted Svelte 5
+ * components, speaking Query over the Client (ADR-0022): `useQuery`
+ * re-subscribes when its read thunk's reactive inputs change (keeping the
+ * previous value as a waiting result), `useAggregate` tracks counts, and
+ * `include` resolves edges live — the hook subscribes its own windows, so
+ * server-side rows arrive without any manual registration.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import { Subset } from "@legation/effect";
 import RunesQueryHarness from "./fixtures/RunesQueryHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
-import { buttonByLabel, collections, makeRuntime, run, until } from "./world.js";
+import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
 
-const allTodos = Subset.make({ collection: "todos" });
 const text = () => document.body.textContent ?? "";
 
 afterEach(() => {
@@ -21,7 +20,7 @@ afterEach(() => {
 
 describe("rune hooks", () => {
   it("useQuery re-subscribes on reactive input change; useAggregate stays live", async () => {
-    const runtime = makeRuntime();
+    const runtime = makeClientRuntime();
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "1", title: "match" }));
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "2", title: "other" }));
 
@@ -32,12 +31,12 @@ describe("rune hooks", () => {
     await until(() => text().includes("count:2"));
     await until(() => text().includes("state:Success") && !text().includes(":waiting"));
 
-    // Flip the reactive input: the hook re-subscribes to the new subset.
+    // Flip the reactive input: the hook re-subscribes to the new read.
     buttonByLabel("switch").click();
     await until(() => text().includes("row:other"));
     expect(text()).not.toContain("row:match");
 
-    // A mutation matching the new subset re-emits.
+    // A mutation matching the new read re-emits.
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "3", title: "other" }));
     await until(() => text().includes("count:3"));
 
@@ -46,12 +45,12 @@ describe("rune hooks", () => {
   });
 
   it("initial seeds a synchronous Success before the first emission", async () => {
-    const runtime = makeRuntime();
+    const runtime = makeClientRuntime();
     const app = mount(RunesQueryHarness, {
       target: document.body,
       props: {
         runtime,
-        initial: [{ id: "s1", value: { id: "s1", title: "match" } }],
+        initial: [{ id: "s1", value: { id: "s1", title: "match" }, related: {} }],
       },
     });
 
@@ -73,8 +72,8 @@ describe("rune hooks", () => {
     await runtime.dispose();
   });
 
-  it("useRelated joins declared relationships and re-emits on foreign writes", async () => {
-    const runtime = makeRuntime();
+  it("include joins edges and re-emits on foreign writes", async () => {
+    const runtime = makeClientRuntime();
     await run(runtime, (engine) => engine.mutate("user/set", { id: "u1", name: "Ada" }));
     await run(runtime, (engine) =>
       engine.mutate("todo/set", { id: "1", title: "seed", authorId: "u1" })
@@ -82,13 +81,7 @@ describe("rune hooks", () => {
 
     const app = mount(RunesRelatedHarness, {
       target: document.body,
-      props: {
-        runtime,
-        registry: collections,
-        collection: "todos",
-        subset: allTodos,
-        names: ["author"],
-      },
+      props: { runtime, read: { collection: "todos", include: { author: true } } },
     });
 
     await until(() => text().includes("seed:Ada"));
@@ -100,8 +93,8 @@ describe("rune hooks", () => {
     await runtime.dispose();
   });
 
-  it("useRelated with subscribe: true syncs its own subsets from the backend", async () => {
-    const runtime = makeRuntime();
+  it("observing subscribes: server-side rows arrive without manual registration", async () => {
+    const runtime = makeClientRuntime();
     // Rows exist server-side only: the hook must subscribe + pull itself.
     await run(runtime, (engine) => engine.mutate("user/set", { id: "u1", name: "Ada" }));
     await run(runtime, (engine) =>
@@ -111,14 +104,7 @@ describe("rune hooks", () => {
 
     const app = mount(RunesRelatedHarness, {
       target: document.body,
-      props: {
-        runtime,
-        registry: collections,
-        collection: "todos",
-        subset: allTodos,
-        names: ["author"],
-        subscribe: true,
-      },
+      props: { runtime, read: { collection: "todos", include: { author: true } } },
     });
 
     await until(() => text().includes("seed:Ada"));

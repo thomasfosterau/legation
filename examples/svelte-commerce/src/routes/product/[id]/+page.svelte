@@ -1,10 +1,10 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
-  import { Aggregate, Predicate, Subset } from "@legation/effect";
-  import { useAggregate, useMutationWithAck, useRelated } from "@legation/svelte/Runes";
+  import { Aggregate } from "@legation/effect";
+  import { useAggregate, useMutationWithAck, useQuery } from "@legation/svelte/Runes";
   import {
-    productById,
-    registry,
+    productDetail,
+    productReviews,
     type Product,
     type Review,
     type Seller,
@@ -14,20 +14,15 @@
 
   const { data } = $props();
 
-  // A live join over declared relationships: variants, reviews and the
-  // seller resolve in the ENGINE HOST (the service worker — this tab only
-  // receives resolved rows) and re-emit when any of them change. Reactive
-  // to route changes through the thunk; seeded by the JSON:API load.
+  // A live join over the read's `include`d edges: variants, reviews and
+  // the seller resolve in the ENGINE HOST (the service worker — this tab
+  // only receives resolved rows) and re-emit when any of them change.
+  // Reactive to route changes through the thunk; seeded by the JSON:API
+  // load. Observing IS subscribing — the hook registers its own windows.
   // svelte-ignore state_referenced_locally
-  const detail = useRelated(
-    () => ({
-      registry,
-      collection: "products",
-      subset: productById(kitPage.params.id!),
-      names: ["variants", "reviews", "seller"],
-    }),
+  const detail = useQuery(
+    () => productDetail(kitPage.params.id!),
     {
-      subscribe: true,
       initial: [
         {
           ...toRow(data.product, ["category", "seller"]),
@@ -44,11 +39,7 @@
   // Live average rating over this product's synced reviews.
   // svelte-ignore state_referenced_locally
   const rating = useAggregate(
-    () =>
-      Subset.make({
-        collection: "reviews",
-        where: Predicate.eq("productId", kitPage.params.id!),
-      }),
+    () => productReviews(kitPage.params.id!),
     Aggregate.avg("rating"),
     {
       initial:

@@ -1,34 +1,33 @@
 /**
  * Rune-based live queries (Svelte 5)
  *
- * The `use*` hooks bridge live queries to Svelte 5 runes: each returns an
- * object whose reactive `current` is an `AsyncResult` (the same result
- * vocabulary as the engine's reactivity atoms and the React binding). Inputs
- * are thunks called inside `$effect`, so a hook re-subscribes whenever the
- * reactive state its thunk reads changes — a paginated subset whose cursor
- * lives in `$state` just works — while the previous value is kept visible as
- * a waiting result (stale-while-revalidate).
+ * The `use*` hooks speak **Query over the Client** (ADR-0022): reads are
+ * declarative `Query.Read`s — collection, `where`, `include`d edges with
+ * per-edge windows, `order`, cursor pagination — and where a read is
+ * answered (replica, worker-hosted engine, server fallthrough) is the
+ * Client's business, never the component's. Each hook returns an object
+ * whose reactive `current` is an `AsyncResult` (the same result vocabulary
+ * as the engine's reactivity atoms and the React binding), plus an
+ * awaitable `promise` for Async Svelte. Inputs are thunks called inside
+ * `$effect`, so a hook re-subscribes whenever the reactive state its thunk
+ * reads changes — a read whose cursor lives in `$state` just works — while
+ * the previous value stays visible as a waiting result
+ * (stale-while-revalidate).
  *
- * Import from `@legation/svelte/runes` (requires Svelte 5; the classic
- * `Readable` stores on the package root remain for Svelte 4). Like the
- * stores, hooks must be called during component initialisation — they read
- * the engine runtime from context ({@link setEngineRuntime}) and register a
- * `$effect`.
+ * Joins need no separate hook: `include` resolves edges onto each row
+ * (`row.related`), windowed per the edge's declared order (ADR-0024), over
+ * owned and worker-hosted engines alike.
+ *
+ * Import from `@legation/svelte/Runes` (requires Svelte 5; the classic
+ * `Readable` stores on the package root remain for Svelte 4). Hooks must
+ * be called during component initialisation — they read the Client runtime
+ * from context ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Stream } from "effect";
 import type { AsyncResult } from "effect/unstable/reactivity";
-import {
-  Aggregate,
-  ClientEngine,
-  ClientView,
-  type Collection,
-  Related,
-  type Subset,
-} from "@legation/effect";
-import { getEngineRuntime, type EffectSyncRuntime } from "./Runtime.js";
-import { getMutate, getMutateWithAck } from "./Mutation.js";
-import type { Rows } from "./Query.js";
+import { Aggregate, Client, ClientEngine, Query } from "@legation/effect";
+import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
 export interface Live<A, E = never> {
@@ -59,32 +58,31 @@ export interface LiveOptions<A> {
    * Seed `current` with a synchronous `Success` before the first emission —
    * during SSR (where `$effect` never runs) this is what renders, and on the
    * client it makes the first render match the server markup (no loading
-   * flash). Compute it from the page's hydration snapshot, e.g. with
-   * `Hydration.rowsFor(snapshot, subset)`.
+   * flash). Compute it from the rows the page's load already fetched.
    */
   readonly initial?: A;
 }
 
-/** The error channel of view reads (engine or mirror). */
-export type LiveError = ClientView.ClientViewError;
+/** The rows a read resolves to: node values with their included edges. */
+export type ResolvedRows = ReadonlyArray<Client.ResolvedRow>;
 
 /**
  * Core plumbing — effect-svelte's `useLiveStream` does the work (thunk
  * tracked inside `$effect`, interrupt-and-resubscribe on input change with
  * the previous value kept as a waiting result, emissions in `$state.raw`,
  * teardown interruption never surfacing as a failure, `initial` seeding a
- * synchronous `Success`). This adapter resolves the engine view from the
+ * synchronous `Success`). This adapter resolves the Client from the
  * context runtime and keeps the SSR seam below.
  */
 const live = <A, E>(
-  runtime: EffectSyncRuntime,
-  makeStream: () => (view: ClientView.ClientView) => Stream.Stream<A, E>,
+  runtime: ClientRuntime,
+  makeStream: () => (client: Client.Client) => Stream.Stream<A, E>,
   options?: LiveOptions<A>
 ): Live<A, E> => {
   const result = useLiveStream(
     () => {
       const toStream = makeStream();
-      return Stream.unwrap(Effect.map(ClientView.ClientView, (view) => toStream(view)));
+      return Stream.unwrap(Effect.map(Client.Client, (client) => toStream(client)));
     },
     { runtime, ...(options?.initial === undefined ? {} : { initial: options.initial }) }
   );
@@ -107,122 +105,103 @@ const live = <A, E>(
 };
 
 /**
- * Live result of a subset, re-subscribing when the thunk's reactive inputs
- * change. A {@link Subset.TypedSubset} refines the rows to its row type.
+ * Live result of a declarative read, re-subscribing when the thunk's
+ * reactive inputs change. `include`d edges resolve onto each row's
+ * `related`, windowed per the edge's declared order (ADR-0024). Observing
+ * IS subscribing: the read's windows are registered for the hook's
+ * lifetime through the Client's ledger.
  */
-export function useQuery<A>(
-  subset: () => Subset.TypedSubset<A>,
-  options?: LiveOptions<ReadonlyArray<ClientEngine.TypedRow<A>>>
-): Live<ReadonlyArray<ClientEngine.TypedRow<A>>, LiveError>;
-export function useQuery(
-  subset: () => Subset.Subset,
-  options?: LiveOptions<Rows>
-): Live<Rows, LiveError>;
-export function useQuery(
-  subset: () => Subset.Subset,
-  options?: LiveOptions<Rows>
-): Live<Rows, LiveError> {
-  return live(
-    getEngineRuntime(),
+export const useQuery = (
+  read: () => Query.Read,
+  options?: LiveOptions<ResolvedRows>
+): Live<ResolvedRows> =>
+  live(
+    getClientRuntime(),
     () => {
-      const value = subset();
-      return (view) => view.observe(value);
+      const value = read();
+      return (client) => client.observe(value);
     },
     options
   );
-}
 
-/** Live result of a named query (Query.ts), with reactive name/args. */
+/** Live result of a named query (server-resolved), with reactive name/args. */
 export const useNamedQuery = (
   query: () => { readonly name: string; readonly args: unknown },
-  options?: LiveOptions<Rows>
-): Live<Rows, LiveError> =>
+  options?: LiveOptions<ReadonlyArray<ClientEngine.LocalRow>>
+): Live<ReadonlyArray<ClientEngine.LocalRow>> =>
   live(
-    getEngineRuntime(),
+    getClientRuntime(),
     () => {
       const { name, args } = query();
-      return (view) => view.observeNamed(name, args);
+      return (client) => client.view.observeNamed(name, args).pipe(Stream.orDie);
     },
     options
   );
 
 /**
- * Live aggregate over a subset (count/sum/min/max/avg). Local tier only —
- * the aggregate sees the rows this client has synced.
+ * Live aggregate over a read's root window (count/sum/min/max/avg). Local
+ * tier only — the aggregate sees the rows this client has synced.
  */
 export const useAggregate = (
-  subset: () => Subset.Subset,
+  read: () => Query.Read,
   aggregate: Aggregate.Aggregate,
   options?: LiveOptions<Aggregate.AggregateValue>
-): Live<Aggregate.AggregateValue, LiveError> =>
+): Live<Aggregate.AggregateValue> =>
   live(
-    getEngineRuntime(),
+    getClientRuntime(),
     () => {
-      const value = subset();
-      return (view) => Aggregate.observe(view.observe(value), aggregate);
+      const value = read();
+      return (client) =>
+        Aggregate.observe(
+          client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
+          aggregate
+        );
     },
     options
   );
 
-/** Live grouped aggregate over a subset, keyed by `String(row.value[groupBy])`. */
+/** Live grouped aggregate over a read's root window, keyed by `String(row.value[groupBy])`. */
 export const useAggregateGrouped = (
-  subset: () => Subset.Subset,
+  read: () => Query.Read,
   aggregate: Aggregate.Aggregate,
   groupBy: string,
   options?: LiveOptions<Record<string, Aggregate.AggregateValue>>
-): Live<Record<string, Aggregate.AggregateValue>, LiveError> =>
+): Live<Record<string, Aggregate.AggregateValue>> =>
   live(
-    getEngineRuntime(),
+    getClientRuntime(),
     () => {
-      const value = subset();
-      return (view) => Aggregate.observeGrouped(view.observe(value), aggregate, groupBy);
-    },
-    options
-  );
-
-/** Reactive inputs of {@link useRelated}. */
-export interface RelatedInputs {
-  readonly registry: Collection.CollectionRegistry;
-  readonly collection: string;
-  readonly subset: Subset.Subset;
-  readonly names: ReadonlyArray<string>;
-}
-
-/**
- * Live join over a subset's declared relationships. By default it reads the
- * mirror ({@link Related.observe} — the base and foreign collections must
- * already be subscribed); with `subscribe: true` it syncs the base and the
- * narrowed foreign subsets itself and tears the subscriptions down on
- * unmount ({@link Related.related}).
- */
-export const useRelated = (
-  inputs: () => RelatedInputs,
-  options?: LiveOptions<ReadonlyArray<Related.RelatedRow>> & { readonly subscribe?: boolean }
-): Live<ReadonlyArray<Related.RelatedRow>> =>
-  live(
-    getEngineRuntime(),
-    () => {
-      const { registry, collection, subset, names } = inputs();
-      return options?.subscribe === true
-        ? // Auto-subscription registers with the view's host (the engine
-          // directly, or a mirror's host over the protocol); `Stream.unwrap`
-          // scopes the registration to the stream's lifetime: interrupting
-          // the hook's fiber releases it.
-          (view) => Stream.unwrap(view.related(registry, collection, subset, names))
-        : (view) => Related.observe(view, registry, collection, subset, names);
+      const value = read();
+      return (client) =>
+        Aggregate.observeGrouped(
+          client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
+          aggregate,
+          groupBy
+        );
     },
     options
   );
 
 /**
- * A `mutate(mutator, args)` bound to the context runtime, resolving on
- * journal (rune-module alias of `getMutate`).
+ * A `mutate(mutation, args)` bound to the context Client, resolving on
+ * journal (the write is applied optimistically before the promise settles).
  */
-export const useMutation = getMutate;
+export const useMutation = (): ((mutation: string, args: unknown) => Promise<void>) => {
+  const runtime = getClientRuntime();
+  return (mutation, args) =>
+    runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.mutate(mutation, args)));
+};
 
 /**
  * Like {@link useMutation}, but resolving with the mutation's authoritative
- * outcome once the backend settles it (rune-module alias of
- * `getMutateWithAck`).
+ * outcome once the backend settles it.
  */
-export const useMutationWithAck = getMutateWithAck;
+export const useMutationWithAck = (): ((
+  mutation: string,
+  args: unknown
+) => Promise<ClientEngine.MutationOutcome>) => {
+  const runtime = getClientRuntime();
+  return (mutation, args) =>
+    runtime.runPromise(
+      Effect.flatMap(Client.Client, (client) => client.mutateWithAck(mutation, args))
+    );
+};

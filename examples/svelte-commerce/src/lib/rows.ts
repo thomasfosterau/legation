@@ -21,6 +21,8 @@ interface ResourceLike {
 export interface RowSeed {
   readonly id: string;
   readonly value: unknown;
+  /** Included edges, when the seed feeds a read with `include`. */
+  readonly related: Record<string, unknown>;
 }
 
 const refId = (resource: ResourceLike, name: string): string | undefined => {
@@ -42,6 +44,7 @@ export const toRow = (resource: ResourceLike, refs: ReadonlyArray<string> = []):
       })
     ),
   },
+  related: {},
 });
 
 export const productRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
