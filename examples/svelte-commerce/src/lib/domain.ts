@@ -207,11 +207,15 @@ export const allSellers: Query.Read = { collection: "sellers" };
 export const allVariants: Query.Read = { collection: "variants" };
 export const allReviews: Query.Read = { collection: "reviews" };
 
-/** One product with its detail-page edges resolved. */
+/**
+ * One product with its detail-page edges resolved. Reviews are NOT included
+ * here — the detail page pages them with a `useConnection` over
+ * {@link productReviews}, so the window (not the whole feed) is what syncs.
+ */
 export const productDetail = (id: string): Query.Read => ({
   collection: "products",
   where: { id },
-  include: { variants: true, reviews: true, seller: true },
+  include: { variants: true, seller: true },
 });
 
 /** One catalog page: ordered by id, cursor + limit windowed. */

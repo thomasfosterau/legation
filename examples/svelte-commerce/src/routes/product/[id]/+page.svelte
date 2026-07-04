@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
   import { Aggregate } from "@legation/effect";
-  import { useAggregate, useMutationWithAck, useQuery } from "@legation/svelte/Runes";
+  import { useAggregate, useConnection, useMutationWithAck, useQuery } from "@legation/svelte/Runes";
   import {
     productDetail,
     productReviews,
@@ -10,7 +10,7 @@
     type Seller,
     type Variant,
   } from "../../../lib/domain.js";
-  import { toRow, variantRows } from "../../../lib/rows.js";
+  import { reviewRows, toRow, variantRows } from "../../../lib/rows.js";
 
   const { data } = $props();
 
@@ -28,13 +28,23 @@
           ...toRow(data.product, ["category", "seller"]),
           related: {
             variants: variantRows(data.variants).map((row) => row.value),
-            reviews: data.reviews.map((review) => toRow(review, ["product"]).value),
             seller: null,
           },
         },
       ],
     }
   );
+
+  // This product's reviews as a growing connection (ADR-0024): "Load more"
+  // widens the one window a page at a time, so only the shown reviews sync —
+  // not the whole feed. Seeded from the JSON:API load for a flash-free first
+  // paint. Each product page owns its own connection, so paging is per-parent.
+  const REVIEW_PAGE = 3;
+  // svelte-ignore state_referenced_locally
+  const reviews = useConnection(() => productReviews(kitPage.params.id!), {
+    pageSize: REVIEW_PAGE,
+    initial: reviewRows(data.reviews).slice(0, REVIEW_PAGE),
+  });
 
   // Live average rating over this product's synced reviews.
   // svelte-ignore state_referenced_locally
@@ -68,7 +78,6 @@
   {@const row = (await detail.promise)[0]}
   {@const product = row?.value as Product | undefined}
   {@const variants = (row?.related["variants"] as ReadonlyArray<Variant>) ?? []}
-  {@const reviews = (row?.related["reviews"] as ReadonlyArray<Review>) ?? []}
   {@const seller = row?.related["seller"] as Seller | null}
 
   {#if product}
@@ -102,12 +111,18 @@
       {/each}
     </ul>
 
-    <h2>Reviews ({reviews.length})</h2>
+    <h2>Reviews</h2>
     <ul>
-      {#each reviews as review (review.id)}
+      {#each await reviews.promise as reviewRow (reviewRow.id)}
+        {@const review = reviewRow.value as Review}
         <li>{review.rating}/5 — {review.body} — {review.authorName}</li>
       {/each}
     </ul>
+    {#if reviews.hasMore}
+      <button onclick={reviews.loadMore} disabled={reviews.loading}>
+        {reviews.loading ? "Loading…" : "Load more reviews"}
+      </button>
+    {/if}
 
     {#if data.user}
       <form method="post" action="?/review">
