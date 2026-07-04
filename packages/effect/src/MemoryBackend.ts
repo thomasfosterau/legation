@@ -226,6 +226,9 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       mutations: ReadonlyArray<Mutation>
     ): Effect.Effect<ApplyResult, BackendError> =>
       Effect.gen(function* () {
+        // Pre-batch snapshot: the old values fine-grained fan-out derives
+        // moved-away topics from (ADR-0023).
+        const before = yield* Ref.get(state);
         const touched = new Map<string, Set<string>>();
         const puts = new Map<string, Map<string, unknown>>();
         const rejected: Array<RejectedMutation> = [];
@@ -233,7 +236,18 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           yield* applyOne(context, mutation, touched, puts, rejected);
         }
         const final = yield* Ref.get(state);
-        const hints = buildChangeHints(touched, puts);
+        const olds = new Map<string, Map<string, unknown>>();
+        for (const [collection, ids] of touched) {
+          const rows = before.rows.get(collection);
+          if (rows === undefined) continue;
+          const map = new Map<string, unknown>();
+          for (const id of ids) {
+            const row = rows.get(id);
+            if (row !== undefined) map.set(id, row.value);
+          }
+          if (map.size > 0) olds.set(collection, map);
+        }
+        const hints = buildChangeHints(touched, puts, olds);
         return {
           lastMutationIds: Object.fromEntries(
             final.lastMutationIds.get(context.clientGroupId) ?? new Map()
