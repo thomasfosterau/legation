@@ -12,7 +12,8 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import type { IndexedDb } from "@effect/platform-browser";
-import { ClientEngine, RpcTransport, Transport } from "@legation/effect";
+import { Transport } from "@legation/effect";
+import { ClientEngine, RpcTransport } from "@legation/effect/internal";
 import { BrowserConnectivity, IndexedDbClientStore, ServiceWorkerHost } from "@legation/browser";
 import { mutators, registry } from "./domain.js";
 

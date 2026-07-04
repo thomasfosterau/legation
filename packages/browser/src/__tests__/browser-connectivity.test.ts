@@ -8,16 +8,12 @@
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  Subset,
-  SyncServer,
   Transport,
 } from "@legation/effect";
+import { ClientEngine, Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Ref, Schema, Scope, Stream } from "effect";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";

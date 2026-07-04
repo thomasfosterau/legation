@@ -17,14 +17,8 @@ import { Duration, Effect, Layer, Scope } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import {
-  Authorization,
-  Backend,
-  ClientEngine,
-  ClientStore,
-  SyncRoom,
-  Transport,
-} from "@legation/effect";
+import { Authorization, Backend, ClientStore, Transport } from "@legation/effect";
+import { ClientEngine, SyncRoom } from "@legation/effect/internal";
 import { reflectResources, type ResourceMap } from "./Convention.js";
 import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";

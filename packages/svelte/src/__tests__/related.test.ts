@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import { Subset } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 import RelatedHarness from "./fixtures/RelatedHarness.svelte";
 import { collections, makeRuntime, run, until } from "./world.js";
 

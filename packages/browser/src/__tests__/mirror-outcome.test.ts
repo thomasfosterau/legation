@@ -7,19 +7,21 @@
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
+  MemoryBackend,
+  MutationRejected,
+  Mutator,
+  Transport,
+} from "@legation/effect";
+import {
+  ClientEngine,
   Cvr,
   EngineHost,
   InvalidationBus,
-  MemoryBackend,
   MirrorChannel,
-  MutationRejected,
-  Mutator,
   SyncServer,
   Mirror,
-  Transport,
-} from "@legation/effect";
+} from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema } from "effect";
 

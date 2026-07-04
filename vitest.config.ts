@@ -6,6 +6,9 @@ const pkg = (name: string) =>
   fileURLToPath(new URL(`packages/${name}/src/index.ts`, import.meta.url));
 
 const alias = {
+  "@legation/effect/internal": fileURLToPath(
+    new URL("packages/effect/src/internal.ts", import.meta.url)
+  ),
   "@legation/effect": pkg("effect"),
   "@legation/browser": pkg("browser"),
   "@legation/node": pkg("node"),

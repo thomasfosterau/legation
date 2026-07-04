@@ -24,7 +24,8 @@
  * ```
  */
 
-import { ClientEngine, type Collection, EngineHost } from "@legation/effect";
+import { type Collection } from "@legation/effect";
+import { ClientEngine, EngineHost } from "@legation/effect/internal";
 import { Effect, Scope } from "effect";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 

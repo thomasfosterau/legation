@@ -14,14 +14,8 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, Stream } from "effect";
-import {
-  Aggregate,
-  ClientEngine,
-  ClientView,
-  type Collection,
-  Related,
-  type Subset,
-} from "@legation/effect";
+import { Aggregate, type Collection } from "@legation/effect";
+import { ClientEngine, ClientView, Related, type Subset } from "@legation/effect/internal";
 import { getEngineRuntime, type EffectSyncRuntime } from "./Runtime.js";
 
 /** A live query snapshot: the materialised rows (confirmed + overlay). */

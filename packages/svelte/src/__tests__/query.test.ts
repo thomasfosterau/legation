@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import { Subset } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import NamedQueryHarness from "./fixtures/NamedQueryHarness.svelte";
 import { makeRuntime, run, until } from "./world.js";

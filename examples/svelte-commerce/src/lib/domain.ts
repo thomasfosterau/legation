@@ -22,7 +22,7 @@
  * fine fan-out topics can use the same field.
  */
 import { Effect, Schema } from "effect";
-import { Edge, Mutator, Node, type Query } from "@legation/effect";
+import { Edge, Mutation, Node, type Query } from "@legation/effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -315,9 +315,9 @@ export type OrderPlace = typeof OrderPlaceArgs.Type;
 export const ReviewWriteArgs = ReviewSchema;
 export const ProfileUpdateArgs = ProfileSchema;
 
-export const mutators = Mutator.registry([
+export const mutators = Mutation.registry([
   {
-    mutator: Mutator.make("cart/add", CartAddArgs),
+    mutator: Mutation.make("cart/add", CartAddArgs),
     local: (args, writer) =>
       writer.put("cartItems", args.id, {
         id: args.id,
@@ -327,7 +327,7 @@ export const mutators = Mutator.registry([
       } satisfies CartItem),
   },
   {
-    mutator: Mutator.make("cart/setQty", CartSetQtyArgs),
+    mutator: Mutation.make("cart/setQty", CartSetQtyArgs),
     // Re-runnable on every rebase: read the current row, write the new qty.
     local: (args, writer) =>
       Effect.flatMap(writer.get("cartItems", args.id), (current) =>
@@ -337,11 +337,11 @@ export const mutators = Mutator.registry([
       ),
   },
   {
-    mutator: Mutator.make("cart/remove", CartRemoveArgs),
+    mutator: Mutation.make("cart/remove", CartRemoveArgs),
     local: (args, writer) => writer.del("cartItems", args.id),
   },
   {
-    mutator: Mutator.make("order/place", OrderPlaceArgs),
+    mutator: Mutation.make("order/place", OrderPlaceArgs),
     local: (args, writer) =>
       Effect.gen(function* () {
         const total = args.items.reduce((sum: number, item: { priceCents: number; qty: number }) => sum + item.priceCents * item.qty, 0);
@@ -366,11 +366,11 @@ export const mutators = Mutator.registry([
       }),
   },
   {
-    mutator: Mutator.make("review/write", ReviewWriteArgs),
+    mutator: Mutation.make("review/write", ReviewWriteArgs),
     local: (args, writer) => writer.put("reviews", args.id, args),
   },
   {
-    mutator: Mutator.make("profile/update", ProfileUpdateArgs),
+    mutator: Mutation.make("profile/update", ProfileUpdateArgs),
     local: (args, writer) => writer.put("profiles", args.id, args),
   },
 ]);

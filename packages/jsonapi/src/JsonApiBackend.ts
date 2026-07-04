@@ -34,8 +34,9 @@
 import { Effect, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import { Backend, BackendError, Hash, MutationRejected, Predicate } from "@legation/effect";
-import { Subset } from "@legation/effect";
+import { Backend, BackendError, MutationRejected, Predicate } from "@legation/effect";
+import { Hash } from "@legation/effect/internal";
+import { Subset } from "@legation/effect/internal";
 import type { Mutator } from "@legation/effect";
 import { documentToRows, parseResponse } from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";

@@ -9,19 +9,14 @@ import { Effect, Schema, Stream } from "effect";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  Cvr,
   Edge,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
   Node,
-  Related,
-  Subset,
-  SyncServer,
   Transport,
 } from "../index.js";
+import { ClientEngine, Cvr, InvalidationBus, Related, Subset, SyncServer } from "../internal.js";
 
 const Category = Node.make("categories", {
   attributes: { name: Schema.String },

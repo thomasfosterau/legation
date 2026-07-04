@@ -22,7 +22,7 @@
  * `PullCompleted` event, not off `ViewRebuilt` alone.
  */
 
-import type { ClientEngine, HttpCache } from "@legation/effect";
+import type { ClientEngine, HttpCache } from "@legation/effect/internal";
 import { Effect, Stream } from "effect";
 import type { Scope } from "effect";
 

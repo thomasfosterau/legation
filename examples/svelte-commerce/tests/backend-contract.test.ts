@@ -10,7 +10,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Layer } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendContract, BackendError, MutationRejected, Mutator } from "@legation/effect";
+import { BackendError, MutationRejected, Mutator } from "@legation/effect";
+import { BackendContract } from "@legation/effect/internal";
 import { SqlBackend } from "@legation/sql";
 import { makeExecutor } from "../server/db.js";
 

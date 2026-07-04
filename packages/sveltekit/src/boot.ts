@@ -11,7 +11,8 @@
  * `setEngineRuntime` expects.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { ClientEngine, ClientStore, ClientView, Hydration, type Transport } from "@legation/effect";
+import { ClientStore, type Transport } from "@legation/effect";
+import { ClientEngine, ClientView, Hydration } from "@legation/effect/internal";
 
 /** Options for {@link engineRuntime}. */
 export interface EngineRuntimeOptions {

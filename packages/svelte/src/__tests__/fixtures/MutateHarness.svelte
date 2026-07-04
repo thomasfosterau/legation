@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ClientEngine } from "@legation/effect";
+  import type { ClientEngine } from "@legation/effect/internal";
   import { getMutate, getMutateWithAck } from "../../Mutation.js";
   import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
 

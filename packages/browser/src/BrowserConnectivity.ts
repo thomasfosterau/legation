@@ -20,7 +20,7 @@
  */
 
 import { Transport } from "@legation/effect";
-import type { Protocol } from "@legation/effect";
+import type { Protocol } from "@legation/effect/internal";
 import { Effect, Queue, Scope, Stream, SubscriptionRef } from "effect";
 
 /** Current `navigator.onLine`, treating a missing navigator as online. */

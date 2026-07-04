@@ -21,7 +21,8 @@
  *   can add `page[...]`.
  */
 
-import { Predicate, Subset } from "@legation/effect";
+import { Predicate } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 import { buildQueryString } from "./CollectionLoader.js";
 import type { JsonApiRequestOptions } from "./types.js";
 

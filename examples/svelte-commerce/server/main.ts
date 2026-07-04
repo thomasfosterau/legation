@@ -18,7 +18,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { HttpRouter } from "effect/unstable/http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { createServer } from "node:http";
-import { HintSource } from "@legation/effect";
+import { HintSource } from "@legation/effect/internal";
 import { HttpSyncServer } from "@legation/node";
 import { PollingHintSource } from "@legation/sql";
 import { jsonApiLive } from "./jsonapi.js";

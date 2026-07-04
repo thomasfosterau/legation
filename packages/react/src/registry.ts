@@ -11,7 +11,7 @@
 import * as React from "react";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import { AtomRegistry } from "effect/unstable/reactivity";
-import type { ClientEngine, EngineAtoms } from "@legation/effect";
+import type { ClientEngine, EngineAtoms } from "@legation/effect/internal";
 
 const RegistryContext = React.createContext<AtomRegistry.AtomRegistry | null>(null);
 const AtomsContext = React.createContext<EngineAtoms.EngineAtoms | null>(null);

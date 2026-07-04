@@ -7,22 +7,24 @@
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
   Collection,
-  Cvr,
-  EngineHost,
-  InvalidationBus,
   MemoryBackend,
-  MirrorChannel,
   Mutator,
   Predicate,
   Query,
+  Transport,
+} from "@legation/effect";
+import {
+  ClientEngine,
+  Cvr,
+  EngineHost,
+  InvalidationBus,
+  MirrorChannel,
   Subset,
   SyncServer,
   Mirror,
-  Transport,
-} from "@legation/effect";
+} from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";

@@ -26,7 +26,8 @@
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Stream } from "effect";
 import type { AsyncResult } from "effect/unstable/reactivity";
-import { Aggregate, Client, ClientEngine, Query } from "@legation/effect";
+import { Aggregate, Client, Query } from "@legation/effect";
+import { ClientEngine } from "@legation/effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */

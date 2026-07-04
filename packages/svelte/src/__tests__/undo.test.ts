@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { Subset, Undo } from "@legation/effect";
+import { Subset, Undo } from "@legation/effect/internal";
 import { get } from "svelte/store";
 import { undoControls } from "../Undo.js";
 import { makeRuntime, run, until } from "./world.js";
