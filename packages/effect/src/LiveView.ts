@@ -21,6 +21,7 @@
  * an `Effect` `Stream`.
  */
 
+import type * as Index from "./CollectionIndex.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
 
@@ -48,6 +49,21 @@ const indexById = (rows: ReadonlyArray<Row>): ReadonlyMap<string, Row> => {
 /** Build a view from an unordered collection snapshot. */
 export const make = (subset: Subset.Subset, rows: ReadonlyArray<Row>): LiveView => {
   const sorted = Subset.sortFiltered(rows, subset);
+  return { subset, rows: sorted, byId: indexById(sorted) };
+};
+
+/**
+ * {@link make}, but reading rows from an id-keyed map with optional secondary-index
+ * acceleration (issue #113) — the collection-scale rebuild path (`Rebuild`
+ * view changes, a change-hub seq-gap collapse) shares the same narrowing as
+ * one-shot `query`.
+ */
+export const makeIndexed = (
+  subset: Subset.Subset,
+  rowsById: ReadonlyMap<string, Row>,
+  index?: Index.CollectionIndex
+): LiveView => {
+  const sorted = Subset.sortFilteredIndexed(rowsById, subset, index);
   return { subset, rows: sorted, byId: indexById(sorted) };
 };
 

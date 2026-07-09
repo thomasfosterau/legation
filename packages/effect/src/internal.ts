@@ -13,6 +13,7 @@
 export * as Subset from "./Subset.js";
 export * as Related from "./Related.js";
 export * as Hash from "./Hash.js";
+export * as CollectionIndex from "./CollectionIndex.js";
 
 // ─── Protocol ────────────────────────────────────────────────────────────────
 export * as Protocol from "./Protocol.js";

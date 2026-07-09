@@ -31,6 +31,7 @@ import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
+import * as Index from "./CollectionIndex.js";
 import {
   MutatorError,
   QueryError,
@@ -40,6 +41,7 @@ import {
 } from "./Errors.js";
 import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
+import type * as PredicateModule from "./Predicate.js";
 import type {
   Mutation,
   NamedSubscription,
@@ -283,6 +285,20 @@ export interface ClientEngineOptions {
     readonly schemaVersion?: string;
     readonly message: string;
   }) => Effect.Effect<void>;
+  /**
+   * Declared secondary-index fields per collection (issue #113): `eq`/`In`/
+   * range predicates on these fields resolve via an in-memory index instead
+   * of a full scan (`Client.make` derives this from the Node/Collection
+   * registry's `indexes`). Unset means no declared indexes.
+   */
+  readonly indexes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  /**
+   * Auto-discover indexable fields from registered subsets' predicates (the
+   * top-level `eq`/`In`/range conjuncts' fields) and index them, in addition
+   * to any declared `indexes` — TanStack DB's `autoIndex: "eager"`. Defaults
+   * to `false`: zero-config behaviour is identical to no indexing.
+   */
+  readonly autoIndex?: boolean;
 }
 
 /**
@@ -670,6 +686,115 @@ export const make = (
     const overlayLock = yield* Semaphore.make(1);
     const invalidateOverlay = Ref.set(overlayCache, undefined);
 
+    // Secondary field-value indexes over confirmed rows (issue #113).
+    // `indexFields` is the declared-plus-auto-discovered field set per
+    // collection; `builtIndexes` is the actual `Index.CollectionIndex`,
+    // built lazily from the store and kept current by `applyPatch`/`seed`
+    // deltas. An absent `builtIndexes` entry means "not built yet" (or the
+    // collection has no indexed fields) — the next access rebuilds it.
+    const indexFields = yield* Ref.make(
+      new Map<string, Set<string>>(
+        Object.entries(options.indexes ?? {}).map(([collection, fields]) => [
+          collection,
+          new Set(fields),
+        ])
+      )
+    );
+    const builtIndexes = yield* Ref.make(new Map<string, Index.CollectionIndex>());
+
+    // The fields a subset's `where` could narrow via an index: the top-level
+    // (or top-level-`And`) `Compare`/`In` conjuncts' fields. Used only to
+    // decide what `autoIndex` should index — never changes evaluation.
+    const indexableFieldsOf = (where: PredicateModule.Predicate): ReadonlyArray<string> => {
+      const conjuncts = where._tag === "And" ? where.predicates : [where];
+      const fields: Array<string> = [];
+      for (const conjunct of conjuncts) {
+        if (conjunct._tag === "Compare" || conjunct._tag === "In") fields.push(conjunct.field);
+      }
+      return fields;
+    };
+
+    // Record a subset's indexable fields when `autoIndex` is on, widening
+    // that collection's declared field set and invalidating its built index
+    // so the next access rebuilds with the new field. No-op otherwise.
+    const noteAutoIndexFields = (subset: Subset.Subset): Effect.Effect<void> => {
+      if (!options.autoIndex) return Effect.void;
+      const discovered = indexableFieldsOf(subset.where);
+      if (discovered.length === 0) return Effect.void;
+      return Ref.modify(indexFields, (map) => {
+        const current = map.get(subset.collection) ?? new Set<string>();
+        const grown = new Set(current);
+        for (const field of discovered) grown.add(field);
+        if (grown.size === current.size) return [false, map] as const;
+        const next = new Map(map);
+        next.set(subset.collection, grown);
+        return [true, next] as const;
+      }).pipe(
+        Effect.flatMap((grew) =>
+          grew
+            ? Ref.update(builtIndexes, (built) => {
+                if (!built.has(subset.collection)) return built;
+                const next = new Map(built);
+                next.delete(subset.collection); // force a rebuild with the widened field set
+                return next;
+              })
+            : Effect.void
+        )
+      );
+    };
+
+    // (Re)build a collection's index from confirmed store rows if it isn't
+    // already built for its current declared field set. `undefined` means
+    // the collection has no indexed fields — the caller's cue to full-scan.
+    const ensureIndexBuilt = (
+      collection: string
+    ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
+      Effect.gen(function* () {
+        const fields = (yield* Ref.get(indexFields)).get(collection);
+        if (fields === undefined || fields.size === 0) return undefined;
+        const existing = (yield* Ref.get(builtIndexes)).get(collection);
+        if (existing !== undefined) return existing;
+        const fresh = Index.empty(fields);
+        Index.rebuild(fresh, yield* store.listRows(collection));
+        yield* Ref.update(builtIndexes, (map) => new Map(map).set(collection, fresh));
+        return fresh;
+      });
+
+    // Indexed evaluation is sound only while a collection's confirmed rows
+    // equal its materialized view — i.e. no pending mutation's optimistic
+    // overlay could have shifted it (the index tracks confirmed rows only).
+    // A non-empty journal conservatively falls back to today's full scan for
+    // every collection; per-collection overlay-touch scoping is future work.
+    const indexForCollection = (
+      collection: string
+    ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
+      store.pendingMutations.pipe(
+        Effect.flatMap((pending) =>
+          pending.length > 0 ? Effect.succeed(undefined) : ensureIndexBuilt(collection)
+        )
+      );
+
+    // Apply confirmed-row deltas (patch ops / seeded rows) to already-built
+    // indexes. A collection with no built index yet is left alone — it
+    // rebuilds fully from the store (which already reflects these deltas) on
+    // next access.
+    const updateIndexes = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void> =>
+      Ref.get(builtIndexes).pipe(
+        Effect.map((built) => {
+          if (built.size === 0) return;
+          for (const op of ops) {
+            if (op._tag === "Clear") {
+              for (const index of built.values()) Index.clear(index);
+              continue;
+            }
+            const index = built.get(op.collection);
+            if (index === undefined) continue;
+            if (op._tag === "Put") Index.upsertRow(index, op.id, op.value);
+            else Index.deleteRow(index, op.id);
+          }
+        })
+      );
+
     /** Confirmed rows + pending mutations replayed on top (the overlay). */
     const computeOverlay: Effect.Effect<
       Map<string, Map<RowId, LocalRow>>,
@@ -804,35 +929,44 @@ export const make = (
         return union;
       });
 
-    // All local rows of a collection (confirmed + overlay), loading confirmed
-    // rows the overlay didn't already touch.
+    // All local rows of a collection (confirmed + overlay) as an id-keyed
+    // map, loading confirmed rows the overlay didn't already touch. Returning
+    // the map (not a spread array) lets indexed evaluation look candidates up
+    // directly — no extra O(n) copy on top of the O(n) this already pays to
+    // seed the map from the store.
     const ensureCollection = (
       view: Map<string, Map<RowId, LocalRow>>,
       collection: string
-    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError> =>
+    ): Effect.Effect<Map<RowId, LocalRow>, StoreError> =>
       Effect.gen(function* () {
         const existing = view.get(collection);
-        if (existing !== undefined) return [...existing.values()];
+        if (existing !== undefined) return existing;
         const rows = new Map<RowId, LocalRow>();
         for (const row of yield* store.listRows(collection)) {
           rows.set(row.id, { id: row.id, value: row.value });
         }
         view.set(collection, rows);
-        return [...rows.values()];
+        return rows;
       });
 
     const collectionRows = (collection: string) =>
       materialize.pipe(Effect.flatMap((view) => ensureCollection(view, collection)));
 
     const query = (subset: Subset.Subset) =>
-      collectionRows(subset.collection).pipe(Effect.map((rows) => Subset.apply(rows, subset)));
+      Effect.gen(function* () {
+        yield* noteAutoIndexFields(subset);
+        const rowsById = yield* collectionRows(subset.collection);
+        const index = yield* indexForCollection(subset.collection);
+        return Subset.applyIndexed(rowsById, subset, index);
+      });
 
     // Route the whole patch through the store's batched bulk write, so a K-op
     // patch on a large collection costs K row-value writes + ~1 index rewrite
     // per touched collection — I/O scales with patch size, not collection size
-    // (#47) — instead of one read-whole/rewrite-whole per op.
+    // (#47) — instead of one read-whole/rewrite-whole per op. Also maintains
+    // the secondary field-value indexes (#113) from the same ops.
     const applyPatch = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void, StoreError> =>
-      store.applyRowOps(ops);
+      store.applyRowOps(ops).pipe(Effect.tap(() => updateIndexes(ops)));
 
     // Resolve every pending deferred at or below `lastId` as applied, but only
     // report ids this call actually settled (a rejected mutation is already
@@ -1028,6 +1162,17 @@ export const make = (
           });
           touched.add(row.collection);
         }
+        yield* updateIndexes(
+          rows.map(
+            (row): PatchOp => ({
+              _tag: "Put",
+              collection: row.collection,
+              id: row.id,
+              version: row.version,
+              value: row.value,
+            })
+          )
+        );
         yield* invalidateOverlay;
         yield* publishChange(rebuildFor(touched));
       });
@@ -1237,7 +1382,11 @@ export const make = (
         if (rebuildSkips(change, subset.collection)) return LiveView.result(view);
         const next =
           change._tag === "Rebuild"
-            ? LiveView.make(subset, yield* collectionRows(subset.collection))
+            ? LiveView.makeIndexed(
+                subset,
+                yield* collectionRows(subset.collection),
+                yield* indexForCollection(subset.collection)
+              )
             : applyOps(view, subset.collection, change.ops);
         if (next !== view) yield* Ref.set(viewRef, next);
         return LiveView.result(next);
@@ -1257,7 +1406,11 @@ export const make = (
       Effect.gen(function* () {
         yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
         const latest = yield* Ref.get(changeSeq);
-        const next = LiveView.make(subset, yield* collectionRows(subset.collection));
+        const next = LiveView.makeIndexed(
+          subset,
+          yield* collectionRows(subset.collection),
+          yield* indexForCollection(subset.collection)
+        );
         yield* Ref.set(viewRef, next);
         yield* Ref.set(lastSeenRef, latest);
         return LiveView.result(next);
@@ -1292,12 +1445,17 @@ export const make = (
           // the seq gap the observer sleeps through the write forever. A
           // buffered change the snapshot already reflects steps as a stale
           // seq (skip) or an idempotent re-apply.
+          yield* noteAutoIndexFields(subset);
           const subscription = yield* PubSub.subscribe(changes);
           // Capture the seq before materializing: the view then reflects the
           // store at ≥ this seq, so the first live change is contiguous.
           const startSeq = yield* Ref.get(changeSeq);
           const viewRef = yield* Ref.make(
-            LiveView.make(subset, yield* collectionRows(subset.collection))
+            LiveView.makeIndexed(
+              subset,
+              yield* collectionRows(subset.collection),
+              yield* indexForCollection(subset.collection)
+            )
           );
           const lastSeenRef = yield* Ref.make(startSeq);
           const initial = LiveView.result(yield* Ref.get(viewRef));

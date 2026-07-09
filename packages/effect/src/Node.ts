@@ -55,6 +55,12 @@ export interface Node<
    * already an edge.
    */
   readonly hintKeys: ReadonlyArray<string>;
+  /**
+   * Fields eligible for secondary indexing (issue #113), carried through to
+   * the derived {@link Collection}'s `indexes`. See
+   * {@link Collection.Collection.indexes}.
+   */
+  readonly indexes: ReadonlyArray<string>;
   /** The branded id schema for this node type. */
   readonly Id: Id<Type>;
   /** The row schema: `{ id } & attributes & one-edge key fields`. */
@@ -78,6 +84,7 @@ export const make = <
     readonly attributes: Fields;
     readonly edges?: Edges;
     readonly hintKeys?: ReadonlyArray<string>;
+    readonly indexes?: ReadonlyArray<string>;
   }
 ): Node<Type, Fields, Edges> => {
   const edges = options.edges ?? ({} as Edges);
@@ -96,6 +103,7 @@ export const make = <
     attributes: options.attributes,
     edges,
     hintKeys: options.hintKeys ?? [],
+    indexes: options.indexes ?? [],
     Id: id,
     row,
   };
@@ -178,6 +186,7 @@ const toCollection = (
     schema: node.row as unknown as Schema.Codec<unknown, unknown>,
     id: (value) => (value as { id: string }).id,
     relationships,
+    ...(node.indexes.length > 0 ? { indexes: node.indexes } : {}),
   });
 };
 
