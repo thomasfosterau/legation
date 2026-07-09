@@ -213,3 +213,120 @@ describe("observeAggregate over a synced collection", () => {
     }).pipe(Effect.scoped)
   );
 });
+
+// ─── Incremental maintenance (#110) ───────────────────────────────────────────
+//
+// Property test: incrementally-maintained state must equal `compute` /
+// `computeGrouped` run from scratch, after every prefix of a randomized
+// put/del sequence — including group-key moves, `null` fields, and
+// type-mismatched (string vs. number) group keys. A small seeded PRNG keeps
+// failures reproducible without adding a property-testing dependency.
+
+const mulberry32 = (seed: number): (() => number) => {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const IDS = Array.from({ length: 8 }, (_, i) => `r${i}`);
+// Mixes number and string group keys on purpose (type-mismatched fields).
+const TEAMS: ReadonlyArray<unknown> = ["a", "b", 1, 2, undefined];
+
+const randomRowValue = (rand: () => number): unknown => {
+  const r = rand();
+  const score =
+    r < 0.55
+      ? Math.floor(rand() * 21) - 5 // includes negatives/zero, filtered by `where`
+      : r < 0.7
+        ? null
+        : r < 0.85
+          ? "not-a-number"
+          : undefined;
+  return { score, team: TEAMS[Math.floor(rand() * TEAMS.length)] };
+};
+
+interface RandomOp {
+  readonly _tag: "Put" | "Del";
+  readonly id: string;
+  readonly value?: unknown;
+}
+
+const randomOps = (rand: () => number, n: number): ReadonlyArray<RandomOp> =>
+  Array.from({ length: n }, () => {
+    const id = IDS[Math.floor(rand() * IDS.length)]!;
+    return rand() < 0.25
+      ? { _tag: "Del" as const, id }
+      : { _tag: "Put" as const, id, value: randomRowValue(rand) };
+  });
+
+describe("Aggregate incremental state (#110)", () => {
+  const where = Predicate.gt("score", 0);
+  const groupBy = "team";
+  const aggs: ReadonlyArray<Aggregate.Aggregate> = [
+    Aggregate.count,
+    Aggregate.sum("score"),
+    Aggregate.avg("score"),
+    Aggregate.min("score"),
+    Aggregate.max("score"),
+  ];
+
+  const matchingRows = (
+    truth: ReadonlyMap<string, unknown>
+  ): ReadonlyArray<{ readonly id: string; readonly value: unknown }> =>
+    [...truth.entries()]
+      .filter(([, value]) => Predicate.test(where, value))
+      .map(([id, value]) => ({ id, value }));
+
+  it("matches compute/computeGrouped from scratch after every prefix of a randomized delta sequence", () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const rand = mulberry32(seed);
+      const ops = randomOps(rand, 60);
+      const truth = new Map<string, unknown>();
+      const states = new Map<Aggregate.Aggregate, Aggregate.State>(
+        aggs.map((agg) => [agg, Aggregate.initState(agg, [])])
+      );
+      const groupedStates = new Map<Aggregate.Aggregate, Aggregate.GroupedState>(
+        aggs.map((agg) => [agg, Aggregate.initGroupedState(agg, [], groupBy)])
+      );
+
+      for (const op of ops) {
+        if (op._tag === "Del") truth.delete(op.id);
+        else truth.set(op.id, op.value);
+
+        for (const agg of aggs) {
+          states.set(
+            agg,
+            op._tag === "Del"
+              ? Aggregate.applyDel(states.get(agg)!, agg, op.id)
+              : Aggregate.applyPut(states.get(agg)!, agg, where, op.id, op.value)
+          );
+          groupedStates.set(
+            agg,
+            op._tag === "Del"
+              ? Aggregate.applyGroupedDel(groupedStates.get(agg)!, agg, op.id)
+              : Aggregate.applyGroupedPut(
+                  groupedStates.get(agg)!,
+                  agg,
+                  where,
+                  groupBy,
+                  op.id,
+                  op.value
+                )
+          );
+        }
+
+        const rows = matchingRows(truth);
+        for (const agg of aggs) {
+          expect(Aggregate.stateValue(states.get(agg)!)).toEqual(Aggregate.compute(agg, rows));
+          expect(Aggregate.groupedStateValue(groupedStates.get(agg)!)).toEqual(
+            Aggregate.computeGrouped(agg, rows, groupBy)
+          );
+        }
+      }
+    }
+  });
+});

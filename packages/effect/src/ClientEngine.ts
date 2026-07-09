@@ -193,6 +193,16 @@ const REBUILD: ViewChange = { _tag: "Rebuild" };
 const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
   collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
 
+// A windowed subset (limit/cursor) can't fold an aggregate incrementally
+// without also tracking window-boundary shifts (a delta outside the window
+// can still evict/admit a row at its edge, which a row-level delta alone
+// doesn't reveal) — `observeAggregate`/`observeAggregateGrouped` refold the
+// page each emission for these, same as before #110. An unwindowed subset
+// (the common case: aggregate over everything synced) folds `Patch` ops in
+// place instead.
+const isWindowed = (subset: Subset.Subset): boolean =>
+  subset.limit !== undefined || subset.cursor !== undefined;
+
 /**
  * Sync-loop scheduling knobs. `push`/`pull` stay the primitives; these grow
  * `runSync` into a configurable scheduler driven by `Effect.Schedule` and the
@@ -451,8 +461,11 @@ export interface ClientEngine {
     groupBy: string
   ) => Effect.Effect<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
   /**
-   * Live aggregate over a subset: emits now and after every local change,
-   * re-scanning the subset and folding it. Deduped — a change that leaves the
+   * Live aggregate over a subset: emits now and after every local change.
+   * For an unwindowed subset (no `limit`/`cursor`, the common case), the fold
+   * is maintained incrementally from `Patch` row deltas rather than re-scanned
+   * (#110); a windowed subset, or a change too large to diff (`Rebuild`),
+   * refolds the subset from scratch. Deduped — a change that leaves the
    * aggregate value unchanged does not re-emit. Local tier only, as
    * {@link queryAggregate}.
    */
@@ -1332,13 +1345,142 @@ export const make = (
       agg: Aggregate.Aggregate,
       groupBy: string
     ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
+
+    // Route a Patch's ops (this subset's collection only) through an
+    // incremental aggregate state. `Put` carries the raw new value —
+    // `Aggregate.applyPut` re-tests `subset.where` itself to decide
+    // insert/update/remove, exactly as `applyOps` does for `LiveView` above.
+    const applyAggregatePatch = (
+      state: Aggregate.State,
+      agg: Aggregate.Aggregate,
+      subset: Subset.Subset,
+      ops: ReadonlyArray<PatchOp>
+    ): Aggregate.State => {
+      let next = state;
+      for (const op of ops) {
+        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+        next =
+          op._tag === "Put"
+            ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
+            : Aggregate.applyDel(next, agg, op.id);
+      }
+      return next;
+    };
+    const applyAggregateGroupedPatch = (
+      state: Aggregate.GroupedState,
+      agg: Aggregate.Aggregate,
+      subset: Subset.Subset,
+      groupBy: string,
+      ops: ReadonlyArray<PatchOp>
+    ): Aggregate.GroupedState => {
+      let next = state;
+      for (const op of ops) {
+        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+        next =
+          op._tag === "Put"
+            ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
+            : Aggregate.applyGroupedDel(next, agg, op.id);
+      }
+      return next;
+    };
+
+    /**
+     * A push-based reducer over a subset's raw row ops, feeding
+     * {@link observeAggregateSubset}: `init` builds state from a full
+     * collection scan (subscribe time, `Rebuild`, and gap-collapse), `applyOps`
+     * folds a `Patch`'s row-level deltas in place, and `value`/`sameValue`
+     * extract + dedupe the observable result.
+     */
+    interface AggregateReducer<S, V> {
+      readonly init: (rows: ReadonlyArray<LocalRow>) => S;
+      readonly applyOps: (state: S, ops: ReadonlyArray<PatchOp>) => S;
+      readonly value: (state: S) => V;
+      readonly sameValue: (a: V, b: V) => boolean;
+    }
+
+    // Live aggregate over a subset's raw row ops: mirrors `observeSubset`'s
+    // seq/gap-collapse handling, but folds a `reducer`'s state instead of
+    // maintaining a `LiveView`. A `Patch` folds only the ops it carries, in
+    // place; a `Rebuild` (or a seq-gap collapse) re-derives state from a full
+    // collection scan, same as the page-observing path's `LiveView.make`.
+    const observeAggregateSubset = <S, V>(
+      subset: Subset.Subset,
+      reducer: AggregateReducer<S, V>
+    ): Stream.Stream<V, StoreError | MutatorError> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(changes);
+          const startSeq = yield* Ref.get(changeSeq);
+          const stateRef = yield* Ref.make(reducer.init(yield* collectionRows(subset.collection)));
+          const lastSeenRef = yield* Ref.make(startSeq);
+          const initial = reducer.value(yield* Ref.get(stateRef));
+
+          const applyContiguousAgg = (
+            change: ViewChange
+          ): Effect.Effect<V, StoreError | MutatorError> =>
+            Effect.gen(function* () {
+              const state = yield* Ref.get(stateRef);
+              if (rebuildSkips(change, subset.collection)) return reducer.value(state);
+              const next =
+                change._tag === "Rebuild"
+                  ? reducer.init(yield* collectionRows(subset.collection))
+                  : reducer.applyOps(state, change.ops);
+              yield* Ref.set(stateRef, next);
+              return reducer.value(next);
+            });
+
+          const collapseAggregateToRebuild: Effect.Effect<V, StoreError | MutatorError> =
+            Effect.gen(function* () {
+              yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
+              const latest = yield* Ref.get(changeSeq);
+              const next = reducer.init(yield* collectionRows(subset.collection));
+              yield* Ref.set(stateRef, next);
+              yield* Ref.set(lastSeenRef, latest);
+              return reducer.value(next);
+            });
+
+          const stepAggregateView = (
+            item: SeqChange
+          ): Effect.Effect<V, StoreError | MutatorError> =>
+            Effect.gen(function* () {
+              const lastSeen = yield* Ref.get(lastSeenRef);
+              if (item.seq <= lastSeen) return reducer.value(yield* Ref.get(stateRef));
+              if (item.seq === lastSeen + 1) {
+                yield* Ref.set(lastSeenRef, item.seq);
+                return yield* applyContiguousAgg(item.change);
+              }
+              return yield* collapseAggregateToRebuild;
+            });
+
+          return Stream.concat(
+            Stream.succeed(initial),
+            Stream.fromSubscription(subscription).pipe(Stream.mapEffect(stepAggregateView))
+          ).pipe(Stream.changesWith(reducer.sameValue));
+        })
+      );
+
     const observeAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
-      Aggregate.observe(observeSubset(subset), agg);
+      isWindowed(subset)
+        ? Aggregate.observe(observeSubset(subset), agg)
+        : observeAggregateSubset(subset, {
+            init: (rows) => Aggregate.initState(agg, Subset.apply(rows, subset)),
+            applyOps: (state, ops) => applyAggregatePatch(state, agg, subset, ops),
+            value: Aggregate.stateValue,
+            sameValue: Aggregate.sameValue,
+          });
     const observeAggregateGrouped = (
       subset: Subset.Subset,
       agg: Aggregate.Aggregate,
       groupBy: string
-    ) => Aggregate.observeGrouped(observeSubset(subset), agg, groupBy);
+    ) =>
+      isWindowed(subset)
+        ? Aggregate.observeGrouped(observeSubset(subset), agg, groupBy)
+        : observeAggregateSubset(subset, {
+            init: (rows) => Aggregate.initGroupedState(agg, Subset.apply(rows, subset), groupBy),
+            applyOps: (state, ops) => applyAggregateGroupedPatch(state, agg, subset, groupBy, ops),
+            value: Aggregate.groupedStateValue,
+            sameValue: Aggregate.sameGroupedValue,
+          });
 
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
