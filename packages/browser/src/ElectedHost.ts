@@ -163,6 +163,10 @@ const switchingView = (
       query: (subset) => withCurrent((view) => view.query(subset)),
       observe: (subset) =>
         SubscriptionRef.changes(viewRef).pipe(Stream.switchMap((view) => view.observe(subset))),
+      observeChanges: (subset, changeOptions) =>
+        SubscriptionRef.changes(viewRef).pipe(
+          Stream.switchMap((view) => view.observeChanges(subset, changeOptions))
+        ),
       subscribe: (subset) =>
         Ref.update(pinnedSubsets, (map) => new Map(map).set(Subset.hash(subset), subset)).pipe(
           Effect.andThen(withCurrent((view) => view.subscribe(subset)))

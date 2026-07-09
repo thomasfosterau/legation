@@ -30,6 +30,7 @@ import { TransportError } from "./Errors.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
+import type { RowChange } from "./RowChange.js";
 import type * as Subset from "./Subset.js";
 
 /**
@@ -49,6 +50,16 @@ export interface ClientView {
   readonly observe: (
     subset: Subset.Subset
   ) => Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
+  /**
+   * Row-level deltas of a subset's live window (#115) — see
+   * {@link ClientEngineModule.ClientEngine.observeChanges}. Satisfied
+   * structurally by `Mirror` (ADR-0021's one-surface principle), which folds
+   * its own page-diffing over the keyed row broadcasts it already receives.
+   */
+  readonly observeChanges: (
+    subset: Subset.Subset,
+    options?: ClientEngineModule.ObserveChangesOptions
+  ) => Stream.Stream<ReadonlyArray<RowChange<LocalRow>>, ClientViewError>;
   /** Register/release a subscription (synced by the engine host). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
@@ -113,6 +124,7 @@ export const ClientView = Context.Service<ClientView>("@legation/effect/ClientVi
 export const fromEngine = (engine: ClientEngine): ClientView => ({
   query: (subset) => engine.query(subset),
   observe: (subset) => engine.observe(subset),
+  observeChanges: (subset, options) => engine.observeChanges(subset, options),
   subscribe: (subset) => engine.subscribe(subset),
   unsubscribe: (subset) => engine.unsubscribe(subset),
   subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
