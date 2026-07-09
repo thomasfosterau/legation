@@ -77,14 +77,41 @@ export const reset = <Row extends Identified>(
 ): ReadonlyArray<RowChange<Row>> => [{ _tag: "reset" }, ...enters(rows)];
 
 /**
+ * One `next` row's decision against its `previous` counterpart (`undefined`
+ * when the row is new): `enter`, `update`, `move`, or `undefined` when
+ * nothing about it changed. Split out of {@link diff} so the id-membership
+ * scan stays a plain loop over this single-row decision.
+ */
+const changeFor = <Row extends Identified>(
+  row: Row,
+  before: Row | undefined
+): RowChange<Row> | undefined => {
+  const position = positionOf(row);
+  if (before === undefined) {
+    return position === undefined ? { _tag: "enter", row } : { _tag: "enter", row, position };
+  }
+  if (before.value !== row.value) {
+    return position === undefined
+      ? { _tag: "update", row, previous: before }
+      : { _tag: "update", row, previous: before, position };
+  }
+  const previousPosition = positionOf(before);
+  if (position !== undefined && previousPosition !== undefined && position !== previousPosition) {
+    return { _tag: "move", row, position, previousPosition };
+  }
+  return undefined;
+};
+
+/**
  * Diff two windowed pages by id: a row only in `next` enters, a row only in
  * `previous` exits (carrying its last value), a row in both whose `value`
  * reference changed updates, and — when both sides carry a `position` — a row
  * whose value is unchanged but whose position moved emits `move` instead of
- * being silently dropped. Order: `enter`/`update`/`move` in `next`'s order,
- * then `exit`s — batched, not positional beyond the `position` field itself.
- * Returns `[]` when nothing changed (including the `previous === next` fast
- * path), which the observers filter out rather than emit an empty batch.
+ * being silently dropped ({@link changeFor}). Order: `enter`/`update`/`move`
+ * in `next`'s order, then `exit`s — batched, not positional beyond the
+ * `position` field itself. Returns `[]` when nothing changed (including the
+ * `previous === next` fast path), which the observers filter out rather than
+ * emit an empty batch.
  */
 export const diff = <Row extends Identified>(
   previous: ReadonlyArray<Row>,
@@ -96,26 +123,8 @@ export const diff = <Row extends Identified>(
   const changes: Array<RowChange<Row>> = [];
   for (const row of next) {
     nextIds.add(row.id);
-    const before = previousById.get(row.id);
-    const position = positionOf(row);
-    if (before === undefined) {
-      changes.push(
-        position === undefined ? { _tag: "enter", row } : { _tag: "enter", row, position }
-      );
-      continue;
-    }
-    if (before.value !== row.value) {
-      changes.push(
-        position === undefined
-          ? { _tag: "update", row, previous: before }
-          : { _tag: "update", row, previous: before, position }
-      );
-      continue;
-    }
-    const previousPosition = positionOf(before);
-    if (position !== undefined && previousPosition !== undefined && position !== previousPosition) {
-      changes.push({ _tag: "move", row, position, previousPosition });
-    }
+    const change = changeFor(row, previousById.get(row.id));
+    if (change !== undefined) changes.push(change);
   }
   for (const row of previous) {
     if (!nextIds.has(row.id)) changes.push({ _tag: "exit", id: row.id, previous: row });

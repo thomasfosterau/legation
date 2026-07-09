@@ -886,6 +886,35 @@ export const make = (
         return created;
       });
 
+    // A `LocalWriter` over `view`'s per-collection maps: `put`/`del` mutate
+    // in place (through `ensureCollectionMap`'s lazy seeding) and, when
+    // given, report each write via `onPut`/`onDel` — the one seam
+    // `replayMutations`' plain replay and `trackedWriter`'s op-recording
+    // variant (#109) both build on, rather than duplicating the put/del/get
+    // wiring.
+    const viewWriter = (
+      view: Map<string, Map<RowId, LocalRow>>,
+      onPut?: (collection: string, id: RowId, value: unknown) => void,
+      onDel?: (collection: string, id: RowId) => void
+    ): LocalWriter => ({
+      put: (collection, id, value) =>
+        ensureCollectionMap(view, collection).pipe(
+          Effect.map((rows) => {
+            rows.set(id, { id, value });
+            onPut?.(collection, id, value);
+          })
+        ),
+      del: (collection, id) =>
+        ensureCollectionMap(view, collection).pipe(
+          Effect.map((rows) => {
+            rows.delete(id);
+            onDel?.(collection, id);
+          })
+        ),
+      get: (collection, id) =>
+        ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
+    });
+
     // Replay `mutations` (in journal order) onto `view`, mutating its
     // per-collection maps in place. Journal args are encoded (they survive
     // persistence and the wire), so decode before replay. Shared by
@@ -899,22 +928,7 @@ export const make = (
       mutations: ReadonlyArray<Mutation>
     ): Effect.Effect<void, StoreError | MutatorError> =>
       Effect.gen(function* () {
-        const writer: LocalWriter = {
-          put: (collection, id, value) =>
-            ensureCollectionMap(view, collection).pipe(
-              Effect.map((rows) => {
-                rows.set(id, { id, value });
-              })
-            ),
-          del: (collection, id) =>
-            ensureCollectionMap(view, collection).pipe(
-              Effect.map((rows) => {
-                rows.delete(id);
-              })
-            ),
-          get: (collection, id) =>
-            ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
-        };
+        const writer = viewWriter(view);
         for (const mutation of mutations) {
           const definition = options.mutators.mutators.get(mutation.mutator);
           const handler = options.mutators.handlers.get(mutation.mutator);
@@ -1146,24 +1160,12 @@ export const make = (
     const trackedWriter = (
       view: Map<string, Map<RowId, LocalRow>>,
       ops: Array<PatchOp | OverlayOp>
-    ): LocalWriter => ({
-      put: (collection, id, value) =>
-        ensureCollectionMap(view, collection).pipe(
-          Effect.map((rows) => {
-            rows.set(id, { id, value });
-            ops.push({ _tag: "Put", collection, id, value });
-          })
-        ),
-      del: (collection, id) =>
-        ensureCollectionMap(view, collection).pipe(
-          Effect.map((rows) => {
-            rows.delete(id);
-            ops.push({ _tag: "Del", collection, id });
-          })
-        ),
-      get: (collection, id) =>
-        ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
-    });
+    ): LocalWriter =>
+      viewWriter(
+        view,
+        (collection, id, value) => ops.push({ _tag: "Put", collection, id, value }),
+        (collection, id) => ops.push({ _tag: "Del", collection, id })
+      );
 
     // Apply a journaled mutation's local effects onto the cached overlay in
     // place instead of invalidating it (#109's core optimization): the
@@ -1923,6 +1925,13 @@ export const make = (
         const { subscription, viewRef, lastSeenRef } = yield* initSubsetView(subset);
         const subsetRef = yield* Ref.make(subset);
         const retargetTick = yield* SubscriptionRef.make(0);
+        // Subscribe to the retarget tick NOW, not when `rows` is eventually
+        // pulled (#84's "subscribe before snapshotting" discipline, applied
+        // here too): `SubscriptionRef.changes` builds a lazily-subscribing
+        // stream, so a `retarget()` call between `observeWindow` returning
+        // and the caller actually consuming `rows` would otherwise publish
+        // to a PubSub nobody is listening to yet and be silently missed.
+        const retargetSubscription = yield* PubSub.subscribe(retargetTick.pubsub);
         const initial = LiveView.result(yield* Ref.get(viewRef));
 
         const retarget: WindowObservation["retarget"] = (window) =>
@@ -1956,11 +1965,10 @@ export const make = (
         const engineChanges = Stream.fromSubscription(subscription).pipe(
           Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, readSubset, item))
         );
-        // Skip the tick's seeded current value (0) — only an actual retarget
-        // (which bumps it) should trigger a re-read; the initial page is
-        // already emitted below.
-        const retargetChanges = SubscriptionRef.changes(retargetTick).pipe(
-          Stream.drop(1),
+        // The eager subscription above only ever delivers ticks published
+        // *after* it was established — no replay of the seeded current
+        // value (0) to skip, unlike `SubscriptionRef.changes`.
+        const retargetChanges = Stream.fromSubscription(retargetSubscription).pipe(
           Stream.mapEffect(() => Ref.get(viewRef).pipe(Effect.map(LiveView.result)))
         );
         const rows = Stream.concat(

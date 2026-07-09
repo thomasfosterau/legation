@@ -45,31 +45,6 @@ interface Item {
 
 const IDS = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
-/** Fold a sequence of change batches into a plain `id -> value` map. */
-const fold = (
-  initial: ReadonlyArray<LiveView.Row>,
-  batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<LiveView.Row>>>
-): Map<string, unknown> => {
-  const state = new Map(initial.map((row) => [row.id, row.value]));
-  for (const batch of batches) {
-    for (const change of batch) {
-      switch (change._tag) {
-        case "reset":
-          state.clear();
-          break;
-        case "enter":
-        case "update":
-          state.set(change.row.id, change.row.value);
-          break;
-        case "exit":
-          state.delete(change.id);
-          break;
-      }
-    }
-  }
-  return state;
-};
-
 const sortedEntries = (state: Map<string, unknown>) =>
   [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -192,6 +167,69 @@ const applyToLateObserver = (
  * applyPull`'s exact rule — then clears the flag; a `pull` with nothing
  * pending is a correctness no-op, matching an empty `Patch`).
  */
+/** Mutable state threaded through one randomized session (see {@link runSession}). */
+interface SessionState {
+  view: LiveView.LiveView;
+  readonly truth: Truth;
+  readonly folded: Map<string, unknown>;
+  pendingSincePull: boolean;
+}
+
+/**
+ * One randomized step: a bare gap-collapse, a `pull` (Rebuild only if a
+ * mutation is still pending, else a no-op), or an ordinary put/del mutation
+ * — mutates `state` in place and returns the batch that step produced, for
+ * the late observer to fold alongside the primary one.
+ */
+const stepSession = (
+  subset: Subset.Subset,
+  state: SessionState,
+  rand: () => number,
+  pick: <A>(xs: ReadonlyArray<A>) => A
+): ReadonlyArray<RowChange.RowChange<LiveView.Row>> => {
+  const action = rand();
+  if (action < 0.05) {
+    // A bare gap-collapse: unprompted, independent of pending mutations.
+    state.view = applyRebuild(subset, state.truth, state.folded);
+    return RowChange.reset(LiveView.result(state.view));
+  }
+  if (action < 0.1) {
+    // A `pull`: forces a Rebuild only if a mutation is still pending.
+    if (!state.pendingSincePull) return [];
+    state.view = applyRebuild(subset, state.truth, state.folded);
+    state.pendingSincePull = false;
+    return RowChange.reset(LiveView.result(state.view));
+  }
+  const id = pick(IDS);
+  const isDelete = action < 0.1 + 0.25 && state.truth.has(id);
+  const before = LiveView.result(state.view);
+  state.view = applyMutation(state.view, state.truth, state.folded, rand, id, isDelete);
+  state.pendingSincePull = true;
+  return RowChange.diff(before, LiveView.result(state.view));
+};
+
+/** The primary (and, once spawned, the late) observer's fold vs. `LiveView.result`, or the first mismatch. */
+const checkSession = (
+  seed: number,
+  label: string,
+  state: SessionState,
+  lateObserver: LateObserver | undefined
+): Mismatch | undefined => {
+  const page = pageEntries(LiveView.result(state.view));
+  const foldedEntries = sortedEntries(state.folded);
+  if (JSON.stringify(foldedEntries) !== JSON.stringify(page)) {
+    return { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
+  }
+  if (lateObserver === undefined) return undefined;
+  const lateEntries = sortedEntries(lateObserver.folded);
+  if (JSON.stringify(lateEntries) === JSON.stringify(page)) return undefined;
+  return {
+    label: `${label} (seed=${seed}, late observer since step ${lateObserver.startedAtStep})`,
+    folded: lateEntries,
+    page,
+  };
+};
+
 const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatch | undefined => {
   const rand = mulberry32(seed);
   const pick = <A>(xs: ReadonlyArray<A>): A => xs[Math.floor(rand() * xs.length)]!;
@@ -199,66 +237,28 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   // The backing "confirmed collection", independent of the subset's filter —
   // put/del apply here first, mirroring the store `LiveView` maintains a
   // window over.
-  const truth: Truth = new Map();
-  let view = LiveView.make(subset, []);
-  const folded = fold(LiveView.result(view), []);
-  let pendingSincePull = false;
+  const state: SessionState = {
+    view: LiveView.make(subset, []),
+    truth: new Map(),
+    folded: new Map(),
+    pendingSincePull: false,
+  };
   let lateObserver: LateObserver | undefined;
   // Spawn the late subscriber at a random step within the session (most
   // sessions get one — only seeds landing past `steps` skip it), so
   // "joining mid-stream" is exercised at varied points, not a fixed step.
   const lateSpawnStep = Math.floor(rand() * steps * 1.3);
 
-  const checkAll = (label: string): Mismatch | undefined => {
-    const page = pageEntries(LiveView.result(view));
-    const foldedEntries = sortedEntries(folded);
-    if (JSON.stringify(foldedEntries) !== JSON.stringify(page)) {
-      return { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
-    }
-    if (lateObserver !== undefined) {
-      const lateEntries = sortedEntries(lateObserver.folded);
-      if (JSON.stringify(lateEntries) !== JSON.stringify(page)) {
-        return {
-          label: `${label} (seed=${seed}, late observer since step ${lateObserver.startedAtStep})`,
-          folded: lateEntries,
-          page,
-        };
-      }
-    }
-    return undefined;
-  };
-  const initial = checkAll("initial");
+  const initial = checkSession(seed, "initial", state, lateObserver);
   if (initial !== undefined) return initial;
 
   for (let step = 0; step < steps; step++) {
-    if (step === lateSpawnStep) lateObserver = seedLateObserver(view, step);
+    if (step === lateSpawnStep) lateObserver = seedLateObserver(state.view, step);
 
-    const action = rand();
-    let batch: ReadonlyArray<RowChange.RowChange<LiveView.Row>>;
-    if (action < 0.05) {
-      // A bare gap-collapse: unprompted, independent of pending mutations.
-      view = applyRebuild(subset, truth, folded);
-      batch = RowChange.reset(LiveView.result(view));
-    } else if (action < 0.1) {
-      // A `pull`: forces a Rebuild only if a mutation is still pending.
-      if (pendingSincePull) {
-        view = applyRebuild(subset, truth, folded);
-        batch = RowChange.reset(LiveView.result(view));
-        pendingSincePull = false;
-      } else {
-        batch = [];
-      }
-    } else {
-      const id = pick(IDS);
-      const isDelete = action < 0.1 + 0.25 && truth.has(id);
-      const before = LiveView.result(view);
-      view = applyMutation(view, truth, folded, rand, id, isDelete);
-      batch = RowChange.diff(before, LiveView.result(view));
-      pendingSincePull = true;
-    }
+    const batch = stepSession(subset, state, rand, pick);
     if (lateObserver !== undefined) applyToLateObserver(lateObserver, batch);
 
-    const mismatch = checkAll(`step ${step}`);
+    const mismatch = checkSession(seed, `step ${step}`, state, lateObserver);
     if (mismatch !== undefined) return mismatch;
   }
   return undefined;
