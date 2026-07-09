@@ -6,7 +6,7 @@
  * inferred status. Version rejections propagate without touching either.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Ref, Stream } from "effect";
+import { Duration, Effect, Fiber, Ref, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
@@ -200,5 +200,62 @@ describe("Transport.withFallback", () => {
         expect(reasons).toEqual(["fallback", "primary"]);
       })
     )
+  );
+});
+
+describe("Transport.simulateOffline", () => {
+  it.effect("passes calls through while online, fails them while toggled offline", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFake();
+        const { transport, setOffline } = yield* Transport.simulateOffline(fake.transport);
+
+        expect(yield* transport.pull(pullRequest)).toEqual(pullResponse);
+
+        yield* setOffline(true);
+        const failed = yield* Effect.flip(transport.pull(pullRequest));
+        expect(failed._tag).toBe("TransportError");
+        // The underlying carrier is never even called while the gate is closed.
+        expect(yield* Ref.get(fake.pulls)).toBe(1);
+
+        yield* setOffline(false);
+        expect(yield* transport.pull(pullRequest)).toEqual(pullResponse);
+        expect(yield* Ref.get(fake.pulls)).toBe(2);
+      })
+    )
+  );
+
+  // Real clock: the collector subscribes to two combined SubscriptionRef-backed
+  // streams on a background fiber, so give it a turn to establish before the
+  // toggles fire (mirrors mutation-states-engine.test.ts's own live-collector
+  // pattern) — a TestClock would freeze the fiber's subscribe race instead of
+  // resolving it.
+  it.live(
+    "status/statusChanges report disconnected while offline, else the wrapped transport's",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* makeFake();
+          const { transport, setOffline, isOffline } = yield* Transport.simulateOffline(
+            fake.transport
+          );
+
+          expect(yield* isOffline).toBe(false);
+          expect(yield* transport.status).toBe("connected");
+
+          const changes = yield* Effect.forkChild(
+            Stream.runCollect(Stream.take(transport.statusChanges, 3))
+          );
+          yield* Effect.sleep(Duration.millis(20));
+
+          yield* setOffline(true);
+          expect(yield* transport.status).toBe("disconnected");
+          yield* setOffline(false);
+          expect(yield* transport.status).toBe("connected");
+
+          const seen = [...(yield* Fiber.join(changes).pipe(Effect.timeout(Duration.seconds(2))))];
+          expect(seen).toEqual(["connected", "disconnected", "connected"]);
+        })
+      )
   );
 });

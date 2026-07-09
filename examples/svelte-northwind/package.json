@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
+    "@legation/devtools": "workspace:*",
     "@legation/effect": "workspace:*",
     "@legation/svelte": "workspace:*",
     "effect": "catalog:",

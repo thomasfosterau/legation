@@ -122,13 +122,16 @@ export interface MutationHandle {
 /**
  * A mutation lifecycle event on {@link ClientEngine.mutationEvents}: emitted
  * when a mutation is `journaled` locally, then when the backend `acknowledged`
- * (applied) or `rejected` it. Every journaled mutation emits `journaled`,
- * whether it came from `mutate`, `mutateEncoded`, or `mutateWithAck`.
+ * (applied) or `rejected` it — or, for a still-unpushed entry, when a paced
+ * strategy (#117: debounce/throttle/coalesce) `dropped` it via
+ * `dropIfPending` in favour of a newer entry for the same key. Every
+ * journaled mutation emits `journaled`, whether it came from `mutate`,
+ * `mutateEncoded`, or `mutateWithAck`.
  */
 export interface MutationEvent {
   readonly clientId: string;
   readonly mutationId: number;
-  readonly phase: "journaled" | "acknowledged" | "rejected";
+  readonly phase: "journaled" | "acknowledged" | "rejected" | "dropped";
   readonly reason?: string;
 }
 
@@ -144,6 +147,9 @@ export interface MutationEvent {
  *   `mutateEncoded`, or `mutateWithAck`).
  * - `MutationAcknowledged` — the backend applied a journaled mutation.
  * - `MutationRejected` — the backend permanently refused it, with a `reason`.
+ * - `MutationDropped` — a paced strategy (#117) compacted a still-unpushed
+ *   entry out of the journal in favour of a newer one for the same key; the
+ *   entry never reached the backend.
  * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
  *   of `mutations` delivered).
  * - `PullStarted` / `PullCompleted` — a pull began / finished (with the number
@@ -172,6 +178,11 @@ export type EngineEvent =
       readonly clientId: string;
       readonly mutationId: number;
       readonly reason: string;
+    }
+  | {
+      readonly _tag: "MutationDropped";
+      readonly clientId: string;
+      readonly mutationId: number;
     }
   | { readonly _tag: "PushStarted" }
   | { readonly _tag: "PushCompleted"; readonly mutations: number }
@@ -735,7 +746,7 @@ export const make = (
     // always safe; a counter (not a flag) covers overlapping pushes.
     const pushInFlight = yield* Ref.make(0);
     // Emit a mutation-lifecycle event onto the unified hub as its tagged
-    // variant; `mutationEvents` projects these three tags back to `phase`s.
+    // variant; `mutationEvents` projects these four tags back to `phase`s.
     const emitEvent = (
       mutationId: number,
       phase: MutationEvent["phase"],
@@ -754,9 +765,11 @@ export const make = (
             mutationId,
             reason: reason ?? "",
           });
+        case "dropped":
+          return emitEngineEvent({ _tag: "MutationDropped", clientId, mutationId });
       }
     };
-    // Project the three mutation variants back to the #36 `MutationEvent` shape.
+    // Project the four mutation variants back to the #36 `MutationEvent` shape.
     const toMutationEvent = (event: EngineEvent): MutationEvent | undefined => {
       switch (event._tag) {
         case "MutationJournaled":
@@ -770,6 +783,8 @@ export const make = (
             phase: "rejected",
             reason: event.reason,
           };
+        case "MutationDropped":
+          return { clientId: event.clientId, mutationId: event.mutationId, phase: "dropped" };
         default:
           return undefined;
       }
@@ -1306,6 +1321,15 @@ export const make = (
         const droppable = mutationIds.filter((id) => stillPending.has(id));
         if (droppable.length === 0) return [];
         yield* store.dropPending(options.clientId, droppable);
+        // Fold the drop into `mutationStates` (#116) — without this, a
+        // compacted entry's state would never transition off `"pending"`
+        // even though the journal no longer has it, leaving a devtools
+        // journal panel showing a phantom in-flight mutation forever.
+        const droppedAt = yield* Clock.currentTimeMillis;
+        yield* SubscriptionRef.update(mutationStates, (map) =>
+          MutationState.droppedMany(map, droppable, droppedAt, options.mutationStateRetention)
+        );
+        yield* Effect.forEach(droppable, (id) => emitEvent(id, "dropped"), { discard: true });
         yield* invalidateOverlay;
         yield* sampleJournalDepth;
         yield* publishChange(REBUILD);

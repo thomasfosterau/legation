@@ -10,16 +10,20 @@
  *        │                                              + CvrStore (CVR diff)
  *   optimistic overlay + journal                        + InvalidationBus (poke)
  *
- * It exposes two things to the React layer:
+ * It exposes three things to the React layer:
  *   - `atoms` — the engine's reactive surface (`EngineAtoms.fromLayer`), handed
- *     to `<EffectSyncProvider>` so `useQuery` / `useMutation` / `useMutationState`
- *     work — including the journal panel (#116), which reads
- *     `useMutationState()` directly instead of a bespoke introspection wire;
- *   - `controls` — the demo side-channel (offline toggle, "remote edit",
- *     connection status) that the engine's read/write API doesn't cover.
+ *     to `<EffectSyncProvider>` so `useQuery` / `useMutation` work;
+ *   - `devtools` — the `@legation/devtools` headless core (#120) over this
+ *     same engine + store, mounted by `<DevtoolsPanel>` — supersedes the
+ *     hand-rolled journal panel this example used to read `useMutationState()`
+ *     directly for;
+ *   - `controls` — the demo side-channel ("remote edit", connection status)
+ *     that the engine's read/write API doesn't cover. The offline toggle
+ *     itself now lives on the devtools actions panel, wired through the same
+ *     `Transport.simulateOffline` decorator devtools' own offline action uses.
  */
 
-import { Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
@@ -28,10 +32,9 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-  TransportError,
-  type VersionNotSupportedError,
 } from "@legation/effect";
 import { ClientEngine, Cvr, EngineAtoms, InvalidationBus, SyncServer } from "@legation/effect/internal";
+import * as Devtools from "@legation/devtools";
 
 import {
   CLIENT_GROUP_ID,
@@ -58,9 +61,11 @@ export interface DemoControls {
   readonly subscribeConnection: (listener: (status: Connection) => void) => () => void;
 }
 
-/** What `createWorld` resolves to: the engine's reactive surface + the demo controls. */
+/** What `createWorld` resolves to: the engine's reactive surface, the devtools
+ * core (#120), and the demo controls. */
 export interface World {
   readonly atoms: EngineAtoms.EngineAtoms;
+  readonly devtools: Devtools.DevtoolsCore;
   readonly controls: DemoControls;
 }
 
@@ -88,41 +93,6 @@ const backendHandlers = MemoryBackend.validatedHandlers([
 
 /** Public collection: read auth is allow-all (this demo has no identities). */
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
-
-// ─── Offline-aware loopback transport ────────────────────────────────────────
-
-/**
- * A {@link Transport.ClientTransport} bound straight to a {@link
- * Transport.ServerHandler}, gated by an `online` flag. When offline, push and
- * pull *fail* (as a real network would) so the engine keeps mutations in the
- * journal; `statusChanges` mirrors the flag so the sync loop flushes on
- * reconnect.
- */
-const makeOfflineTransport = (
-  handler: Transport.ServerHandler,
-  online: SubscriptionRef.SubscriptionRef<boolean>
-): Transport.ClientTransport => {
-  const whenOnline = <A>(
-    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
-  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-    SubscriptionRef.get(online).pipe(
-      Effect.flatMap((on) =>
-        on ? effect : Effect.fail(new TransportError({ message: "Client is offline" }))
-      )
-    );
-
-  return {
-    push: (request) => whenOnline(handler.handlePush(request)),
-    pull: (request) => whenOnline(handler.handlePull(request)),
-    pokes: handler.pokes(CLIENT_GROUP_ID),
-    status: SubscriptionRef.get(online).pipe(
-      Effect.map((on): Connection => (on ? "connected" : "disconnected"))
-    ),
-    statusChanges: SubscriptionRef.changes(online).pipe(
-      Stream.map((on): Connection => (on ? "connected" : "disconnected"))
-    ),
-  };
-};
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -159,9 +129,6 @@ const seedBackend = (backend: Backend.Backend, bus: InvalidationBus.Invalidation
 export const createWorld = (): Promise<World> =>
   new Promise<World>((resolve, reject) => {
     const program = Effect.gen(function* () {
-      // Connectivity flag the transport (and the UI) toggle.
-      const online = yield* SubscriptionRef.make(true);
-
       // Server side: backend + CVR store + invalidation bus + sync server.
       const backend = yield* MemoryBackend.make(backendHandlers);
       const cvr = yield* Cvr.makeMemoryStore;
@@ -175,8 +142,11 @@ export const createWorld = (): Promise<World> =>
 
       yield* seedBackend(backend, bus);
 
-      // Client side: durable store (localStorage) + offline transport + engine.
-      const transport = makeOfflineTransport(handler, online);
+      // Client side: durable store (localStorage) + a simulated-offline
+      // transport (the devtools' offline-toggle action wraps the same
+      // decorator, #120) + engine.
+      const base = yield* Transport.makeInMemory(handler, CLIENT_GROUP_ID);
+      const { transport, setOffline, isOffline } = yield* Transport.simulateOffline(base);
       const store = yield* ClientStore.makeKeyValue({ prefix: "react-todo/" }).pipe(
         Effect.provide(BrowserKeyValueStore.layerLocalStorage)
       );
@@ -199,18 +169,23 @@ export const createWorld = (): Promise<World> =>
       // journal left over from a previous offline session and hydrates.
       yield* engine.runSync;
 
-      // The engine's reactive surface: `useQuery`/`useMutation`/`useMutationState`
-      // all read/write through this over `<EffectSyncProvider>`. Its scope (and
-      // the forked sync loop) stays alive because this program ends in
-      // `Effect.never`.
+      // The engine's reactive surface: `useQuery`/`useMutation` read/write
+      // through this over `<EffectSyncProvider>`. Its scope (and the forked
+      // sync loop) stays alive because this program ends in `Effect.never`.
       const atoms = EngineAtoms.fromLayer(Layer.succeed(ClientEngine.ClientEngine, engine));
+
+      // The devtools headless core (#120), fed by the same engine + store —
+      // the offline control is the very same `simulateOffline` toggle the
+      // app's own "Go offline" button drives, so either surface reflects the
+      // same simulated connectivity.
+      const devtools = Devtools.make(engine, store, { offline: { setOffline, isOffline } });
 
       // Authoritative writes from a "remote" client share the backend; their
       // mutation ids must stay gap-free per client.
       let remoteSeq = 0;
 
       const controls: DemoControls = {
-        setOnline: (next) => Effect.runPromise(SubscriptionRef.set(online, next)),
+        setOnline: (next) => Effect.runPromise(setOffline(!next)),
         syncNow: () =>
           Effect.runPromise(engine.push.pipe(Effect.andThen(engine.pull), Effect.ignore)),
         simulateRemote: () =>
@@ -252,7 +227,7 @@ export const createWorld = (): Promise<World> =>
         },
       };
 
-      yield* Effect.sync(() => resolve({ atoms, controls }));
+      yield* Effect.sync(() => resolve({ atoms, devtools, controls }));
       // Keep the scope open forever so the forked sync/fan-out fibers live on.
       yield* Effect.never;
     });

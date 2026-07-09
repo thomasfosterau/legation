@@ -3,14 +3,17 @@
  *
  * The whole UI. Todos come from `useQuery(allTodos)` (live: re-renders on every
  * mutation, push ack, and pull/rebase); writes go through `useMutation`
- * optimistically. The journal panel reads `useMutationState()` (#116) — the
- * keyed, reactive mutation-state map — directly, no bespoke wiring. The demo
- * knobs (offline, remote edit) come from the demo context. Visual design and
- * behaviour mirror the FoldKit / Compose / SwiftUI todo examples.
+ * optimistically. The journal/mutation timeline, subscriptions, sync activity,
+ * and actions all now live in the `@legation/devtools` panel (#120) — this
+ * component no longer reads `useMutationState()` for a bespoke journal UI. The
+ * demo knobs (offline, remote edit) come from the demo context. Visual design
+ * and behaviour mirror the FoldKit / Compose / SwiftUI todo examples.
  */
 import * as React from "react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useMutation, useMutationState, useQuery } from "@legation/react";
+import { useMutation, useQuery } from "@legation/react";
+import type { DevtoolsCore } from "@legation/devtools";
+import { DevtoolsPanel } from "@legation/devtools/react";
 import { type Todo, allTodos } from "./domain";
 import { useConnection, useDemo } from "./demo";
 
@@ -26,24 +29,13 @@ const filterTodos = (todos: ReadonlyArray<Todo>, filter: Filter): ReadonlyArray<
       ? todos.filter((todo) => !todo.done)
       : todos.filter((todo) => todo.done);
 
-/** A short label for one journal entry, from its mutator + args. */
-const summarise = (mutator: string, args: unknown): string =>
-  mutator === "todo/set"
-    ? `set "${(args as Todo).title}"`
-    : `remove ${(args as { readonly id: string }).id}`;
-
-export const App = (): React.ReactElement => {
+export const App = (props: { readonly devtools: DevtoolsCore }): React.ReactElement => {
   const rowsResult = useQuery(allTodos);
   const rows = AsyncResult.getOrElse(rowsResult, () => []);
   const todos = React.useMemo(() => rows.map((row) => row.value as Todo), [rows]);
   const mutate = useMutation();
   const controls = useDemo();
   const connection = useConnection();
-  const mutationStates = useMutationState();
-  // Newest first: the most recent activity (a fresh optimistic write, or a
-  // just-settled ack/reject) reads as the top of the journal.
-  const journal = React.useMemo(() => mutationStates.slice().reverse(), [mutationStates]);
-  const pendingCount = journal.filter((entry) => entry.phase === "pending").length;
 
   const [draft, setDraft] = React.useState("");
   const [filter, setFilter] = React.useState<Filter>("All");
@@ -91,9 +83,6 @@ export const App = (): React.ReactElement => {
 
         <div className="status-bar">
           <span className={`pill pill-${connection}`}>● {connectionLabel(connection)}</span>
-          <span className={pendingCount > 0 ? "pill pill-pending" : "pill pill-clean"}>
-            {pendingCount > 0 ? `${pendingCount} pending` : "all synced"}
-          </span>
           <span className="muted">
             {lastSyncAt === null ? "" : `last sync ${new Date(lastSyncAt).toLocaleTimeString()}`}
           </span>
@@ -190,30 +179,7 @@ export const App = (): React.ReactElement => {
           )}
         </div>
 
-        {journal.length === 0 ? (
-          <div className="journal journal-empty">
-            Journal empty — every write is confirmed.
-          </div>
-        ) : (
-          <div className="journal">
-            <div className="journal-title">
-              Mutation journal — {pendingCount} pending, newest first
-            </div>
-            <ul className="journal-list">
-              {journal.map((entry) => (
-                <li key={entry.mutationId} className={`journal-row journal-row-${entry.phase}`}>
-                  <span className={`journal-phase journal-phase-${entry.phase}`}>
-                    {entry.phase}
-                  </span>{" "}
-                  #{entry.mutationId} {summarise(entry.mutator, entry.args)}
-                  {entry.phase === "rejected" && entry.reason !== undefined
-                    ? ` — ${entry.reason}`
-                    : ""}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <DevtoolsPanel core={props.devtools} />
       </div>
     </div>
   );

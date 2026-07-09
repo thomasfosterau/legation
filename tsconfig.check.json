@@ -18,9 +18,12 @@
       "@legation/sql": ["packages/sql/src/index.ts"],
       "@legation/react": ["packages/react/src/index.ts"],
       "@legation/svelte": ["packages/svelte/src/index.ts"],
-      "@legation/sveltekit": ["packages/sveltekit/src/index.ts"]
+      "@legation/sveltekit": ["packages/sveltekit/src/index.ts"],
+      "@legation/devtools": ["packages/devtools/src/index.ts"],
+      "@legation/devtools/react": ["packages/devtools/src/react.tsx"]
     },
-    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
   },
   "include": ["packages/*/src/**/*", "packages/*/examples/**/*", "tests/**/*"],
   "exclude": ["node_modules", "packages/*/dist"]

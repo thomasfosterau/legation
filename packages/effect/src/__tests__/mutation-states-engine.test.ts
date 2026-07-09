@@ -215,6 +215,33 @@ describe("ClientEngine.mutationStates (#116)", () => {
     })
   );
 
+  it.effect(
+    "dropIfPending (#117 paced compaction) settles the compacted entry as 'dropped', not stuck pending",
+    () =>
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const store = yield* ClientStoreModule.makeMemory;
+        const engine = yield* makeEngine(handler, store);
+        yield* engine.subscribe(allTodos);
+
+        yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
+        const dropped = yield* engine.dropIfPending([1]);
+        expect(dropped).toEqual([1]);
+
+        // The journal no longer has it...
+        const pending = yield* store.pendingMutations;
+        expect(pending.find((m) => m.mutationId === 1)).toBeUndefined();
+
+        // ...and the state map must not leave it stranded on "pending" forever
+        // (the bug this test guards): it settles to "dropped" like any other
+        // terminal outcome, so a devtools mutation timeline never shows a
+        // phantom in-flight entry for a compacted-away mutation.
+        const states = yield* snapshot(engine);
+        expect(get(states, 1)?.phase).toBe("dropped");
+        expect(get(states, 1)?.settledAt).toBeDefined();
+      })
+  );
+
   // Real clock: the collector subscribes to the underlying PubSub on a
   // background fibre, so give it a turn to establish before the mutation
   // publishes (mirrors mutation-outcome.test.ts's `it.live` mutationEvents

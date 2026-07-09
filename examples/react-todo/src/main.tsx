@@ -18,12 +18,12 @@ const container = document.getElementById("root");
 if (container === null) throw new Error("Missing #root container");
 
 const main = async (): Promise<void> => {
-  const { atoms, controls } = await createWorld();
+  const { atoms, devtools, controls } = await createWorld();
   createRoot(container).render(
     <React.StrictMode>
       <EffectSyncProvider atoms={atoms}>
         <DemoProvider controls={controls}>
-          <App />
+          <App devtools={devtools} />
         </DemoProvider>
       </EffectSyncProvider>
     </React.StrictMode>

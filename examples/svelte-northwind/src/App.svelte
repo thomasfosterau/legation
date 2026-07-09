@@ -9,6 +9,7 @@
    */
   import { untrack } from "svelte";
   import { Runtime } from "@legation/svelte";
+  import { DevtoolsPanel } from "@legation/devtools/svelte";
   import type { World } from "./sync";
   import { setWorld, connectionStore } from "./world";
   import { createData, setData } from "./data";
@@ -81,4 +82,6 @@
   {:else if tab === "suppliers"}
     <Suppliers />
   {/if}
+
+  <DevtoolsPanel core={world.devtools} />
 </div>

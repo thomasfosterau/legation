@@ -84,6 +84,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
+        "@legation/devtools": "workspace:*",
         "@legation/effect": "workspace:*",
         "@legation/react": "workspace:*",
         "effect": "catalog:",
@@ -133,6 +134,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
+        "@legation/devtools": "workspace:*",
         "@legation/effect": "workspace:*",
         "@legation/svelte": "workspace:*",
         "effect": "catalog:",
@@ -209,6 +211,27 @@
       "peerDependencies": {
         "effect": "4.0.0-beta.84",
       },
+    },
+    "packages/devtools": {
+      "name": "@legation/devtools",
+      "version": "0.1.0",
+      "dependencies": {
+        "@legation/effect": "workspace:^",
+      },
+      "devDependencies": {
+        "effect": "catalog:",
+        "react": "^18",
+        "svelte": "^5",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-beta.84",
+        "react": ">=18",
+        "svelte": ">=5.40",
+      },
+      "optionalPeers": [
+        "react",
+        "svelte",
+      ],
     },
     "packages/effect": {
       "name": "@legation/effect",
@@ -540,6 +563,8 @@
     "@legation/browser": ["@legation/browser@workspace:packages/browser"],
 
     "@legation/cloudflare": ["@legation/cloudflare@workspace:packages/cloudflare"],
+
+    "@legation/devtools": ["@legation/devtools@workspace:packages/devtools"],
 
     "@legation/effect": ["@legation/effect@workspace:packages/effect"],
 

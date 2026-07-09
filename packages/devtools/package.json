@@ -1,0 +1,80 @@
+{
+  "name": "@legation/devtools",
+  "version": "0.1.0",
+  "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with thin React and Svelte panels over it",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./svelte": {
+      "svelte": "./svelte/index.ts",
+      "types": "./svelte/index.ts",
+      "default": "./svelte/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "svelte",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.."
+  },
+  "keywords": [
+    "effect",
+    "devtools",
+    "react",
+    "svelte",
+    "sync-engine",
+    "introspection",
+    "typescript"
+  ],
+  "author": "Thomas Foster",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@legation/effect": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.84",
+    "react": ">=18",
+    "svelte": ">=5.40"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "svelte": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "effect": "catalog:",
+    "react": "^18",
+    "svelte": "^5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/devtools"
+  },
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/devtools#readme"
+}

@@ -13,7 +13,7 @@
  * `writer.get`, merges, and puts. That re-runs idempotently on every rebase.
  */
 
-import { Effect, Fiber, Layer, ManagedRuntime, Schema, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, Layer, ManagedRuntime, Schema, Stream } from "effect";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
@@ -22,8 +22,6 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-  TransportError,
-  type VersionNotSupportedError,
 } from "@legation/effect";
 import {
   ClientEngine,
@@ -33,6 +31,7 @@ import {
   SyncServer,
 } from "@legation/effect/internal";
 import { Runtime } from "@legation/svelte";
+import * as Devtools from "@legation/devtools";
 
 import {
   CLIENT_GROUP_ID,
@@ -61,6 +60,8 @@ import * as seed from "./seed";
 
 export interface World {
   readonly runtime: Runtime.EffectSyncRuntime;
+  /** The `@legation/devtools` headless core (#120) over this engine + store. */
+  readonly devtools: Devtools.DevtoolsCore;
   readonly setOnline: (online: boolean) => Promise<void>;
   readonly subscribeConnection: (
     listener: (status: Transport.ConnectionStatus) => void
@@ -141,33 +142,6 @@ const authPolicy = Authorization.policy({
   orderDetails: Authorization.allowAll,
 });
 
-// ─── Offline-aware loopback transport ────────────────────────────────────────
-
-const makeOfflineTransport = (
-  handler: Transport.ServerHandler,
-  online: SubscriptionRef.SubscriptionRef<boolean>
-): Transport.ClientTransport => {
-  const whenOnline = <A>(
-    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
-  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-    SubscriptionRef.get(online).pipe(
-      Effect.flatMap((on) =>
-        on ? effect : Effect.fail(new TransportError({ message: "Client is offline" }))
-      )
-    );
-  return {
-    push: (request) => whenOnline(handler.handlePush(request)),
-    pull: (request) => whenOnline(handler.handlePull(request)),
-    pokes: handler.pokes(CLIENT_GROUP_ID),
-    status: SubscriptionRef.get(online).pipe(
-      Effect.map((on): Transport.ConnectionStatus => (on ? "connected" : "disconnected"))
-    ),
-    statusChanges: SubscriptionRef.changes(online).pipe(
-      Stream.map((on): Transport.ConnectionStatus => (on ? "connected" : "disconnected"))
-    ),
-  };
-};
-
 // ─── Seed ────────────────────────────────────────────────────────────────────
 
 const seedBackend = (backend: Backend.Backend, bus: InvalidationBus.InvalidationBus) =>
@@ -196,8 +170,6 @@ const seedBackend = (backend: Backend.Backend, bus: InvalidationBus.Invalidation
 export const createWorld = (): Promise<World> =>
   new Promise<World>((resolve, reject) => {
     const program = Effect.gen(function* () {
-      const online = yield* SubscriptionRef.make(true);
-
       const backend = yield* MemoryBackend.make(backendHandlers);
       const cvr = yield* Cvr.makeMemoryStore;
       const bus = yield* InvalidationBus.makeInProcess;
@@ -210,7 +182,10 @@ export const createWorld = (): Promise<World> =>
 
       yield* seedBackend(backend, bus);
 
-      const transport = makeOfflineTransport(handler, online);
+      // A simulated-offline transport (the devtools' offline-toggle action
+      // wraps the same decorator, #120) + engine.
+      const base = yield* Transport.makeInMemory(handler, CLIENT_GROUP_ID);
+      const { transport, setOffline, isOffline } = yield* Transport.simulateOffline(base);
       const store = yield* ClientStore.makeKeyValue({ prefix: "svelte-northwind/" }).pipe(
         Effect.provide(BrowserKeyValueStore.layerLocalStorage)
       );
@@ -232,9 +207,14 @@ export const createWorld = (): Promise<World> =>
         )
       );
 
+      // The devtools headless core (#120): the offline control is the same
+      // `simulateOffline` toggle the banner's own "Go offline" button drives.
+      const devtools = Devtools.make(engine, store, { offline: { setOffline, isOffline } });
+
       const world: World = {
         runtime,
-        setOnline: (next) => Effect.runPromise(SubscriptionRef.set(online, next)),
+        devtools,
+        setOnline: (next) => Effect.runPromise(setOffline(!next)),
         subscribeConnection: (listener) => {
           const fiber = Effect.runFork(
             Stream.runForEach(transport.statusChanges, (status) =>

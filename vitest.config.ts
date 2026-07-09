@@ -18,6 +18,10 @@ const alias = {
   "@legation/react": pkg("react"),
   "@legation/svelte": pkg("svelte"),
   "@legation/sveltekit": pkg("sveltekit"),
+  "@legation/devtools/react": fileURLToPath(
+    new URL("packages/devtools/src/react.tsx", import.meta.url)
+  ),
+  "@legation/devtools": pkg("devtools"),
 };
 
 export default defineConfig({
