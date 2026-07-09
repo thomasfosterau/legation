@@ -1490,14 +1490,17 @@ export const make = (
     ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
 
     // Route a Patch's ops (this subset's collection only) through an
-    // incremental aggregate state. `Put` carries the raw new value —
-    // `Aggregate.applyPut` re-tests `subset.where` itself to decide
-    // insert/update/remove, exactly as `applyOps` does for `LiveView` above.
+    // incremental aggregate state. A Patch's ops are confirmed-row deltas
+    // from a pull, or optimistic `OverlayOp`s a mutate's local handler just
+    // performed (#109) — both shapes carry the `_tag`/`collection`/`id`/`value`
+    // this reads. `Put` carries the raw new value — `Aggregate.applyPut`
+    // re-tests `subset.where` itself to decide insert/update/remove, exactly
+    // as `applyOps` does for `LiveView` above.
     const applyAggregatePatch = (
       state: Aggregate.State,
       agg: Aggregate.Aggregate,
       subset: Subset.Subset,
-      ops: ReadonlyArray<PatchOp>
+      ops: ReadonlyArray<PatchOp | OverlayOp>
     ): Aggregate.State => {
       let next = state;
       for (const op of ops) {
@@ -1514,7 +1517,7 @@ export const make = (
       agg: Aggregate.Aggregate,
       subset: Subset.Subset,
       groupBy: string,
-      ops: ReadonlyArray<PatchOp>
+      ops: ReadonlyArray<PatchOp | OverlayOp>
     ): Aggregate.GroupedState => {
       let next = state;
       for (const op of ops) {
@@ -1536,7 +1539,7 @@ export const make = (
      */
     interface AggregateReducer<S, V> {
       readonly init: (rows: ReadonlyArray<LocalRow>) => S;
-      readonly applyOps: (state: S, ops: ReadonlyArray<PatchOp>) => S;
+      readonly applyOps: (state: S, ops: ReadonlyArray<PatchOp | OverlayOp>) => S;
       readonly value: (state: S) => V;
       readonly sameValue: (a: V, b: V) => boolean;
     }

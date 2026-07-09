@@ -12,11 +12,12 @@ changed row's old and new group — every other group's value is left
 untouched, both in cost and by reference.
 
 This applies to unwindowed subsets (no `limit`/`cursor` — the common case:
-aggregating over everything a client has synced) and only for confirmed
-`Patch` changes (an empty-journal pull's per-row deltas); a windowed subset,
-or a change too large to diff safely (`Rebuild` — journal-pending mutations,
-resets, seq-gap collapses), still refolds from scratch, as before. Public API
-and dedup guarantees ("streams do not re-emit when a change leaves the
+aggregating over everything a client has synced) whenever a `Patch` view
+change is available — a confirmed pull's per-row deltas, or (now that #109
+has landed) a `mutate`'s optimistic overlay deltas. A windowed subset, or a
+change too large to diff safely (`Rebuild` — resets, an unrecognized
+mutator, seq-gap collapses), still refolds from scratch, as before. Public
+API and dedup guarantees ("streams do not re-emit when a change leaves the
 aggregate unchanged") are unchanged.
 
 A benchmark (`bun run bench`) exercises three live aggregates over a 10k-row
