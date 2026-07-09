@@ -107,7 +107,7 @@ describe("EngineIntrospection (#45)", () => {
       yield* engine.subscribe(allTodos);
 
       const collected = yield* Effect.forkChild(
-        Stream.runCollect(intro.events.pipe(Stream.take(7)))
+        Stream.runCollect(intro.events.pipe(Stream.take(6)))
       );
       yield* Effect.sleep(Duration.millis(20));
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
@@ -115,9 +115,11 @@ describe("EngineIntrospection (#45)", () => {
       yield* engine.pull;
 
       const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
+      // No `ViewRebuilt` after `MutationJournaled` (#109): a mutate now
+      // publishes a delta `Patch` onto the cached overlay rather than a
+      // `Rebuild`, so it never emits `ViewRebuilt` at all.
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
-        "ViewRebuilt",
         "PushStarted",
         "ViewRebuilt",
         "PushCompleted",

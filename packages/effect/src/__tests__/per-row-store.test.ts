@@ -150,6 +150,25 @@ describe("ClientStore per-row layout (#47)", () => {
     })
   );
 
+  it.effect("dropPending (#117) never rewrites surviving mutation bodies", () =>
+    Effect.gen(function* () {
+      const { store, sets } = countingStore();
+      yield* Effect.gen(function* () {
+        const s = yield* ClientStoreModule.makeKeyValue();
+        yield* s.appendMutation(mutation(1));
+        yield* s.appendMutation(mutation(2));
+        yield* s.appendMutation(mutation(3));
+
+        // Dropping the superseded #1 (paced coalescing) removes only its body
+        // and rewrites the tiny index — #2 and #3's bodies are untouched.
+        yield* s.dropPending("c1", [1]);
+        expect(sets.get("legation/journal/c1/2")).toBe(1);
+        expect(sets.get("legation/journal/c1/3")).toBe(1);
+        expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([2, 3]);
+      }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
+    })
+  );
+
   it.effect("a K-op patch writes ~K row values, independent of collection size", () =>
     Effect.gen(function* () {
       const { store, sets } = countingStore();

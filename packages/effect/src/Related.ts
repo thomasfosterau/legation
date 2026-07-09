@@ -19,7 +19,7 @@
  * same machinery via {@link queryWith}/{@link observeWith}/{@link relatedWith}.
  */
 
-import { Effect, Ref, Scope, Stream } from "effect";
+import { Effect, Fiber, Queue, Ref, Scope, Stream } from "effect";
 import * as Collection from "./Collection.js";
 import type { ClientEngine, LocalRow } from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
@@ -286,50 +286,396 @@ export const queryWith = (
   });
 
 /**
- * Live version of {@link queryWith} as an incrementally-maintained join. The
- * base page is kept current by `engine.observe(subset)`; each targeted
- * collection by its own `engine.observe`, so a write to a related row
- * re-hydrates the join without re-querying the base. When a base change shifts
- * *which* collections are targeted, `switchMap` re-establishes the observers.
- * Per collection the index slice is rebuilt only on that collection's change;
- * changes that don't move the resolved result are deduped away.
+ * The delta-maintained join engine behind {@link observeWith} (issue #111).
+ * Maintains, per targeted foreign collection, an incremental `fk → rows`
+ * bucket index — a row put/del touches at most the one or two buckets its old
+ * and new key select, never a full re-group (`groupByField` was the O(n)
+ * offender) — plus a reverse index from `(collection, key)` to the base row
+ * ids that key affects, so a foreign delta re-hydrates only the base rows it
+ * actually touches, never the full base page. A base-row delta re-hydrates
+ * only that row. Linkage shifts (which collections are targeted) are diffed
+ * against the previously targeted set — the same diff-and-release shape as
+ * {@link reconcile} — so already-targeted collections' indexes and observers
+ * are left running instead of torn down and re-primed.
+ *
+ * `one`-edge presence transitions (a resolved edge appearing or disappearing)
+ * need no special case: they fall out of re-running `resolveRow` for exactly
+ * the affected base rows, same as any other bucket change.
+ *
+ * Pure and Effect-free — it consumes plain row snapshots, not streams or
+ * subscriptions — so it can be driven directly by a property test comparing
+ * it against {@link hydrateFromScratch} after every prefix of a randomized
+ * delta sequence.
+ */
+export interface JoinEngine {
+  /**
+   * Apply a new base-page snapshot. `added`/`removed` are the collections the
+   * caller must start/stop observing. `result` is the freshly hydrated page,
+   * or `undefined` while any newly-targeted collection has not yet delivered
+   * its first snapshot (the join isn't fully primed yet).
+   */
+  readonly applyBase: (rows: ReadonlyArray<LocalRow>) => {
+    readonly added: ReadonlyArray<string>;
+    readonly removed: ReadonlyArray<string>;
+    readonly result: ReadonlyArray<RelatedRow> | undefined;
+  };
+  /** Apply a new snapshot for one currently-targeted foreign collection. */
+  readonly applyForeign: (
+    collection: string,
+    rows: ReadonlyArray<LocalRow>
+  ) => { readonly result: ReadonlyArray<RelatedRow> | undefined };
+}
+
+/** One targeted foreign collection's incrementally-maintained state. */
+interface ForeignState {
+  target: Target;
+  /** Last-seen full snapshot, diffed against the next one to find the delta. */
+  rowsById: Map<string, LocalRow>;
+  /** `fk value → (row id → row)`, updated for only the touched key(s). */
+  buckets: Map<Predicate.Literal, Map<string, LocalRow>>;
+  /** `fk value → rows`: the {@link CollectionIndex} entry, cached from `buckets`. */
+  results: Map<Predicate.Literal, ReadonlyArray<LocalRow>>;
+}
+
+/** The per-row key set a base row pins in each targeted collection. */
+const rowKeysOf = (
+  strategy: Strategy,
+  row: LocalRow
+): ReadonlyMap<string, ReadonlySet<Predicate.Literal>> => {
+  const map = new Map<string, ReadonlySet<Predicate.Literal>>();
+  for (const [collection, target] of strategy.targets([row])) map.set(collection, target.ids);
+  return map;
+};
+
+/** {@inheritDoc JoinEngine} */
+export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
+  let baseOrder: ReadonlyArray<string> = [];
+  const baseRowsById = new Map<string, LocalRow>();
+  const baseKeysById = new Map<string, ReadonlyMap<string, ReadonlySet<Predicate.Literal>>>();
+  const resolvedById = new Map<string, RelatedRow>();
+  const foreignByCollection = new Map<string, ForeignState>();
+  const reverseIndex = new Map<string, Map<Predicate.Literal, Set<string>>>();
+  // Collections newly targeted whose first snapshot hasn't arrived yet: while
+  // non-empty the join is incompletely primed, so `result` stays `undefined`.
+  const pendingCollections = new Set<string>();
+
+  const indexView = (): CollectionIndex => {
+    const map = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
+    for (const [collection, state] of foreignByCollection) map.set(collection, state.results);
+    return map;
+  };
+
+  const hydrateRow = (row: LocalRow): RelatedRow => ({
+    id: row.id,
+    value: row.value,
+    related: strategy.resolveRow(indexView(), row),
+  });
+
+  const rehydrateById = (id: string): void => {
+    const row = baseRowsById.get(id);
+    if (row !== undefined) resolvedById.set(id, hydrateRow(row));
+  };
+
+  // Visit every (collection, key) a row's key set touches, skipping
+  // collections that aren't (or are no longer) targeted. `indexRow` and
+  // `unindexRow` differ only in what they do at each (byKey, key) — this is
+  // the shared traversal.
+  const forEachIndexed = (
+    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>,
+    f: (byKey: Map<Predicate.Literal, Set<string>>, key: Predicate.Literal) => void
+  ): void => {
+    for (const [collection, ids] of keys) {
+      const byKey = reverseIndex.get(collection);
+      if (byKey === undefined) continue;
+      for (const key of ids) f(byKey, key);
+    }
+  };
+
+  const indexRow = (id: string, keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>): void =>
+    forEachIndexed(keys, (byKey, key) => {
+      const set = byKey.get(key) ?? new Set<string>();
+      set.add(id);
+      byKey.set(key, set);
+    });
+
+  const unindexRow = (
+    id: string,
+    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
+  ): void =>
+    forEachIndexed(keys, (byKey, key) => {
+      const set = byKey.get(key);
+      if (set === undefined) return;
+      set.delete(id);
+      if (set.size === 0) byKey.delete(key);
+    });
+
+  const addCollection = (collection: string, target: Target): void => {
+    foreignByCollection.set(collection, {
+      target,
+      rowsById: new Map(),
+      buckets: new Map(),
+      results: new Map(),
+    });
+    reverseIndex.set(collection, new Map());
+    pendingCollections.add(collection);
+  };
+
+  const removeCollection = (collection: string): void => {
+    foreignByCollection.delete(collection);
+    reverseIndex.delete(collection);
+    pendingCollections.delete(collection);
+  };
+
+  const currentOutput = (): ReadonlyArray<RelatedRow> =>
+    baseOrder.map((id) => resolvedById.get(id)!);
+
+  /**
+   * Diff the targeted collection set (the `reconcile` pattern, :366-388):
+   * start observing newly-targeted collections, stop observing stale ones,
+   * leave already-targeted ones (with the same join field) untouched.
+   */
+  const diffTargets = (
+    nextTargets: ReadonlyMap<string, Target>
+  ): { readonly added: ReadonlyArray<string>; readonly removed: ReadonlyArray<string> } => {
+    const added: Array<string> = [];
+    const removed: Array<string> = [];
+    for (const [collection, target] of nextTargets) {
+      const existing = foreignByCollection.get(collection);
+      if (existing === undefined) {
+        addCollection(collection, target);
+        added.push(collection);
+      } else if (existing.target.field !== target.field) {
+        // The join key itself changed collection-wide: the maintained buckets
+        // no longer mean anything, so re-prime from scratch.
+        removeCollection(collection);
+        addCollection(collection, target);
+        removed.push(collection);
+        added.push(collection);
+      } else {
+        existing.target = target;
+      }
+    }
+    for (const collection of foreignByCollection.keys()) {
+      if (!nextTargets.has(collection)) {
+        removeCollection(collection);
+        removed.push(collection);
+      }
+    }
+    return { added, removed };
+  };
+
+  /** Diff the base page against the last snapshot, updating the reverse
+   * index and re-hydrating only added/changed rows. */
+  const diffBaseRows = (rows: ReadonlyArray<LocalRow>): void => {
+    const nextIds = new Set(rows.map((row) => row.id));
+    for (const id of baseRowsById.keys()) {
+      if (nextIds.has(id)) continue;
+      const keys = baseKeysById.get(id);
+      if (keys !== undefined) unindexRow(id, keys);
+      baseRowsById.delete(id);
+      baseKeysById.delete(id);
+      resolvedById.delete(id);
+    }
+    for (const row of rows) {
+      const prior = baseRowsById.get(row.id);
+      if (prior === row) continue; // reference-stable: nothing to redo
+      const keys = rowKeysOf(strategy, row);
+      const priorKeys = baseKeysById.get(row.id);
+      if (priorKeys !== undefined) unindexRow(row.id, priorKeys);
+      indexRow(row.id, keys);
+      baseKeysById.set(row.id, keys);
+      baseRowsById.set(row.id, row);
+      resolvedById.set(row.id, hydrateRow(row));
+    }
+    baseOrder = rows.map((row) => row.id);
+  };
+
+  const applyBase: JoinEngine["applyBase"] = (rows) => {
+    const { added, removed } = diffTargets(strategy.targets(rows));
+    diffBaseRows(rows);
+    return { added, removed, result: pendingCollections.size === 0 ? currentOutput() : undefined };
+  };
+
+  /**
+   * Diff one foreign collection's new snapshot against its last one: an
+   * unchanged row (same reference) is skipped; a changed or new row is
+   * (re)placed in its current key's bucket, vacating its prior key's bucket
+   * if the key moved; a row present before but not now is removed from its
+   * bucket. Returns the keys whose bucket contents changed.
+   */
+  const diffForeignRows = (
+    state: ForeignState,
+    rows: ReadonlyArray<LocalRow>
+  ): ReadonlySet<Predicate.Literal> => {
+    const changedKeys = new Set<Predicate.Literal>();
+    const keyOf = (row: LocalRow) => fieldOf(row.value, state.target.field) as Predicate.Literal;
+    const putInto = (key: Predicate.Literal, row: LocalRow): void => {
+      const bucket = state.buckets.get(key) ?? new Map<string, LocalRow>();
+      bucket.set(row.id, row);
+      state.buckets.set(key, bucket);
+      state.results.set(key, [...bucket.values()]);
+      changedKeys.add(key);
+    };
+    const removeFrom = (key: Predicate.Literal, id: string): void => {
+      const bucket = state.buckets.get(key);
+      if (bucket === undefined) return;
+      bucket.delete(id);
+      if (bucket.size === 0) {
+        state.buckets.delete(key);
+        state.results.delete(key);
+      } else {
+        state.results.set(key, [...bucket.values()]);
+      }
+      changedKeys.add(key);
+    };
+
+    const nextRowsById = new Map<string, LocalRow>();
+    for (const row of rows) {
+      nextRowsById.set(row.id, row);
+      const prior = state.rowsById.get(row.id);
+      if (prior === row) continue; // reference-stable: this row didn't change
+      const key = keyOf(row);
+      if (prior !== undefined && keyOf(prior) !== key) removeFrom(keyOf(prior), row.id);
+      putInto(key, row);
+    }
+    for (const [id, prior] of state.rowsById) {
+      if (!nextRowsById.has(id)) removeFrom(keyOf(prior), id); // deleted
+    }
+    state.rowsById = nextRowsById;
+    return changedKeys;
+  };
+
+  /** The base row ids that depend on any of `changedKeys` in `collection`. */
+  const affectedByKeys = (
+    collection: string,
+    changedKeys: ReadonlySet<Predicate.Literal>
+  ): ReadonlySet<string> => {
+    const affected = new Set<string>();
+    const byKey = reverseIndex.get(collection);
+    if (byKey === undefined) return affected;
+    for (const key of changedKeys) {
+      const ids = byKey.get(key);
+      if (ids !== undefined) for (const id of ids) affected.add(id);
+    }
+    return affected;
+  };
+
+  const applyForeign: JoinEngine["applyForeign"] = (collection, rows) => {
+    const state = foreignByCollection.get(collection);
+    // A stale event for a collection this base page no longer targets.
+    if (state === undefined) return { result: undefined };
+
+    const changedKeys = diffForeignRows(state, rows);
+    // The first snapshot for a newly-targeted collection always primes it,
+    // even if it touches no base row yet (e.g. an empty foreign collection).
+    const justPrimed = pendingCollections.delete(collection);
+    const affected = affectedByKeys(collection, changedKeys);
+    for (const id of affected) rehydrateById(id);
+
+    if (pendingCollections.size > 0) return { result: undefined };
+    if (affected.size === 0 && !justPrimed) return { result: undefined };
+    return { result: currentOutput() };
+  };
+
+  return { applyBase, applyForeign };
+};
+
+/**
+ * Pure from-scratch join: group every targeted collection's given rows by
+ * field and hydrate the base page against them — the semantics
+ * {@link makeJoinEngine} must match after every incremental step. Exported
+ * for the delta-maintenance property test.
+ */
+export const hydrateFromScratch = (
+  strategy: Strategy,
+  base: ReadonlyArray<LocalRow>,
+  foreignRows: ReadonlyMap<string, ReadonlyArray<LocalRow>>
+): ReadonlyArray<RelatedRow> => {
+  const targets = strategy.targets(base);
+  const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
+  for (const [collection, target] of targets) {
+    index.set(collection, groupByField(foreignRows.get(collection) ?? [], target.field));
+  }
+  return hydrate(strategy, base, index);
+};
+
+/** One raw snapshot arriving from the base subset or a targeted foreign collection. */
+type JoinEvent =
+  | { readonly _tag: "base"; readonly rows: ReadonlyArray<LocalRow> }
+  | {
+      readonly _tag: "foreign";
+      readonly collection: string;
+      readonly rows: ReadonlyArray<LocalRow>;
+    };
+
+/**
+ * Live version of {@link queryWith} as an incrementally-maintained join
+ * (issue #111). A {@link makeJoinEngine} consumes the base page and every
+ * targeted foreign collection's snapshots as they arrive over `view.observe`
+ * and re-hydrates only the base rows a delta actually touches — never a full
+ * re-group or a full base re-hydrate. A collection is observed for as long as
+ * (and only as long as) the base page targets it: a linkage shift diffs the
+ * targeted set and starts/stops just the newly (un)targeted collections'
+ * observers, leaving the rest running.
  */
 export const observeWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
-  view.observe(subset).pipe(
-    Stream.orDie,
-    Stream.switchMap((base) => {
-      const targets = strategy.targets(base);
-      return Stream.unwrap(
+  Stream.callback<ReadonlyArray<RelatedRow>>((output) =>
+    Effect.gen(function* () {
+      const engine = makeJoinEngine(strategy);
+      const events = yield* Queue.unbounded<JoinEvent>();
+      const collectionFibers = new Map<string, Fiber.Fiber<void, never>>();
+
+      const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
+        result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
+
+      const startCollection = (collection: string) =>
         Effect.gen(function* () {
-          const index = yield* primeIndex(view, targets);
-          const updates = Stream.mergeAll(
-            [...targets].map(([collection, target]) =>
-              view.observe(Subset.make({ collection })).pipe(
-                Stream.orDie,
-                // The observer's initial current-rows emission is NOT dropped:
-                // a write landing between `primeIndex` and this subscription
-                // would otherwise be swallowed, leaving the join stale until
-                // the next foreign write. Rebuilding from an unchanged initial
-                // emission re-hydrates to the same join, which `changesWith`
-                // dedups away.
-                Stream.map((rows) => {
-                  index.set(collection, groupByField(rows, target.field));
-                  return hydrate(strategy, base, index);
-                })
-              )
-            ),
-            { concurrency: "unbounded" }
+          const fiber = yield* Effect.forkScoped(
+            Stream.runForEach(
+              view.observe(Subset.make({ collection })).pipe(Stream.orDie),
+              (rows) => Queue.offer(events, { _tag: "foreign", collection, rows })
+            )
           );
-          return Stream.concat(Stream.succeed(hydrate(strategy, base, index)), updates);
-        })
+          collectionFibers.set(collection, fiber);
+        });
+
+      const stopCollection = (collection: string) =>
+        Effect.gen(function* () {
+          const fiber = collectionFibers.get(collection);
+          collectionFibers.delete(collection);
+          if (fiber !== undefined) yield* Fiber.interrupt(fiber);
+        });
+
+      // The base observer runs for the join's whole lifetime; foreign
+      // observers come and go with `applyBase`'s targeted-set diff below.
+      yield* Effect.forkScoped(
+        Stream.runForEach(view.observe(subset).pipe(Stream.orDie), (rows) =>
+          Queue.offer(events, { _tag: "base", rows })
+        )
       );
-    }),
-    Stream.changesWith(sameJoin)
-  );
+
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Queue.take(events).pipe(
+            Effect.flatMap((event) =>
+              event._tag === "base"
+                ? Effect.gen(function* () {
+                    const { added, removed, result } = engine.applyBase(event.rows);
+                    for (const collection of removed) yield* stopCollection(collection);
+                    for (const collection of added) yield* startCollection(collection);
+                    yield* emit(result);
+                  })
+                : emit(engine.applyForeign(event.collection, event.rows).result)
+            )
+          )
+        )
+      );
+    })
+  ).pipe(Stream.changesWith(sameJoin));
 
 /**
  * The narrowed subsets a base page's targets pin: one `foreignField IN (...)`
