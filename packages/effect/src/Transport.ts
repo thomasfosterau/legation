@@ -198,6 +198,75 @@ export const makePokeHub: Effect.Effect<
 const isTransportError = (error: TransportError | VersionNotSupportedError): boolean =>
   error._tag === "TransportError";
 
+/** A transport wrapped by {@link simulateOffline}, plus the toggle driving it. */
+export interface SimulatedOffline {
+  /** The wrapped transport: fails push/pull/read while simulated-offline. */
+  readonly transport: ClientTransport;
+  /** Flip simulated connectivity. */
+  readonly setOffline: (offline: boolean) => Effect.Effect<void>;
+  /** Current simulated-offline state. */
+  readonly isOffline: Effect.Effect<boolean>;
+}
+
+/**
+ * Wrap any transport with a simulated-offline gate: while toggled offline,
+ * every push/pull/read *fails* with a `TransportError` (as a real network
+ * would), so the engine keeps mutations in the journal and its sync loop
+ * flushes them on reconnect — exactly the behaviour a devtools "simulated
+ * offline" action needs (issue #120), generalising the demo examples'
+ * hand-rolled offline-gate transport into reusable substrate.
+ *
+ * `status`/`statusChanges` report `"disconnected"` while the gate is closed,
+ * otherwise defer to the wrapped transport's own reported status — so this
+ * composes under {@link withInferredStatus} or over a carrier that already
+ * tracks real connectivity.
+ */
+export const simulateOffline = (
+  transport: ClientTransport
+): Effect.Effect<SimulatedOffline, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const offline = yield* SubscriptionRef.make(false);
+
+    const gate = <A>(
+      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+      SubscriptionRef.get(offline).pipe(
+        Effect.flatMap((isOffline) =>
+          isOffline ? Effect.fail(new TransportError({ message: "simulated offline" })) : effect
+        )
+      );
+
+    const status = SubscriptionRef.get(offline).pipe(
+      Effect.flatMap(
+        (isOffline): Effect.Effect<ConnectionStatus> =>
+          isOffline ? Effect.succeed("disconnected") : transport.status
+      )
+    );
+
+    const statusChanges = Stream.zipLatestWith(
+      SubscriptionRef.changes(offline),
+      transport.statusChanges,
+      (isOffline, real): ConnectionStatus => (isOffline ? "disconnected" : real)
+    ).pipe(Stream.changesWith((a, b) => a === b));
+
+    const wrapped: ClientTransport = {
+      push: (request) => gate(transport.push(request)),
+      pull: (request) => gate(transport.pull(request)),
+      ...(transport.read === undefined
+        ? {}
+        : { read: (request: ReadRequest) => gate(transport.read!(request)) }),
+      pokes: transport.pokes,
+      status,
+      statusChanges,
+    };
+
+    return {
+      transport: wrapped,
+      setOffline: (next) => SubscriptionRef.set(offline, next),
+      isOffline: SubscriptionRef.get(offline),
+    };
+  });
+
 /**
  * Wrap a transport with connectivity inferred from observed behaviour:
  * `"connecting"` until the first push/pull settles, then `"connected"` after

@@ -25,7 +25,7 @@
 import { HashMap, Option } from "effect";
 import type { Mutation } from "./Protocol.js";
 
-export type MutationPhase = "pending" | "acknowledged" | "rejected";
+export type MutationPhase = "pending" | "acknowledged" | "rejected" | "dropped";
 
 /**
  * One mutation's lifecycle state, keyed by `mutationId` in {@link
@@ -119,11 +119,11 @@ const evictTerminal = (
   return next;
 };
 
-/** Fold one mutation's authoritative outcome in, without applying retention. */
+/** Fold one mutation's terminal outcome in, without applying retention. */
 const transition = (
   map: MutationStateMap,
   mutationId: number,
-  phase: "acknowledged" | "rejected",
+  phase: "acknowledged" | "rejected" | "dropped",
   settledAt: number,
   reason: string | undefined
 ): MutationStateMap => {
@@ -157,6 +157,44 @@ export const rejected = (
   options?: RetentionOptions
 ): MutationStateMap =>
   evictTerminal(transition(map, mutationId, "rejected", settledAt, reason), options);
+
+/**
+ * Fold a paced-compaction drop in for one mutation (`ClientEngine.dropIfPending`,
+ * #117's debounce/throttle/coalesce strategies superseding a still-unpushed
+ * entry), then apply terminal retention. Unlike {@link acknowledged} /
+ * {@link rejected}, this is not a backend verdict — the entry never reached the
+ * backend — but it must still leave `"pending"`: left untouched, a compacted
+ * entry would stay `"pending"` forever (the journal no longer has it, but
+ * nothing ever transitions the state map), a permanently stale entry a
+ * mutation-timeline consumer (a devtools journal panel) would show as
+ * eternally in flight.
+ */
+export const dropped = (
+  map: MutationStateMap,
+  mutationId: number,
+  settledAt: number,
+  options?: RetentionOptions
+): MutationStateMap =>
+  evictTerminal(transition(map, mutationId, "dropped", settledAt, undefined), options);
+
+/**
+ * Fold a batch of paced-compaction drops in, then apply terminal retention
+ * exactly once — see {@link acknowledgedMany}'s rationale: `evictTerminal` is
+ * `O(size)`, so folding every transition first and evicting once keeps a
+ * K-entry drop `O(size)` rather than `O(K * size)`.
+ */
+export const droppedMany = (
+  map: MutationStateMap,
+  mutationIds: ReadonlyArray<number>,
+  settledAt: number,
+  options?: RetentionOptions
+): MutationStateMap => {
+  let next = map;
+  for (const mutationId of mutationIds) {
+    next = transition(next, mutationId, "dropped", settledAt, undefined);
+  }
+  return evictTerminal(next, options);
+};
 
 /**
  * Fold a push ack sweep's whole batch of newly-applied mutation ids in, then
