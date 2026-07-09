@@ -60,6 +60,7 @@ import {
 | Normalised entity cache (Apollo)                        | Collections _are_ the normalisation — one row per (collection, id), no `keyFields`.              |
 | `ModelActor` / boundary rules (SwiftData)               | The engine host is the serialised writer; encoded rows/mutations cross the mirror boundary.      |
 | Suspense (TanStack)                                     | `AsyncResult` states in the atoms; a suspense hook is deliberately not shipped.                  |
+| `placeholderData: keepPreviousData` (TanStack)          | `useQuery`/`useNamedQuery`'s `keepPrevious` option (react); automatic on resubscribe (svelte).   |
 
 Beyond the direct translations, several capabilities that these libraries hand
 you as options have shipped as real APIs — [select projections](#select-projections),
@@ -266,6 +267,33 @@ the app.
 //   const result = useQuery(subset);
 //   AsyncResult.match(result, { onInitial, onSuccess, onFailure });
 const todos = atoms.liveQuery(Subset.make({ collection: "todos" })); // Atom<AsyncResult<Rows>>
+```
+
+## `placeholderData: keepPreviousData` (TanStack)
+
+**Reference:** TanStack's [paginated
+queries](https://tanstack.com/query/latest/docs/framework/react/guides/paginated-queries).
+
+A changed subset (a paging cursor, a filter) selects a different atom whose
+`AsyncResult` starts at `Initial` — nothing carries the old rows across by
+default, so the UI flashes a loading state between pages. `@legation/svelte`'s
+`useQuery`/`useConnection` do this automatically: re-subscribing on an input
+change keeps the previous result on screen as a `waiting` `Success`
+(`useLiveStream`'s stale-while-revalidate). `@legation/react`'s atoms are
+cached per `Subset.hash` rather than held in one reactive slot per component,
+so the same behaviour is an explicit opt-in: `useQuery`/`useNamedQuery`'s
+`keepPrevious` option keeps the previous subset's rows as a `waiting`
+`Success` until the new subset's first emission replaces it. Either way, the
+consumer discriminates previous ("stale") from fresh data via
+`AsyncResult.isWaiting` — no separate `isPlaceholderData` flag.
+
+```ts
+// From @legation/react:
+const orders = useQuery(Subset.make({ collection: "orders", where, first, after }), {
+  keepPrevious: true,
+});
+// AsyncResult.isSuccess(orders) && orders.waiting ⇒ showing the previous
+// page's rows while the new page loads.
 ```
 
 ## Shipped as real APIs
