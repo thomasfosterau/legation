@@ -97,17 +97,15 @@ const NewProduct = (): React.ReactElement => {
   const add = (event: React.FormEvent) => {
     event.preventDefault();
     if (name.trim() === "") return;
-    actions
-      .createProduct({
-        id: `p-${Math.random().toString(36).slice(2, 8)}`,
-        name: name.trim(),
-        categoryId: categoryId || categories[0]?.id || "1",
-        supplierId: "1",
-        unitPrice: Number(price) || 0,
-        unitsInStock: 0,
-        discontinued: false,
-      })
-      .catch(() => undefined);
+    actions.createProduct({
+      id: `p-${Math.random().toString(36).slice(2, 8)}`,
+      name: name.trim(),
+      categoryId: categoryId || categories[0]?.id || "1",
+      supplierId: "1",
+      unitPrice: Number(price) || 0,
+      unitsInStock: 0,
+      discontinued: false,
+    });
     setName("");
     setPrice("");
   };

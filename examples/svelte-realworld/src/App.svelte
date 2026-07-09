@@ -10,7 +10,7 @@
    * flush on reconnect.
    */
   import { untrack } from "svelte";
-  import { setEngineRuntime, getMutate } from "@legation/svelte";
+  import { Runtime, Mutation } from "@legation/svelte";
   import type { World } from "./sync";
   import { setWorld, connectionStore } from "./world";
   import { createData, setData } from "./data";
@@ -30,14 +30,14 @@
   const world = untrack(() => props.world);
 
   // Wire the engine runtime + demo world into context for this subtree.
-  setEngineRuntime(world.runtime);
+  Runtime.setEngineRuntime(world.runtime);
   setWorld(world);
 
   // Base collection stores + the session, shared via context.
   const data = createData();
   setData(data);
 
-  const mutate = getMutate();
+  const mutate = Mutation.getMutate();
   const { auth, currentUsername } = createAuth(data.users, mutate, world);
   setAuth(auth);
 

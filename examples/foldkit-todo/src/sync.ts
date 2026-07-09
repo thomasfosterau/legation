@@ -28,18 +28,14 @@ import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  type Protocol,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
 } from "@legation/effect";
+import { ClientEngine, Cvr, InvalidationBus, type Protocol, SyncServer } from "@legation/effect/internal";
 
 import {
   CLIENT_GROUP_ID,

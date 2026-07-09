@@ -7,6 +7,7 @@
  * re-derives on every optimistic edit, push ack, and pull/rebase.
  */
 import * as React from "react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useQuery } from "@legation/react";
 import {
   allCategories,
@@ -50,31 +51,31 @@ const map = <T,>(rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArra
 // ─── Raw collection reads ────────────────────────────────────────────────────
 
 export const useCategories = (): ReadonlyArray<Category> => {
-  const rows = useQuery(allCategories);
+  const rows = AsyncResult.getOrElse(useQuery(allCategories), () => []);
   return React.useMemo(() => map<Category>(rows), [rows]);
 };
 export const useSuppliers = (): ReadonlyArray<Supplier> => {
-  const rows = useQuery(allSuppliers);
+  const rows = AsyncResult.getOrElse(useQuery(allSuppliers), () => []);
   return React.useMemo(() => map<Supplier>(rows), [rows]);
 };
 export const useProducts = (): ReadonlyArray<Product> => {
-  const rows = useQuery(allProducts);
+  const rows = AsyncResult.getOrElse(useQuery(allProducts), () => []);
   return React.useMemo(() => map<Product>(rows), [rows]);
 };
 export const useCustomers = (): ReadonlyArray<Customer> => {
-  const rows = useQuery(allCustomers);
+  const rows = AsyncResult.getOrElse(useQuery(allCustomers), () => []);
   return React.useMemo(() => map<Customer>(rows), [rows]);
 };
 export const useEmployees = (): ReadonlyArray<Employee> => {
-  const rows = useQuery(allEmployees);
+  const rows = AsyncResult.getOrElse(useQuery(allEmployees), () => []);
   return React.useMemo(() => map<Employee>(rows), [rows]);
 };
 export const useOrders = (): ReadonlyArray<Order> => {
-  const rows = useQuery(allOrders);
+  const rows = AsyncResult.getOrElse(useQuery(allOrders), () => []);
   return React.useMemo(() => map<Order>(rows), [rows]);
 };
 export const useOrderDetails = (): ReadonlyArray<OrderDetail> => {
-  const rows = useQuery(allOrderDetails);
+  const rows = AsyncResult.getOrElse(useQuery(allOrderDetails), () => []);
   return React.useMemo(() => map<OrderDetail>(rows), [rows]);
 };
 

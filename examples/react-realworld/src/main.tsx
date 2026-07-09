@@ -20,7 +20,7 @@ const main = async (): Promise<void> => {
   const world = await createWorld();
   createRoot(container).render(
     <React.StrictMode>
-      <EffectSyncProvider runtime={world.runtime}>
+      <EffectSyncProvider atoms={world.atoms}>
         <WorldProvider world={world}>
           <AuthProvider>
             <App />

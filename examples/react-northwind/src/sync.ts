@@ -13,23 +13,19 @@
  * `writer.get`, merges, and puts. That re-runs idempotently on every rebase.
  */
 
-import { Effect, Fiber, Layer, ManagedRuntime, Schema, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "@legation/react";
+import { ClientEngine, Cvr, EngineAtoms, InvalidationBus, SyncServer } from "@legation/effect/internal";
 
 import {
   CLIENT_GROUP_ID,
@@ -57,7 +53,7 @@ import {
 import * as seed from "./seed";
 
 export interface World {
-  readonly runtime: EffectSyncRuntime;
+  readonly atoms: EngineAtoms.EngineAtoms;
   readonly setOnline: (online: boolean) => Promise<void>;
   readonly subscribeConnection: (
     listener: (status: Transport.ConnectionStatus) => void
@@ -223,12 +219,10 @@ export const createWorld = (): Promise<World> =>
       for (const subset of allSubsets) yield* engine.subscribe(subset);
       yield* engine.runSync;
 
-      const runtime: EffectSyncRuntime = ManagedRuntime.make(
-        Layer.succeed(ClientEngine.ClientEngine, engine)
-      );
+      const atoms = EngineAtoms.fromLayer(Layer.succeed(ClientEngine.ClientEngine, engine));
 
       const world: World = {
-        runtime,
+        atoms,
         setOnline: (next) => Effect.runPromise(SubscriptionRef.set(online, next)),
         subscribeConnection: (listener) => {
           const fiber = Effect.runFork(

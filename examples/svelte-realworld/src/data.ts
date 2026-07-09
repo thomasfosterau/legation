@@ -9,8 +9,8 @@
  */
 import { derived, type Readable } from "svelte/store";
 import { getContext, setContext } from "svelte";
-import { query, related } from "@legation/svelte";
-import type { Related } from "@legation/effect";
+import { Query } from "@legation/svelte";
+import type { Related } from "@legation/effect/internal";
 import { allArticles, allComments, allFavorites, allFollows, allUsers, conduitRegistry } from "./domain";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 
@@ -31,12 +31,12 @@ export interface Data {
 
 /** Build the base collection stores. Call during init, after setEngineRuntime. */
 export const createData = (): Data => ({
-  users: derived(query(allUsers), (rows) => rows.map((r) => r.value as User)),
-  articles: derived(query(allArticles), (rows) => rows.map((r) => r.value as Article)),
-  comments: derived(query(allComments), (rows) => rows.map((r) => r.value as Comment)),
-  favorites: derived(query(allFavorites), (rows) => rows.map((r) => r.value as Favorite)),
-  follows: derived(query(allFollows), (rows) => rows.map((r) => r.value as Follow)),
-  commentsWithAuthor: related(conduitRegistry, "comments", allComments, ["author"]),
+  users: derived(Query.query(allUsers), (rows) => rows.map((r) => r.value as User)),
+  articles: derived(Query.query(allArticles), (rows) => rows.map((r) => r.value as Article)),
+  comments: derived(Query.query(allComments), (rows) => rows.map((r) => r.value as Comment)),
+  favorites: derived(Query.query(allFavorites), (rows) => rows.map((r) => r.value as Favorite)),
+  follows: derived(Query.query(allFollows), (rows) => rows.map((r) => r.value as Follow)),
+  commentsWithAuthor: Query.related(conduitRegistry, "comments", allComments, ["author"]),
 });
 
 const DATA_KEY = Symbol("svelte-realworld/data");

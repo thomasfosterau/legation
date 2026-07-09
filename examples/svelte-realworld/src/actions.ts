@@ -11,7 +11,7 @@
  * with `$actions` so it tracks login/logout reactively.
  */
 import { derived, type Readable } from "svelte/store";
-import { getMutate } from "@legation/svelte";
+import { Mutation } from "@legation/svelte";
 import { getAuth } from "./auth";
 import { favoriteId, followId, slugify } from "./domain";
 import type { Article } from "./domain";
@@ -36,7 +36,7 @@ const newId = (): string =>
 
 /** All write actions, bound to the current user. Emits null when anonymous. */
 export const getActions = (): Readable<Actions | null> => {
-  const mutate = getMutate();
+  const mutate = Mutation.getMutate();
   const { currentUsername } = getAuth();
 
   return derived(currentUsername, (username) => {

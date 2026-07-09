@@ -10,7 +10,7 @@
  * collections (`favorites`, `follows`), never denormalised onto the row — so a
  * rebase can never leave a stale counter.
  */
-import type { Related } from "@legation/effect";
+import type { Related } from "@legation/effect/internal";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 import type { ArticlePage, ArticleView, CommentView, Feed, ProfileView } from "./types";
 

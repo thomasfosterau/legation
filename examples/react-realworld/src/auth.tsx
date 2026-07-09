@@ -62,19 +62,21 @@ export const AuthProvider = (props: { readonly children: React.ReactNode }): Rea
         return null;
       },
       register: async (username, email, password) => {
+        // Client-side taken-username check stands in for the round trip: these
+        // demos don't push automatically after a mutation (no
+        // `syncLoop.pushDebounce`), so waiting on the backend's ack here would
+        // hang the sign-up form until the next poke, reconnect, or manual
+        // "Sync now" — set identity first so the fire-and-forget write is
+        // attributed, then proceed optimistically like every other mutator.
         if (users.some((u) => u.username === username)) return "Username is taken";
-        // Set identity first so the authoritative register write is attributed.
         world.setIdentity(username);
-        try {
-          await mutate("user/register", { username, email, password });
-        } catch {
-          world.setIdentity(currentUsername);
-          return "Could not register";
-        }
+        mutate("user/register", { username, email, password });
         setCurrentUsername(username);
         return null;
       },
-      updateSettings: (next) => mutate("user/update", next),
+      updateSettings: async (next) => {
+        mutate("user/update", next);
+      },
       logout: () => setCurrentUsername(null),
     }),
     [users, currentUser, currentUsername, mutate, world]
