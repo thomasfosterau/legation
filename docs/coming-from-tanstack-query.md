@@ -55,7 +55,8 @@ import {
 | `setQueryData` direct writes (TanStack)                 | Writes are intents — a local-only mutator is the sanctioned "direct write".                      |
 | Optimistic updates + rollback (TanStack)                | Journal + overlay + rebase does it structurally — no `onMutate`/rollback code.                   |
 | Request dedupe (SWR)                                    | Atoms cached per `Subset.hash`; refcounted subscriptions; one store.                             |
-| Dependent / serial queries (TanStack)                   | Effect composition + `Related.related`.                                                          |
+| Dependent / serial queries (TanStack)                   | Effect composition + `Related.related` (declared edges), or `Derive.join` (arbitrary keys).      |
+| Client-side joins / group-by / distinct (TanStack DB)   | `Derive` combinators — incrementally maintained over already-synced rows; never widen sync.      |
 | Middleware (SWR)                                        | Wrap `ClientTransport` (client) or `SyncMiddleware` (server).                                    |
 | Normalised entity cache (Apollo)                        | Collections _are_ the normalisation — one row per (collection, id), no `keyFields`.              |
 | `ModelActor` / boundary rules (SwiftData)               | The engine host is the serialised writer; encoded rows/mutations cross the mirror boundary.      |
@@ -359,6 +360,38 @@ const openCount$ = engine.observeAggregate(
   Aggregate.count
 );
 ```
+
+### Derived queries (joins, group-by, distinct, computed predicates)
+
+TanStack DB's client-side query builder (arbitrary joins, DISTINCT, row-level
+group-by, `fn.where`/`fn.select` callbacks, queries-from-queries) maps onto
+`Derive`'s bare combinators (ADR-0027). Each takes any `observe`d source — an
+engine, a mirror, or **another combinator**, so pipelines compose — and is
+incrementally maintained from row deltas, not refolded per change. The result
+is an Effect `Stream` and, via `Derive.atom`, an atom on the standard surface,
+so `useQuery` / the Svelte `query` store bind it with no new machinery.
+
+```ts
+import { Derive } from "@legation/effect/internal";
+
+const teamOpenCounts$ = Derive.map(
+  Derive.groupBy(
+    Derive.filter(engine.observe(allTodos), (t) => !(t as Todo).done),
+    (t) => (t as Todo).team
+  ),
+  (g) => ({
+    team: (g as { key: string }).key,
+    open: (g as { rows: ReadonlyArray<unknown> }).rows.length,
+  })
+);
+```
+
+**Local tier only — and it never widens sync.** A derived combinator sees only
+the rows this client has already synced; the serializable **Query**/**subset**
+tier alone decides what the server ships. The mistake this forbids is filtering
+locally and believing the result set is complete: if a derived view needs rows
+the client does not hold, widen the **Query** (what syncs), not the combinator
+(what is shown).
 
 ### Undo / redo
 

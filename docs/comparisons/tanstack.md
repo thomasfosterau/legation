@@ -69,17 +69,42 @@ the mix-and-match flexibility; you gain a single correctness story where
 the optimistic overlay is dropped exactly when each mutation's
 authoritative effect is observed, not when a POST resolves.
 
-### Query engine
+### Query engine — a two-tier read model
 
-TanStack DB's live queries run on a differential-dataflow engine (joins,
-aggregates, sub-queries incrementally maintained) — genuinely more
-expressive than legation's read layer, and the strongest reason to pick it.
-legation composes narrower primitives: **subscriptions** are (collection,
-**predicate**, order, limit/cursor) subsets; `Related` joins declared
-relationships (auto-subscribing the narrowed foreign subsets so the joined
-rows actually sync); `Aggregate` folds. The restraint is deliberate —
-subsets stay serializable and auth-analyzable server-side — but it is a
-real expressiveness gap on the client.
+Both libraries split the same problem the same way, and it is worth naming
+the split because it is the crux of the read layer (ADR-0027). Relational
+expressiveness — arbitrary joins, DISTINCT, row-level GROUP BY,
+computed/cross-field predicates — runs **client-side over already-synced
+data**; only a narrow, analyzable predicate is pushed down to the sync layer.
+TanStack DB pushes down to its collection adapters; legation's push-down tier
+_is_ the **Query**/**subset** language, which compiles to sync windows
+natively.
+
+- **The sync tier is deliberately narrow.** A **subscription** is a
+  (collection, **predicate**, order, limit/cursor) subset that stays
+  serializable and auth-narrowable: the server AND-s a mandatory **auth
+  filter** into every one before evaluating it (ADR-0015), and one foreign key
+  powers the join, the sync window, the auth scope, and the fan-out topic
+  (ADR-0022). That cap is load-bearing, not a limitation — it is what lets the
+  wire language be reasoned about server-side.
+- **The derived tier is where the expressiveness lives.** `Derive`'s bare
+  combinators — `filter` (arbitrary JS predicate), `map`/`select`, `join`
+  (arbitrary key equality, inner/left), `groupBy` returning rows, `distinct`,
+  `orderedWindow` — compose over any `observe`d source (an engine, a mirror,
+  or another combinator, so queries compose from queries) and are
+  incrementally maintained the way TanStack DB's differential-dataflow engine
+  maintains its live queries — the same operator set (`map / filter / join /
+reduce / distinct / ordered-window`), though over keyed row deltas on a
+  single timeline rather than a `[value, ±multiplicity]` multiset (ADR-0027).
+  `Related` (declared-edge joins that auto-sync the foreign rows) and
+  `Aggregate` (live folds) sit alongside them.
+
+The one rule that makes the split safe: **the derived tier never widens what
+syncs.** A client-local combinator sees only the rows already synced; if a
+derived view needs more, you widen the **Query**, not the combinator. So the
+restraint on the wire language is no longer an expressiveness gap on the
+client — it is the boundary between what is auth-checked-and-synced and what
+is shaped locally.
 
 ### Where the engine runs
 
@@ -108,8 +133,9 @@ offline writes, and a cache with staleness is the honest model for your
 problem.
 
 Choose **TanStack DB** when you want the collections + live-queries model
-with maximum flexibility in how data syncs, an expressive incremental query
-engine, and gradual adoption inside the broad TanStack ecosystem.
+with maximum flexibility in how data syncs and gradual adoption inside the
+broad TanStack ecosystem — both libraries give you an incrementally
+maintained client-side query engine, so that is no longer the deciding axis.
 
 Choose **legation** when you want the sync _protocol_ solved — durable
 offline writes with exactly-once server application, CVR-diffed partial

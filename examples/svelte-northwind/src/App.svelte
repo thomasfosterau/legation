@@ -8,7 +8,7 @@
    * same live stores. The banner reflects the live transport status.
    */
   import { untrack } from "svelte";
-  import { setEngineRuntime } from "@legation/svelte";
+  import { Runtime } from "@legation/svelte";
   import type { World } from "./sync";
   import { setWorld, connectionStore } from "./world";
   import { createData, setData } from "./data";
@@ -34,7 +34,7 @@
   const world = untrack(() => props.world);
 
   // Wire the engine runtime + demo world into context for this subtree.
-  setEngineRuntime(world.runtime);
+  Runtime.setEngineRuntime(world.runtime);
   setWorld(world);
 
   // Base collection stores, shared via context.

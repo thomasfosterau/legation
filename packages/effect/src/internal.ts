@@ -30,6 +30,8 @@ export * as Introspection from "./Introspection.js";
 export * as MutationState from "./MutationState.js";
 export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
+export * as Incremental from "./Incremental.js";
+export * as Derive from "./Derive.js";
 export * as OrderedTree from "./OrderedTree.js";
 export * as FractionalIndex from "./FractionalIndex.js";
 export * as Subscriptions from "./Subscriptions.js";

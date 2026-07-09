@@ -4,12 +4,15 @@
    * items, and a "ship" action (the read-merge `order/ship` mutator).
    */
   import { getActions } from "../actions";
-  import { getData, lineTotal, toOrderLines, toOrderViews } from "../data";
+  import { getData, lineTotal, toOrderLines } from "../data";
 
   const actions = getActions();
-  const { orders, customers, employees, orderDetails, products } = getData();
+  // `orderViews` is a `Derive` join/group pipeline (orders ⋈ customers ⋈
+  // employees ⋈ rolled-up line items) the engine maintains incrementally; the
+  // screen just orders it for display.
+  const { orderViews, orderDetails, products } = getData();
 
-  const views = $derived(toOrderViews($orders, $customers, $employees, $orderDetails));
+  const views = $derived([...$orderViews].sort((a, b) => b.order.orderedAt - a.order.orderedAt));
 
   let open = $state<string | null>(null);
 
