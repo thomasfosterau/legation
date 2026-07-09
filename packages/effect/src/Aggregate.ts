@@ -114,6 +114,21 @@ const groupKey = (value: unknown, groupBy: string): string =>
       : undefined
   );
 
+/** Partition `rows` by {@link groupKey}, preserving each group's row order. */
+const bucketByGroup = <R extends { readonly value: unknown }>(
+  rows: ReadonlyArray<R>,
+  groupBy: string
+): Map<string, Array<R>> => {
+  const buckets = new Map<string, Array<R>>();
+  for (const row of rows) {
+    const key = groupKey(row.value, groupBy);
+    const bucket = buckets.get(key);
+    if (bucket === undefined) buckets.set(key, [row]);
+    else bucket.push(row);
+  }
+  return buckets;
+};
+
 /**
  * Evaluate an aggregate per group, keying the result by
  * `String(row.value[groupBy])`. Each group's value follows {@link compute}.
@@ -123,15 +138,8 @@ export const computeGrouped = (
   rows: ReadonlyArray<{ readonly value: unknown }>,
   groupBy: string
 ): Record<string, AggregateValue> => {
-  const buckets = new Map<string, Array<{ readonly value: unknown }>>();
-  for (const row of rows) {
-    const key = groupKey(row.value, groupBy);
-    const bucket = buckets.get(key);
-    if (bucket === undefined) buckets.set(key, [row]);
-    else bucket.push(row);
-  }
   const result: Record<string, AggregateValue> = {};
-  for (const [key, bucket] of buckets) result[key] = compute(agg, bucket);
+  for (const [key, bucket] of bucketByGroup(rows, groupBy)) result[key] = compute(agg, bucket);
   return result;
 };
 
@@ -372,16 +380,9 @@ export const initGroupedState = (
   rows: ReadonlyArray<Row>,
   groupBy: string
 ): GroupedState => {
-  const buckets = new Map<string, Array<Row>>();
-  for (const row of rows) {
-    const key = groupKey(row.value, groupBy);
-    const bucket = buckets.get(key);
-    if (bucket === undefined) buckets.set(key, [row]);
-    else bucket.push(row);
-  }
   const groups = new Map<string, State>();
   const groupKeyOf = new Map<string, string>();
-  for (const [key, bucketRows] of buckets) {
+  for (const [key, bucketRows] of bucketByGroup(rows, groupBy)) {
     groups.set(key, initState(agg, bucketRows));
     for (const row of bucketRows) groupKeyOf.set(row.id, key);
   }

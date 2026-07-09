@@ -263,70 +263,94 @@ const randomOps = (rand: () => number, n: number): ReadonlyArray<RandomOp> =>
       : { _tag: "Put" as const, id, value: randomRowValue(rand) };
   });
 
-describe("Aggregate incremental state (#110)", () => {
-  const where = Predicate.gt("score", 0);
-  const groupBy = "team";
-  const aggs: ReadonlyArray<Aggregate.Aggregate> = [
-    Aggregate.count,
-    Aggregate.sum("score"),
-    Aggregate.avg("score"),
-    Aggregate.min("score"),
-    Aggregate.max("score"),
-  ];
+const INCREMENTAL_WHERE = Predicate.gt("score", 0);
+const INCREMENTAL_GROUP_BY = "team";
+const INCREMENTAL_AGGS: ReadonlyArray<Aggregate.Aggregate> = [
+  Aggregate.count,
+  Aggregate.sum("score"),
+  Aggregate.avg("score"),
+  Aggregate.min("score"),
+  Aggregate.max("score"),
+];
 
-  const matchingRows = (
-    truth: ReadonlyMap<string, unknown>
-  ): ReadonlyArray<{ readonly id: string; readonly value: unknown }> =>
-    [...truth.entries()]
-      .filter(([, value]) => Predicate.test(where, value))
-      .map(([id, value]) => ({ id, value }));
+const matchingRows = (
+  truth: ReadonlyMap<string, unknown>
+): ReadonlyArray<{ readonly id: string; readonly value: unknown }> =>
+  [...truth.entries()]
+    .filter(([, value]) => Predicate.test(INCREMENTAL_WHERE, value))
+    .map(([id, value]) => ({ id, value }));
 
-  it("matches compute/computeGrouped from scratch after every prefix of a randomized delta sequence", () => {
-    for (let seed = 0; seed < 40; seed++) {
-      const rand = mulberry32(seed);
-      const ops = randomOps(rand, 60);
-      const truth = new Map<string, unknown>();
-      const states = new Map<Aggregate.Aggregate, Aggregate.State>(
-        aggs.map((agg) => [agg, Aggregate.initState(agg, [])])
+/** Fold one op into `agg`'s incremental state (mutated in place, per `Aggregate.applyPut`/`applyDel`). */
+const applyOpToState = (
+  state: Aggregate.State,
+  agg: Aggregate.Aggregate,
+  op: RandomOp
+): Aggregate.State =>
+  op._tag === "Del"
+    ? Aggregate.applyDel(state, agg, op.id)
+    : Aggregate.applyPut(state, agg, INCREMENTAL_WHERE, op.id, op.value);
+
+/** Fold one op into `agg`'s incremental grouped state (mutated in place). */
+const applyOpToGroupedState = (
+  state: Aggregate.GroupedState,
+  agg: Aggregate.Aggregate,
+  op: RandomOp
+): Aggregate.GroupedState =>
+  op._tag === "Del"
+    ? Aggregate.applyGroupedDel(state, agg, op.id)
+    : Aggregate.applyGroupedPut(
+        state,
+        agg,
+        INCREMENTAL_WHERE,
+        INCREMENTAL_GROUP_BY,
+        op.id,
+        op.value
       );
-      const groupedStates = new Map<Aggregate.Aggregate, Aggregate.GroupedState>(
-        aggs.map((agg) => [agg, Aggregate.initGroupedState(agg, [], groupBy)])
-      );
 
-      for (const op of ops) {
-        if (op._tag === "Del") truth.delete(op.id);
-        else truth.set(op.id, op.value);
+/** Assert `agg`'s incrementally-maintained value(s) match a from-scratch fold over `rows`. */
+const expectAggMatches = (
+  agg: Aggregate.Aggregate,
+  state: Aggregate.State,
+  groupedState: Aggregate.GroupedState,
+  rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>
+): void => {
+  expect(Aggregate.stateValue(state)).toEqual(Aggregate.compute(agg, rows));
+  expect(Aggregate.groupedStateValue(groupedState)).toEqual(
+    Aggregate.computeGrouped(agg, rows, INCREMENTAL_GROUP_BY)
+  );
+};
 
-        for (const agg of aggs) {
-          states.set(
-            agg,
-            op._tag === "Del"
-              ? Aggregate.applyDel(states.get(agg)!, agg, op.id)
-              : Aggregate.applyPut(states.get(agg)!, agg, where, op.id, op.value)
-          );
-          groupedStates.set(
-            agg,
-            op._tag === "Del"
-              ? Aggregate.applyGroupedDel(groupedStates.get(agg)!, agg, op.id)
-              : Aggregate.applyGroupedPut(
-                  groupedStates.get(agg)!,
-                  agg,
-                  where,
-                  groupBy,
-                  op.id,
-                  op.value
-                )
-          );
-        }
+/**
+ * Run one seed's randomized delta sequence, checking after every prefix that
+ * every aggregate's incremental state (ungrouped and grouped) matches a
+ * from-scratch fold over the rows currently matching `INCREMENTAL_WHERE`.
+ */
+const checkIncrementalSeed = (seed: number): void => {
+  const ops = randomOps(mulberry32(seed), 60);
+  const truth = new Map<string, unknown>();
+  const states = new Map(INCREMENTAL_AGGS.map((agg) => [agg, Aggregate.initState(agg, [])]));
+  const groupedStates = new Map(
+    INCREMENTAL_AGGS.map((agg) => [agg, Aggregate.initGroupedState(agg, [], INCREMENTAL_GROUP_BY)])
+  );
 
-        const rows = matchingRows(truth);
-        for (const agg of aggs) {
-          expect(Aggregate.stateValue(states.get(agg)!)).toEqual(Aggregate.compute(agg, rows));
-          expect(Aggregate.groupedStateValue(groupedStates.get(agg)!)).toEqual(
-            Aggregate.computeGrouped(agg, rows, groupBy)
-          );
-        }
-      }
+  for (const op of ops) {
+    if (op._tag === "Del") truth.delete(op.id);
+    else truth.set(op.id, op.value);
+
+    for (const agg of INCREMENTAL_AGGS) {
+      states.set(agg, applyOpToState(states.get(agg)!, agg, op));
+      groupedStates.set(agg, applyOpToGroupedState(groupedStates.get(agg)!, agg, op));
     }
+
+    const rows = matchingRows(truth);
+    for (const agg of INCREMENTAL_AGGS) {
+      expectAggMatches(agg, states.get(agg)!, groupedStates.get(agg)!, rows);
+    }
+  }
+};
+
+describe("Aggregate incremental state (#110)", () => {
+  it("matches compute/computeGrouped from scratch after every prefix of a randomized delta sequence", () => {
+    for (let seed = 0; seed < 40; seed++) checkIncrementalSeed(seed);
   });
 });
