@@ -441,49 +441,57 @@ const foreignRowsOf = (truth: GroundTruth): ReadonlyMap<string, ReadonlyArray<Lo
     ["tags", [...truth.tags.values()]],
   ]);
 
+type ForeignCollection = "people" | "comments" | "tags";
+
 type Op =
   | { readonly _tag: "putIssue"; readonly id: string; readonly authorId: string | null }
   | { readonly _tag: "deleteIssue"; readonly id: string }
   | {
       readonly _tag: "putForeign";
-      readonly collection: "people" | "comments" | "tags";
+      readonly collection: ForeignCollection;
       readonly id: string;
       readonly fk: string;
       readonly rank: number;
     }
-  | {
-      readonly _tag: "deleteForeign";
-      readonly collection: "people" | "comments" | "tags";
-      readonly id: string;
-    };
+  | { readonly _tag: "deleteForeign"; readonly collection: ForeignCollection; readonly id: string };
 
 const pick = <A>(rng: () => number, values: ReadonlyArray<A>): A =>
   values[Math.floor(rng() * values.length)]!;
 
+const FOREIGN_COLLECTIONS: ReadonlyArray<ForeignCollection> = ["people", "comments", "tags"];
+const FOREIGN_ID_PREFIX: Record<ForeignCollection, string> = {
+  people: "fp",
+  comments: "fc",
+  tags: "ft",
+};
+
+const poolOf = (truth: GroundTruth, collection: ForeignCollection) => truth[collection];
+
+const randomPutIssue = (rng: () => number): Op => ({
+  _tag: "putIssue",
+  id: pick(rng, ISSUE_IDS),
+  authorId: rng() < 0.15 ? null : pick(rng, PERSON_IDS),
+});
+
+const randomPutForeign = (rng: () => number, collection: ForeignCollection): Op => ({
+  _tag: "putForeign",
+  collection,
+  id: `${FOREIGN_ID_PREFIX[collection]}${Math.floor(rng() * 6)}`,
+  fk: collection === "people" ? pick(rng, PERSON_IDS) : pick(rng, FK_TARGETS),
+  rank: Math.floor(rng() * 10),
+});
+
+/** Weighted: 30% put issue, 10% delete issue, 35% put foreign, 25% delete foreign. */
 const randomOp = (rng: () => number, truth: GroundTruth): Op => {
   const choice = rng();
-  if (choice < 0.3) {
-    const id = pick(rng, ISSUE_IDS);
-    const authorId = rng() < 0.15 ? null : pick(rng, PERSON_IDS);
-    return { _tag: "putIssue", id, authorId };
-  }
-  if (choice < 0.4) {
-    return { _tag: "deleteIssue", id: pick(rng, ISSUE_IDS) };
-  }
-  const collection = pick(rng, ["people", "comments", "tags"] as const);
-  const pool =
-    collection === "people"
-      ? truth.people
-      : collection === "comments"
-        ? truth.comments
-        : truth.tags;
-  if (choice < 0.75 || pool.size === 0) {
-    const idPrefix = collection === "people" ? "fp" : collection === "comments" ? "fc" : "ft";
-    const id = `${idPrefix}${Math.floor(rng() * 6)}`;
-    const fk = collection === "people" ? pick(rng, PERSON_IDS) : pick(rng, FK_TARGETS);
-    return { _tag: "putForeign", collection, id, fk, rank: Math.floor(rng() * 10) };
-  }
-  return { _tag: "deleteForeign", collection, id: pick(rng, [...pool.keys()]) };
+  if (choice < 0.3) return randomPutIssue(rng);
+  if (choice < 0.4) return { _tag: "deleteIssue", id: pick(rng, ISSUE_IDS) };
+
+  const collection = pick(rng, FOREIGN_COLLECTIONS);
+  const pool = poolOf(truth, collection);
+  return choice < 0.75 || pool.size === 0
+    ? randomPutForeign(rng, collection)
+    : { _tag: "deleteForeign", collection, id: pick(rng, [...pool.keys()]) };
 };
 
 const applyOp = (truth: GroundTruth, op: Op): void => {
@@ -550,7 +558,7 @@ describe("Related delta-maintenance (issue #111)", () => {
 
     const primeAdded = (collections: ReadonlyArray<string>) => {
       for (const collection of collections) {
-        const rows = [...truth[collection as "people" | "comments" | "tags"].values()];
+        const rows = [...truth[collection as ForeignCollection].values()];
         const { result } = engine.applyForeign(collection, rows);
         if (result !== undefined) lastResult = result;
       }

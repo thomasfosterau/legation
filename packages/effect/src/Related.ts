@@ -376,36 +376,38 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     if (row !== undefined) resolvedById.set(id, hydrateRow(row));
   };
 
-  const indexRow = (
-    id: string,
-    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
-  ): void => {
-    for (const [collection, ids] of keys) {
-      const byKey = reverseIndex.get(collection);
-      if (byKey === undefined) continue; // not (or no longer) a targeted collection
-      for (const key of ids) {
-        const set = byKey.get(key) ?? new Set<string>();
-        set.add(id);
-        byKey.set(key, set);
-      }
-    }
-  };
-
-  const unindexRow = (
-    id: string,
-    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
+  // Visit every (collection, key) a row's key set touches, skipping
+  // collections that aren't (or are no longer) targeted. `indexRow` and
+  // `unindexRow` differ only in what they do at each (byKey, key) — this is
+  // the shared traversal.
+  const forEachIndexed = (
+    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>,
+    f: (byKey: Map<Predicate.Literal, Set<string>>, key: Predicate.Literal) => void
   ): void => {
     for (const [collection, ids] of keys) {
       const byKey = reverseIndex.get(collection);
       if (byKey === undefined) continue;
-      for (const key of ids) {
-        const set = byKey.get(key);
-        if (set === undefined) continue;
-        set.delete(id);
-        if (set.size === 0) byKey.delete(key);
-      }
+      for (const key of ids) f(byKey, key);
     }
   };
+
+  const indexRow = (id: string, keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>): void =>
+    forEachIndexed(keys, (byKey, key) => {
+      const set = byKey.get(key) ?? new Set<string>();
+      set.add(id);
+      byKey.set(key, set);
+    });
+
+  const unindexRow = (
+    id: string,
+    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
+  ): void =>
+    forEachIndexed(keys, (byKey, key) => {
+      const set = byKey.get(key);
+      if (set === undefined) return;
+      set.delete(id);
+      if (set.size === 0) byKey.delete(key);
+    });
 
   const addCollection = (collection: string, target: Target): void => {
     foreignByCollection.set(collection, {
@@ -427,11 +429,14 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
   const currentOutput = (): ReadonlyArray<RelatedRow> =>
     baseOrder.map((id) => resolvedById.get(id)!);
 
-  const applyBase: JoinEngine["applyBase"] = (rows) => {
-    // Diff the targeted collection set (the `reconcile` pattern, :366-388):
-    // start observing newly-targeted collections, stop observing stale ones,
-    // leave already-targeted ones untouched.
-    const nextTargets = strategy.targets(rows);
+  /**
+   * Diff the targeted collection set (the `reconcile` pattern, :366-388):
+   * start observing newly-targeted collections, stop observing stale ones,
+   * leave already-targeted ones (with the same join field) untouched.
+   */
+  const diffTargets = (
+    nextTargets: ReadonlyMap<string, Target>
+  ): { readonly added: ReadonlyArray<string>; readonly removed: ReadonlyArray<string> } => {
     const added: Array<string> = [];
     const removed: Array<string> = [];
     for (const [collection, target] of nextTargets) {
@@ -456,7 +461,12 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
         removed.push(collection);
       }
     }
+    return { added, removed };
+  };
 
+  /** Diff the base page against the last snapshot, updating the reverse
+   * index and re-hydrating only added/changed rows. */
+  const diffBaseRows = (rows: ReadonlyArray<LocalRow>): void => {
     const nextIds = new Set(rows.map((row) => row.id));
     for (const id of baseRowsById.keys()) {
       if (nextIds.has(id)) continue;
@@ -478,16 +488,27 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
       resolvedById.set(row.id, hydrateRow(row));
     }
     baseOrder = rows.map((row) => row.id);
+  };
 
+  const applyBase: JoinEngine["applyBase"] = (rows) => {
+    const { added, removed } = diffTargets(strategy.targets(rows));
+    diffBaseRows(rows);
     return { added, removed, result: pendingCollections.size === 0 ? currentOutput() : undefined };
   };
 
-  const applyForeign: JoinEngine["applyForeign"] = (collection, rows) => {
-    const state = foreignByCollection.get(collection);
-    // A stale event for a collection this base page no longer targets.
-    if (state === undefined) return { result: undefined };
-
+  /**
+   * Diff one foreign collection's new snapshot against its last one: an
+   * unchanged row (same reference) is skipped; a changed or new row is
+   * (re)placed in its current key's bucket, vacating its prior key's bucket
+   * if the key moved; a row present before but not now is removed from its
+   * bucket. Returns the keys whose bucket contents changed.
+   */
+  const diffForeignRows = (
+    state: ForeignState,
+    rows: ReadonlyArray<LocalRow>
+  ): ReadonlySet<Predicate.Literal> => {
     const changedKeys = new Set<Predicate.Literal>();
+    const keyOf = (row: LocalRow) => fieldOf(row.value, state.target.field) as Predicate.Literal;
     const putInto = (key: Predicate.Literal, row: LocalRow): void => {
       const bucket = state.buckets.get(key) ?? new Map<string, LocalRow>();
       bucket.set(row.id, row);
@@ -513,30 +534,42 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
       nextRowsById.set(row.id, row);
       const prior = state.rowsById.get(row.id);
       if (prior === row) continue; // reference-stable: this row didn't change
-      const key = fieldOf(row.value, state.target.field) as Predicate.Literal;
-      if (prior !== undefined) {
-        const priorKey = fieldOf(prior.value, state.target.field) as Predicate.Literal;
-        if (priorKey !== key) removeFrom(priorKey, row.id);
-      }
+      const key = keyOf(row);
+      if (prior !== undefined && keyOf(prior) !== key) removeFrom(keyOf(prior), row.id);
       putInto(key, row);
     }
     for (const [id, prior] of state.rowsById) {
-      if (nextRowsById.has(id)) continue; // deleted
-      removeFrom(fieldOf(prior.value, state.target.field) as Predicate.Literal, id);
+      if (!nextRowsById.has(id)) removeFrom(keyOf(prior), id); // deleted
     }
     state.rowsById = nextRowsById;
+    return changedKeys;
+  };
 
+  /** The base row ids that depend on any of `changedKeys` in `collection`. */
+  const affectedByKeys = (
+    collection: string,
+    changedKeys: ReadonlySet<Predicate.Literal>
+  ): ReadonlySet<string> => {
+    const affected = new Set<string>();
+    const byKey = reverseIndex.get(collection);
+    if (byKey === undefined) return affected;
+    for (const key of changedKeys) {
+      const ids = byKey.get(key);
+      if (ids !== undefined) for (const id of ids) affected.add(id);
+    }
+    return affected;
+  };
+
+  const applyForeign: JoinEngine["applyForeign"] = (collection, rows) => {
+    const state = foreignByCollection.get(collection);
+    // A stale event for a collection this base page no longer targets.
+    if (state === undefined) return { result: undefined };
+
+    const changedKeys = diffForeignRows(state, rows);
     // The first snapshot for a newly-targeted collection always primes it,
     // even if it touches no base row yet (e.g. an empty foreign collection).
     const justPrimed = pendingCollections.delete(collection);
-    const affected = new Set<string>();
-    const byKey = reverseIndex.get(collection);
-    if (byKey !== undefined) {
-      for (const key of changedKeys) {
-        const ids = byKey.get(key);
-        if (ids !== undefined) for (const id of ids) affected.add(id);
-      }
-    }
+    const affected = affectedByKeys(collection, changedKeys);
     for (const id of affected) rehydrateById(id);
 
     if (pendingCollections.size > 0) return { result: undefined };
