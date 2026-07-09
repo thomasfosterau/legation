@@ -38,6 +38,7 @@
  * does for its own maintained window.
  */
 
+import type * as Index from "./CollectionIndex.js";
 import * as FractionalIndex from "./FractionalIndex.js";
 import * as OrderedTree from "./OrderedTree.js";
 import * as Predicate from "./Predicate.js";
@@ -162,6 +163,24 @@ const positionsFor = (
 /** Build a view from an unordered collection snapshot. */
 export const make = (subset: Subset.Subset, rows: ReadonlyArray<Row>): LiveView => {
   const sorted = Subset.sortFiltered(rows, subset);
+  const order = OrderedTree.fromSorted(sorted);
+  const byId = OrderedTree.fromSorted(sorted.toSorted(byIdCompare));
+  const positions = positionsFor(windowSlice(order, byId, subset), new Map());
+  return { subset, order, byId, positions };
+};
+
+/**
+ * {@link make}, but reading rows from an id-keyed map with optional secondary-index
+ * acceleration (issue #113) — the collection-scale rebuild path (`Rebuild`
+ * view changes, a change-hub seq-gap collapse) shares the same narrowing as
+ * one-shot `query`.
+ */
+export const makeIndexed = (
+  subset: Subset.Subset,
+  rowsById: ReadonlyMap<string, Row>,
+  index?: Index.CollectionIndex
+): LiveView => {
+  const sorted = Subset.sortFilteredIndexed(rowsById, subset, index);
   const order = OrderedTree.fromSorted(sorted);
   const byId = OrderedTree.fromSorted(sorted.toSorted(byIdCompare));
   const positions = positionsFor(windowSlice(order, byId, subset), new Map());

@@ -9,6 +9,7 @@
 
 import { Schema } from "effect";
 import type { AnyCollection, RowOf } from "./Collection.js";
+import * as Index from "./CollectionIndex.js";
 import * as Predicate from "./Predicate.js";
 
 /** Sort direction. */
@@ -259,3 +260,42 @@ export const window = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): R
  */
 export const apply = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): ReadonlyArray<R> =>
   window(sortFiltered(rows, subset), subset);
+
+// ─── Indexed evaluation (issue #113) ─────────────────────────────────────────
+//
+// Same semantics as `sortFiltered`/`apply`, but over an id-keyed row map with
+// an optional `Index.CollectionIndex` in front of the filter step: an
+// indexable `where` resolves via `O(hits)` index lookups instead of testing
+// every row. A predicate the index can't narrow (or no index at all) falls
+// back to exactly today's full scan — this is additive, never a behavior
+// change for unindexed paths.
+
+const fullScan = <R extends Row>(
+  rowsById: ReadonlyMap<string, R>,
+  where: Predicate.Predicate
+): Array<R> => {
+  const result: Array<R> = [];
+  for (const row of rowsById.values()) {
+    if (Predicate.test(where, row.value)) result.push(row);
+  }
+  return result;
+};
+
+/** {@link sortFiltered}, but reading rows from an id-keyed map with optional index acceleration. */
+export const sortFilteredIndexed = <R extends Row>(
+  rowsById: ReadonlyMap<string, R>,
+  subset: Subset,
+  index?: Index.CollectionIndex
+): ReadonlyArray<R> => {
+  const filtered =
+    (index !== undefined ? Index.evaluate(index, rowsById, subset.where) : undefined) ??
+    fullScan(rowsById, subset.where);
+  return filtered.toSorted(comparator(subset.orderBy));
+};
+
+/** {@link apply}, but reading rows from an id-keyed map with optional index acceleration. */
+export const applyIndexed = <R extends Row>(
+  rowsById: ReadonlyMap<string, R>,
+  subset: Subset,
+  index?: Index.CollectionIndex
+): ReadonlyArray<R> => window(sortFilteredIndexed(rowsById, subset, index), subset);
