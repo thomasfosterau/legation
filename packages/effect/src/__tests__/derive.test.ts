@@ -246,3 +246,55 @@ describe("Derive — observable via the standard atom surface", () => {
     })
   );
 });
+
+describe("Derive — observed leaf consumes observeChanges (#133 item 1), not page-diff", () => {
+  it.effect("a pipeline built on Derive.observed stays correct across enter/update/exit", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeClient(yield* makeServer);
+      const subs = yield* Subscriptions.make(engine, { ttl: Duration.minutes(5) });
+      const view = ClientView.fromEngine(engine);
+
+      const pipeline = yield* Derive.observed(subs, view, allTodos).pipe(
+        Effect.map((source) => Derive.filter(source, (v) => (v as Todo).title.startsWith("keep")))
+      );
+      const atom = Derive.atom(pipeline);
+      const registry = AtomRegistry.make();
+      yield* Effect.acquireRelease(
+        Effect.sync(() => registry.mount(atom)),
+        (unmount) => Effect.sync(unmount)
+      );
+
+      const read = Effect.sync(() => registry.get(atom));
+      const await1 = (predicate: (rows: ReadonlyArray<Row>) => boolean) =>
+        Effect.gen(function* () {
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const result = yield* read;
+            if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
+            yield* sleepReal(5);
+          }
+          return yield* Effect.die(new Error("derived atom never reached the expected state"));
+        });
+
+      // Unlike page-based `observe` (which always emits an initial snapshot,
+      // even `[]`), `observeChanges({ includeInitial: true })` stays silent
+      // until there's something to show (`docs/observing-row-changes.md`) —
+      // an empty collection emits no initial batch at all, so the pipeline
+      // built on top has nothing to read until the first real change.
+      yield* engine.mutate("todo/set", { id: "1", title: "keep-me" });
+      yield* engine.mutate("todo/set", { id: "2", title: "drop-me" });
+      const afterEnter = yield* await1((current) => current.length === 1);
+      expect(afterEnter.map((row) => (row.value as Todo).title)).toEqual(["keep-me"]);
+
+      // An update that crosses the filter boundary the other way: "keep-me"
+      // no longer matches, so the pipeline drops back to empty.
+      yield* engine.mutate("todo/set", { id: "1", title: "renamed" });
+      yield* await1((current) => current.length === 0);
+
+      // And a fresh row entering after that keeps working (the maintained
+      // operator state survives past the boundary crossing).
+      yield* engine.mutate("todo/set", { id: "3", title: "keep-again" });
+      const afterSecondEnter = yield* await1((current) => current.length === 1);
+      expect(afterSecondEnter.map((row) => (row.value as Todo).title)).toEqual(["keep-again"]);
+    }).pipe(Effect.scoped)
+  );
+});

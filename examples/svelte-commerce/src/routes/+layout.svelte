@@ -1,7 +1,9 @@
 <script lang="ts">
   import { browser } from "$app/environment";
+  import { Effect, Fiber, Stream } from "effect";
   import { Runtime } from "@legation/svelte";
-  import { boot, ssrStub, type AppRuntime } from "../lib/engine.js";
+  import type { ElectedHost } from "@legation/browser";
+  import { boot, bootMainThread, ssrStub, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();
 
@@ -9,10 +11,27 @@
   // engine — boot broadcasts the config handshake and registers the shell
   // subsets. SSR renders come entirely from the hooks' `initial` seeds, so
   // the server gets a loud stub instead of a runtime.
+  //
+  // `?host=main` is a dev-mode toggle (#133 item 6): skip the service
+  // worker entirely and run `ElectedHost.run` on this tab instead (the
+  // shipped no-service-worker fallback, ADR-0010/#119) — useful for
+  // exercising that topology locally, or in a browser context that can't
+  // register a service worker. `role` below is purely a debug badge; no
+  // application logic branches on it.
   let runtime: AppRuntime | undefined;
+  let role = $state<ElectedHost.Role | undefined>(undefined);
   if (browser) {
-    // svelte-ignore state_referenced_locally
-    runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
+    const useMainThreadHost = new URLSearchParams(location.search).get("host") === "main";
+    if (useMainThreadHost) {
+      // svelte-ignore state_referenced_locally
+      const elected = bootMainThread({ clientGroupId: data.clientGroupId, userId: data.user?.id });
+      runtime = elected.runtime;
+      const fiber = Effect.runFork(Stream.runForEach(elected.role, (r) => Effect.sync(() => (role = r))));
+      $effect(() => () => Effect.runFork(Fiber.interrupt(fiber)));
+    } else {
+      // svelte-ignore state_referenced_locally
+      runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
+    }
   }
   Runtime.setClientRuntime(runtime ?? ssrStub());
 </script>
@@ -28,6 +47,9 @@
     </form>
   {:else}
     <a href="/account">Sign in</a>
+  {/if}
+  {#if role !== undefined}
+    <span title="ElectedHost.run dev toggle (?host=main) — debug only">host role: {role}</span>
   {/if}
 </nav>
 

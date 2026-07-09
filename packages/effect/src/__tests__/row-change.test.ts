@@ -1,13 +1,20 @@
 /**
- * RowChange (#115): property test that folding the change feed reproduces
- * `observe()`'s pages exactly. `LiveView.put`/`del` already decide predicate
- * and window membership per row (`live-view.test.ts` covers that in
- * isolation); this drives long randomized sequences of upserts/deletes
- * (plus periodic Rebuilds, mirroring the engine's conservative fallback) and
+ * RowChange (#115, hardened per #133 item 5): property test that folding the
+ * change feed reproduces `observe()`'s pages exactly. `LiveView.put`/`del`
+ * already decide predicate and window membership per row
+ * (`live-view.test.ts` covers that in isolation); this drives long randomized
+ * sequences of upserts/deletes — interleaved with two distinct Rebuild
+ * triggers, a bare gap-collapse and a "pull races a pending mutation" (the
+ * two real causes `ClientEngine`/`docs/observing-row-changes.md` document —
+ * `observe-changes.test.ts` covered each as a separate deterministic
+ * scenario; folded in here so every seed exercises both, interleaved with
+ * ordinary mutations rather than in isolation) — and a randomly-timed late
+ * subscriber (a second observer seeded mid-session via fresh `enter`s, the
+ * same `includeInitial` contract, tracked in parallel from then on) — and
  * checks that folding `RowChange.diff`/`reset` batches into a plain map
- * reproduces `LiveView.result` after every single step — not just at the end
- * — across several subset shapes (predicate-only, ordered+limited,
- * unordered).
+ * reproduces `LiveView.result` after every single step, for every observer —
+ * not just at the end — across several subset shapes (predicate-only,
+ * ordered+limited, unordered).
  *
  * No `fast-check`/`Schema.Arbitrary` dependency exists in this codebase yet
  * (see CONTEXT.md's testing conventions); this follows the repo's existing
@@ -37,31 +44,6 @@ interface Item {
 }
 
 const IDS = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
-
-/** Fold a sequence of change batches into a plain `id -> value` map. */
-const fold = (
-  initial: ReadonlyArray<LiveView.Row>,
-  batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<LiveView.Row>>>
-): Map<string, unknown> => {
-  const state = new Map(initial.map((row) => [row.id, row.value]));
-  for (const batch of batches) {
-    for (const change of batch) {
-      switch (change._tag) {
-        case "reset":
-          state.clear();
-          break;
-        case "enter":
-        case "update":
-          state.set(change.row.id, change.row.value);
-          break;
-        case "exit":
-          state.delete(change.id);
-          break;
-      }
-    }
-  }
-  return state;
-};
 
 const sortedEntries = (state: Map<string, unknown>) =>
   [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -130,13 +112,124 @@ const applyMutation = (
   return next;
 };
 
+/** A second observer's state: its own fold, seeded at `startedAtStep`. */
+interface LateObserver {
+  readonly startedAtStep: number;
+  readonly folded: Map<string, unknown>;
+}
+
+/** Seed a late subscriber the way `includeInitial` does: fresh `enter`s for
+ * the window as it stands right now, no `reset` marker (nothing to reset
+ * from yet). */
+const seedLateObserver = (view: LiveView.LiveView, startedAtStep: number): LateObserver => {
+  const folded = new Map<string, unknown>();
+  for (const change of RowChange.enters(LiveView.result(view))) {
+    if (change._tag === "enter") folded.set(change.row.id, change.row.value);
+  }
+  return { startedAtStep, folded };
+};
+
+/** Fold one transition's batch into a late observer's state, same rules `fold` uses. */
+const applyToLateObserver = (
+  observer: LateObserver,
+  batch: ReadonlyArray<RowChange.RowChange<LiveView.Row>>
+): void => {
+  for (const change of batch) {
+    switch (change._tag) {
+      case "reset":
+        observer.folded.clear();
+        break;
+      case "enter":
+      case "update":
+        observer.folded.set(change.row.id, change.row.value);
+        break;
+      case "exit":
+        observer.folded.delete(change.id);
+        break;
+      case "move":
+        break;
+    }
+  }
+};
+
 /**
- * Run one randomized session against `subset`, checking every step. Returns
- * the first step where folding the emitted `RowChange` batches diverges from
- * `LiveView.result`, or `undefined` if every step matched — so the caller's
- * `it` block makes the actual assertion (a helper's internal `expect` calls
- * are invisible to static "test has assertions" checks).
+ * Run one randomized session against `subset`, checking every step for the
+ * primary observer AND, once spawned, a late subscriber. Returns the first
+ * mismatch, or `undefined` if every step matched for every observer — so the
+ * caller's `it` block makes the actual assertion (a helper's internal
+ * `expect` calls are invisible to static "test has assertions" checks).
+ *
+ * Two distinct Rebuild triggers are modeled, both real per
+ * `docs/observing-row-changes.md`: a bare gap-collapse (an unprompted
+ * conservative reset, e.g. a dropped change under hub backpressure) and a
+ * "pull races a pending mutation" (a mutation sets `pendingSincePull`; the
+ * next `pull` step forces a full Rebuild instead of a diff — `ClientEngine.
+ * applyPull`'s exact rule — then clears the flag; a `pull` with nothing
+ * pending is a correctness no-op, matching an empty `Patch`).
  */
+/** Mutable state threaded through one randomized session (see {@link runSession}). */
+interface SessionState {
+  view: LiveView.LiveView;
+  readonly truth: Truth;
+  readonly folded: Map<string, unknown>;
+  pendingSincePull: boolean;
+}
+
+/**
+ * One randomized step: a bare gap-collapse, a `pull` (Rebuild only if a
+ * mutation is still pending, else a no-op), or an ordinary put/del mutation
+ * — mutates `state` in place and returns the batch that step produced, for
+ * the late observer to fold alongside the primary one.
+ */
+const stepSession = (
+  subset: Subset.Subset,
+  state: SessionState,
+  rand: () => number,
+  pick: <A>(xs: ReadonlyArray<A>) => A
+): ReadonlyArray<RowChange.RowChange<LiveView.Row>> => {
+  const action = rand();
+  if (action < 0.05) {
+    // A bare gap-collapse: unprompted, independent of pending mutations.
+    state.view = applyRebuild(subset, state.truth, state.folded);
+    return RowChange.reset(LiveView.result(state.view));
+  }
+  if (action < 0.1) {
+    // A `pull`: forces a Rebuild only if a mutation is still pending.
+    if (!state.pendingSincePull) return [];
+    state.view = applyRebuild(subset, state.truth, state.folded);
+    state.pendingSincePull = false;
+    return RowChange.reset(LiveView.result(state.view));
+  }
+  const id = pick(IDS);
+  const isDelete = action < 0.1 + 0.25 && state.truth.has(id);
+  const before = LiveView.result(state.view);
+  state.view = applyMutation(state.view, state.truth, state.folded, rand, id, isDelete);
+  state.pendingSincePull = true;
+  return RowChange.diff(before, LiveView.result(state.view));
+};
+
+/** The primary (and, once spawned, the late) observer's fold vs. `LiveView.result`, or the first mismatch. */
+const checkSession = (
+  seed: number,
+  label: string,
+  state: SessionState,
+  lateObserver: LateObserver | undefined
+): Mismatch | undefined => {
+  const page = pageEntries(LiveView.result(state.view));
+  const foldedEntries = sortedEntries(state.folded);
+  if (JSON.stringify(foldedEntries) !== JSON.stringify(page)) {
+    return { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
+  }
+  if (lateObserver === undefined) return undefined;
+  const lateEntries = sortedEntries(lateObserver.folded);
+  if (JSON.stringify(lateEntries) === JSON.stringify(page)) return undefined;
+  return {
+    label: `${label} (seed=${seed}, late observer since step ${lateObserver.startedAtStep})`,
+    folded: lateEntries,
+    page,
+  };
+};
+
 const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatch | undefined => {
   const rand = mulberry32(seed);
   const pick = <A>(xs: ReadonlyArray<A>): A => xs[Math.floor(rand() * xs.length)]!;
@@ -144,30 +237,28 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   // The backing "confirmed collection", independent of the subset's filter —
   // put/del apply here first, mirroring the store `LiveView` maintains a
   // window over.
-  const truth: Truth = new Map();
-  let view = LiveView.make(subset, []);
-  const folded = fold(LiveView.result(view), []);
-
-  const matches = (label: string): Mismatch | undefined => {
-    const foldedEntries = sortedEntries(folded);
-    const page = pageEntries(LiveView.result(view));
-    return JSON.stringify(foldedEntries) === JSON.stringify(page)
-      ? undefined
-      : { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
+  const state: SessionState = {
+    view: LiveView.make(subset, []),
+    truth: new Map(),
+    folded: new Map(),
+    pendingSincePull: false,
   };
-  const initial = matches("initial");
+  let lateObserver: LateObserver | undefined;
+  // Spawn the late subscriber at a random step within the session (most
+  // sessions get one — only seeds landing past `steps` skip it), so
+  // "joining mid-stream" is exercised at varied points, not a fixed step.
+  const lateSpawnStep = Math.floor(rand() * steps * 1.3);
+
+  const initial = checkSession(seed, "initial", state, lateObserver);
   if (initial !== undefined) return initial;
 
   for (let step = 0; step < steps; step++) {
-    const action = rand();
-    if (action < 0.08) {
-      view = applyRebuild(subset, truth, folded);
-    } else {
-      const id = pick(IDS);
-      const isDelete = action < 0.08 + 0.25 && truth.has(id);
-      view = applyMutation(view, truth, folded, rand, id, isDelete);
-    }
-    const mismatch = matches(`step ${step}`);
+    if (step === lateSpawnStep) lateObserver = seedLateObserver(state.view, step);
+
+    const batch = stepSession(subset, state, rand, pick);
+    if (lateObserver !== undefined) applyToLateObserver(lateObserver, batch);
+
+    const mismatch = checkSession(seed, `step ${step}`, state, lateObserver);
     if (mismatch !== undefined) return mismatch;
   }
   return undefined;
@@ -205,5 +296,51 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
   it("reset batches a marker followed by fresh enters", () => {
     const rows: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];
     expect(RowChange.reset(rows)).toEqual([{ _tag: "reset" }, { _tag: "enter", row: rows[0] }]);
+  });
+
+  it("carries position on enter/update when rows have one", () => {
+    interface Positioned extends LiveView.Row {
+      readonly position: string;
+    }
+    const before: ReadonlyArray<Positioned> = [
+      { id: "a", value: { rank: 1 }, position: "a0" },
+      { id: "b", value: { rank: 2 }, position: "a1" },
+    ];
+    const bUpdated: Positioned = { id: "b", value: { rank: 5 }, position: "a1" };
+    const cEnters: Positioned = { id: "c", value: { rank: 3 }, position: "a2" };
+    const after: ReadonlyArray<Positioned> = [before[0]!, bUpdated, cEnters];
+    expect(RowChange.diff(before, after)).toEqual([
+      { _tag: "update", row: bUpdated, previous: before[1], position: "a1" },
+      { _tag: "enter", row: cEnters, position: "a2" },
+    ]);
+  });
+
+  it("emits move for a same-value row whose position shifted", () => {
+    interface Positioned extends LiveView.Row {
+      readonly position: string;
+    }
+    const before: ReadonlyArray<Positioned> = [
+      { id: "a", value: { rank: 1 }, position: "a0" },
+      { id: "b", value: { rank: 2 }, position: "a1" },
+    ];
+    // "b"'s value is unchanged but its position moved ahead of "a" (a
+    // neighbor's insert/delete re-ranked it without touching its value).
+    const bMoved: Positioned = { id: "b", value: before[1]!.value, position: "a-1" };
+    const after: ReadonlyArray<Positioned> = [bMoved, before[0]!];
+    expect(RowChange.diff(before, after)).toEqual([
+      { _tag: "move", row: bMoved, position: "a-1", previousPosition: "a1" },
+    ]);
+  });
+
+  it("reset/enters carry position when present, and omit it when absent", () => {
+    interface Positioned extends LiveView.Row {
+      readonly position: string;
+    }
+    const positioned: ReadonlyArray<Positioned> = [{ id: "a", value: { rank: 1 }, position: "a0" }];
+    expect(RowChange.enters(positioned)).toEqual([
+      { _tag: "enter", row: positioned[0], position: "a0" },
+    ]);
+    const plain: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];
+    expect(RowChange.enters(plain)).toEqual([{ _tag: "enter", row: plain[0] }]);
   });
 });

@@ -180,9 +180,21 @@ const connectionKey = (read: Query.Read): string => {
  * // {#each await reviews.promise as row (row.value.id)} … {/each}
  * // <button onclick={reviews.loadMore} disabled={!reviews.hasMore}>More</button>
  * ```
+ *
+ * **Engine-level retargeting (#133).** When the read has no `include`d edges
+ * and the view is engine-backed (`ClientView.observeWindow` present — a
+ * `Mirror` has none, see `docs/observing-row-changes.md`), `loadMore`/`reset`
+ * widen or shrink the SAME open observation's window via
+ * `ClientEngine.observeWindow`'s `retarget` — reusing `LiveView`'s maintained
+ * order instead of tearing the stream down and resubscribing wider each page.
+ * The stream itself is still built once per *base* change (collection/where/
+ * order/include), exactly as before; only `pages` no longer forces a rebuild.
+ * A joined read, or a mirror-backed connection, falls back to the original
+ * resubscribe-per-page behavior, unchanged.
  */
 export const useConnection = (read: () => Query.Read, options?: ConnectionOptions): Connection => {
   const pageSize = options?.pageSize ?? 20;
+  const runtime = getClientRuntime();
   let pages = $state(1);
   // Non-reactive: tracks the base read so a reused hook re-bases to page 1
   // when its inputs change (a per-parent instance never trips this).
@@ -196,17 +208,62 @@ export const useConnection = (read: () => Query.Read, options?: ConnectionOption
     }
   });
 
+  // The current base's retarget handle, set once per base change from inside
+  // the stream thunk below. `loadMore`/`reset` widen/shrink through it
+  // instead of relying on `pages` to force a resubscribe — `pages` is
+  // deliberately read only inside the thunk's *async* body below, which
+  // Svelte's effect tracking never sees, so changing it alone no longer
+  // retriggers `useLiveStream`'s interrupt-and-resubscribe. `undefined` when
+  // the current base has no engine-level retarget available (falls back to
+  // the pre-#133 behavior).
+  let retargetHandle:
+    | { readonly baseKey: string; readonly retarget: (limit: number) => void }
+    | undefined;
+
   const windowed = live(
-    getClientRuntime(),
+    runtime,
     () => {
-      const { first: _first, after: _after, ...base } = read();
-      const first = pages * pageSize;
-      return (client) => client.observe({ ...base, first });
+      const value = read();
+      const { first: _first, after: _after, ...base } = value;
+      const key = connectionKey(value);
+      return (client) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const observeWindow = client.view.observeWindow;
+            const hasEdges = Object.keys(base.include ?? {}).length > 0;
+            if (hasEdges || observeWindow === undefined) {
+              retargetHandle = undefined;
+              return client.observe({ ...base, first: pages * pageSize });
+            }
+            const compiled = Query.plan(client.nodes, { ...base, first: pageSize });
+            const opened = yield* observeWindow(compiled.root);
+            retargetHandle = {
+              baseKey: key,
+              retarget: (limit) => {
+                runtime.runFork(opened.retarget({ limit }));
+              },
+            };
+            // Defensive: `pages` is always freshly reset to 1 by the base-key
+            // effect above before this thunk re-runs, but this keeps the
+            // observation correct even if that ordering ever changes.
+            if (pages > 1) retargetHandle.retarget(pages * pageSize);
+            return opened.rows.pipe(
+              Stream.orDie,
+              Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+            );
+          }).pipe(Effect.orDie)
+        );
     },
     options
   );
 
   const rows = (): ResolvedRows => AsyncResult.getOrElse(windowed.current, () => EMPTY_ROWS);
+
+  const widenTo = (nextPages: number) => {
+    pages = nextPages;
+    const handle = retargetHandle;
+    if (handle !== undefined && handle.baseKey === baseKey) handle.retarget(pages * pageSize);
+  };
 
   return {
     get current() {
@@ -223,12 +280,10 @@ export const useConnection = (read: () => Query.Read, options?: ConnectionOption
     },
     loadMore: () => {
       if (!AsyncResult.isWaiting(windowed.current) && rows().length >= pages * pageSize) {
-        pages += 1;
+        widenTo(pages + 1);
       }
     },
-    reset: () => {
-      pages = 1;
-    },
+    reset: () => widenTo(1),
   };
 };
 

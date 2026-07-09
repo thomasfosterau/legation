@@ -17,8 +17,9 @@ the same subset a paired `observe(subset)` would page.
 
 ```ts
 type RowChange<Row> =
-  | { _tag: "enter"; row: Row }
-  | { _tag: "update"; row: Row; previous: Row }
+  | { _tag: "enter"; row: Row; position?: string }
+  | { _tag: "update"; row: Row; previous: Row; position?: string }
+  | { _tag: "move"; row: Row; position: string; previousPosition: string }
   | { _tag: "exit"; id: string; previous: Row }
   | { _tag: "reset" };
 ```
@@ -34,6 +35,27 @@ changed.
 Batches are **per view-step** — one array per underlying view change, same
 granularity as one `observe()` page re-emission — not per patch op. A quiet
 window emits nothing; there's no need to filter empty arrays yourself.
+
+### Position and `move`
+
+`enter`, `update`, and `move` carry the row's stable `position` — a
+{@link FractionalIndex} sort key the maintained window has assigned to it
+(issue #112), present whenever the source can compute one. A row whose
+`value` is unchanged but whose neighbors shifted enough to move it (a
+sibling entering/leaving the window re-ranks it) emits `move` — `position`
+and `previousPosition` — instead of being silently dropped as "unchanged."
+
+A consumer that only needs membership and value can ignore `position`/`move`
+entirely (a `move` never changes `value`). A keyed-list binding that wants
+correct ordering uses `position` to place `enter`s and re-sort on `move`,
+rather than only appending — see the Svelte example below.
+
+`position` is present on `ClientEngine.observeChanges` (backed by `LiveView`'s
+incrementally-maintained window). `Mirror.observeChanges` does not emit it: a
+mirror has no maintained window of its own — it diffs consecutive whole-page
+broadcasts from its host — so it cannot derive a stable position from a page
+snapshot alone. This is a documented gap, not a silent one; a mirror-backed
+consumer that needs order still re-derives it from a paired `observe` page.
 
 ### `reset`
 
@@ -63,11 +85,9 @@ one batch of `enter`s for the current window — no gap, no duplicate row.
 
 ### What's not here yet
 
-Ordering (a `move` variant with a stable position key) needs incrementally
-maintained position identity, tracked separately (issue #112). Until that
-lands, a consumer that needs order re-derives it from a paired `observe()`
-call or from the position `enter`s arrive in within a batch — `observeChanges`
-alone tells you membership and value, not position.
+`Mirror.observeChanges` does not emit `position`/`move` (see above) — a
+mirror-backed consumer that needs order re-derives it from a paired
+`observe()` call.
 
 ## Where it lives
 
@@ -85,36 +105,63 @@ view.observeChanges(subset, options); // ClientView.fromEngine or a Mirror
 ```
 
 A `ClientEngine` diffs its incrementally-maintained `LiveView` window
-directly. A `Mirror` has no local `LiveView` — it diffs consecutive whole-page
-updates the host already broadcasts to it, which is exact because the host
-sends the full current page on every change; the two hosts emit identical
-batches for identical page transitions.
+directly, so its batches carry `position`. A `Mirror` has no local `LiveView`
+— it diffs consecutive whole-page updates the host already broadcasts to it,
+which is exact for membership/value because the host sends the full current
+page on every change; the two hosts emit identical `enter`/`update`/`exit`/
+`reset` batches for identical page transitions, but only `ClientEngine`
+emits `position`/`move` (see above).
 
 ## A keyed-list binding (Svelte 5 example)
 
 The raw `Stream` is the framework primitive — bindings fold it into
 whatever state shape the framework wants. For a Svelte 5 keyed `{#each}`,
-that's a `$state` array kept in sync by applying each batch in order:
+that's a `$state` array kept in sync by applying each batch in order,
+inserting/re-sorting by `position` when it's present and falling back to
+append order when it's not (a mirror-backed source):
 
 ```svelte
 <script lang="ts">
   import { Effect, Stream } from "effect";
+  import * as FractionalIndex from "@legation/effect/internal/FractionalIndex";
   import type { Todo } from "./schema";
 
-  let todos = $state<Array<{ id: string; value: Todo }>>([]);
+  interface Row {
+    id: string;
+    value: Todo;
+    position?: string;
+  }
+
+  let todos = $state<Array<Row>>([]);
+
+  // Insert/re-sort by `position` when present (ascending FractionalIndex
+  // order); a row with no position keeps whatever order it was seen in.
+  const bySortKey = (a: Row, b: Row): number =>
+    a.position !== undefined && b.position !== undefined
+      ? FractionalIndex.compare(a.position, b.position)
+      : 0;
 
   $effect(() => {
-    const applyBatch = (batch: ReadonlyArray<RowChange<{ id: string; value: Todo }>>) => {
+    const applyBatch = (batch: ReadonlyArray<RowChange<Row>>) => {
       for (const change of batch) {
         switch (change._tag) {
           case "reset":
             todos = [];
             break;
           case "enter":
-            todos = [...todos, change.row];
+            todos = [...todos, { ...change.row, position: change.position }].toSorted(bySortKey);
             break;
           case "update":
-            todos = todos.map((row) => (row.id === change.row.id ? change.row : row));
+            todos = todos
+              .map((row) =>
+                row.id === change.row.id ? { ...change.row, position: change.position ?? row.position } : row
+              )
+              .toSorted(bySortKey);
+            break;
+          case "move":
+            todos = todos
+              .map((row) => (row.id === change.row.id ? { ...row, position: change.position } : row))
+              .toSorted(bySortKey);
             break;
           case "exit":
             todos = todos.filter((row) => row.id !== change.id);
@@ -137,9 +184,10 @@ that's a `$state` array kept in sync by applying each batch in order:
 {/each}
 ```
 
-Because updates only replace the row whose id matches, Svelte's keyed
-`{#each}` only re-renders the changed row — no full-list diff, no
-`transition:` restart on unrelated rows.
+Because `update`/`move` only replace the row whose id matches (re-sorting the
+array reference, not each row object), Svelte's keyed `{#each}` still only
+re-renders rows whose own identity/props changed — no `transition:` restart on
+rows that merely shifted position in the DOM order.
 
 ## Side-effect subscriptions
 
@@ -157,6 +205,8 @@ Stream.runForEach(client.observeChanges(subset), (batch) =>
         return notifyExited(change.id);
       case "update":
         return notifyUpdated(change.row, change.previous);
+      case "move":
+        return Effect.void; // position only; value is unchanged
       case "reset":
         return Effect.void; // resync, no per-row notification
     }

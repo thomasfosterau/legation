@@ -5,8 +5,11 @@
  * un-elected on a main thread — that's `@legation/browser`'s `ElectedHost`
  * (the shipped no-service-worker fallback, ADR-0010), which wraps this same
  * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election
- * (#119). This app always runs the service worker (dev included), so it
- * doesn't need that path itself.
+ * (#119). This app runs the service worker by default (dev included), but
+ * `bootElected` below wires the same domain (nodes/mutators/transport) onto
+ * `ElectedHost.run` instead — a documented dev-mode toggle (`?host=main` in
+ * `+layout.svelte`) so the no-service-worker fallback topology actually gets
+ * exercised somewhere, not just unit-tested (#133 item 6).
  *
  * Paced mutations (#117) — the cart-quantity stepper demo — are wired in
  * *here*, not in the cart page: `Paced.debounce` needs the real
@@ -19,14 +22,20 @@
  * `EngineHost`, so the cart page keeps calling the ordinary mirror
  * `mutate("cart/setQty", ...)` unchanged — clicking + / − rapidly now
  * collapses to a leading + trailing journal write per cart line instead of
- * one per click.
+ * one per click. `bootElected` does not wire this in — it demonstrates the
+ * plain topology, and a paced elected host is unexercised follow-up.
  */
-import { Effect, Layer } from "effect";
+import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type { IndexedDb } from "@effect/platform-browser";
-import { Transport } from "@legation/effect";
+import { Client, Transport } from "@legation/effect";
 import { ClientEngine, Paced, RpcTransport } from "@legation/effect/internal";
-import { BrowserConnectivity, IndexedDbClientStore, ServiceWorkerHost } from "@legation/browser";
-import { mutators, registry } from "./domain.js";
+import {
+  BrowserConnectivity,
+  ElectedHost,
+  IndexedDbClientStore,
+  ServiceWorkerHost,
+} from "@legation/browser";
+import { mutators, nodes, registry, shellReads } from "./domain.js";
 import type { CartSetQty } from "./domain.js";
 
 export interface HostOptions {
@@ -42,7 +51,10 @@ export interface HostOptions {
  * `RpcTransport.fromOrigin`, the same composition `Client.make`'s
  * `transport: { url }` builds), plus browser connectivity awareness.
  */
-const transportLayer = (options: HostOptions): Layer.Layer<Transport.ClientTransport> =>
+const transportLayer = (options: {
+  readonly clientGroupId: string;
+  readonly syncOrigin: string;
+}): Layer.Layer<Transport.ClientTransport> =>
   Layer.effect(Transport.ClientTransport)(
     Effect.gen(function* () {
       const transport = yield* RpcTransport.fromOrigin({
@@ -106,3 +118,56 @@ export const runHost = (options: HostOptions): Effect.Effect<never> =>
     Effect.provide(pacedEngineLayer(options)),
     Effect.scoped
   );
+
+export interface ElectedBootOptions {
+  readonly clientGroupId: string;
+  readonly syncOrigin: string;
+  readonly userId: string | undefined;
+}
+
+/**
+ * Dev-mode toggle (#133 item 6, `?host=main` in `+layout.svelte`): the same
+ * domain (nodes/mutators) and transport `runHost` gives the service worker,
+ * hosted via `ElectedHost.run`'s `navigator.locks` leader election instead —
+ * the shipped no-service-worker fallback (ADR-0010, #119) — so it actually
+ * runs somewhere in this repo, not just under `elected-host.test.ts`. One
+ * `ManagedRuntime` per tab, holding the SAME `IndexedDbClientStore` a service
+ * worker would (same-origin `window`/worker `indexedDB` share storage), so
+ * switching the toggle mid-session resumes the same journal/rows/cookie.
+ * `role` is purely observational (a debug badge) — resolved once
+ * `ElectedHost.run`'s election settles, never read by application logic.
+ */
+export const bootElected = (
+  options: ElectedBootOptions
+): {
+  readonly runtime: ManagedRuntime.ManagedRuntime<Client.Client, never>;
+  readonly role: Stream.Stream<ElectedHost.Role>;
+} => {
+  let resolveRole: (role: Stream.Stream<ElectedHost.Role>) => void = () => {};
+  const rolePromise = new Promise<Stream.Stream<ElectedHost.Role>>((resolve) => {
+    resolveRole = resolve;
+  });
+  const runtime = ManagedRuntime.make(
+    Layer.effect(Client.Client)(
+      Effect.gen(function* () {
+        const elected = yield* ElectedHost.run({
+          clientGroupId: options.clientGroupId,
+          nodes,
+          mutations: mutators,
+          registry,
+          dependencies: Layer.merge(transportLayer(options), IndexedDbClientStore.layerWindow()),
+        });
+        resolveRole(elected.role);
+        yield* Effect.forEach(
+          shellReads(options.userId),
+          (read) => elected.client.subscribe(read),
+          { discard: true }
+        ).pipe(Effect.orDie);
+        return elected.client;
+      })
+    )
+  );
+  // Touch the runtime so the election (and the shell subscriptions) start now.
+  void runtime.runPromise(Effect.asVoid(Client.Client)).catch(() => undefined);
+  return { runtime, role: Stream.unwrap(Effect.promise(() => rolePromise)) };
+};
