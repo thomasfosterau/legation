@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
+import type { RowChange } from "../RowChange.js";
 import * as Subset from "../Subset.js";
 
 type Row = Incremental.Row;
@@ -292,6 +293,104 @@ describe("Incremental.join — arbitrary key equality", () => {
 });
 
 // ─── Ordered window ──────────────────────────────────────────────────────────
+
+// ─── deltaFromChanges (#133 item 1: observeChanges as combinator input) ─────
+//
+// `stepGround` above already synthesizes exactly the delta a real `LiveView`
+// put/del would produce (at most one row touched per step); converting it to
+// the equivalent `RowChange` batch and recovering a delta via
+// `deltaFromChanges` must reproduce the *same* delta `Incremental.diff` would
+// have recovered by re-diffing two pages — proving `Derive.observed`'s
+// change-feed path is behaviorally identical to the page-diff fallback it
+// replaces, not just "also plausible."
+
+/** The `RowChange` batch a real `observeChanges` stream would emit for one
+ * `stepGround` delta (which touches at most one row per step). */
+const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> => {
+  if (
+    delta.added.length === 1 &&
+    delta.removed.length === 1 &&
+    delta.added[0]!.id === delta.removed[0]!.id
+  ) {
+    return [{ _tag: "update", row: delta.added[0]!, previous: delta.removed[0]! }];
+  }
+  const changes: Array<RowChange<Row>> = [];
+  for (const row of delta.added) changes.push({ _tag: "enter", row });
+  for (const row of delta.removed) changes.push({ _tag: "exit", id: row.id, previous: row });
+  return changes;
+};
+
+/** `null` if every step of one seed matched, else a description of the first divergence. */
+const runDeltaFromChangesSession = (seed: number, steps: number): string | null => {
+  const rng = mulberry32(seed);
+  const ground = new Map<string, Row>();
+  const known = new Map<string, Row>();
+  const ids = ["a", "b", "c", "d", "e", "f"];
+  const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
+  for (let step = 0; step < steps; step++) {
+    // Occasionally exercise `reset` (a Rebuild/gap-collapse batch) instead of
+    // a single-row delta.
+    if (rng() < 0.05) {
+      const knownSizeBefore = known.size;
+      const batch: ReadonlyArray<RowChange<Row>> = [
+        { _tag: "reset" },
+        ...[...ground.values()].map((row) => ({ _tag: "enter" as const, row })),
+      ];
+      const recovered = Incremental.deltaFromChanges(known, batch);
+      // A reset removes everything `known` held (regardless of whether it
+      // matches the fresh ground truth) and adds every row `ground` holds
+      // now — the same "clear then fresh enters" semantics `RowChange.reset`
+      // documents.
+      if (recovered.removed.length !== knownSizeBefore) {
+        return `seed ${seed} step ${step}: reset removed ${recovered.removed.length}, expected ${knownSizeBefore}`;
+      }
+      const recoveredIds = recovered.added.map((r) => r.id).toSorted();
+      const groundIds = [...ground.keys()].toSorted();
+      if (JSON.stringify(recoveredIds) !== JSON.stringify(groundIds)) {
+        return `seed ${seed} step ${step}: reset's added ids didn't match ground truth`;
+      }
+      if (known.size !== ground.size) {
+        return `seed ${seed} step ${step}: known.size ${known.size} !== ground.size ${ground.size}`;
+      }
+      continue;
+    }
+    const delta = stepGround(rng, ground, ids, makeValue, 0.2);
+    const batch = changeBatchOf(delta);
+    const recovered = Incremental.deltaFromChanges(known, batch);
+    if (JSON.stringify(recovered) !== JSON.stringify(delta)) {
+      return `seed ${seed} step ${step}: recovered ${JSON.stringify(recovered)} !== expected ${JSON.stringify(delta)}`;
+    }
+  }
+  return null;
+};
+
+describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just plausible", () => {
+  it("recovers the exact delta a page-diff would have, every step, including resets", () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      expect(runDeltaFromChangesSession(seed, 200)).toBeNull();
+    }
+  });
+
+  it("driving an operator via deltaFromChanges matches the from-scratch recompute", () => {
+    for (let seed = 1; seed <= 16; seed++) {
+      const rng = mulberry32(seed);
+      const ground = new Map<string, Row>();
+      const known = new Map<string, Row>();
+      const operator = Incremental.makeFilter(geFive);
+      const result = new Map<string, Row>();
+      const ids = ["a", "b", "c", "d", "e", "f"];
+      const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
+      for (let step = 0; step < 150; step++) {
+        const delta = stepGround(rng, ground, ids, makeValue, 0.2);
+        const batch = changeBatchOf(delta);
+        const recovered = Incremental.deltaFromChanges(known, batch);
+        Incremental.applyDelta(result, operator.step(recovered));
+        const expected = Incremental.filterFromScratch([...ground.values()], geFive);
+        expect(sameResult(result, expected)).toBe(true);
+      }
+    }
+  });
+});
 
 describe("Incremental.orderedWindow — orderBy + limit over derived rows", () => {
   it("limit narrow enough to force push-out/pull-in across the boundary", () => {

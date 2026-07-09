@@ -5,6 +5,7 @@
  * Clear consistency across a pull.
  */
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
@@ -148,6 +149,22 @@ const setItem = Mutator.registry([
   },
 ]);
 
+interface User {
+  readonly id: string;
+  readonly name: string;
+}
+
+const setItemAndUser = Mutator.registry([
+  {
+    mutator: Mutator.make("item/set", Schema.Unknown),
+    local: (args, writer) => writer.put("items", (args as Item).id, args),
+  },
+  {
+    mutator: Mutator.make("user/set", Schema.Unknown),
+    local: (args, writer) => writer.put("users", (args as User).id, args),
+  },
+]);
+
 const noopHandler: ServerHandler = {
   handlePush: () => Effect.succeed({ lastMutationIds: {} }),
   handlePull: () => Effect.succeed({ patch: [], cookie: "c", lastMutationIds: {} }),
@@ -276,6 +293,56 @@ describe("ClientEngine + CollectionIndex", () => {
         );
         expect(result.some((r) => r.id === "i1")).toBe(true); // reflects the optimistic overlay, not the stale index
       })
+  );
+
+  it.effect("#133: a pending mutation on collection A doesn't disable collection B's index", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const transport = yield* makeInMemory(noopHandler, "g");
+      const engine = yield* ClientEngineModule.make({
+        clientId: "c",
+        clientGroupId: "g",
+        mutators: setItemAndUser,
+        indexes: { items: ["done"] },
+      }).pipe(
+        Effect.provideService(ClientStore, store),
+        Effect.provideService(ClientTransport, transport)
+      );
+
+      yield* seedEngine(engine, items(20));
+      const doneQuery = () =>
+        engine.query(Subset.make({ collection: "items", where: Predicate.eq("done", true) }));
+
+      // Prime (and cache) the "items" index against the confirmed snapshot.
+      yield* doneQuery();
+
+      const evaluateSpy = vi.spyOn(CollectionIndex, "evaluate");
+      evaluateSpy.mockClear();
+
+      // A pending mutation on "users" — a different collection entirely —
+      // must not disable "items"'s index: `evaluate` is still consulted.
+      yield* engine.mutate("user/set", { id: "u1", name: "Ada" });
+      const whileUserPending = yield* doneQuery();
+      expect(evaluateSpy).toHaveBeenCalled();
+      expect(whileUserPending.map((r) => r.id).toSorted()).toEqual(
+        items(20)
+          .filter((r) => r.done)
+          .map((r) => r.id)
+          .toSorted()
+      );
+
+      evaluateSpy.mockClear();
+
+      // A pending mutation on "items" itself still falls back to a full
+      // scan (the coarse pre-#133 behavior, unchanged for the touched
+      // collection): `evaluate` is NOT consulted.
+      yield* engine.mutate("item/set", { id: "i1", priority: 1, done: true });
+      const whileItemsPending = yield* doneQuery();
+      expect(evaluateSpy).not.toHaveBeenCalled();
+      expect(whileItemsPending.some((r) => r.id === "i1")).toBe(true);
+
+      evaluateSpy.mockRestore();
+    })
   );
 
   it.effect("Put/Del/Clear via pull keep the index consistent", () =>

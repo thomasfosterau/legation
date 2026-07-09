@@ -100,6 +100,31 @@ export interface ObserveChangesOptions {
 }
 
 /**
+ * `limit`/`cursor` to widen or advance an open {@link ClientEngine.observeWindow}
+ * observation (mirrors `LiveView.retarget`) — an omitted field leaves that
+ * side of the window where it is.
+ */
+export interface WindowRetarget {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/**
+ * A reactively-retargetable live window (#133): `rows` is the same live page
+ * stream {@link ClientEngine.observe} would give this subset; `retarget`
+ * widens/advances its `limit`/`cursor` in place — reusing `LiveView`'s
+ * maintained order (`LiveView.retarget`: no re-subscribe, no rebuild from
+ * scratch) — and widens this subset's entry in the engine's subscription
+ * list so the next `pull` fetches the wider window from the server too.
+ * `collection`/`where`/`orderBy` are fixed at `observeWindow` time; only
+ * `limit`/`cursor` move.
+ */
+export interface WindowObservation {
+  readonly rows: Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
+  readonly retarget: (window: WindowRetarget) => Effect.Effect<void>;
+}
+
+/**
  * A mutation's authoritative (server) outcome: `applied` once the backend
  * acknowledged it with effects, or `rejected` with a reason when the backend
  * permanently refused it (#35). Observed via {@link MutationHandle}.
@@ -510,26 +535,41 @@ export interface ClientEngine {
     (subset: Subset.Subset): Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
   };
   /**
+   * Reactive window retargeting (#133): like {@link observe}, but returns a
+   * {@link WindowObservation} whose `retarget` widens/advances the SAME open
+   * observation's `limit`/`cursor` — reusing `LiveView`'s maintained order
+   * instead of requiring a fresh `observe(widerSubset)` (a re-subscribe and a
+   * rebuild from scratch). The Svelte `useConnection` "load more" paging hook
+   * is the reference consumer. Scoped: the underlying change-hub subscription
+   * is released (and `retarget` becomes inert) when the scope closes — pair
+   * with `Effect.scoped` or a long-lived component scope, the same as
+   * {@link runSync}.
+   */
+  readonly observeWindow: (
+    subset: Subset.Subset
+  ) => Effect.Effect<WindowObservation, StoreError | MutatorError, Scope.Scope>;
+  /**
    * Row-level deltas of a subset's live window (#115): `enter`/`exit` mark
    * predicate/limit-boundary crossings, `update` a same-membership value
-   * change — batched per view-step (one array per {@link ViewChange}
-   * application, mirroring `observe`'s one-page-per-step). A confirmed-row
-   * pull `Patch` and a plain local mutation (#109 tracks a mutator's local
-   * handler directly onto the cached overlay and publishes exactly what it
-   * did) both diff precisely; `Rebuild`/seq-gap collapse — a pull racing a
-   * still-pending mutation, an unknown mutator, a `Clear` — emit a `reset`
-   * marker + fresh `enter`s instead of a diff, since the overlay could have
-   * shifted any row (the same conservative fallback `observe`'s page already
-   * takes). `LiveView.put`/`del` already decide predicate/window membership
-   * per row; this surfaces that decision instead of discarding it and
-   * rescanning two pages.
+   * change, `move` a same-membership/same-value position change (#112's
+   * stable position keys) — batched per view-step (one array per
+   * {@link ViewChange} application, mirroring `observe`'s one-page-per-step).
+   * A confirmed-row pull `Patch` and a plain local mutation (#109 tracks a
+   * mutator's local handler directly onto the cached overlay and publishes
+   * exactly what it did) both diff precisely; `Rebuild`/seq-gap collapse — a
+   * pull racing a still-pending mutation, an unknown mutator, a `Clear` —
+   * emit a `reset` marker + fresh `enter`s instead of a diff, since the
+   * overlay could have shifted any row (the same conservative fallback
+   * `observe`'s page already takes). `LiveView.put`/`del` already decide
+   * predicate/window membership per row; this surfaces that decision instead
+   * of discarding it and rescanning two pages.
    *
-   * Ordering (`move`) is not yet part of this stream's contract: `LiveView`
-   * rows carry a stable position (#112) at runtime, but a row repositioned by
-   * a neighbor's insert/delete without its own value changing isn't
-   * distinguished from "unchanged" here — a consumer that needs order
-   * re-derives it from a paired `observe` or the position of `enter`s within
-   * a batch, pending that follow-up.
+   * `enter`/`update`/`move` carry the row's stable `position` (a
+   * `LiveView.PositionedRow`'s `FractionalIndex` key): a row repositioned by
+   * a neighbor's insert/delete without its own value changing is no longer
+   * indistinguishable from "unchanged" — it emits `move` with its new and
+   * previous position, so a keyed-list consumer re-sorts without diffing
+   * pages (`docs/observing-row-changes.md`).
    */
   readonly observeChanges: {
     <A>(
@@ -975,15 +1015,28 @@ export const make = (
     // Indexed evaluation is sound only while a collection's confirmed rows
     // equal its materialized view — i.e. no pending mutation's optimistic
     // overlay could have shifted it (the index tracks confirmed rows only).
-    // A non-empty journal conservatively falls back to today's full scan for
-    // every collection; per-collection overlay-touch scoping is future work.
+    // Scoped per-collection (#133): a pending mutation's touched collections
+    // are already computed for the rebase path (`collectionsTouchedByMutations`,
+    // #109's tracked-write machinery), so a mutation pending against
+    // collection A no longer disables index acceleration for a query against
+    // untouched collection B. An unscoped result (an unknown mutator,
+    // undecodable args — same cases `collectionsTouchedByMutations`'
+    // `undefined` already covers for scoped Rebuilds) conservatively falls
+    // back to a full scan for every collection, same as before this change.
     const indexForCollection = (
       collection: string
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
       store.pendingMutations.pipe(
-        Effect.flatMap((pending) =>
-          pending.length > 0 ? Effect.succeed(undefined) : ensureIndexBuilt(collection)
-        )
+        Effect.flatMap((pending) => {
+          if (pending.length === 0) return ensureIndexBuilt(collection);
+          return collectionsTouchedByMutations(pending).pipe(
+            Effect.flatMap((touched) =>
+              touched !== undefined && !touched.has(collection)
+                ? ensureIndexBuilt(collection)
+                : Effect.succeed(undefined)
+            )
+          );
+        })
       );
 
     // Apply confirmed-row deltas (patch ops / seeded rows) to already-built
@@ -1713,10 +1766,15 @@ export const make = (
       readonly after: ReadonlyArray<LocalRow>;
       readonly reset: boolean;
     }
+    // `readSubset` re-reads the *current* subset on every step rather than
+    // closing over a fixed one, so a retargeted window (`observeWindow`
+    // below) picks up its widened `limit`/advanced `cursor` on the very next
+    // Rebuild/gap-collapse — `observeSubset`/`observeSubsetChanges` (whose
+    // subset never changes) just pass `Effect.succeed(subset)`.
     const advanceView = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       lastSeenRef: Ref.Ref<number>,
-      subset: Subset.Subset,
+      readSubset: Effect.Effect<Subset.Subset>,
       item: SeqChange
     ): Effect.Effect<ViewStep, StoreError | MutatorError> =>
       Effect.gen(function* () {
@@ -1725,6 +1783,7 @@ export const make = (
           const page = LiveView.result(yield* Ref.get(viewRef));
           return { before: page, after: page, reset: false };
         }
+        const subset = yield* readSubset;
         if (item.seq === lastSeen + 1) {
           yield* Ref.set(lastSeenRef, item.seq);
           const view = yield* Ref.get(viewRef);
@@ -1766,18 +1825,18 @@ export const make = (
     const stepView = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       lastSeenRef: Ref.Ref<number>,
-      subset: Subset.Subset,
+      readSubset: Effect.Effect<Subset.Subset>,
       item: SeqChange
     ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
-      advanceView(viewRef, lastSeenRef, subset, item).pipe(Effect.map((step) => step.after));
+      advanceView(viewRef, lastSeenRef, readSubset, item).pipe(Effect.map((step) => step.after));
 
     const stepViewChanges = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       lastSeenRef: Ref.Ref<number>,
-      subset: Subset.Subset,
+      readSubset: Effect.Effect<Subset.Subset>,
       item: SeqChange
     ): Effect.Effect<ReadonlyArray<RowChange.RowChange<LocalRow>>, StoreError | MutatorError> =>
-      advanceView(viewRef, lastSeenRef, subset, item).pipe(
+      advanceView(viewRef, lastSeenRef, readSubset, item).pipe(
         Effect.map((step) =>
           step.reset ? RowChange.reset(step.after) : RowChange.diff(step.before, step.after)
         )
@@ -1815,10 +1874,11 @@ export const make = (
           const initial = LiveView.result(yield* Ref.get(viewRef));
           // Emit the page on each change, dropping re-emits when it didn't move
           // (e.g. a change outside the limit window, or a skipped stale seq).
+          const readSubset = Effect.succeed(subset);
           return Stream.concat(
             Stream.succeed(initial),
             Stream.fromSubscription(subscription).pipe(
-              Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, subset, item))
+              Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, readSubset, item))
             )
           ).pipe(Stream.changesWith(sameResult));
         })
@@ -1838,15 +1898,78 @@ export const make = (
             changeOptions?.includeInitial === true && initialRows.length > 0
               ? [RowChange.enters(initialRows)]
               : [];
+          const readSubset = Effect.succeed(subset);
           return Stream.concat(
             Stream.fromIterable(initial),
             Stream.fromSubscription(subscription).pipe(
-              Stream.mapEffect((item) => stepViewChanges(viewRef, lastSeenRef, subset, item)),
+              Stream.mapEffect((item) => stepViewChanges(viewRef, lastSeenRef, readSubset, item)),
               Stream.filter((batch) => batch.length > 0)
             )
           );
         })
       );
+
+    // Engine-level reactive window retargeting (#133): unlike `observeSubset`
+    // (whose subset is fixed for the stream's lifetime), this tracks the
+    // *current* subset in a `Ref` that `retarget` can widen/advance, and a
+    // `retargetTick` that wakes the stream to reslice immediately — without
+    // waiting for an unrelated engine change, and without the caller
+    // resubscribing (`observe(widerSubset)`, which would rebuild `LiveView`
+    // from scratch instead of reusing the maintained order).
+    const observeWindow = (
+      subset: Subset.Subset
+    ): Effect.Effect<WindowObservation, StoreError | MutatorError, Scope.Scope> =>
+      Effect.gen(function* () {
+        const { subscription, viewRef, lastSeenRef } = yield* initSubsetView(subset);
+        const subsetRef = yield* Ref.make(subset);
+        const retargetTick = yield* SubscriptionRef.make(0);
+        const initial = LiveView.result(yield* Ref.get(viewRef));
+
+        const retarget: WindowObservation["retarget"] = (window) =>
+          Effect.gen(function* () {
+            const previous = yield* Ref.get(subsetRef);
+            const limit = window.limit !== undefined ? window.limit : previous.limit;
+            const cursor = window.cursor !== undefined ? window.cursor : previous.cursor;
+            if (limit === previous.limit && cursor === previous.cursor) return;
+            const nextSubset: Subset.Subset = {
+              ...previous,
+              ...(limit !== undefined ? { limit } : {}),
+              ...(cursor !== undefined ? { cursor } : {}),
+            };
+            yield* Ref.set(subsetRef, nextSubset);
+            yield* Ref.update(viewRef, (view) => LiveView.retarget(view, window));
+            // Widen this observation's tracked subscription entry in place —
+            // matched by the *previous* subset's hash, since limit/cursor are
+            // part of what `Subset.hash` covers — so the next pull fetches the
+            // wider window from the server too. A caller that never
+            // `subscribe`d this exact subset has no server-tracked entry to
+            // widen; the local reslice above still runs over whatever rows
+            // are already synced.
+            const previousHash = Subset.hash(previous);
+            yield* Ref.update(subscriptions, (current) =>
+              current.map((s) => (Subset.hash(s) === previousHash ? nextSubset : s))
+            );
+            yield* SubscriptionRef.update(retargetTick, (n) => n + 1);
+          });
+
+        const readSubset = Ref.get(subsetRef);
+        const engineChanges = Stream.fromSubscription(subscription).pipe(
+          Stream.mapEffect((item) => stepView(viewRef, lastSeenRef, readSubset, item))
+        );
+        // Skip the tick's seeded current value (0) — only an actual retarget
+        // (which bumps it) should trigger a re-read; the initial page is
+        // already emitted below.
+        const retargetChanges = SubscriptionRef.changes(retargetTick).pipe(
+          Stream.drop(1),
+          Stream.mapEffect(() => Ref.get(viewRef).pipe(Effect.map(LiveView.result)))
+        );
+        const rows = Stream.concat(
+          Stream.succeed(initial),
+          Stream.merge(engineChanges, retargetChanges)
+        ).pipe(Stream.changesWith(sameResult));
+
+        return { rows, retarget };
+      });
 
     // Projected observe: map each page through `select` and drop consecutive
     // equal projections, so a change to a field the projection ignores never
@@ -2135,6 +2258,7 @@ export const make = (
       query: query as ClientEngine["query"],
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
       observe: observeProjected as ClientEngine["observe"],
+      observeWindow,
       observeChanges: observeSubsetChanges as ClientEngine["observeChanges"],
       queryAggregate,
       queryAggregateGrouped,

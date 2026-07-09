@@ -12,12 +12,19 @@
  * engine (the worker can't read the client-group cookie) and (2) pins the
  * shell's reads — subscriptions are client state, refcounted per mirror
  * by the host.
+ *
+ * `bootMainThread` is the dev-mode alternative (`?host=main`,
+ * `+layout.svelte`): no service worker at all — `ElectedHost.run` owns the
+ * engine on this tab directly (ADR-0010's no-service-worker fallback, #119),
+ * so the topology actually runs somewhere in this repo (see `lib/host.ts`'s
+ * `bootElected`).
  */
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, type Stream } from "effect";
 import { Client } from "@legation/effect";
-import { BroadcastMirrorChannel, ServiceWorkerHost } from "@legation/browser";
+import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@legation/browser";
 import type { Runtime } from "@legation/svelte";
 import { mutators, nodes, shellReads } from "./domain.js";
+import { bootElected } from "./host.js";
 
 export type AppRuntime = Runtime.ClientRuntime;
 
@@ -61,6 +68,27 @@ export const boot = (options: {
   void runtime.runPromise(Effect.asVoid(Client.Client)).catch(() => undefined);
   if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
   return runtime;
+};
+
+/**
+ * The dev-mode, no-service-worker alternative to {@link boot} (#133 item 6):
+ * this tab elects itself leader (`navigator.locks`) and owns the engine
+ * directly instead of joining the service worker's — the shipped fallback
+ * topology for environments without service-worker support (ADR-0010, #119).
+ * Returns the `role` stream alongside the runtime purely for a debug badge;
+ * `+layout.svelte` never branches application logic on it.
+ */
+export const bootMainThread = (options: {
+  readonly clientGroupId: string;
+  readonly userId: string | undefined;
+}): { readonly runtime: AppRuntime; readonly role: Stream.Stream<ElectedHost.Role> } => {
+  const { runtime, role } = bootElected({
+    clientGroupId: options.clientGroupId,
+    syncOrigin: location.origin,
+    userId: options.userId,
+  });
+  if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
+  return { runtime, role };
 };
 
 /**

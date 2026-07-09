@@ -51,6 +51,24 @@ export interface ClientView {
     subset: Subset.Subset
   ) => Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
   /**
+   * Reactive window retargeting (#133): like {@link observe}, but the
+   * returned {@link ClientEngineModule.WindowObservation}'s `retarget` widens
+   * or advances the SAME open observation's `limit`/`cursor` in place —
+   * see {@link ClientEngineModule.ClientEngine.observeWindow}. Present only
+   * for an engine-backed view (`fromEngine`): a `Mirror` has no local
+   * `LiveView` of its own to retarget — a documented gap, not a silent one
+   * (`docs/observing-row-changes.md`) — a mirror-backed consumer that needs
+   * this re-`subscribe`s with a wider subset instead.
+   */
+  readonly observeWindow?: (subset: Subset.Subset) => Effect.Effect<
+    {
+      readonly rows: Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
+      readonly retarget: (window: ClientEngineModule.WindowRetarget) => Effect.Effect<void>;
+    },
+    ClientViewError,
+    Scope.Scope
+  >;
+  /**
    * Row-level deltas of a subset's live window (#115) — see
    * {@link ClientEngineModule.ClientEngine.observeChanges}. Satisfied
    * structurally by `Mirror` (ADR-0021's one-surface principle), which folds
@@ -124,6 +142,7 @@ export const ClientView = Context.Service<ClientView>("@legation/effect/ClientVi
 export const fromEngine = (engine: ClientEngine): ClientView => ({
   query: (subset) => engine.query(subset),
   observe: (subset) => engine.observe(subset),
+  observeWindow: (subset) => engine.observeWindow(subset),
   observeChanges: (subset, options) => engine.observeChanges(subset, options),
   subscribe: (subset) => engine.subscribe(subset),
   unsubscribe: (subset) => engine.unsubscribe(subset),

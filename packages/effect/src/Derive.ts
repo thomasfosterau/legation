@@ -27,9 +27,21 @@
  * straight out of the shared shape, the same trick `LiveQuery` and `Related`
  * already play). A combinator recovers deltas by diffing consecutive `observe`
  * pages ({@link Incremental.diff}) — the page-diffing path ADR-0027 §4
- * describes; #115's now-merged `observeChanges` enter/update/exit feed is the
- * row-level alternative, and wiring the combinators onto it directly is a
- * follow-up.
+ * describes, and the fallback for a plain page source (a raw `Stream`, or
+ * another combinator's output).
+ *
+ * **`observed` prefers `observeChanges` (#115).** When the leaf is built from
+ * a full `ClientView` (rather than the narrower `Reader`), `observed` reads
+ * its `observeChanges` enter/update/exit/move feed directly instead of
+ * `observe`'s pages: `LiveView` already decided each row's delta, so
+ * `Incremental.deltaFromChanges` just reads that decision instead of
+ * `Incremental.diff` recomputing it from two page `Map`s. The resulting
+ * `Source` is tagged (invisibly to its `Stream.Stream<ReadonlyArray<Row>, E>`
+ * type) with its native change feed, so every combinator built on top of it —
+ * `filter`, `map`, `join`, `groupBy`, `distinct`, `orderedWindow` — consumes
+ * that feed too, one level deep. A source built any other way (a raw
+ * `Stream`, `view.observe(subset)` called directly, or a combinator's own
+ * output) carries no such tag and falls back to page-diffing, unchanged.
  *
  * **Observability.** A derived pipeline is an Effect `Stream` and, via
  * {@link atom}, an Atom on the standard `effect/unstable/reactivity` surface —
@@ -49,6 +61,7 @@ import { Atom, type AsyncResult } from "effect/unstable/reactivity";
 import type * as ClientView from "./ClientView.js";
 import * as Hash from "./Hash.js";
 import * as Incremental from "./Incremental.js";
+import type { RowChange } from "./RowChange.js";
 import type * as Subscriptions from "./Subscriptions.js";
 import type * as Subset from "./Subset.js";
 
@@ -57,6 +70,33 @@ export type Row = Incremental.Row;
 
 /** A derived source: a stream of page snapshots (what `ClientView.observe` yields). */
 export type Source<E> = Stream.Stream<ReadonlyArray<Row>, E>;
+
+// ─── The observeChanges tag (see the module doc's "observed prefers
+// observeChanges" section) ────────────────────────────────────────────────
+//
+// `Source<E>` must stay exactly `Stream.Stream<ReadonlyArray<Row>, E>` — it is
+// handed around and constructed directly (a raw `Stream.fromIterable`, or
+// `view.observe(subset)`) by callers who never go through `observed`. A tag
+// smuggled onto the *value* `observed` returns (an ordinary, extensible
+// object, like every Effect `Stream`) lets a combinator opportunistically
+// recover the native change feed without widening that public type: present,
+// it's used; absent (a raw stream, or another combinator's own page output),
+// the page-diff fallback below runs exactly as before.
+const CHANGES = Symbol.for("@legation/effect/Derive/changes");
+
+interface ChangeTagged<E> {
+  readonly [CHANGES]: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>;
+}
+
+const withChanges = <E>(
+  pages: Source<E>,
+  changes: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>
+): Source<E> => Object.assign(pages, { [CHANGES]: changes } satisfies ChangeTagged<E>);
+
+const changesOf = <E>(
+  source: Source<E>
+): Stream.Stream<ReadonlyArray<RowChange<Row>>, E> | undefined =>
+  (source as unknown as Partial<ChangeTagged<E>>)[CHANGES];
 
 // ─── Dedup ───────────────────────────────────────────────────────────────────
 
@@ -75,23 +115,46 @@ const samePage = (a: ReadonlyArray<Row>, b: ReadonlyArray<Row>): boolean =>
 // ─── Single-input maintenance ────────────────────────────────────────────────
 
 /**
- * Drive one delta→delta {@link Incremental.Operator} over a source's pages:
- * diff each page against the last snapshot, step the operator, fold the output
- * delta into a maintained result, and emit the result as a page (deduped). The
- * operator (and its state) is built lazily per subscription, so one derived
- * value mounted from many components each gets its own maintained state.
+ * Recover a delta per emission from any `Source`: when it carries the
+ * {@link CHANGES} tag (built by `observed` over a `ClientView`), read the
+ * delta `LiveView` already computed (`Incremental.deltaFromChanges`);
+ * otherwise diff each page against the last snapshot
+ * ({@link Incremental.diff}), the pre-#115 fallback for a plain page source.
+ * Every combinator funnels through this so the tag needs checking once, not
+ * once per combinator.
+ */
+const toDeltaStream = <E>(source: Source<E>): Stream.Stream<Incremental.Delta, E> => {
+  const changes = changesOf(source);
+  return changes !== undefined
+    ? changes.pipe(
+        Stream.mapAccum(
+          () => new Map<string, Row>(),
+          (known, batch) => [known, [Incremental.deltaFromChanges(known, batch)]] as const
+        )
+      )
+    : source.pipe(
+        Stream.mapAccum(
+          () => new Map<string, Row>(),
+          (last, page) => {
+            const { delta, index } = Incremental.diff(last, page);
+            return [index, [delta]] as const;
+          }
+        )
+      );
+};
+
+/**
+ * Drive one delta→delta {@link Incremental.Operator} over a source's deltas
+ * ({@link toDeltaStream}): step the operator, fold the output delta into a
+ * maintained result, and emit the result as a page (deduped). The operator
+ * (and its state) is built lazily per subscription, so one derived value
+ * mounted from many components each gets its own maintained state.
  */
 const maintain = <E>(source: Source<E>, makeOperator: () => Incremental.Operator): Source<E> =>
-  source.pipe(
+  toDeltaStream(source).pipe(
     Stream.mapAccum(
-      () => ({
-        operator: makeOperator(),
-        last: new Map<string, Row>(),
-        result: new Map<string, Row>(),
-      }),
-      (state, page) => {
-        const { delta, index } = Incremental.diff(state.last, page);
-        state.last = index;
+      () => ({ operator: makeOperator(), result: new Map<string, Row>() }),
+      (state, delta) => {
         Incremental.applyDelta(state.result, state.operator.step(delta));
         return [state, [Incremental.pageOf(state.result)]] as const;
       }
@@ -144,30 +207,24 @@ export const join = <E, F>(
   options: JoinOptions
 ): Source<E | F> => {
   const tagged: Stream.Stream<
-    { readonly side: "left" | "right"; readonly page: ReadonlyArray<Row> },
+    { readonly side: "left" | "right"; readonly delta: Incremental.Delta },
     E | F
   > = Stream.merge(
-    left.pipe(Stream.map((page) => ({ side: "left" as const, page }))),
-    right.pipe(Stream.map((page) => ({ side: "right" as const, page })))
+    toDeltaStream(left).pipe(Stream.map((delta) => ({ side: "left" as const, delta }))),
+    toDeltaStream(right).pipe(Stream.map((delta) => ({ side: "right" as const, delta })))
   );
   return tagged.pipe(
     Stream.mapAccum(
       () => ({
         operator: Incremental.makeJoin(options),
-        left: new Map<string, Row>(),
-        right: new Map<string, Row>(),
         result: new Map<string, Row>(),
       }),
       (state, event) => {
-        if (event.side === "left") {
-          const { delta, index } = Incremental.diff(state.left, event.page);
-          state.left = index;
-          Incremental.applyDelta(state.result, state.operator.stepLeft(delta));
-        } else {
-          const { delta, index } = Incremental.diff(state.right, event.page);
-          state.right = index;
-          Incremental.applyDelta(state.result, state.operator.stepRight(delta));
-        }
+        const outDelta =
+          event.side === "left"
+            ? state.operator.stepLeft(event.delta)
+            : state.operator.stepRight(event.delta);
+        Incremental.applyDelta(state.result, outDelta);
         return [state, [Incremental.pageOf(state.result)]] as const;
       }
     ),
@@ -190,17 +247,10 @@ export interface OrderedWindowOptions {
  * one ordering authority applies, so "no orderBy" still means stable id order).
  */
 export const orderedWindow = <E>(source: Source<E>, options: OrderedWindowOptions): Source<E> =>
-  source.pipe(
+  toDeltaStream(source).pipe(
     Stream.mapAccum(
-      () => ({
-        window: Incremental.makeOrderedWindow(options.orderBy, options.limit),
-        last: new Map<string, Row>(),
-      }),
-      (state, page) => {
-        const { delta, index } = Incremental.diff(state.last, page);
-        state.last = index;
-        return [state, [state.window.step(delta)]] as const;
-      }
+      () => Incremental.makeOrderedWindow(options.orderBy, options.limit),
+      (window, delta) => [window, [window.step(delta)]] as const
     ),
     Stream.changesWith(samePage)
   );
@@ -223,20 +273,50 @@ export const atom = <E>(source: Source<E>): Atom.Atom<DerivedResult<E>> => Atom.
 // ─── Lifetime ────────────────────────────────────────────────────────────────
 
 /**
+ * Fold an `observeChanges` feed into a page stream without ever diffing a
+ * page: each batch's delta ({@link Incremental.deltaFromChanges}) is folded
+ * straight into a running result map. This is what `observed` returns when
+ * the view has `observeChanges` — a real, standalone page stream (so it's
+ * correct if consumed directly), separate from the {@link CHANGES} tag that
+ * lets a combinator built on top skip this fold entirely and read the same
+ * underlying batches itself.
+ */
+const pagesFromChanges = <E>(changes: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>): Source<E> =>
+  changes.pipe(
+    Stream.mapAccum(
+      () => ({ known: new Map<string, Row>(), result: new Map<string, Row>() }),
+      (state, batch) => {
+        Incremental.applyDelta(state.result, Incremental.deltaFromChanges(state.known, batch));
+        return [state, [Incremental.pageOf(state.result)]] as const;
+      }
+    ),
+    Stream.changesWith(samePage)
+  );
+
+/**
  * A scoped leaf source: acquire a refcounted subscription for `subset` (so the
  * rows actually sync) and observe it, releasing the subscription when the scope
  * closes. A pipeline built from `observed` leaves holds all its sources'
  * subscriptions for its lifetime and drops them together on teardown — the
  * refcounted-lifetime discipline the #114 brief asks for, `Subscriptions`
  * doing the reference counting so a shared leaf is synced once.
+ *
+ * When `view` is a full {@link ClientView.ClientView} (not just the narrower
+ * {@link ClientView.Reader}), the returned source is built from its
+ * `observeChanges` feed and tagged so every combinator composed on top reads
+ * that feed directly too (see the module doc). A bare `Reader` has no
+ * `observeChanges` to prefer, so this falls back to `observe`'s pages,
+ * unchanged.
  */
 export const observed = (
   subscriptions: Subscriptions.Subscriptions,
-  view: ClientView.Reader,
+  view: ClientView.Reader | ClientView.ClientView,
   subset: Subset.Subset
 ): Effect.Effect<Source<ClientView.ClientViewError>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const handle = yield* subscriptions.acquire(subset);
     yield* Effect.addFinalizer(() => handle.release);
-    return view.observe(subset);
+    if (!("observeChanges" in view)) return view.observe(subset);
+    const changes = view.observeChanges(subset, { includeInitial: true });
+    return withChanges(pagesFromChanges(changes), changes);
   });

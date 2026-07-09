@@ -14,9 +14,9 @@
  * acquires without ever releasing.
  */
 
-import { Duration, Effect, Fiber, Scope, Semaphore } from "effect";
-import type { ClientEngine } from "./ClientEngine.js";
-import type { QueryError } from "./Errors.js";
+import { Duration, Effect, Fiber, Ref, Scope, Semaphore } from "effect";
+import type { ClientEngine, WindowObservation } from "./ClientEngine.js";
+import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Subset from "./Subset.js";
 
 /** A held subscription. `release` is idempotent; the grace timer starts when
@@ -25,9 +25,35 @@ export interface SubscriptionHandle {
   readonly release: Effect.Effect<void>;
 }
 
+/**
+ * A held, reactively-retargetable window (#133): `rows`/`retarget` are
+ * {@link WindowObservation}'s (see `ClientEngine.observeWindow`); `release`
+ * drops the subscription this window's *current* (possibly retargeted)
+ * subset holds — unlike {@link acquire}, not refcounted, since a window's
+ * subset identity (its `limit`/`cursor`) changes over its lifetime and so
+ * cannot be shared under one hash-keyed entry the way a plain subset
+ * subscription is. Each retargetable window should be its own observation
+ * (the common case: one user's one paginated view); two independent
+ * `acquireWindow` calls that happen to start from equivalently-hashed
+ * subsets are not coordinated with each other.
+ */
+export interface WindowHandle extends WindowObservation {
+  readonly release: Effect.Effect<void>;
+}
+
 export interface Subscriptions {
   /** Acquire a raw-subset subscription (refcounted). */
   readonly acquire: (subset: Subset.Subset) => Effect.Effect<SubscriptionHandle>;
+  /**
+   * Acquire a reactively-retargetable window (#133): composes `acquire`'s
+   * subscribe/release with {@link ClientEngine.observeWindow}, so `retarget`
+   * widens/advances the window in place (reusing `LiveView`'s maintained
+   * order) and keeps the server-synced subscription in step — the
+   * `useConnection` "load more" paging hook's engine-level seam.
+   */
+  readonly acquireWindow: (
+    subset: Subset.Subset
+  ) => Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope>;
   /** Acquire a named-query subscription (refcounted). */
   readonly acquireQuery: (
     name: string,
@@ -135,8 +161,46 @@ export const make = (
         engine.unsubscribeQuery(name, args).pipe(Effect.orDie)
       );
 
+    // A window's own lifecycle, deliberately NOT routed through `acquireKey`'s
+    // hash-keyed `entries` map: `retarget` changes the subset's `limit`/
+    // `cursor` (and so its hash) over the observation's lifetime, which the
+    // refcounted map has no way to track (it would either leak the original
+    // entry or, worse, silently release a DIFFERENT acquirer's subscription
+    // that happens to now share the retargeted hash). `currentRef` tracks
+    // this window's own current subset so `release` unsubscribes the right
+    // one regardless of how many times it was retargeted.
+    const acquireWindow = (
+      subset: Subset.Subset
+    ): Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope> =>
+      Effect.gen(function* () {
+        yield* engine.subscribe(subset);
+        const currentRef = yield* Ref.make(subset);
+        const observation = yield* engine.observeWindow(subset);
+        const retarget: WindowHandle["retarget"] = (window) =>
+          observation.retarget(window).pipe(
+            Effect.andThen(
+              Ref.update(
+                currentRef,
+                (current): Subset.Subset => ({
+                  ...current,
+                  ...(window.limit !== undefined ? { limit: window.limit } : {}),
+                  ...(window.cursor !== undefined ? { cursor: window.cursor } : {}),
+                })
+              )
+            )
+          );
+        let released = false;
+        const release = Effect.suspend(() => {
+          if (released) return Effect.void;
+          released = true;
+          return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
+        });
+        return { rows: observation.rows, retarget, release };
+      });
+
     return {
       acquire,
+      acquireWindow,
       acquireQuery,
       preload: (subset) => Effect.asVoid(acquire(subset)),
       preloadQuery: (name, args) => Effect.asVoid(acquireQuery(name, args)),

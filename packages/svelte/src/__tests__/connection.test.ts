@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
+import { Effect, Stream } from "effect";
 import RunesConnectionHarness from "./fixtures/RunesConnectionHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
 
@@ -38,12 +39,27 @@ describe("useConnection", () => {
     expect(text()).toContain("row:todo-2");
     expect(text()).not.toContain("row:todo-3");
 
+    // #133: count `ViewRebuilt` engine events from here on — a widen that
+    // reuses the maintained order (`retarget`) fires none; only a genuine
+    // Rebuild (a pull racing a pending mutation, a Clear) would.
+    let rebuilds = 0;
+    await run(runtime, (engine) =>
+      Effect.forkDetach(
+        Stream.runForEach(engine.engineEvents, (event) =>
+          Effect.sync(() => {
+            if (event._tag === "ViewRebuilt") rebuilds++;
+          })
+        )
+      ).pipe(Effect.asVoid)
+    );
+
     // Widen: the window grows in place, keeping the first page's rows.
     buttonByLabel("row:more").click();
     await until(() => text().includes("row-count:4"));
     expect(text()).toContain("row:todo-1");
     expect(text()).toContain("row:todo-4");
     expect(text()).toContain("row-hasMore:true");
+    expect(rebuilds).toBe(0); // the widen reused LiveView's maintained order
 
     // The tail: the fifth row lands and the window is no longer saturated.
     buttonByLabel("row:more").click();

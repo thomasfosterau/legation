@@ -32,11 +32,13 @@
  *   rather than guessing a fixed duration, since CI's scheduling variance
  *   makes a fixed sleep an unreliable proxy for "has this propagated yet".
  *
- * `LiveView` rows also carry a stable `position` (fractional index, #112) at
- * runtime that `LocalRow`'s public type doesn't expose; `stripPositions`
- * drops it before comparing so these assertions track `observeChanges`'s
- * actual typed contract, not an implementation detail of the maintained
- * order underneath it.
+ * `LiveView` rows carry a stable `position` (fractional index, #112), and
+ * `enter`/`update`/`move` now surface it on the `RowChange` itself (since
+ * `LocalRow`'s type doesn't expose `row.position`, unlike the underlying
+ * runtime object) — see `row-change.test.ts` for position/move coverage.
+ * `stripPositions` drops it here so these assertions stay focused on
+ * membership/value, the same contract before #112's position keys were
+ * surfaced.
  */
 import { describe, expect, it } from "vitest";
 import { Deferred, Effect, Ref, Schema, Stream } from "effect";
@@ -62,6 +64,11 @@ interface Todo {
   readonly title: string;
 }
 
+interface User {
+  readonly id: string;
+  readonly name: string;
+}
+
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -71,11 +78,16 @@ const mutators = Mutator.registry([
     mutator: Mutator.make("todo/remove", Schema.Unknown),
     local: (args, writer) => writer.del("todos", (args as { id: string }).id),
   },
+  {
+    mutator: Mutator.make("user/set", Schema.Unknown),
+    local: (args, writer) => writer.put("users", (args as User).id, args),
+  },
 ]);
 
 const handlers: Record<string, MemoryBackend.BackendHandler> = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
+  "user/set": (args, writer) => Effect.asVoid(writer.put("users", (args as User).id, args)),
 };
 
 const makeServer = Effect.gen(function* () {
@@ -86,7 +98,7 @@ const makeServer = Effect.gen(function* () {
     Effect.provideService(Backend, backend),
     Effect.provideService(
       Authorization.AuthPolicy,
-      Authorization.policy({ todos: Authorization.allowAll })
+      Authorization.policy({ todos: Authorization.allowAll, users: Authorization.allowAll })
     ),
     Effect.provideService(Cvr.CvrStore, cvrStore),
     Effect.provideService(InvalidationBus.InvalidationBus, bus)
@@ -109,6 +121,7 @@ const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: n
   });
 
 const todos = Subset.make({ collection: "todos" });
+const users = Subset.make({ collection: "users" });
 
 /** Real timers, independent of the test clock (matches backpressure.test.ts). */
 const sleepReal = (millis: number) =>
@@ -150,15 +163,24 @@ const idValue = (row: { readonly id: string; readonly value: unknown }) => ({
   value: row.value,
 });
 const stripPositions = (batch: ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>) =>
-  batch.map((change) =>
-    change._tag === "exit"
-      ? { ...change, previous: idValue(change.previous) }
-      : change._tag === "update"
-        ? { ...change, row: idValue(change.row), previous: idValue(change.previous) }
-        : change._tag === "enter"
-          ? { ...change, row: idValue(change.row) }
-          : change
-  );
+  batch.map((change) => {
+    switch (change._tag) {
+      case "exit":
+        return { _tag: "exit" as const, id: change.id, previous: idValue(change.previous) };
+      case "update":
+        return {
+          _tag: "update" as const,
+          row: idValue(change.row),
+          previous: idValue(change.previous),
+        };
+      case "enter":
+        return { _tag: "enter" as const, row: idValue(change.row) };
+      case "move":
+        return { _tag: "move" as const, row: idValue(change.row) };
+      case "reset":
+        return change;
+    }
+  });
 
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
@@ -317,6 +339,46 @@ describe("ClientEngine.observeChanges", () => {
     );
   }, 10000);
 
+  it("#133: an observer of an untouched collection sees no spurious reset under a scoped rebuild", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const writer = yield* makeClient(handler, "writer3");
+        const reader = yield* makeClient(handler, "reader3");
+        yield* reader.subscribe(todos);
+        yield* reader.subscribe(users);
+
+        const todoBatches = yield* collect(reader.observeChanges(todos));
+        const userBatches = yield* collect(reader.observeChanges(users));
+        expect(yield* Ref.get(todoBatches)).toEqual([]);
+        expect(yield* Ref.get(userBatches)).toEqual([]);
+
+        // A pending mutation on "todos" only.
+        yield* reader.mutate("todo/set", { id: "2", title: "optimistic" });
+        yield* eventually(Ref.get(todoBatches), (seen) => seen.length === 1);
+
+        // The writer pushes a "todos" change; the reader's pull races its own
+        // still-pending "todos" mutation — `applyPull` scopes the resulting
+        // Rebuild to exactly {"todos"} (touched ∪ the reader's own pending
+        // mutation's collections), never the unscoped fallback. "users" is
+        // outside that set, so its observer must see nothing at all — not
+        // even a `reset` — for this pull.
+        yield* writer.mutate("todo/set", { id: "1", title: "from-server" });
+        yield* writer.push;
+        yield* reader.pull;
+        yield* eventually(Ref.get(todoBatches), (seen) => seen.length === 2);
+
+        const todoSeen = yield* Ref.get(todoBatches);
+        expect(todoSeen[1]?.[0]).toEqual({ _tag: "reset" });
+
+        // Give a spurious "users" batch every chance to arrive before
+        // asserting its absence.
+        yield* settle;
+        expect(yield* Ref.get(userBatches)).toEqual([]);
+      }).pipe(Effect.scoped)
+    );
+  }, 10000);
+
   it("a seq-gap collapse resets rather than losing the dropped deltas", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -456,4 +518,109 @@ describe("Mirror.observeChanges", () => {
       }).pipe(Effect.scoped)
     );
   }, 10000);
+});
+
+// ─── Randomized property through the real engine stream (#133 item 5) ───────
+//
+// `row-change.test.ts` drives the same fold-reproduces-the-page property
+// directly against `LiveView` — fast, and exhaustive over hundreds of steps.
+// This drives a smaller randomized sequence through the actual
+// `ClientEngine.observeChanges` stream (real Patch/Rebuild decisions, a real
+// journal, real async scheduling) to confirm the property holds end-to-end,
+// not only at the pure `LiveView` layer it's built on.
+
+/** mulberry32: same tiny deterministic PRNG as `row-change.test.ts`. */
+const mulberry32 = (seed: number) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const foldChangeBatches = (
+  batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
+): Map<string, unknown> => {
+  const state = new Map<string, unknown>();
+  for (const batch of batches) {
+    for (const change of batch) {
+      switch (change._tag) {
+        case "reset":
+          state.clear();
+          break;
+        case "enter":
+        case "update":
+          state.set(change.row.id, change.row.value);
+          break;
+        case "exit":
+          state.delete(change.id);
+          break;
+        case "move":
+          break;
+      }
+    }
+  }
+  return state;
+};
+
+const sortedIdValue = (state: Map<string, unknown>) =>
+  [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+describe("ClientEngine.observeChanges — randomized property through the real engine", () => {
+  it("folding the real observeChanges stream matches engine.query at every step", async () => {
+    const IDS = ["a", "b", "c", "d", "e"];
+    for (let seed = 1; seed <= 3; seed++) {
+      // eslint-disable-next-line no-await-in-loop -- each seed needs the previous engine torn down first
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const handler = yield* makeServer;
+          // A tiny change-hub bound so an occasional burst forces a real
+          // seq-gap collapse, alongside the ordinary Patch/pending-pull-Rebuild
+          // paths — all three real triggers, randomized together.
+          const engine = yield* makeClient(handler, `prop-${seed}`, 3);
+          yield* engine.subscribe(todos);
+
+          const batches = yield* Ref.make<
+            Array<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
+          >([]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(engine.observeChanges(todos), (batch) =>
+              Ref.update(batches, (a) => [...a, batch])
+            ).pipe(Effect.ignore)
+          );
+          yield* settle;
+
+          const rand = mulberry32(seed);
+          const pick = <A>(xs: ReadonlyArray<A>): A => xs[Math.floor(rand() * xs.length)]!;
+
+          for (let step = 0; step < 20; step++) {
+            const action = rand();
+            const id = pick(IDS);
+            if (action < 0.15) {
+              yield* engine.mutate("todo/remove", { id });
+            } else if (action < 0.35) {
+              yield* engine.pull; // a pull: Rebuild only if a mutation is still pending
+            } else {
+              yield* engine.mutate("todo/set", { id, title: `t-${Math.floor(rand() * 5)}` });
+            }
+            // Bursts of rapid mutations occasionally overrun the tiny hub
+            // bound above, forcing a gap-collapse — exercised by chance
+            // across seeds/steps rather than a dedicated branch.
+
+            const expected = sortedIdValue(
+              new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
+            );
+            // eslint-disable-next-line no-loop-func -- captures `batches` fresh each poll, not stale
+            const seen = yield* eventually(Ref.get(batches), (candidate) => {
+              const folded = sortedIdValue(foldChangeBatches(candidate));
+              return JSON.stringify(folded) === JSON.stringify(expected);
+            });
+            expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
+          }
+        }).pipe(Effect.scoped)
+      );
+    }
+  }, 20000);
 });

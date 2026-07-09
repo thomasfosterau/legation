@@ -36,6 +36,7 @@
 
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
+import type { RowChange } from "./RowChange.js";
 import * as Subset from "./Subset.js";
 
 /** A `(id, value)` row — structurally `Subset.Row` / `ClientEngine.LocalRow`. */
@@ -62,10 +63,12 @@ export const emptyDelta: Delta = { added: [], removed: [] };
 //
 // The derived tier consumes `ClientView.observe` page snapshots and recovers
 // row deltas by diffing consecutive pages here — the page-diffing path
-// ADR-0027 §4 describes, the same internal re-diff `Related` does. #115's
-// (now-merged) `observeChanges` enter/update/exit feed is the row-level
-// alternative to this diff; wiring the combinators onto it directly, so the
-// diff drops away, is a follow-up.
+// ADR-0027 §4 describes, the same internal re-diff `Related` does, and the
+// fallback `Derive.maintain` keeps for a plain page source. When the leaf is
+// a `ClientView` (`Derive.observed`), #115's `observeChanges` enter/update/
+// exit/move feed is consumed directly instead: `deltaFromChanges` below reads
+// the delta `LiveView` already computed rather than recomputing it by diffing
+// two page `Map`s.
 
 /** Index a page by id, for diffing against the next snapshot. */
 export const indexById = (rows: ReadonlyArray<Row>): Map<string, Row> => {
@@ -106,6 +109,49 @@ export const diff = (
 export const applyDelta = (result: Map<string, Row>, delta: Delta): void => {
   for (const row of delta.removed) result.delete(row.id);
   for (const row of delta.added) result.set(row.id, row);
+};
+
+/**
+ * Recover a {@link Delta} directly from an `observeChanges` batch (#115),
+ * instead of diffing two page snapshots (see {@link diff} above) — the
+ * optimization ADR-0027 §4 and this module's header flag as a follow-up:
+ * `LiveView` already decided enter/update/exit/move per row, so this just
+ * reads that decision instead of recomputing it from two `Map`s. `known`
+ * tracks the last row seen per id (across calls, mutated in place) so a
+ * `reset` can emit a `removed` for everything it cleared — the same
+ * information a page-diff's `previous` snapshot would have given for free.
+ * `move` carries no value change, so it contributes nothing to the delta.
+ */
+export const deltaFromChanges = (
+  known: Map<string, Row>,
+  batch: ReadonlyArray<RowChange<Row>>
+): Delta => {
+  const added: Array<Row> = [];
+  const removed: Array<Row> = [];
+  for (const change of batch) {
+    switch (change._tag) {
+      case "reset":
+        for (const row of known.values()) removed.push(row);
+        known.clear();
+        break;
+      case "enter":
+        added.push(change.row);
+        known.set(change.row.id, change.row);
+        break;
+      case "update":
+        removed.push(change.previous);
+        added.push(change.row);
+        known.set(change.row.id, change.row);
+        break;
+      case "exit":
+        removed.push(change.previous);
+        known.delete(change.id);
+        break;
+      case "move":
+        break;
+    }
+  }
+  return { added, removed };
 };
 
 /** Materialize a result map to a page in a deterministic (id-ascending) order. */

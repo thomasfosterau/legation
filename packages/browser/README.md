@@ -117,6 +117,12 @@ pushed by the new one. A mutation still in flight when the leader dies
 either completes normally or fails visibly to its caller; it is never
 silently dropped.
 
+`examples/svelte-commerce` runs the service worker by default but wires this
+topology in too, behind a documented dev-mode toggle (`?host=main` — see
+`src/lib/host.ts`'s `bootElected` and `src/routes/+layout.svelte`), so the
+no-service-worker fallback runs against a real app rather than only under
+this package's own tests.
+
 Environments without `navigator.locks` (some embedded webviews) get a
 **documented fallback, not a polyfill**: `ElectedHost.run` logs a warning
 and becomes the host immediately, which is only correct if exactly one tab

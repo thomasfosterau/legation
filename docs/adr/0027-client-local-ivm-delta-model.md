@@ -243,12 +243,16 @@ delta input for #114; it does **not** design, build, or modify `observeChanges`
   `docs/coming-from-tanstack-query.md` and `docs/comparisons/tanstack.md`,
   replacing the "expressiveness gap" concession with the two-tier story anchored
   here.
-- **Known limitations remain tracked, not silently closed** (carried from the
-  children): engine-level reactive window `retarget` wiring (`LiveView` computes
-  a widened slice purely, but nothing feeds a widened `limit` to an open
-  subscription yet); secondary indexes are bypassed while any mutation is pending
-  (per-collection overlay-touch scoping is future work); `move` deltas + stable
-  position keys over `observeChanges` land with #115/#112 follow-through.
+- **Known limitations, closed by #133's follow-up sweep:** engine-level
+  reactive window `retarget` wiring (`ClientEngine.observeWindow` feeds a
+  widened `limit`/advanced `cursor` to an open subscription, reusing
+  `LiveView`'s maintained order — the `useConnection` paging hook is the
+  consumer); the secondary-index bypass is now scoped per-collection (a
+  pending mutation on collection A no longer disables index acceleration on
+  collection B); `move` deltas with stable position keys ship on
+  `observeChanges` (`ClientEngine`; a `Mirror`, having no maintained window of
+  its own, still doesn't emit them — documented in
+  `docs/observing-row-changes.md`).
 
 ### Non-goals (explicit)
 

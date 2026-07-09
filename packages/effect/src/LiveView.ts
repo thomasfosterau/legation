@@ -33,9 +33,9 @@
  * In-window rows carry a stable {@link FractionalIndex} `position`: assigned
  * when a row enters the window, dropped when it leaves, and left untouched
  * when neither the row nor its immediate neighbors moved — so a downstream
- * delta consumer (not built yet) can tell "entered"/"left"/"moved" apart
- * without diffing pages, the way TanStack DB's `topKWithFractionalIndex`
- * does for its own maintained window.
+ * delta consumer (`RowChange.diff`, driving `ClientEngine.observeChanges`)
+ * can tell "entered"/"left"/"moved" apart without diffing pages, the way
+ * TanStack DB's `topKWithFractionalIndex` does for its own maintained window.
  */
 
 import type * as Index from "./CollectionIndex.js";
@@ -205,9 +205,9 @@ export const result = (view: LiveView): ReadonlyArray<PositionedRow> =>
  * move, matching `useConnection`'s "load more widens one window" (ADR-0024)
  * — the pure, comparator-shaped half of "widen"; the engine-level API that
  * reactively feeds a widened `limit` to an open subscription (so the client
- * never re-registers it) is future work, flagged where
- * `ClientEngine.observeSubset` builds its `LiveView`. Same-reference-on-no-op:
- * returns `view` unchanged if neither `limit` nor `cursor` moved.
+ * never re-registers it) is `ClientEngine.observeWindow` (#133).
+ * Same-reference-on-no-op: returns `view` unchanged if neither `limit` nor
+ * `cursor` moved.
  */
 export const retarget = (
   view: LiveView,
