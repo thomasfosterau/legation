@@ -1783,29 +1783,35 @@ export const make = (
         )
       );
 
+    // Shared setup for `observeSubset`/`observeSubsetChanges`: establish the
+    // live window a step at a time, so the two observers can never drift in
+    // how they get there. Subscribe BEFORE snapshotting (#84): the hub only
+    // delivers to live subscribers, so a change published while we
+    // materialize must land in this subscription's buffer — subscribing
+    // after the snapshot silently loses it, and with no later change to
+    // reveal the seq gap the observer sleeps through the write forever. The
+    // seq is captured before materializing so the view reflects the store at
+    // ≥ that seq, making the first live change contiguous.
+    const initSubsetView = (subset: Subset.Subset) =>
+      Effect.gen(function* () {
+        yield* noteAutoIndexFields(subset);
+        const subscription = yield* PubSub.subscribe(changes);
+        const startSeq = yield* Ref.get(changeSeq);
+        const viewRef = yield* Ref.make(
+          LiveView.makeIndexed(
+            subset,
+            yield* collectionRows(subset.collection),
+            yield* indexForCollection(subset.collection)
+          )
+        );
+        const lastSeenRef = yield* Ref.make(startSeq);
+        return { subscription, viewRef, lastSeenRef };
+      });
+
     const observeSubset = (subset: Subset.Subset) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          // Subscribe BEFORE snapshotting (#84): the hub only delivers to
-          // live subscribers, so a change published while we materialize
-          // must land in this subscription's buffer — subscribing after the
-          // snapshot silently loses it, and with no later change to reveal
-          // the seq gap the observer sleeps through the write forever. A
-          // buffered change the snapshot already reflects steps as a stale
-          // seq (skip) or an idempotent re-apply.
-          yield* noteAutoIndexFields(subset);
-          const subscription = yield* PubSub.subscribe(changes);
-          // Capture the seq before materializing: the view then reflects the
-          // store at ≥ this seq, so the first live change is contiguous.
-          const startSeq = yield* Ref.get(changeSeq);
-          const viewRef = yield* Ref.make(
-            LiveView.makeIndexed(
-              subset,
-              yield* collectionRows(subset.collection),
-              yield* indexForCollection(subset.collection)
-            )
-          );
-          const lastSeenRef = yield* Ref.make(startSeq);
+          const { subscription, viewRef, lastSeenRef } = yield* initSubsetView(subset);
           const initial = LiveView.result(yield* Ref.get(viewRef));
           // Emit the page on each change, dropping re-emits when it didn't move
           // (e.g. a change outside the limit window, or a skipped stale seq).
@@ -1824,20 +1830,7 @@ export const make = (
     ): Stream.Stream<ReadonlyArray<RowChange.RowChange<LocalRow>>, StoreError | MutatorError> =>
       Stream.unwrap(
         Effect.gen(function* () {
-          // Subscribe BEFORE snapshotting (#84) — the same race `observeSubset`
-          // closes: a change published while we materialize must land in this
-          // subscription's buffer.
-          yield* noteAutoIndexFields(subset);
-          const subscription = yield* PubSub.subscribe(changes);
-          const startSeq = yield* Ref.get(changeSeq);
-          const viewRef = yield* Ref.make(
-            LiveView.makeIndexed(
-              subset,
-              yield* collectionRows(subset.collection),
-              yield* indexForCollection(subset.collection)
-            )
-          );
-          const lastSeenRef = yield* Ref.make(startSeq);
+          const { subscription, viewRef, lastSeenRef } = yield* initSubsetView(subset);
           const initialRows = LiveView.result(yield* Ref.get(viewRef));
           // `includeInitial` emits the current window as `enter`s in its own
           // batch — no `reset` marker, since there is nothing to reset from.

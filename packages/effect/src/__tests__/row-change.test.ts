@@ -85,6 +85,51 @@ interface Mismatch {
   readonly page: ReadonlyArray<readonly [string, unknown]>;
 }
 
+type Truth = Map<string, Item>;
+
+/** Rebuild: reset + fresh enters, as the engine does on ViewChange.Rebuild. */
+const applyRebuild = (
+  subset: Subset.Subset,
+  truth: Truth,
+  folded: Map<string, unknown>
+): LiveView.LiveView => {
+  const next = LiveView.make(
+    subset,
+    [...truth.entries()].map(([id, value]) => ({ id, value }))
+  );
+  folded.clear();
+  for (const row of LiveView.result(next)) folded.set(row.id, row.value);
+  return next;
+};
+
+/** A single put/del against `truth`, folding the resulting diff into `folded`. */
+const applyMutation = (
+  view: LiveView.LiveView,
+  truth: Truth,
+  folded: Map<string, unknown>,
+  rand: () => number,
+  id: string,
+  isDelete: boolean
+): LiveView.LiveView => {
+  const before = LiveView.result(view);
+  let next: LiveView.LiveView;
+  if (isDelete) {
+    truth.delete(id);
+    next = LiveView.del(view, id);
+  } else {
+    const value: Item = { rank: Math.floor(rand() * 6), open: rand() < 0.6 };
+    truth.set(id, value);
+    next = LiveView.put(view, { id, value });
+  }
+  const after = LiveView.result(next);
+  for (const change of RowChange.diff(before, after)) {
+    if (change._tag === "enter" || change._tag === "update")
+      folded.set(change.row.id, change.row.value);
+    else if (change._tag === "exit") folded.delete(change.id);
+  }
+  return next;
+};
+
 /**
  * Run one randomized session against `subset`, checking every step. Returns
  * the first step where folding the emitted `RowChange` batches diverges from
@@ -99,7 +144,7 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   // The backing "confirmed collection", independent of the subset's filter —
   // put/del apply here first, mirroring the store `LiveView` maintains a
   // window over.
-  const truth = new Map<string, Item>();
+  const truth: Truth = new Map();
   let view = LiveView.make(subset, []);
   const folded = fold(LiveView.result(view), []);
 
@@ -116,35 +161,11 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   for (let step = 0; step < steps; step++) {
     const action = rand();
     if (action < 0.08) {
-      // Rebuild: reset + fresh enters, as the engine does on ViewChange.Rebuild.
-      const next = LiveView.make(
-        subset,
-        [...truth.entries()].map(([id, value]) => ({ id, value }))
-      );
-      const after = LiveView.result(next);
-      folded.clear();
-      for (const row of after) folded.set(row.id, row.value);
-      view = next;
+      view = applyRebuild(subset, truth, folded);
     } else {
       const id = pick(IDS);
       const isDelete = action < 0.08 + 0.25 && truth.has(id);
-      const before = LiveView.result(view);
-      let next: LiveView.LiveView;
-      if (isDelete) {
-        truth.delete(id);
-        next = LiveView.del(view, id);
-      } else {
-        const value: Item = { rank: Math.floor(rand() * 6), open: rand() < 0.6 };
-        truth.set(id, value);
-        next = LiveView.put(view, { id, value });
-      }
-      const after = LiveView.result(next);
-      for (const change of RowChange.diff(before, after)) {
-        if (change._tag === "enter" || change._tag === "update")
-          folded.set(change.row.id, change.row.value);
-        else if (change._tag === "exit") folded.delete(change.id);
-      }
-      view = next;
+      view = applyMutation(view, truth, folded, rand, id, isDelete);
     }
     const mismatch = matches(`step ${step}`);
     if (mismatch !== undefined) return mismatch;
