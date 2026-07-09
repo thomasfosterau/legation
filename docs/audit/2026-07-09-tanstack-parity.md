@@ -1,5 +1,18 @@
 # TanStack parity audit — 2026-07-09
 
+> **Postscript (same day):** the full issue programme this audit filed has
+> shipped and been verified — #109–#113 and #115–#119 merged individually;
+> #114 (`Derive`/`Incremental` query combinators) closed the headline
+> differential-dataflow gap; #108 closed as complete with the model recorded
+> in [ADR-0027](../adr/0027-client-local-ivm-delta-model.md) (version-free
+> single-timeline `Patch`-op deltas; per-module seams blessed over a shared
+> operator core) and [ADR-0026](../adr/0026-subset-ordering-and-collation.md)
+> (collation). `docs/comparisons/tanstack.md`'s "expressiveness gap"
+> concession is replaced by the two-tier read model. Documented leftovers are
+> consolidated in [#133](https://github.com/thomasfosterau/effect-synchronizer/issues/133);
+> #120 (devtools panel) remains deliberately deferred. The findings below are
+> preserved as written — they describe the pre-programme state.
+
 Audit of the monorepo against **TanStack Query v5** (`@tanstack/query-core` 5.101.x),
 **TanStack DB** (`@tanstack/db` 0.6.x + `@tanstack/db-ivm` 0.1.x), and **TanStack
 Store** (0.9/0.11), with TanStack Pacer consulted for the write-path timing
