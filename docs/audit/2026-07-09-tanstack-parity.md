@@ -10,7 +10,7 @@
 > (collation). `docs/comparisons/tanstack.md`'s "expressiveness gap"
 > concession is replaced by the two-tier read model. Documented leftovers are
 > consolidated in [#133](https://github.com/thomasfosterau/effect-synchronizer/issues/133);
-> #120 (devtools panel) remains deliberately deferred. The findings below are
+> #120 (devtools panel) is dispatched separately. The findings below are
 > preserved as written — they describe the pre-programme state.
 
 Audit of the monorepo against **TanStack Query v5** (`@tanstack/query-core` 5.101.x),
