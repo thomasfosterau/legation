@@ -61,12 +61,13 @@ import {
 | `ModelActor` / boundary rules (SwiftData)               | The engine host is the serialised writer; encoded rows/mutations cross the mirror boundary.      |
 | Suspense (TanStack)                                     | `AsyncResult` states in the atoms; a suspense hook is deliberately not shipped.                  |
 | `placeholderData: keepPreviousData` (TanStack)          | `useQuery`/`useNamedQuery`'s `keepPrevious` option (react); automatic on resubscribe (svelte).   |
+| `createPacedMutations` (TanStack DB)                    | `Paced.debounce` / `throttle` / `coalesce` — pace rapid mutation intents over the journal.       |
 
 Beyond the direct translations, several capabilities that these libraries hand
 you as options have shipped as real APIs — [select projections](#select-projections),
 [typed subsets](#typed-subsets), [initial data / prefetch / SSR](#initial-data--prefetch--ssr),
-[aggregations](#aggregations), [undo--redo](#undo--redo), [retries](#retries),
-[awaiting the server outcome](#awaiting-the-server-outcome), and a
+[aggregations](#aggregations), [undo--redo](#undo--redo), [paced mutations](#paced-mutations),
+[retries](#retries), [awaiting the server outcome](#awaiting-the-server-outcome), and a
 [devtools substrate](#devtools-substrate) — covered after the table.
 
 ## `staleTime` / freshness / background refetch
@@ -373,6 +374,71 @@ yield *
     undo: { mutator: "todo/set", args: { id: "1", title: "ship it", done: false } },
   });
 yield * undo.undo; // replays the `undo` intent
+```
+
+### Paced mutations
+
+**Reference:** TanStack DB's [`createPacedMutations`](https://tanstack.com/db/latest/docs)
+(`debounceStrategy` / `throttleStrategy` / `queueStrategy`, built on
+`@tanstack/pacer-lite`) — the same concern this section covers, without a pacer
+dependency: `Paced` is ~150 lines over `engine.mutateWithAck` + Effect's own
+`Effect.sleep`/`Fiber.interrupt` (#117).
+
+A high-frequency write source — a text field autosaving per keystroke, a
+slider, a cart-quantity stepper — journals **one mutation per call** by
+default: a 50-keystroke burst is 50 journal entries and 50 overlay replays.
+`Paced.debounce`/`Paced.throttle`/`Paced.coalesce` collapse a burst of
+same-**key** calls (the key is yours to choose — a row id, typically) down to
+a handful of entries, without touching mutations already pushed (ADR-0008's
+exactly-once contract: an entry's mutation id, once pushed, is never mutated
+or reordered — pacing only ever acts on the still-unpushed tail).
+
+```ts
+const setQty = yield * Paced.debounce(engine, "cart/setQty", Duration.millis(300));
+// Fifty rapid clicks on one stepper collapse to a leading + a trailing
+// journal write for that cart item's key — other items are unaffected.
+yield * setQty.call(item.id, { id: item.id, userId, qty: item.qty + 1 });
+```
+
+Every strategy always journals _some_ call immediately — the overlay never
+waits for the window to close — then compacts:
+
+- **`coalesce`** — no timing: every call journals and immediately drops its
+  key's previous still-pending entry. Fully durable (nothing is ever buffered
+  only in memory), at the cost of a momentary extra journal entry between a
+  call and its compaction.
+- **`debounce(duration)`** — the first call after quiet journals immediately
+  (the leading edge); calls inside the window only buffer in memory and
+  restart the trailing timer. When the window elapses, the latest buffered
+  args flush once, superseding the leading entry — two journal writes total
+  per burst, however many calls it contained.
+- **`throttle(duration)`** — like `debounce`'s leading edge, but the window is
+  never reset by later calls: it flushes at most once per `duration` while
+  calls keep arriving (so a continuous drag reports progress periodically,
+  not only at the very end), then goes idle once a window elapses with
+  nothing new buffered.
+
+**Durability tradeoff:** `debounce`/`throttle`'s in-memory buffer (the args of
+calls made after the leading edge, before the trailing/periodic flush) is lost
+on a crash inside the window — the journal still holds the last successfully
+flushed args, not nothing, but not the very latest edit either. This is the
+identical tradeoff TanStack DB's own debounce/throttle strategies make.
+`coalesce` never loses an edit (everything journals immediately) at the cost
+of those short-lived extra entries.
+
+**Undo pairing:** wrap a burst of `Paced` calls in `Undo.group` and the whole
+burst becomes one undo step, the same way `Undo.group` already coalesces any
+run of `manager.run` calls — a debounced text edit undoes in one step, not one
+per keystroke.
+
+```ts
+yield *
+  undo.group(
+    Effect.gen(function* () {
+      yield* setQty.call(item.id, { id: item.id, userId, qty: 1 });
+      yield* setQty.call(item.id, { id: item.id, userId, qty: 2 });
+    })
+  );
 ```
 
 ### Retries

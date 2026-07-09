@@ -23,6 +23,7 @@ export * as SpecExport from "./SpecExport.js";
 export * as ClientEngine from "./ClientEngine.js";
 export * as ClientView from "./ClientView.js";
 export * as Undo from "./Undo.js";
+export * as Paced from "./Paced.js";
 export * as Introspection from "./Introspection.js";
 export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
