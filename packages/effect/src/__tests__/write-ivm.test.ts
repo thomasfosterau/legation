@@ -132,19 +132,34 @@ describe("write-path selective re-evaluation", () => {
     })
   );
 
-  it.live("a single mutate materializes the overlay once for N observers", () =>
+  it.live("a mutate on a warm cache patches the overlay in place, with no replay (#109)", () =>
     Effect.gen(function* () {
       const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
       yield* Effect.forEach(Array.from({ length: 5 }), () =>
         Effect.forkScoped(Stream.runForEach(engine.observe(todos), () => Effect.void))
       );
       yield* settle;
-      yield* Ref.set(listRowsCount, 0); // measure only the mutate-triggered replay
+      yield* Ref.set(listRowsCount, 0); // measure only the mutate-triggered work
 
       yield* engine.mutate("todo/set", { id: "t1", title: "x" });
       yield* settle;
-      // Cached + single-flight: one replay seeds `todos` once, not once per observer.
-      expect(yield* Ref.get(listRowsCount)).toBe(1);
+      // The tracked writer mutates the already-cached overlay in place
+      // instead of invalidating it, so a mutate costs zero further replays
+      // regardless of how many observers are watching (#109).
+      expect(yield* Ref.get(listRowsCount)).toBe(0);
+    })
+  );
+
+  it.live("a mutate on a cold cache replays once, then patches in place after (#109)", () =>
+    Effect.gen(function* () {
+      const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
+      // No observer has materialized yet, so the cache starts cold.
+      yield* engine.mutate("todo/set", { id: "t1", title: "x" });
+      expect(yield* Ref.get(listRowsCount)).toBe(1); // one fallback replay fills the cache
+
+      yield* Ref.set(listRowsCount, 0);
+      yield* engine.mutate("todo/set", { id: "t2", title: "y" });
+      expect(yield* Ref.get(listRowsCount)).toBe(0); // now warm: patched in place, no replay
     })
   );
 });
