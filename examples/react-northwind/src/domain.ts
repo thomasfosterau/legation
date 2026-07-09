@@ -20,7 +20,8 @@
  */
 
 import { Schema } from "effect";
-import { Collection, Mutator, Subset } from "@legation/effect";
+import { Collection, Mutator } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 

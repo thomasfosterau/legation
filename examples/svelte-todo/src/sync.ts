@@ -23,21 +23,23 @@ import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
-  ClientEngine,
-  ClientView,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  type Protocol,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
-  Undo,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "@legation/svelte";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  InvalidationBus,
+  type Protocol,
+  SyncServer,
+  Undo,
+} from "@legation/effect/internal";
+import { Runtime } from "@legation/svelte";
 
 import {
   CLIENT_GROUP_ID,
@@ -74,7 +76,7 @@ export interface DemoControls {
 
 /** What `createWorld` resolves to: the engine runtime + the demo controls. */
 export interface World {
-  readonly runtime: EffectSyncRuntime;
+  readonly runtime: Runtime.EffectSyncRuntime;
   readonly controls: DemoControls;
   /**
    * The per-client undo manager (#46). Its `run`/`undo`/`redo` replay through
@@ -225,7 +227,7 @@ export const createWorld = (): Promise<World> =>
       // The Svelte bindings drive observe/mutate through a runtime providing the
       // engine we just built; its scope (and the forked sync loop) stays alive
       // because this program ends in `Effect.never`.
-      const runtime: EffectSyncRuntime = ManagedRuntime.make(
+      const runtime: Runtime.EffectSyncRuntime = ManagedRuntime.make(
         Layer.succeed(ClientEngine.ClientEngine, engine).pipe(
           Layer.merge(Layer.succeed(ClientView.ClientView)(ClientView.fromEngine(engine)))
         )

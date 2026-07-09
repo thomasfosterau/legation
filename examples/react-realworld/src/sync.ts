@@ -6,7 +6,7 @@
  * a durable `localStorage` `ClientStore`, and an offline-aware loopback
  * transport. It exposes:
  *
- *   - `runtime`  — a `ManagedRuntime` providing the built `ClientEngine`, for
+ *   - `atoms`    — the engine's reactive surface (`EngineAtoms.fromLayer`), for
  *                  the React bindings (`useQuery` / `useMutation`);
  *   - `setIdentity(username)` — the seam that makes the *server* treat this
  *                  client as a given logged-in user. The `IdentityResolver`
@@ -20,24 +20,20 @@
  * in the mutator", enforced server-side and impossible for the client to forge.
  */
 
-import { Effect, Fiber, Layer, ManagedRuntime, Schema, SubscriptionRef, Stream } from "effect";
+import { Effect, Fiber, Layer, Schema, SubscriptionRef, Stream } from "effect";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
   BackendError,
-  ClientEngine,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "@legation/react";
+import { ClientEngine, Cvr, EngineAtoms, InvalidationBus, SyncServer } from "@legation/effect/internal";
 
 import {
   Article,
@@ -65,7 +61,7 @@ import {
 
 /** What `createWorld` resolves to. */
 export interface World {
-  readonly runtime: EffectSyncRuntime;
+  readonly atoms: EngineAtoms.EngineAtoms;
   /** Tell the server which user this client is acting as (null = anonymous). */
   readonly setIdentity: (username: string | null) => void;
   /** Flip the loopback transport between online and (failing) offline. */
@@ -301,12 +297,10 @@ export const createWorld = (): Promise<World> =>
       for (const subset of allSubsets) yield* engine.subscribe(subset);
       yield* engine.runSync;
 
-      const runtime: EffectSyncRuntime = ManagedRuntime.make(
-        Layer.succeed(ClientEngine.ClientEngine, engine)
-      );
+      const atoms = EngineAtoms.fromLayer(Layer.succeed(ClientEngine.ClientEngine, engine));
 
       const world: World = {
-        runtime,
+        atoms,
         setIdentity: (username) => {
           currentIdentity = username;
         },

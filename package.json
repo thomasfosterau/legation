@@ -27,6 +27,7 @@
     "build": "tsc --build tsconfig.json",
     "build:clean": "tsc --build tsconfig.json --clean",
     "typecheck": "tsc -p tsconfig.check.json",
+    "typecheck:examples": "bun run scripts/typecheck-examples.ts",
     "test": "vitest",
     "test:run": "vitest run",
     "test:watch": "vitest",

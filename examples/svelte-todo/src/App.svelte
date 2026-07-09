@@ -9,11 +9,11 @@
    * FoldKit / React / Compose / SwiftUI todo examples.
    */
   import { Effect } from "effect";
-  import { query, aggregate, setEngineRuntime, undoControls } from "@legation/svelte";
-  import { Aggregate, type Undo } from "@legation/effect";
+  import { Query, Runtime, Undo as UndoBindings } from "@legation/svelte";
+  import { Aggregate } from "@legation/effect";
+  import { type Undo } from "@legation/effect/internal";
   import { type Todo, allTodos, activeTodos } from "./domain";
   import type { DemoControls } from "./sync";
-  import type { EffectSyncRuntime } from "@legation/svelte";
   import { setDemo, connectionStore, pendingStore } from "./demo";
 
   type Filter = "All" | "Active" | "Completed";
@@ -22,20 +22,24 @@
     runtime,
     controls,
     undo: manager,
-  }: { runtime: EffectSyncRuntime; controls: DemoControls; undo: Undo.UndoManager } = $props();
+  }: {
+    runtime: Runtime.EffectSyncRuntime;
+    controls: DemoControls;
+    undo: Undo.UndoManager;
+  } = $props();
 
   // Wire the engine runtime + demo controls into context for this subtree.
-  setEngineRuntime(runtime);
+  Runtime.setEngineRuntime(runtime);
   setDemo(controls);
 
-  const rows = query(allTodos);
+  const rows = Query.query(allTodos);
   // The "active" tally is a live Count aggregate over the incomplete-todos
   // subset — derived by the engine, deduped so an edit that leaves the count
   // unchanged doesn't re-render the footer.
-  const activeCount = aggregate(activeTodos, Aggregate.count);
+  const activeCount = Query.aggregate(activeTodos, Aggregate.count);
   // Undo/redo over the engine: `run` a paired intent (do + reverse), and the
   // stores track whether an undo/redo is currently possible.
-  const { canUndo, canRedo, undo, redo } = undoControls(manager);
+  const { canUndo, canRedo, undo, redo } = UndoBindings.undoControls(manager);
   const connection = connectionStore(controls);
   const pending = pendingStore(controls);
 

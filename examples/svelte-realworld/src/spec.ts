@@ -6,7 +6,7 @@
  * definitions that drive the engine drive the spec, so it cannot drift. Run
  * `bun run spec` to write the documents into `spec/`.
  */
-import { SpecExport } from "@legation/effect";
+import { SpecExport } from "@legation/effect/internal";
 import {
   addComment,
   articlesCollection,

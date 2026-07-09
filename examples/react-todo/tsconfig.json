@@ -10,5 +10,6 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src"],
+  "exclude": ["vite.config.ts"]
 }

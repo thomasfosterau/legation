@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck (packages and tests)
         run: bun run typecheck
 
+      - name: Typecheck examples
+        run: bun run typecheck:examples
+
       - name: Test with coverage
         run: bun run test:coverage
 

@@ -14,6 +14,7 @@
  * auth context by the caller, keeping this module free of an auth import.
  */
 import * as React from "react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useQuery } from "@legation/react";
 import {
   allArticles,
@@ -30,23 +31,23 @@ const PAGE_SIZE = 10;
 // ─── Raw collection reads ────────────────────────────────────────────────────
 
 export const useUsers = (): ReadonlyArray<User> => {
-  const rows = useQuery(allUsers);
+  const rows = AsyncResult.getOrElse(useQuery(allUsers), () => []);
   return React.useMemo(() => rows.map((row) => row.value as User), [rows]);
 };
 export const useArticlesRaw = (): ReadonlyArray<Article> => {
-  const rows = useQuery(allArticles);
+  const rows = AsyncResult.getOrElse(useQuery(allArticles), () => []);
   return React.useMemo(() => rows.map((row) => row.value as Article), [rows]);
 };
 export const useCommentsRaw = (): ReadonlyArray<Comment> => {
-  const rows = useQuery(allComments);
+  const rows = AsyncResult.getOrElse(useQuery(allComments), () => []);
   return React.useMemo(() => rows.map((row) => row.value as Comment), [rows]);
 };
 export const useFavoritesRaw = (): ReadonlyArray<Favorite> => {
-  const rows = useQuery(allFavorites);
+  const rows = AsyncResult.getOrElse(useQuery(allFavorites), () => []);
   return React.useMemo(() => rows.map((row) => row.value as Favorite), [rows]);
 };
 export const useFollowsRaw = (): ReadonlyArray<Follow> => {
-  const rows = useQuery(allFollows);
+  const rows = AsyncResult.getOrElse(useQuery(allFollows), () => []);
   return React.useMemo(() => rows.map((row) => row.value as Follow), [rows]);
 };
 

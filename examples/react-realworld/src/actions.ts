@@ -30,7 +30,17 @@ export interface Actions {
 const newId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
-/** All write actions, bound to the current user. Returns null when anonymous. */
+/**
+ * All write actions, bound to the current user. Returns null when anonymous.
+ *
+ * `mutate` is fire-and-forget (#116's `useMutation`, not `useMutationWithAck`):
+ * these demos don't configure `syncLoop.pushDebounce`, so an ack-waiting write
+ * would hang until the next poke, reconnect, or manual "Sync now" — the
+ * optimistic overlay update is what the UI actually needs here, not the
+ * round trip. `Promise`-returning signatures stay (some callers `await` them,
+ * e.g. the editor navigating to a new article's slug), resolving as soon as
+ * the mutator has run locally.
+ */
 export const useActions = (): Actions | null => {
   const mutate = useMutation();
   const { currentUsername } = useAuth();
@@ -43,7 +53,7 @@ export const useActions = (): Actions | null => {
         const base = slugify(title) || newId().slice(0, 8);
         const slug = `${base}-${newId().slice(0, 6)}`;
         const now = Date.now();
-        await mutate("article/create", {
+        mutate("article/create", {
           slug,
           title,
           description,
@@ -55,7 +65,7 @@ export const useActions = (): Actions | null => {
         });
         return slug;
       },
-      updateArticle: (slug, patch) =>
+      updateArticle: async (slug, patch) => {
         mutate("article/update", {
           slug,
           title: patch.title ?? "",
@@ -65,27 +75,35 @@ export const useActions = (): Actions | null => {
           authorId: me,
           createdAt: patch.createdAt ?? Date.now(),
           updatedAt: Date.now(),
-        }),
-      deleteArticle: (slug) => mutate("article/delete", { slug }),
-      setFavorite: (slug, favorited) =>
+        });
+      },
+      deleteArticle: async (slug) => {
+        mutate("article/delete", { slug });
+      },
+      setFavorite: async (slug, favorited) => {
         mutate(favorited ? "favorite/add" : "favorite/remove", {
           userId: me,
           articleSlug: slug,
-        }),
-      setFollow: (username, following) =>
+        });
+      },
+      setFollow: async (username, following) => {
         mutate(following ? "follow/add" : "follow/remove", {
           followerId: me,
           followeeId: username,
-        }),
-      addComment: (slug, body) =>
+        });
+      },
+      addComment: async (slug, body) => {
         mutate("comment/add", {
           id: newId(),
           articleSlug: slug,
           authorId: me,
           body,
           createdAt: Date.now(),
-        }),
-      deleteComment: (id) => mutate("comment/delete", { id }),
+        });
+      },
+      deleteComment: async (id) => {
+        mutate("comment/delete", { id });
+      },
     };
   }, [mutate, currentUsername]);
 };
