@@ -1184,12 +1184,19 @@ export const make = (
         Effect.flatMap((now) =>
           SubscriptionRef.modify(mutationStates, (map) => {
             const settledIds: Array<number> = [];
-            let next = map;
             for (const [id, state] of map) {
               if (id > lastId || state.phase !== "pending") continue;
-              next = MutationState.acknowledged(next, id, now, options.mutationStateRetention);
               settledIds.push(id);
             }
+            // Fold every transition first, evict once (#116's `HashMap`
+            // rationale): retention's scan-and-sort is O(size), so evicting
+            // per-id inside a K-mutation ack sweep would cost O(K * size).
+            const next = MutationState.acknowledgedMany(
+              map,
+              settledIds,
+              now,
+              options.mutationStateRetention
+            );
             return [settledIds, next] as const;
           })
         ),

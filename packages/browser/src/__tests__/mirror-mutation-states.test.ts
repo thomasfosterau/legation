@@ -23,7 +23,7 @@ import {
 } from "@legation/effect/internal";
 import type { MutationState } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { Effect, HashMap, Option, Ref, Schema, Stream } from "effect";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
@@ -83,12 +83,15 @@ const makeEngine = Effect.gen(function* () {
 /** Fork a background consumer of `mirror.mutationStates` into a pollable `Ref`. */
 const track = (stream: Stream.Stream<MutationState.MutationStateMap>) =>
   Effect.gen(function* () {
-    const latest = yield* Ref.make<MutationState.MutationStateMap>(new Map());
+    const latest = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     yield* Effect.forkScoped(
       Stream.runForEach(stream, (states) => Ref.set(latest, states)).pipe(Effect.ignore)
     );
     return latest;
   });
+
+const get = (map: MutationState.MutationStateMap, id: number) =>
+  Option.getOrUndefined(HashMap.get(map, id));
 
 describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
   it.effect("a mirror sees the host's mutation states, pending then acknowledged", () =>
@@ -102,12 +105,12 @@ describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
         const latest = yield* track(mirror.mutationStates);
         yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", done: false });
 
-        const pending = yield* eventually(Ref.get(latest), (states) => states.size === 1);
-        expect(pending.get(1)?.phase).toBe("pending");
-        expect(pending.get(1)?.mutator).toBe("todo/set");
+        const pending = yield* eventually(Ref.get(latest), (states) => HashMap.size(states) === 1);
+        expect(get(pending, 1)?.phase).toBe("pending");
+        expect(get(pending, 1)?.mutator).toBe("todo/set");
 
         yield* engine.push;
-        yield* eventually(Ref.get(latest), (states) => states.get(1)?.phase === "acknowledged");
+        yield* eventually(Ref.get(latest), (states) => get(states, 1)?.phase === "acknowledged");
       })
     )
   );
@@ -124,15 +127,18 @@ describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
           const first = yield* Mirror.make({ channel: mirrorChannel, mutators });
           const firstLatest = yield* track(first.mutationStates);
           yield* first.mutate("todo/set", { id: "1", title: "before", done: false });
-          yield* eventually(Ref.get(firstLatest), (states) => states.size === 1);
+          yield* eventually(Ref.get(firstLatest), (states) => HashMap.size(states) === 1);
 
           // A late-joining mirror on the same channel hydrates from the
           // host's current map — the same states the host holds.
           const second = yield* Mirror.make({ channel: mirrorChannel, mutators });
           const secondLatest = yield* track(second.mutationStates);
-          const hydrated = yield* eventually(Ref.get(secondLatest), (states) => states.size === 1);
-          expect(hydrated.get(1)?.mutator).toBe("todo/set");
-          expect(hydrated.get(1)?.phase).toBe("pending");
+          const hydrated = yield* eventually(
+            Ref.get(secondLatest),
+            (states) => HashMap.size(states) === 1
+          );
+          expect(get(hydrated, 1)?.mutator).toBe("todo/set");
+          expect(get(hydrated, 1)?.phase).toBe("pending");
         })
       )
   );

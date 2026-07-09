@@ -35,7 +35,7 @@ import { TransportError } from "./Errors.js";
 import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
-import { Clock, Duration, Effect, Fiber, Option, Ref, Scope, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -109,7 +109,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     // to a fresh subscriber, so its first emission IS the current snapshot.
     const currentMutationStates: Effect.Effect<MutationState.MutationStateMap> = Stream.runHead(
       engine.mutationStates
-    ).pipe(Effect.map(Option.getOrElse(() => new Map())));
+    ).pipe(Effect.map(Option.getOrElse(() => HashMap.empty())));
 
     /**
      * Register (or refcount) one broadcastable registration. `start` begins

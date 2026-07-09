@@ -22,6 +22,7 @@ import {
   Deferred,
   type Duration,
   Effect,
+  HashMap,
   Metric,
   Option,
   PubSub,
@@ -267,7 +268,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // The mirrored mutation-state map (#116), kept apart from `rows` because
     // it is a singleton (one map, not one per subset/named-query key) whose
     // shape differs from `LocalRow`.
-    const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(new Map());
+    const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -396,7 +397,12 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               case "MutationStatesUpdate":
                 return Ref.set(
                   mutationStatesRow,
-                  new Map(message.states.map((state) => [state.mutationId, state]))
+                  HashMap.fromIterable(
+                    message.states.map((state): readonly [number, MutationState.MutationState] => [
+                      state.mutationId,
+                      state,
+                    ])
+                  )
                 ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)));
               case "MutateAck":
                 return resolveIn(pending, message.requestId, (deferred) =>

@@ -24,7 +24,7 @@
  * from context ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
-import { Effect, Stream } from "effect";
+import { Effect, HashMap, Stream } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Aggregate, Client, Query } from "@legation/effect";
 import { ClientEngine, type MutationState } from "@legation/effect/internal";
@@ -333,7 +333,7 @@ export const useMutationState = (
       return (client) =>
         client.mutationStates.pipe(
           Stream.map((states) =>
-            [...states.values()]
+            [...HashMap.values(states)]
               .filter((state) => scope === undefined || state.mutator === scope)
               .toSorted((a, b) => a.mutationId - b.mutationId)
           )

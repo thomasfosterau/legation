@@ -17,7 +17,7 @@
  */
 
 import type { Cause, Layer } from "effect";
-import { Effect, Stream } from "effect";
+import { Effect, HashMap, Stream } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import type { AsyncResult, AtomRegistry, Reactivity } from "effect/unstable/reactivity";
 import {
@@ -238,7 +238,7 @@ export const fromLayer = (
     const existing = mutationsForCache.get(mutator);
     if (existing !== undefined) return existing;
     const atom = Atom.mapResult(mutationStates, (states) =>
-      [...states.values()]
+      [...HashMap.values(states)]
         .filter((state) => state.mutator === mutator)
         .toSorted((a, b) => a.mutationId - b.mutationId)
     );

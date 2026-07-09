@@ -9,7 +9,7 @@
  * primitives — no bespoke reactivity here.
  */
 import * as React from "react";
-import { Effect } from "effect";
+import { Effect, HashMap } from "effect";
 import { AsyncResult, AtomRegistry, type Atom } from "effect/unstable/reactivity";
 import type { ClientEngine, EngineAtoms, MutationState, Subset } from "@legation/effect/internal";
 import { useEngineAtoms, useRegistry } from "./registry.js";
@@ -184,11 +184,10 @@ export const useMutationState = (mutator?: string): ReadonlyArray<MutationState.
     // the whole-map atom's `AsyncResult` always resolves to a Map, the
     // per-mutator atom's always resolves to an already-filtered array.
     if (mutator === undefined) {
-      const map = AsyncResult.getOrElse(
-        result as EngineAtoms.MutationStatesResult,
-        () => new Map<number, MutationState.MutationState>()
+      const map = AsyncResult.getOrElse(result as EngineAtoms.MutationStatesResult, () =>
+        HashMap.empty<number, MutationState.MutationState>()
       );
-      return [...map.values()].toSorted((a, b) => a.mutationId - b.mutationId);
+      return [...HashMap.values(map)].toSorted((a, b) => a.mutationId - b.mutationId);
     }
     return AsyncResult.getOrElse(result as EngineAtoms.MutationsForResult, () => []);
   }, [result, mutator]);

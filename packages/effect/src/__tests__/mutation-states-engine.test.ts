@@ -8,7 +8,7 @@
  * mutation storm.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Schema, Scope, Stream } from "effect";
+import { Duration, Effect, Fiber, HashMap, Option, Schema, Scope, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -89,8 +89,11 @@ const makeEngine = (
  * current value to a fresh subscriber, so a one-shot `runHead` is a snapshot. */
 const snapshot = (engine: ClientEngineModule.ClientEngine) =>
   Stream.runHead(engine.mutationStates).pipe(
-    Effect.map((option) => (option._tag === "Some" ? option.value : new Map()))
+    Effect.map((option) => (option._tag === "Some" ? option.value : HashMap.empty()))
   );
+
+const get = (map: MutationState.MutationStateMap, id: number) =>
+  Option.getOrUndefined(HashMap.get(map, id));
 
 describe("ClientEngine.mutationStates (#116)", () => {
   it.effect("is empty before any mutation is journaled", () =>
@@ -98,7 +101,7 @@ describe("ClientEngine.mutationStates (#116)", () => {
       const handler = yield* makeServer;
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
-      expect((yield* snapshot(engine)).size).toBe(0);
+      expect(HashMap.size(yield* snapshot(engine))).toBe(0);
     })
   );
 
@@ -118,8 +121,8 @@ describe("ClientEngine.mutationStates (#116)", () => {
 
       const engine = yield* makeEngine(handler, store);
       const states = yield* snapshot(engine);
-      expect(states.size).toBe(1);
-      expect(states.get(1)).toEqual({
+      expect(HashMap.size(states)).toBe(1);
+      expect(get(states, 1)).toEqual({
         mutationId: 1,
         mutator: "todo/set",
         args: { id: "1", title: "left over", done: false },
@@ -138,15 +141,15 @@ describe("ClientEngine.mutationStates (#116)", () => {
 
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
       const pending = yield* snapshot(engine);
-      expect(pending.get(1)?.phase).toBe("pending");
-      expect(pending.get(1)?.mutator).toBe("todo/set");
+      expect(get(pending, 1)?.phase).toBe("pending");
+      expect(get(pending, 1)?.mutator).toBe("todo/set");
 
       // #116 fixes a gap where only `mutateWithAck`-registered mutations ever
       // settled; a plain `mutate` must transition too.
       yield* engine.push;
       const settled = yield* snapshot(engine);
-      expect(settled.get(1)?.phase).toBe("acknowledged");
-      expect(settled.get(1)?.settledAt).toBeDefined();
+      expect(get(settled, 1)?.phase).toBe("acknowledged");
+      expect(get(settled, 1)?.settledAt).toBeDefined();
     })
   );
 
@@ -161,8 +164,8 @@ describe("ClientEngine.mutationStates (#116)", () => {
       yield* engine.push;
 
       const states = yield* snapshot(engine);
-      expect(states.get(1)?.phase).toBe("rejected");
-      expect(states.get(1)?.reason).toBe("permission revoked");
+      expect(get(states, 1)?.phase).toBe("rejected");
+      expect(get(states, 1)?.reason).toBe("permission revoked");
     })
   );
 
@@ -179,7 +182,7 @@ describe("ClientEngine.mutationStates (#116)", () => {
       expect(outcome).toEqual({ _tag: "applied" });
 
       const states = yield* snapshot(engine);
-      expect(states.get(1)?.phase).toBe("acknowledged");
+      expect(get(states, 1)?.phase).toBe("acknowledged");
     })
   );
 
@@ -202,13 +205,13 @@ describe("ClientEngine.mutationStates (#116)", () => {
       yield* engine.mutate("todo/set", { id: "last", title: "still pending", done: false });
 
       const states = yield* snapshot(engine);
-      const terminal = [...states.values()].filter((s) => s.phase !== "pending");
-      const pending = [...states.values()].filter((s) => s.phase === "pending");
+      const terminal = [...HashMap.values(states)].filter((s) => s.phase !== "pending");
+      const pending = [...HashMap.values(states)].filter((s) => s.phase === "pending");
       expect(terminal.length).toBeLessThanOrEqual(5);
       expect(pending).toHaveLength(1);
       expect(pending[0]?.mutationId).toBe(51);
       // Bounded overall: no unbounded growth across the storm.
-      expect(states.size).toBeLessThanOrEqual(6);
+      expect(HashMap.size(states)).toBeLessThanOrEqual(6);
     })
   );
 
@@ -232,9 +235,9 @@ describe("ClientEngine.mutationStates (#116)", () => {
 
       const snapshots = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
       expect(snapshots).toHaveLength(3);
-      expect(snapshots[0]!.size).toBe(0); // initial (empty)
-      expect(snapshots[1]!.get(1)?.phase).toBe("pending"); // journaled
-      expect(snapshots[2]!.get(1)?.phase).toBe("acknowledged"); // settled
+      expect(HashMap.size(snapshots[0]!)).toBe(0); // initial (empty)
+      expect(get(snapshots[1]!, 1)?.phase).toBe("pending"); // journaled
+      expect(get(snapshots[2]!, 1)?.phase).toBe("acknowledged"); // settled
     })
   );
 });

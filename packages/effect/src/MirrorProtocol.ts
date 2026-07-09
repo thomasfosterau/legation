@@ -33,7 +33,7 @@ import * as Hash from "./Hash.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
-import { Effect, Schema } from "effect";
+import { Effect, HashMap, Schema } from "effect";
 
 /** Wire codec for one selected edge of a `related` registration. */
 export const EdgeSelectSchema = Schema.Struct({
@@ -323,7 +323,7 @@ export const relatedUpdate = (
 /** Build a MutationStatesUpdate from the engine's current mutation-state map (#116). */
 export const mutationStatesUpdate = (states: MutationState.MutationStateMap): HostMessage => ({
   _tag: "MutationStatesUpdate",
-  states: [...states.values()],
+  states: [...HashMap.values(states)],
 });
 
 const decodeTab = Schema.decodeUnknownEffect(MirrorMessageSchema);
