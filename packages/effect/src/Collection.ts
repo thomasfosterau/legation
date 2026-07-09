@@ -69,6 +69,15 @@ export interface Collection<A, I = unknown> {
   readonly id: (value: A) => RowId;
   /** Declared relationships to other collections (issue #38). */
   readonly relationships?: ReadonlyArray<Relationship>;
+  /**
+   * Fields eligible for secondary indexing (issue #113): `eq`/`In` predicates
+   * on a declared field resolve via an in-memory hash index, range
+   * `Compare`s via an ordered one, instead of a full collection scan. Purely
+   * an engine-level acceleration hint — maintained from row deltas, rebuilt
+   * on demand; absent (or an engine with `autoIndex` off) means every
+   * predicate scans, exactly like before this field existed.
+   */
+  readonly indexes?: ReadonlyArray<string>;
 }
 
 /** A collection definition with the row type erased. */
@@ -83,6 +92,7 @@ export const make = <A, I>(options: {
   readonly schema: Schema.Codec<A, I>;
   readonly id: (value: A) => RowId;
   readonly relationships?: ReadonlyArray<Relationship>;
+  readonly indexes?: ReadonlyArray<string>;
 }): Collection<A, I> => options;
 
 /**

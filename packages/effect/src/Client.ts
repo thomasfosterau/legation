@@ -252,11 +252,30 @@ export interface MakeOptions {
   readonly queries?: QueryModule.QueryRegistry;
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /**
+   * Auto-discover indexable fields from registered subsets and index them
+   * (issue #113), in addition to any `indexes` a Node/Collection declares.
+   * Defaults to `false`: zero-config behaviour is identical to no indexing.
+   */
+  readonly autoIndex?: boolean;
+  /**
    * Start the sync loop automatically. Defaults to `true` with a
    * transport, `false` when the Client defaulted to offline.
    */
   readonly sync?: boolean;
 }
+
+/** The `indexes` declared on each of `nodes`' collections, by collection name. */
+const declaredIndexes = (
+  nodes: Node.NodeRegistry
+): Readonly<Record<string, ReadonlyArray<string>>> => {
+  const indexes: Record<string, ReadonlyArray<string>> = {};
+  for (const [name, collection] of nodes.collections) {
+    if (collection.indexes !== undefined && collection.indexes.length > 0) {
+      indexes[name] = collection.indexes;
+    }
+  }
+  return indexes;
+};
 
 /**
  * A Client that owns the engine in this thread. Zero wiring works:
@@ -285,12 +304,15 @@ export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.S
     // unless the caller insists.
     const sync = options.sync ?? (configured ?? contextual) !== undefined;
 
+    const indexes = declaredIndexes(options.nodes);
     const engine = yield* ClientEngine.make({
       clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
       clientGroupId,
       mutators: options.mutations,
       ...(options.queries === undefined ? {} : { queries: options.queries }),
       ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
+      ...(Object.keys(indexes).length > 0 ? { indexes } : {}),
+      ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)

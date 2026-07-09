@@ -256,7 +256,13 @@ const hydrate = (
 ): ReadonlyArray<RelatedRow> =>
   base.map((row) => ({ id: row.id, value: row.value, related: strategy.resolveRow(index, row) }));
 
-/** Prime one index entry per targeted collection from the current local view. */
+/**
+ * Prime one index entry per targeted collection from the current local view:
+ * only the pinned `foreignField IN (...)` rows, not the whole collection
+ * (issue #113) — exactly what `resolveRow` ever looks up, and an `eq`/`In`
+ * lookup the engine's secondary index can resolve without a full scan when
+ * `target.field` is indexed. A target with no pinned ids needs no query.
+ */
 const primeIndex = (
   view: ClientView.Reader,
   targets: ReadonlyMap<string, Target>
@@ -264,7 +270,14 @@ const primeIndex = (
   Effect.gen(function* () {
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     for (const [collection, target] of targets) {
-      const rows = yield* view.query(Subset.make({ collection })).pipe(Effect.orDie);
+      const rows =
+        target.ids.size === 0
+          ? []
+          : yield* view
+              .query(
+                Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
+              )
+              .pipe(Effect.orDie);
       index.set(collection, groupByField(rows, target.field));
     }
     return index;
