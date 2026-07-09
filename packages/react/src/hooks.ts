@@ -11,7 +11,7 @@
 import * as React from "react";
 import { Effect } from "effect";
 import { AsyncResult, AtomRegistry, type Atom } from "effect/unstable/reactivity";
-import type { ClientEngine, EngineAtoms, Subset } from "@legation/effect/internal";
+import type { ClientEngine, EngineAtoms, MutationState, Subset } from "@legation/effect/internal";
 import { useEngineAtoms, useRegistry } from "./registry.js";
 
 /** Subscribe to an atom's value, re-rendering whenever it changes. */
@@ -162,4 +162,34 @@ export const useMutationWithAck = (): ((
     },
     [registry, atom]
   );
+};
+
+/**
+ * Reactive mutation-state list (#116) — TanStack Query's `useMutationState`
+ * analogue: every journaled mutation's current lifecycle state (`pending` →
+ * `acknowledged` | `rejected`), oldest-journaled first. Pass `mutator` to
+ * scope to one mutator (`EngineAtoms.mutationsFor`); omit it for every
+ * mutation (`EngineAtoms.mutationStates`). Always an array — empty before the
+ * engine's first emission — so a "N unsent changes" badge or a failed-intents
+ * list needs no `AsyncResult` handling.
+ */
+export const useMutationState = (mutator?: string): ReadonlyArray<MutationState.MutationState> => {
+  const atoms = useEngineAtoms();
+  const atom: Atom.Atom<EngineAtoms.MutationStatesResult | EngineAtoms.MutationsForResult> =
+    mutator === undefined ? atoms.mutationStates : atoms.mutationsFor(mutator);
+  const result = useAtomValue(atom);
+  return React.useMemo(() => {
+    // `result`'s shape is determined by the same `mutator === undefined`
+    // check that selected its source atom above, so these casts are safe:
+    // the whole-map atom's `AsyncResult` always resolves to a Map, the
+    // per-mutator atom's always resolves to an already-filtered array.
+    if (mutator === undefined) {
+      const map = AsyncResult.getOrElse(
+        result as EngineAtoms.MutationStatesResult,
+        () => new Map<number, MutationState.MutationState>()
+      );
+      return [...map.values()].toSorted((a, b) => a.mutationId - b.mutationId);
+    }
+    return AsyncResult.getOrElse(result as EngineAtoms.MutationsForResult, () => []);
+  }, [result, mutator]);
 };

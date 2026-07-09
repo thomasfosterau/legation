@@ -29,6 +29,7 @@ import {
 import * as Aggregate from "./Aggregate.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Hash from "./Hash.js";
+import * as MutationState from "./MutationState.js";
 import * as Subset from "./Subset.js";
 
 type Rows = ReadonlyArray<LocalRow>;
@@ -77,6 +78,18 @@ export interface MutationArg {
   readonly args: unknown;
 }
 
+/** The mutation-state map's Atom value (#116): an `AsyncResult` of the current map. */
+export type MutationStatesResult = AsyncResult.AsyncResult<
+  MutationState.MutationStateMap,
+  Cause.NoSuchElementError
+>;
+
+/** A `mutationsFor` selector's Atom value: the matching states, oldest first. */
+export type MutationsForResult = AsyncResult.AsyncResult<
+  ReadonlyArray<MutationState.MutationState>,
+  Cause.NoSuchElementError
+>;
+
 /** The engine's reactive surface, built from its layer. */
 export interface EngineAtoms {
   /** The runtime backing every engine atom; the registry owns its scope. */
@@ -110,6 +123,18 @@ export interface EngineAtoms {
   ) => Atom.Atom<GroupedAggregateResult>;
   /** Write a {@link MutationArg} to run a mutator; its result is an `AsyncResult`. */
   readonly mutation: Atom.AtomResultFn<MutationArg, void, MutatorError | StoreError>;
+  /**
+   * The Atom for the engine's whole keyed mutation-state map (#116) —
+   * `ClientEngine.mutationStates` re-emits on every fold; a single shared
+   * Atom, so mounting it from many components shares one subscription.
+   */
+  readonly mutationStates: Atom.Atom<MutationStatesResult>;
+  /**
+   * A derived selector over {@link mutationStates}, filtered to one mutator
+   * and sorted oldest-journaled first — "N unsent changes" or "list failed
+   * intents" for one mutator in one line. Stable per `mutator`.
+   */
+  readonly mutationsFor: (mutator: string) => Atom.Atom<MutationsForResult>;
   /**
    * Like {@link mutation}, but its result resolves with the mutation's
    * authoritative outcome (applied or permanently rejected) once the backend
@@ -202,6 +227,25 @@ export const fromLayer = (
     )
   );
 
+  // A single shared atom for the whole map; `mutationsFor` derives from it
+  // (Atom.mapResult) rather than opening a second engine subscription.
+  const mutationStates: Atom.Atom<MutationStatesResult> = runtime.atom(
+    Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.mutationStates))
+  );
+
+  const mutationsForCache = new Map<string, Atom.Atom<MutationsForResult>>();
+  const mutationsFor = (mutator: string): Atom.Atom<MutationsForResult> => {
+    const existing = mutationsForCache.get(mutator);
+    if (existing !== undefined) return existing;
+    const atom = Atom.mapResult(mutationStates, (states) =>
+      [...states.values()]
+        .filter((state) => state.mutator === mutator)
+        .toSorted((a, b) => a.mutationId - b.mutationId)
+    );
+    mutationsForCache.set(mutator, atom);
+    return atom;
+  };
+
   return {
     runtime,
     liveQuery: liveQuery as EngineAtoms["liveQuery"],
@@ -210,5 +254,7 @@ export const fromLayer = (
     aggregateGrouped,
     mutation,
     mutationWithAck,
+    mutationStates,
+    mutationsFor,
   };
 };

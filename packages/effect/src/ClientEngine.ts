@@ -26,6 +26,7 @@ import {
   Scope,
   Semaphore,
   Stream,
+  SubscriptionRef,
 } from "effect";
 import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
@@ -41,6 +42,7 @@ import {
 } from "./Errors.js";
 import * as LiveView from "./LiveView.js";
 import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
+import * as MutationState from "./MutationState.js";
 import type * as PredicateModule from "./Predicate.js";
 import type {
   Mutation,
@@ -326,6 +328,12 @@ export interface ClientEngineOptions {
    * to `false`: zero-config behaviour is identical to no indexing.
    */
   readonly autoIndex?: boolean;
+  /**
+   * Retention for terminal (acknowledged/rejected) entries in {@link
+   * ClientEngine.mutationStates} (#116). Unset uses {@link
+   * MutationState.DEFAULT_MAX_TERMINAL}.
+   */
+  readonly mutationStateRetention?: MutationState.RetentionOptions;
 }
 
 /**
@@ -382,6 +390,19 @@ export interface ClientEngine {
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
    */
   readonly mutationEvents: Stream.Stream<MutationEvent>;
+  /**
+   * A keyed, reactive mutation-state map (#116) — TanStack Query's
+   * `useMutationState` analogue: every journaled mutation's current lifecycle
+   * state (`pending` → `acknowledged` | `rejected`), keyed by `mutationId`.
+   * Seeded from the journal at boot (so a reload shows pending intents) and
+   * folded forward as mutations are journaled and settled, regardless of
+   * whether they were journaled via `mutate`, `mutateEncoded`, or
+   * `mutateWithAck`. Emits the current map immediately, then on every change
+   * ({@link SubscriptionRef.changes} semantics). Terminal entries are
+   * retained only up to `mutationStateRetention` — the journal, not this map,
+   * is the durable source of truth for pending mutations.
+   */
+  readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /**
    * The unified sync-lifecycle event stream (#45): mutation, push, pull, poke,
    * and view-rebuild events from one hub. {@link mutationEvents} is a filtered
@@ -568,6 +589,15 @@ export const make = (
   Effect.gen(function* () {
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
+    // The keyed mutation-state map (#116), seeded from the journal so a
+    // reload shows pending intents before any push/pull runs. A store read
+    // failure here is not fatal to engine construction (mirrors
+    // `sampleJournalDepth`'s tolerance elsewhere): the map starts empty and
+    // catches up as mutations are journaled.
+    const initialPending = yield* store.pendingMutations.pipe(
+      Effect.catch(() => Effect.succeed<ReadonlyArray<Mutation>>([]))
+    );
+    const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
     // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
     // prefetches of the same subset share one pull instead of racing N of them.
@@ -1129,29 +1159,61 @@ export const make = (
     const applyPatch = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void, StoreError> =>
       store.applyRowOps(ops).pipe(Effect.tap(() => updateIndexes(ops)));
 
-    // Resolve every pending deferred at or below `lastId` as applied, but only
-    // report ids this call actually settled (a rejected mutation is already
-    // settled, so `succeed` returns false and it is not re-reported).
-    const settleApplied = (lastId: number): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        for (const [id, deferred] of yield* Ref.get(acks)) {
-          if (id > lastId) continue;
-          const won = yield* Deferred.succeed(deferred, { _tag: "applied" });
-          if (won) yield* emitEvent(id, "acknowledged");
-          yield* forgetAck(id);
-        }
-      });
+    // Resolve a `mutateWithAck` deferred for `id`, if one is registered, and
+    // drop it from `acks`. A no-op for mutations journaled via `mutate` or
+    // `mutateEncoded`, which never register one.
+    const resolveAck = (id: number, outcome: MutationOutcome): Effect.Effect<void> =>
+      Ref.get(acks).pipe(
+        Effect.flatMap((map) => {
+          const deferred = map.get(id);
+          return deferred === undefined
+            ? Effect.void
+            : Deferred.succeed(deferred, outcome).pipe(Effect.asVoid);
+        }),
+        Effect.andThen(forgetAck(id))
+      );
 
-    // Settle one mutation as permanently rejected; emit only if this call won
-    // the race (it was not already settled).
+    // Fold every still-`"pending"` mutation state at or below `lastId` to
+    // `"acknowledged"` (#116) — every journaled mutation, not just ones with a
+    // registered `mutateWithAck` deferred — then resolve any deferred that IS
+    // registered and emit one `acknowledged` event per newly-settled id.
+    // States already settled (e.g. rejected by `settleRejected` moments
+    // earlier in the same push) are skipped, so this stays idempotent.
+    const settleApplied = (lastId: number): Effect.Effect<void> =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          SubscriptionRef.modify(mutationStates, (map) => {
+            const settledIds: Array<number> = [];
+            let next = map;
+            for (const [id, state] of map) {
+              if (id > lastId || state.phase !== "pending") continue;
+              next = MutationState.acknowledged(next, id, now, options.mutationStateRetention);
+              settledIds.push(id);
+            }
+            return [settledIds, next] as const;
+          })
+        ),
+        Effect.flatMap((settledIds) =>
+          Effect.forEach(settledIds, (id) =>
+            resolveAck(id, { _tag: "applied" }).pipe(Effect.andThen(emitEvent(id, "acknowledged")))
+          )
+        ),
+        Effect.asVoid
+      );
+
+    // Fold one mutation's permanent rejection in (#116), resolve any
+    // registered `mutateWithAck` deferred, and emit `rejected` — regardless of
+    // whether it was journaled via `mutate`, `mutateEncoded`, or `mutateWithAck`.
     const rejectAck = (id: number, reason: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const deferred = (yield* Ref.get(acks)).get(id);
-        if (deferred === undefined) return;
-        const won = yield* Deferred.succeed(deferred, { _tag: "rejected", reason });
-        if (won) yield* emitEvent(id, "rejected", reason);
-        yield* forgetAck(id);
-      });
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          SubscriptionRef.update(mutationStates, (map) =>
+            MutationState.rejected(map, id, reason, now, options.mutationStateRetention)
+          )
+        ),
+        Effect.andThen(resolveAck(id, { _tag: "rejected", reason })),
+        Effect.andThen(emitEvent(id, "rejected", reason))
+      );
 
     // Resolve deferreds for the mutations this client had permanently rejected.
     const settleRejected = (response: PushResponse): Effect.Effect<void> =>
@@ -1866,15 +1928,19 @@ export const make = (
           // `trackedWriter`).
           const pendingBefore = yield* store.pendingMutations;
           const mutationId = yield* store.nextMutationId(options.clientId);
+          const journaledAt = yield* Clock.currentTimeMillis;
           const mutation: Mutation = {
             clientId: options.clientId,
             mutationId,
             mutator,
             args: encoded,
-            createdAt: yield* Clock.currentTimeMillis,
+            createdAt: journaledAt,
           };
           yield* store.appendMutation(mutation);
           yield* sampleJournalDepth; // the append changed journal depth
+          yield* SubscriptionRef.update(mutationStates, (map) =>
+            MutationState.journaled(map, { mutationId, mutator, args: encoded, journaledAt })
+          );
           yield* emitEvent(mutationId, "journaled");
           // Apply the handler's effects onto the cached overlay in place and
           // publish exactly what it did as a Patch, rather than invalidating
@@ -1997,6 +2063,8 @@ export const make = (
         Stream.map(toMutationEvent),
         Stream.filter((event): event is MutationEvent => event !== undefined)
       ),
+      // #116's keyed mutation-state map: current value now, then every change.
+      mutationStates: SubscriptionRef.changes(mutationStates),
     });
   });
 

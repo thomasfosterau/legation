@@ -30,6 +30,7 @@
 
 import type * as ClientEngine from "./ClientEngine.js";
 import * as Hash from "./Hash.js";
+import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import { Effect, Schema } from "effect";
@@ -40,11 +41,29 @@ export const EdgeSelectSchema = Schema.Struct({
   first: Schema.optional(Schema.Number),
 });
 
+/** Wire codec for one {@link MutationState.MutationState} entry (#116). */
+export const MutationStateSchema = Schema.Struct({
+  mutationId: Schema.Number,
+  mutator: Schema.String,
+  args: Schema.Unknown,
+  phase: Schema.Literals(["pending", "acknowledged", "rejected"]),
+  reason: Schema.optional(Schema.String),
+  journaledAt: Schema.Number,
+  settledAt: Schema.optional(Schema.Number),
+});
+
 // ─── Broadcast keys ──────────────────────────────────────────────────────────
 
 /** The broadcast key a named query's results are mirrored under. */
 export const namedKey = (name: string, args: unknown): string =>
   `named:${name}:${Hash.contentHash(args)}`;
+
+/**
+ * The broadcast key {@link ClientEngine.ClientEngine.mutationStates} is
+ * mirrored under (#116) — a singleton, unparameterized registration (unlike
+ * subsets/named queries, there is exactly one mutation-state map per engine).
+ */
+export const MUTATION_STATES_KEY = "mutationStates";
 
 /**
  * The broadcast key a `related` registration's resolved rows are mirrored
@@ -106,6 +125,9 @@ export type MirrorMessage =
       readonly requestId: number;
       readonly subsets: ReadonlyArray<Subset.Subset>;
     }
+  /** Register interest in the mutation-state map (#116); see {@link MUTATION_STATES_KEY}. */
+  | { readonly _tag: "SubscribeMutationStates"; readonly mirrorId: string }
+  | { readonly _tag: "UnsubscribeMutationStates"; readonly mirrorId: string }
   /** A mirror leaving: release every subscription it held. */
   | { readonly _tag: "Disconnect"; readonly mirrorId: string }
   /** Liveness ping: lets the host reclaim subsets from mirrors that crash. */
@@ -159,6 +181,8 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     requestId: Schema.Number,
     subsets: Schema.Array(Subset.SubsetSchema),
   }),
+  Schema.Struct({ _tag: Schema.tag("SubscribeMutationStates"), mirrorId: Schema.String }),
+  Schema.Struct({ _tag: Schema.tag("UnsubscribeMutationStates"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Heartbeat"), mirrorId: Schema.String }),
 ]) as Schema.Codec<MirrorMessage>;
@@ -221,6 +245,11 @@ export type HostMessage =
       }>;
       /** Set instead of rows when the host could not serve the read. */
       readonly error?: string;
+    }
+  /** The whole mutation-state map, broadcast on every fold (#116). */
+  | {
+      readonly _tag: "MutationStatesUpdate";
+      readonly states: ReadonlyArray<MutationState.MutationState>;
     };
 
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
@@ -265,6 +294,10 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
     ),
     error: Schema.optional(Schema.String),
   }),
+  Schema.Struct({
+    _tag: Schema.tag("MutationStatesUpdate"),
+    states: Schema.Array(MutationStateSchema),
+  }),
 ]) as Schema.Codec<HostMessage>;
 
 /** Build a MirrorUpdate from materialized engine rows. */
@@ -285,6 +318,12 @@ export const relatedUpdate = (
   _tag: "RelatedUpdate",
   key,
   rows: rows.map((row) => ({ id: row.id, value: row.value, related: row.related })),
+});
+
+/** Build a MutationStatesUpdate from the engine's current mutation-state map (#116). */
+export const mutationStatesUpdate = (states: MutationState.MutationStateMap): HostMessage => ({
+  _tag: "MutationStatesUpdate",
+  states: [...states.values()],
 });
 
 const decodeTab = Schema.decodeUnknownEffect(MirrorMessageSchema);

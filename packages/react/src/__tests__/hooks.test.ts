@@ -21,7 +21,13 @@ import {
   Transport,
 } from "@legation/effect";
 import { ClientEngine, EngineAtoms, Subset, SyncRoom } from "@legation/effect/internal";
-import { EffectSyncProvider, useMutation, useMutationWithAck, useQuery } from "../index.js";
+import {
+  EffectSyncProvider,
+  useMutation,
+  useMutationState,
+  useMutationWithAck,
+  useQuery,
+} from "../index.js";
 
 const mutators = Mutator.registry([
   {
@@ -137,6 +143,22 @@ const AckButton = (props: {
   );
 };
 
+const JournalPanel = () => {
+  const all = useMutationState();
+  const forSetTodo = useMutationState("todo/set");
+  return React.createElement(
+    "ul",
+    null,
+    all.map((state) =>
+      React.createElement(
+        "li",
+        { key: state.mutationId },
+        `#${state.mutationId} ${state.phase} (${forSetTodo.length} for todo/set)`
+      )
+    )
+  );
+};
+
 afterEach(cleanup);
 
 describe("React hooks", () => {
@@ -235,6 +257,38 @@ describe("React hooks", () => {
       registry.set(pushAtom, undefined);
     });
     await waitFor(() => expect(outcome).toEqual({ _tag: "applied" }));
+
+    registry.dispose();
+  });
+
+  it("useMutationState (#116) reflects pending then acknowledged, whole map and per-mutator", async () => {
+    const atoms = EngineAtoms.fromLayer(engineLayer);
+    const registry = AtomRegistry.make();
+    const pushAtom = atoms.runtime.fn(() =>
+      Effect.flatMap(ClientEngine.ClientEngine, (engine) => engine.push)
+    );
+    render(
+      React.createElement(
+        EffectSyncProvider,
+        { atoms, registry },
+        React.createElement(JournalPanel),
+        React.createElement(AddButton)
+      )
+    );
+
+    expect(screen.queryByText(/#\d/)).toBeNull();
+
+    // A plain `mutate` (not `mutateWithAck`) must still be tracked — #116
+    // fixes a gap where only `mutateWithAck`-registered mutations settled.
+    await act(async () => {
+      fireEvent.click(screen.getByText("add"));
+    });
+    await waitFor(() => expect(screen.getByText("#1 pending (1 for todo/set)")).toBeTruthy());
+
+    await act(async () => {
+      registry.set(pushAtom, undefined);
+    });
+    await waitFor(() => expect(screen.getByText("#1 acknowledged (1 for todo/set)")).toBeTruthy());
 
     registry.dispose();
   });
