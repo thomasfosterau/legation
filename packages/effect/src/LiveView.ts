@@ -89,37 +89,49 @@ const windowSlice = (
 };
 
 /**
- * Assign positions to a freshly-computed window, reusing a row's previous
- * position whenever it is still ordered correctly against its *previous*
- * immediate neighbors (cheap to check, and exactly the "row didn't move
- * relative to what's next to it" condition) — everything else (freshly
- * entered rows, and runs of rows whose old position no longer fits) gets a
- * batch of fresh keys spanning the gap between the nearest reused
- * neighbors, via {@link FractionalIndex.generateNBetween}. O(window).
+ * Whether row `i`'s previous position is still ordered correctly against its
+ * *previous* immediate neighbors — cheap to check, and exactly the "row
+ * didn't move relative to what's next to it" condition that lets a position
+ * survive unchanged.
  */
-const positionsFor = (
+const stillOrdered = (
+  windowRows: ReadonlyArray<Row>,
+  previous: ReadonlyMap<string, string>,
+  i: number,
+  position: string
+): boolean => {
+  const leftPrev = i > 0 ? previous.get(windowRows[i - 1]!.id) : undefined;
+  const rightPrev = i < windowRows.length - 1 ? previous.get(windowRows[i + 1]!.id) : undefined;
+  const okLeft = leftPrev === undefined || FractionalIndex.compare(leftPrev, position) < 0;
+  const okRight = rightPrev === undefined || FractionalIndex.compare(position, rightPrev) < 0;
+  return okLeft && okRight;
+};
+
+/** Each window row's reusable previous position, or `undefined` where a fresh one is needed. */
+const reusablePositions = (
   windowRows: ReadonlyArray<Row>,
   previous: ReadonlyMap<string, string>
+): ReadonlyArray<string | undefined> =>
+  windowRows.map((row, i) => {
+    const existing = previous.get(row.id);
+    return existing !== undefined && stillOrdered(windowRows, previous, i, existing)
+      ? existing
+      : undefined;
+  });
+
+/** Fill every gap between reused positions with a fresh, evenly-spaced batch. */
+const fillGaps = (
+  windowRows: ReadonlyArray<Row>,
+  reused: ReadonlyArray<string | undefined>
 ): ReadonlyMap<string, string> => {
   const n = windowRows.length;
-  const reused: Array<string | undefined> = Array.from({ length: n });
-  for (let i = 0; i < n; i++) {
-    const existing = previous.get(windowRows[i]!.id);
-    if (existing === undefined) continue;
-    const leftPrev = i > 0 ? previous.get(windowRows[i - 1]!.id) : undefined;
-    const rightPrev = i < n - 1 ? previous.get(windowRows[i + 1]!.id) : undefined;
-    const okLeft = leftPrev === undefined || FractionalIndex.compare(leftPrev, existing) < 0;
-    const okRight = rightPrev === undefined || FractionalIndex.compare(existing, rightPrev) < 0;
-    if (okLeft && okRight) reused[i] = existing;
-  }
   const next = new Map<string, string>();
   let left: string | undefined;
   let i = 0;
   while (i < n) {
-    const current = reused[i];
-    if (current !== undefined) {
-      next.set(windowRows[i]!.id, current);
-      left = current;
+    if (reused[i] !== undefined) {
+      next.set(windowRows[i]!.id, reused[i]!);
+      left = reused[i];
       i++;
       continue;
     }
@@ -133,6 +145,19 @@ const positionsFor = (
   }
   return next;
 };
+
+/**
+ * Assign positions to a freshly-computed window, reusing a row's previous
+ * position whenever it is still ordered correctly against its previous
+ * neighbors — everything else (freshly entered rows, and runs of rows whose
+ * old position no longer fits) gets a batch of fresh keys spanning the gap
+ * between the nearest reused neighbors, via
+ * {@link FractionalIndex.generateNBetween}. O(window).
+ */
+const positionsFor = (
+  windowRows: ReadonlyArray<Row>,
+  previous: ReadonlyMap<string, string>
+): ReadonlyMap<string, string> => fillGaps(windowRows, reusablePositions(windowRows, previous));
 
 /** Build a view from an unordered collection snapshot. */
 export const make = (subset: Subset.Subset, rows: ReadonlyArray<Row>): LiveView => {
