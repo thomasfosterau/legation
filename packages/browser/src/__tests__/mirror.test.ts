@@ -23,7 +23,7 @@ import {
   Mirror,
 } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema } from "effect";
+import { Effect, Exit, Fiber, Ref, Schema } from "effect";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 
 const TodoArgs = Schema.Struct({
@@ -278,6 +278,89 @@ describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
       yield* mirror.mutate("todo/set", { id: "1", title: "broadcast", done: false });
       const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
       expect(rows.map((row) => (row.value as Todo).title)).toEqual(["broadcast"]);
+    })
+  );
+});
+
+describe("Mirror: a forwarded request is never silently lost (#119)", () => {
+  it.effect(
+    "a mutation orphaned by a dead host fails visibly once a new host announces itself",
+    () =>
+      Effect.gen(function* () {
+        const name = `legation-test-restart-${Date.now()}`;
+        const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
+        const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
+        yield* mirror.subscribe(allTodos);
+
+        // The first host serves this channel for a while, answering the
+        // handshake and one mutation normally, then "dies" — its scope
+        // closes, tearing down its channel and background fibers, just like
+        // a leader tab closing or crashing.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { engine } = yield* makeEngine;
+            const host = yield* BroadcastMirrorChannel.make(name);
+            yield* EngineHost.run({ channel: host, engine });
+            yield* mirror.mutate("todo/set", { id: "warm", title: "while alive", done: false });
+            yield* eventually(mirror.query(allTodos), (rows) => rows.length === 1);
+          })
+        );
+
+        // Sent after the leader is gone: nobody will ever journal or ack it.
+        const orphaned = yield* Effect.forkChild(
+          mirror.mutate("todo/set", { id: "orphan", title: "never acked", done: false })
+        );
+        yield* sleepReal(30);
+
+        // A new host takes over and announces itself — the SECOND HostReady
+        // this mirror has ever seen, so the stale request is failed instead
+        // of hanging forever.
+        const { engine: replacement } = yield* makeEngine;
+        const newHost = yield* BroadcastMirrorChannel.make(name);
+        yield* EngineHost.run({ channel: newHost, engine: replacement });
+
+        const exit = yield* Effect.exit(Fiber.join(orphaned));
+        expect(Exit.isFailure(exit)).toBe(true);
+      })
+  );
+
+  it.effect("a request still in flight fails once the mirror's own scope closes", () =>
+    Effect.gen(function* () {
+      const name = `legation-test-orphan-scope-${Date.now()}`;
+      // Nobody is listening on this channel at all — the request can never
+      // be answered while the mirror is alive.
+      const inFlight = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* BroadcastMirrorChannel.make(name);
+          const mirror = yield* Mirror.make({ channel, mutators });
+          return yield* Effect.forkChild(
+            mirror.mutate("todo/set", { id: "1", title: "orphaned", done: false })
+          );
+        })
+      );
+      const exit = yield* Effect.exit(Fiber.join(inFlight));
+      expect(Exit.isFailure(exit)).toBe(true);
+    })
+  );
+
+  it.effect("the host's very first readiness announcement never fails a racing request", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const name = `legation-test-first-ready-${Date.now()}`;
+      const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
+      const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
+
+      // The mutation is issued before the host's own HostReady necessarily
+      // finishes propagating to this mirror — a brand-new host's first
+      // handshake must never be mistaken for a restart.
+      const outcome = yield* Effect.forkChild(
+        mirror.mutate("todo/set", { id: "1", title: "first contact", done: false })
+      );
+      const host = yield* BroadcastMirrorChannel.make(name);
+      yield* EngineHost.run({ channel: host, engine });
+
+      const exit = yield* Effect.exit(Fiber.join(outcome));
+      expect(Exit.isSuccess(exit)).toBe(true);
     })
   );
 });
