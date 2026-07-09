@@ -14,9 +14,22 @@
  * `Mirror.observeChanges` has no incremental `LiveView`: it diffs consecutive
  * whole-page `MirrorUpdate`s, so its own suite checks the same three
  * semantics land correctly from page diffing alone.
+ *
+ * Two timing rules, both load-bearing:
+ * - `Effect.forkScoped` schedules a fiber but does not preempt — the forking
+ *   fiber keeps running until it hits a genuine async boundary. A collector
+ *   forked right before a synchronous `mutate` call may not even reach its
+ *   `PubSub.subscribe` until that boundary, by which point the mutate's one
+ *   and only change has already been published and lost (no replay). So
+ *   every collector here is followed by one real `settle` *before* the first
+ *   write it must observe — not to "wait long enough", but to hand control
+ *   back to the scheduler at all.
+ * - Everything after that first synchronization point polls via `eventually`
+ *   rather than guessing a fixed duration, since CI's scheduling variance
+ *   makes a fixed sleep an unreliable proxy for "has this propagated yet".
  */
 import { describe, expect, it } from "vitest";
-import { Duration, Effect, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Ref, Schema, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -29,6 +42,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as MirrorChannel from "../MirrorChannel.js";
 import * as MirrorModule from "../Mirror.js";
 import * as Mutator from "../Mutator.js";
+import type * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
@@ -85,14 +99,38 @@ const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: n
   });
 
 const todos = Subset.make({ collection: "todos" });
-const settle = Effect.sleep(Duration.millis(50));
 
+/** Real timers, independent of the test clock (matches backpressure.test.ts). */
+const sleepReal = (millis: number) =>
+  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+
+/**
+ * The mandatory yield after forking a collector: hands control back to the
+ * scheduler so the forked fiber reaches its `PubSub.subscribe` before any
+ * subsequent write. Not a "hope it's enough" guess — any real async boundary
+ * does this — just generous for CI's scheduling variance.
+ */
+const settle = sleepReal(50);
+
+/** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
+const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 400; attempt++) {
+      const value = yield* read.pipe(Effect.orDie);
+      if (until(value)) return value;
+      yield* sleepReal(5);
+    }
+    return yield* Effect.die(new Error("eventually: condition never held"));
+  });
+
+/** Fork a collector and settle once, so its subscription is guaranteed live. */
 const collect = <A, E>(stream: Stream.Stream<A, E>) =>
   Effect.gen(function* () {
     const batches = yield* Ref.make<Array<A>>([]);
     yield* Effect.forkScoped(
       Stream.runForEach(stream, (b) => Ref.update(batches, (a) => [...a, b])).pipe(Effect.ignore)
     );
+    yield* settle;
     return batches;
   });
 
@@ -106,26 +144,24 @@ describe("ClientEngine.observeChanges", () => {
         yield* reader.subscribe(todos);
 
         const batches = yield* collect(reader.observeChanges(todos));
-        yield* settle;
         expect(yield* Ref.get(batches)).toEqual([]); // includeInitial defaults to false
 
         yield* writer.mutate("todo/set", { id: "1", title: "first" });
         yield* writer.push;
         yield* reader.pull;
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
 
         yield* writer.mutate("todo/set", { id: "1", title: "second" });
         yield* writer.push;
         yield* reader.pull;
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 2);
 
         yield* writer.mutate("todo/remove", { id: "1" });
         yield* writer.push;
         yield* reader.pull;
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 3);
 
         const seen = yield* Ref.get(batches);
-        expect(seen).toHaveLength(3);
         expect(seen[0]).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "first" } } },
         ]);
@@ -157,7 +193,7 @@ describe("ClientEngine.observeChanges", () => {
         yield* reader.pull; // rows already present before anyone observes
 
         const batches = yield* collect(reader.observeChanges(todos, { includeInitial: true }));
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length >= 1);
 
         const seen = yield* Ref.get(batches);
         expect(seen).toHaveLength(1); // one batch: the initial enters, no gap/dup
@@ -176,13 +212,12 @@ describe("ClientEngine.observeChanges", () => {
         yield* engine.subscribe(todos);
 
         const batches = yield* collect(engine.observeChanges(todos));
-        yield* settle;
+        expect(yield* Ref.get(batches)).toEqual([]);
 
         yield* engine.mutate("todo/set", { id: "1", title: "optimistic" });
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
 
         const seen = yield* Ref.get(batches);
-        expect(seen).toHaveLength(1);
         expect(seen[0]?.[0]).toEqual({ _tag: "reset" });
         expect(seen[0]?.slice(1)).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "optimistic" } } },
@@ -198,31 +233,62 @@ describe("ClientEngine.observeChanges", () => {
         const engine = yield* makeClient(handler, "storm", 4); // small bound → forced drops
         yield* engine.subscribe(todos);
 
-        const batches = yield* collect(engine.observeChanges(todos));
-        yield* settle;
-
-        // A burst of local mutations far exceeding the bounded hub's capacity.
-        yield* Effect.forEach(Array.from({ length: 30 }), (_, i) =>
-          engine.mutate("todo/set", { id: `s${i}`, title: `t${i}` })
+        const batches = yield* Ref.make<
+          Array<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
+        >([]);
+        const seenCount = yield* Ref.make(0);
+        const release = yield* Deferred.make<void>();
+        yield* Effect.forkScoped(
+          Stream.runForEach(engine.observeChanges(todos), (batch) =>
+            Effect.gen(function* () {
+              yield* Ref.update(batches, (a) => [...a, batch]);
+              const n = yield* Ref.updateAndGet(seenCount, (x) => x + 1);
+              // Stall after the first live batch so the consumer's queue
+              // backs up while the storm below overruns the bound —
+              // deterministic overflow, mirroring backpressure.test.ts's
+              // engine-change-hub test rather than hoping one occurs.
+              if (n === 1) yield* Deferred.await(release);
+            })
+          ).pipe(Effect.ignore)
         );
-        yield* settle;
+        yield* settle; // let the collector subscribe before the first mutate
+
+        yield* engine.mutate("todo/set", { id: "s0", title: "t0" }); // first live batch: stalls the consumer
+        yield* eventually(Ref.get(seenCount), (n) => n === 1);
+
+        // Storm: far more changes than the bound of 4 → the hub drops the
+        // surplus while the consumer is stalled.
+        yield* Effect.forEach(Array.from({ length: 30 }), (_, i) =>
+          engine.mutate("todo/set", { id: `s${i + 1}`, title: `t${i + 1}` })
+        );
+        yield* Deferred.succeed(release, undefined);
+
+        // A gap forces a reset; keep polling until the folded state matches
+        // the engine's own query (more batches may still be draining).
+        const foldedIds = Ref.get(batches).pipe(
+          Effect.map((seen) => {
+            const folded = new Map<string, unknown>();
+            for (const batch of seen) {
+              for (const change of batch) {
+                if (change._tag === "reset") folded.clear();
+                else if (change._tag === "enter" || change._tag === "update") {
+                  folded.set(change.row.id, change.row.value);
+                } else if (change._tag === "exit") folded.delete(change.id);
+              }
+            }
+            return [...folded.keys()].toSorted();
+          })
+        );
+        const expectedIds = engine
+          .query(todos)
+          .pipe(Effect.map((rows) => rows.map((r) => r.id).toSorted()));
+        yield* eventually(
+          Effect.all([foldedIds, expectedIds]),
+          ([folded, expected]) => JSON.stringify(folded) === JSON.stringify(expected)
+        );
 
         const seen = yield* Ref.get(batches);
-        expect(seen.length).toBeGreaterThan(0);
         expect(seen.some((batch) => batch[0]?._tag === "reset")).toBe(true);
-
-        // Folding every received batch reproduces the engine's own query.
-        const folded = new Map<string, unknown>();
-        for (const batch of seen) {
-          for (const change of batch) {
-            if (change._tag === "reset") folded.clear();
-            else if (change._tag === "enter" || change._tag === "update") {
-              folded.set(change.row.id, change.row.value);
-            } else if (change._tag === "exit") folded.delete(change.id);
-          }
-        }
-        const expected = yield* engine.query(todos);
-        expect([...folded.keys()].toSorted()).toEqual(expected.map((r) => r.id).toSorted());
       }).pipe(Effect.scoped)
     );
   }, 10000);
@@ -254,14 +320,23 @@ describe("Mirror.observeChanges", () => {
 
         const batches = yield* collect(mirror.observeChanges(todos));
         yield* mirror.subscribe(todos);
-        yield* settle;
+        yield* settle; // let the host register the mirror's subscription
 
         yield* mirror.mutate("todo/set", { id: "1", title: "first" });
-        yield* settle;
+        yield* eventually(
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          (seen) => seen.length === 1
+        );
         yield* mirror.mutate("todo/set", { id: "1", title: "second" });
-        yield* settle;
+        yield* eventually(
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          (seen) => seen.length === 2
+        );
         yield* mirror.mutate("todo/remove", { id: "1" });
-        yield* settle;
+        yield* eventually(
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          (seen) => seen.length === 3
+        );
 
         const seen = (yield* Ref.get(batches)).filter((b) => b.length > 0);
         const tags = seen.map((batch) => batch.map((c) => c._tag));
@@ -281,10 +356,10 @@ describe("Mirror.observeChanges", () => {
 
         yield* mirror.subscribe(todos);
         yield* mirror.mutate("todo/set", { id: "1", title: "a" });
-        yield* settle;
+        yield* eventually(mirror.query(todos), (rows) => rows.length === 1);
 
         const batches = yield* collect(mirror.observeChanges(todos, { includeInitial: true }));
-        yield* settle;
+        yield* eventually(Ref.get(batches), (seen) => seen.length >= 1);
 
         const seen = yield* Ref.get(batches);
         expect(seen[0]).toEqual([
