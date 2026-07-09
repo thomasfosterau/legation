@@ -78,6 +78,31 @@ const outcomeOf = (
     ? { _tag: "applied" }
     : { _tag: "rejected", reason: message.reason ?? "" };
 
+/**
+ * Raised for a request whose answer can never arrive: the host that would
+ * have answered it is gone (a restart this mirror observed via `HostReady`,
+ * or this mirror's own scope closing while requests were still in flight).
+ * Never left hanging — if the mutation was already journaled by the old
+ * host, it is durable in its store and the next host will push it, but this
+ * caller must not assume that without checking; retry is only safe once the
+ * caller has verified the mutation didn't already apply.
+ */
+const hostUnavailable = new TransportError({
+  message: "Mirror: the engine host is gone — outcome unknown, verify before retrying",
+});
+
+/** Fail (and clear) every deferred still waiting in `ref`, never leaving a caller hanging. */
+const failPending = <A>(
+  ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>
+): Effect.Effect<void> =>
+  Ref.getAndSet(ref, new Map()).pipe(
+    Effect.flatMap((requests) =>
+      Effect.forEach(requests.values(), (deferred) => Deferred.fail(deferred, hostUnavailable), {
+        discard: true,
+      })
+    )
+  );
+
 export interface Mirror {
   /** Validate args locally, forward to the host journal, await the ack. */
   readonly mutate: (
@@ -175,6 +200,11 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       readonly unsubscribe: MirrorProtocol.MirrorMessage;
     }
     const interests = yield* Ref.make(new Map<string, Interest>());
+    // Distinguishes a host's first-ever readiness announcement (routine — this
+    // mirror has nothing in flight worth failing, and racing to fail it here
+    // would clobber a request this same host is about to answer) from a later
+    // one (a genuine restart, whose old in-memory bookkeeping is gone).
+    const seenHostReady = yield* Ref.make(false);
     /** Add one unit of interest; posts Subscribe when it is the first. */
     const acquireInterest = (
       key: string,
@@ -266,6 +296,15 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     );
     const requestIds = yield* Ref.make(0);
 
+    // A request left in flight when this mirror's scope closes can never be
+    // answered (its host may still be alive, but nobody will read the reply)
+    // — fail it rather than leave the caller hanging forever.
+    yield* Effect.addFinalizer(() =>
+      Effect.all([failPending(pending), failPending(pendingSettled), failPending(pendingReads)], {
+        discard: true,
+      })
+    );
+
     // Take a request's deferred out of its map and complete it. A no-op when the
     // requestId is not in this map (so both maps can be swept on `MutateError`).
     const resolveIn = <A>(
@@ -295,12 +334,32 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             if (message === undefined) return Effect.void;
             switch (message._tag) {
               case "HostReady":
-                // A host (re)started: replay every interest we hold.
+                // A host (re)started: replay every interest we hold. Past the
+                // first HostReady we've ever seen, this also means whatever
+                // was in flight with the OLD host is unanswerable — its
+                // in-memory request bookkeeping is gone, so those replies are
+                // never coming (the old host may still have journaled the
+                // mutation before it died; the new host's sync loop picks
+                // that up from the durable store regardless of what this
+                // caller is told).
                 return Ref.get(interests).pipe(
                   Effect.flatMap((map) =>
                     Effect.forEach(map.values(), (interest) =>
                       channel.post(interest.subscribe).pipe(Effect.ignore)
                     )
+                  ),
+                  Effect.andThen(Ref.getAndSet(seenHostReady, true)),
+                  Effect.flatMap((hadSeenBefore) =>
+                    hadSeenBefore
+                      ? Effect.all(
+                          [
+                            failPending(pending),
+                            failPending(pendingSettled),
+                            failPending(pendingReads),
+                          ],
+                          { discard: true }
+                        )
+                      : Effect.void
                   ),
                   Effect.asVoid
                 );
