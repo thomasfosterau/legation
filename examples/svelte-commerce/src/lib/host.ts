@@ -1,11 +1,12 @@
 /**
- * The engine host, host-agnostically: the same composition serves
- * mirrors from the service worker (production — see src/service-worker.ts)
- * and from a dev tab's main thread (Vite's dev service workers can't
- * evaluate module graphs containing dynamic imports, so `+layout.svelte`
- * runs this under a `navigator.locks` leader election instead — ADR-0010's
- * documented degraded mode, and a live demonstration that the host only
- * needs a BroadcastChannel).
+ * The engine host, host-agnostically: the same composition serves mirrors
+ * from the service worker (production — see src/service-worker.ts). It only
+ * needs a `BroadcastChannel`, so the identical composition also works
+ * un-elected on a main thread — that's `@legation/browser`'s `ElectedHost`
+ * (the shipped no-service-worker fallback, ADR-0010), which wraps this same
+ * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election
+ * (#119). This app always runs the service worker (dev included), so it
+ * doesn't need that path itself.
  *
  * Paced mutations (#117) — the cart-quantity stepper demo — are wired in
  * *here*, not in the cart page: `Paced.debounce` needs the real

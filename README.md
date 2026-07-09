@@ -32,6 +32,28 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 
 See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for the decisions. Coming from TanStack Query / SwiftData / SWR / Apollo? [docs/coming-from-tanstack-query.md](docs/coming-from-tanstack-query.md) maps their concepts onto this model.
 
+### Browser topology: service worker vs. elected main-thread host
+
+The diagram above is the **recommended** topology: the engine lives in the
+per-origin service-worker singleton, so there's no leader election — the
+platform provides the singleton, and closed-tab pending mutations survive in
+the service worker's journal ([ADR-0010](docs/adr/0010-service-worker-hosted-client-engine.md)).
+
+Apps that can't run a service worker (some embedded webviews, or a dev
+environment where it's inconvenient) run the same host composition on a
+tab's main thread instead, with `@legation/browser`'s `ElectedHost.run`
+electing exactly one tab per browser profile via the Web Locks API
+(`navigator.locks`) — held for that tab's whole lifetime, no voluntary
+step-down. Every other tab mirrors it over the same `BroadcastChannel`; when
+the elected tab closes or crashes, the browser grants the lock to the next
+tab, which boots the engine against the SAME durable store (journal, rows,
+cookie), resuming the CVR conversation rather than starting over. `run`
+hands back one `Client` that keeps working across that promotion (the
+underlying view swaps itself) and a `role: Stream<"host" | "mirror">` purely
+for observability. Environments without `navigator.locks` get a documented
+fallback (this module logs a warning and becomes host immediately — correct
+for a single tab only), not a polyfill.
+
 ## Packages
 
 Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md)).
@@ -39,7 +61,7 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | Package                                 | Description                                                                                                                                                                                                                                                            |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`@legation/effect`](packages/effect)   | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
-| [`@legation/browser`](packages/browser) | Browser adapters: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                              |
+| [`@legation/browser`](packages/browser) | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                         |
 | [`@legation/node`](packages/node)       | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
 | [`@legation/jsonapi`](packages/jsonapi) | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
 | [`@legation/sql`](packages/sql)         | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
