@@ -49,9 +49,12 @@ import type {
   ReadResponse,
 } from "./Protocol.js";
 import * as Query from "./Query.js";
+import * as RowChange from "./RowChange.js";
 import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
 import * as Subset from "./Subset.js";
+
+export type { RowChange } from "./RowChange.js";
 
 /** A locally-materialized row (no version: overlay rows have none yet). */
 export interface LocalRow {
@@ -80,6 +83,16 @@ export interface TypedRow<A> {
 export interface ObserveOptions<Row, B> {
   readonly select: (rows: ReadonlyArray<Row>) => B;
   readonly equals?: (a: B, b: B) => boolean;
+}
+
+/**
+ * Options for {@link ClientEngine.observeChanges}. `includeInitial` emits the
+ * current window as `enter`s in the first batch (TanStack's
+ * `currentStateAsChanges`/`includeInitialState`); the default `false` waits
+ * for the first live change.
+ */
+export interface ObserveChangesOptions {
+  readonly includeInitial?: boolean;
 }
 
 /**
@@ -431,6 +444,31 @@ export interface ClientEngine {
       subset: Subset.TypedSubset<A>
     ): Stream.Stream<ReadonlyArray<TypedRow<A>>, StoreError | MutatorError>;
     (subset: Subset.Subset): Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
+  };
+  /**
+   * Row-level deltas of a subset's live window (#115): `enter`/`exit` mark
+   * predicate/limit-boundary crossings, `update` a same-membership value
+   * change — batched per view-step (one array per {@link ViewChange}
+   * application, mirroring `observe`'s one-page-per-step). `Rebuild`/seq-gap
+   * collapse emit a `reset` marker + fresh `enter`s instead of a diff, since
+   * the overlay could have shifted any row (the same conservative fallback
+   * `observe`'s page already takes). `LiveView.put`/`del` already decide
+   * predicate/window membership per row; this surfaces that decision instead
+   * of discarding it and rescanning two pages.
+   *
+   * Ordering (`move`) is out of scope until #112 lands stable position keys;
+   * a consumer that needs order re-derives it from a paired `observe` or the
+   * position of `enter`s within a batch.
+   */
+  readonly observeChanges: {
+    <A>(
+      subset: Subset.TypedSubset<A>,
+      options?: ObserveChangesOptions
+    ): Stream.Stream<ReadonlyArray<RowChange.RowChange<TypedRow<A>>>, StoreError | MutatorError>;
+    (
+      subset: Subset.Subset,
+      options?: ObserveChangesOptions
+    ): Stream.Stream<ReadonlyArray<RowChange.RowChange<LocalRow>>, StoreError | MutatorError>;
   };
   /**
    * One-shot aggregate over the current local view (confirmed + overlay):
@@ -1224,63 +1262,82 @@ export const make = (
       change.collections !== undefined &&
       !change.collections.has(collection);
 
-    // Apply one contiguous change (no drop before it) to a query's LiveView and
-    // return its current page — the incremental fast path, unchanged from the
-    // unbounded-hub behaviour.
-    const applyContiguous = (
-      viewRef: Ref.Ref<LiveView.LiveView>,
-      subset: Subset.Subset,
-      change: ViewChange
-    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
-      Effect.gen(function* () {
-        const view = yield* Ref.get(viewRef);
-        if (rebuildSkips(change, subset.collection)) return LiveView.result(view);
-        const next =
-          change._tag === "Rebuild"
-            ? LiveView.make(subset, yield* collectionRows(subset.collection))
-            : applyOps(view, subset.collection, change.ops);
-        if (next !== view) yield* Ref.set(viewRef, next);
-        return LiveView.result(next);
-      });
-
-    // A drop happened before this seq: collapse it into a full Rebuild. Read
-    // the latest assigned seq FIRST, then re-materialize — the store then
-    // reflects every change with seq ≤ latest, so advancing `lastSeenRef` to
-    // `latest` safely skips any still-buffered changes already folded into this
-    // rebuild (they would otherwise re-apply as stale, regressing rows). A
-    // Rebuild subsumes the dropped Patches (ADR-0008), so the view is correct.
-    const collapseToRebuild = (
+    // One sequenced step's page transition for a query's LiveView: `before`/
+    // `after` are the window slices pre/post this step, `reset` marks a
+    // Rebuild-touching-this-collection or a gap collapse — the overlay could
+    // have shifted any row, so a consumer cannot diff `before` against
+    // `after`. `observeSubset` always takes `after` (a scoped rebuild that
+    // skips this collection returns `before === after`, so `changesWith`
+    // dedups it); `observeSubsetChanges` diffs `before`/`after`, or emits a
+    // `reset` batch when `reset` is set — the single seq/gap/rebuild-skip
+    // decision both observers share, so they can never step out of sync with
+    // each other. Mutates `viewRef`/`lastSeenRef` as a side effect.
+    interface ViewStep {
+      readonly before: ReadonlyArray<LocalRow>;
+      readonly after: ReadonlyArray<LocalRow>;
+      readonly reset: boolean;
+    }
+    const advanceView = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       lastSeenRef: Ref.Ref<number>,
-      subset: Subset.Subset
-    ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
+      subset: Subset.Subset,
+      item: SeqChange
+    ): Effect.Effect<ViewStep, StoreError | MutatorError> =>
       Effect.gen(function* () {
+        const lastSeen = yield* Ref.get(lastSeenRef);
+        if (item.seq <= lastSeen) {
+          const page = LiveView.result(yield* Ref.get(viewRef));
+          return { before: page, after: page, reset: false };
+        }
+        if (item.seq === lastSeen + 1) {
+          yield* Ref.set(lastSeenRef, item.seq);
+          const view = yield* Ref.get(viewRef);
+          const before = LiveView.result(view);
+          if (rebuildSkips(item.change, subset.collection)) {
+            return { before, after: before, reset: false };
+          }
+          const isRebuild = item.change._tag === "Rebuild";
+          const next = isRebuild
+            ? LiveView.make(subset, yield* collectionRows(subset.collection))
+            : applyOps(view, subset.collection, item.change.ops);
+          if (next !== view) yield* Ref.set(viewRef, next);
+          return { before, after: LiveView.result(next), reset: isRebuild };
+        }
+        // A drop happened before this seq: collapse it into a full Rebuild.
+        // Read the latest assigned seq FIRST, then re-materialize — the store
+        // then reflects every change with seq ≤ latest, so advancing
+        // `lastSeenRef` to `latest` safely skips any still-buffered changes
+        // already folded into this rebuild (they would otherwise re-apply as
+        // stale, regressing rows). A Rebuild subsumes the dropped Patches
+        // (ADR-0008), so the view is correct.
         yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
+        const before = LiveView.result(yield* Ref.get(viewRef));
         const latest = yield* Ref.get(changeSeq);
         const next = LiveView.make(subset, yield* collectionRows(subset.collection));
         yield* Ref.set(viewRef, next);
         yield* Ref.set(lastSeenRef, latest);
-        return LiveView.result(next);
+        return { before, after: LiveView.result(next), reset: true };
       });
 
-    // Advance a query's LiveView for one sequenced change and return its page.
-    // Contiguous seq → incremental apply; a gap (a bounded-hub drop) → lossless
-    // Rebuild collapse; a seq at/below the last seen → already reflected, skip.
     const stepView = (
       viewRef: Ref.Ref<LiveView.LiveView>,
       lastSeenRef: Ref.Ref<number>,
       subset: Subset.Subset,
       item: SeqChange
     ): Effect.Effect<ReadonlyArray<LocalRow>, StoreError | MutatorError> =>
-      Effect.gen(function* () {
-        const lastSeen = yield* Ref.get(lastSeenRef);
-        if (item.seq <= lastSeen) return LiveView.result(yield* Ref.get(viewRef));
-        if (item.seq === lastSeen + 1) {
-          yield* Ref.set(lastSeenRef, item.seq);
-          return yield* applyContiguous(viewRef, subset, item.change);
-        }
-        return yield* collapseToRebuild(viewRef, lastSeenRef, subset);
-      });
+      advanceView(viewRef, lastSeenRef, subset, item).pipe(Effect.map((step) => step.after));
+
+    const stepViewChanges = (
+      viewRef: Ref.Ref<LiveView.LiveView>,
+      lastSeenRef: Ref.Ref<number>,
+      subset: Subset.Subset,
+      item: SeqChange
+    ): Effect.Effect<ReadonlyArray<RowChange.RowChange<LocalRow>>, StoreError | MutatorError> =>
+      advanceView(viewRef, lastSeenRef, subset, item).pipe(
+        Effect.map((step) =>
+          step.reset ? RowChange.reset(step.after) : RowChange.diff(step.before, step.after)
+        )
+      );
 
     const observeSubset = (subset: Subset.Subset) =>
       Stream.unwrap(
@@ -1311,6 +1368,39 @@ export const make = (
           ).pipe(Stream.changesWith(sameResult));
         })
       );
+
+    const observeSubsetChanges = (
+      subset: Subset.Subset,
+      changeOptions?: ObserveChangesOptions
+    ): Stream.Stream<ReadonlyArray<RowChange.RowChange<LocalRow>>, StoreError | MutatorError> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          // Subscribe BEFORE snapshotting (#84) — the same race `observeSubset`
+          // closes: a change published while we materialize must land in this
+          // subscription's buffer.
+          const subscription = yield* PubSub.subscribe(changes);
+          const startSeq = yield* Ref.get(changeSeq);
+          const viewRef = yield* Ref.make(
+            LiveView.make(subset, yield* collectionRows(subset.collection))
+          );
+          const lastSeenRef = yield* Ref.make(startSeq);
+          const initialRows = LiveView.result(yield* Ref.get(viewRef));
+          // `includeInitial` emits the current window as `enter`s in its own
+          // batch — no `reset` marker, since there is nothing to reset from.
+          const initial: ReadonlyArray<ReadonlyArray<RowChange.RowChange<LocalRow>>> =
+            changeOptions?.includeInitial === true && initialRows.length > 0
+              ? [RowChange.enters(initialRows)]
+              : [];
+          return Stream.concat(
+            Stream.fromIterable(initial),
+            Stream.fromSubscription(subscription).pipe(
+              Stream.mapEffect((item) => stepViewChanges(viewRef, lastSeenRef, subset, item)),
+              Stream.filter((batch) => batch.length > 0)
+            )
+          );
+        })
+      );
+
     // Projected observe: map each page through `select` and drop consecutive
     // equal projections, so a change to a field the projection ignores never
     // re-emits. Without `select` it is the plain rows stream (whole-page dedup
@@ -1445,6 +1535,7 @@ export const make = (
       query: query as ClientEngine["query"],
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
       observe: observeProjected as ClientEngine["observe"],
+      observeChanges: observeSubsetChanges as ClientEngine["observeChanges"],
       queryAggregate,
       queryAggregateGrouped,
       observeAggregate,
