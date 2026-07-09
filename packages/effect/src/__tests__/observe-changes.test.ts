@@ -15,7 +15,7 @@
  * whole-page `MirrorUpdate`s, so its own suite checks the same three
  * semantics land correctly from page diffing alone.
  *
- * Two timing rules, both load-bearing:
+ * Timing rules, both load-bearing:
  * - `Effect.forkScoped` schedules a fiber but does not preempt — the forking
  *   fiber keeps running until it hits a genuine async boundary. A collector
  *   forked right before a synchronous `mutate` call may not even reach its
@@ -27,6 +27,14 @@
  * - Everything after that first synchronization point polls via `eventually`
  *   rather than guessing a fixed duration, since CI's scheduling variance
  *   makes a fixed sleep an unreliable proxy for "has this propagated yet".
+ *
+ * The Rebuild-path assertions fold whatever batches actually arrive
+ * (`foldBatches`) rather than assuming exactly one: `ViewChange.Rebuild` is
+ * documented as the conservative "the overlay could have shifted any row"
+ * fallback, not a promise of one-mutation-one-batch, so the property under
+ * test is "resets before re-entering, and the fold matches the engine's own
+ * query" — robust to how many view-steps a given host/scheduler happens to
+ * split the change into.
  */
 import { describe, expect, it } from "vitest";
 import { Deferred, Effect, Ref, Schema, Stream } from "effect";
@@ -110,7 +118,23 @@ const sleepReal = (millis: number) =>
  * subsequent write. Not a "hope it's enough" guess — any real async boundary
  * does this — just generous for CI's scheduling variance.
  */
-const settle = sleepReal(50);
+const settle = sleepReal(300);
+
+/** Fold a sequence of change batches into a plain `id -> value` map. */
+const foldBatches = (
+  batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
+): Map<string, unknown> => {
+  const folded = new Map<string, unknown>();
+  for (const batch of batches) {
+    for (const change of batch) {
+      if (change._tag === "reset") folded.clear();
+      else if (change._tag === "enter" || change._tag === "update") {
+        folded.set(change.row.id, change.row.value);
+      } else if (change._tag === "exit") folded.delete(change.id);
+    }
+  }
+  return folded;
+};
 
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
@@ -215,13 +239,22 @@ describe("ClientEngine.observeChanges", () => {
         expect(yield* Ref.get(batches)).toEqual([]);
 
         yield* engine.mutate("todo/set", { id: "1", title: "optimistic" });
-        yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
+
+        // Tolerant of exactly how many view-steps the mutation is batched
+        // into (a Rebuild is the fallback for "the overlay could have shifted
+        // any row", not a promise of one-op-one-batch): the contract under
+        // test is that a Rebuild always resets before re-entering, and that
+        // folding whatever batches arrive reproduces the engine's own query.
+        yield* eventually(
+          Ref.get(batches).pipe(Effect.map((seen) => [...foldBatches(seen).keys()].toSorted())),
+          (ids) => ids.length === 1 && ids[0] === "1"
+        );
 
         const seen = yield* Ref.get(batches);
-        expect(seen[0]?.[0]).toEqual({ _tag: "reset" });
-        expect(seen[0]?.slice(1)).toEqual([
-          { _tag: "enter", row: { id: "1", value: { id: "1", title: "optimistic" } } },
-        ]);
+        expect(seen.length).toBeGreaterThan(0);
+        expect(seen.some((batch) => batch[0]?._tag === "reset")).toBe(true);
+        const folded = foldBatches(seen);
+        expect([...folded.entries()]).toEqual([["1", { id: "1", title: "optimistic" }]]);
       }).pipe(Effect.scoped)
     );
   }, 10000);
@@ -266,18 +299,7 @@ describe("ClientEngine.observeChanges", () => {
         // A gap forces a reset; keep polling until the folded state matches
         // the engine's own query (more batches may still be draining).
         const foldedIds = Ref.get(batches).pipe(
-          Effect.map((seen) => {
-            const folded = new Map<string, unknown>();
-            for (const batch of seen) {
-              for (const change of batch) {
-                if (change._tag === "reset") folded.clear();
-                else if (change._tag === "enter" || change._tag === "update") {
-                  folded.set(change.row.id, change.row.value);
-                } else if (change._tag === "exit") folded.delete(change.id);
-              }
-            }
-            return [...folded.keys()].toSorted();
-          })
+          Effect.map((seen) => [...foldBatches(seen).keys()].toSorted())
         );
         const expectedIds = engine
           .query(todos)
