@@ -1,22 +1,29 @@
 /**
  * Incremental
  *
- * The version-free multiset operator core the #108 IVM programme called for,
- * extracted from the per-module machinery its children proved out
- * (`LiveView`/`OrderedTree`, `Related.makeJoinEngine`, `Aggregate`'s
- * incremental buckets). Each operator is a small, pure, Effect-free engine
- * that consumes **row deltas** (`added`/`removed`) and emits the delta to its
- * result — never a refold of the whole input (a refolding version of this
- * tier was explicitly judged not worth shipping, #114 brief). This is the
- * shared substance behind the client-local derived combinators in
- * {@link Derive}; keeping it pure and stream-free is what lets a property test
- * drive each operator directly against a naive from-scratch recompute after
- * every prefix of a randomized delta sequence.
+ * The pure delta engines behind #114's derived combinators ({@link Derive}).
+ * ADR-0027 (decision 4) blesses the proven per-module seams over extracting a
+ * shared #108 operator core, and rules that #114's combinators *are* the
+ * operator layer, landing with their consumer — so these are exactly those
+ * combinators' engines, not a separately-consumed core. Each mirrors a proven
+ * seam's *technique* (not its coupled code): `join` the keyed-bucket-plus-
+ * reverse-index of `Related.makeJoinEngine`, `groupBy` the running-fold-plus-
+ * `byId` of `Aggregate`, `orderedWindow` the `LiveView`/`OrderedTree`
+ * persistent order.
  *
- * **The boundary rule (ADR-0027).** These operators are read-layer machinery
- * behind `observe`. They see only rows the client already holds; they never
- * widen what syncs, never serialize, and are never auth-relevant. The
- * serializable `Subset`/`Predicate` tier alone decides what the server ships.
+ * The delta currency is keyed `added`/`removed` rows — the `Patch`-op model of
+ * ADR-0027 §1, on row identity, not `[value, ±multiplicity]` multiset entries.
+ * Each engine is a small, pure, Effect-free function that emits the delta to
+ * its result, never a refold of the whole input (a refolding version of this
+ * tier was explicitly judged not worth shipping, #114 brief) — and being pure
+ * and stream-free is what lets a property test drive it against a naive
+ * from-scratch recompute after every prefix of a randomized delta sequence.
+ *
+ * **The boundary rule (ADR-0027 §3).** These operators are read-layer
+ * machinery behind `observe`. They see only rows the client already holds;
+ * they never widen what syncs, never serialize, and are never auth-relevant.
+ * The serializable `Subset`/`Predicate` tier alone decides what the server
+ * ships.
  *
  * The unit is a {@link Row} — the same `(id, value)` shape as `Subset.Row` and
  * `ClientEngine.LocalRow`, so a source's page (`ReadonlyArray<LocalRow>`) is a
@@ -53,10 +60,12 @@ export const emptyDelta: Delta = { added: [], removed: [] };
 
 // ─── Snapshot ↔ delta (the source boundary) ──────────────────────────────────
 //
-// #115's row-level `observeChanges` feed has not merged, so the derived tier
-// consumes page snapshots (`ClientView.observe`) and recovers deltas by
-// diffing consecutive pages here. When #115 lands its deltas can feed the
-// operators directly and this boundary step drops away.
+// The derived tier consumes `ClientView.observe` page snapshots and recovers
+// row deltas by diffing consecutive pages here — the page-diffing path
+// ADR-0027 §4 describes, the same internal re-diff `Related` does. #115's
+// (now-merged) `observeChanges` enter/update/exit feed is the row-level
+// alternative to this diff; wiring the combinators onto it directly, so the
+// diff drops away, is a follow-up.
 
 /** Index a page by id, for diffing against the next snapshot. */
 export const indexById = (rows: ReadonlyArray<Row>): Map<string, Row> => {

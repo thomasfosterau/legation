@@ -4,7 +4,7 @@
  * Client-local **derived live queries**: a set of bare, composable combinators
  * — `filter`, `map`/`select`, `join`, `groupBy`, `distinct`, `orderedWindow` —
  * over already-observed sources, each incrementally maintained from row deltas
- * by the {@link Incremental} operator core. This is the expressiveness tier the
+ * by the pure {@link Incremental} engines. This is the expressiveness tier the
  * #114 brief describes: the relational shaping (arbitrary joins, DISTINCT,
  * row-level group-by, computed/cross-field predicates) that the serializable
  * `Subset`/`Predicate` wire language deliberately does not carry, done here in
@@ -25,9 +25,11 @@
  * mirror, *or the output of another combinator* (every combinator's output is
  * a page stream of the same `(id, value)` rows, so queries-from-queries falls
  * straight out of the shared shape, the same trick `LiveQuery` and `Related`
- * already play). #115's row-level `observeChanges` feed has not merged, so a
- * combinator recovers deltas by diffing consecutive pages ({@link
- * Incremental.diff}); when #115 lands its deltas feed the operators directly.
+ * already play). A combinator recovers deltas by diffing consecutive `observe`
+ * pages ({@link Incremental.diff}) — the page-diffing path ADR-0027 §4
+ * describes; #115's now-merged `observeChanges` enter/update/exit feed is the
+ * row-level alternative, and wiring the combinators onto it directly is a
+ * follow-up.
  *
  * **Observability.** A derived pipeline is an Effect `Stream` and, via
  * {@link atom}, an Atom on the standard `effect/unstable/reactivity` surface —
@@ -126,7 +128,7 @@ export const groupBy = <E>(source: Source<E>, key: (value: unknown) => string): 
 
 // ─── Join (two inputs) ───────────────────────────────────────────────────────
 
-/** Options for {@link join} (re-exported from the operator core). */
+/** Options for {@link join} (re-exported from {@link Incremental}). */
 export type JoinOptions = Incremental.JoinOptions;
 
 /**

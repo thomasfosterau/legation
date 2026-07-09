@@ -92,10 +92,12 @@ natively.
   (arbitrary key equality, inner/left), `groupBy` returning rows, `distinct`,
   `orderedWindow` — compose over any `observe`d source (an engine, a mirror,
   or another combinator, so queries compose from queries) and are
-  incrementally maintained by the same version-free multiset IVM core (`map /
-filter / join / reduce / distinct / ordered-window`) that TanStack DB's
-  differential-dataflow engine uses. `Related` (declared-edge joins that
-  auto-sync the foreign rows) and `Aggregate` (live folds) sit alongside them.
+  incrementally maintained the way TanStack DB's differential-dataflow engine
+  maintains its live queries — the same operator set (`map / filter / join /
+reduce / distinct / ordered-window`), though over keyed row deltas on a
+  single timeline rather than a `[value, ±multiplicity]` multiset (ADR-0027).
+  `Related` (declared-edge joins that auto-sync the foreign rows) and
+  `Aggregate` (live folds) sit alongside them.
 
 The one rule that makes the split safe: **the derived tier never widens what
 syncs.** A client-local combinator sees only the rows already synced; if a

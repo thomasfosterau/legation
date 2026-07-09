@@ -13,13 +13,13 @@ over already-synced rows.
 
 Each combinator takes any source satisfying the `ClientView.observe` shape — an
 owned engine, a mirror, or **another combinator**, so queries compose from
-queries — and is maintained **incrementally** from row deltas by a new
-version-free multiset operator core (`Incremental`), never refolded per change.
-`orderedWindow` reuses `LiveView`/`OrderedTree`; `join` follows
-`Related.makeJoinEngine`'s "re-derive only the affected rows" discipline;
-`groupBy` follows `Aggregate`'s "touch only the affected bucket" discipline.
-Each operator carries a delta-in/delta-out property test against a naive
-from-scratch recompute.
+queries — and is maintained **incrementally** from keyed row deltas by pure
+engines (`Incremental`), never refolded per change. Per ADR-0027 these are
+#114's combinator engines, not a separate operator core: each mirrors a proven
+seam's technique — `orderedWindow` the `LiveView`/`OrderedTree` order, `join`
+`Related.makeJoinEngine`'s keyed buckets + reverse index, `groupBy`
+`Aggregate`'s running-fold-plus-`byId`. Each carries a delta-in/delta-out
+property test against a naive from-scratch recompute.
 
 Results are an Effect `Stream` and, via `Derive.atom`, an Atom on the standard
 reactivity surface, so framework bindings need nothing new. Leaf subscriptions
@@ -30,5 +30,5 @@ release on scope close, tearing the whole chain down together.
 They see only the rows a client already holds; the serializable Query/Subset
 tier alone decides what the server ships. Both `Incremental` and `Derive` live
 behind `@legation/effect/internal` (read-layer machinery, no new public noun).
-ADR-0027 records the two-tier read model and the version-free multiset IVM
-these consume.
+ADR-0027 (client-local IVM delta model) records the two-tier read model and the
+never-widens-sync rule these consume.
