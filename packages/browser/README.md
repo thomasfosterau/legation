@@ -72,6 +72,56 @@ For tests or non-global environments, pass a `webSocketConstructor`:
 WebSocketTransport.make({ url, webSocketConstructor: (u) => new MyWebSocket(u) });
 ```
 
+## `ElectedHost`: leader election for the no-service-worker topology
+
+`ServiceWorkerHost.run` is the recommended deployment (the engine lives in
+the per-origin service worker; every tab just mirrors it). Apps that can't
+run a service worker instead run `ElectedHost.run`, which elects exactly one
+tab per browser profile to host the engine on its main thread, via the [Web
+Locks API](https://developer.mozilla.org/docs/Web/API/Web_Locks_API)
+(`navigator.locks`):
+
+```ts
+import { Effect, Layer } from "effect";
+import { ClientStore, Transport } from "@legation/effect";
+import { ElectedHost, IndexedDbClientStore } from "@legation/browser";
+import { nodes, mutators } from "./domain.js";
+
+const dependencies = Layer.mergeAll(
+  IndexedDbClientStore.layerWindow(),
+  Layer.effect(Transport.ClientTransport)()
+  /* build a ClientTransport, e.g. RpcTransport.fromOrigin(...) */
+);
+
+const program = Effect.gen(function* () {
+  const { client, role } = yield* ElectedHost.run({
+    clientGroupId: "my-app", // the Web Lock name AND the sync client group
+    nodes,
+    mutations: mutators,
+    dependencies,
+  });
+  // `client` works unchanged whether this tab is currently hosting or
+  // mirroring; `role` (Stream<"host" | "mirror">) is for devtools/debug UI
+  // only — never branch application logic on it.
+});
+```
+
+The lock is held for the tab's whole lifetime once won (no voluntary
+step-down). While waiting, this tab mirrors whichever tab currently holds
+it, over the same `BroadcastChannel` `ServiceWorkerHost` uses. When the
+elected tab closes or crashes, the browser grants the lock to the next tab,
+which boots the engine against the SAME durable store — same journal, same
+rows, same cookie — so the CVR conversation resumes rather than starting
+over, and any mutation the old leader had already journaled survives and is
+pushed by the new one. A mutation still in flight when the leader dies
+either completes normally or fails visibly to its caller; it is never
+silently dropped.
+
+Environments without `navigator.locks` (some embedded webviews) get a
+**documented fallback, not a polyfill**: `ElectedHost.run` logs a warning
+and becomes the host immediately, which is only correct if exactly one tab
+is ever open for that client group.
+
 ## IndexedDB persistence
 
 `IndexedDbCacheStore.layer` provides core's `CacheStore` service backed by IndexedDB. It is a

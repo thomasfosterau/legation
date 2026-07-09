@@ -183,11 +183,6 @@ const fieldOf = (value: unknown, field: string): unknown =>
     ? (value as Record<string, unknown>)[field]
     : undefined;
 
-/**
- * A comparator over row *values* for an `orderBy`. Stable across the same
- * orderBy, so it can both sort a set and place a single row incrementally
- * (LiveView).
- */
 /** Compare two field values ascending; null/undefined sort first. */
 const compareValues = (left: unknown, right: unknown): number => {
   if (left === right) return 0;
@@ -196,14 +191,42 @@ const compareValues = (left: unknown, right: unknown): number => {
   return (left as number | string) < (right as number | string) ? -1 : 1;
 };
 
+/**
+ * A total-order comparator over *rows* for an `orderBy`: `orderBy`'s fields
+ * first, then row id ascending as a tie-break. The id tie-break is what
+ * makes this a genuine total order even for an empty `orderBy` (every row
+ * would otherwise tie) — `LiveView` relies on that to locate a delta's row
+ * in O(log n) instead of scanning every same-key row (issue #112). Stable
+ * across the same `orderBy`, so it can both sort a set from scratch
+ * (`sortFiltered`) and place one row incrementally (`LiveView`).
+ *
+ * This is also **the collation seam**, and today it is a deliberate punt:
+ * ordering is JS's default `<` over the field's decoded value (code-unit
+ * order for strings, numeric for numbers) — no locale-aware collation, no
+ * case-insensitive option. `Subset.apply` is the *sole* ordering authority
+ * for both the server (every `Backend.evaluate` finalizes order/limit/cursor
+ * locally with it — `MemoryBackend`, `@legation/sql`'s `SqlBackend`,
+ * `@legation/jsonapi`'s `JsonApiBackend`) and the client (`LiveView`), so
+ * client and server always agree on cursor windows *by construction* — but
+ * only as long as this stays the one comparator both sides call. A
+ * locale-aware collation therefore cannot be a client-local `observe`
+ * option (a client sorting `"café" < "cafe"` while the server's cursor
+ * assumes code-unit order would silently tear cursor pages); it would have
+ * to be declared on the `Subset`/collection itself, wire-serialized, and
+ * threaded into this comparator on both sides — the same shape as the
+ * derivable-set declaration in ADR-0023. Nothing in this codebase needs
+ * non-default collation yet, so that declaration is not added here; this
+ * comment is the record the issue asked for. Adding it later is additive
+ * (a new optional `Subset.collation` field defaulting to today's behavior).
+ */
 export const comparator =
   (orderBy: ReadonlyArray<OrderBy>) =>
-  (a: unknown, b: unknown): number => {
+  (a: Row, b: Row): number => {
     for (const term of orderBy) {
-      const ordered = compareValues(fieldOf(a, term.field), fieldOf(b, term.field));
+      const ordered = compareValues(fieldOf(a.value, term.field), fieldOf(b.value, term.field));
       if (ordered !== 0) return term.direction === "asc" ? ordered : -ordered;
     }
-    return 0;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   };
 
 /** Filter rows by the subset's predicate and sort by its `orderBy` (no window). */
@@ -212,9 +235,7 @@ export const sortFiltered = <R extends Row>(
   subset: Subset
 ): ReadonlyArray<R> => {
   const filtered = rows.filter((row) => Predicate.test(subset.where, row.value));
-  if (subset.orderBy.length === 0) return filtered;
-  const compare = comparator(subset.orderBy);
-  return filtered.toSorted((a, b) => compare(a.value, b.value));
+  return filtered.toSorted(comparator(subset.orderBy));
 };
 
 /**
