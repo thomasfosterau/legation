@@ -359,3 +359,229 @@ describe("Related.resolveExistsLocally", () => {
     })
   );
 });
+
+// ─── Delta-maintenance property test (issue #111) ────────────────────────────
+//
+// `Related.makeJoinEngine` maintains the join incrementally from base/foreign
+// row snapshots (put/delete-shaped deltas, including fk changes that move a
+// row between buckets) instead of re-grouping and re-hydrating from scratch.
+// This drives it directly (no ClientEngine/Effect involved — the engine is
+// pure) with a long randomized sequence of deltas over base rows, foreign
+// rows (including a windowed/paginated target, ADR-0024), and fk reassignment,
+// and after every prefix compares its result against `Related.hydrateFromScratch`
+// computed fresh from the same ground truth. Deterministic (seeded PRNG) so a
+// failure is reproducible from the printed seed.
+
+type LocalRow = ClientEngineModule.LocalRow;
+
+// mulberry32: small, fast, seedable — good enough for a reproducible fuzz run.
+const mulberry32 = (rngSeed: number) => {
+  let state = rngSeed >>> 0;
+  return (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const propertyRelationships: ReadonlyArray<Collection.Relationship & { readonly first?: number }> =
+  [
+    {
+      name: "author",
+      kind: "one",
+      collection: "people",
+      localField: "authorId",
+      foreignField: "id",
+    },
+    {
+      name: "comments",
+      kind: "many",
+      collection: "comments",
+      localField: "id",
+      foreignField: "issueId",
+    },
+    {
+      name: "tags",
+      kind: "paginated",
+      collection: "tags",
+      localField: "id",
+      foreignField: "issueId",
+      order: [{ field: "rank", direction: "asc" }],
+      first: 2,
+    },
+  ];
+
+const ISSUE_IDS = ["i0", "i1", "i2", "i3", "i4"];
+const PERSON_IDS = ["p0", "p1", "p2"];
+// Occasionally points a comment/tag at an issue id no base row currently
+// holds — a dangling fk, which must resolve like any other non-match.
+const FK_TARGETS = [...ISSUE_IDS, "i-missing"];
+
+/** Ground truth: one `Map<id, LocalRow>` per collection, mutated by each op. */
+interface GroundTruth {
+  readonly issues: Map<string, LocalRow>;
+  readonly people: Map<string, LocalRow>;
+  readonly comments: Map<string, LocalRow>;
+  readonly tags: Map<string, LocalRow>;
+}
+
+const emptyGroundTruth = (): GroundTruth => ({
+  issues: new Map(),
+  people: new Map(),
+  comments: new Map(),
+  tags: new Map(),
+});
+
+const foreignRowsOf = (truth: GroundTruth): ReadonlyMap<string, ReadonlyArray<LocalRow>> =>
+  new Map([
+    ["people", [...truth.people.values()]],
+    ["comments", [...truth.comments.values()]],
+    ["tags", [...truth.tags.values()]],
+  ]);
+
+type Op =
+  | { readonly _tag: "putIssue"; readonly id: string; readonly authorId: string | null }
+  | { readonly _tag: "deleteIssue"; readonly id: string }
+  | {
+      readonly _tag: "putForeign";
+      readonly collection: "people" | "comments" | "tags";
+      readonly id: string;
+      readonly fk: string;
+      readonly rank: number;
+    }
+  | {
+      readonly _tag: "deleteForeign";
+      readonly collection: "people" | "comments" | "tags";
+      readonly id: string;
+    };
+
+const pick = <A>(rng: () => number, values: ReadonlyArray<A>): A =>
+  values[Math.floor(rng() * values.length)]!;
+
+const randomOp = (rng: () => number, truth: GroundTruth): Op => {
+  const choice = rng();
+  if (choice < 0.3) {
+    const id = pick(rng, ISSUE_IDS);
+    const authorId = rng() < 0.15 ? null : pick(rng, PERSON_IDS);
+    return { _tag: "putIssue", id, authorId };
+  }
+  if (choice < 0.4) {
+    return { _tag: "deleteIssue", id: pick(rng, ISSUE_IDS) };
+  }
+  const collection = pick(rng, ["people", "comments", "tags"] as const);
+  const pool =
+    collection === "people"
+      ? truth.people
+      : collection === "comments"
+        ? truth.comments
+        : truth.tags;
+  if (choice < 0.75 || pool.size === 0) {
+    const idPrefix = collection === "people" ? "fp" : collection === "comments" ? "fc" : "ft";
+    const id = `${idPrefix}${Math.floor(rng() * 6)}`;
+    const fk = collection === "people" ? pick(rng, PERSON_IDS) : pick(rng, FK_TARGETS);
+    return { _tag: "putForeign", collection, id, fk, rank: Math.floor(rng() * 10) };
+  }
+  return { _tag: "deleteForeign", collection, id: pick(rng, [...pool.keys()]) };
+};
+
+const applyOp = (truth: GroundTruth, op: Op): void => {
+  switch (op._tag) {
+    case "putIssue":
+      truth.issues.set(op.id, { id: op.id, value: { id: op.id, authorId: op.authorId } });
+      return;
+    case "deleteIssue":
+      truth.issues.delete(op.id);
+      return;
+    case "putForeign": {
+      const map = truth[op.collection];
+      const value =
+        op.collection === "people"
+          ? { id: op.id }
+          : op.collection === "comments"
+            ? { id: op.id, issueId: op.fk }
+            : { id: op.id, issueId: op.fk, rank: op.rank };
+      map.set(op.id, { id: op.id, value });
+      return;
+    }
+    case "deleteForeign":
+      truth[op.collection].delete(op.id);
+      return;
+  }
+};
+
+const idsOf = (values: ReadonlyArray<unknown>) =>
+  values.map((v) => (v as { id: string }).id).sort();
+
+/** `many`/`paginated` order isn't a contract (a write can reorder a bucket —
+ * see the `re-hydrates on a related-row write` test above), so compare those
+ * as sets; `one` and the base row compare directly. */
+const relatedValuesEqual = (a: Related.RelatedValue, b: Related.RelatedValue): boolean => {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return JSON.stringify(idsOf(a)) === JSON.stringify(idsOf(b));
+  }
+  return a === b;
+};
+
+const sameJoinUnordered = (
+  actual: ReadonlyArray<Related.RelatedRow>,
+  expected: ReadonlyArray<Related.RelatedRow>
+): boolean =>
+  actual.length === expected.length &&
+  actual.every((row, i) => {
+    const other = expected[i]!;
+    if (row.id !== other.id || row.value !== other.value) return false;
+    const names = Object.keys(row.related);
+    return (
+      names.length === Object.keys(other.related).length &&
+      names.every((name) => relatedValuesEqual(row.related[name], other.related[name]))
+    );
+  });
+
+describe("Related delta-maintenance (issue #111)", () => {
+  it("makeJoinEngine matches hydrateFromScratch after every prefix of randomized deltas", () => {
+    const rngSeed = 0xc0ffee; // fixed: a failure is reproducible from this constant
+    const rng = mulberry32(rngSeed);
+    const strategy = Related.fieldMappingStrategy(propertyRelationships);
+    const engine = Related.makeJoinEngine(strategy);
+    const truth = emptyGroundTruth();
+    let lastResult: ReadonlyArray<Related.RelatedRow> = [];
+
+    const primeAdded = (collections: ReadonlyArray<string>) => {
+      for (const collection of collections) {
+        const rows = [...truth[collection as "people" | "comments" | "tags"].values()];
+        const { result } = engine.applyForeign(collection, rows);
+        if (result !== undefined) lastResult = result;
+      }
+    };
+
+    for (let step = 0; step < 400; step++) {
+      const op = randomOp(rng, truth);
+      applyOp(truth, op);
+
+      if (op._tag === "putIssue" || op._tag === "deleteIssue") {
+        const { added, removed, result } = engine.applyBase([...truth.issues.values()]);
+        expect(removed).toEqual([]); // this strategy's target set is static
+        if (result !== undefined) lastResult = result;
+        primeAdded(added);
+      } else {
+        const { result } = engine.applyForeign(op.collection, [...truth[op.collection].values()]);
+        if (result !== undefined) lastResult = result;
+      }
+
+      const expected = Related.hydrateFromScratch(
+        strategy,
+        [...truth.issues.values()],
+        foreignRowsOf(truth)
+      );
+      expect(
+        sameJoinUnordered(lastResult, expected),
+        `step ${step} (seed ${rngSeed}) diverged from from-scratch hydrate:\n` +
+          `op: ${JSON.stringify(op)}\n` +
+          `actual:   ${JSON.stringify(lastResult)}\n` +
+          `expected: ${JSON.stringify(expected)}`
+      ).toBe(true);
+    }
+  });
+});
