@@ -87,11 +87,11 @@ const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: n
 const todos = Subset.make({ collection: "todos" });
 const settle = Effect.sleep(Duration.millis(50));
 
-const collect = <A>(stream: Stream.Stream<A>) =>
+const collect = <A, E>(stream: Stream.Stream<A, E>) =>
   Effect.gen(function* () {
     const batches = yield* Ref.make<Array<A>>([]);
     yield* Effect.forkScoped(
-      Stream.runForEach(stream, (b) => Ref.update(batches, (a) => [...a, b]))
+      Stream.runForEach(stream, (b) => Ref.update(batches, (a) => [...a, b])).pipe(Effect.ignore)
     );
     return batches;
   });
