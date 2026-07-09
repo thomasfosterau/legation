@@ -208,6 +208,9 @@ const switchingView = (
         ),
       mutate: (mutator, args) => withCurrent((view) => view.mutate(mutator, args)),
       mutateWithAck: (mutator, args) => withCurrent((view) => view.mutateWithAck(mutator, args)),
+      mutationStates: SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) => view.mutationStates)
+      ),
     };
   });
 

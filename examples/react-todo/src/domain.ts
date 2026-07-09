@@ -11,7 +11,8 @@
  */
 
 import { Schema } from "effect";
-import { Collection, Mutator, Subset } from "@legation/effect";
+import { Collection, Mutator } from "@legation/effect";
+import { Subset } from "@legation/effect/internal";
 
 /** A todo row. Same schema drives the collection, the mutator args, and the UI. */
 export const Todo = Schema.Struct({

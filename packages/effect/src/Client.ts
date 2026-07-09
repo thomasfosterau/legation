@@ -37,6 +37,7 @@ import * as RpcTransport from "./RpcTransport.js";
 import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
 import type * as Mutator from "./Mutator.js";
+import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
 import type * as QueryModule from "./Query.js";
@@ -75,6 +76,13 @@ export interface Client {
     mutation: string,
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, ClientView.ClientViewError>;
+  /**
+   * The keyed mutation-state map (#116) — TanStack Query's
+   * `useMutationState` analogue: every journaled mutation's current
+   * lifecycle state, current value now then every fold. Works identically
+   * over an owned engine and a connected host (ADR-0021).
+   */
+  readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /**
    * The underlying view — the escape hatch while the ADR-0022 program
    * lands (named-query registration, bindings plumbing).
@@ -209,6 +217,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     unsubscribe: (read) => release(Query.plan(nodes, read).root, "explicit"),
     mutate: (mutation, args) => view.mutate(mutation, args),
     mutateWithAck: (mutation, args) => view.mutateWithAck(mutation, args),
+    mutationStates: view.mutationStates,
     view,
   };
 };

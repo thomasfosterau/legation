@@ -32,9 +32,10 @@
 import * as ClientEngine from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import { TransportError } from "./Errors.js";
+import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
-import { Clock, Duration, Effect, Fiber, Ref, Scope, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -101,6 +102,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       channel.post(MirrorProtocol.mirrorUpdate(key, rows));
     const broadcastRelated = (key: string, rows: ReadonlyArray<Related.RelatedRow>) =>
       channel.post(MirrorProtocol.relatedUpdate(key, rows));
+    const broadcastMutationStates = (states: MutationState.MutationStateMap) =>
+      channel.post(MirrorProtocol.mutationStatesUpdate(states));
+    // A one-shot snapshot of the engine's mutation-state map: `mutationStates`
+    // is built over `SubscriptionRef.changes`, which replays the current value
+    // to a fresh subscriber, so its first emission IS the current snapshot.
+    const currentMutationStates: Effect.Effect<MutationState.MutationStateMap> = Stream.runHead(
+      engine.mutationStates
+    ).pipe(Effect.map(Option.getOrElse(() => HashMap.empty())));
 
     /**
      * Register (or refcount) one broadcastable registration. `start` begins
@@ -237,6 +246,28 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       );
     };
 
+    // The mutation-state map (#116): a singleton registration (unlike
+    // subsets/named queries, there is exactly one per engine), so it acquires
+    // under the fixed `MUTATION_STATES_KEY` — refcounted across mirrors the
+    // same way a subset subscription is.
+    const handleSubscribeMutationStates = (mirrorId: string) =>
+      acquire(
+        mirrorId,
+        MirrorProtocol.MUTATION_STATES_KEY,
+        Effect.succeed({
+          // `mutationStates` emits the current map first, hydrating the
+          // subscriber, then again on every fold.
+          loop: Stream.runForEach(engine.mutationStates, broadcastMutationStates).pipe(
+            Effect.asVoid
+          ),
+          teardown: Effect.void,
+          hydrate: currentMutationStates.pipe(
+            Effect.flatMap(broadcastMutationStates),
+            Effect.ignore
+          ),
+        })
+      );
+
     // The server-fallthrough read (ADR-0025): the host owns the transport, so
     // it performs the read and answers point-in-time. Nothing is registered
     // and nothing enters the store — errors travel back as the result.
@@ -351,6 +382,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
           );
         case "Read":
           return handleRead(message.requestId, message.subsets);
+        case "SubscribeMutationStates":
+          return touch(message.mirrorId).pipe(
+            Effect.andThen(handleSubscribeMutationStates(message.mirrorId))
+          );
+        case "UnsubscribeMutationStates":
+          return touch(message.mirrorId).pipe(
+            Effect.andThen(release(message.mirrorId, MirrorProtocol.MUTATION_STATES_KEY))
+          );
         case "Disconnect":
           return handleDisconnect(message.mirrorId);
         case "Heartbeat":

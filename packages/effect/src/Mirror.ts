@@ -14,6 +14,7 @@ import type * as ClientEngine from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import { MutatorError, TransportError } from "./Errors.js";
 import type * as Mutator from "./Mutator.js";
+import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import * as Telemetry from "./Telemetry.js";
@@ -21,6 +22,7 @@ import {
   Deferred,
   type Duration,
   Effect,
+  HashMap,
   Metric,
   Option,
   PubSub,
@@ -143,6 +145,13 @@ export interface Mirror {
   ) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
   /** Emits the current rows now and on every mirror update for the subset. */
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /**
+   * The host engine's keyed mutation-state map (#116), mirrored so every tab
+   * sees the same states the host holds. Registers interest with the host for
+   * the stream's lifetime (refcounted like `observe`); emits the current map
+   * now and on every host-side fold.
+   */
+  readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /** Emits the named query's current rows now and on every mirror update. */
   readonly observeNamed: (
     name: string,
@@ -256,6 +265,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Resolved relational rows, keyed by the host's related key. Kept apart
     // from `rows` because the row shape differs (base value + resolved names).
     const relatedRows = yield* Ref.make(new Map<string, ReadonlyArray<Related.RelatedRow>>());
+    // The mirrored mutation-state map (#116), kept apart from `rows` because
+    // it is a singleton (one map, not one per subset/named-query key) whose
+    // shape differs from `LocalRow`.
+    const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -381,6 +394,16 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                     }))
                   )
                 ).pipe(Effect.andThen(publishKey(message.key)));
+              case "MutationStatesUpdate":
+                return Ref.set(
+                  mutationStatesRow,
+                  HashMap.fromIterable(
+                    message.states.map((state): readonly [number, MutationState.MutationState] => [
+                      state.mutationId,
+                      state,
+                    ])
+                  )
+                ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)));
               case "MutateAck":
                 return resolveIn(pending, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, undefined)
@@ -423,6 +446,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     const readKey = (key: string) => Ref.get(rows).pipe(Effect.map((map) => map.get(key) ?? []));
     const readRelated = (key: string) =>
       Ref.get(relatedRows).pipe(Effect.map((map) => map.get(key) ?? []));
+    const readMutationStates = Ref.get(mutationStatesRow);
 
     // Validate + encode args against the shared registry (fail fast in the mirror;
     // the host re-validates by decoding), then forward as a `Mutate` message and
@@ -578,6 +602,19 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           ).pipe(Effect.as(observeKey(key, readKey(key))))
         );
       },
+      mutationStates: Stream.unwrap(
+        Effect.acquireRelease(
+          acquireInterest(
+            MirrorProtocol.MUTATION_STATES_KEY,
+            {
+              subscribe: { _tag: "SubscribeMutationStates", mirrorId },
+              unsubscribe: { _tag: "UnsubscribeMutationStates", mirrorId },
+            },
+            "observer"
+          ),
+          () => releaseInterest(MirrorProtocol.MUTATION_STATES_KEY, "observer")
+        ).pipe(Effect.as(observeKey(MirrorProtocol.MUTATION_STATES_KEY, readMutationStates)))
+      ),
       related: (_registry, collectionName, subset, edgeInputs) =>
         Effect.gen(function* () {
           const edges = edgeInputs.map(Related.edgeSelect);

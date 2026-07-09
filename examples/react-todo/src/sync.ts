@@ -11,32 +11,27 @@
  *   optimistic overlay + journal                        + InvalidationBus (poke)
  *
  * It exposes two things to the React layer:
- *   - `runtime` — a `ManagedRuntime` providing the built `ClientEngine`, handed
- *     to `<EffectSyncProvider>` so `useQuery` / `useMutation` work;
- *   - `controls` — the demo side-channel (offline toggle, "remote edit", the
- *     durable journal, connection status) that the engine's read/write API
- *     doesn't cover.
+ *   - `atoms` — the engine's reactive surface (`EngineAtoms.fromLayer`), handed
+ *     to `<EffectSyncProvider>` so `useQuery` / `useMutation` / `useMutationState`
+ *     work — including the journal panel (#116), which reads
+ *     `useMutationState()` directly instead of a bespoke introspection wire;
+ *   - `controls` — the demo side-channel (offline toggle, "remote edit",
+ *     connection status) that the engine's read/write API doesn't cover.
  */
 
-import { Effect, Fiber, Layer, ManagedRuntime, Schema, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, Layer, Schema, Stream, SubscriptionRef } from "effect";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
-  ClientEngine,
   ClientStore,
-  Cvr,
-  InvalidationBus,
-  Introspection,
   MemoryBackend,
   Mutator,
-  type Protocol,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "@legation/react";
+import { ClientEngine, Cvr, EngineAtoms, InvalidationBus, SyncServer } from "@legation/effect/internal";
 
 import {
   CLIENT_GROUP_ID,
@@ -47,12 +42,6 @@ import {
   removeTodo,
   setTodo,
 } from "./domain";
-
-/** One unconfirmed journal entry, summarised for display. */
-export interface PendingEntry {
-  readonly mutationId: number;
-  readonly summary: string;
-}
 
 /** Transport connection status, as the UI labels it. */
 export type Connection = Transport.ConnectionStatus;
@@ -65,22 +54,13 @@ export interface DemoControls {
   readonly syncNow: () => Promise<void>;
   /** Apply an authoritative write as a second client, then poke. */
   readonly simulateRemote: () => Promise<void>;
-  /**
-   * Subscribe to the pending journal via `EngineIntrospection` (#45): the
-   * listener fires now and again on every engine lifecycle event (journal,
-   * push, pull, poke, rebuild), so the panel reflects push acks that trim the
-   * journal without polling. Returns an unsubscribe.
-   */
-  readonly subscribeJournal: (
-    listener: (entries: ReadonlyArray<PendingEntry>) => void
-  ) => () => void;
   /** Subscribe to connection status; returns an unsubscribe. Emits now + on change. */
   readonly subscribeConnection: (listener: (status: Connection) => void) => () => void;
 }
 
-/** What `createWorld` resolves to: the engine runtime + the demo controls. */
+/** What `createWorld` resolves to: the engine's reactive surface + the demo controls. */
 export interface World {
-  readonly runtime: EffectSyncRuntime;
+  readonly atoms: EngineAtoms.EngineAtoms;
   readonly controls: DemoControls;
 }
 
@@ -146,11 +126,6 @@ const makeOfflineTransport = (
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
-const summarise = (mutation: Protocol.Mutation): string =>
-  mutation.mutator === "todo/set"
-    ? `set "${(mutation.args as Todo).title}"`
-    : `remove ${(mutation.args as RemoveArgs).id}`;
-
 /** Seed the in-memory backend so a fresh page always has something to sync. */
 const seedBackend = (backend: Backend.Backend, bus: InvalidationBus.InvalidationBus) =>
   Effect.gen(function* () {
@@ -209,6 +184,11 @@ export const createWorld = (): Promise<World> =>
         clientId: CLIENT_ID,
         clientGroupId: CLIENT_GROUP_ID,
         mutators: clientMutators,
+        // A small terminal-retention bound (#116) so the journal panel visibly
+        // demonstrates bounded retention: a handful of recently-settled
+        // mutations stay visible, older ones drop off (the journal itself,
+        // not this map, is the durable record).
+        mutationStateRetention: { maxTerminal: 5 },
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, store),
         Effect.provideService(Transport.ClientTransport, transport)
@@ -219,25 +199,11 @@ export const createWorld = (): Promise<World> =>
       // journal left over from a previous offline session and hydrates.
       yield* engine.runSync;
 
-      // Read-only introspection over the engine + store (#45): the demo journal
-      // panel is driven by `journal` + `events`, not by polling the store.
-      const introspection = Introspection.make(engine, store);
-      const journalEntries: Effect.Effect<ReadonlyArray<PendingEntry>> = introspection.journal.pipe(
-        Effect.map((mutations) =>
-          mutations.map((mutation) => ({
-            mutationId: mutation.mutationId,
-            summary: summarise(mutation),
-          }))
-        ),
-        Effect.catch(() => Effect.succeed<ReadonlyArray<PendingEntry>>([]))
-      );
-
-      // The React bindings drive observe/mutate through a runtime providing the
-      // engine we just built; its scope (and the forked sync loop) stays alive
-      // because this program ends in `Effect.never`.
-      const runtime: EffectSyncRuntime = ManagedRuntime.make(
-        Layer.succeed(ClientEngine.ClientEngine, engine)
-      );
+      // The engine's reactive surface: `useQuery`/`useMutation`/`useMutationState`
+      // all read/write through this over `<EffectSyncProvider>`. Its scope (and
+      // the forked sync loop) stays alive because this program ends in
+      // `Effect.never`.
+      const atoms = EngineAtoms.fromLayer(Layer.succeed(ClientEngine.ClientEngine, engine));
 
       // Authoritative writes from a "remote" client share the backend; their
       // mutation ids must stay gap-free per client.
@@ -247,18 +213,6 @@ export const createWorld = (): Promise<World> =>
         setOnline: (next) => Effect.runPromise(SubscriptionRef.set(online, next)),
         syncNow: () =>
           Effect.runPromise(engine.push.pipe(Effect.andThen(engine.pull), Effect.ignore)),
-        subscribeJournal: (listener) => {
-          const emit = () => void Effect.runPromise(journalEntries).then(listener);
-          // Emit the current journal immediately so first paint is correct.
-          emit();
-          // Then refresh on every engine lifecycle event (push acks trim it).
-          const fiber = Effect.runFork(
-            Stream.runForEach(introspection.events, () => Effect.sync(emit))
-          );
-          return () => {
-            Effect.runFork(Fiber.interrupt(fiber));
-          };
-        },
         simulateRemote: () =>
           Effect.runPromise(
             Effect.gen(function* () {
@@ -298,7 +252,7 @@ export const createWorld = (): Promise<World> =>
         },
       };
 
-      yield* Effect.sync(() => resolve({ runtime, controls }));
+      yield* Effect.sync(() => resolve({ atoms, controls }));
       // Keep the scope open forever so the forked sync/fan-out fibers live on.
       yield* Effect.never;
     });
