@@ -3,12 +3,16 @@
    * Categories — categories with live product counts, and a create form.
    */
   import { getActions } from "../actions";
-  import { getData, toCategoryCounts } from "../data";
+  import { getData } from "../data";
 
   const actions = getActions();
-  const { categories, products } = getData();
+  // `categoryCounts` is a `Derive` join over categories and products-grouped-
+  // by-category, maintained incrementally by the engine; sort by name for display.
+  const { categoryCounts } = getData();
 
-  const rows = $derived(toCategoryCounts($categories, $products));
+  const rows = $derived(
+    [...$categoryCounts].sort((a, b) => a.category.name.localeCompare(b.category.name))
+  );
 
   let name = $state("");
   let description = $state("");

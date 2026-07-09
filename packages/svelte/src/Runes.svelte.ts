@@ -24,10 +24,10 @@
  * from context ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
-import { Effect, Stream } from "effect";
+import { Effect, HashMap, Stream } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Aggregate, Client, Query } from "@legation/effect";
-import { ClientEngine } from "@legation/effect/internal";
+import { ClientEngine, type MutationState } from "@legation/effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
@@ -313,3 +313,31 @@ export const useMutationWithAck = (): ((
       Effect.flatMap(Client.Client, (client) => client.mutateWithAck(mutation, args))
     );
 };
+
+/**
+ * Reactive mutation-state list (#116) — TanStack Query's `useMutationState`
+ * analogue: every journaled mutation's current lifecycle state (`pending` →
+ * `acknowledged` | `rejected`), oldest-journaled first. Pass a `mutator`
+ * thunk to scope to one mutator (reactive, like {@link useQuery}'s `read`);
+ * omit it (or return `undefined`) for every mutation. Works identically over
+ * an owned engine and a connected host (ADR-0021) — the same states either
+ * way.
+ */
+export const useMutationState = (
+  mutator?: () => string | undefined
+): Live<ReadonlyArray<MutationState.MutationState>> =>
+  live(
+    getClientRuntime(),
+    () => {
+      const scope = mutator?.();
+      return (client) =>
+        client.mutationStates.pipe(
+          Stream.map((states) =>
+            [...HashMap.values(states)]
+              .filter((state) => scope === undefined || state.mutator === scope)
+              .toSorted((a, b) => a.mutationId - b.mutationId)
+          )
+        );
+    },
+    { initial: [] }
+  );

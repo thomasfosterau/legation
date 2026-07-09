@@ -28,7 +28,9 @@ import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import { TransportError } from "./Errors.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
+import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
+import type { RowChange } from "./RowChange.js";
 import type * as Subset from "./Subset.js";
 
 /**
@@ -48,6 +50,16 @@ export interface ClientView {
   readonly observe: (
     subset: Subset.Subset
   ) => Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
+  /**
+   * Row-level deltas of a subset's live window (#115) — see
+   * {@link ClientEngineModule.ClientEngine.observeChanges}. Satisfied
+   * structurally by `Mirror` (ADR-0021's one-surface principle), which folds
+   * its own page-diffing over the keyed row broadcasts it already receives.
+   */
+  readonly observeChanges: (
+    subset: Subset.Subset,
+    options?: ClientEngineModule.ObserveChangesOptions
+  ) => Stream.Stream<ReadonlyArray<RowChange<LocalRow>>, ClientViewError>;
   /** Register/release a subscription (synced by the engine host). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
@@ -95,6 +107,12 @@ export interface ClientView {
     mutator: string,
     args: unknown
   ) => Effect.Effect<MutationOutcome, ClientViewError>;
+  /**
+   * The keyed mutation-state map (#116): current value now, then every fold.
+   * A main-thread engine emits its own {@link ClientEngineModule.ClientEngine.mutationStates};
+   * a mirror mirrors the host's — the same states either way (ADR-0021).
+   */
+  readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
 }
 
 /** The read half of a {@link ClientView} — what a local join needs. */
@@ -106,6 +124,7 @@ export const ClientView = Context.Service<ClientView>("@legation/effect/ClientVi
 export const fromEngine = (engine: ClientEngine): ClientView => ({
   query: (subset) => engine.query(subset),
   observe: (subset) => engine.observe(subset),
+  observeChanges: (subset, options) => engine.observeChanges(subset, options),
   subscribe: (subset) => engine.subscribe(subset),
   unsubscribe: (subset) => engine.unsubscribe(subset),
   subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
@@ -129,6 +148,7 @@ export const fromEngine = (engine: ClientEngine): ClientView => ({
   mutate: (mutator, args) => engine.mutate(mutator, args),
   mutateWithAck: (mutator, args) =>
     engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),
+  mutationStates: engine.mutationStates,
 });
 
 /**

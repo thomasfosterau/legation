@@ -87,4 +87,97 @@ describe("LiveView", () => {
     const view = LiveView.make(afterA, [row("a", 1), row("b", 2), row("c", 3)]);
     expect(ids(LiveView.result(view))).toEqual(["b", "c"]);
   });
+
+  describe("no orderBy", () => {
+    const unordered = Subset.make({ collection: "items" });
+
+    it("falls back to id order as a total order (no ties)", () => {
+      const view = LiveView.make(unordered, [row("c", 0), row("a", 0), row("b", 0)]);
+      expect(ids(LiveView.result(view))).toEqual(["a", "b", "c"]);
+    });
+
+    it("locates and deletes a row without a full scan degrading to wrong results", () => {
+      let view = LiveView.make(unordered, [row("a", 0), row("b", 0), row("c", 0), row("d", 0)]);
+      view = LiveView.del(view, "b");
+      expect(ids(LiveView.result(view))).toEqual(["a", "c", "d"]);
+      view = LiveView.put(view, row("e", 0));
+      expect(ids(LiveView.result(view))).toEqual(["a", "c", "d", "e"]);
+    });
+  });
+
+  describe("positions", () => {
+    it("assigns every in-window row a stable position key on the initial snapshot", () => {
+      const view = LiveView.make(top2, [row("a", 1), row("b", 2), row("c", 3)]);
+      const rows = LiveView.result(view);
+      expect(rows.map((r) => r.position).every((p) => typeof p === "string" && p.length > 0)).toBe(
+        true
+      );
+      // Positions sort the same way the rows are already sorted.
+      expect(rows[0]!.position < rows[1]!.position).toBe(true);
+    });
+
+    it("keeps an unmoved row's position across an unrelated delta", () => {
+      const view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);
+      const before = LiveView.result(view).find((r) => r.id === "a")!.position;
+      // Updating "c" (elsewhere in the order) doesn't touch "a"'s neighbors.
+      const after = LiveView.put(view, row("c", 30));
+      const afterPosition = LiveView.result(after).find((r) => r.id === "a")!.position;
+      expect(afterPosition).toBe(before);
+    });
+
+    it("assigns a fresh position to a row entering the window and drops it on exit", () => {
+      let view = LiveView.make(top2, [row("a", 1), row("c", 3)]);
+      expect(LiveView.result(view).map((r) => r.id)).toEqual(["a", "c"]);
+
+      // "b" enters the window, pushing "c" out.
+      view = LiveView.put(view, row("b", 2));
+      const rows = LiveView.result(view);
+      expect(rows.map((r) => r.id)).toEqual(["a", "b"]);
+      expect(view.positions.has("c")).toBe(false); // left the window: no stale position kept
+      expect(rows.every((r) => typeof r.position === "string")).toBe(true);
+    });
+
+    it("reassigns a moved row's position between its new neighbors", () => {
+      let view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);
+      const aBefore = LiveView.result(view).find((r) => r.id === "a")!.position;
+      view = LiveView.put(view, row("a", 2.5)); // "a" moves between "b" and "c"
+      const rows = LiveView.result(view);
+      expect(rows.map((r) => r.id)).toEqual(["b", "a", "c"]);
+      const aAfter = rows.find((r) => r.id === "a")!.position;
+      const bPos = rows.find((r) => r.id === "b")!.position;
+      const cPos = rows.find((r) => r.id === "c")!.position;
+      expect(aAfter).not.toBe(aBefore);
+      expect(bPos < aAfter && aAfter < cPos).toBe(true);
+    });
+  });
+
+  describe("retarget", () => {
+    it("widens the limit over the same maintained order (no re-materialization)", () => {
+      const view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3), row("d", 4)]);
+      const first2 = LiveView.retarget(view, { limit: 2 });
+      expect(ids(LiveView.result(first2))).toEqual(["a", "b"]);
+
+      const first3 = LiveView.retarget(first2, { limit: 3 });
+      expect(ids(LiveView.result(first3))).toEqual(["a", "b", "c"]);
+      // Same underlying tree/index — retargeting never rebuilds them.
+      expect(first3.order).toBe(view.order);
+      expect(first3.byId).toBe(view.byId);
+      // Rows that stayed in the window keep their positions.
+      expect(first3.positions.get("a")).toBe(first2.positions.get("a"));
+      expect(first3.positions.get("b")).toBe(first2.positions.get("b"));
+    });
+
+    it("advances via cursor over the same maintained order", () => {
+      const view = LiveView.make(top2, [row("a", 1), row("b", 2), row("c", 3), row("d", 4)]);
+      expect(ids(LiveView.result(view))).toEqual(["a", "b"]);
+      const next = LiveView.retarget(view, { cursor: "b" });
+      expect(ids(LiveView.result(next))).toEqual(["c", "d"]);
+      expect(next.order).toBe(view.order);
+    });
+
+    it("is a same-reference no-op when neither limit nor cursor changes", () => {
+      const view = LiveView.make(top2, [row("a", 1), row("b", 2)]);
+      expect(LiveView.retarget(view, { limit: 2 })).toBe(view);
+    });
+  });
 });

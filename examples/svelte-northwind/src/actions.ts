@@ -6,7 +6,7 @@
  * authoritatively (the read-merge mutators look the row up first). Northwind has
  * no auth, so these are unbound and need no session.
  */
-import { getMutate } from "@legation/svelte";
+import { Mutation } from "@legation/svelte";
 import type { Product, ProductPatchType } from "./domain";
 
 export interface Actions {
@@ -18,7 +18,7 @@ export interface Actions {
 }
 
 export const getActions = (): Actions => {
-  const mutate = getMutate();
+  const mutate = Mutation.getMutate();
   return {
     updateProduct: (patch) => mutate("product/update", patch),
     createProduct: (product) => mutate("product/create", product),

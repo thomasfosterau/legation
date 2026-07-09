@@ -247,3 +247,19 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--muted);
 }
+.journal-phase {
+  display: inline-block;
+  min-width: 74px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.journal-phase-pending {
+  color: var(--warn);
+}
+.journal-phase-acknowledged {
+  color: var(--ok);
+}
+.journal-phase-rejected {
+  color: var(--danger);
+}

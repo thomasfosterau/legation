@@ -18,19 +18,21 @@ import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,
   Backend,
-  ClientEngine,
-  ClientView,
   ClientStore,
-  Cvr,
-  InvalidationBus,
   MemoryBackend,
   Mutator,
-  SyncServer,
   Transport,
   TransportError,
   type VersionNotSupportedError,
 } from "@legation/effect";
-import type { EffectSyncRuntime } from "@legation/svelte";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  InvalidationBus,
+  SyncServer,
+} from "@legation/effect/internal";
+import { Runtime } from "@legation/svelte";
 
 import {
   CLIENT_GROUP_ID,
@@ -58,7 +60,7 @@ import {
 import * as seed from "./seed";
 
 export interface World {
-  readonly runtime: EffectSyncRuntime;
+  readonly runtime: Runtime.EffectSyncRuntime;
   readonly setOnline: (online: boolean) => Promise<void>;
   readonly subscribeConnection: (
     listener: (status: Transport.ConnectionStatus) => void
@@ -224,7 +226,7 @@ export const createWorld = (): Promise<World> =>
       for (const subset of allSubsets) yield* engine.subscribe(subset);
       yield* engine.runSync;
 
-      const runtime: EffectSyncRuntime = ManagedRuntime.make(
+      const runtime: Runtime.EffectSyncRuntime = ManagedRuntime.make(
         Layer.succeed(ClientEngine.ClientEngine, engine).pipe(
           Layer.merge(Layer.succeed(ClientView.ClientView)(ClientView.fromEngine(engine)))
         )

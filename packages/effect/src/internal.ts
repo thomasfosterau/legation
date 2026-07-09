@@ -13,6 +13,7 @@
 export * as Subset from "./Subset.js";
 export * as Related from "./Related.js";
 export * as Hash from "./Hash.js";
+export * as CollectionIndex from "./CollectionIndex.js";
 
 // ─── Protocol ────────────────────────────────────────────────────────────────
 export * as Protocol from "./Protocol.js";
@@ -22,10 +23,17 @@ export * as SpecExport from "./SpecExport.js";
 // ─── Engine ──────────────────────────────────────────────────────────────────
 export * as ClientEngine from "./ClientEngine.js";
 export * as ClientView from "./ClientView.js";
+export * as RowChange from "./RowChange.js";
 export * as Undo from "./Undo.js";
+export * as Paced from "./Paced.js";
 export * as Introspection from "./Introspection.js";
+export * as MutationState from "./MutationState.js";
 export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
+export * as Incremental from "./Incremental.js";
+export * as Derive from "./Derive.js";
+export * as OrderedTree from "./OrderedTree.js";
+export * as FractionalIndex from "./FractionalIndex.js";
 export * as Subscriptions from "./Subscriptions.js";
 export * as LiveQuery from "./LiveQuery.js";
 export * as EngineAtoms from "./EngineAtoms.js";

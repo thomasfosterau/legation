@@ -2,10 +2,14 @@
   /**
    * Customers — directory table with live order counts (a join).
    */
-  import { getData, toCustomerCounts } from "../data";
+  import { getData } from "../data";
 
-  const { customers, orders } = getData();
-  const rows = $derived(toCustomerCounts($customers, $orders));
+  // `customerCounts` is a `Derive` join over customers and orders-grouped-by-
+  // customer, maintained incrementally by the engine; sort by company for display.
+  const { customerCounts } = getData();
+  const rows = $derived(
+    [...$customerCounts].sort((a, b) => a.customer.company.localeCompare(b.customer.company))
+  );
 </script>
 
 <table>

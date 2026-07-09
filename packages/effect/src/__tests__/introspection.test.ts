@@ -115,10 +115,15 @@ describe("EngineIntrospection (#45)", () => {
       yield* engine.pull;
 
       const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
+      // No `ViewRebuilt` after `MutationJournaled` (#109): a mutate now
+      // publishes a delta `Patch` onto the cached overlay rather than a
+      // `Rebuild`, so it never emits `ViewRebuilt` at all.
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
-        "ViewRebuilt",
         "PushStarted",
+        // #116: every journaled mutation now settles (not just `mutateWithAck`
+        // ones), so a plain `mutate` also reports `MutationAcknowledged`.
+        "MutationAcknowledged",
         "ViewRebuilt",
         "PushCompleted",
         "PullStarted",

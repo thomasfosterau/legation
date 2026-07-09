@@ -90,6 +90,36 @@ describe("ClientStore.makeKeyValue", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
+  it.effect("dropPending removes specific unpushed entries, unlike acknowledge's <= upTo", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeKeyValue();
+      yield* store.appendMutation(mutation(1));
+      yield* store.appendMutation(mutation(2));
+      yield* store.appendMutation(mutation(3));
+      yield* store.appendMutation({ ...mutation(1), clientId: "c2" });
+
+      // Drop the middle entry only — a non-prefix id set `acknowledge` can't express.
+      yield* store.dropPending("c1", [2]);
+      const pending = yield* store.pendingMutations;
+      expect(pending.map((m) => [m.clientId, m.mutationId])).toEqual([
+        ["c1", 1],
+        ["c1", 3],
+        ["c2", 1],
+      ]);
+
+      // Ids already gone (or never pending) are silently skipped, not an error.
+      yield* store.dropPending("c1", [2, 999]);
+      expect(yield* store.pendingMutations).toHaveLength(3);
+
+      // A fresh store over the same KVS sees the drop persisted, not just the
+      // in-memory index — same rehydration guarantee as `acknowledge`.
+      const rehydrated = yield* ClientStoreModule.makeKeyValue();
+      expect((yield* rehydrated.pendingMutations).map((m) => m.mutationId).toSorted()).toEqual([
+        1, 1, 3,
+      ]);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
   it.effect("prefixes isolate two stores sharing one KVS", () =>
     Effect.gen(function* () {
       const a = yield* ClientStoreModule.makeKeyValue({ prefix: "a/" });

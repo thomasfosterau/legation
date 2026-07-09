@@ -149,7 +149,13 @@ export const exists = (options: {
 
 // ─── Evaluation ──────────────────────────────────────────────────────────────
 
-const fieldValue = (row: unknown, field: string): unknown =>
+/**
+ * Top-level field access on a row value: `undefined` for a non-object row or
+ * an absent field, distinct from an explicit `null`. Exported so accelerated
+ * evaluators (`Index.ts`) read fields with exactly this semantics — the
+ * single source of truth `test` also uses.
+ */
+export const fieldValue = (row: unknown, field: string): unknown =>
   typeof row === "object" && row !== null ? (row as Record<string, unknown>)[field] : undefined;
 
 const compareValues = (op: Comparison, left: unknown, right: Literal): boolean => {

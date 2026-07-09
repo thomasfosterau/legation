@@ -37,6 +37,7 @@ import * as RpcTransport from "./RpcTransport.js";
 import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
 import type * as Mutator from "./Mutator.js";
+import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
 import type * as QueryModule from "./Query.js";
@@ -75,6 +76,13 @@ export interface Client {
     mutation: string,
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, ClientView.ClientViewError>;
+  /**
+   * The keyed mutation-state map (#116) — TanStack Query's
+   * `useMutationState` analogue: every journaled mutation's current
+   * lifecycle state, current value now then every fold. Works identically
+   * over an owned engine and a connected host (ADR-0021).
+   */
+  readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /**
    * The underlying view — the escape hatch while the ADR-0022 program
    * lands (named-query registration, bindings plumbing).
@@ -209,6 +217,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     unsubscribe: (read) => release(Query.plan(nodes, read).root, "explicit"),
     mutate: (mutation, args) => view.mutate(mutation, args),
     mutateWithAck: (mutation, args) => view.mutateWithAck(mutation, args),
+    mutationStates: view.mutationStates,
     view,
   };
 };
@@ -252,11 +261,30 @@ export interface MakeOptions {
   readonly queries?: QueryModule.QueryRegistry;
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /**
+   * Auto-discover indexable fields from registered subsets and index them
+   * (issue #113), in addition to any `indexes` a Node/Collection declares.
+   * Defaults to `false`: zero-config behaviour is identical to no indexing.
+   */
+  readonly autoIndex?: boolean;
+  /**
    * Start the sync loop automatically. Defaults to `true` with a
    * transport, `false` when the Client defaulted to offline.
    */
   readonly sync?: boolean;
 }
+
+/** The `indexes` declared on each of `nodes`' collections, by collection name. */
+const declaredIndexes = (
+  nodes: Node.NodeRegistry
+): Readonly<Record<string, ReadonlyArray<string>>> => {
+  const indexes: Record<string, ReadonlyArray<string>> = {};
+  for (const [name, collection] of nodes.collections) {
+    if (collection.indexes !== undefined && collection.indexes.length > 0) {
+      indexes[name] = collection.indexes;
+    }
+  }
+  return indexes;
+};
 
 /**
  * A Client that owns the engine in this thread. Zero wiring works:
@@ -285,12 +313,15 @@ export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.S
     // unless the caller insists.
     const sync = options.sync ?? (configured ?? contextual) !== undefined;
 
+    const indexes = declaredIndexes(options.nodes);
     const engine = yield* ClientEngine.make({
       clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
       clientGroupId,
       mutators: options.mutations,
       ...(options.queries === undefined ? {} : { queries: options.queries }),
       ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
+      ...(Object.keys(indexes).length > 0 ? { indexes } : {}),
+      ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
