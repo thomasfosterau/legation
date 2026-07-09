@@ -28,6 +28,8 @@ export * as Paced from "./Paced.js";
 export * as Introspection from "./Introspection.js";
 export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
+export * as OrderedTree from "./OrderedTree.js";
+export * as FractionalIndex from "./FractionalIndex.js";
 export * as Subscriptions from "./Subscriptions.js";
 export * as LiveQuery from "./LiveQuery.js";
 export * as EngineAtoms from "./EngineAtoms.js";
