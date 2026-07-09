@@ -5,9 +5,13 @@
  * machinery (`backpressure.test.ts`, `incremental.test.ts`) so these tests
  * exercise the same three paths at the delta level:
  *
- * - an empty-journal pull applies a `Patch` → a diffed batch (enter/update/exit);
- * - a local mutation (or any overlay-shifting change) is a `Rebuild` → a
- *   `reset` marker + fresh `enter`s;
+ * - an empty-journal pull, or a plain local mutation (#109 tracks a
+ *   mutator's local handler directly onto the cached overlay and publishes
+ *   exactly what it did), applies a `Patch` → a diffed batch (enter/update/exit);
+ * - a pull that races a still-pending mutation — or any other change the
+ *   overlay could have shifted in a way that isn't tracked precisely (an
+ *   unknown mutator, a `Clear`) — is a `Rebuild` → a `reset` marker + fresh
+ *   `enter`s;
  * - a dropped change (bounded hub under pressure) collapses into a `Rebuild`
  *   too, so it also resets rather than silently losing a delta.
  *
@@ -28,13 +32,11 @@
  *   rather than guessing a fixed duration, since CI's scheduling variance
  *   makes a fixed sleep an unreliable proxy for "has this propagated yet".
  *
- * The Rebuild-path assertions fold whatever batches actually arrive
- * (`foldBatches`) rather than assuming exactly one: `ViewChange.Rebuild` is
- * documented as the conservative "the overlay could have shifted any row"
- * fallback, not a promise of one-mutation-one-batch, so the property under
- * test is "resets before re-entering, and the fold matches the engine's own
- * query" — robust to how many view-steps a given host/scheduler happens to
- * split the change into.
+ * `LiveView` rows also carry a stable `position` (fractional index, #112) at
+ * runtime that `LocalRow`'s public type doesn't expose; `stripPositions`
+ * drops it before comparing so these assertions track `observeChanges`'s
+ * actual typed contract, not an implementation detail of the maintained
+ * order underneath it.
  */
 import { describe, expect, it } from "vitest";
 import { Deferred, Effect, Ref, Schema, Stream } from "effect";
@@ -136,6 +138,28 @@ const foldBatches = (
   return folded;
 };
 
+/**
+ * `LiveView`-backed rows (#112) carry a stable `position` (fractional index)
+ * at runtime alongside `id`/`value`, which `LocalRow`'s public type doesn't
+ * expose. These tests assert on `id`/`value` only — `position` isn't part of
+ * `observeChanges`'s current contract (a natural follow-up now that stable
+ * positions exist, tracked separately from this feature).
+ */
+const idValue = (row: { readonly id: string; readonly value: unknown }) => ({
+  id: row.id,
+  value: row.value,
+});
+const stripPositions = (batch: ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>) =>
+  batch.map((change) =>
+    change._tag === "exit"
+      ? { ...change, previous: idValue(change.previous) }
+      : change._tag === "update"
+        ? { ...change, row: idValue(change.row), previous: idValue(change.previous) }
+        : change._tag === "enter"
+          ? { ...change, row: idValue(change.row) }
+          : change
+  );
+
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
   Effect.gen(function* () {
@@ -186,17 +210,17 @@ describe("ClientEngine.observeChanges", () => {
         yield* eventually(Ref.get(batches), (seen) => seen.length === 3);
 
         const seen = yield* Ref.get(batches);
-        expect(seen[0]).toEqual([
+        expect(stripPositions(seen[0]!)).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "first" } } },
         ]);
-        expect(seen[1]).toEqual([
+        expect(stripPositions(seen[1]!)).toEqual([
           {
             _tag: "update",
             row: { id: "1", value: { id: "1", title: "second" } },
             previous: { id: "1", value: { id: "1", title: "first" } },
           },
         ]);
-        expect(seen[2]).toEqual([
+        expect(stripPositions(seen[2]!)).toEqual([
           { _tag: "exit", id: "1", previous: { id: "1", value: { id: "1", title: "second" } } },
         ]);
       }).pipe(Effect.scoped)
@@ -228,7 +252,7 @@ describe("ClientEngine.observeChanges", () => {
     );
   }, 10000);
 
-  it("Rebuild path (a local mutation): a reset marker followed by fresh enters", async () => {
+  it("a local mutation produces a precise Patch enter (#109's delta-maintained overlay)", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const handler = yield* makeServer;
@@ -239,22 +263,56 @@ describe("ClientEngine.observeChanges", () => {
         expect(yield* Ref.get(batches)).toEqual([]);
 
         yield* engine.mutate("todo/set", { id: "1", title: "optimistic" });
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
 
-        // Tolerant of exactly how many view-steps the mutation is batched
-        // into (a Rebuild is the fallback for "the overlay could have shifted
-        // any row", not a promise of one-op-one-batch): the contract under
-        // test is that a Rebuild always resets before re-entering, and that
-        // folding whatever batches arrive reproduces the engine's own query.
-        yield* eventually(
-          Ref.get(batches).pipe(Effect.map((seen) => [...foldBatches(seen).keys()].toSorted())),
-          (ids) => ids.length === 1 && ids[0] === "1"
-        );
+        // #109 tracks a mutator's local handler directly onto the cached
+        // overlay and publishes exactly what it did as a Patch, rather than
+        // invalidating the cache and forcing a full Rebuild — so a plain
+        // mutate is a precise enter, the same shape a confirmed-row Patch
+        // from a pull would produce (see the Patch-path test above).
+        const seen = yield* Ref.get(batches);
+        expect(stripPositions(seen[0]!)).toEqual([
+          { _tag: "enter", row: { id: "1", value: { id: "1", title: "optimistic" } } },
+        ]);
+      }).pipe(Effect.scoped)
+    );
+  }, 10000);
+
+  it("Rebuild path (a pull racing a pending mutation): a reset marker followed by fresh enters", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const writer = yield* makeClient(handler, "writer2");
+        const reader = yield* makeClient(handler, "reader2");
+        yield* reader.subscribe(todos);
+
+        yield* writer.mutate("todo/set", { id: "1", title: "from-server" });
+        yield* writer.push;
+
+        const batches = yield* collect(reader.observeChanges(todos));
+        expect(yield* Ref.get(batches)).toEqual([]);
+
+        // A local, unpushed mutation leaves the reader with a pending
+        // journal entry — its own Patch enter is the first batch.
+        yield* reader.mutate("todo/set", { id: "2", title: "optimistic" });
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
+
+        // Pulling while a mutation is still pending can't be diffed
+        // precisely (rebase could shift any row the patch or the pending
+        // mutation touches), so `applyPull` falls back to a Rebuild scoped
+        // to the union — the conservative "the overlay could have shifted
+        // any row" fallback `observeChanges` documents.
+        yield* reader.pull;
+        yield* eventually(Ref.get(batches), (seen) => seen.length === 2);
 
         const seen = yield* Ref.get(batches);
-        expect(seen.length).toBeGreaterThan(0);
-        expect(seen.some((batch) => batch[0]?._tag === "reset")).toBe(true);
-        const folded = foldBatches(seen);
-        expect([...folded.entries()]).toEqual([["1", { id: "1", title: "optimistic" }]]);
+        expect(seen[1]?.[0]).toEqual({ _tag: "reset" });
+        const entered = new Set(
+          stripPositions(seen[1]!)
+            .slice(1)
+            .map((c) => (c._tag === "enter" ? c.row.id : undefined))
+        );
+        expect(entered).toEqual(new Set(["1", "2"])); // both the pulled row and the still-pending one
       }).pipe(Effect.scoped)
     );
   }, 10000);
@@ -295,6 +353,14 @@ describe("ClientEngine.observeChanges", () => {
           engine.mutate("todo/set", { id: `s${i + 1}`, title: `t${i + 1}` })
         );
         yield* Deferred.succeed(release, undefined);
+        // The dropped items vanish silently — `PubSub.dropping` never tells a
+        // stalled subscriber it missed anything, so without a change *after*
+        // the drain the consumer just sees its buffered backlog end on a
+        // contiguous seq and goes quiet, no gap ever revealed (matching
+        // backpressure.test.ts's engine-change-hub test, which mutates once
+        // more post-release for exactly this reason).
+        yield* settle;
+        yield* engine.mutate("todo/set", { id: "final", title: "final" });
 
         // A gap forces a reset; keep polling until the folded state matches
         // the engine's own query (more batches may still be draining).

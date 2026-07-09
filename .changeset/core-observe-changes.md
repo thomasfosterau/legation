@@ -1,5 +1,6 @@
 ---
 "@legation/effect": minor
+"@legation/browser": patch
 ---
 
 Add `observeChanges(subset, options?)`: a public row-level change feed
@@ -25,10 +26,21 @@ view-step:
 `LiveView` window `observe` already keeps (surfaced, not recomputed);
 `Mirror` — which has no local `LiveView` — diffs the whole-page updates its
 host already broadcasts, so both hosts emit identical batches for identical
-page transitions.
+page transitions. `@legation/browser`'s `ElectedHost` switches an observer
+onto whichever `ClientView` (mirror or owned engine) is currently active, so
+`observeChanges` works unchanged across a leader-election transition too.
 
-Move events (stable position keys across a maintained order) are out of
-scope until #112 lands; a consumer that needs ordering re-derives it from a
-paired `observe()` or the position of `enter`s within a batch. See
-`docs/observing-row-changes.md` for the framework-binding guide (a Svelte 5
-keyed-list example) and the `runOnChanges`-style side-effect pattern.
+A confirmed-row pull and a plain local mutation (#109's delta-maintained
+overlay tracks a mutator's local handler directly and publishes exactly what
+it did) both diff precisely; `Rebuild` is reserved for cases the overlay
+genuinely can't diff — a pull racing a still-pending mutation, an unknown
+mutator, a reset (`Clear`) patch — or a seq-gap collapse.
+
+Move events are not yet part of the contract: `LiveView` rows carry a stable
+position (#112) at runtime, but a row repositioned by a neighbor's
+insert/delete without its own value changing isn't distinguished from
+"unchanged" here — a consumer that needs order re-derives it from a paired
+`observe()` or the position of `enter`s within a batch, pending that
+follow-up. See `docs/observing-row-changes.md` for the framework-binding
+guide (a Svelte 5 keyed-list example) and the `runOnChanges`-style
+side-effect pattern.

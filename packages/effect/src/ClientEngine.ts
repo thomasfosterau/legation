@@ -476,16 +476,23 @@ export interface ClientEngine {
    * Row-level deltas of a subset's live window (#115): `enter`/`exit` mark
    * predicate/limit-boundary crossings, `update` a same-membership value
    * change — batched per view-step (one array per {@link ViewChange}
-   * application, mirroring `observe`'s one-page-per-step). `Rebuild`/seq-gap
-   * collapse emit a `reset` marker + fresh `enter`s instead of a diff, since
-   * the overlay could have shifted any row (the same conservative fallback
-   * `observe`'s page already takes). `LiveView.put`/`del` already decide
-   * predicate/window membership per row; this surfaces that decision instead
-   * of discarding it and rescanning two pages.
+   * application, mirroring `observe`'s one-page-per-step). A confirmed-row
+   * pull `Patch` and a plain local mutation (#109 tracks a mutator's local
+   * handler directly onto the cached overlay and publishes exactly what it
+   * did) both diff precisely; `Rebuild`/seq-gap collapse — a pull racing a
+   * still-pending mutation, an unknown mutator, a `Clear` — emit a `reset`
+   * marker + fresh `enter`s instead of a diff, since the overlay could have
+   * shifted any row (the same conservative fallback `observe`'s page already
+   * takes). `LiveView.put`/`del` already decide predicate/window membership
+   * per row; this surfaces that decision instead of discarding it and
+   * rescanning two pages.
    *
-   * Ordering (`move`) is out of scope until #112 lands stable position keys;
-   * a consumer that needs order re-derives it from a paired `observe` or the
-   * position of `enter`s within a batch.
+   * Ordering (`move`) is not yet part of this stream's contract: `LiveView`
+   * rows carry a stable position (#112) at runtime, but a row repositioned by
+   * a neighbor's insert/delete without its own value changing isn't
+   * distinguished from "unchanged" here — a consumer that needs order
+   * re-derives it from a paired `observe` or the position of `enter`s within
+   * a batch, pending that follow-up.
    */
   readonly observeChanges: {
     <A>(
