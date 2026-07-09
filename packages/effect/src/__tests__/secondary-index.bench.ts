@@ -72,6 +72,11 @@ const makeBulkSeededStore = (
           () =>
             void (journal = journal.filter((m) => m.clientId !== clientId || m.mutationId > upTo))
         ),
+      dropPending: (clientId, mutationIds) =>
+        Effect.sync(() => {
+          const ids = new Set(mutationIds);
+          journal = journal.filter((m) => m.clientId !== clientId || !ids.has(m.mutationId));
+        }),
       nextMutationId: (clientId) =>
         Effect.sync(() => {
           const next = (counters.get(clientId) ?? 0) + 1;

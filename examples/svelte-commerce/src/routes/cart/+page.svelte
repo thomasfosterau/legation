@@ -22,6 +22,10 @@
   );
 
   const mutate = useMutation();
+  // Rapid +/- clicks call `mutate("cart/setQty", ...)` per click, same as any
+  // other mutation from this page — the debouncing happens host-side
+  // (`src/lib/host.ts`'s `Paced.debounce`, #117), invisible here, because the
+  // engine capable of pacing lives across the mirror boundary (ADR-0010).
   const setQty = (item: CartItem, qty: number) => {
     if (userId === undefined) return;
     void (

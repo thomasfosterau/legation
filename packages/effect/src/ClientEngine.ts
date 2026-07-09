@@ -175,17 +175,34 @@ export type EngineEvent =
     };
 
 /**
- * A local-view change. `Patch` carries per-row confirmed deltas (emitted only
- * when the journal is empty, so they equal the materialized-view deltas) and
- * drives incremental `LiveView` maintenance. `Rebuild` is the conservative
- * fallback when the optimistic overlay shifts, so observers re-materialize; its
- * `collections` names exactly which collections the shift touched, so an
- * observer of a collection outside the set skips the recompute. `collections`
- * left `undefined` means "any collection" — the global fallback for changes we
- * cannot scope precisely (a `Clear`, an unknown mutator, a pull with pending).
+ * A row-level delta produced by a mutator's local handler (#109): unlike a
+ * `PatchOp`, it carries no server version — the row is optimistic, not yet
+ * confirmed. Structurally interchangeable with `PatchOp`'s `Put`/`Del` for
+ * `LiveView` folding, which never reads `version`.
+ */
+type OverlayOp =
+  | {
+      readonly _tag: "Put";
+      readonly collection: string;
+      readonly id: RowId;
+      readonly value: unknown;
+    }
+  | { readonly _tag: "Del"; readonly collection: string; readonly id: RowId };
+
+/**
+ * A local-view change. `Patch` carries per-row deltas that drive incremental
+ * `LiveView` maintenance: confirmed-row ops from a pull (only when the journal
+ * was empty, so they equal the materialized-view deltas) or the ops a mutator's
+ * local handler just performed on the optimistic overlay (#109). `Rebuild` is
+ * the conservative fallback when the overlay could have shifted in a way we
+ * did not track precisely, so observers re-materialize; its `collections`
+ * names exactly which collections the shift touched, so an observer of a
+ * collection outside the set skips the recompute. `collections` left
+ * `undefined` means "any collection" — the global fallback for changes we
+ * cannot scope precisely (a `Clear`, an unknown mutator, a handler that threw).
  */
 type ViewChange =
-  | { readonly _tag: "Patch"; readonly ops: ReadonlyArray<PatchOp> }
+  | { readonly _tag: "Patch"; readonly ops: ReadonlyArray<PatchOp | OverlayOp> }
   | { readonly _tag: "Rebuild"; readonly collections?: ReadonlySet<string> };
 
 /** The global rebuild: `collections` undefined, so every observer re-materializes. */
@@ -194,6 +211,16 @@ const REBUILD: ViewChange = { _tag: "Rebuild" };
 /** A rebuild scoped to `collections`, or the global {@link REBUILD} when undefined. */
 const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
   collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
+
+// A windowed subset (limit/cursor) can't fold an aggregate incrementally
+// without also tracking window-boundary shifts (a delta outside the window
+// can still evict/admit a row at its edge, which a row-level delta alone
+// doesn't reveal) — `observeAggregate`/`observeAggregateGrouped` refold the
+// page each emission for these, same as before #110. An unwindowed subset
+// (the common case: aggregate over everything synced) folds `Patch` ops in
+// place instead.
+const isWindowed = (subset: Subset.Subset): boolean =>
+  subset.limit !== undefined || subset.cursor !== undefined;
 
 /**
  * Sync-loop scheduling knobs. `push`/`pull` stay the primitives; these grow
@@ -467,8 +494,11 @@ export interface ClientEngine {
     groupBy: string
   ) => Effect.Effect<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
   /**
-   * Live aggregate over a subset: emits now and after every local change,
-   * re-scanning the subset and folding it. Deduped — a change that leaves the
+   * Live aggregate over a subset: emits now and after every local change.
+   * For an unwindowed subset (no `limit`/`cursor`, the common case), the fold
+   * is maintained incrementally from `Patch` row deltas rather than re-scanned
+   * (#110); a windowed subset, or a change too large to diff (`Rebuild`),
+   * refolds the subset from scratch. Deduped — a change that leaves the
    * aggregate value unchanged does not re-emit. Local tier only, as
    * {@link queryAggregate}.
    */
@@ -488,6 +518,21 @@ export interface ClientEngine {
    * and `onUpdateNeeded` fires (deduped) as a side effect.
    */
   readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
+  /**
+   * Drop `mutationIds` from the journal if — and only if — they are still
+   * pending *and* no push is currently in flight (#117's pacing strategies:
+   * debounce/throttle/coalesce compact a superseded, still-unpushed entry out
+   * of the journal tail before a newer one supersedes it). A push claims every
+   * currently-pending id for the duration of its round trip, so this never
+   * touches an entry that may already be in flight to the backend — the hard
+   * boundary of ADR-0008's exactly-once contract. Returns exactly the ids it
+   * dropped; a caller whose id is missing from the result (push in flight, or
+   * the id already settled) should treat that entry as no longer theirs to
+   * compact and let it resolve normally.
+   */
+  readonly dropIfPending: (
+    mutationIds: ReadonlyArray<number>
+  ) => Effect.Effect<ReadonlyArray<number>, StoreError>;
   /**
    * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
    * server rejects this build's `schemaVersion` (#48); see {@link push}.
@@ -605,6 +650,15 @@ export const make = (
     // mutation id. `mutate`/`mutateEncoded` never register one, so their path
     // stays allocation-free.
     const acks = yield* Ref.make(new Map<number, Deferred.Deferred<MutationOutcome>>());
+    // Count of `push` calls currently between reading their pending snapshot
+    // and settling it (ack/reject) — i.e. mutations that MAY already be in
+    // flight to the backend. `dropIfPending` (#117) refuses to compact any
+    // entry while this is nonzero: a pending id it cannot prove is still
+    // untouched by a push is left alone rather than risked (ADR-0008's hard
+    // boundary — never mutate or reorder a pushed entry). Retries re-read
+    // `pendingMutations` fresh each attempt, so a drop between attempts is
+    // always safe; a counter (not a flag) covers overlapping pushes.
+    const pushInFlight = yield* Ref.make(0);
     // Emit a mutation-lifecycle event onto the unified hub as its tagged
     // variant; `mutationEvents` projects these three tags back to `phase`s.
     const emitEvent = (
@@ -684,7 +738,90 @@ export const make = (
     // recompute once, not once each.
     const overlayCache = yield* Ref.make<Map<string, Map<RowId, LocalRow>> | undefined>(undefined);
     const overlayLock = yield* Semaphore.make(1);
-    const invalidateOverlay = Ref.set(overlayCache, undefined);
+    // Invalidation must serialize with the tracked-write path below (#109):
+    // that path holds the permit for its whole read-modify-write of the
+    // cache, so an invalidation racing it outside the lock could be clobbered
+    // by a stale `Ref.set` once the tracked write finishes. Going through the
+    // same semaphore makes "invalidate" and "read cache, mutate, write cache
+    // back" mutually exclusive, so whichever runs first is fully visible to
+    // the other. Callers inside a block that already holds the permit (the
+    // tracked-write path's own failure fallback) must use `Ref.set` directly
+    // to avoid deadlocking on the non-reentrant semaphore.
+    const invalidateOverlay = Semaphore.withPermit(overlayLock, Ref.set(overlayCache, undefined));
+
+    // Ensure `view` holds a live, mutable map for `collection`, seeding it
+    // lazily from confirmed rows the first time it's touched. Shared by
+    // `computeOverlay` (fresh materialization, replayed sequentially so no
+    // collection is seeded twice) and the tracked-write path (incremental
+    // mutation onto the persisted cache) — both agree on what "the
+    // collection's rows" means, and once a collection is seeded into a
+    // cache-backed `view` it stays seeded across calls.
+    const ensureCollectionMap = (
+      view: Map<string, Map<RowId, LocalRow>>,
+      collection: string
+    ): Effect.Effect<Map<RowId, LocalRow>, StoreError> =>
+      Effect.gen(function* () {
+        const existing = view.get(collection);
+        if (existing !== undefined) return existing;
+        const created = new Map<RowId, LocalRow>();
+        for (const row of yield* store.listRows(collection)) {
+          created.set(row.id, { id: row.id, value: row.value });
+        }
+        view.set(collection, created);
+        return created;
+      });
+
+    // Replay `mutations` (in journal order) onto `view`, mutating its
+    // per-collection maps in place. Journal args are encoded (they survive
+    // persistence and the wire), so decode before replay. Shared by
+    // `computeOverlay` (replays every currently-pending mutation) and the
+    // tracked-write cold-cache path (replays every *other* pending mutation
+    // before applying the new one on top via `trackedWriter` — passing the
+    // pre-append snapshot avoids replaying the new mutation twice, since by
+    // the time that path runs it has already been appended to the store).
+    const replayMutations = (
+      view: Map<string, Map<RowId, LocalRow>>,
+      mutations: ReadonlyArray<Mutation>
+    ): Effect.Effect<void, StoreError | MutatorError> =>
+      Effect.gen(function* () {
+        const writer: LocalWriter = {
+          put: (collection, id, value) =>
+            ensureCollectionMap(view, collection).pipe(
+              Effect.map((rows) => {
+                rows.set(id, { id, value });
+              })
+            ),
+          del: (collection, id) =>
+            ensureCollectionMap(view, collection).pipe(
+              Effect.map((rows) => {
+                rows.delete(id);
+              })
+            ),
+          get: (collection, id) =>
+            ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
+        };
+        for (const mutation of mutations) {
+          const definition = options.mutators.mutators.get(mutation.mutator);
+          const handler = options.mutators.handlers.get(mutation.mutator);
+          if (definition === undefined || handler === undefined) {
+            return yield* new MutatorError({
+              message: `Unknown mutator: ${mutation.mutator}`,
+              mutator: mutation.mutator,
+            });
+          }
+          const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+            Effect.mapError(
+              (cause) =>
+                new MutatorError({
+                  message: `Invalid journaled args for mutator "${mutation.mutator}"`,
+                  mutator: mutation.mutator,
+                  cause,
+                })
+            )
+          );
+          yield* handler(args, writer);
+        }
+      });
 
     // Secondary field-value indexes over confirmed rows (issue #113).
     // `indexFields` is the declared-plus-auto-discovered field set per
@@ -801,65 +938,7 @@ export const make = (
       StoreError | MutatorError
     > = Effect.gen(function* () {
       const view = new Map<string, Map<RowId, LocalRow>>();
-      const seeded = new Set<string>();
-
-      const collectionView = (collection: string) => {
-        const existing = view.get(collection);
-        if (existing !== undefined) return Effect.succeed(existing);
-        return Effect.gen(function* () {
-          const created = new Map<RowId, LocalRow>();
-          if (!seeded.has(collection)) {
-            seeded.add(collection);
-            for (const row of yield* store.listRows(collection)) {
-              created.set(row.id, { id: row.id, value: row.value });
-            }
-          }
-          view.set(collection, created);
-          return created;
-        });
-      };
-
-      const writer: LocalWriter = {
-        put: (collection, id, value) =>
-          collectionView(collection).pipe(
-            Effect.map((rows) => {
-              rows.set(id, { id, value });
-            })
-          ),
-        del: (collection, id) =>
-          collectionView(collection).pipe(
-            Effect.map((rows) => {
-              rows.delete(id);
-            })
-          ),
-        get: (collection, id) =>
-          collectionView(collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
-      };
-
-      // Seed every collection we know about lazily via collectionView; then
-      // replay pending mutations in journal order. Journal args are encoded
-      // (they survive persistence and the wire), so decode before replay.
-      for (const mutation of yield* store.pendingMutations) {
-        const definition = options.mutators.mutators.get(mutation.mutator);
-        const handler = options.mutators.handlers.get(mutation.mutator);
-        if (definition === undefined || handler === undefined) {
-          return yield* new MutatorError({
-            message: `Unknown mutator: ${mutation.mutator}`,
-            mutator: mutation.mutator,
-          });
-        }
-        const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-          Effect.mapError(
-            (cause) =>
-              new MutatorError({
-                message: `Invalid journaled args for mutator "${mutation.mutator}"`,
-                mutator: mutation.mutator,
-                cause,
-              })
-          )
-        );
-        yield* handler(args, writer);
-      }
+      yield* replayMutations(view, yield* store.pendingMutations);
       return view;
     });
 
@@ -929,28 +1008,110 @@ export const make = (
         return union;
       });
 
+    // Run a mutator's local handler directly onto `view` (mutating its
+    // per-collection maps in place) while recording the `put`/`del` it
+    // performs as `OverlayOp`s — the delta an observer folds via the same
+    // `LiveView.put`/`del` machinery a confirmed-row `Patch` already uses
+    // (#109). `get` reads through the same lazily-seeded collection maps as
+    // `computeOverlay`'s writer, so a read-modify-write handler sees exactly
+    // what a fresh replay would show it.
+    const trackedWriter = (
+      view: Map<string, Map<RowId, LocalRow>>,
+      ops: Array<PatchOp | OverlayOp>
+    ): LocalWriter => ({
+      put: (collection, id, value) =>
+        ensureCollectionMap(view, collection).pipe(
+          Effect.map((rows) => {
+            rows.set(id, { id, value });
+            ops.push({ _tag: "Put", collection, id, value });
+          })
+        ),
+      del: (collection, id) =>
+        ensureCollectionMap(view, collection).pipe(
+          Effect.map((rows) => {
+            rows.delete(id);
+            ops.push({ _tag: "Del", collection, id });
+          })
+        ),
+      get: (collection, id) =>
+        ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
+    });
+
+    // Apply a journaled mutation's local effects onto the cached overlay in
+    // place instead of invalidating it (#109's core optimization): the
+    // mutate path then costs one `trackedWriter` run over the rows it
+    // touches, not a full journal replay. Must run under `overlayLock` — the
+    // caller (`journal`) holds the permit for its whole body, so this
+    // reads/mutates/writes the cache without racing `materialize`'s fill or
+    // another mutation's tracked write. `pendingBefore` is the journal
+    // snapshot from *before* this mutation was appended to the store — the
+    // cold-cache fallback replays exactly that (not a fresh
+    // `store.pendingMutations`, which would already include this mutation by
+    // the time this runs), so `trackedWriter` below applies this mutation's
+    // effect exactly once rather than once from the replay and once more from
+    // the tracked write. Falls back to a Rebuild scoped to the mutator's
+    // touched collections (or the unscoped `REBUILD` when that can't be
+    // determined either) when the handler is unknown, when materializing a
+    // cold cache fails, or when the handler itself fails partway through —
+    // every fallback drops the cache via a direct `Ref.set` (not
+    // `invalidateOverlay`, which would deadlock re-acquiring this same
+    // permit), so the next `materialize` recomputes from scratch, which
+    // already includes this mutation since it is appended before this call.
+    const applyMutationToOverlayLocked = (
+      mutator: string,
+      decodedArgs: unknown,
+      pendingBefore: ReadonlyArray<Mutation>
+    ): Effect.Effect<ViewChange> =>
+      Effect.gen(function* () {
+        const handler = options.mutators.handlers.get(mutator);
+        if (handler === undefined) {
+          yield* Ref.set(overlayCache, undefined);
+          return REBUILD;
+        }
+        const cached = yield* Ref.get(overlayCache);
+        let view: Map<string, Map<RowId, LocalRow>>;
+        if (cached !== undefined) {
+          view = cached;
+        } else {
+          const filled = yield* Effect.exit(
+            timedRebase(
+              Effect.gen(function* () {
+                const fresh = new Map<string, Map<RowId, LocalRow>>();
+                yield* replayMutations(fresh, pendingBefore);
+                return fresh;
+              })
+            )
+          );
+          if (filled._tag === "Failure") {
+            yield* Ref.set(overlayCache, undefined);
+            return REBUILD;
+          }
+          view = filled.value;
+        }
+        const ops: Array<PatchOp | OverlayOp> = [];
+        const ran = yield* Effect.exit(handler(decodedArgs, trackedWriter(view, ops)));
+        if (ran._tag === "Failure") {
+          yield* Ref.set(overlayCache, undefined);
+          const touched = yield* collectionsTouchedBy(mutator, decodedArgs);
+          return rebuildFor(touched);
+        }
+        yield* Ref.set(overlayCache, view);
+        return { _tag: "Patch", ops };
+      });
+
     // All local rows of a collection (confirmed + overlay) as an id-keyed
     // map, loading confirmed rows the overlay didn't already touch. Returning
     // the map (not a spread array) lets indexed evaluation look candidates up
     // directly — no extra O(n) copy on top of the O(n) this already pays to
-    // seed the map from the store.
-    const ensureCollection = (
-      view: Map<string, Map<RowId, LocalRow>>,
-      collection: string
-    ): Effect.Effect<Map<RowId, LocalRow>, StoreError> =>
-      Effect.gen(function* () {
-        const existing = view.get(collection);
-        if (existing !== undefined) return existing;
-        const rows = new Map<RowId, LocalRow>();
-        for (const row of yield* store.listRows(collection)) {
-          rows.set(row.id, { id: row.id, value: row.value });
-        }
-        view.set(collection, rows);
-        return rows;
-      });
-
+    // seed the map from the store; aggregate consumers below spread it into
+    // an array themselves.
     const collectionRows = (collection: string) =>
-      materialize.pipe(Effect.flatMap((view) => ensureCollection(view, collection)));
+      materialize.pipe(Effect.flatMap((view) => ensureCollectionMap(view, collection)));
+
+    // The aggregate reducers below fold over a plain array (unindexed —
+    // aggregate initialization isn't wired to the secondary-index planner).
+    const collectionRowsArray = (collection: string) =>
+      collectionRows(collection).pipe(Effect.map((rows) => [...rows.values()]));
 
     const query = (subset: Subset.Subset) =>
       Effect.gen(function* () {
@@ -1012,6 +1173,31 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
+    // #117: compact superseded, still-pending journal entries for pacing
+    // strategies. Refuses outright while a push is in flight (see
+    // `pushInFlight`) and further narrows to ids this client's own pending
+    // set still contains, so it can only ever drop an entry no push has
+    // claimed — the hard boundary is enforced here, once, rather than trusted
+    // to callers. A global rebuild is the safe fallback (mirrors `acknowledge`
+    // and `journal`'s own use of it) since the dropped mutations' collections
+    // aren't known without re-decoding args already gone from the journal.
+    const dropIfPending: ClientEngine["dropIfPending"] = (mutationIds) =>
+      Effect.gen(function* () {
+        if (mutationIds.length === 0) return [];
+        if ((yield* Ref.get(pushInFlight)) > 0) return [];
+        const pending = yield* store.pendingMutations;
+        const stillPending = new Set(
+          pending.filter((m) => m.clientId === options.clientId).map((m) => m.mutationId)
+        );
+        const droppable = mutationIds.filter((id) => stillPending.has(id));
+        if (droppable.length === 0) return [];
+        yield* store.dropPending(options.clientId, droppable);
+        yield* invalidateOverlay;
+        yield* sampleJournalDepth;
+        yield* publishChange(REBUILD);
+        return droppable;
+      });
+
     // Latch so an ongoing schema-version rejection (#48) fires `onUpdateNeeded`
     // and the `UpdateNeeded` event exactly once — a retry storm or repeated
     // pulls against the same rejection do not refire it. The latch resets on the
@@ -1052,26 +1238,36 @@ export const make = (
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
         if (pending.length === 0) return;
-        yield* emitEngineEvent({ _tag: "PushStarted" });
-        const response = yield* transport.push({
-          clientGroupId: options.clientGroupId,
-          mutations: pending,
-          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
-        });
-        // Trimming these pending mutations drops their optimistic effects, so
-        // only their collections can shift — scope the rebuild to that union so
-        // observers of untouched collections don't re-materialize.
-        const touched = yield* collectionsTouchedByMutations(pending);
-        // Settle permanently-rejected mutations before the ack sweep, so a
-        // rejected id reports `rejected` rather than `applied`.
-        yield* settleRejected(response);
-        // Effects arrive via the next pull; the ack only trims the journal.
-        yield* acknowledge(response.lastMutationIds);
-        yield* publishChange(rebuildFor(touched));
-        yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
-        yield* Metric.update(Telemetry.pushesTotal, 1);
-        yield* Metric.update(Telemetry.pushMutations, pending.length);
-        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+        // Claimed for the whole round trip (through the ack sweep below), so
+        // `dropIfPending` cannot compact an entry this push may have already
+        // sent before its outcome is known locally. Released on every exit
+        // path, including failure, so a transient push error never wedges the
+        // counter.
+        yield* Ref.update(pushInFlight, (n) => n + 1);
+        yield* Effect.gen(function* () {
+          yield* emitEngineEvent({ _tag: "PushStarted" });
+          const response = yield* transport.push({
+            clientGroupId: options.clientGroupId,
+            mutations: pending,
+            ...(options.schemaVersion !== undefined
+              ? { schemaVersion: options.schemaVersion }
+              : {}),
+          });
+          // Trimming these pending mutations drops their optimistic effects, so
+          // only their collections can shift — scope the rebuild to that union so
+          // observers of untouched collections don't re-materialize.
+          const touched = yield* collectionsTouchedByMutations(pending);
+          // Settle permanently-rejected mutations before the ack sweep, so a
+          // rejected id reports `rejected` rather than `applied`.
+          yield* settleRejected(response);
+          // Effects arrive via the next pull; the ack only trims the journal.
+          yield* acknowledge(response.lastMutationIds);
+          yield* publishChange(rebuildFor(touched));
+          yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+          yield* Metric.update(Telemetry.pushesTotal, 1);
+          yield* Metric.update(Telemetry.pushMutations, pending.length);
+          yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+        }).pipe(Effect.ensuring(Ref.update(pushInFlight, (n) => n - 1)));
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
@@ -1099,19 +1295,36 @@ export const make = (
     const applyPull = (response: PullResponse): Effect.Effect<ReadonlyArray<string>, StoreError> =>
       Effect.gen(function* () {
         // With an empty journal the patch ops are exactly the materialized-view
-        // deltas, so observers maintain incrementally; with a pending overlay (or
-        // a reset) the overlay could shift any row, so fall back to a rebuild.
-        const hadPending = (yield* store.pendingMutations).length > 0;
+        // deltas, so observers maintain incrementally. With a pending overlay,
+        // rebase (confirmed patch + replay of whatever mutations remain
+        // pending, and the vanishing of whatever just got acknowledged or
+        // rejected) could shift any row the patch or those pending-before-this-
+        // pull mutations touch — scope a Rebuild to their union rather than
+        // forcing a global one (#109's "stays a scoped Rebuild" rebase path);
+        // a reset (`Clear`) still forces the unscoped fallback.
+        const pendingBefore = yield* store.pendingMutations;
+        const hadPending = pendingBefore.length > 0;
         const hasClear = response.patch.some((op) => op._tag === "Clear");
         const touched = yield* pullTouchedCollections(response.patch);
         yield* applyPatch(response.patch);
         yield* acknowledge(response.lastMutationIds);
         yield* store.setCookie(response.cookie);
+        let change: ViewChange;
+        if (hasClear) {
+          change = REBUILD;
+        } else if (!hadPending) {
+          change = { _tag: "Patch", ops: response.patch };
+        } else {
+          const mutationCollections = yield* collectionsTouchedByMutations(pendingBefore);
+          change = rebuildFor(
+            mutationCollections === undefined
+              ? undefined
+              : new Set([...touched, ...mutationCollections])
+          );
+        }
         // Atomic reveal: one change event after patch + ack (rebase is
         // recomputation in `materialize`).
-        yield* publishChange(
-          hadPending || hasClear ? REBUILD : { _tag: "Patch", ops: response.patch }
-        );
+        yield* publishChange(change);
         return touched;
       });
 
@@ -1340,11 +1553,13 @@ export const make = (
           )
         )
       );
-    // Apply a Patch's confirmed deltas for one collection to a LiveView.
+    // Apply a Patch's deltas for one collection to a LiveView — confirmed-row
+    // ops from a pull, or optimistic `OverlayOp`s from a mutate (#109); both
+    // shapes carry the `_tag`/`collection`/`id`/`value` this only reads.
     const applyOps = (
       view: LiveView.LiveView,
       collection: string,
-      ops: ReadonlyArray<PatchOp>
+      ops: ReadonlyArray<PatchOp | OverlayOp>
     ): LiveView.LiveView => {
       let next = view;
       for (const op of ops) {
@@ -1490,37 +1705,186 @@ export const make = (
       agg: Aggregate.Aggregate,
       groupBy: string
     ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
+
+    // Route a Patch's ops (this subset's collection only) through an
+    // incremental aggregate state. A Patch's ops are confirmed-row deltas
+    // from a pull, or optimistic `OverlayOp`s a mutate's local handler just
+    // performed (#109) — both shapes carry the `_tag`/`collection`/`id`/`value`
+    // this reads. `Put` carries the raw new value — `Aggregate.applyPut`
+    // re-tests `subset.where` itself to decide insert/update/remove, exactly
+    // as `applyOps` does for `LiveView` above.
+    const applyAggregatePatch = (
+      state: Aggregate.State,
+      agg: Aggregate.Aggregate,
+      subset: Subset.Subset,
+      ops: ReadonlyArray<PatchOp | OverlayOp>
+    ): Aggregate.State => {
+      let next = state;
+      for (const op of ops) {
+        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+        next =
+          op._tag === "Put"
+            ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
+            : Aggregate.applyDel(next, agg, op.id);
+      }
+      return next;
+    };
+    const applyAggregateGroupedPatch = (
+      state: Aggregate.GroupedState,
+      agg: Aggregate.Aggregate,
+      subset: Subset.Subset,
+      groupBy: string,
+      ops: ReadonlyArray<PatchOp | OverlayOp>
+    ): Aggregate.GroupedState => {
+      let next = state;
+      for (const op of ops) {
+        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+        next =
+          op._tag === "Put"
+            ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
+            : Aggregate.applyGroupedDel(next, agg, op.id);
+      }
+      return next;
+    };
+
+    /**
+     * A push-based reducer over a subset's raw row ops, feeding
+     * {@link observeAggregateSubset}: `init` builds state from a full
+     * collection scan (subscribe time, `Rebuild`, and gap-collapse), `applyOps`
+     * folds a `Patch`'s row-level deltas in place, and `value`/`sameValue`
+     * extract + dedupe the observable result.
+     */
+    interface AggregateReducer<S, V> {
+      readonly init: (rows: ReadonlyArray<LocalRow>) => S;
+      readonly applyOps: (state: S, ops: ReadonlyArray<PatchOp | OverlayOp>) => S;
+      readonly value: (state: S) => V;
+      readonly sameValue: (a: V, b: V) => boolean;
+    }
+
+    // Live aggregate over a subset's raw row ops: mirrors `observeSubset`'s
+    // seq/gap-collapse handling, but folds a `reducer`'s state instead of
+    // maintaining a `LiveView`. A `Patch` folds only the ops it carries, in
+    // place; a `Rebuild` (or a seq-gap collapse) re-derives state from a full
+    // collection scan, same as the page-observing path's `LiveView.make`.
+    const observeAggregateSubset = <S, V>(
+      subset: Subset.Subset,
+      reducer: AggregateReducer<S, V>
+    ): Stream.Stream<V, StoreError | MutatorError> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(changes);
+          const startSeq = yield* Ref.get(changeSeq);
+          const stateRef = yield* Ref.make(
+            reducer.init(yield* collectionRowsArray(subset.collection))
+          );
+          const lastSeenRef = yield* Ref.make(startSeq);
+          const initial = reducer.value(yield* Ref.get(stateRef));
+
+          const applyContiguousAgg = (
+            change: ViewChange
+          ): Effect.Effect<V, StoreError | MutatorError> =>
+            Effect.gen(function* () {
+              const state = yield* Ref.get(stateRef);
+              if (rebuildSkips(change, subset.collection)) return reducer.value(state);
+              const next =
+                change._tag === "Rebuild"
+                  ? reducer.init(yield* collectionRowsArray(subset.collection))
+                  : reducer.applyOps(state, change.ops);
+              yield* Ref.set(stateRef, next);
+              return reducer.value(next);
+            });
+
+          const collapseAggregateToRebuild: Effect.Effect<V, StoreError | MutatorError> =
+            Effect.gen(function* () {
+              yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
+              const latest = yield* Ref.get(changeSeq);
+              const next = reducer.init(yield* collectionRowsArray(subset.collection));
+              yield* Ref.set(stateRef, next);
+              yield* Ref.set(lastSeenRef, latest);
+              return reducer.value(next);
+            });
+
+          const stepAggregateView = (
+            item: SeqChange
+          ): Effect.Effect<V, StoreError | MutatorError> =>
+            Effect.gen(function* () {
+              const lastSeen = yield* Ref.get(lastSeenRef);
+              if (item.seq <= lastSeen) return reducer.value(yield* Ref.get(stateRef));
+              if (item.seq === lastSeen + 1) {
+                yield* Ref.set(lastSeenRef, item.seq);
+                return yield* applyContiguousAgg(item.change);
+              }
+              return yield* collapseAggregateToRebuild;
+            });
+
+          return Stream.concat(
+            Stream.succeed(initial),
+            Stream.fromSubscription(subscription).pipe(Stream.mapEffect(stepAggregateView))
+          ).pipe(Stream.changesWith(reducer.sameValue));
+        })
+      );
+
     const observeAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>
-      Aggregate.observe(observeSubset(subset), agg);
+      isWindowed(subset)
+        ? Aggregate.observe(observeSubset(subset), agg)
+        : observeAggregateSubset(subset, {
+            init: (rows) => Aggregate.initState(agg, Subset.apply(rows, subset)),
+            applyOps: (state, ops) => applyAggregatePatch(state, agg, subset, ops),
+            value: Aggregate.stateValue,
+            sameValue: Aggregate.sameValue,
+          });
     const observeAggregateGrouped = (
       subset: Subset.Subset,
       agg: Aggregate.Aggregate,
       groupBy: string
-    ) => Aggregate.observeGrouped(observeSubset(subset), agg, groupBy);
+    ) =>
+      isWindowed(subset)
+        ? Aggregate.observeGrouped(observeSubset(subset), agg, groupBy)
+        : observeAggregateSubset(subset, {
+            init: (rows) => Aggregate.initGroupedState(agg, Subset.apply(rows, subset), groupBy),
+            applyOps: (state, ops) => applyAggregateGroupedPatch(state, agg, subset, groupBy, ops),
+            value: Aggregate.groupedStateValue,
+            sameValue: Aggregate.sameGroupedValue,
+          });
 
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
+    // Journal a mutation and reveal its local effects. The whole body runs
+    // under `overlayLock` (#109): appending to the store then tracking the
+    // handler's effects directly onto the cached overlay must be atomic with
+    // respect to `materialize`'s fill and any other mutation's tracked write,
+    // or a concurrent invalidation (push ack, pull, seed) could be clobbered
+    // by this call's stale `Ref.set` once it finishes (see `invalidateOverlay`).
     const journal = (mutator: string, encoded: unknown, decodedArgs: unknown) =>
-      Effect.gen(function* () {
-        const mutationId = yield* store.nextMutationId(options.clientId);
-        const mutation: Mutation = {
-          clientId: options.clientId,
-          mutationId,
-          mutator,
-          args: encoded,
-          createdAt: yield* Clock.currentTimeMillis,
-        };
-        yield* store.appendMutation(mutation);
-        yield* invalidateOverlay; // the new pending mutation shifts the overlay
-        yield* sampleJournalDepth; // the append changed journal depth
-        yield* emitEvent(mutationId, "journaled");
-        // Scope the rebuild to the collections this mutation writes, so
-        // observers of other collections don't re-materialize.
-        const touched = yield* collectionsTouchedBy(mutator, decodedArgs);
-        yield* publishChange(rebuildFor(touched));
-        yield* signalPush; // the sync loop may auto-push this (debounced)
-        return mutationId;
-      });
+      Semaphore.withPermit(
+        overlayLock,
+        Effect.gen(function* () {
+          // Snapshot the journal *before* appending, so the tracked-write
+          // fallback below replays exactly the mutations already pending —
+          // not this one too (it is appended next, so `store.pendingMutations`
+          // would otherwise double-count it: once from the replay, once from
+          // `trackedWriter`).
+          const pendingBefore = yield* store.pendingMutations;
+          const mutationId = yield* store.nextMutationId(options.clientId);
+          const mutation: Mutation = {
+            clientId: options.clientId,
+            mutationId,
+            mutator,
+            args: encoded,
+            createdAt: yield* Clock.currentTimeMillis,
+          };
+          yield* store.appendMutation(mutation);
+          yield* sampleJournalDepth; // the append changed journal depth
+          yield* emitEvent(mutationId, "journaled");
+          // Apply the handler's effects onto the cached overlay in place and
+          // publish exactly what it did as a Patch, rather than invalidating
+          // the cache and forcing every observer to re-materialize (#109).
+          const change = yield* applyMutationToOverlayLocked(mutator, decodedArgs, pendingBefore);
+          yield* publishChange(change);
+          yield* signalPush; // the sync loop may auto-push this (debounced)
+          return mutationId;
+        })
+      );
     // Validate the decoded args now (fail fast at the call site) and produce the
     // journal's encoded (wire/persistence) form — shared by `mutate` and
     // `mutateWithAck`.
@@ -1611,6 +1975,7 @@ export const make = (
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
       pull,
+      dropIfPending,
       ...(transport.read === undefined
         ? {}
         : {
