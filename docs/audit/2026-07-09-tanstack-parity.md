@@ -20,7 +20,7 @@ primitives. Follows the method of the [Zero parity audit](2026-06-18-zero-featur
 and the [2026-07-02 capability gap analysis](2026-07-02-capability-gap-analysis.md)
 (whose programme, #33–#50, has fully shipped): the goal is a good story for every
 reference use case, natively or via a documented extension point — not API mimicry.
-Framework adapters were out of scope; framework-*primitives* were in scope.
+Framework adapters were out of scope; framework-_primitives_ were in scope.
 
 ## Headline findings
 
@@ -37,7 +37,7 @@ Framework adapters were out of scope; framework-*primitives* were in scope.
   ([#120](https://github.com/thomasfosterau/effect-synchronizer/issues/120)).
 - **TanStack DB's differential-dataflow engine is the real gap**, as
   [`docs/comparisons/tanstack.md`](../comparisons/tanstack.md) already conceded.
-  Its `db-ivm` package is a *version-free* fork of d2ts — single-timeline
+  Its `db-ivm` package is a _version-free_ fork of d2ts — single-timeline
   multiset deltas through a static operator DAG (map/filter/join/reduce/
   distinct/topK-with-fractional-index), **not** Naiad-style differential
   dataflow with multidimensional timestamps. That reduced model is a drop-in
@@ -60,7 +60,7 @@ Framework adapters were out of scope; framework-*primitives* were in scope.
   arbitrary joins/group-by/`fn.*` predicates client-side and pushes only an
   analyzable predicate subset to the sync layer. We can adopt the same split:
   `Subset`/`Predicate` stay the serializable, auth-narrowable wire vocabulary
-  (ADR-0015/0022, untouched); a client-local *derived-view* tier over observed
+  (ADR-0015/0022, untouched); a client-local _derived-view_ tier over observed
   windows supplies distinct/row-group-by/arbitrary joins (#114). Documented as
   a two-tier read model rather than a widened wire language.
 - **TanStack Store: correctly absent.** Its role (subscription/derivation
@@ -117,7 +117,7 @@ devtools panel.
   persisters, `streamedQuery`): moot or against the documented model; the
   coming-from guide covers the translations.
 - **Mutation scopes / parallel mutations**: all mutations are serial per
-  client by mutation id — that *is* the sync model (ADR-0008).
+  client by mutation id — that _is_ the sync model (ADR-0008).
 - **Immer-style update drafts / direct collection `insert`/`update`/`delete`**:
   writes are named intents by design; the local-only-mutator pattern covers
   the escape hatch.
