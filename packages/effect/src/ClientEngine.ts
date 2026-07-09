@@ -490,6 +490,21 @@ export interface ClientEngine {
    */
   readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
   /**
+   * Drop `mutationIds` from the journal if — and only if — they are still
+   * pending *and* no push is currently in flight (#117's pacing strategies:
+   * debounce/throttle/coalesce compact a superseded, still-unpushed entry out
+   * of the journal tail before a newer one supersedes it). A push claims every
+   * currently-pending id for the duration of its round trip, so this never
+   * touches an entry that may already be in flight to the backend — the hard
+   * boundary of ADR-0008's exactly-once contract. Returns exactly the ids it
+   * dropped; a caller whose id is missing from the result (push in flight, or
+   * the id already settled) should treat that entry as no longer theirs to
+   * compact and let it resolve normally.
+   */
+  readonly dropIfPending: (
+    mutationIds: ReadonlyArray<number>
+  ) => Effect.Effect<ReadonlyArray<number>, StoreError>;
+  /**
    * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
    * server rejects this build's `schemaVersion` (#48); see {@link push}.
    */
@@ -606,6 +621,15 @@ export const make = (
     // mutation id. `mutate`/`mutateEncoded` never register one, so their path
     // stays allocation-free.
     const acks = yield* Ref.make(new Map<number, Deferred.Deferred<MutationOutcome>>());
+    // Count of `push` calls currently between reading their pending snapshot
+    // and settling it (ack/reject) — i.e. mutations that MAY already be in
+    // flight to the backend. `dropIfPending` (#117) refuses to compact any
+    // entry while this is nonzero: a pending id it cannot prove is still
+    // untouched by a push is left alone rather than risked (ADR-0008's hard
+    // boundary — never mutate or reorder a pushed entry). Retries re-read
+    // `pendingMutations` fresh each attempt, so a drop between attempts is
+    // always safe; a counter (not a flag) covers overlapping pushes.
+    const pushInFlight = yield* Ref.make(0);
     // Emit a mutation-lifecycle event onto the unified hub as its tagged
     // variant; `mutationEvents` projects these three tags back to `phase`s.
     const emitEvent = (
@@ -1002,6 +1026,31 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
+    // #117: compact superseded, still-pending journal entries for pacing
+    // strategies. Refuses outright while a push is in flight (see
+    // `pushInFlight`) and further narrows to ids this client's own pending
+    // set still contains, so it can only ever drop an entry no push has
+    // claimed — the hard boundary is enforced here, once, rather than trusted
+    // to callers. A global rebuild is the safe fallback (mirrors `acknowledge`
+    // and `journal`'s own use of it) since the dropped mutations' collections
+    // aren't known without re-decoding args already gone from the journal.
+    const dropIfPending: ClientEngine["dropIfPending"] = (mutationIds) =>
+      Effect.gen(function* () {
+        if (mutationIds.length === 0) return [];
+        if ((yield* Ref.get(pushInFlight)) > 0) return [];
+        const pending = yield* store.pendingMutations;
+        const stillPending = new Set(
+          pending.filter((m) => m.clientId === options.clientId).map((m) => m.mutationId)
+        );
+        const droppable = mutationIds.filter((id) => stillPending.has(id));
+        if (droppable.length === 0) return [];
+        yield* store.dropPending(options.clientId, droppable);
+        yield* invalidateOverlay;
+        yield* sampleJournalDepth;
+        yield* publishChange(REBUILD);
+        return droppable;
+      });
+
     // Latch so an ongoing schema-version rejection (#48) fires `onUpdateNeeded`
     // and the `UpdateNeeded` event exactly once — a retry storm or repeated
     // pulls against the same rejection do not refire it. The latch resets on the
@@ -1042,26 +1091,36 @@ export const make = (
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
         if (pending.length === 0) return;
-        yield* emitEngineEvent({ _tag: "PushStarted" });
-        const response = yield* transport.push({
-          clientGroupId: options.clientGroupId,
-          mutations: pending,
-          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
-        });
-        // Trimming these pending mutations drops their optimistic effects, so
-        // only their collections can shift — scope the rebuild to that union so
-        // observers of untouched collections don't re-materialize.
-        const touched = yield* collectionsTouchedByMutations(pending);
-        // Settle permanently-rejected mutations before the ack sweep, so a
-        // rejected id reports `rejected` rather than `applied`.
-        yield* settleRejected(response);
-        // Effects arrive via the next pull; the ack only trims the journal.
-        yield* acknowledge(response.lastMutationIds);
-        yield* publishChange(rebuildFor(touched));
-        yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
-        yield* Metric.update(Telemetry.pushesTotal, 1);
-        yield* Metric.update(Telemetry.pushMutations, pending.length);
-        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+        // Claimed for the whole round trip (through the ack sweep below), so
+        // `dropIfPending` cannot compact an entry this push may have already
+        // sent before its outcome is known locally. Released on every exit
+        // path, including failure, so a transient push error never wedges the
+        // counter.
+        yield* Ref.update(pushInFlight, (n) => n + 1);
+        yield* Effect.gen(function* () {
+          yield* emitEngineEvent({ _tag: "PushStarted" });
+          const response = yield* transport.push({
+            clientGroupId: options.clientGroupId,
+            mutations: pending,
+            ...(options.schemaVersion !== undefined
+              ? { schemaVersion: options.schemaVersion }
+              : {}),
+          });
+          // Trimming these pending mutations drops their optimistic effects, so
+          // only their collections can shift — scope the rebuild to that union so
+          // observers of untouched collections don't re-materialize.
+          const touched = yield* collectionsTouchedByMutations(pending);
+          // Settle permanently-rejected mutations before the ack sweep, so a
+          // rejected id reports `rejected` rather than `applied`.
+          yield* settleRejected(response);
+          // Effects arrive via the next pull; the ack only trims the journal.
+          yield* acknowledge(response.lastMutationIds);
+          yield* publishChange(rebuildFor(touched));
+          yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+          yield* Metric.update(Telemetry.pushesTotal, 1);
+          yield* Metric.update(Telemetry.pushMutations, pending.length);
+          yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+        }).pipe(Effect.ensuring(Ref.update(pushInFlight, (n) => n - 1)));
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
@@ -1611,6 +1670,7 @@ export const make = (
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
       pull,
+      dropIfPending,
       ...(transport.read === undefined
         ? {}
         : {

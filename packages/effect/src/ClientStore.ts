@@ -58,6 +58,19 @@ export interface ClientStore {
   readonly pendingMutations: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
   /** Drop journal entries with `mutationId <= upTo` for the client. */
   readonly acknowledge: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
+  /**
+   * Drop specific still-pending journal entries by id (#117's pacing
+   * strategies: debounce/throttle/coalesce compact a superseded entry out of
+   * the unpushed tail). Unlike {@link acknowledge}, the caller names exact
+   * ids rather than a `<= upTo` prefix — the mutations dropped here were
+   * never sent to the backend, so no acknowledgement is implied. Ids not
+   * currently pending (already acknowledged, rejected, or unknown) are
+   * silently skipped.
+   */
+  readonly dropPending: (
+    clientId: string,
+    mutationIds: ReadonlyArray<number>
+  ) => Effect.Effect<void, StoreError>;
   readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
 
   // Sync bookkeeping
@@ -123,6 +136,11 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.update(journal, (entries) =>
         entries.filter((m) => m.clientId !== clientId || m.mutationId > upTo)
       ),
+    dropPending: (clientId, mutationIds) =>
+      Ref.update(journal, (entries) => {
+        const ids = new Set(mutationIds);
+        return entries.filter((m) => m.clientId !== clientId || !ids.has(m.mutationId));
+      }),
     nextMutationId: (clientId) =>
       Ref.modify(counters, (m) => {
         const next = (m.get(clientId) ?? 0) + 1;
@@ -514,6 +532,21 @@ export const makeKeyValue = (
             const kept: Array<JournalIndexEntry> = [];
             for (const entry of yield* journalIndex) {
               if (entry.clientId === clientId && entry.mutationId <= upTo) {
+                yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
+              } else {
+                kept.push(entry);
+              }
+            }
+            yield* writeJson("journalIndex", kept);
+          })
+        ),
+      dropPending: (clientId, mutationIds) =>
+        locked(
+          Effect.gen(function* () {
+            const ids = new Set(mutationIds);
+            const kept: Array<JournalIndexEntry> = [];
+            for (const entry of yield* journalIndex) {
+              if (entry.clientId === clientId && ids.has(entry.mutationId)) {
                 yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
               } else {
                 kept.push(entry);
