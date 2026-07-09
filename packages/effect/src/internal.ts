@@ -27,6 +27,7 @@ export * as RowChange from "./RowChange.js";
 export * as Undo from "./Undo.js";
 export * as Paced from "./Paced.js";
 export * as Introspection from "./Introspection.js";
+export * as MutationState from "./MutationState.js";
 export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
 export * as OrderedTree from "./OrderedTree.js";

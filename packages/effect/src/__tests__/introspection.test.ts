@@ -107,7 +107,7 @@ describe("EngineIntrospection (#45)", () => {
       yield* engine.subscribe(allTodos);
 
       const collected = yield* Effect.forkChild(
-        Stream.runCollect(intro.events.pipe(Stream.take(6)))
+        Stream.runCollect(intro.events.pipe(Stream.take(7)))
       );
       yield* Effect.sleep(Duration.millis(20));
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
@@ -121,6 +121,9 @@ describe("EngineIntrospection (#45)", () => {
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
         "PushStarted",
+        // #116: every journaled mutation now settles (not just `mutateWithAck`
+        // ones), so a plain `mutate` also reports `MutationAcknowledged`.
+        "MutationAcknowledged",
         "ViewRebuilt",
         "PushCompleted",
         "PullStarted",
