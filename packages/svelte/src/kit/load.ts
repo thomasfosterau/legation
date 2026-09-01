@@ -6,12 +6,12 @@
  * request-scoped engine, and return `{ snapshot, clientGroupId }` for the
  * page data. Run it inside any Effect-based server `load` (e.g.
  * `@thomasfosterau/effect-sveltekit`'s `serverLoad`) with the app's sync
- * server provided as `ServerHandler`.
+ * server provided as `ServerHandler`. The snapshot itself is core
+ * (`Hydration.snapshot`); this only folds the cookie into it.
  */
 import type { Cookies } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { type Transport } from "@legation/effect";
-import { Hydration } from "@legation/effect/internal";
+import { Hydration, type Transport } from "@legation/effect";
 import type {
   MutatorError,
   StoreError,

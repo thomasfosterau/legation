@@ -17,7 +17,7 @@
       "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],
       "@legation/sql": ["packages/sql/src/index.ts"],
       "@legation/svelte": ["packages/svelte/src/index.ts"],
-      "@legation/sveltekit": ["packages/sveltekit/src/index.ts"],
+      "@legation/svelte/kit": ["packages/svelte/src/kit/index.ts"],
       "@legation/devtools": ["packages/devtools/src/index.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]

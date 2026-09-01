@@ -21,7 +21,6 @@
     "@legation/node": "workspace:*",
     "@legation/sql": "workspace:*",
     "@legation/svelte": "workspace:*",
-    "@legation/sveltekit": "workspace:*",
     "@thomasfosterau/effect-jsonapi": "^0.6.0",
     "better-auth": "^1.6.23",
     "better-sqlite3": "^12",

@@ -1,6 +1,6 @@
 /**
- * Runtime context rule: the stores read the engine runtime from Svelte
- * context, so using them without `setEngineRuntime` higher in the tree is a
+ * Runtime context rule: the rune hooks read the Client runtime from Svelte
+ * context, so using one without `setClientRuntime` higher in the tree is a
  * setup error with an actionable message.
  */
 import { describe, expect, it, afterEach } from "vitest";
@@ -11,8 +11,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("engine runtime context", () => {
-  it("query() without setEngineRuntime throws an actionable error", () => {
-    expect(() => mount(NoRuntime, { target: document.body })).toThrowError(/setEngineRuntime/);
+describe("client runtime context", () => {
+  it("a hook without setClientRuntime throws an actionable error", () => {
+    expect(() => mount(NoRuntime, { target: document.body })).toThrowError(/setClientRuntime/);
   });
 });

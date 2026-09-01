@@ -5,62 +5,51 @@ Idiomatic Svelte bindings for the
 
 Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
-- **`setEngineRuntime(runtime)`** — supply a `ManagedRuntime` that provides a
-  `ClientView` (the narrow engine surface, ADR-0021): an engine-backed app
-  composes `ClientView.layer.pipe(Layer.provideMerge(engineLayer))`; a
-  service-worker deployment provides its `TabMirror` directly. Call once,
-  high in the tree, before any query.
-- **`query(subset)`** / **`namedQuery(name, args)`** — live results as a Svelte
-  `Readable` store; read with `$store` auto-subscription and the component
-  re-renders on every local change. The `observe` fiber is torn down when the
-  last subscriber unsubscribes.
-- **`getMutate()`** — returns a promise-returning `mutate(name, args)` for event
-  handlers (optimistic on resolve).
-- **`related(registry, collection, subset, names)`** — live join over a
-  subset's declared relationships as a `Readable` store (the base and foreign
-  collections must already be subscribed).
+The package is deliberately thin. Everything the engine can do on its own —
+reads, mutations, hydration — is `@legation/effect`; what lives here is the
+Svelte shape of it, plus the two integrations a framework can do that the core
+cannot: **reactive re-subscription** (a read re-runs when the `$state` its
+thunk touches changes) and **SSR hydration** (a server-rendered page's rows
+seeding the first client render).
 
-```svelte
-<script lang="ts">
-  import { query, getMutate } from "@legation/svelte";
-  import { allTodos } from "./domain";
+Three entry points:
 
-  const todos = query(allTodos);
-  const mutate = getMutate();
-</script>
+| Import                   | What it is                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `@legation/svelte`       | `setClientRuntime` / `getClientRuntime` — the `Client` in Svelte context                |
+| `@legation/svelte/Runes` | the rune hooks: reads, aggregates, mutations, undo                                      |
+| `@legation/svelte/kit`   | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
-<ul>
-  {#each $todos as row (row.id)}
-    <li>{row.value.title}</li>
-  {/each}
-</ul>
-<button onclick={() => mutate("todo/set", { id: "1", title: "ship it", done: false })}>
-  Add
-</button>
+```bash
+npm install @legation/svelte @legation/effect effect svelte
 ```
 
-Pure TypeScript (stores + `setContext`/`getContext`); no `.svelte` components,
-so it builds with the same `tsc -b` as the rest of the monorepo. Works with
-Svelte 4 stores and Svelte 5 (`$store` auto-subscription is unchanged).
+`@sveltejs/kit` is an **optional** peer dependency — only `@legation/svelte/kit`
+needs it, and only as a `Cookies` type, so a non-Kit Svelte app pulls nothing.
 
 ## Runes (Svelte 5)
 
-`@legation/svelte/runes` exposes the same reads as rune-based hooks. Each hook
-takes its inputs as a **thunk** called inside `$effect`, so a query
-re-subscribes whenever the reactive state the thunk reads changes — a
-paginated subset whose cursor lives in `$state` just works. Results are
-exposed as a reactive `current`
+`@legation/svelte/Runes` is the whole read/write surface. Each hook takes its
+inputs as a **thunk** called inside `$effect`, so a read re-subscribes whenever
+the reactive state the thunk touches changes — a paginated read whose cursor
+lives in `$state` just works, and so does a detail read keyed on a route param.
+Results are exposed as a reactive `current`
 [`AsyncResult`](https://effect.website) (the engine's atom vocabulary): while
 re-subscribing the previous value stays visible with `waiting: true`
 (stale-while-revalidate).
 
-- **`useQuery(() => subset)`** / **`useNamedQuery(() => ({ name, args }))`**
-- **`useAggregate(() => subset, agg)`** / **`useAggregateGrouped(() => subset, agg, groupBy)`**
-- **`useRelated(() => ({ registry, collection, subset, names }), { subscribe? })`**
-  — with `subscribe: true` it syncs the base and narrowed foreign subsets
-  itself and tears them down on unmount.
-- **`useMutation()`** / **`useMutationWithAck()`** — aliases of `getMutate` /
-  `getMutateWithAck`.
+- **`useQuery(() => read)`** / **`useNamedQuery(() => ({ name, args }))`** —
+  a declarative `Query.Read`; `include`d edges resolve onto each row's
+  `related`, so a join needs no separate hook.
+- **`useConnection(() => read, { pageSize })`** — connection-style paging that
+  _grows_ one window rather than jumping between detached pages.
+- **`useAggregate(() => read, agg)`** / **`useAggregateGrouped(() => read, agg, groupBy)`**
+- **`useMutation()`** / **`useMutationWithAck()`** — a promise-returning
+  `mutate(name, args)`, optimistic on resolve; the `WithAck` form settles with
+  the backend's authoritative outcome.
+- **`useMutationState(() => mutator?)`** — every journaled mutation's lifecycle.
+- **`useUndo(manager)`** — `canUndo` / `canRedo` / `undo` / `redo` over an
+  `Undo.UndoManager`.
 
 Every live hook accepts `{ initial }` to seed a synchronous `Success` before
 the first emission — during SSR (where `$effect` never runs) the seed is what
@@ -70,13 +59,15 @@ renders, and on the client it makes the first render match the server markup
 ```svelte
 <script lang="ts">
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/runes";
-  import { Predicate, Subset } from "@legation/effect";
+  import { useQuery } from "@legation/svelte/Runes";
 
   let cursor = $state<string | undefined>(undefined);
-  const page = useQuery(() =>
-    Subset.make({ collection: "products", orderBy: [{ field: "id" }], limit: 20, cursor })
-  );
+  const page = useQuery(() => ({
+    collection: "products",
+    order: ["id"],
+    first: 20,
+    ...(cursor === undefined ? {} : { after: cursor }),
+  }));
   const rows = $derived(AsyncResult.getOrElse(page.current, () => []));
 </script>
 ```
@@ -107,6 +98,96 @@ your bundler's Svelte plugin, the standard Svelte-library convention). The
 package requires Svelte 5.40+ (its runtime context rides Svelte's
 `createContext`).
 
-```bash
-npm install @legation/svelte @legation/effect effect svelte
+## SvelteKit
+
+`@legation/svelte/kit` adds what SvelteKit shapes: the client-group cookie, an
+SSR snapshot for a server `load`, and the snapshot-hydrated Client boot. The
+hydration itself is core (`Hydration` in `@legation/effect`) and the wiring is
+`Client.make` — this subpath is the framework's share of it, nothing more.
+
+The SSR model (see `Hydration` in `@legation/effect`): each server render runs
+a **request-scoped engine** against the app's sync server, under the
+**browser's client group id**, and ships the dehydrated snapshot (rows +
+CVR cookie) in the page data. The client hydrates the snapshot into its
+durable store **only when the store is empty** — a repeat visit's rows,
+cookie, and journalled offline mutations are all fresher — and the first
+client pull continues the CVR conversation where the server left off: no
+refetch, no reset.
+
+### Server
+
+```ts
+// +page.server.ts — with @thomasfosterau/effect-sveltekit's serverLoad (or any
+// Effect-based load), the app's sync server provided as ServerHandler.
+import { Effect } from "effect";
+import { loadSnapshot } from "@legation/svelte/kit";
+import { allProducts, nodes } from "$lib/domain";
+
+export const load = serverLoad((event) =>
+  Effect.gen(function* () {
+    const { snapshot, clientGroupId } = yield* loadSnapshot(event.cookies, {
+      nodes,
+      reads: [allProducts],
+    });
+    return { snapshot, clientGroupId };
+  })
+);
 ```
+
+- **`clientGroupId(cookies, options?)`** — read-or-mint the browser's client
+  group id (a plain, non-`httpOnly` cookie; it carries no authority — identity
+  is resolved server-side via `IdentityResolver`).
+- **`loadSnapshot(cookies, { nodes, reads })`** — resolve the group id and
+  produce the page's snapshot over a request-scoped engine (a thin wrapper of
+  core's `Hydration.snapshot`).
+
+### Client
+
+```ts
+// $lib/engine.ts — boot once, hand the runtime to the hooks.
+import { clientRuntime } from "@legation/svelte/kit";
+import { IndexedDbClientStore } from "@legation/browser";
+import { mutations, nodes, shellReads } from "$lib/domain";
+
+export const boot = (data: { snapshot: Snapshot; clientGroupId: string }) =>
+  clientRuntime({
+    nodes,
+    mutations,
+    clientGroupId: data.clientGroupId,
+    store: IndexedDbClientStore.layerWindow(),
+    transport: rpcTransportLayer,
+    snapshot: data.snapshot,
+    subscribe: shellReads,
+  });
+```
+
+```svelte
+<!-- +layout.svelte -->
+<script lang="ts">
+  import { Runtime } from "@legation/svelte";
+  const { data, children } = $props();
+  Runtime.setClientRuntime(boot(data));
+</script>
+```
+
+Components render SSR markup from the snapshot and hydrate flash-free by
+seeding the rune hooks:
+
+```svelte
+<script lang="ts">
+  import { Hydration } from "@legation/effect";
+  import { useQuery } from "@legation/svelte/Runes";
+  import { allProducts, nodes } from "$lib/domain";
+  const { data } = $props();
+  const products = useQuery(() => allProducts, {
+    initial: Hydration.rowsFor(data.snapshot, nodes, allProducts),
+  });
+</script>
+```
+
+### No-JS baseline
+
+Writes without JavaScript are ordinary SvelteKit form actions hitting the
+app's own API — out-of-band writers in engine terms (ADR-0019): commit the
+write, then `server.broadcast({ collection })` for the touched collections so
+live subscribers pull. The next full-page render re-snapshots.

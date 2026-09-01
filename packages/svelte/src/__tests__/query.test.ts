@@ -1,29 +1,28 @@
 /**
- * Live query stores against a real engine (memory backend, loopback
- * transport) in mounted Svelte components: `query` re-emits on mutation,
- * `aggregate`/`aggregateGrouped` track counts, and `namedQuery` renders the
- * named query's client-local subset.
+ * Live reads against a real engine (memory backend, loopback transport) in
+ * mounted Svelte components: `useQuery` re-emits on mutation,
+ * `useAggregate`/`useAggregateGrouped` track counts, and `useNamedQuery`
+ * renders the named query's client-local subset.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import { Subset } from "@legation/effect/internal";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import NamedQueryHarness from "./fixtures/NamedQueryHarness.svelte";
-import { makeRuntime, run, until } from "./world.js";
+import { makeClientRuntime, run, until } from "./world.js";
 
-const allTodos = Subset.make({ collection: "todos" });
+const allTodos = { collection: "todos" };
 const text = () => document.body.textContent ?? "";
 
 afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("query stores", () => {
+describe("live read hooks", () => {
   it("emits live rows and aggregates, updating on mutation", async () => {
-    const runtime = makeRuntime();
+    const runtime = makeClientRuntime();
     const app = mount(QueryHarness, {
       target: document.body,
-      props: { runtime, subset: allTodos, groupBy: "authorId" },
+      props: { runtime, read: allTodos, groupBy: "authorId" },
     });
 
     await until(() => text().includes("count:0"));
@@ -46,8 +45,8 @@ describe("query stores", () => {
     await runtime.dispose();
   });
 
-  it("namedQuery renders only the named query's client-local subset", async () => {
-    const runtime = makeRuntime();
+  it("useNamedQuery renders only the named query's client-local subset", async () => {
+    const runtime = makeClientRuntime();
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "1", title: "match" }));
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "2", title: "other" }));
 

@@ -47,7 +47,9 @@ import { ClientStore, makeMemory, StoredRowSchema } from "./ClientStore.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
+import type * as Node from "./Node.js";
 import { MutationSchema } from "./Protocol.js";
+import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
 import { ClientTransport, makeInMemory, ServerHandler } from "./Transport.js";
 
@@ -158,21 +160,26 @@ export const hydrateIfEmpty = (
   });
 
 /**
- * Project a snapshot onto a subset, locally and synchronously:
- * the snapshot's rows for the subset's collection, filtered/sorted/windowed
- * by {@link Subset.apply}. This is how a component derives its initial value
+ * Project a snapshot onto a read, locally and synchronously: the snapshot's
+ * rows for the read's collection, filtered/sorted/windowed by the read's
+ * compiled root window. This is how a component derives its initial value
  * (e.g. the rune hooks' `initial` option) from the page's snapshot — during
  * SSR and on first client render — without touching an engine.
+ *
+ * `include`d edges are not resolved here: a snapshot is flat rows, and
+ * resolving edges is the Client's job once the engine is up. Seed the base
+ * rows and let the first live emission fill the edges in.
  */
 export const rowsFor = (
   snapshot: Snapshot,
-  subset: Subset.Subset
+  nodes: Node.NodeRegistry,
+  read: Query.Read
 ): ReadonlyArray<ClientEngineModule.LocalRow> =>
   Subset.apply(
     snapshot.rows
-      .filter((row) => row.collection === subset.collection)
+      .filter((row) => row.collection === read.collection)
       .map((row) => ({ id: row.id, value: row.value })),
-    subset
+    Query.plan(nodes, read).root
   );
 
 /** Options for {@link snapshot}. */
@@ -185,10 +192,12 @@ export interface SnapshotOptions {
   readonly clientGroupId: string;
   /** Client id for the request-scoped engine (never pushes). Default `"ssr"`. */
   readonly clientId?: string;
-  /** The subsets the page needs — subscribed and pulled once. */
-  readonly subsets: ReadonlyArray<Subset.Subset>;
-  /** Mutator registry for the request-scoped engine. Default: none. */
-  readonly mutators?: Mutator.MutatorRegistry;
+  /** The node graph the reads compile against. */
+  readonly nodes: Node.NodeRegistry;
+  /** The reads the page needs — subscribed and pulled once. */
+  readonly reads: ReadonlyArray<Query.Read>;
+  /** Mutation registry for the request-scoped engine. Default: none. */
+  readonly mutations?: Mutator.MutatorRegistry;
 }
 
 /**
@@ -199,7 +208,9 @@ export interface SnapshotOptions {
  *
  * This is the server half of the SSR flow described above; run it inside a
  * request handler (a SvelteKit `load`, a Next.js loader) with the app's sync
- * server provided as `ServerHandler`.
+ * server provided as `ServerHandler`. Framework packages wrap this — they add
+ * the framework's own plumbing (a cookie, a `load` signature), never their own
+ * hydration logic.
  */
 export const snapshot = (
   options: SnapshotOptions
@@ -216,13 +227,13 @@ export const snapshot = (
       const engine = yield* ClientEngineModule.make({
         clientId: options.clientId ?? "ssr",
         clientGroupId: options.clientGroupId,
-        mutators: options.mutators ?? Mutator.registry([]),
+        mutators: options.mutations ?? Mutator.registry([]),
       }).pipe(
         Effect.provideService(ClientStore, store),
         Effect.provideService(ClientTransport, transport)
       );
-      for (const subset of options.subsets) {
-        yield* engine.subscribe(subset);
+      for (const read of options.reads) {
+        yield* engine.subscribe(Query.plan(options.nodes, read).root);
       }
       yield* engine.pull;
       return yield* dehydrate(store);

@@ -89,6 +89,11 @@ describe("rune hooks", () => {
     await until(() => text().includes("seed:Grace"));
     expect(text()).not.toContain("seed:Ada");
 
+    // A base row with no linkage resolves to no related row.
+    await run(runtime, (engine) => engine.mutate("todo/set", { id: "2", title: "orphan" }));
+    await until(() => text().includes("orphan:nobody"));
+    expect(text()).toContain("seed:Grace");
+
     unmount(app);
     await runtime.dispose();
   });

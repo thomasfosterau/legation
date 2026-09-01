@@ -1,42 +1,41 @@
 /**
  * SvelteKit integration: the client-group cookie is minted once and then
  * stable; `loadSnapshot` renders a request-scoped snapshot under it; and
- * `engineRuntime` boots a client whose store took the snapshot (empty-store
- * only), rendering rows with no transport call and converging on the first
- * pull without a reset.
+ * `clientRuntime` boots a Client whose store took the snapshot (empty-store
+ * only), reading rows with no transport call and converging on the first pull
+ * without a reset.
  */
 import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
-import { Effect, Layer, Schema, type Scope } from "effect";
+import { Effect, Layer, Schedule, Schema, type Scope } from "effect";
 import {
   Authorization,
   Backend,
+  Client,
   ClientStore,
+  Hydration,
   MemoryBackend,
-  Mutator,
+  Mutation,
+  Node,
+  type Query,
   Transport,
 } from "@legation/effect";
-import {
-  ClientEngine,
-  Cvr,
-  Hydration,
-  InvalidationBus,
-  Subset,
-  SyncServer,
-} from "@legation/effect/internal";
-import { clientGroupId, engineRuntime, loadSnapshot } from "../index.js";
+import { ClientEngine, Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
+import { clientGroupId, clientRuntime, loadSnapshot } from "../index.js";
 
 interface Todo {
   readonly id: string;
   readonly title: string;
 }
 
-const mutators = Mutator.registry([
+const mutations = Mutation.registry([
   {
-    mutator: Mutator.make("todo/set", Schema.Unknown),
+    mutator: Mutation.make("todo/set", Schema.Unknown),
     local: (args, writer) => writer.put("todos", (args as Todo).id, args),
   },
 ]);
+
+const nodes = Node.registry([Node.make("todos", { attributes: { title: Schema.String } })]);
 
 const handlers: Record<string, MemoryBackend.BackendHandler> = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
@@ -76,7 +75,8 @@ const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: s
   return { cookies, sets };
 };
 
-const allTodos = Subset.make({ collection: "todos" });
+const allTodosSubset = Subset.make({ collection: "todos" });
+const allTodos: Query.Read = { collection: "todos" };
 
 describe("clientGroupId", () => {
   it("mints once and stays stable across requests", () => {
@@ -96,8 +96,8 @@ describe("clientGroupId", () => {
   });
 });
 
-describe("loadSnapshot + engineRuntime", () => {
-  it.effect("SSR snapshot boots a client that renders without transport and pulls no reset", () =>
+describe("loadSnapshot + clientRuntime", () => {
+  it.effect("SSR snapshot boots a Client that reads without transport and pulls no reset", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
 
@@ -107,49 +107,60 @@ describe("loadSnapshot + engineRuntime", () => {
       const writer = yield* ClientEngine.make({
         clientId: "writer",
         clientGroupId: "group-writer",
-        mutators,
+        mutators: mutations,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, writerStore),
         Effect.provideService(Transport.ClientTransport, writerTransport)
       );
-      yield* writer.subscribe(allTodos);
+      yield* writer.subscribe(allTodosSubset);
       yield* writer.mutate("todo/set", { id: "1", title: "first" });
       yield* writer.push;
 
-      // The load: mint the group cookie, snapshot the page's subsets under it.
+      // The load: mint the group cookie, snapshot the page's reads under it.
       const { cookies } = fakeCookies();
       const { snapshot, clientGroupId: group } = yield* loadSnapshot(cookies, {
-        subsets: [allTodos],
+        nodes,
+        reads: [allTodos],
       }).pipe(Effect.provideService(Transport.ServerHandler, handler));
       expect(snapshot.rows.map((row) => row.id)).toEqual(["1"]);
       expect(cookies.get("legation-client-group")).toBe(group);
 
-      // The client boot: snapshot-hydrated store, engine over it.
-      const runtime = engineRuntime({
-        engine: { clientId: "browser", clientGroupId: group, mutators },
+      // The client boot: snapshot-hydrated store, Client over it.
+      const runtime = clientRuntime({
+        nodes,
+        mutations,
+        clientId: "browser",
+        clientGroupId: group,
         store: ClientStore.layerMemory,
         transport: Transport.layerInMemory(group).pipe(
           Layer.provide(Layer.succeed(Transport.ServerHandler)(handler))
         ),
         snapshot,
+        subscribe: [allTodos],
       });
 
       const rows = yield* Effect.promise(() =>
-        runtime.runPromise(
-          Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-            Effect.andThen(engine.subscribe(allTodos), engine.query(allTodos))
-          )
-        )
+        runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTodos)))
       );
       expect(rows.map((row) => row.id)).toEqual(["1"]);
 
-      // A new authoritative write arrives on the client's first pull.
+      // A new authoritative write arrives on the client's first pull. The
+      // Client owns the sync loop, so this is the loop converging, not a
+      // hand-driven pull.
       yield* writer.mutate("todo/set", { id: "2", title: "second" });
       yield* writer.push;
       const after = yield* Effect.promise(() =>
         runtime.runPromise(
-          Effect.flatMap(ClientEngine.ClientEngine, (engine) =>
-            Effect.andThen(engine.pull, engine.query(allTodos))
+          Effect.flatMap(Client.Client, (client) =>
+            Effect.andThen(
+              Effect.retry(
+                Effect.flatMap(client.query(allTodos), (current) =>
+                  current.length === 2 ? Effect.void : Effect.fail("not yet" as const)
+                ),
+                { times: 100, schedule: Schedule.spaced("20 millis") }
+              ),
+              client.query(allTodos)
+            )
           )
         )
       );

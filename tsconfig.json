@@ -8,7 +8,6 @@
     { "path": "./packages/jsonapi" },
     { "path": "./packages/sql" },
     { "path": "./packages/svelte" },
-    { "path": "./packages/sveltekit" },
     { "path": "./packages/devtools" }
   ]
 }

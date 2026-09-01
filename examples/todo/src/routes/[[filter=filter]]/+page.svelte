@@ -13,8 +13,7 @@
    */
   import { Effect } from "effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useAggregate, useQuery } from "@legation/svelte/Runes";
-  import { Undo as UndoBindings } from "@legation/svelte";
+  import { useAggregate, useQuery, useUndo } from "@legation/svelte/Runes";
   import { Aggregate } from "@legation/effect";
   import { type Todo, allTodos, activeTodos } from "$lib/domain";
   import { connectionState, getDemo, pendingState } from "$lib/demo.svelte";
@@ -33,9 +32,9 @@
   // read — derived by the engine, deduped so an edit that leaves the count
   // unchanged doesn't re-render the footer.
   const activeCount = useAggregate(() => activeTodos, Aggregate.count);
-  // Undo/redo over the engine: `run` a paired intent (do + reverse). These are
-  // `Readable` stores — the bindings have no rune equivalent — hence the `$`.
-  const { canUndo, canRedo, undo, redo } = UndoBindings.undoControls(manager);
+  // Undo/redo over the engine: `run` a paired intent (do + reverse), and the
+  // rune tracks whether an undo/redo is currently possible.
+  const history = useUndo(manager);
   const connection = connectionState(demo);
   const pending = pendingState(demo);
 
@@ -132,8 +131,8 @@
   const onKeydown = (event: KeyboardEvent): void => {
     if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
     event.preventDefault();
-    if (event.shiftKey) void redo();
-    else void undo();
+    if (event.shiftKey) void history.redo();
+    else void history.undo();
   };
 </script>
 
@@ -163,10 +162,10 @@
       <button class={remoteAgent ? "btn btn-active" : "btn"} onclick={() => (remoteAgent = !remoteAgent)}>
         {remoteAgent ? "Remote agent: on" : "Remote agent: off"}
       </button>
-      <button class="btn" disabled={!$canUndo} onclick={() => void undo()} title="Undo (⌘Z / Ctrl+Z)">
+      <button class="btn" disabled={!history.canUndo} onclick={() => void history.undo()} title="Undo (⌘Z / Ctrl+Z)">
         Undo
       </button>
-      <button class="btn" disabled={!$canRedo} onclick={() => void redo()} title="Redo (⇧⌘Z / Ctrl+Shift+Z)">
+      <button class="btn" disabled={!history.canRedo} onclick={() => void history.redo()} title="Redo (⇧⌘Z / Ctrl+Shift+Z)">
         Redo
       </button>
     </div>

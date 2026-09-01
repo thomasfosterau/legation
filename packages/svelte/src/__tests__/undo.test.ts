@@ -1,25 +1,31 @@
 /**
- * Undo controls: `canUndo`/`canRedo` are live stores over the manager's
- * history, and `undo`/`redo` replay the paired intents through the engine —
- * no component context required (the manager closes over the engine).
+ * `useUndo`: `canUndo`/`canRedo` are runes over the manager's history change
+ * streams, and `undo`/`redo` replay the paired intents through the engine.
+ * The manager closes over the engine, so the hook needs no Client in context —
+ * only a mounted component, for its `$effect`.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mount, unmount } from "svelte";
 import { Effect } from "effect";
 import { Subset, Undo } from "@legation/effect/internal";
-import { get } from "svelte/store";
-import { undoControls } from "../Undo.js";
-import { makeRuntime, run, until } from "./world.js";
+import UndoHarness from "./fixtures/UndoHarness.svelte";
+import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
 
 const allTodos = Subset.make({ collection: "todos" });
+const text = () => document.body.textContent ?? "";
 
-describe("undo controls", () => {
+afterEach(() => {
+  document.body.innerHTML = "";
+});
+
+describe("useUndo", () => {
   it("tracks history availability and replays intents", async () => {
-    const runtime = makeRuntime();
+    const runtime = makeClientRuntime();
     const manager = await run(runtime, (engine) => Undo.make(engine));
-    const controls = undoControls(manager);
+    const app = mount(UndoHarness, { target: document.body, props: { manager } });
 
-    // Stores seed false and re-emit from the manager's change streams.
-    await until(() => get(controls.canUndo) === false && get(controls.canRedo) === false);
+    // The runes seed false and re-emit from the manager's change streams.
+    await until(() => text().includes("canUndo:false") && text().includes("canRedo:false"));
 
     await Effect.runPromise(
       manager.run({
@@ -27,7 +33,7 @@ describe("undo controls", () => {
         undo: { mutator: "todo/set", args: { id: "1", title: "before" } },
       })
     );
-    await until(() => get(controls.canUndo) === true);
+    await until(() => text().includes("canUndo:true"));
 
     const titles = async (): Promise<ReadonlyArray<string>> =>
       (await run(runtime, (engine) => engine.query(allTodos))).map(
@@ -35,14 +41,15 @@ describe("undo controls", () => {
       );
     expect(await titles()).toEqual(["after"]);
 
-    await controls.undo();
-    await until(() => get(controls.canRedo) === true && get(controls.canUndo) === false);
+    buttonByLabel("undo").click();
+    await until(() => text().includes("canRedo:true") && text().includes("canUndo:false"));
     expect(await titles()).toEqual(["before"]);
 
-    await controls.redo();
-    await until(() => get(controls.canUndo) === true && get(controls.canRedo) === false);
+    buttonByLabel("redo").click();
+    await until(() => text().includes("canUndo:true") && text().includes("canRedo:false"));
     expect(await titles()).toEqual(["after"]);
 
+    unmount(app);
     await runtime.dispose();
   });
 });

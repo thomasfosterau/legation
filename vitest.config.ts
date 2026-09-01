@@ -15,8 +15,10 @@ const alias = {
   "@legation/node": pkg("node"),
   "@legation/jsonapi": pkg("jsonapi"),
   "@legation/sql": pkg("sql"),
+  "@legation/svelte/kit": fileURLToPath(
+    new URL("packages/svelte/src/kit/index.ts", import.meta.url)
+  ),
   "@legation/svelte": pkg("svelte"),
-  "@legation/sveltekit": pkg("sveltekit"),
   "@legation/devtools": pkg("devtools"),
 };
 
@@ -39,7 +41,9 @@ export default defineConfig({
             "tests/**/*.test.ts",
             "examples/commerce/tests/**/*.test.ts",
           ],
-          exclude: ["**/node_modules/**", "packages/svelte/**"],
+          // The binding tests mount components and need the `svelte`
+          // project below; the /kit tests are plain node.
+          exclude: ["**/node_modules/**", "packages/svelte/src/__tests__/**"],
         },
       },
       {
@@ -55,7 +59,7 @@ export default defineConfig({
         test: {
           name: "svelte",
           environment: "jsdom",
-          include: ["packages/svelte/src/**/*.test.ts"],
+          include: ["packages/svelte/src/__tests__/**/*.test.ts"],
           server: {
             deps: {
               // Vitest externalizes node_modules by default — even a package

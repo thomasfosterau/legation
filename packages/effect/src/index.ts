@@ -13,6 +13,9 @@
  *   optimistically on the Client and authoritatively on the Backend.
  * - {@link Client} — the one-per-thread object; where a read is answered
  *   (replica, worker-hosted engine, server fallthrough) is configuration.
+ * - {@link Hydration} — moving a client's durable state across a
+ *   serialisation boundary: the SSR snapshot a server renders and a browser
+ *   hydrates, framework-agnostically.
  * - {@link Server} — one per backend: the protocol handler plus
  *   `broadcast`, the single verb for out-of-band changes.
  *
@@ -44,6 +47,7 @@ export * as Mutator from "./Mutator.js";
 export * as Client from "./Client.js";
 export * as ClientStore from "./ClientStore.js";
 export * as Transport from "./Transport.js";
+export * as Hydration from "./Hydration.js";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 export * as Server from "./Server.js";

@@ -1,7 +1,7 @@
 {
   "name": "@legation/svelte",
   "version": "0.1.0",
-  "description": "Svelte bindings for the legation engine: live query stores and a mutate helper",
+  "description": "Svelte bindings for the legation engine: rune hooks over the Client, plus the SvelteKit integration on /kit",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +15,10 @@
       "svelte": "./dist/Runes.svelte.js",
       "import": "./dist/Runes.svelte.js"
     },
+    "./kit": {
+      "types": "./dist/kit/index.d.ts",
+      "import": "./dist/kit/index.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
@@ -26,13 +30,14 @@
   ],
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.. --project svelte"
+    "test": "vitest run --root ../.. packages/svelte"
   },
   "keywords": [
     "effect",
     "svelte",
-    "stores",
+    "sveltekit",
     "runes",
+    "ssr",
     "sync-engine",
     "typescript"
   ],
@@ -47,11 +52,13 @@
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84",
-    "svelte": ">=5.40"
+    "svelte": ">=5.40",
+    "@sveltejs/kit": "^2.0.0"
   },
   "devDependencies": {
     "effect": "catalog:",
-    "svelte": "^5"
+    "svelte": "^5",
+    "@sveltejs/kit": "^2.0.0"
   },
   "repository": {
     "type": "git",
@@ -61,5 +68,10 @@
   "bugs": {
     "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/svelte#readme"
+  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/svelte#readme",
+  "peerDependenciesMeta": {
+    "@sveltejs/kit": {
+      "optional": true
+    }
+  }
 }

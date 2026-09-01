@@ -1,7 +1,8 @@
 # ADR-0020: SvelteKit integration — core SSR primitives, a thin kit package, effect-sveltekit at the app boundary
 
 Date: 2026-07-03
-Status: Accepted
+Status: Accepted — amended 2026-09-01 (placement 2: the Kit package became the
+`@legation/svelte/kit` subpath; `Hydration` is public and speaks `Query.Read`)
 
 ## Context
 
@@ -30,13 +31,12 @@ Three placements, following ADR-0006's dependency test:
    _browser's_ client group id, so the snapshot cookie continues that group's
    CVR conversation. `Hydration.hydrateIfEmpty` is the client-boot default
    over durable stores (a repeat visit's rows/cookie/journal are fresher than
-   any snapshot). `Hydration.rowsFor` projects a snapshot onto a subset with
-   `Subset.apply` — the synchronous initial value for component hooks during
-   SSR and first client render.
-2. **`@legation/sveltekit`** holds what binds to SvelteKit's types: the
-   client-group cookie helper, `loadSnapshot` sugar, and the
-   snapshot-hydrated `engineRuntime` boot. It depends on `@sveltejs/kit`
-   (types) and stays deliberately thin.
+   any snapshot). `Hydration.rowsFor` projects a snapshot onto a read — the
+   synchronous initial value for component hooks during SSR and first client
+   render.
+2. **The Kit surface** holds what binds to SvelteKit's types: the client-group
+   cookie helper, `loadSnapshot` sugar, and the snapshot-hydrated boot. It
+   depends on `@sveltejs/kit` (types) and stays deliberately thin.
 3. **Apps author their Kit boundary with `@thomasfosterau/effect-sveltekit`**
    (loads, form actions, endpoints, per-request runtimes via
    `RequestRuntime`, deployment adapter). The library does not wrap it —
@@ -51,9 +51,28 @@ engine hooks need reactive thunks (re-subscribe on `$state` change). The two
 compose side by side in an app — effect-svelte for generic Effect concerns,
 `@legation/svelte` for engine reads/writes.
 
+## Amendment (2026-09-01)
+
+Placement 2 shipped as a separate package, `@legation/sveltekit`. It is now the
+**`@legation/svelte/kit` subpath** of the bindings package instead. ADR-0006's
+dependency test drew the original line, but the footprint turned out not to
+justify it: the package contained no Svelte code and its entire `@sveltejs/kit`
+coupling was two `import type { Cookies }` statements, erased at build — so
+there was no runtime dependency to isolate. `@sveltejs/kit` is an **optional**
+peer of `@legation/svelte`; a non-Kit Svelte app pulls nothing, and subpath
+exports keep the server helpers out of a client bundle that never imports them.
+
+Two consequences of that move sharpen placement 1. `Hydration` was described
+here as living in core but shipped behind `@legation/effect/internal`; it is
+now exported from the package root, because an SSR snapshot is an app-facing
+concept, not an implementation seam. And it speaks ADR-0022's vocabulary:
+`snapshot({ nodes, reads })` and `rowsFor(snapshot, nodes, read)` rather than
+`Subset`. The Kit boot is `clientRuntime` (over `Client.make`, so the sync loop
+starts itself) rather than `engineRuntime`.
+
 ## Consequences
 
-- SSR works on any Effect-capable server framework — the Kit package is sugar,
+- SSR works on any Effect-capable server framework — the Kit surface is sugar,
   not a dependency of correctness; a Next.js or plain-Node SSR setup calls
   `Hydration.snapshot` directly.
 - The client group id becomes an explicit, app-visible concept (a plain

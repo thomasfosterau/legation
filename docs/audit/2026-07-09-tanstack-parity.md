@@ -129,4 +129,4 @@ devtools panel.
   `replaceEqualDeep` has no observed consumer.
 - **React SSR meta-framework adapter**: the primitives (`Hydration.snapshot`,
   seed, `hydrateIfEmpty`) are framework-agnostic and proven via
-  `@legation/sveltekit`; an adapter is thin app-shaped work.
+  `@legation/svelte/kit`; an adapter is thin app-shaped work.

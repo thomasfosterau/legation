@@ -50,4 +50,4 @@ with stock decrement and cart clear).
   `@legation/svelte`'s mirror test.
 - Swap the demo sign-in for Better Auth behind the same `client_groups` +
   `IdentityResolver` seam.
-- An SSR-stub runtime helper for `@legation/sveltekit` (see `lib/engine.ts`).
+- An SSR-stub runtime helper for `@legation/svelte/kit` (see `lib/engine.ts`).

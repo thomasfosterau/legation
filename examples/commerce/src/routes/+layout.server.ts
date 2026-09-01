@@ -4,7 +4,7 @@
  * each page, against the JSON:API — this layout only supplies the shell.
  */
 import type { LayoutServerLoad } from "./$types";
-import { clientGroupId } from "@legation/sveltekit";
+import { clientGroupId } from "@legation/svelte/kit";
 
 export const load: LayoutServerLoad = ({ cookies, locals }) => ({
   user: locals.user,

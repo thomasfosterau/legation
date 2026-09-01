@@ -20,6 +20,8 @@ export * as Protocol from "./Protocol.js";
 export * as RpcTransport from "./RpcTransport.js";
 export * as SpecExport from "./SpecExport.js";
 
+// `Hydration` is public (`@legation/effect`) — the SSR snapshot is app-facing.
+
 // ─── Engine ──────────────────────────────────────────────────────────────────
 export * as ClientEngine from "./ClientEngine.js";
 export * as ClientView from "./ClientView.js";
@@ -28,7 +30,6 @@ export * as Undo from "./Undo.js";
 export * as Paced from "./Paced.js";
 export * as Introspection from "./Introspection.js";
 export * as MutationState from "./MutationState.js";
-export * as Hydration from "./Hydration.js";
 export * as LiveView from "./LiveView.js";
 export * as Incremental from "./Incremental.js";
 export * as Derive from "./Derive.js";

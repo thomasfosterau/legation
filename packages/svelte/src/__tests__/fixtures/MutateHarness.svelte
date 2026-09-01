@@ -1,21 +1,20 @@
 <script lang="ts">
   import type { ClientEngine } from "@legation/effect/internal";
-  import { getMutate, getMutateWithAck } from "../../Mutation.js";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
+  import { useMutation, useMutationWithAck } from "../../Runes.svelte.js";
 
   const {
     runtime,
     onOutcome,
   }: {
-    runtime: EffectSyncRuntime;
+    runtime: ClientRuntime;
     onOutcome: (outcome: ClientEngine.MutationOutcome) => void;
   } = $props();
 
-  // The mutate helpers capture the context runtime at init by design.
   // svelte-ignore state_referenced_locally
-  setEngineRuntime(runtime);
-  const mutate = getMutate();
-  const mutateWithAck = getMutateWithAck();
+  setClientRuntime(runtime);
+  const mutate = useMutation();
+  const mutateWithAck = useMutationWithAck();
 </script>
 
 <!-- Fire-and-forget clicks: swallow rejections (the runtime may dispose

@@ -24,10 +24,10 @@
  * from context ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
-import { Effect, HashMap, Stream } from "effect";
+import { Effect, Fiber, HashMap, Stream } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Aggregate, Client, Query } from "@legation/effect";
-import { ClientEngine, type MutationState } from "@legation/effect/internal";
+import { ClientEngine, type MutationState, type Undo } from "@legation/effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
@@ -396,3 +396,54 @@ export const useMutationState = (
     },
     { initial: [] }
   );
+
+/** Live undo/redo availability plus the two commands. */
+export interface UndoControls {
+  /** Whether an undo is currently possible. Reactive. */
+  readonly canUndo: boolean;
+  /** Whether a redo is currently possible. Reactive. */
+  readonly canRedo: boolean;
+  /** Run the manager's `undo` (a no-op when nothing is undoable). */
+  readonly undo: () => Promise<void>;
+  /** Run the manager's `redo` (a no-op when nothing is redoable). */
+  readonly redo: () => Promise<void>;
+}
+
+/** Drain a boolean stream into `$state`, interrupting on teardown. */
+const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean } => {
+  let value = $state(false);
+  $effect(() => {
+    // The manager's streams close over the engine (no `R`), so they run on the
+    // default runtime — `useUndo` needs no Client in context.
+    const fiber = Effect.runFork(
+      Stream.runForEach(changes, (next) => Effect.sync(() => (value = next)))
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(fiber));
+    };
+  });
+  return {
+    get current() {
+      return value;
+    },
+  };
+};
+
+/**
+ * Undo/redo over an engine's history as runes. Build one manager per client
+ * with `Undo.make(engine)` and call this during component initialisation.
+ */
+export const useUndo = (manager: Undo.UndoManager): UndoControls => {
+  const canUndo = useFlag(manager.canUndoChanges);
+  const canRedo = useFlag(manager.canRedoChanges);
+  return {
+    get canUndo() {
+      return canUndo.current;
+    },
+    get canRedo() {
+      return canRedo.current;
+    },
+    undo: () => Effect.runPromise(Effect.ignore(manager.undo)),
+    redo: () => Effect.runPromise(Effect.ignore(manager.redo)),
+  };
+};
