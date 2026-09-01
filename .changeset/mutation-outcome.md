@@ -14,8 +14,8 @@ authoritative backend outcome — applied, or permanently rejected with a reason
   streams the lifecycle (`journaled`, then `acknowledged` or `rejected`). Plain
   `mutate`/`mutateEncoded` are unchanged and register no deferred; pending
   acknowledgements are interrupted on engine scope close, so they never hang.
-- React gains `useMutationWithAck` (over an additive `EngineAtoms.mutationWithAck`
-  atom); Svelte gains `getMutateWithAck`. Both return a promise of the outcome.
+- Svelte gains `useMutationWithAck` (over an additive
+  `EngineAtoms.mutationWithAck` atom), returning a promise of the outcome.
 - The tab mirror forwards the outcome: `MirrorProtocol` gains an additive
   `MutateSettled` host→tab message, `EngineHost` awaits the backend verdict on a
   scoped fibre and posts it, and `TabMirror.mutateWithAck` awaits it (the

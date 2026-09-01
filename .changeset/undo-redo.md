@@ -26,8 +26,7 @@ The **delete-then-undo** criterion is met by the paired-intents pattern: capture
 the row's pre-delete value from the local view at run time and pass it as the
 undo's re-create args, so an undo restores the row exactly.
 
-`@legation/react` gains `useUndo(manager)` (`{ undo, redo, canUndo, canRedo }`,
-with availability tracked through `useSyncExternalStore`) and `@legation/svelte`
-gains `undoControls(manager)` (readable `canUndo` / `canRedo` stores plus `undo`
-/ `redo` handlers). The `svelte-todo` example wires ⌘Z / Ctrl+Z (Shift for redo)
-through the manager and documents the recipe.
+`@legation/svelte` gains `useUndo(manager)` — `canUndo` / `canRedo` as runes
+over the manager's change streams, plus `undo` / `redo` handlers. The `todo`
+example wires ⌘Z / Ctrl+Z (Shift for redo) through the manager and documents
+the recipe.
