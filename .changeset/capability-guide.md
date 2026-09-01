@@ -1,6 +1,5 @@
 ---
 "@legation/effect": patch
-"@legation/react": patch
 "@legation/svelte": patch
 ---
 

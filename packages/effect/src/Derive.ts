@@ -46,7 +46,7 @@
  * **Observability.** A derived pipeline is an Effect `Stream` and, via
  * {@link atom}, an Atom on the standard `effect/unstable/reactivity` surface —
  * so framework bindings need nothing new: `@legation/svelte`'s `query` store
- * and `@legation/react`'s `useQuery` bind a derived stream exactly as they bind
+ * and `@legation/svelte`'s `useQuery` bind a derived stream exactly as they bind
  * a raw `observe`.
  *
  * **Lifetime.** {@link observed} pairs a refcounted `Subscriptions` acquire

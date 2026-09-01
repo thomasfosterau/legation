@@ -1,6 +1,5 @@
 ---
 "@legation/jsonapi": minor
-"@legation/react": patch
 ---
 
 `JsonApiSync.layer` accepts a `store` option to back the engine with a

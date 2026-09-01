@@ -4,7 +4,6 @@
 "@legation/node": patch
 "@legation/jsonapi": patch
 "@legation/sql": patch
-"@legation/react": patch
 ---
 
 Bump the pinned Effect version from `4.0.0-beta.75` to `4.0.0-beta.83` across all

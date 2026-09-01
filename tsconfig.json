@@ -7,7 +7,6 @@
     { "path": "./packages/node" },
     { "path": "./packages/jsonapi" },
     { "path": "./packages/sql" },
-    { "path": "./packages/react" },
     { "path": "./packages/svelte" },
     { "path": "./packages/sveltekit" },
     { "path": "./packages/devtools" }

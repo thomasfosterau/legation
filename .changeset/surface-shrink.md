@@ -4,7 +4,6 @@
 "@legation/node": patch
 "@legation/jsonapi": patch
 "@legation/sql": patch
-"@legation/react": patch
 "@legation/svelte": patch
 "@legation/sveltekit": patch
 ---

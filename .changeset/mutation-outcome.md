@@ -1,7 +1,6 @@
 ---
 "@legation/effect": minor
 "@legation/browser": minor
-"@legation/react": minor
 "@legation/svelte": minor
 ---
 

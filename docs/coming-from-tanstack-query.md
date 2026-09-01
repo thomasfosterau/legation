@@ -23,8 +23,7 @@ The snippets assume a `ClientEngine` in scope as `engine` and its `ClientStore`
 as `store`, both obtained from `ClientEngine.make(...)` (see the top-level
 [README](../README.md) quick start). They are illustrative fragments: effectful
 lines are the body of an `Effect.gen(function* () { … })`, and `atoms` /
-`engineLayer` refer to the reactivity bindings from `@legation/react` /
-`@legation/svelte`. Import surface:
+`engineLayer` refer to the reactivity bindings from `@legation/svelte`. Import surface:
 
 ```ts
 import { Duration, Effect, Schedule, Schema, Stream } from "effect";
@@ -264,7 +263,7 @@ The states are exposed instead, so the choice of how to gate rendering stays wit
 the app.
 
 ```ts
-// From @legation/react: `useQuery(subset)` returns an AsyncResult, not a thrown
+// From the bindings: `useQuery(read)` returns an AsyncResult, not a thrown
 // promise, so the component branches on the state explicitly.
 //   const result = useQuery(subset);
 //   AsyncResult.match(result, { onInitial, onSuccess, onFailure });
@@ -281,7 +280,7 @@ A changed subset (a paging cursor, a filter) selects a different atom whose
 default, so the UI flashes a loading state between pages. `@legation/svelte`'s
 `useQuery`/`useConnection` do this automatically: re-subscribing on an input
 change keeps the previous result on screen as a `waiting` `Success`
-(`useLiveStream`'s stale-while-revalidate). `@legation/react`'s atoms are
+(`useLiveStream`'s stale-while-revalidate). The bindings' atoms are
 cached per `Subset.hash` rather than held in one reactive slot per component,
 so the same behaviour is an explicit opt-in: `useQuery`/`useNamedQuery`'s
 `keepPrevious` option keeps the previous subset's rows as a `waiting`
@@ -290,7 +289,7 @@ consumer discriminates previous ("stale") from fresh data via
 `AsyncResult.isWaiting` — no separate `isPlaceholderData` flag.
 
 ```ts
-// From @legation/react:
+// From the bindings:
 const orders = useQuery(Subset.make({ collection: "orders", where, first, after }), {
   keepPrevious: true,
 });

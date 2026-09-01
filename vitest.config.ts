@@ -15,12 +15,8 @@ const alias = {
   "@legation/node": pkg("node"),
   "@legation/jsonapi": pkg("jsonapi"),
   "@legation/sql": pkg("sql"),
-  "@legation/react": pkg("react"),
   "@legation/svelte": pkg("svelte"),
   "@legation/sveltekit": pkg("sveltekit"),
-  "@legation/devtools/react": fileURLToPath(
-    new URL("packages/devtools/src/react.tsx", import.meta.url)
-  ),
   "@legation/devtools": pkg("devtools"),
 };
 

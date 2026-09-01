@@ -10,10 +10,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./react": {
-      "types": "./dist/react.d.ts",
-      "import": "./dist/react.js"
-    },
     "./svelte": {
       "svelte": "./svelte/index.ts",
       "types": "./svelte/index.ts",
@@ -52,13 +48,9 @@
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.84",
-    "react": ">=18",
     "svelte": ">=5.40"
   },
   "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    },
     "svelte": {
       "optional": true
     }

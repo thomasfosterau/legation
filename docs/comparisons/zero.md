@@ -85,10 +85,11 @@ worker deployment is not second-class.
 
 Zero defines schema in its own builder and generates types; it is
 framework-agnostic with first-class React/Solid/Svelte/Vue hooks. legation
-is **Effect-native**: collections, mutators, and protocol messages are
-Effect Schemas (single source of truth for validation, wire format, and
+is **Effect-native**: nodes, mutations, and protocol messages are Effect
+Schemas (single source of truth for validation, wire format, and
 persistence), the engine is layers and streams, and the bindings
-(`@legation/react`, `@legation/svelte`) sit over a reactivity core. If your
+(`@legation/svelte` today; the seam is framework-agnostic) sit over a
+reactivity core. If your
 team is not using Effect, this is real friction — schema definitions,
 error handling, and composition all assume it. If it is, everything
 composes with the rest of your stack for free (the example's server mounts

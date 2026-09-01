@@ -4,7 +4,6 @@
 "@legation/node": minor
 "@legation/jsonapi": minor
 "@legation/sql": minor
-"@legation/react": minor
 "@legation/svelte": minor
 ---
 

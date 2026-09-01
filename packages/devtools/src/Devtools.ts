@@ -3,14 +3,13 @@
  *
  * The headless core over the introspection substrate (#120): all data
  * acquisition and every action live here as plain `Effect`/`Stream` values —
- * the same surfaces `@legation/react` and `@legation/svelte` already expose
- * bindings over — so each framework panel (`@legation/devtools/react`,
- * `@legation/devtools/svelte`) is a thin idiomatic UI over one shared, tested
- * read model, never its own data-acquisition path.
+ * the same surfaces `@legation/svelte` already exposes bindings over — so a
+ * framework panel (`@legation/devtools/svelte`) is a thin idiomatic UI over
+ * one shared, tested read model, never its own data-acquisition path.
  *
  * Fed exclusively by already-public substrate (the `@legation/effect/internal`
- * entrypoint, the same one `@legation/react`/`@legation/svelte` themselves
- * depend on): `Introspection` (subscriptions, cookie, collections),
+ * entrypoint, the same one `@legation/svelte` itself depends on):
+ * `Introspection` (subscriptions, cookie, collections),
  * `ClientEngine.mutationStates` (#116, the journal/mutation timeline —
  * including the `"dropped"` phase paced compaction settles a compacted entry
  * to, so a devtools timeline never shows a phantom in-flight mutation),
