@@ -57,7 +57,6 @@
   },
   "devDependencies": {
     "effect": "catalog:",
-    "react": "^18",
     "svelte": "^5"
   },
   "repository": {

@@ -141,3 +141,25 @@ and `todo` still hand-rolled one.
 extends SvelteKit's generated one, whose `include` covers `src/`, `tests/` and
 `vite.config.ts` — but not `server/`, which is a third of the example. Fixed
 here by adding `tsconfig.server.json` and chaining it into `check`.
+
+## 10. Framework packages: React retired, the seam kept
+
+With the React examples gone, `@legation/react` and `@legation/devtools/react`
+had no consumers anywhere in the repo, and neither was published — so both were
+removed rather than left to rot the way the store-tier bindings had (finding 1).
+That also retired the root `react` / `react-dom` / `@testing-library/react`
+devDependencies and the `jsx` compiler option.
+
+`@legation/svelte` and `@legation/sveltekit` **stay**. They are load-bearing —
+all four examples import them, they carry the binding test suite, and
+`@legation/sveltekit` owns the SSR-seeding path that has no equivalent in app
+code — and ADR-0006 draws package boundaries by dependency footprint precisely
+so that a `svelte` peer dependency never reaches the engine. Removing them would
+duplicate the parts that are actually hard (stale-while-revalidate,
+effect-scoped subscriptions, SSR seeds) into every app.
+
+The seam itself is unchanged by React's removal: `Client` and the reactivity
+atoms are framework-agnostic, `@legation/devtools`' core is headless with the
+panel as a thin per-framework export, and a binding for another framework
+remains a package over the same surfaces — there is now simply one such package
+instead of two.
