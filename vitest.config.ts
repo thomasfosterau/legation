@@ -18,7 +18,9 @@ const alias = {
   "@legation/svelte/kit": fileURLToPath(
     new URL("packages/svelte/src/kit/index.ts", import.meta.url)
   ),
-  "@legation/svelte": pkg("svelte"),
+  "@legation/svelte": fileURLToPath(
+    new URL("packages/svelte/src/index.svelte.ts", import.meta.url)
+  ),
   "@legation/devtools": pkg("devtools"),
 };
 

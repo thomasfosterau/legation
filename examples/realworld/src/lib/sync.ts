@@ -38,7 +38,7 @@ import {
   Server,
   Transport,
 } from "@legation/effect";
-import type { Runtime } from "@legation/svelte";
+import type { ClientRuntime } from "@legation/svelte";
 
 import {
   type Article,
@@ -70,7 +70,7 @@ import {
 
 /** What `createWorld` resolves to. */
 export interface World {
-  readonly runtime: Runtime.ClientRuntime;
+  readonly runtime: ClientRuntime;
   /** Tell the server which user this client is acting as (null = anonymous). */
   readonly setIdentity: (username: string | null) => void;
   /** Flip the loopback transport between online and (failing) offline. */

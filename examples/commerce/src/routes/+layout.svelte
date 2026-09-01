@@ -1,7 +1,7 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { Effect, Fiber, Stream } from "effect";
-  import { Runtime } from "@legation/svelte";
+  import { setClientRuntime } from "@legation/svelte";
   import type { ElectedHost } from "@legation/browser";
   import { boot, bootMainThread, ssrStub, type AppRuntime } from "../lib/engine.js";
 
@@ -33,7 +33,7 @@
       runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
     }
   }
-  Runtime.setClientRuntime(runtime ?? ssrStub());
+  setClientRuntime(runtime ?? ssrStub());
 </script>
 
 <nav>

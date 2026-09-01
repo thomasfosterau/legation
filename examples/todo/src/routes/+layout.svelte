@@ -6,7 +6,7 @@
    * hooks read it from there, ADR-0022) and hands the demo controls down the
    * same way.
    */
-  import { Runtime } from "@legation/svelte";
+  import { setClientRuntime } from "@legation/svelte";
   import { setDemo } from "$lib/demo.svelte";
   import "../app.css";
 
@@ -17,7 +17,7 @@
   // svelte-ignore state_referenced_locally
   const world = data.world;
 
-  Runtime.setClientRuntime(world.runtime);
+  setClientRuntime(world.runtime);
   setDemo(world.demo);
 </script>
 

@@ -13,7 +13,7 @@
    */
   import { Effect } from "effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useAggregate, useQuery, useUndo } from "@legation/svelte/Runes";
+  import { useAggregate, useQuery, useUndo } from "@legation/svelte";
   import { Aggregate } from "@legation/effect";
   import { type Todo, allTodos, activeTodos } from "$lib/domain";
   import { connectionState, getDemo, pendingState } from "$lib/demo.svelte";

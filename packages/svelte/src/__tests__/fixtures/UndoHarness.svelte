@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Undo } from "@legation/effect/internal";
-  import { useUndo } from "../../Runes.svelte.js";
+  import { useUndo } from "../../index.svelte.js";
 
   const { manager }: { manager: Undo.UndoManager } = $props();
 

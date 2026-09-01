@@ -22,11 +22,11 @@
 import { Effect, Layer, ManagedRuntime, type Stream } from "effect";
 import { Client } from "@legation/effect";
 import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@legation/browser";
-import type { Runtime } from "@legation/svelte";
+import type { ClientRuntime } from "@legation/svelte";
 import { mutators, nodes, shellReads } from "./domain.js";
 import { bootElected } from "./host.js";
 
-export type AppRuntime = Runtime.ClientRuntime;
+export type AppRuntime = ClientRuntime;
 
 /** Build the tab's Client runtime once (call from the root layout). */
 export const boot = (options: {

@@ -11,7 +11,7 @@
  * so — like any hook — it must be called during component initialisation; the
  * result is a `$derived`, so it tracks login/logout.
  */
-import { useMutation } from "@legation/svelte/Runes";
+import { useMutation } from "@legation/svelte";
 import { getSession } from "./session.svelte";
 import { favoriteId, followId, slugify } from "./domain";
 import type { Article } from "./domain";

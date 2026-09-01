@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
   import { Aggregate } from "@legation/effect";
-  import { useAggregate, useConnection, useMutationWithAck, useQuery } from "@legation/svelte/Runes";
+  import { useAggregate, useConnection, useMutationWithAck, useQuery } from "@legation/svelte";
   import {
     productDetail,
     productReviews,

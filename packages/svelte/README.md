@@ -12,13 +12,12 @@ cannot: **reactive re-subscription** (a read re-runs when the `$state` its
 thunk touches changes) and **SSR hydration** (a server-rendered page's rows
 seeding the first client render).
 
-Three entry points:
+Two entry points:
 
-| Import                   | What it is                                                                              |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| `@legation/svelte`       | `setClientRuntime` / `getClientRuntime` — the `Client` in Svelte context                |
-| `@legation/svelte/Runes` | the rune hooks: reads, aggregates, mutations, undo                                      |
-| `@legation/svelte/kit`   | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
+| Import                 | What it is                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `@legation/svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
+| `@legation/svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
 ```bash
 npm install @legation/svelte @legation/effect effect svelte
@@ -27,9 +26,10 @@ npm install @legation/svelte @legation/effect effect svelte
 `@sveltejs/kit` is an **optional** peer dependency — only `@legation/svelte/kit`
 needs it, and only as a `Cookies` type, so a non-Kit Svelte app pulls nothing.
 
-## Runes (Svelte 5)
+## The hooks
 
-`@legation/svelte/Runes` is the whole read/write surface. Each hook takes its
+The package root is the whole read/write surface — the hooks are the API, so
+they are not behind a subpath. Each hook takes its
 inputs as a **thunk** called inside `$effect`, so a read re-subscribes whenever
 the reactive state the thunk touches changes — a paginated read whose cursor
 lives in `$state` just works, and so does a detail read keyed on a route param.
@@ -50,6 +50,9 @@ re-subscribing the previous value stays visible with `waiting: true`
 - **`useMutationState(() => mutator?)`** — every journaled mutation's lifecycle.
 - **`useUndo(manager)`** — `canUndo` / `canRedo` / `undo` / `redo` over an
   `Undo.UndoManager`.
+- **`setClientRuntime(runtime)`** / **`getClientRuntime()`** — the `Client` in
+  Svelte context. Call `setClientRuntime` once, high in the tree, before any
+  hook.
 
 Every live hook accepts `{ initial }` to seed a synchronous `Success` before
 the first emission — during SSR (where `$effect` never runs) the seed is what
@@ -59,7 +62,7 @@ renders, and on the client it makes the first render match the server markup
 ```svelte
 <script lang="ts">
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
 
   let cursor = $state<string | undefined>(undefined);
   const page = useQuery(() => ({
@@ -93,10 +96,12 @@ stream rejects it into the boundary's `failed` snippet.
 </svelte:boundary>
 ```
 
-The runes entry point ships as an uncompiled `.svelte.js` module (compiled by
-your bundler's Svelte plugin, the standard Svelte-library convention). The
-package requires Svelte 5.40+ (its runtime context rides Svelte's
-`createContext`).
+The root entry ships as an uncompiled `.svelte.js` module (compiled by your
+bundler's Svelte plugin, the standard Svelte-library convention — the package
+carries a `svelte` export condition so the plugin picks it up). It requires
+Svelte 5.40+: the hooks are runes, and the runtime context rides Svelte's
+`createContext`. `@legation/svelte/kit` is rune-free and server-side, so
+importing it pulls none of this in.
 
 ## SvelteKit
 
@@ -164,9 +169,9 @@ export const boot = (data: { snapshot: Snapshot; clientGroupId: string }) =>
 ```svelte
 <!-- +layout.svelte -->
 <script lang="ts">
-  import { Runtime } from "@legation/svelte";
+  import { setClientRuntime } from "@legation/svelte";
   const { data, children } = $props();
-  Runtime.setClientRuntime(boot(data));
+  setClientRuntime(boot(data));
 </script>
 ```
 
@@ -176,7 +181,7 @@ seeding the rune hooks:
 ```svelte
 <script lang="ts">
   import { Hydration } from "@legation/effect";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import { allProducts, nodes } from "$lib/domain";
   const { data } = $props();
   const products = useQuery(() => allProducts, {

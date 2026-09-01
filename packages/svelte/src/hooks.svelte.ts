@@ -18,10 +18,10 @@
  * (`row.related`), windowed per the edge's declared order (ADR-0024), over
  * owned and worker-hosted engines alike.
  *
- * Import from `@legation/svelte/Runes` (requires Svelte 5; the classic
- * `Readable` stores on the package root remain for Svelte 4). Hooks must
- * be called during component initialisation — they read the Client runtime
- * from context ({@link setClientRuntime}) and register a `$effect`.
+ * Re-exported from the package root (`@legation/svelte`), which is the only
+ * read/write surface. Requires Svelte 5. Hooks must be called during
+ * component initialisation — they read the Client runtime from context
+ * ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Fiber, HashMap, Stream } from "effect";

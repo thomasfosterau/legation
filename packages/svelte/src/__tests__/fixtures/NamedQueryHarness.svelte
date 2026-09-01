@@ -1,7 +1,7 @@
 <script lang="ts">
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
-  import { useNamedQuery } from "../../Runes.svelte.js";
+  import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
+  import { useNamedQuery } from "../../index.svelte.js";
 
   const {
     runtime,

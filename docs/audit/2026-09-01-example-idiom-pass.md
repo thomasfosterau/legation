@@ -26,6 +26,11 @@ them looked stale. **Suggestion:** deprecate `Query`/`Mutation`/`Runtime`'s
 engine-runtime surface in the bindings the way `Mutator` is deprecated in the
 core, and lead the bindings README with the rune hooks.
 
+**Resolved.** The store tier is gone: the hooks are the package root, there is
+no second way to read, and `@legation/svelte/Runes` no longer exists as a
+subpath. `Mutator`/`Collection`/`Subset` remain as-is in the core — that half of
+the finding still stands.
+
 ## 2. `Client.make` is the documented front door, but two capabilities force you off it
 
 `Client.make({ nodes, mutations })` is genuinely zero-wiring: it resolves the
@@ -112,7 +117,10 @@ right now", leaving `current` at `Initial`.
 `undoControls(manager)` returns `Readable` stores. In an otherwise store-free
 runes component that is the one place a `$` auto-subscription survives
 (`examples/todo/src/routes/[[filter=filter]]/+page.svelte`). **Suggestion:** a
-`useUndo(manager)` hook on the `Runes` subpath, matching the rest.
+`useUndo(manager)` hook, matching the rest.
+
+**Resolved.** `useUndo(manager)` ships on the package root and the todo example
+uses it; nothing in the examples reads a store any more.
 
 ## 8. Layer composition is where the seams pay off — once you find them
 
@@ -150,7 +158,11 @@ removed rather than left to rot the way the store-tier bindings had (finding 1).
 That also retired the root `react` / `react-dom` / `@testing-library/react`
 devDependencies and the `jsx` compiler option.
 
-`@legation/svelte` and `@legation/sveltekit` **stay**. They are load-bearing —
+`@legation/svelte` and `@legation/sveltekit` **stay** as a binding layer —
+though they were later merged into one package (`@legation/svelte`, with the
+SvelteKit surface on `@legation/svelte/kit`); see ADR-0020's 2026-09-01
+amendment. What follows is the reasoning for keeping the _layer_, which the
+merge did not change. They are load-bearing —
 all four examples import them, they carry the binding test suite, and
 `@legation/sveltekit` owns the SSR-seeding path that has no equivalent in app
 code — and ADR-0006 draws package boundaries by dependency footprint precisely

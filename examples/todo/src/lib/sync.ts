@@ -16,7 +16,7 @@
  *
  * Two things come out of it:
  *   - `runtime` — provides the `Client` (ADR-0022's one-per-thread object) to
- *     the rune hooks via `Runtime.setClientRuntime`;
+ *     the rune hooks via `setClientRuntime`;
  *   - `demo` — the side-channel the Client's read/write API deliberately
  *     doesn't cover (offline toggle, "remote edit", the durable journal,
  *     connection status), exposed as promises for event handlers.
@@ -37,7 +37,7 @@ import {
 // public `Client.make` does not hand back. So this app builds the engine
 // itself and wraps it with `Client.fromView` — the same Client either way.
 import { ClientEngine, ClientView, type Protocol, Undo } from "@legation/effect/internal";
-import type { Runtime } from "@legation/svelte";
+import type { ClientRuntime } from "@legation/svelte";
 
 import {
   CLIENT_GROUP_ID,
@@ -76,7 +76,7 @@ export interface Demo {
 
 /** What `createWorld` resolves to. */
 export interface World {
-  readonly runtime: Runtime.ClientRuntime;
+  readonly runtime: ClientRuntime;
   readonly demo: Demo;
   /**
    * The per-client undo manager (#46). Its `run`/`undo`/`redo` replay through

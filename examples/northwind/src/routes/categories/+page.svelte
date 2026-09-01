@@ -6,7 +6,7 @@
    * engine — no grouping pipeline and no join in the component.
    */
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { allCategories } from "$lib/domain";
   import { toCategoryCounts } from "$lib/data";

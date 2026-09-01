@@ -3,17 +3,13 @@
   "version": "0.1.0",
   "description": "Svelte bindings for the legation engine: rune hooks over the Client, plus the SvelteKit integration on /kit",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.svelte.js",
+  "types": "./dist/index.svelte.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./Runes": {
-      "types": "./dist/Runes.svelte.d.ts",
-      "svelte": "./dist/Runes.svelte.js",
-      "import": "./dist/Runes.svelte.js"
+      "types": "./dist/index.svelte.d.ts",
+      "svelte": "./dist/index.svelte.js",
+      "import": "./dist/index.svelte.js"
     },
     "./kit": {
       "types": "./dist/kit/index.d.ts",

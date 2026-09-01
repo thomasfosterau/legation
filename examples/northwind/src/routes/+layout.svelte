@@ -13,7 +13,7 @@
    */
   import { page } from "$app/state";
   import { Effect, Fiber, Stream } from "effect";
-  import { Runtime } from "@legation/svelte";
+  import { setClientRuntime } from "@legation/svelte";
   import { DevtoolsPanel } from "@legation/devtools/svelte";
   import type { Transport } from "@legation/effect";
   import "../app.css";
@@ -32,7 +32,7 @@
   // svelte-ignore state_referenced_locally
   const world = data.world;
 
-  Runtime.setClientRuntime(world.runtime);
+  setClientRuntime(world.runtime);
 
   // Connection status as a rune: the transport's own stream, drained into
   // `$state` for the banner.

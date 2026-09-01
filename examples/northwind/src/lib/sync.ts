@@ -34,7 +34,7 @@ import {
 // devtools core (#120) is an engine-level capability, and `Client.make` does
 // not hand the engine back. `Client.fromView` wraps it — the same Client.
 import { ClientEngine, ClientView } from "@legation/effect/internal";
-import { Runtime } from "@legation/svelte";
+import type { ClientRuntime } from "@legation/svelte";
 import * as Devtools from "@legation/devtools";
 
 import {
@@ -64,7 +64,7 @@ import {
 import * as seed from "./seed";
 
 export interface World {
-  readonly runtime: Runtime.ClientRuntime;
+  readonly runtime: ClientRuntime;
   /** The `@legation/devtools` headless core (#120) over this engine + store. */
   readonly devtools: Devtools.DevtoolsCore;
   readonly setOnline: (online: boolean) => Promise<void>;

@@ -14,8 +14,8 @@
   import { page } from "$app/state";
   import { Effect, Fiber, Stream } from "effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { Runtime } from "@legation/svelte";
-  import { useMutation, useQuery } from "@legation/svelte/Runes";
+  import { setClientRuntime } from "@legation/svelte";
+  import { useMutation, useQuery } from "@legation/svelte";
   import type { Transport } from "@legation/effect";
   import { allUsers, type User } from "$lib/domain";
   import { values } from "$lib/joins";
@@ -28,7 +28,7 @@
   // svelte-ignore state_referenced_locally
   const world = data.world;
 
-  Runtime.setClientRuntime(world.runtime);
+  setClientRuntime(world.runtime);
 
   // The session needs the live users read (to verify a login and to resolve the
   // signed-in user's row) and the mutate helper (to register / update).

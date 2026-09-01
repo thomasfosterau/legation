@@ -16,7 +16,7 @@
       "@legation/node": ["packages/node/src/index.ts"],
       "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],
       "@legation/sql": ["packages/sql/src/index.ts"],
-      "@legation/svelte": ["packages/svelte/src/index.ts"],
+      "@legation/svelte": ["packages/svelte/src/index.svelte.ts"],
       "@legation/svelte/kit": ["packages/svelte/src/kit/index.ts"],
       "@legation/devtools": ["packages/devtools/src/index.ts"]
     },

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
-  import { useMutation, useMutationState } from "../../Runes.svelte.js";
+  import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
+  import { useMutation, useMutationState } from "../../index.svelte.js";
 
   const { runtime }: { runtime: ClientRuntime } = $props();
 

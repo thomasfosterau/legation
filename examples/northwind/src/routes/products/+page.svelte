@@ -10,7 +10,7 @@
    * read-merge `product/update` mutation (optimistic, then authoritative).
    */
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { toProductViews, values } from "$lib/data";
   import type { ProductFilter } from "$lib/data";

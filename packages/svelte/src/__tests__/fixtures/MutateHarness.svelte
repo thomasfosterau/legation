@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ClientEngine } from "@legation/effect/internal";
-  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
-  import { useMutation, useMutationWithAck } from "../../Runes.svelte.js";
+  import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
+  import { useMutation, useMutationWithAck } from "../../index.svelte.js";
 
   const {
     runtime,

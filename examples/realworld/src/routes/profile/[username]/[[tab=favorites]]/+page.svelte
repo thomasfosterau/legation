@@ -10,7 +10,7 @@
   // Aliased: this page already has a `page` of its own — the pagination index.
   import { page as kitPage } from "$app/state";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import {
     allArticles,
     allFavorites,

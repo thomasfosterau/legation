@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useQuery } from "../../Runes.svelte.js";
+  import { useQuery } from "../../index.svelte.js";
 
   // No setClientRuntime higher in the tree: this must throw on init.
   const rows = useQuery(() => ({ collection: "todos" }));

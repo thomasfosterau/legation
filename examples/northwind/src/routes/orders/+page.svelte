@@ -11,7 +11,7 @@
    * previous rows stay on screen while it resolves.
    */
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { lineTotal, toOrderLines, toOrderViews } from "$lib/data";
   import { allOrders, orderLines } from "$lib/domain";

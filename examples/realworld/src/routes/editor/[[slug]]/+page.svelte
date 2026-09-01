@@ -9,7 +9,7 @@
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { useQuery } from "@legation/svelte/Runes";
+  import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions.svelte";
   import { getSession } from "$lib/session.svelte";
   import { articleBySlug } from "$lib/domain";
