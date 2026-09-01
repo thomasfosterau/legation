@@ -14,12 +14,12 @@ Vocabulary note: terms in **bold** are defined in [`CONTEXT.md`](../../CONTEXT.m
 
 ## Where state lives
 
-|                     | Convex                                                | legation                                                                                                                                                                              |
-| ------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source of truth     | Convex's database (documents in tables)               | Your **backend** (any store satisfying the backend contract; `@legation/sql` ships the SQL reference)                                                                                 |
-| Client state        | In-memory cache of subscribed query results           | A durable local replica: subscribed **collection** subsets in IndexedDB, plus the **journal** of pending writes                                                                       |
-| Reactivity computed | Server-side (query re-execution on dependency change) | Client-side (**live queries** re-run over the local replica when **patches** or the **optimistic overlay** change)                                                                    |
-| Server infra        | Convex deployment (hosted or self-hosted binary)      | A library inside your existing server process — `SyncServer.make` mounted on your router (the [svelte-commerce example](../../examples/svelte-commerce) mounts it next to a JSON:API) |
+|                     | Convex                                                | legation                                                                                                                                                                |
+| ------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source of truth     | Convex's database (documents in tables)               | Your **backend** (any store satisfying the backend contract; `@legation/sql` ships the SQL reference)                                                                   |
+| Client state        | In-memory cache of subscribed query results           | A durable local replica: subscribed **collection** subsets in IndexedDB, plus the **journal** of pending writes                                                         |
+| Reactivity computed | Server-side (query re-execution on dependency change) | Client-side (**live queries** re-run over the local replica when **patches** or the **optimistic overlay** change)                                                      |
+| Server infra        | Convex deployment (hosted or self-hosted binary)      | A library inside your existing server process — `SyncServer.make` mounted on your router (the [commerce example](../../examples/commerce) mounts it next to a JSON:API) |
 
 The deepest difference is the first row. Convex's model is only coherent
 because Convex owns the database: queries are deterministic functions run
@@ -70,7 +70,7 @@ This is the clearest fork in the road:
   whole engine runs in a **service worker** (ADR-0010) — tabs hold only a
   **mirror** and keep working; writes queue and push when connectivity
   returns (`BrowserConnectivity` gates the sync loop). The
-  svelte-commerce example goes further: the app is server-rendered from a
+  commerce example goes further: the app is server-rendered from a
   plain REST API and the engine is _progressive enhancement_ on top, so
   even the no-JS path works.
 

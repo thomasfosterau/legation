@@ -20,7 +20,7 @@ out of scope — a human design pass comes later.
 ## Scope
 
 The owned-engine case only: an app that constructs its own `ClientEngine` +
-`ClientStore` in-process (see `examples/svelte-northwind`).
+`ClientStore` in-process (see `examples/northwind`).
 Attaching over the mirror seam (a service-worker-hosted engine) needs a
 mirror-protocol introspection extension that doesn't exist yet — tracked as a
 follow-up substrate issue (#136).

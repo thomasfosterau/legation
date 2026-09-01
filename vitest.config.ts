@@ -41,7 +41,7 @@ export default defineConfig({
           include: [
             "packages/*/src/**/*.test.ts",
             "tests/**/*.test.ts",
-            "examples/svelte-commerce/tests/**/*.test.ts",
+            "examples/commerce/tests/**/*.test.ts",
           ],
           exclude: ["**/node_modules/**", "packages/svelte/**"],
         },

@@ -63,7 +63,7 @@ service you run, with Postgres as a hard requirement.
 legation is a library (ADR-0009): `SyncServer.make` mounts on the router of
 the server you already have, the **backend contract** is store-agnostic
 (the reference implementations are in-memory and SQL — SQLite and Postgres
-via `@legation/sql`; the [svelte-commerce example](../../examples/svelte-commerce)
+via `@legation/sql`; the [commerce example](../../examples/commerce)
 runs SQLite), CVR storage is pluggable (in-memory or any
 `KeyValueStore`), and scale-out is the serialized **invalidation bus**
 (Redis Streams / WebSocket broker, ADR-0011) rather than a dedicated tier.

@@ -73,7 +73,7 @@ Framework adapters were out of scope; framework-_primitives_ were in scope.
   mutations ([#117](https://github.com/thomasfosterau/effect-synchronizer/issues/117)).
 - **TanStack DB 0.6's persistence round-trip flagged one topology gap**: it
   ships multi-tab leader election; our no-service-worker degraded mode leaves
-  election to app code (`examples/svelte-commerce/src/lib/host.ts`). Filed as
+  election to app code (`examples/commerce/src/lib/host.ts`). Filed as
   [#119](https://github.com/thomasfosterau/effect-synchronizer/issues/119).
 
 ## Where the story is already strong

@@ -48,7 +48,7 @@ export const defaultChannelName = "legation";
  * engine's sync loop (pull on poke, push+pull on reconnect). NEVER returns —
  * both the host and `runSync` fork their fibers into the surrounding scope,
  * so returning would let a caller's `Effect.scoped` tear the whole host down
- * immediately (a real bug the svelte-commerce harness hit twice). Interrupt
+ * immediately (a real bug the commerce harness hit twice). Interrupt
  * it / close the scope to stop serving.
  */
 export const run = (

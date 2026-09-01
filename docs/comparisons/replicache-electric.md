@@ -98,7 +98,7 @@ legation's pitch against the pair is _one_ story: one replica, one
 optimistic overlay dropped per-mutation exactly when that mutation's
 authoritative effect is observed, one auth filter surface, one journal —
 and the whole thing hostable in a service worker so the main thread only
-renders. The [svelte-commerce example](../../examples/svelte-commerce)
+renders. The [commerce example](../../examples/commerce)
 demonstrates the shape this enables: a JSON:API-first SSR app (works with
 JavaScript disabled) where the engine in the service worker progressively
 enhances reads and writes into local-first ones.

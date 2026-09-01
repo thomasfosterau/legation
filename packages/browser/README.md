@@ -117,7 +117,7 @@ pushed by the new one. A mutation still in flight when the leader dies
 either completes normally or fails visibly to its caller; it is never
 silently dropped.
 
-`examples/svelte-commerce` runs the service worker by default but wires this
+`examples/commerce` runs the service worker by default but wires this
 topology in too, behind a documented dev-mode toggle (`?host=main` — see
 `src/lib/host.ts`'s `bootElected` and `src/routes/+layout.svelte`), so the
 no-service-worker fallback runs against a real app rather than only under

@@ -135,23 +135,24 @@ const program = Effect.gen(function* () {
 
 ## Examples
 
-Every example is a **SvelteKit** app driving the engine through the
-[`@legation/svelte`](packages/svelte) bindings. Three are client-only demos that
-run the **real library server pipeline in the page** (`SyncServer` +
-`MemoryBackend` + `CvrStore` + `InvalidationBus`) over a durable `localStorage`
-client store; the fourth is the full-stack deployment, with a real server
-process and the engine in a service worker.
+Every example is a **SvelteKit** app on ADR-0022's vocabulary — a `Node`/`Edge`
+graph, declarative `Query.Read`s, `Mutation`s, one `Client` per thread, one
+`Server` per backend — read through the [`@legation/svelte`](packages/svelte)
+rune hooks. Three are client-only demos that run the **real library server
+pipeline in the page** (`Server.make` over a `MemoryBackend`) against a durable
+`localStorage` client store; the fourth is the full-stack deployment, with a
+real server process and the engine in a service worker.
 
-| App                     | Example                                         | Exercises                                                                                                                                                                                                            |
-| ----------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Todo**                | [`svelte-todo`](examples/svelte-todo)           | One collection: optimistic writes, live views, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                       |
-| **RealWorld** (Conduit) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity. A route per Conduit screen                                                                                     |
-| **Northwind** (admin)   | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins maintained incrementally by `Derive`, read-merge mutators, search/filter/pagination. A route per screen                                                                          |
-| **Commerce**            | [`svelte-commerce`](examples/svelte-commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/sveltekit`](packages/sveltekit), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, and a no-JS baseline |
+| App                     | Example                           | Exercises                                                                                                                                                                                                            |
+| ----------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                          |
+| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                     |
+| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                            |
+| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/sveltekit`](packages/sveltekit), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, and a no-JS baseline |
 
 The first three are SvelteKit **SPAs** — the engine, its store, and the demo
 backend are browser-only, so they turn SSR off in the root layout and build
-through `adapter-static` with a fallback page. `svelte-commerce` is the one that
+through `adapter-static` with a fallback page. `commerce` is the one that
 renders on the server; it is also the only example with tests, run as part of
 `bun run test:run`.
 
