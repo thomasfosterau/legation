@@ -135,36 +135,25 @@ const program = Effect.gen(function* () {
 
 ## Examples
 
-Runnable apps driving the engine from different UI stacks. Each shows the same
-core flow — optimistic writes, live views, push/pull/rebase against an
-in-process demo backend. The web examples run the **real library server pipeline
-in the page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`)
-over a durable `localStorage` client store.
+Every example is a **SvelteKit** app driving the engine through the
+[`@legation/svelte`](packages/svelte) bindings. Three are client-only demos that
+run the **real library server pipeline in the page** (`SyncServer` +
+`MemoryBackend` + `CvrStore` + `InvalidationBus`) over a durable `localStorage`
+client store; the fourth is the full-stack deployment, with a real server
+process and the engine in a service worker.
 
-Three apps of increasing scope, each on React and Svelte:
+| App                     | Example                                         | Exercises                                                                                                                                                                                                            |
+| ----------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Todo**                | [`svelte-todo`](examples/svelte-todo)           | One collection: optimistic writes, live views, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                       |
+| **RealWorld** (Conduit) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity. A route per Conduit screen                                                                                     |
+| **Northwind** (admin)   | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins maintained incrementally by `Derive`, read-merge mutators, search/filter/pagination. A route per screen                                                                          |
+| **Commerce**            | [`svelte-commerce`](examples/svelte-commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/sveltekit`](packages/sveltekit), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, and a no-JS baseline |
 
-| App                     | React                                         | Svelte                                          | Exercises                                                                                              |
-| ----------------------- | --------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Todo**                | [`react-todo`](examples/react-todo)           | [`svelte-todo`](examples/svelte-todo)           | One collection: optimistic writes, live views, durable journal + true offline, poke-driven convergence |
-| **RealWorld** (Conduit) | [`react-realworld`](examples/react-realworld) | [`svelte-realworld`](examples/svelte-realworld) | Five collections joined over the mirror, relationships, server-side write authorization via identity   |
-| **Northwind** (admin)   | [`react-northwind`](examples/react-northwind) | [`svelte-northwind`](examples/svelte-northwind) | Seven collections, relational joins, read-merge mutators, search/filter/pagination                     |
-
-The React examples use the [`@legation/react`](packages/react) bindings
-(`useQuery` / `useMutation`); the Svelte examples use
-[`@legation/svelte`](packages/svelte) (`query` stores + `getMutate`).
-
-Every example also wires up **spec export** (`SpecExport`, ADR-0017): run
-`bun run spec` inside an example to project its sync surface — collections,
-mutators — into `spec/openapi.json` (OpenAPI 3.1) and `spec/asyncapi.json`
-(AsyncAPI 3.0), ready to feed a client generator. The documents are specialized
-with the example's own row and mutator schemas, so a generated client gets
-concrete per-name types rather than an opaque envelope.
-
-Other UI stacks:
-
-| Example                                 | Stack                                | Highlights                                                                                        |
-| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| [`foldkit-todo`](examples/foldkit-todo) | [FoldKit](https://foldkit.dev) (web) | The todo app consuming `@legation/effect` directly (no framework bindings) — The Elm Architecture |
+The first three are SvelteKit **SPAs** — the engine, its store, and the demo
+backend are browser-only, so they turn SSR off in the root layout and build
+through `adapter-static` with a fallback page. `svelte-commerce` is the one that
+renders on the server; it is also the only example with tests, run as part of
+`bun run test:run`.
 
 ## Development
 

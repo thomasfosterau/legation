@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Svelte todo app driving the legation engine through @legation/svelte: offline-first, optimistic writes, live views, push/pull rebase.",
+  "description": "SvelteKit todo app driving the legation engine through @legation/svelte: offline-first, optimistic writes, live views, push/pull rebase, with the filter in the URL.",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "spec": "bun run ../../scripts/gen-example-spec.ts"
+    "prepare": "svelte-kit sync"
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
@@ -19,6 +19,8 @@
     "svelte": "^5"
   },
   "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.0",
+    "@sveltejs/kit": "^2.0.0",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.9.3",

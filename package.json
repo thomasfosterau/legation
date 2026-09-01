@@ -7,14 +7,7 @@
   "workspaces": {
     "packages": [
       "packages/*",
-      "examples/foldkit-todo",
-      "examples/react-todo",
-      "examples/svelte-todo",
-      "examples/react-realworld",
-      "examples/svelte-realworld",
-      "examples/react-northwind",
-      "examples/svelte-northwind",
-      "examples/svelte-commerce"
+      "examples/*"
     ],
     "catalog": {
       "effect": "4.0.0-beta.84",

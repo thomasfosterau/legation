@@ -1,12 +1,13 @@
-# legation · Svelte example
+# legation · SvelteKit todo
 
-A browser todo app that drives
-[`@legation/effect`](../../packages/effect) from Svelte through the
-[`@legation/svelte`](../../packages/svelte) bindings
-(`query` stores + `undoControls`). It is the Svelte counterpart to the
-[React](../react-todo) and [FoldKit](../foldkit-todo) examples, and like the
-others it runs the **real library server pipeline in the page**, so every
-concept in `CONTEXT.md` is exercised by code you can click on.
+A SvelteKit todo app that drives [`@legation/effect`](../../packages/effect)
+through the [`@legation/svelte`](../../packages/svelte) bindings (`query`
+stores + `undoControls`). It runs the **real library server pipeline in the
+page**, so every concept in `CONTEXT.md` is exercised by code you can click on.
+
+The whole world — engine, durable store, demo backend — is browser-only, so the
+app is a SvelteKit **SPA**: `ssr = false` in the root layout and
+`adapter-static` with a fallback page, which any static host can serve.
 
 ## What it shows
 
@@ -19,6 +20,10 @@ concept in `CONTEXT.md` is exercised by code you can click on.
   journaled, rebased, and offline-safe like any write. Press **⌘Z / Ctrl+Z** to
   undo and **⇧⌘Z / Ctrl+Shift+Z** to redo, or use the toolbar buttons; the
   history is in-memory and per-client (a reload clears it).
+- **The filter is a route** — `/`, `/active`, and `/completed` are one
+  optional route param (`[[filter=filter]]`, matched by `src/params/filter.ts`)
+  loaded into `data.filter`, not component state: the tabs are links, the back
+  button works, and a filtered list is shareable.
 - **Live views** — the list is `query(allTodos)`, a Svelte `Readable` store
   backed by a forked `observe` fiber. Read with `$todos` auto-subscription, it
   re-renders on every local change (mutation, push ack, pull/rebase).
@@ -38,8 +43,8 @@ concept in `CONTEXT.md` is exercised by code you can click on.
 ## Architecture
 
 ```
-  setEngineRuntime(runtime)               runtime = ManagedRuntime providing the
-        │  query / getMutate               built ClientEngine
+  +layout.svelte: setEngineRuntime(runtime)   runtime = ManagedRuntime providing
+        │  query / getMutate                  the built ClientEngine
         ▼
   ClientEngine ──(offline-aware loopback transport)──▶ SyncServer
        │                                                   │
@@ -48,17 +53,22 @@ concept in `CONTEXT.md` is exercised by code you can click on.
   optimistic overlay + journal                        + InvalidationBus (poke)
 ```
 
-- `src/domain.ts` — the `Todo` collection, the `todo/set` / `todo/remove`
+- `src/lib/domain.ts` — the `Todo` collection, the `todo/set` / `todo/remove`
   mutators, and the `allTodos` subset (shared client + server vocabulary).
-- `src/sync.ts` — `createWorld()`: wires the whole stack, then exposes the
+- `src/lib/sync.ts` — `createWorld()`: wires the whole stack, then exposes the
   engine `runtime` (for the Svelte bindings) plus the demo `controls`.
-- `src/demo.ts` — a small Svelte context + two stores for the demo knobs the
+- `src/lib/demo.ts` — a small Svelte context + two stores for the demo knobs the
   engine's read/write API doesn't cover (offline, remote edit, journal,
   connection).
-- `src/App.svelte` — the UI: `setEngineRuntime` + `query` + `undoControls` and
-  the demo context, in idiomatic Svelte 5 runes.
-- `src/main.ts` — builds the world, then mounts the app with the runtime +
-  controls + undo manager as props.
+- `src/routes/+layout.ts` — the root `load`: builds the world **once** for the
+  lifetime of the app, and turns SSR off (the engine is browser-only).
+- `src/routes/+layout.svelte` — wires the engine runtime and the demo controls
+  into context for the whole route tree.
+- `src/params/filter.ts` + `src/routes/[[filter=filter]]/` — the filter is the
+  URL: one optional, matched route param serves `/`, `/active`, and
+  `/completed`, so the tabs are plain links and a filtered list is shareable.
+- `src/routes/[[filter=filter]]/+page.svelte` — the UI: `query` +
+  `undoControls` in idiomatic Svelte 5 runes.
 
 ## Recipe: paired-intents undo
 
@@ -71,10 +81,10 @@ and offline behaviour for free.
 import { Undo } from "@legation/effect";
 import { undoControls } from "@legation/svelte";
 
-// One manager per client (in-memory history) — see src/sync.ts.
+// One manager per client (in-memory history) — see src/lib/sync.ts.
 const manager = yield * Undo.make(engine);
 
-// Svelte stores + handlers — see src/App.svelte.
+// Svelte stores + handlers — see the route's +page.svelte.
 const { canUndo, canRedo, undo, redo } = undoControls(manager);
 
 // A create: undo is a delete of the same id.
@@ -122,6 +132,8 @@ bun run dev      # open the printed http://localhost:5175
 - **The server is ephemeral.** `MemoryBackend` lives in the page, so a reload
   resets server state (the seed rows reappear). The _client_ is durable: pending
   offline writes in the journal survive reloads and flush on the next connect.
-- The example is a workspace member for dependency consistency, but it stays
-  outside the CI quality gates (build/typecheck/lint/format), like the other
-  examples; it is illustrative, not a published package.
+- The example is a workspace member for dependency consistency. It is excluded
+  from the root `tsc` project, oxlint, and prettier (it is illustrative, not a
+  published package), but CI does run its `check` script via
+  `bun run typecheck:examples`, so binding-API changes in `packages/*` can't
+  silently rot it.

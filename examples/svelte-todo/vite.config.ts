@@ -1,10 +1,10 @@
+import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
-import { svelte } from "@sveltejs/vite-plugin-svelte";
 
-// The Svelte plugin compiles `.svelte` files; the engine and its Svelte
-// bindings are consumed from `../../packages/*` as built dependencies
-// (`workspace:*`).
+// `sveltekit()` supersedes the bare `svelte()` plugin: it adds the router, the
+// generated `$types`, and `$lib`. The engine and its Svelte bindings are still
+// consumed from `../../packages/*` as built dependencies (`workspace:*`).
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [sveltekit()],
   server: { port: 5175 },
 });
