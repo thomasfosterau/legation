@@ -26,10 +26,10 @@ them looked stale. **Suggestion:** deprecate `Query`/`Mutation`/`Runtime`'s
 engine-runtime surface in the bindings the way `Mutator` is deprecated in the
 core, and lead the bindings README with the rune hooks.
 
-**Resolved.** The store tier is gone: the hooks are the package root, there is
-no second way to read, and `@legation/svelte/Runes` no longer exists as a
-subpath. `Mutator`/`Collection`/`Subset` remain as-is in the core — that half of
-the finding still stands.
+**Resolved for the bindings** (#139): the store tier is gone, the hooks are the
+package root, and `@legation/svelte/Runes` no longer exists as a subpath. The
+core half — `Collection.make` and `Subset.make` still reading as current API —
+is tracked as **#145**.
 
 ## 2. `Client.make` is the documented front door, but two capabilities force you off it
 
@@ -47,7 +47,8 @@ build the engine by hand (`ClientEngine.make` + `Effect.forkScoped(runSync)`)
 and wrap it with `Client.fromView(nodes, ClientView.fromEngine(engine))` just to
 keep a headline feature. **Suggestion:** widen `Undo.make` to accept anything
 with `mutate` (or a `Client`), and either return the engine from `Client.make`
-or expose an `engine`-shaped capability on `Client` for devtools.
+or expose an `engine`-shaped capability on `Client` for devtools. Tracked as
+**#142**.
 
 ## 3. Writes do not reach the server unless you opt into `syncLoop.pushDebounce`
 
@@ -62,7 +63,7 @@ journal, and the demos only looked correct because toggling offline→online
 flushed them. For an offline-first library whose headline is "writes converge",
 push-on-write is the behaviour an author assumes. **Suggestion:** default
 `pushDebounce` to a small value (the examples use `300 millis`) and let apps opt
-out, rather than the reverse.
+out, rather than the reverse. Tracked as **#143**.
 
 ## 4. The node graph hard-codes `id` as the identity field
 
@@ -75,7 +76,8 @@ Conduit identifies users by username and articles by slug, so porting
 key and keeping the two equal at every write site (`userRow`, `articleRow` in
 `examples/realworld/src/lib/domain.ts`). It works and it is honest, but it is
 duplicated state a schema cannot enforce. **Suggestion:** let `Node.make` name
-its identity attribute (`id: "username"`), defaulting to `id`.
+its identity attribute (`id: "username"`), defaulting to `id`. Tracked as
+**#144**.
 
 ## 5. A read's rows are untyped, so every app re-casts what the graph already knows
 
@@ -94,7 +96,7 @@ const many = <T>(row, edge) => (row.related[edge] as ReadonlyArray<T> | undefine
 plus `row.value as Product` at each use. The casts are unchecked: renaming an
 edge or changing a node's shape compiles cleanly and fails at runtime.
 **Suggestion:** thread the node types through `Query.Read` so `useQuery` returns
-typed rows, with `include`d edges typed per their kind.
+typed rows, with `include`d edges typed per their kind. Tracked as **#140**.
 
 ## 6. There is no way to _not_ run a hook
 
@@ -110,7 +112,7 @@ const rows = useQuery(() => articleBySlug(slug ?? "")); // realworld
 
 That registers a real (empty) window and a real subscription for a read the UI
 does not want. **Suggestion:** let the thunk return `undefined` to mean "no read
-right now", leaving `current` at `Initial`.
+right now", leaving `current` at `Initial`. Tracked as **#141**.
 
 ## 7. Undo/redo has no rune equivalent
 
@@ -119,8 +121,8 @@ runes component that is the one place a `$` auto-subscription survives
 (`examples/todo/src/routes/[[filter=filter]]/+page.svelte`). **Suggestion:** a
 `useUndo(manager)` hook, matching the rest.
 
-**Resolved.** `useUndo(manager)` ships on the package root and the todo example
-uses it; nothing in the examples reads a store any more.
+**Resolved** (#139). `useUndo(manager)` ships on the package root and the todo
+example uses it; nothing in the examples reads a store any more.
 
 ## 8. Layer composition is where the seams pay off — once you find them
 
@@ -175,3 +177,22 @@ atoms are framework-agnostic, `@legation/devtools`' core is headless with the
 panel as a thin per-framework export, and a binding for another framework
 remains a package over the same surfaces — there is now simply one such package
 instead of two.
+
+## Follow-ups
+
+The findings above that are not resolved in #139 are filed:
+
+| Finding                                                               | Issue                                                         |
+| --------------------------------------------------------------------- | ------------------------------------------------------------- |
+| 1 (core half) — `Collection.make` / `Subset.make` read as current API | [#145](https://github.com/thomasfosterau/legation/issues/145) |
+| 2 — `Client.make` hides the engine undo and devtools need             | [#142](https://github.com/thomasfosterau/legation/issues/142) |
+| 3 — `syncLoop.pushDebounce` is opt-in                                 | [#143](https://github.com/thomasfosterau/legation/issues/143) |
+| 4 — the node graph hard-codes `id`                                    | [#144](https://github.com/thomasfosterau/legation/issues/144) |
+| 5 — a read's rows are untyped                                         | [#140](https://github.com/thomasfosterau/legation/issues/140) |
+| 6 — no way to _not_ run a hook                                        | [#141](https://github.com/thomasfosterau/legation/issues/141) |
+
+Plus one raised by the merge rather than the idiom pass: nothing exercises the
+SSR snapshot path — [#146](https://github.com/thomasfosterau/legation/issues/146).
+
+Findings 7, 9 and 10 are resolved in #139; finding 8 records what already
+worked and needs no follow-up.
