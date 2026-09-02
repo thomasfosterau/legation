@@ -7,7 +7,7 @@ Status: Accepted
 
 The library grew module-by-module, and it shows at the surface:
 `@legation/effect` exports **39 public namespaces**. A comprehensive
-implementation (the svelte-commerce example) must understand concepts at
+implementation (the commerce example) must understand concepts at
 three altitudes at once — domain (`Collection`, `Mutator`, `Subset`,
 `Predicate`, named `Query`), machinery (`ClientEngine`, `ClientView`,
 `Mirror`, `EngineHost`, `MirrorProtocol`, `MirrorChannel`, `Transport`,

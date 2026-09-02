@@ -240,7 +240,8 @@ delta input for #114; it does **not** design, build, or modify `observeChanges`
 - **No wire, protocol, `Subset`, or `Predicate` change** — from this ADR or from
   the whole programme. The delta model is entirely behind `observe`.
 - **The two-tier read model is now documented law.** #114 updates
-  `docs/coming-from-tanstack-query.md` and `docs/comparisons/tanstack.md`,
+  `docs/comparisons/coming-from-tanstack-query.md` and
+  `docs/comparisons/tanstack.md`,
   replacing the "expressiveness gap" concession with the two-tier story anchored
   here.
 - **Known limitations, closed by #133's follow-up sweep:** engine-level

@@ -1,6 +1,5 @@
 ---
 "@legation/effect": minor
-"@legation/react": minor
 "@legation/svelte": minor
 ---
 
@@ -30,9 +29,9 @@ Exposed at every layer:
   (a derived per-mutator selector).
 - React `useMutationState(mutator?)` — always a plain array, oldest-journaled
   first, no `AsyncResult` handling needed.
-- Svelte `useMutationState(mutator?)` rune (`@legation/svelte/Runes`), reactive
+- Svelte `useMutationState(mutator?)` rune (`@legation/svelte`), reactive
   to a `mutator` thunk like `useQuery`'s `read`.
 
-The react-todo example's journal panel is rewritten over this surface,
+The todo example's journal panel is written over this surface,
 replacing its bespoke `Introspection`-based wiring, and demonstrates bounded
 terminal retention.

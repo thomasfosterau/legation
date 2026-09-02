@@ -10,34 +10,36 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Client } from "@legation/effect";
-import { ClientEngine, ClientView, Subset } from "@legation/effect/internal";
+import { ClientEngine } from "@legation/effect/internal";
 import { EngineHost, MirrorChannel, Mirror } from "@legation/effect/internal";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";
 import { buttonByLabel, collections, engineLayer, mutators, nodes, until } from "./world.js";
-import type { ClientRuntime, EffectSyncRuntime } from "../Runtime.js";
+import type { ClientRuntime } from "../Runtime.js";
 
-const allTodos = Subset.make({ collection: "todos" });
+const allTodosRead = { collection: "todos" };
 const text = () => document.body.textContent ?? "";
 
 /**
  * A mirror-only runtime: the host engine and its channel live inside the
- * layer's scope; the runtime exposes ONLY the ClientView (the mirror).
+ * layer's scope; the runtime exposes ONLY a Client over the mirror — no
+ * engine at all on this side.
  */
-const makeMirrorRuntime = (): EffectSyncRuntime =>
+const makeMirrorRuntime = (): ClientRuntime =>
   ManagedRuntime.make(
-    Layer.effect(ClientView.ClientView)(
+    Layer.effect(Client.Client)(
       Effect.gen(function* () {
         const engine = yield* ClientEngine.ClientEngine;
         const pair = yield* MirrorChannel.makeLoopbackPair;
         // Wires its inbox eagerly and forks its own scoped loop — must run
         // before the mirror posts its first message. The registry lets the
-        // host resolve tabs' `related` registrations.
+        // host resolve tabs' relational registrations.
         yield* EngineHost.run({ channel: pair.host, engine, registry: collections });
-        // Mirror satisfies ClientView structurally — this return is the
-        // type-level proof.
-        return yield* Mirror.make({ channel: pair.mirror, mutators });
+        // Mirror satisfies ClientView structurally — this is the type-level
+        // proof that a Client can be built over one.
+        const mirror = yield* Mirror.make({ channel: pair.mirror, mutators });
+        return Client.fromView(nodes, mirror);
       })
     ).pipe(Layer.provide(engineLayer))
   );
@@ -47,16 +49,16 @@ afterEach(() => {
 });
 
 describe("bindings over a tab mirror (ADR-0021)", () => {
-  it("query, aggregate and mutate drive the same components over a mirror-only runtime", async () => {
+  it("reads, aggregates and mutations drive the same components over a mirror-only runtime", async () => {
     const runtime = makeMirrorRuntime();
-    // The app registers the subsets it needs — refcounted by the host.
+    // The app pins the reads it needs — refcounted by the host.
     await runtime.runPromise(
-      Effect.flatMap(ClientView.ClientView, (view) => view.subscribe(allTodos))
+      Effect.flatMap(Client.Client, (client) => client.subscribe(allTodosRead))
     );
 
     const list = mount(QueryHarness, {
       target: document.body,
-      props: { runtime, subset: allTodos, groupBy: "authorId" },
+      props: { runtime, read: allTodosRead, groupBy: "authorId" },
     });
     const buttons = mount(MutateHarness, {
       target: document.body,

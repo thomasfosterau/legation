@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Query } from "@legation/effect";
   import { AsyncResult } from "effect/unstable/reactivity";
-  import { setClientRuntime, type ClientRuntime } from "../../Runtime.js";
-  import { useQuery } from "../../Runes.svelte.js";
+  import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
+  import { useQuery } from "../../index.svelte.js";
 
   const {
     runtime,

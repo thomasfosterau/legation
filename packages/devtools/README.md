@@ -9,10 +9,9 @@ Architecture: a framework-agnostic headless core (`@legation/devtools`) that
 owns all data acquisition — built entirely over already-public substrate
 (`@legation/effect/internal`'s `Introspection`, `ClientEngine.mutationStates`,
 `ClientEngine.engineEvents`/`syncFailures`, `ClientStore`) — plus thin,
-idiomatic panels per framework: `@legation/devtools/react` and
-`@legation/devtools/svelte`. Each panel just runs the core's Effects/Streams
-through its own framework's reactivity; neither has a data-acquisition path
-of its own.
+idiomatic panels per framework — today `@legation/devtools/svelte`. A panel
+just runs the core's Effects/Streams through its own framework's reactivity;
+it has no data-acquisition path of its own.
 
 This is a **functional first cut**: plain, legible, correct. Visual polish is
 out of scope — a human design pass comes later.
@@ -20,7 +19,7 @@ out of scope — a human design pass comes later.
 ## Scope
 
 The owned-engine case only: an app that constructs its own `ClientEngine` +
-`ClientStore` in-process (see `examples/react-todo`, `examples/svelte-northwind`).
+`ClientStore` in-process (see `examples/northwind`).
 Attaching over the mirror seam (a service-worker-hosted engine) needs a
 mirror-protocol introspection extension that doesn't exist yet — tracked as a
 follow-up substrate issue (#136).
@@ -38,14 +37,6 @@ const devtools = Devtools.make(engine, store, {
 });
 ```
 
-React:
-
-```tsx
-import { DevtoolsPanel } from "@legation/devtools/react";
-
-<DevtoolsPanel core={devtools} />;
-```
-
 Svelte:
 
 ```svelte
@@ -56,8 +47,10 @@ Svelte:
 <DevtoolsPanel core={devtools} />
 ```
 
-The `/react` and `/svelte` entry points are separate exports so an app that
-never imports them pays nothing for the panel in its production bundle.
+The `/svelte` entry point is a separate export so an app that never imports
+it pays nothing for the panel in its production bundle. The headless core is
+framework-agnostic — a binding for another framework is a component over the
+same `DevtoolsCore`.
 
 Note: `@legation/devtools/svelte` ships raw `.svelte`/`.ts` source (not a
 pre-compiled bundle) — any Svelte 5 app already has a bundler that compiles

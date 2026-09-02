@@ -11,7 +11,7 @@ optimistic **mutators**. Comparing legation to each is really comparing the
 two models — and then comparing two implementations of the second.
 
 There is a dedicated vocabulary translation for people arriving from the
-request-cache world: [`docs/coming-from-tanstack-query.md`](../coming-from-tanstack-query.md).
+request-cache world: [`coming-from-tanstack-query.md`](coming-from-tanstack-query.md).
 This document is the architectural comparison. Terms in **bold** are defined
 in [`CONTEXT.md`](../../CONTEXT.md).
 

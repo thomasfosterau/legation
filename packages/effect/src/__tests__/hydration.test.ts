@@ -17,10 +17,10 @@ import * as Hydration from "../Hydration.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
+import * as Node from "../Node.js";
 import type { PatchOp, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
-import * as Predicate from "../Predicate.js";
 import { ClientTransport, makeInMemory, ServerHandler } from "../Transport.js";
 
 interface Todo {
@@ -105,6 +105,14 @@ const makeClient = (
   });
 
 const allTodos = Subset.make({ collection: "todos" });
+
+/** The node graph the `Query.Read`-shaped hydration APIs compile against. */
+const testNodes = Node.registry([
+  Node.make("todos", {
+    attributes: { title: Schema.String, done: Schema.Boolean },
+  }),
+  Node.make("users", { attributes: {} }),
+]);
 
 describe("ClientEngine.seed (#41)", () => {
   it.effect(
@@ -238,7 +246,8 @@ describe("Hydration.snapshot (SSR)", () => {
         // so the produced cookie continues that group's CVR conversation.
         const snapshot = yield* Hydration.snapshot({
           clientGroupId: "group-browser",
-          subsets: [allTodos],
+          nodes: testNodes,
+          reads: [{ collection: "todos" }],
         }).pipe(Effect.provideService(ServerHandler, handler));
 
         expect(snapshot.rows.map((row) => row.id)).toEqual(["1"]);
@@ -286,17 +295,15 @@ describe("Hydration.rowsFor", () => {
     journal: [],
   };
 
-  it("filters snapshot rows by the subset's collection and predicate", () => {
-    const open = Subset.make({ collection: "todos", where: Predicate.eq("done", false) });
-    expect(Hydration.rowsFor(snapshot, open).map((row) => row.id)).toEqual(["2", "3"]);
+  it("filters snapshot rows by the read's collection and predicate", () => {
+    const open = { collection: "todos", where: { done: false } };
+    expect(Hydration.rowsFor(snapshot, testNodes, open).map((row) => row.id)).toEqual(["2", "3"]);
   });
 
   it("applies order and window like the engine's own evaluator", () => {
-    const firstByTitle = Subset.make({
-      collection: "todos",
-      orderBy: [{ field: "title", direction: "asc" }],
-      limit: 1,
-    });
-    expect(Hydration.rowsFor(snapshot, firstByTitle).map((row) => row.id)).toEqual(["1"]);
+    const firstByTitle = { collection: "todos", order: ["title"], first: 1 };
+    expect(Hydration.rowsFor(snapshot, testNodes, firstByTitle).map((row) => row.id)).toEqual([
+      "1",
+    ]);
   });
 });

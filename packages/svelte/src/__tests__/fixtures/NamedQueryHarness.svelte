@@ -1,27 +1,26 @@
 <script lang="ts">
-  import { namedQuery } from "../../Query.js";
-  import { setEngineRuntime, type EffectSyncRuntime } from "../../Runtime.js";
+  import { AsyncResult } from "effect/unstable/reactivity";
+  import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
+  import { useNamedQuery } from "../../index.svelte.js";
 
   const {
     runtime,
     name,
     args,
   }: {
-    runtime: EffectSyncRuntime;
+    runtime: ClientRuntime;
     name: string;
     args: unknown;
   } = $props();
 
-  // The store API captures its inputs at init by design — these fixtures
-  // never change props after mount.
   // svelte-ignore state_referenced_locally
-  setEngineRuntime(runtime);
-  // svelte-ignore state_referenced_locally
-  const rows = namedQuery(name, args);
+  setClientRuntime(runtime);
+  const rows = useNamedQuery(() => ({ name, args }));
+  const current = $derived(AsyncResult.getOrElse(rows.current, () => []));
 </script>
 
 <ul>
-  {#each $rows as row (row.id)}
+  {#each current as row (row.id)}
     <li>{(row.value as { title: string }).title}</li>
   {/each}
 </ul>

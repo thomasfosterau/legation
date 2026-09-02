@@ -63,7 +63,7 @@ service you run, with Postgres as a hard requirement.
 legation is a library (ADR-0009): `SyncServer.make` mounts on the router of
 the server you already have, the **backend contract** is store-agnostic
 (the reference implementations are in-memory and SQL — SQLite and Postgres
-via `@legation/sql`; the [svelte-commerce example](../../examples/svelte-commerce)
+via `@legation/sql`; the [commerce example](../../examples/commerce)
 runs SQLite), CVR storage is pluggable (in-memory or any
 `KeyValueStore`), and scale-out is the serialized **invalidation bus**
 (Redis Streams / WebSocket broker, ADR-0011) rather than a dedicated tier.
@@ -85,10 +85,11 @@ worker deployment is not second-class.
 
 Zero defines schema in its own builder and generates types; it is
 framework-agnostic with first-class React/Solid/Svelte/Vue hooks. legation
-is **Effect-native**: collections, mutators, and protocol messages are
-Effect Schemas (single source of truth for validation, wire format, and
+is **Effect-native**: nodes, mutations, and protocol messages are Effect
+Schemas (single source of truth for validation, wire format, and
 persistence), the engine is layers and streams, and the bindings
-(`@legation/react`, `@legation/svelte`) sit over a reactivity core. If your
+(`@legation/svelte` today; the seam is framework-agnostic) sit over a
+reactivity core. If your
 team is not using Effect, this is real friction — schema definitions,
 error handling, and composition all assume it. If it is, everything
 composes with the rest of your stack for free (the example's server mounts

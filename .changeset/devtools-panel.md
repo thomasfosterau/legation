@@ -21,5 +21,4 @@ Scoped to the owned-engine case (an app that constructs its own `ClientEngine`
 - `ClientStore` in-process); attaching over the mirror seam needs a
   mirror-protocol introspection extension, tracked separately (#136).
 
-Demonstrated in `examples/react-todo` (superseding its hand-rolled journal
-panel) and `examples/svelte-northwind`.
+Demonstrated in `examples/northwind`.
