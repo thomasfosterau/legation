@@ -6,13 +6,13 @@
 import type { Actions, PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { apiFor } from "../../../../server/client.js";
+import { apiFor, run } from "../../../../server/client.js";
 import { productId, variantId } from "../../../../server/jsonapi.js";
 
 export const load: PageServerLoad = async ({ locals, params }) => {
   const api = await Effect.runPromise(apiFor(locals.user?.id));
   const [product, reviews] = await Promise.all([
-    Effect.runPromise(
+    run(
       api.products.get({ params: { id: productId(params.id) }, query: { include: ["variants"] } }).pipe(
         Effect.catchTag("NotFound", () => Effect.succeed(undefined))
       )

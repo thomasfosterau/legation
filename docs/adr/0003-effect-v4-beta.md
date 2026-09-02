@@ -25,3 +25,7 @@ The exact-pin-and-bump-deliberately policy stands; the specific version has move
 ## Update (2026-06-19)
 
 Bumped the catalog from `4.0.0-beta.83` to `4.0.0-beta.84`, package-wide in one change per the policy above. The bump was forced by adopting `@thomasfosterau/effect-jsonapi` (ADR-0016), whose peer dependency is `effect >= 4.0.0-beta.84`. All quality gates (build, typecheck, test, lint, format) pass on the new pin.
+
+## Update (2026-09-02)
+
+Bumped the catalog from `4.0.0-beta.84` to `4.0.0-beta.107`, package-wide in one change per the policy above. The bump was forced by moving `@thomasfosterau/effect-jsonapi` to 0.12 (issue #152), whose peer dependency is `effect >= 4.0.0-beta.104`; beta.107 is the version that library develops against, so it was preferred over the later `4.0.0-rc.*` releases. Renames absorbed: `Schedule.either`/`both` → `Schedule.min`/`max`, `Schema.TaggedErrorClass` → `Schema.TaggedError`, `SchemaRepresentation.fromASTs` → `toRepresentations`, and `HttpApiGroup.Any` removed (the `HttpApi` group parameter is now invariant, so the JSON:API entry points became generic). All quality gates (build, typecheck, typecheck:examples, test, lint, format) pass on the new pin.

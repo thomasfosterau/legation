@@ -41,7 +41,7 @@
     "@legation/sql": "workspace:^"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.84"
+    "effect": "4.0.0-beta.107"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260704.1",

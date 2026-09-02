@@ -264,7 +264,7 @@ const specialize = (api: SyncApi) => {
 export const build = (api: SyncApi): SyncSpec => {
   const { roots, catalog } = specialize(api);
   const openApi = JsonSchema.toMultiDocumentOpenApi3_1(
-    SchemaRepresentation.toJsonSchemaMultiDocument(SchemaRepresentation.fromASTs(roots))
+    SchemaRepresentation.toJsonSchemaMultiDocument(SchemaRepresentation.toRepresentations(roots))
   );
   return {
     info: api.info,

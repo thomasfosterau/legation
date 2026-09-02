@@ -29,7 +29,7 @@ npm install @legation/jsonapi @legation/effect effect
 
 `effect`, `@legation/effect`, and
 `@thomasfosterau/effect-jsonapi` are required alongside this package. It
-targets Effect v4 beta (`effect@>=4.0.0-beta.84`).
+targets Effect v4 beta (`effect@>=4.0.0-beta.107`).
 
 ## The happy path: sync an existing JSON:API
 

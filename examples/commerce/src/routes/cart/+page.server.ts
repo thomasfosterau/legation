@@ -6,7 +6,7 @@
 import type { Actions, PageServerLoad } from "./$types";
 import { redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { apiFor } from "../../../server/client.js";
+import { apiFor, run } from "../../../server/client.js";
 import { cartItemId } from "../../../server/jsonapi.js";
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -25,9 +25,7 @@ export const actions: Actions = {
     if (locals.user === undefined) redirect(303, "/account");
     const api = await Effect.runPromise(apiFor(locals.user.id));
     const form = await request.formData();
-    await Effect.runPromise(
-      api.cartItems.delete({ params: { id: cartItemId(String(form.get("id") ?? "")) } })
-    );
+    await run(api.cartItems.delete({ params: { id: cartItemId(String(form.get("id") ?? "")) } }));
     redirect(303, "/cart");
   },
   placeOrder: async ({ locals }) => {

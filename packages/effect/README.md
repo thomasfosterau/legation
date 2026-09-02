@@ -18,7 +18,7 @@ Targets Effect v4 beta and ESM-only consumers.
 ## Installation
 
 ```bash
-bun add @legation/effect effect@4.0.0-beta.65
+bun add @legation/effect effect@4.0.0-beta.107
 ```
 
 ## Module map

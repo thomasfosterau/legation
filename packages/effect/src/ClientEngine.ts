@@ -314,10 +314,13 @@ export interface RetryOptions {
  * bounded to 5 retries — mirroring TanStack Query's 1s→30s policy. No jitter,
  * so it composes predictably; add `Schedule.jittered` to taste.
  */
-export const defaultRetryPolicy: Schedule.Schedule<unknown, unknown> = Schedule.exponential(
-  Duration.seconds(1),
-  2
-).pipe(Schedule.either(Schedule.spaced(Duration.seconds(30))), Schedule.both(Schedule.recurs(5)));
+export const defaultRetryPolicy: Schedule.Schedule<unknown, unknown> = Schedule.max([
+  Schedule.min([
+    Schedule.exponential(Duration.seconds(1), 2),
+    Schedule.spaced(Duration.seconds(30)),
+  ]),
+  Schedule.recurs(5),
+]);
 
 /** A terminal sync failure surfaced after the retry policy was exhausted. */
 export interface SyncFailure {
