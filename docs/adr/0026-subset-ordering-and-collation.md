@@ -1,7 +1,7 @@
 # ADR-0026: Subset ordering is a shared total order; collation is a documented punt
 
 Date: 2026-07-09
-Status: Accepted (issue #112)
+Status: Accepted (issue #112). Superseded in part by ADR-0028 (evaluation authority and collation)
 
 ## Context
 
@@ -58,6 +58,13 @@ tie-breaks on row id.** Concretely: value fields compare first (as
 before), then — if every field ties, including the empty-`orderBy` case
 — row id compares ascending. This makes the comparator a genuine total
 order unconditionally:
+
+> **Superseded in part by ADR-0028.** `Subset.comparator` and `Subset.apply`
+> are no longer the definition of correctness; Postgres semantics are, and
+> both are implementations that must agree with Postgres exactly. ADR-0028
+> also settles the collation punt below (code-point order, `COLLATE "C"`)
+> and changes NULL ordering to NULLs last on `ASC`. The id tie-break and the
+> total-order guarantee in this section stand.
 
 - `LiveView`'s incrementally maintained order (an `OrderedTree`, see the
   module) can locate any row's position in O(log n) always, not "O(log n)
