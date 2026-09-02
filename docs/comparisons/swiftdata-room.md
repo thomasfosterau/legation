@@ -21,7 +21,7 @@ Vocabulary note: terms in **bold** are defined in [`CONTEXT.md`](../../CONTEXT.m
 
 ## The read model: already agreeing
 
-[`coming-from-tanstack-query.md`](../coming-from-tanstack-query.md) puts it
+[`coming-from-tanstack-query.md`](coming-from-tanstack-query.md) puts it
 directly: legation "is the SwiftData `@Query` model, not the TanStack
 refetch model". All three systems hold a typed local store and treat reads
 as live views over it:

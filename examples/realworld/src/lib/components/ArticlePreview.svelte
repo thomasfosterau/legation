@@ -1,8 +1,8 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import ArticleMeta from "./ArticleMeta.svelte";
   import FavoriteButton from "./FavoriteButton.svelte";
   import type { ArticleView } from "../types";
-  import { paths } from "../routes";
 
   let { view }: { view: ArticleView } = $props();
 </script>
@@ -14,7 +14,7 @@
       <FavoriteButton article={view} compact />
     </div>
   </div>
-  <a href={paths.article(view.article.slug)} class="preview-link">
+  <a href={resolve("/article/[slug]", { slug: view.article.slug })} class="preview-link">
     <h1>{view.article.title}</h1>
     <p>{view.article.description}</p>
     <span>Read more...</span>

@@ -12,16 +12,17 @@
   // subsets. SSR renders come entirely from the hooks' `initial` seeds, so
   // the server gets a loud stub instead of a runtime.
   //
-  // `?host=main` is a dev-mode toggle (#133 item 6): skip the service
-  // worker entirely and run `ElectedHost.run` on this tab instead (the
-  // shipped no-service-worker fallback, ADR-0010/#119) — useful for
-  // exercising that topology locally, or in a browser context that can't
-  // register a service worker. `role` below is purely a debug badge; no
-  // application logic branches on it.
+  // `?host=main` skips the service worker entirely and runs
+  // `ElectedHost.run` on this tab instead (the shipped no-service-worker
+  // fallback, ADR-0010/#119) — useful for exercising that topology locally.
+  // It is gated on `import.meta.env.DEV` so a production build cannot be
+  // switched onto the fallback topology by a query string. `role` below is
+  // purely a debug badge; no application logic branches on it.
   let runtime: AppRuntime | undefined;
   let role = $state<ElectedHost.Role | undefined>(undefined);
   if (browser) {
-    const useMainThreadHost = new URLSearchParams(location.search).get("host") === "main";
+    const useMainThreadHost =
+      import.meta.env.DEV && new URLSearchParams(location.search).get("host") === "main";
     if (useMainThreadHost) {
       // svelte-ignore state_referenced_locally
       const elected = bootMainThread({ clientGroupId: data.clientGroupId, userId: data.user?.id });

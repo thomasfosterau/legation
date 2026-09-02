@@ -12,6 +12,7 @@
    * matches the URL.
    */
   import { page } from "$app/state";
+  import { resolve } from "$app/paths";
   import { Effect, Fiber, Stream } from "effect";
   import { AsyncResult } from "effect/unstable/reactivity";
   import { setClientRuntime } from "@legation/svelte";
@@ -20,7 +21,6 @@
   import { allUsers, type User } from "$lib/domain";
   import { values } from "$lib/joins";
   import { createSession, setSession } from "$lib/session.svelte";
-  import { paths } from "$lib/routes";
 
   const { data, children } = $props();
   // The world is a stable singleton the root `load` builds once, so reading it
@@ -76,24 +76,24 @@
 
 <nav class="navbar navbar-light">
   <div class="container">
-    <a href={paths.home} class="navbar-brand">conduit</a>
+    <a href={resolve("/")} class="navbar-brand">conduit</a>
     <ul class="nav navbar-nav pull-xs-right">
       <li class="nav-item">
-        <a href={paths.home} class={`nav-link ${active("/")}`}>Home</a>
+        <a href={resolve("/")} class={`nav-link ${active("/")}`}>Home</a>
       </li>
       {#if session.username}
         <li class="nav-item">
-          <a href={paths.newArticle} class={`nav-link ${active("/editor")}`}>
+          <a href={resolve("/editor/[[slug]]", {})} class={`nav-link ${active("/editor")}`}>
             <i class="ion-compose"></i>&nbsp;New Article
           </a>
         </li>
         <li class="nav-item">
-          <a href={paths.settings} class={`nav-link ${active("/settings")}`}>
+          <a href={resolve("/settings")} class={`nav-link ${active("/settings")}`}>
             <i class="ion-gear-a"></i>&nbsp;Settings
           </a>
         </li>
         <li class="nav-item">
-          <a href={paths.profile(session.username)} class={`nav-link ${active("/profile")}`}>
+          <a href={resolve("/profile/[username]/[[tab=favorites]]", { username: session.username })} class={`nav-link ${active("/profile")}`}>
             {#if session.user?.image}
               <img src={session.user.image} class="user-pic" alt={session.username} />
             {/if}
@@ -102,10 +102,10 @@
         </li>
       {:else}
         <li class="nav-item">
-          <a href={paths.login} class={`nav-link ${active("/login")}`}>Sign in</a>
+          <a href={resolve("/login")} class={`nav-link ${active("/login")}`}>Sign in</a>
         </li>
         <li class="nav-item">
-          <a href={paths.register} class={`nav-link ${active("/register")}`}>Sign up</a>
+          <a href={resolve("/register")} class={`nav-link ${active("/register")}`}>Sign up</a>
         </li>
       {/if}
     </ul>
@@ -116,7 +116,7 @@
 
 <footer>
   <div class="container">
-    <a href={paths.home} class="logo-font">conduit</a>
+    <a href={resolve("/")} class="logo-font">conduit</a>
     <span class="attribution">
       RealWorld example driving the
       <a href="https://github.com/thomasfosterau/legation">legation</a> engine.

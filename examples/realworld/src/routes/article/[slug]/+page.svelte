@@ -9,6 +9,7 @@
    */
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/unstable/reactivity";
   import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions.svelte";
@@ -18,7 +19,6 @@
   import ArticleMeta from "$lib/components/ArticleMeta.svelte";
   import FavoriteButton from "$lib/components/FavoriteButton.svelte";
   import FollowButton from "$lib/components/FollowButton.svelte";
-  import { paths } from "$lib/routes";
 
   const slug = $derived(page.params.slug!);
 
@@ -66,7 +66,7 @@
           {#if isAuthor}
             <span>
               <a
-                href={paths.editArticle(view.article.slug)}
+                href={resolve("/editor/[[slug]]", { slug: view.article.slug })}
                 class="btn btn-sm btn-outline-secondary"
               >
                 <i class="ion-edit"></i> Edit Article
@@ -75,7 +75,7 @@
                 class="btn btn-sm btn-outline-danger"
                 onclick={() => {
                   void actions.current?.deleteArticle(view.article.slug);
-                  void goto(paths.home);
+                  void goto(resolve("/"));
                 }}
               >
                 <i class="ion-trash-a"></i> Delete Article
@@ -110,7 +110,7 @@
           {#if isAuthor}
             <span>
               <a
-                href={paths.editArticle(view.article.slug)}
+                href={resolve("/editor/[[slug]]", { slug: view.article.slug })}
                 class="btn btn-sm btn-outline-secondary"
               >
                 <i class="ion-edit"></i> Edit Article
@@ -119,7 +119,7 @@
                 class="btn btn-sm btn-outline-danger"
                 onclick={() => {
                   void actions.current?.deleteArticle(view.article.slug);
-                  void goto(paths.home);
+                  void goto(resolve("/"));
                 }}
               >
                 <i class="ion-trash-a"></i> Delete Article
@@ -151,8 +151,8 @@
             </form>
           {:else}
             <p>
-              <a href={paths.login}>Sign in</a> or
-              <a href={paths.register}>sign up</a> to add comments.
+              <a href={resolve("/login")}>Sign in</a> or
+              <a href={resolve("/register")}>sign up</a> to add comments.
             </p>
           {/if}
 
@@ -162,10 +162,10 @@
                 <p class="card-text">{comment.body}</p>
               </div>
               <div class="card-footer">
-                <a href={paths.profile(author.username)} class="comment-author">
+                <a href={resolve("/profile/[username]/[[tab=favorites]]", { username: author.username })} class="comment-author">
                   <img src={author.image} class="comment-author-img" alt={author.username} />
                 </a>
-                <a href={paths.profile(author.username)} class="comment-author">
+                <a href={resolve("/profile/[username]/[[tab=favorites]]", { username: author.username })} class="comment-author">
                   {author.username}
                 </a>
                 <span class="date-posted">{formatDate(comment.createdAt)}</span>

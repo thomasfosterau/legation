@@ -3,7 +3,7 @@
 Idiomatic Svelte bindings for the
 [`@legation/effect`](../effect) engine.
 
-Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
+Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 The package is deliberately thin. Everything the engine can do on its own —
 reads, mutations, hydration — is `@legation/effect`; what lives here is the

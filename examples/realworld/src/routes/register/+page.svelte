@@ -3,8 +3,8 @@
    * Register — Sign up.
    */
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getSession } from "$lib/session.svelte";
-  import { paths } from "$lib/routes";
 
   const session = getSession();
 
@@ -17,7 +17,7 @@
     event.preventDefault();
     const err = await session.register(username.trim(), email.trim(), password);
     if (err) error = err;
-    else await goto(paths.home);
+    else await goto(resolve("/"));
   };
 </script>
 
@@ -27,7 +27,7 @@
       <div class="col-md-6 offset-md-3 col-xs-12">
         <h1 class="text-xs-center">Sign up</h1>
         <p class="text-xs-center">
-          <a href={paths.login}>Have an account?</a>
+          <a href={resolve("/login")}>Have an account?</a>
         </p>
         {#if error}
           <ul class="error-messages">

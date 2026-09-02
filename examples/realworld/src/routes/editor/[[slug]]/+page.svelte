@@ -8,13 +8,13 @@
    */
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/unstable/reactivity";
   import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions.svelte";
   import { getSession } from "$lib/session.svelte";
   import { articleBySlug } from "$lib/domain";
   import { toArticle } from "$lib/joins";
-  import { paths } from "$lib/routes";
 
   const actions = getActions();
   const session = getSession();
@@ -31,7 +31,7 @@
   let hydrated = $state(false);
 
   $effect(() => {
-    if (session.username === null) void goto(paths.login);
+    if (session.username === null) void goto(resolve("/login"));
   });
 
   // Hydrate the form once the article to edit has loaded.
@@ -61,10 +61,10 @@
         tagList,
         createdAt: existing.article.createdAt,
       });
-      await goto(paths.article(slug));
+      await goto(resolve("/article/[slug]", { slug: slug }));
     } else {
       const created = await current.createArticle({ title, description, body, tagList });
-      await goto(paths.article(created));
+      await goto(resolve("/article/[slug]", { slug: created }));
     }
   };
 </script>

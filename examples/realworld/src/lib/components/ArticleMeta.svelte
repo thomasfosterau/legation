@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { paths } from "../routes";
+  import { resolve } from "$app/paths";
   import type { ArticleView } from "../types";
 
   let { view }: { view: ArticleView } = $props();
@@ -9,12 +9,12 @@
 </script>
 
 <div class="article-meta">
-  <a href={paths.profile(view.author.username)}>
+  <a href={resolve("/profile/[username]/[[tab=favorites]]", { username: view.author.username })}>
     <img src={view.author.image} alt={view.author.username} />
   </a>
   <div class="info">
     <a
-      href={paths.profile(view.author.username)}
+      href={resolve("/profile/[username]/[[tab=favorites]]", { username: view.author.username })}
       class="author"
     >
       {view.author.username}

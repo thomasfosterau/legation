@@ -9,7 +9,7 @@ The Effect-native sync engine. One package, one dependency (`effect`), four laye
 
 Protocol adapters live in separate packages (e.g. [`@legation/jsonapi`](../jsonapi)).
 
-Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/coming-from-tanstack-query.md) maps those libraries' concepts onto this engine.
+Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this engine.
 
 ## Status
 

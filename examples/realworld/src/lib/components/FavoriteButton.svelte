@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getActions } from "../actions.svelte";
-  import { paths } from "../routes";
   import type { ArticleView } from "../types";
 
   let { article, compact = false }: { article: ArticleView; compact?: boolean } = $props();
@@ -10,7 +10,7 @@
 
   const onClick = (): void => {
     const current = actions.current;
-    if (current === null) return void goto(paths.login);
+    if (current === null) return void goto(resolve("/login"));
     void current.setFavorite(article.article.slug, !article.favorited);
   };
 </script>

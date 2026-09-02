@@ -3,8 +3,8 @@
    * Settings — edit the current user's profile, or log out.
    */
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getSession } from "$lib/session.svelte";
-  import { paths } from "$lib/routes";
 
   const session = getSession();
 
@@ -18,13 +18,13 @@
   let password = $state(initial?.password ?? "");
 
   $effect(() => {
-    if (session.user === null) void goto(paths.login);
+    if (session.user === null) void goto(resolve("/login"));
   });
 
   const submit = async (event: SubmitEvent): Promise<void> => {
     event.preventDefault();
     await session.updateSettings({ username, email, password, bio, image });
-    await goto(paths.profile(username));
+    await goto(resolve("/profile/[username]/[[tab=favorites]]", { username: username }));
   };
 </script>
 
@@ -77,7 +77,7 @@
             class="btn btn-outline-danger"
             onclick={() => {
               session.logout();
-              void goto(paths.home);
+              void goto(resolve("/"));
             }}
           >
             Or click here to logout.

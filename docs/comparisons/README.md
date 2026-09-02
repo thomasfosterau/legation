@@ -21,7 +21,10 @@ one document per system, each honest about where the other side wins:
   and the web-only platform reality (ADR-0012/0013 withdrawn; ADR-0017
   spec export for bespoke native clients).
 
+- [**Coming from TanStack Query**](coming-from-tanstack-query.md) — not a
+  system comparison but the hands-on vocabulary translation for people
+  arriving from TanStack Query / SWR / Apollo / SwiftData: where each of
+  their terms lands here, side by side.
+
 Vocabulary in these documents follows [`CONTEXT.md`](../../CONTEXT.md);
-the architecture decisions they cite live in [`docs/adr/`](../adr/). For a
-hands-on translation aimed at TanStack Query / SWR / Apollo / SwiftData
-users, see [`coming-from-tanstack-query.md`](../coming-from-tanstack-query.md).
+the architecture decisions they cite live in [`docs/adr/`](../adr/).

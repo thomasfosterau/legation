@@ -1,8 +1,8 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getActions } from "../actions.svelte";
   import { getSession } from "../session.svelte";
-  import { paths } from "../routes";
   import type { ProfileView } from "../types";
 
   let { profile }: { profile: ProfileView } = $props();
@@ -12,7 +12,7 @@
 
   const onClick = (): void => {
     const current = actions.current;
-    if (current === null) return void goto(paths.login);
+    if (current === null) return void goto(resolve("/login"));
     void current.setFollow(profile.username, !profile.following);
   };
 </script>

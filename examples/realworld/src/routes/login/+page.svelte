@@ -3,8 +3,8 @@
    * Login — Sign in.
    */
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getSession } from "$lib/session.svelte";
-  import { paths } from "$lib/routes";
 
   const session = getSession();
 
@@ -16,7 +16,7 @@
     event.preventDefault();
     const err = session.login(username.trim(), password);
     if (err) error = err;
-    else void goto(paths.home);
+    else void goto(resolve("/"));
   };
 </script>
 
@@ -26,7 +26,7 @@
       <div class="col-md-6 offset-md-3 col-xs-12">
         <h1 class="text-xs-center">Sign in</h1>
         <p class="text-xs-center">
-          <a href={paths.register}>Need an account?</a>
+          <a href={resolve("/register")}>Need an account?</a>
         </p>
         <p class="text-xs-center text-muted">Try emma / demo or liang / demo.</p>
         {#if error}
