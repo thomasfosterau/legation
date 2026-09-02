@@ -17,6 +17,7 @@
 import { Data, Effect, Schema } from "effect";
 import type { Backend, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
+import * as FilterCorpus from "./FilterCorpus.js";
 import * as MemoryBackend from "./MemoryBackend.js";
 import * as Mutator from "./Mutator.js";
 import * as Predicate from "./Predicate.js";
@@ -283,6 +284,62 @@ export const verifyBackendContract = (
         JSON.stringify(evaluatedPaged) === JSON.stringify(expectedPaged),
         `cursor page: expected ${JSON.stringify(expectedPaged)}, got ${JSON.stringify(evaluatedPaged)}`
       );
+
+      // A small generated corpus (issue #153) over the same two columns, so
+      // every backend inherits the check for every operator in the core:
+      // `evaluate` must return exactly what `Subset.apply` returns over the
+      // same rows, order included, for random predicates, order terms, and
+      // limits. NULL/absent values and astral text are deliberately off:
+      // ADR-0028 makes Postgres normative for both, and the JS evaluator
+      // (#155) and the SQL compilers (#156) are not yet exact there — the
+      // differential harness in `@legation/sql` pins those divergences; flip
+      // the two options here once they land, so the contract catches any
+      // backend that regresses.
+      const corpus = FilterCorpus.generateCorpus({
+        seed: FilterCorpus.DEFAULT_SEED,
+        columns: [
+          { name: "rank", kind: "integer" },
+          { name: "tag", kind: "string" },
+        ],
+        rows: 30,
+        predicates: 40,
+        orderBys: 40,
+        nulls: false,
+        astral: false,
+      });
+      const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
+      yield* expectOk(
+        rule,
+        backend.applyMutations(
+          context,
+          corpusRows.map((row, index) => put(4 + seed.length + index, evalRows, row.id, row.value))
+        )
+      );
+      const all = [...reference, ...corpusRows];
+      for (const [index, where] of corpus.predicates.entries()) {
+        const subset = Subset.make({
+          collection: evalRows,
+          where,
+          orderBy: corpus.orderBys[index % corpus.orderBys.length],
+          ...(index % 3 === 0 ? { limit: 1 + (index % 7) } : {}),
+        });
+        const expected = Subset.apply(all, subset).map((row) => row.id);
+        const evaluated = (yield* expectOk(rule, backend.evaluate(context, subset))).map(
+          (entry) => entry.id
+        );
+        yield* check(
+          rule,
+          JSON.stringify(evaluated) === JSON.stringify(expected),
+          FilterCorpus.formatDisagreement({
+            seed: corpus.seed,
+            subject: `generated subset ${index}${subset.limit !== undefined ? ` (limit ${subset.limit})` : ""}`,
+            predicate: where,
+            orderBy: subset.orderBy,
+            rows: all,
+            results: { "Subset.apply": expected, "backend.evaluate": evaluated },
+          })
+        );
+      }
     }
 
     // 7. getRows omits missing ids.

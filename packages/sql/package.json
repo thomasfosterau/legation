@@ -44,6 +44,8 @@
     "effect": "4.0.0-beta.107"
   },
   "devDependencies": {
+    "@effect/sql-sqlite-node": "catalog:",
+    "@electric-sql/pglite": "^0.5.8",
     "effect": "catalog:"
   },
   "repository": {
