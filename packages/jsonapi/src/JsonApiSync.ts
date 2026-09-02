@@ -11,6 +11,11 @@
  *
  * The same JsonApiBackend satisfies the BYO `Backend` contract, so a later
  * server-side deployment for CVR fan-out reuses it unchanged.
+ *
+ * When the api advertises the JSON:API Atomic Operations extension (an
+ * endpoint taking an `atomic:operations` document), pushes go to it as one
+ * all-or-nothing request per batch; otherwise each mutation is replayed as
+ * its own request (`JsonApiSyncOptions.atomic`).
  */
 
 import { Duration, Effect, Layer, Scope } from "effect";
@@ -19,7 +24,12 @@ import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { Authorization, Backend, ClientStore, Transport } from "@legation/effect";
 import { ClientEngine, SyncRoom } from "@legation/effect/internal";
-import { reflectResources, type ResourceMap } from "./Convention.js";
+import {
+  reflectAtomic,
+  reflectResources,
+  type EndpointRef,
+  type ResourceMap,
+} from "./Convention.js";
 import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";
 import type { QueryEncoder } from "./JsonApiQuery.js";
@@ -47,6 +57,16 @@ export interface JsonApiSyncOptions {
    */
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
   /**
+   * Atomic operations. When the api advertises the JSON:API Atomic Operations
+   * extension (an endpoint taking an `atomic:operations` document, e.g.
+   * effect-jsonapi's `Endpoint.operations`), the backend pushes each batch as
+   * one all-or-nothing request to it — detected from the api by default.
+   * Pass `false` to keep one request per mutation, or `{ path }` to name the
+   * endpoint explicitly (an api that serves it outside the reflected
+   * `HttpApi`).
+   */
+  readonly atomic?: false | { readonly path: string };
+  /**
    * Periodic pull interval — the correctness backstop that picks up changes
    * made elsewhere ("realtime" is periodic pull for client-direct deployment).
    * Defaults to 5 seconds; set to `null` to disable interval pulling.
@@ -66,12 +86,16 @@ export interface JsonApiSyncOptions {
   readonly store?: Layer.Layer<ClientStore.ClientStore>;
 }
 
-/** Reflect + derive an api's resources, collections, mutators, operations. */
+/**
+ * Reflect + derive an api's resources, collections, mutators, operations —
+ * and its atomic operations endpoint, when it declares one.
+ */
 export const inspect = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
-): { readonly resources: ResourceMap } & Derived => {
+): { readonly resources: ResourceMap; readonly atomic?: EndpointRef } & Derived => {
   const resources = reflectResources(api);
-  return { resources, ...derive(resources) };
+  const atomic = reflectAtomic(api);
+  return { resources, ...(atomic !== undefined ? { atomic } : {}), ...derive(resources) };
 };
 
 /** Every resource collection is readable; the REST API enforces real auth. */
@@ -90,7 +114,10 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
   api: HttpApi.HttpApi<Id, Groups>,
   options: JsonApiSyncOptions
 ): Layer.Layer<ClientEngine.ClientEngine, never, HttpClient.HttpClient> => {
-  const { resources, registry, operations } = inspect(api);
+  const { resources, registry, operations, atomic } = inspect(api);
+  // Atomic pushes when the api advertises the extension, unless opted out;
+  // an explicit path overrides what reflection found.
+  const atomicPath = options.atomic === false ? undefined : (options.atomic?.path ?? atomic?.path);
 
   const backendLayer = Layer.effect(Backend.Backend)(
     JsonApiBackend.make({
@@ -98,6 +125,7 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
       resources,
       mutators: registry.mutators,
       operations,
+      ...(atomicPath !== undefined ? { atomic: { path: atomicPath } } : {}),
       ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
       ...(options.includes !== undefined ? { includes: options.includes } : {}),
     })

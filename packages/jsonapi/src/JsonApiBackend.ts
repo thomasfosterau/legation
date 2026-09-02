@@ -17,31 +17,66 @@
  * - `getRows` serves row values from the cache `evaluate` populates (the sync
  *   server always evaluates before fetching put rows in the same pull),
  *   falling back to `GET /{type}/{id}`.
- * - `applyMutations` replays each CRUD mutator as its HTTP write
- *   (`POST`/`PATCH`/`DELETE`).
+ * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
+ *   JSON:API write (`Write`: a create, update or delete of one resource —
+ *   derived CRUD mutators map directly, and `writes` expresses custom
+ *   mutators). With `atomic` configured the whole batch goes as one
+ *   `atomic:operations` request (`create` → `add`, `update` → `update`,
+ *   `delete` → `remove`, sent with the extension's media type); otherwise
+ *   each write is its own `POST`/`PATCH`/`DELETE`.
  *
  * **Versioning.** A plain REST API exposes no row-version token, so versions
  * are a content hash of the resource value: the hash changes iff the row
  * changed, which is exactly what CVR diffing needs.
  *
  * **Delivery semantics.** Without a cooperating server there is no
- * server-side mutation-id ledger, so this backend keeps an in-session ledger
- * and provides *at-least-once* application. Make writes idempotent
- * (client-generated ids on create; PATCH/DELETE are naturally idempotent) and
- * retries are safe.
+ * server-side mutation-id ledger, so this backend keeps an in-session ledger.
+ *
+ * Over an atomic operations endpoint (`atomic` set) a push is all-or-nothing
+ * per batch: one request, and the ledger advances only once the server has
+ * applied every operation in it. A transient failure — transport, 5xx, or a
+ * 4xx naming no operation — leaves the server holding nothing and the ledger
+ * unmoved, so the client's retry resends the same batch. A 4xx error document
+ * whose `source.pointer` names an operation (`Atomic.operationPointer(i)`) is
+ * a permanent rejection of that mutation (ADR-0008's poison-mutation
+ * semantics): it is recorded as rejected and the batch is resent without it,
+ * until the remainder applies or nothing is left; every mutation in the batch
+ * is then acknowledged in order (one round trip per rejection, bounded by the
+ * batch size). `lid` is supported by the wire format but unused: derived
+ * creates carry the client-generated `id`, and no mutator yet needs a
+ * server-assigned one.
+ *
+ * Over per-resource endpoints (no `atomic`) delivery is *at-least-once*:
+ * make writes idempotent (client-generated ids on create; PATCH/DELETE are
+ * naturally idempotent) and retries are safe.
  */
 
-import { Effect, Ref, Schema } from "effect";
+import { Effect, Option, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import { Backend, BackendError, MutationRejected, Predicate } from "@legation/effect";
 import { Hash } from "@legation/effect/internal";
 import { Subset } from "@legation/effect/internal";
 import type { Mutator } from "@legation/effect";
-import { documentToRows, parseResponse } from "./CollectionLoader.js";
+import { documentToRows, parseResponse, resourceToRow } from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
+import { ResourceObjectSchema } from "./schema.js";
+
+/**
+ * One JSON:API write — the unit both delivery paths speak: a create (`POST`,
+ * or atomic `add`), update (`PATCH` / `update`) or delete (`DELETE` /
+ * `remove`) of one resource. Creates carry the client-generated id.
+ */
+export interface Write {
+  readonly operation: "create" | "update" | "delete";
+  readonly type: string;
+  readonly id: string;
+  readonly attributes?: Record<string, unknown>;
+  readonly relationships?: Record<string, unknown>;
+}
 
 export interface JsonApiBackendConfig {
   /** Base URL the resource paths are resolved against (no trailing slash). */
@@ -51,6 +86,21 @@ export interface JsonApiBackendConfig {
   readonly mutators: ReadonlyMap<string, Mutator.AnyMutator>;
   /** Mutator name → CRUD operation + type. */
   readonly operations: ReadonlyMap<string, OperationInfo>;
+  /**
+   * Mutators beyond the derived CRUD ones, and how to express each one's
+   * decoded args as a single JSON:API `Write`. Consulted before `operations`,
+   * so an app can push its own named intents through this backend as long
+   * as each is one create/update/delete of one resource.
+   */
+  readonly writes?: ReadonlyMap<string, (args: unknown) => Write>;
+  /**
+   * The server's JSON:API Atomic Operations endpoint (`POST {path}`), when it
+   * has one. With it set, `applyMutations` pushes a whole batch as one
+   * all-or-nothing `atomic:operations` request; without it, each mutation is
+   * its own request. `JsonApiSync` fills this in from the reflected api
+   * (`Convention.reflectAtomic`).
+   */
+  readonly atomic?: { readonly path: string };
   /** Subset → JSON:API query string. Defaults to a sound-superset encoder. */
   readonly query?: QueryEncoder;
   /**
@@ -62,9 +112,18 @@ export interface JsonApiBackendConfig {
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
 }
 
+/** A mutation as the sync server pushes it to a backend. */
+type PushedMutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
+
 const jsonApiHeaders = {
   "Content-Type": "application/vnd.api+json",
   Accept: "application/vnd.api+json",
+} as const;
+
+/** The extension media type an atomic operations request carries both ways. */
+const atomicHeaders = {
+  "Content-Type": Atomic.MEDIA_TYPE,
+  Accept: Atomic.MEDIA_TYPE,
 } as const;
 
 const trimSlashes = (s: string): string => s.replace(/\/+$/, "");
@@ -119,6 +178,11 @@ const recordPut = (
   puts.set(collection, (puts.get(collection) ?? new Map<string, unknown>()).set(id, value));
 };
 
+/** Record a touched id under its collection (mutates `touched`). */
+const recordTouched = (touched: Map<string, Set<string>>, collection: string, id: string): void => {
+  touched.set(collection, (touched.get(collection) ?? new Set<string>()).add(id));
+};
+
 /** The mutable accumulators one push folds its per-mutation outcomes into. */
 interface WriteAccumulator {
   readonly touched: Map<string, Set<string>>;
@@ -139,7 +203,7 @@ const recordOutcome = (
   outcome: WriteOutcome
 ): void => {
   if (outcome._tag === "applied") {
-    acc.touched.set(type, (acc.touched.get(type) ?? new Set()).add(outcome.id));
+    recordTouched(acc.touched, type, outcome.id);
     if (outcome.value !== undefined) recordPut(acc.puts, type, outcome.id, outcome.value);
   } else {
     acc.rejected.push({
@@ -164,6 +228,128 @@ const writeBody = (
     ...(relationships !== undefined ? { relationships } : {}),
   },
 });
+
+/** The value a create/update writes, as the hint carries it. */
+const writtenValue = (write: Write): Record<string, unknown> => ({
+  id: write.id,
+  ...write.attributes,
+});
+
+/** Express a derived CRUD mutator's decoded args as one JSON:API write. */
+const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, BackendError> => {
+  switch (operation.operation) {
+    case "create": {
+      const a = args as {
+        id: string;
+        attributes: Record<string, unknown>;
+        relationships?: Record<string, unknown>;
+      };
+      return Effect.succeed({
+        operation: "create",
+        type: operation.type,
+        id: a.id,
+        attributes: a.attributes,
+        ...(a.relationships !== undefined ? { relationships: a.relationships } : {}),
+      });
+    }
+    case "update": {
+      const a = args as { id: string; attributes: Record<string, unknown> };
+      return Effect.succeed({
+        operation: "update",
+        type: operation.type,
+        id: a.id,
+        attributes: a.attributes,
+      });
+    }
+    case "delete": {
+      const a = args as { id: string };
+      return Effect.succeed({ operation: "delete", type: operation.type, id: a.id });
+    }
+    default:
+      return Effect.fail(
+        new BackendError({ message: `Operation "${operation.operation}" is not a write` })
+      );
+  }
+};
+
+/** One write as an atomic operation object (`add` / `update` / `remove`). */
+const operationOf = (write: Write): Record<string, unknown> => {
+  switch (write.operation) {
+    case "create":
+      return {
+        op: "add",
+        data: {
+          type: write.type,
+          id: write.id,
+          attributes: write.attributes ?? {},
+          ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+        },
+      };
+    case "update":
+      return {
+        op: "update",
+        data: { type: write.type, id: write.id, attributes: write.attributes ?? {} },
+      };
+    case "delete":
+      return { op: "remove", ref: { type: write.type, id: write.id } };
+  }
+};
+
+/**
+ * The index of the operation an error's `source.pointer` names — the
+ * operation itself (`Atomic.operationPointer(i)`) or a member below it — or
+ * `undefined` when the pointer names none of the `count` operations sent.
+ */
+const operationIndex = (pointer: string, count: number): number | undefined => {
+  for (let index = 0; index < count; index++) {
+    const expected = Atomic.operationPointer(index);
+    if (pointer === expected || pointer.startsWith(`${expected}/`)) return index;
+  }
+  return undefined;
+};
+
+/** The per-operation rejections an error document carries, by operation index. */
+const rejectionsOf = (
+  body: unknown,
+  count: number,
+  fallbackReason: string
+): ReadonlyArray<{ readonly index: number; readonly reason: string }> => {
+  const errors =
+    typeof body === "object" &&
+    body !== null &&
+    Array.isArray((body as { errors?: unknown }).errors)
+      ? ((body as { errors: ReadonlyArray<unknown> }).errors as ReadonlyArray<{
+          readonly title?: string;
+          readonly detail?: string;
+          readonly source?: { readonly pointer?: string };
+        }>)
+      : [];
+  const byIndex = new Map<number, string>();
+  for (const error of errors) {
+    const pointer = error?.source?.pointer;
+    if (typeof pointer !== "string") continue;
+    const index = operationIndex(pointer, count);
+    if (index === undefined || byIndex.has(index)) continue;
+    byIndex.set(index, error.detail ?? error.title ?? fallbackReason);
+  }
+  return [...byIndex].map(([index, reason]) => ({ index, reason }));
+};
+
+/** The row an `atomic:results` entry carries, if it returned a resource. */
+const resultRow = (result: unknown): JsonApiRow | undefined => {
+  const data =
+    typeof result === "object" && result !== null ? (result as { data?: unknown }).data : undefined;
+  const resource = Schema.decodeUnknownOption(ResourceObjectSchema)(data);
+  return Option.isSome(resource) ? toRow(resourceToRow(resource.value).value) : undefined;
+};
+
+/** One atomic request's outcome: everything applied, or some operations named as rejected. */
+type AtomicOutcome =
+  | { readonly _tag: "applied"; readonly results: ReadonlyArray<unknown> }
+  | {
+      readonly _tag: "rejected";
+      readonly rejections: ReadonlyArray<{ readonly index: number; readonly reason: string }>;
+    };
 
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
@@ -193,15 +379,15 @@ export const make = (
     // is a MutationRejected that skips the mutation without poisoning the queue.
     // 408/429 are the transient exceptions in the 4xx band (timeout, rate limit).
     const transientStatuses = new Set([408, 429]);
+    const isPermanentStatus = (status: number): boolean =>
+      status >= 400 && status < 500 && !transientStatuses.has(status);
     const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.scoped(client.execute(request)).pipe(
         Effect.mapError(backendError("JSON:API write failed")),
         Effect.flatMap((response): Effect.Effect<void, BackendError | MutationRejected> => {
           if (response.status >= 200 && response.status < 300) return Effect.void;
           const message = `JSON:API write returned HTTP ${response.status}`;
-          return response.status >= 400 &&
-            response.status < 500 &&
-            !transientStatuses.has(response.status)
+          return isPermanentStatus(response.status)
             ? Effect.fail(new MutationRejected({ reason: message }))
             : Effect.fail(new BackendError({ message }));
         })
@@ -310,6 +496,8 @@ export const make = (
           const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
             Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
           );
+          // A 404 is an absent row: omitted, as the contract requires.
+          if (response.status === 404) continue;
           const document = yield* parseResponse(response).pipe(
             Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
           );
@@ -322,74 +510,72 @@ export const make = (
         return result;
       });
 
-    // Apply one write and report the affected id plus, for create/update, the
-    // row value (`{ id, ...attributes }`) so the hint can carry it for
-    // predicate matching. A delete reports no value → absent from the hint's
-    // values, marking it a delete.
+    /** Decode a pushed mutation's args and express it as one JSON:API write. */
+    const writeFor = (mutation: PushedMutation): Effect.Effect<Write, BackendError> =>
+      Effect.gen(function* () {
+        const definition = config.mutators.get(mutation.mutator);
+        const custom = config.writes?.get(mutation.mutator);
+        const operation = config.operations.get(mutation.mutator);
+        if (definition === undefined || (custom === undefined && operation === undefined))
+          return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+        const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+          Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
+        );
+        return custom !== undefined ? custom(args) : yield* writeOf(operation!, args);
+      });
+
+    // Apply one write as its own request and report the affected id plus, for
+    // create/update, the row value (`{ id, ...attributes }`) so the hint can
+    // carry it for predicate matching. A delete reports no value → absent from
+    // the hint's values, marking it a delete.
     const applyOne = (
-      operation: OperationInfo,
-      args: unknown
+      write: Write
     ): Effect.Effect<
       { readonly id: string; readonly value?: unknown },
       BackendError | MutationRejected
     > =>
       Effect.gen(function* () {
-        const resource = config.resources.get(operation.type);
-        switch (operation.operation) {
+        const resource = config.resources.get(write.type);
+        switch (write.operation) {
           case "create": {
-            const a = args as {
-              id: string;
-              attributes: Record<string, unknown>;
-              relationships?: Record<string, unknown>;
-            };
             const ref = resource?.create;
             if (ref === undefined)
-              return yield* new BackendError({
-                message: `No create endpoint for "${operation.type}"`,
-              });
+              return yield* new BackendError({ message: `No create endpoint for "${write.type}"` });
             yield* sendWrite(
               HttpClientRequest.post(urlFor(config.baseUrl, ref.path)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
-                  writeBody(operation.type, a.id, a.attributes, a.relationships)
+                  writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
                 )
               )
             );
-            return { id: a.id, value: { id: a.id, ...a.attributes } };
+            return { id: write.id, value: writtenValue(write) };
           }
           case "update": {
-            const a = args as { id: string; attributes: Record<string, unknown> };
             const ref = resource?.update;
             if (ref === undefined)
-              return yield* new BackendError({
-                message: `No update endpoint for "${operation.type}"`,
-              });
+              return yield* new BackendError({ message: `No update endpoint for "${write.type}"` });
             yield* sendWrite(
-              HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, a.id)).pipe(
+              HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
-                HttpClientRequest.bodyJsonUnsafe(writeBody(operation.type, a.id, a.attributes))
+                HttpClientRequest.bodyJsonUnsafe(
+                  writeBody(write.type, write.id, write.attributes ?? {})
+                )
               )
             );
-            return { id: a.id, value: { id: a.id, ...a.attributes } };
+            return { id: write.id, value: writtenValue(write) };
           }
           case "delete": {
-            const a = args as { id: string };
             const ref = resource?.delete;
             if (ref === undefined)
-              return yield* new BackendError({
-                message: `No delete endpoint for "${operation.type}"`,
-              });
+              return yield* new BackendError({ message: `No delete endpoint for "${write.type}"` });
             yield* sendWrite(
-              HttpClientRequest.make("DELETE")(urlFor(config.baseUrl, ref.path, a.id)).pipe(
+              HttpClientRequest.make("DELETE")(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders)
               )
             );
-            return { id: a.id };
+            return { id: write.id };
           }
-          default:
-            return yield* new BackendError({
-              message: `Operation "${operation.operation}" is not a write`,
-            });
         }
       });
 
@@ -405,7 +591,16 @@ export const make = (
         return next;
       });
 
-    const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
+    const lastMutationIdsOf = (context: Backend.SyncContext) =>
+      Ref.get(ledger).pipe(
+        Effect.map((current) => Object.fromEntries(current.get(context.clientGroupId) ?? new Map()))
+      );
+
+    /** Replay each write as its own request (at-least-once, in order). */
+    const applyEach = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>
+    ): Effect.Effect<Backend.ApplyResult, BackendError> =>
       Effect.gen(function* () {
         const touched = new Map<string, Set<string>>();
         const puts = new Map<string, Map<string, unknown>>();
@@ -415,43 +610,147 @@ export const make = (
           const last = group.get(mutation.clientId) ?? 0;
           if (mutation.mutationId <= last) continue; // idempotent (in-session)
 
-          const operation = config.operations.get(mutation.mutator);
-          const definition = config.mutators.get(mutation.mutator);
-          if (operation === undefined || definition === undefined)
-            return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
-
-          const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-            Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
-          );
+          const write = yield* writeFor(mutation);
           // A permanent HTTP rejection (4xx) skips this mutation but still bumps
           // its id, so it is acknowledged and never poisons the queue. A
           // transient failure propagates and aborts the push.
-          const outcome = yield* applyOne(operation, args).pipe(
+          const outcome = yield* applyOne(write).pipe(
             Effect.map((applied) => ({ _tag: "applied", ...applied }) as const),
             Effect.catchTag("MutationRejected", (error) =>
               Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
             )
           );
-          recordOutcome({ touched, puts, rejected }, operation.type, mutation, outcome);
+          recordOutcome({ touched, puts, rejected }, write.type, mutation, outcome);
           yield* bumpLedger(context, mutation);
         }
 
-        const finalGroup = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
         return {
-          lastMutationIds: Object.fromEntries(finalGroup),
+          lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(touched, puts),
           ...(rejected.length > 0 ? { rejected } : {}),
         };
       });
 
+    /** Send one `atomic:operations` request and classify the server's answer. */
+    const sendAtomic = (
+      path: string,
+      operations: ReadonlyArray<Record<string, unknown>>
+    ): Effect.Effect<AtomicOutcome, BackendError> =>
+      Effect.gen(function* () {
+        const response = yield* Effect.scoped(
+          client.execute(
+            HttpClientRequest.post(urlFor(config.baseUrl, path)).pipe(
+              HttpClientRequest.bodyText(
+                JSON.stringify({ "atomic:operations": operations }),
+                Atomic.MEDIA_TYPE
+              ),
+              HttpClientRequest.setHeaders(atomicHeaders)
+            )
+          )
+        ).pipe(Effect.mapError(backendError("JSON:API atomic:operations request failed")));
+        const status = response.status;
+        const message = `JSON:API atomic:operations returned HTTP ${status}`;
+        // A 204 (or an unparseable success body) still means every operation applied.
+        const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
+        if (status >= 200 && status < 300) {
+          const results =
+            typeof body === "object" && body !== null
+              ? (body as { readonly "atomic:results"?: unknown })["atomic:results"]
+              : undefined;
+          return { _tag: "applied", results: Array.isArray(results) ? results : [] } as const;
+        }
+        if (isPermanentStatus(status)) {
+          const rejections = rejectionsOf(body, operations.length, message);
+          if (rejections.length > 0) return { _tag: "rejected", rejections } as const;
+        }
+        // 5xx, 408/429, transport, or a 4xx naming no operation: transient.
+        return yield* new BackendError({ message });
+      });
+
+    /**
+     * Push the batch as one `atomic:operations` request. Nothing is
+     * acknowledged until the server has applied the whole (remaining) batch;
+     * permanently rejected operations are dropped and the rest resent.
+     */
+    const applyAtomic = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>,
+      atomic: { readonly path: string }
+    ): Effect.Effect<Backend.ApplyResult, BackendError> =>
+      Effect.gen(function* () {
+        const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
+        const expected = new Map<string, number>(group);
+        const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
+        for (const mutation of mutations) {
+          const last = expected.get(mutation.clientId) ?? 0;
+          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          if (mutation.mutationId > last + 1)
+            return yield* new BackendError({
+              message: `Mutation-id gap for client "${mutation.clientId}": expected ${last + 1}, got ${mutation.mutationId}`,
+            });
+          expected.set(mutation.clientId, mutation.mutationId);
+          batch.push({ mutation, write: yield* writeFor(mutation) });
+        }
+
+        // Batch index → rejection reason; each round trip drops at least one.
+        const rejectedAt = new Map<number, string>();
+        let pending = batch.map((entry, index) => ({ ...entry, index }));
+        let results: ReadonlyArray<unknown> = [];
+        while (pending.length > 0) {
+          const outcome = yield* sendAtomic(
+            atomic.path,
+            pending.map((entry) => operationOf(entry.write))
+          );
+          if (outcome._tag === "applied") {
+            results = outcome.results;
+            break;
+          }
+          for (const { index, reason } of outcome.rejections) {
+            rejectedAt.set(pending[index]!.index, reason);
+          }
+          pending = pending.filter((entry) => !rejectedAt.has(entry.index));
+        }
+
+        // Hints from what applied: the result document's resource where the
+        // server returned one, else the value the request wrote.
+        const touched = new Map<string, Set<string>>();
+        const puts = new Map<string, Map<string, unknown>>();
+        pending.forEach(({ write }, position) => {
+          recordTouched(touched, write.type, write.id);
+          if (write.operation === "delete") return;
+          recordPut(
+            puts,
+            write.type,
+            write.id,
+            resultRow(results[position]) ?? writtenValue(write)
+          );
+        });
+
+        // Applied and rejected alike are acknowledged, in original order.
+        for (const { mutation } of batch) yield* bumpLedger(context, mutation);
+        const rejected = [...rejectedAt]
+          .toSorted(([a], [b]) => a - b)
+          .map(([index, reason]) => ({
+            clientId: batch[index]!.mutation.clientId,
+            mutationId: batch[index]!.mutation.mutationId,
+            reason,
+          }));
+
+        return {
+          lastMutationIds: yield* lastMutationIdsOf(context),
+          hints: Backend.buildChangeHints(touched, puts),
+          ...(rejected.length > 0 ? { rejected } : {}),
+        };
+      });
+
+    const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
+      config.atomic === undefined
+        ? applyEach(context, mutations)
+        : applyAtomic(context, mutations, config.atomic);
+
     return Backend.Backend.of({
       applyMutations,
-      lastMutationIds: (context) =>
-        Ref.get(ledger).pipe(
-          Effect.map((current) =>
-            Object.fromEntries(current.get(context.clientGroupId) ?? new Map())
-          )
-        ),
+      lastMutationIds: lastMutationIdsOf,
       evaluate,
       getRows,
     });

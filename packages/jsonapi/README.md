@@ -11,8 +11,10 @@ convention-first derivation — wires an app's existing JSON:API REST API into t
 full offline/optimistic sync engine with no bespoke backend to write.
 
 It is **read-side**: reads come from JSON:API documents, while writes are the
-engine's named mutators (create/update/delete replayed as `POST`/`PATCH`/`DELETE`),
-not ad-hoc REST calls.
+engine's named mutators (create/update/delete replayed as `POST`/`PATCH`/`DELETE`,
+or pushed as one `atomic:operations` request when the server supports the
+[Atomic Operations extension](https://jsonapi.org/ext/atomic/)), not ad-hoc
+REST calls.
 
 The JSON:API wire types/schemas and query encoding are adopted from
 [`@thomasfosterau/effect-jsonapi`](https://www.npmjs.com/package/@thomasfosterau/effect-jsonapi)
@@ -93,7 +95,44 @@ A CRUD mutator is derived only when its endpoint exists (no `POST /{type}` ⇒ n
 `create` mutator). Endpoints that don't fit the table (nested routes, custom
 actions) are simply not part of the derived sync surface. Use
 `JsonApiSync.inspect(api)` to see the reflected resources, collections,
-mutators, and operations.
+mutators, operations, and the atomic operations endpoint (below), if any.
+
+### Atomic operations
+
+If the api advertises the JSON:API
+[Atomic Operations extension](https://jsonapi.org/ext/atomic/) — an endpoint
+whose request payload is an `atomic:operations` document, such as
+effect-jsonapi's `Endpoint.operations([...])` (conventionally
+`POST /operations`) — `JsonApiSync` detects it and pushes each batch of
+journalled mutations as **one request**: `create` → `add`, `update` →
+`update`, `delete` → `remove`, sent with the extension's media type. The
+endpoint is recognised by its payload, not its path, so it never reads as a
+phantom `operations` resource.
+
+```ts
+JsonApiSync.layer(api, { ...options, atomic: false }); // one request per mutation
+JsonApiSync.layer(api, { ...options, atomic: { path: "/batch" } }); // an explicit endpoint
+```
+
+Delivery over the atomic endpoint is all-or-nothing per batch: nothing is
+acknowledged until the server has applied every operation. A transient failure
+(transport, 5xx, or a 4xx that names no operation) leaves the server holding
+nothing and the client retries the whole batch. A 4xx error document whose
+`source.pointer` names an operation (`/atomic:operations/{index}`) is a
+permanent rejection of that mutation: it is reported as rejected, the batch is
+resent without it, and every mutation in the batch is then acknowledged in
+order — the poison-mutation semantics of the core contract. Creates keep
+sending the client-generated `id`; `lid` is supported by the wire format but
+unused until a mutator needs a server-assigned id.
+
+Without the endpoint, each write is its own `POST`/`PATCH`/`DELETE` and
+delivery is at-least-once: keep writes idempotent (client-generated ids on
+create; `PATCH`/`DELETE` are naturally idempotent).
+
+Mutators beyond the derived CRUD ones can ride the same backend: give
+`JsonApiBackend.make` a `writes` map from mutator name to a function expressing
+its decoded args as one JSON:API `Write` (a create, update or delete of one
+resource), and both delivery paths carry it.
 
 ## Standalone collection loading
 
