@@ -148,6 +148,20 @@ describe("Convention.reflectAtomic", () => {
       )
     );
     expect(Convention.reflectAtomic(custom)?.path).toBe("/api/v2/batch");
+    // The document may be one arm of a union (or behind a suspension) and is still recognised.
+    const unioned = plainApi.add(
+      HttpApiGroup.make("batch").add(
+        HttpApiEndpoint.post("batch", "/batch", {
+          payload: Schema.Union([
+            Schema.Struct({ legacy: Schema.Array(Schema.Unknown) }),
+            Schema.suspend(() => AtomicRequest),
+          ]),
+          success: Schema.Unknown,
+        })
+      )
+    );
+    expect(Convention.reflectAtomic(unioned)?.path).toBe("/batch");
+    expect(Convention.reflectResources(unioned).has("batch")).toBe(false);
   });
 
   it("does not derive a phantom `operations` resource", () => {
@@ -228,9 +242,10 @@ describe("JsonApiBackend in atomic mode", () => {
       const backend = yield* makeBackend(server);
       const result = yield* backend.applyMutations(context, three);
       expect(result.lastMutationIds).toEqual({ "client-1": 3 });
+      // The fallback carries the same shape a returned resource would (`toRow`).
       expect(result.hints[0]?.values).toEqual([
-        { id: "1", value: { id: "1", title: "first" } },
-        { id: "2", value: { id: "2", title: "second" } },
+        { id: "1", value: { id: "1", title: "first", relationships: {} } },
+        { id: "2", value: { id: "2", title: "second", relationships: {} } },
       ]);
     })
   );

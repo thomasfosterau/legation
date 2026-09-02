@@ -56,7 +56,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import { Backend, BackendError, MutationRejected, Predicate } from "@legation/effect";
-import { Hash } from "@legation/effect/internal";
+import { Hash, Protocol } from "@legation/effect/internal";
 import { Subset } from "@legation/effect/internal";
 import type { Mutator } from "@legation/effect";
 import { documentToRows, parseResponse, resourceToRow } from "./CollectionLoader.js";
@@ -113,7 +113,7 @@ export interface JsonApiBackendConfig {
 }
 
 /** A mutation as the sync server pushes it to a backend. */
-type PushedMutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
+type PushedMutation = Protocol.Mutation;
 
 const jsonApiHeaders = {
   "Content-Type": "application/vnd.api+json",
@@ -229,10 +229,15 @@ const writeBody = (
   },
 });
 
-/** The value a create/update writes, as the hint carries it. */
-const writtenValue = (write: Write): Record<string, unknown> => ({
-  id: write.id,
+/**
+ * The value a create/update writes, as the hint carries it — the same shape
+ * `toRow` gives a resource the server returned, so a hint looks alike
+ * whichever path produced it and whatever the server answered.
+ */
+const writtenValue = (write: Write): JsonApiRow => ({
   ...write.attributes,
+  id: write.id,
+  relationships: (write.relationships ?? {}) as JsonApiRow["relationships"],
 });
 
 /** Express a derived CRUD mutator's decoded args as one JSON:API write. */
@@ -288,7 +293,12 @@ const operationOf = (write: Write): Record<string, unknown> => {
     case "update":
       return {
         op: "update",
-        data: { type: write.type, id: write.id, attributes: write.attributes ?? {} },
+        data: {
+          type: write.type,
+          id: write.id,
+          attributes: write.attributes ?? {},
+          ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+        },
       };
     case "delete":
       return { op: "remove", ref: { type: write.type, id: write.id } };
@@ -301,11 +311,12 @@ const operationOf = (write: Write): Record<string, unknown> => {
  * `undefined` when the pointer names none of the `count` operations sent.
  */
 const operationIndex = (pointer: string, count: number): number | undefined => {
-  for (let index = 0; index < count; index++) {
-    const expected = Atomic.operationPointer(index);
-    if (pointer === expected || pointer.startsWith(`${expected}/`)) return index;
-  }
-  return undefined;
+  const match = /^\/atomic:operations\/(\d+)(?:\/|$)/.exec(pointer);
+  if (match === null) return undefined;
+  const index = Number(match[1]);
+  return index < count && Atomic.operationPointer(index) === `/atomic:operations/${index}`
+    ? index
+    : undefined;
 };
 
 /** The per-operation rejections an error document carries, by operation index. */
@@ -559,7 +570,7 @@ export const make = (
               HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
-                  writeBody(write.type, write.id, write.attributes ?? {})
+                  writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
                 )
               )
             );
@@ -579,14 +590,15 @@ export const make = (
         }
       });
 
+    /** Acknowledge mutations in the in-session ledger, in the order given, in one update. */
     const bumpLedger = (
       context: Backend.SyncContext,
-      mutation: { clientId: string; mutationId: number }
+      mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
     ) =>
       Ref.update(ledger, (current) => {
         const next = new Map(current);
         const groupIds = new Map(next.get(context.clientGroupId) ?? []);
-        groupIds.set(mutation.clientId, mutation.mutationId);
+        for (const mutation of mutations) groupIds.set(mutation.clientId, mutation.mutationId);
         next.set(context.clientGroupId, groupIds);
         return next;
       });
@@ -621,7 +633,7 @@ export const make = (
             )
           );
           recordOutcome({ touched, puts, rejected }, write.type, mutation, outcome);
-          yield* bumpLedger(context, mutation);
+          yield* bumpLedger(context, [mutation]);
         }
 
         return {
@@ -727,7 +739,10 @@ export const make = (
         });
 
         // Applied and rejected alike are acknowledged, in original order.
-        for (const { mutation } of batch) yield* bumpLedger(context, mutation);
+        yield* bumpLedger(
+          context,
+          batch.map(({ mutation }) => mutation)
+        );
         const rejected = [...rejectedAt]
           .toSorted(([a], [b]) => a - b)
           .map(([index, reason]) => ({

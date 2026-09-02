@@ -30,6 +30,7 @@
  * instead — the backend then pushes a whole batch as one request.
  */
 
+import type * as SchemaAST from "effect/SchemaAST";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -108,22 +109,38 @@ export const classify = (
 /** The top-level member that makes a request an atomic operations document. */
 const ATOMIC_OPERATIONS_MEMBER = "atomic:operations";
 
+/** Depth bound for walking a payload schema's unions and suspensions. */
+const MEMBER_WALK_DEPTH = 8;
+
+/**
+ * Whether a schema is (or, through unions and suspensions, may be) an object
+ * with a top-level `atomic:operations` member.
+ */
+const hasAtomicMember = (ast: SchemaAST.AST, depth = 0): boolean => {
+  if (depth > MEMBER_WALK_DEPTH) return false;
+  switch (ast._tag) {
+    case "Objects":
+      return ast.propertySignatures.some((property) => property.name === ATOMIC_OPERATIONS_MEMBER);
+    case "Union":
+      return ast.types.some((member) => hasAtomicMember(member, depth + 1));
+    case "Suspend":
+      return hasAtomicMember(ast.thunk(), depth + 1);
+    default:
+      return false;
+  }
+};
+
 /**
  * Whether an endpoint takes an `atomic:operations` request document: some
  * payload schema (any content type) is an object with a top-level
- * `atomic:operations` member. This is what makes an endpoint the atomic
- * operations endpoint — not its path, which is configurable.
+ * `atomic:operations` member, possibly one arm of a union. This is what
+ * makes an endpoint the atomic operations endpoint — not its path, which is
+ * configurable.
  */
 export const isAtomicEndpoint = (endpoint: HttpApiEndpoint.Top): boolean => {
   for (const { schemas } of endpoint.payload.values()) {
     for (const schema of schemas) {
-      const ast = schema.ast;
-      if (
-        ast._tag === "Objects" &&
-        ast.propertySignatures.some((property) => property.name === ATOMIC_OPERATIONS_MEMBER)
-      ) {
-        return true;
-      }
+      if (hasAtomicMember(schema.ast)) return true;
     }
   }
   return false;
