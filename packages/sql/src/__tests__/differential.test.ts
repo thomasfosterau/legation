@@ -12,9 +12,11 @@
  * the JS evaluator is two-valued where SQL is three-valued (`ne`, `Not`, `In`
  * over NULL/absent), `eq(f, null)` misses an absent field, and JS compares
  * text by UTF-16 code unit where Postgres `COLLATE "C"` and SQLite `BINARY`
- * compare by code point — so astral characters sort differently. SQLite and
- * Postgres agree on all of it (plain `it`), and so does JS on the corpus
- * without NULL/absent values and astral text.
+ * compare by code point — so astral characters sort differently — and JS
+ * refuses ordered comparison on booleans where Postgres orders them
+ * `false < true`. SQLite and Postgres agree on all of it (plain `it`), and so
+ * does JS on the corpus without NULL/absent values, astral text and ordered
+ * booleans.
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
@@ -26,10 +28,19 @@ import { type Engine, makePostgres, makeSqlite } from "./differential/engines.js
 
 const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);
 
-/** The full corpus: NULL, absent, astral text — everything ADR-0028 covers. */
+/** The full corpus: NULL, absent, astral text, ordered booleans — everything ADR-0028 covers. */
 const full = FilterCorpus.generateCorpus({ seed });
-/** The corpus every evaluator already agrees on: no NULL/absent, no astral text. */
-const restricted = FilterCorpus.generateCorpus({ seed: seed + 1, nulls: false, astral: false });
+/**
+ * The corpus every evaluator already agrees on: no NULL/absent, no astral
+ * text, no ordered comparison on booleans. Same seed as `full` so the seed a
+ * disagreement reports reproduces it; the options alone make it distinct.
+ */
+const restricted = FilterCorpus.generateCorpus({
+  seed,
+  nulls: false,
+  astral: false,
+  booleanOrder: false,
+});
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;
@@ -226,7 +237,7 @@ describe("differential filter harness (ADR-0028)", () => {
 
   describe("JS Predicate.test vs Postgres", () => {
     it(
-      "agrees on the corpus without NULL/absent values or astral text",
+      "agrees on the corpus without NULL/absent values, astral text or ordered booleans",
       () =>
         expect(
           run(checkWhere(prefixedCorpus("q", restricted), js, postgres))
@@ -235,7 +246,7 @@ describe("differential filter harness (ADR-0028)", () => {
     );
     // ADR-0028: red until #155 (JS evaluator); remove `fails` there.
     it.fails(
-      "agrees on the full corpus (NULL, absent, astral text)",
+      "agrees on the full corpus (NULL, absent, astral text, ordered booleans)",
       () => expect(run(checkWhere(full, js, postgres))).resolves.toBeUndefined(),
       60_000
     );

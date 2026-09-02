@@ -7,9 +7,10 @@
  * - Postgres is the oracle. It runs in-process via PGlite (Postgres compiled
  *   to WASM), so the leg needs no service and runs unconditionally. Text
  *   columns are declared `COLLATE "C"`.
- * - SQLite runs via `@effect/sql-sqlite-node` on `:memory:`. Booleans are
- *   bound as 0/1 (better-sqlite3 refuses boolean binds) for rows and
- *   predicate literals alike; text uses the default `BINARY` collation.
+ * - SQLite runs via `@effect/sql-sqlite-node` (over `node:sqlite`) on
+ *   `:memory:`. Booleans are bound as 0/1 (the driver refuses boolean binds)
+ *   for rows and predicate literals alike; text uses the default `BINARY`
+ *   collation.
  *
  * An absent JS field is inserted as SQL NULL on both (rule (b)).
  */
@@ -44,6 +45,33 @@ type Encoder = (value: Predicate.Literal | undefined) => unknown;
 const encodePostgres: Encoder = (value) => value ?? null;
 const encodeSqlite: Encoder = (value) =>
   value === undefined ? null : typeof value === "boolean" ? (value ? 1 : 0) : value;
+
+/** Column types per dialect, keyed by literal kind, so the DDL follows `corpusColumns`. */
+const columnTypes: Record<"sqlite" | "postgres", Record<FilterCorpus.LiteralKind, string>> = {
+  sqlite: {
+    string: "TEXT",
+    integer: "INTEGER",
+    double: "REAL",
+    boolean: "INTEGER",
+    instant: "TEXT",
+  },
+  postgres: {
+    string: `TEXT COLLATE "C"`,
+    integer: "INTEGER",
+    double: "DOUBLE PRECISION",
+    boolean: "BOOLEAN",
+    instant: `TEXT COLLATE "C"`,
+  },
+};
+
+const createText = (
+  dialect: Sql.Dialect,
+  types: Record<FilterCorpus.LiteralKind, string>
+): string => {
+  const id = `${dialect.quote("id")} ${types.string} PRIMARY KEY`;
+  const rest = columns.map((column) => `${dialect.quote(column.name)} ${types[column.kind]}`);
+  return `CREATE TABLE ${dialect.quote(TABLE)} (${[id, ...rest].join(", ")})`;
+};
 
 const insertText = (dialect: Sql.Dialect): string => {
   const names = ["id", ...columns.map((column) => column.name)];
@@ -122,9 +150,7 @@ export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(
     exec: (text) => sql.unsafe(text).unprepared.pipe(Effect.asVoid, Effect.orDie),
     query: (text, params) => sql.unsafe<{ readonly id: string }>(text, params).pipe(Effect.orDie),
   };
-  yield* runner.exec(
-    `CREATE TABLE "${TABLE}" ("id" TEXT PRIMARY KEY, "s" TEXT, "i" INTEGER, "d" REAL, "b" INTEGER, "t" TEXT)`
-  );
+  yield* runner.exec(createText(Sql.sqlite, columnTypes.sqlite));
   return makeEngine("sqlite", Sql.sqlite, encodeSqlite, "BINARY", runner);
 });
 
@@ -145,8 +171,6 @@ export const makePostgres: Effect.Effect<Engine, never, Scope.Scope> = Effect.ge
         Effect.map((result) => result.rows)
       ),
   };
-  yield* runner.exec(
-    `CREATE TABLE "${TABLE}" ("id" TEXT PRIMARY KEY COLLATE "C", "s" TEXT COLLATE "C", "i" INTEGER, "d" DOUBLE PRECISION, "b" BOOLEAN, "t" TEXT COLLATE "C")`
-  );
+  yield* runner.exec(createText(Sql.postgres, columnTypes.postgres));
   return makeEngine("postgres", Sql.postgres, encodePostgres, `"C"`, runner);
 });

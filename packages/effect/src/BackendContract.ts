@@ -294,7 +294,10 @@ export const verifyBackendContract = (
       // (#155) and the SQL compilers (#156) are not yet exact there — the
       // differential harness in `@legation/sql` pins those divergences; flip
       // the two options here once they land, so the contract catches any
-      // backend that regresses.
+      // backend that regresses. String order is code-point order (ADR-0028
+      // rule (c)): the `tag` pool mixes case and accents, so a backend whose
+      // text column carries a locale collation fails here by design — the
+      // contract requires `COLLATE "C"` (Postgres) or `BINARY` (SQLite).
       const corpus = FilterCorpus.generateCorpus({
         seed: FilterCorpus.DEFAULT_SEED,
         columns: [
@@ -337,6 +340,7 @@ export const verifyBackendContract = (
             orderBy: subset.orderBy,
             rows: all,
             results: { "Subset.apply": expected, "backend.evaluate": evaluated },
+            reproduce: "the contract corpus uses FilterCorpus.DEFAULT_SEED, not the environment",
           })
         );
       }

@@ -112,16 +112,25 @@ export interface CorpusOptions {
    * `BINARY`) — ADR-0028 rule (c).
    */
   readonly astral?: boolean;
+  /**
+   * Apply the ordered operators (`gt gte lt lte`) to the boolean column too.
+   * Default `true`. Postgres orders booleans `false < true` (ADR-0028
+   * section 3); today's JS `compareValues` only orders numbers and strings,
+   * so this is another divergence #155 closes.
+   */
+  readonly booleanOrder?: boolean;
 }
 
 interface ResolvedOptions {
   readonly nulls: boolean;
   readonly astral: boolean;
+  readonly booleanOrder: boolean;
 }
 
 const resolveOptions = (options: CorpusOptions | undefined): ResolvedOptions => ({
   nulls: options?.nulls ?? true,
   astral: options?.astral ?? true,
+  booleanOrder: options?.booleanOrder ?? true,
 });
 
 // ─── Literal pools ───────────────────────────────────────────────────────────
@@ -180,11 +189,13 @@ const DOUBLES: ReadonlyArray<number> = [
   -0.5,
   1e-7,
   1.5,
+  // The boundary of exact integers in a double: 2^53 - 1, 2^53, and the next
+  // representable double above it (2^53 + 1 is not one; it rounds to 2^53 in
+  // JS and Postgres alike). These live in the double column only because
+  // int4 cannot hold them.
   2 ** 53 - 1,
   2 ** 53,
-  // Rounds to 2^53 in both JS and Postgres (double precision); it lives in
-  // the double column only because int4 cannot hold it.
-  2 ** 53 + 1,
+  2 ** 53 + 2,
   1e300,
   -1e-300,
   3.25,
@@ -329,7 +340,7 @@ export const emptyCoverage = (): Coverage => ({
 
 interface LeafOperator {
   readonly name: OperatorName;
-  /** Needs an ordered kind: never applied to a boolean column. */
+  /** An ordered comparison: applied to a boolean column only with `booleanOrder`. */
   readonly ordered: boolean;
   readonly build: (
     field: string,
@@ -383,7 +394,9 @@ const generateLeaf = (
   }
   const column = pick(rng, columns);
   const pool = poolFor(column.kind, options);
-  const candidates = leafOperators.filter((op) => !op.ordered || column.kind !== "boolean");
+  const candidates = leafOperators.filter(
+    (op) => !op.ordered || column.kind !== "boolean" || options.booleanOrder
+  );
   const operator = pick(rng, candidates);
   coverage[operator.name]++;
   const literal = () => literalFor(rng, pool);
@@ -588,6 +601,11 @@ export interface Disagreement {
   readonly rows: ReadonlyArray<Subset.Row>;
   /** Per-subject result (ids), keyed by subject name. */
   readonly results: Readonly<Record<string, ReadonlyArray<string>>>;
+  /**
+   * How to reproduce at this seed. Defaults to the harness's environment
+   * override; a caller with a fixed seed (`BackendContract`) says so instead.
+   */
+  readonly reproduce?: string;
 }
 
 /**
@@ -596,9 +614,8 @@ export interface Disagreement {
  * and every subject's ids.
  */
 export const formatDisagreement = (disagreement: Disagreement): string => {
-  const lines = [
-    `${disagreement.subject} (seed ${disagreement.seed}; set LEGATION_CORPUS_SEED to reproduce)`,
-  ];
+  const reproduce = disagreement.reproduce ?? "set LEGATION_CORPUS_SEED to reproduce";
+  const lines = [`${disagreement.subject} (seed ${disagreement.seed}; ${reproduce})`];
   if (disagreement.predicate !== undefined) {
     lines.push(`predicate: ${JSON.stringify(disagreement.predicate)}`);
   }
