@@ -193,9 +193,13 @@ SQL compilers emit an explicit code-point collation on every text comparison
 and every text sort term: `COLLATE "C"` on Postgres, `COLLATE BINARY` on
 SQLite. _And_ the schema rule stands: filterable and sortable text columns
 must be declared `COLLATE "C"` (Postgres) or left at `BINARY` (SQLite). The
-compiler knows the attribute type (#156), so the clause is emitted for text
-attributes only; a `timestamptz` column compared against an ISO literal gets
-no collation clause.
+compiler cannot tell a text attribute from an instant by the JS literal
+alone, so the per-attribute declaration (#154) carries the literal kind
+(`text`, `integer`, `double`, `boolean`, `instant`) and the compilers bind
+and collate by it (#156). The clause is emitted for `text` attributes only.
+An `instant` attribute gets no collation clause: stored as `timestamptz` it
+compares chronologically, and stored as `text` it falls under the schema
+rule above.
 
 Rationale: exactness by construction is the point of this ADR. If a column
 lacks `COLLATE "C"`, the explicit clause keeps results exact and costs index
