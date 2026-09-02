@@ -24,8 +24,13 @@ import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";
 import type { QueryEncoder } from "./JsonApiQuery.js";
 
-/** An app's JSON:API surface defined with Effect `HttpApi`. */
-export type JsonApi = HttpApi.HttpApi<string, HttpApiGroup.Any>;
+/**
+ * An app's JSON:API surface defined with Effect `HttpApi`, with its identifier
+ * and group types erased. `HttpApi`'s group parameter is invariant, so the
+ * entry points below are generic over the concrete api rather than accepting
+ * this alias directly.
+ */
+export type JsonApi = HttpApi.Constraint;
 
 export interface JsonApiSyncOptions {
   /** Base URL the resource paths resolve against (no trailing slash). */
@@ -62,7 +67,9 @@ export interface JsonApiSyncOptions {
 }
 
 /** Reflect + derive an api's resources, collections, mutators, operations. */
-export const inspect = (api: JsonApi): { readonly resources: ResourceMap } & Derived => {
+export const inspect = <Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>
+): { readonly resources: ResourceMap } & Derived => {
   const resources = reflectResources(api);
   return { resources, ...derive(resources) };
 };
@@ -79,8 +86,8 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
  * client store defaults to in-memory (pass `store` for durable offline
  * persistence across reloads).
  */
-export const layer = (
-  api: JsonApi,
+export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>,
   options: JsonApiSyncOptions
 ): Layer.Layer<ClientEngine.ClientEngine, never, HttpClient.HttpClient> => {
   const { resources, registry, operations } = inspect(api);

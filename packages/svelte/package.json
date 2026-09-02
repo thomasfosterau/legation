@@ -47,7 +47,7 @@
     "@thomasfosterau/effect-svelte": "^0.3.2"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.84",
+    "effect": "4.0.0-beta.107",
     "svelte": ">=5.40",
     "@sveltejs/kit": "^2.0.0"
   },

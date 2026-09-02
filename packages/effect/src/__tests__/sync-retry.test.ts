@@ -63,9 +63,10 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(
 
 const allTodos = Subset.make({ collection: "todos" });
 const isTransient = (error: { readonly _tag: string }): boolean => error._tag === "TransportError";
-const fast: Schedule.Schedule<unknown, unknown> = Schedule.spaced(Duration.millis(10)).pipe(
-  Schedule.both(Schedule.recurs(5))
-);
+const fast: Schedule.Schedule<unknown, unknown> = Schedule.max([
+  Schedule.spaced(Duration.millis(10)),
+  Schedule.recurs(5),
+]);
 
 describe("retry/backoff timing (#34)", () => {
   it.effect("default policy backs off exponentially (1s then 2s)", () =>
@@ -187,7 +188,7 @@ describe("retry integration (#34)", () => {
         clientId: "c",
         clientGroupId: "group-down",
         mutators: setTodo,
-        retry: { pull: Schedule.both(Schedule.recurs(2), Schedule.spaced(Duration.millis(5))) },
+        retry: { pull: Schedule.max([Schedule.recurs(2), Schedule.spaced(Duration.millis(5))]) },
         syncLoop: { pullInterval: Duration.millis(50) },
       }).pipe(
         Effect.provideService(ClientStore, store),

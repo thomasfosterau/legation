@@ -100,7 +100,9 @@ export const classify = (
  * Reflect an `HttpApi` into its JSON:API resource surface. The first endpoint
  * matching each (type, role) wins; later duplicates are ignored.
  */
-export const reflectResources = (api: HttpApi.HttpApi<string, HttpApiGroup.Any>): ResourceMap => {
+export const reflectResources = <Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>
+): ResourceMap => {
   const resources = new Map<
     string,
     { type: string } & { -readonly [K in Operation]?: EndpointRef }

@@ -28,6 +28,17 @@ export const makeApiClient = (userId?: string) =>
 
 export type CommerceApi = Effect.Success<ReturnType<typeof makeApiClient>>;
 
+/**
+ * `Effect.runPromise` for typed client calls. effect-jsonapi 0.12's endpoint
+ * declarations intersect the `:id` params struct with `Schema.Struct.Fields`,
+ * which leaks `unknown` into the requirements of `get`/`delete` calls even
+ * though the client already provides everything it needs (the `list` and
+ * `create` calls are unaffected). The runtime carries nothing, so narrow the
+ * requirements here instead of at every call site.
+ */
+export const run = <A, E>(effect: Effect.Effect<A, E, unknown>): Promise<A> =>
+  Effect.runPromise(effect as Effect.Effect<A, E>);
+
 // One client per identity per process, built lazily on first use — request
 // handling looks the client up instead of carrying it in `locals`.
 const clients = new Map<string, CommerceApi>();
