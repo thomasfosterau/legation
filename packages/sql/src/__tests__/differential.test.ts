@@ -128,10 +128,52 @@ const checkWhere = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
     }
   });
 
+type OrderCase = { readonly terms: ReadonlyArray<Subset.OrderBy>; readonly rows: Rows };
+type OrderDisagrees = (
+  orderBy: ReadonlyArray<Subset.OrderBy>,
+  rows: Rows
+) => Effect.Effect<boolean>;
+
+/** Drop one row at a time while the order still disagrees. */
+const shrinkOrderRows = (
+  disagrees: OrderDisagrees,
+  terms: ReadonlyArray<Subset.OrderBy>,
+  rows: Rows
+) =>
+  Effect.gen(function* () {
+    let current = rows;
+    let shrunk = true;
+    while (shrunk) {
+      shrunk = false;
+      for (let i = 0; i < current.length && !shrunk; i++) {
+        const fewer = current.filter((_, j) => j !== i);
+        if (yield* disagrees(terms, fewer)) {
+          current = fewer;
+          shrunk = true;
+        }
+      }
+    }
+    return current;
+  });
+
+/** Shrink a disagreeing order case: fewer terms first, then fewer rows. */
+const shrinkOrder = (
+  disagrees: OrderDisagrees,
+  orderBy: ReadonlyArray<Subset.OrderBy>,
+  rows: Rows
+): Effect.Effect<OrderCase> =>
+  Effect.gen(function* () {
+    let terms = orderBy;
+    for (const term of orderBy) {
+      if (terms.length > 1 && (yield* disagrees([term], rows))) terms = [term];
+    }
+    return { terms, rows: yield* shrinkOrderRows(disagrees, terms, rows) };
+  });
+
 /** Every corpus `orderBy`: `subject` must produce the oracle's id sequence. */
 const checkOrder = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
   Effect.gen(function* () {
-    const disagrees = (orderBy: ReadonlyArray<Subset.OrderBy>, rows: Rows) =>
+    const disagrees: OrderDisagrees = (orderBy, rows) =>
       Effect.gen(function* () {
         const expected = yield* oracle.order(orderBy, rows);
         const actual = yield* subject.order(orderBy, rows);
@@ -139,24 +181,7 @@ const checkOrder = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
       });
     for (const orderBy of corpus.orderBys) {
       if (!(yield* disagrees(orderBy, corpus.rows))) continue;
-      // Shrink: fewer terms first, then fewer rows, while it still disagrees.
-      let terms = orderBy;
-      let rows = corpus.rows;
-      for (const term of orderBy) {
-        if (terms.length > 1 && (yield* disagrees([term], rows))) terms = [term];
-      }
-      let shrunk = true;
-      while (shrunk) {
-        shrunk = false;
-        for (let i = 0; i < rows.length; i++) {
-          const fewer = rows.filter((_, j) => j !== i);
-          if (yield* disagrees(terms, fewer)) {
-            rows = fewer;
-            shrunk = true;
-            break;
-          }
-        }
-      }
+      const { terms, rows } = yield* shrinkOrder(disagrees, orderBy, corpus.rows);
       fail({
         seed: corpus.seed,
         subject: `${subject.name} order disagrees with ${oracle.name}`,
