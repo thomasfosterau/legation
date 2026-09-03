@@ -7,7 +7,7 @@ when? It records measurements, a schema, and a recommendation. If the
 recommendation's trigger fires, the decision would be written up as an ADR
 with the working title "IndexedDB-native `ClientStore`: one object store per
 collection, UTF-8 index keys, one transaction per pull", taking the next free
-number at that time (ADR-0029 is reserved by #157).
+number at that time (ADR-0029 is the façade, #157).
 
 Date: 2026-09-03. Depends on ADR-0028 (filter grammar; rule (c) on text
 ordering). Does not change `CollectionIndex` semantics.
@@ -363,9 +363,9 @@ The trigger, restated: build when a real app hits **T1** (an id-index value
 over 1 MB, about 115k short-id or 27k UUID-id rows in one collection), **T2**
 (over 1 s cold start after the `rebuild` fix), **T3** (over 100 MB replica
 heap in the worker), or **T4** (a consumer that needs snapshot-isolated reads
-of the store across a pull; the façade is the likely first such consumer,
-and its ADR (#157) should say whether it reads the store directly or only
-through the engine's `publishChange`-ordered views). Before any of those,
+of the store across a pull; ADR-0029 has the façade answer through the
+engine's view, the same one `Client.query` uses, never the store directly,
+so the façade as designed does not fire it). Before any of those,
 the two small fixes named in section 3 should be filed under
 `CollectionIndex` and the KV layout respectively.
 
