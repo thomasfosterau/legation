@@ -15,11 +15,10 @@
  * produces (`SyncServer` authorises those with `origin: "server"`).
  *
  * The operator vocabulary is the grammar's full core (ADR-0028 §3):
- * `eq ne lt lte gt gte in nin isnull`. Today's `Predicate` union carries
- * `Compare`, `In` and the connectives; `nin` and `isnull` are declarable
- * now so a declaration stays valid once #155 adds the `NotIn` and `IsNull`
- * nodes. Until then a `Compare` against a `null` literal is the wire form
- * of `isnull` (ADR-0028 §5) and is checked against that operator.
+ * `eq ne lt lte gt gte in nin isnull`. `NotIn` is checked as `nin` and
+ * `IsNull` (negated or not) as `isnull`; so are their older wire forms,
+ * `Not(In)` and a `Compare` against a `null` literal (ADR-0028 §5), which
+ * a client built before #155 may still send.
  */
 
 import { SchemaAST } from "effect";
@@ -358,11 +357,11 @@ const isNullTest = (node: { readonly op: string; readonly value: Literal }): boo
  * filter may introduce it); the connectives recurse. `undefined` means the
  * predicate is admissible.
  *
- * Today's wire forms of the grammar's `nin` and `isnull` are `Not(In)` and
- * `Compare` against a null literal (negated under `Not`); each is checked
- * against the operator it desugars to, so a `nin`-only declaration admits
- * `Not(In)` and an `in`-only one does not. #155's `NotIn` / `IsNull` nodes
- * slot in beside them.
+ * `NotIn` is `nin` and `IsNull` is `isnull` whether or not it is negated.
+ * The older wire forms, `Not(In)` and a `Compare` against a null literal
+ * (negated under `Not`), are checked against the same operators, so a
+ * `nin`-only declaration admits both `NotIn` and `Not(In)` and an
+ * `in`-only one admits neither.
  */
 export const checkWhere = (
   collection: string,
@@ -376,6 +375,10 @@ export const checkWhere = (
       return compareCheck(collection, declaration, where);
     case "In":
       return inCheck(collection, declaration, where, "in");
+    case "NotIn":
+      return inCheck(collection, declaration, where, "nin");
+    case "IsNull":
+      return fieldCheck(collection, declaration, where.field, "isnull");
     case "And":
     case "Or":
       return connectiveCheck(collection, declaration, where.predicates);

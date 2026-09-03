@@ -306,6 +306,43 @@ describe("FilterPolicy: authorize", () => {
     })
   );
 
+  it.effect("the NotIn and IsNull nodes are checked as nin and isnull", () =>
+    Effect.gen(function* () {
+      const Tagged = Node.make("tagged", {
+        attributes: {
+          tag: Schema.String,
+          colour: Schema.String,
+          note: Schema.NullOr(Schema.String),
+          kind: Schema.NullOr(Schema.String),
+        },
+        filterable: { tag: ["nin"], colour: ["in"], note: ["isnull"], kind: ["eq"] },
+      });
+      const tagged = Authorization.policy(
+        { tagged: Authorization.allowAll },
+        { collections: Node.registry([Tagged]).collections }
+      );
+      const check = (where: Predicate.Predicate) =>
+        Authorization.authorize(tagged, context, Subset.make({ collection: "tagged", where }));
+
+      // NotIn needs `nin`, and its literals are kind-checked.
+      yield* check(Predicate.notIn("tag", ["a", "b"]));
+      const ninOnIn = yield* Effect.flip(check(Predicate.notIn("colour", ["red"])));
+      expect(ninOnIn.message).toMatch(
+        /field "colour" is not filterable with "nin" \(declared: in\)/
+      );
+      const badLiteral = yield* Effect.flip(check(Predicate.notIn("tag", [1])));
+      expect(badLiteral.message).toMatch(/literal 1 for field "tag" \("nin"\)/);
+      // IsNull, negated or not, needs `isnull`; `eq(f, null)` desugars to it.
+      yield* check(Predicate.isNull("note"));
+      yield* check(Predicate.isNotNull("note"));
+      yield* check(Predicate.eq("note", null));
+      const nullOnEq = yield* Effect.flip(check(Predicate.isNull("kind")));
+      expect(nullOnEq.message).toMatch(/field "kind" is not filterable with "isnull"/);
+      const negatedOnEq = yield* Effect.flip(check(Predicate.isNotNull("kind")));
+      expect(negatedOnEq.message).toMatch(/field "kind" is not filterable with "isnull"/);
+    })
+  );
+
   it.effect("refuses a client-supplied Exists anywhere in the predicate", () =>
     Effect.gen(function* () {
       const exists = Predicate.exists({
