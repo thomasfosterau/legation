@@ -101,14 +101,54 @@ describe("CollectionIndex", () => {
     ).toEqual(["a", "c"]);
   });
 
-  it("an absent field indexes separately from an explicit null", () => {
+  it("an absent field and an explicit null share the NULL bucket (ADR-0028)", () => {
     const index = CollectionIndex.empty(["a"]);
     const rows = [row("absent", {}), row("null", { a: null }), row("one", { a: 1 })];
     CollectionIndex.rebuild(index, rows);
     const rowsById = new Map(rows.map((r) => [r.id, r]));
+    // ADR-0028 rule (b): absent ≡ NULL. This assertion used to expect only
+    // `["null"]` when the two indexed in separate buckets; `eq("a", null)`
+    // now desugars to `IsNull`, which reads the shared bucket.
     expect(
       CollectionIndex.evaluate(index, rowsById, Predicate.eq("a", null))?.map((r) => r.id)
-    ).toEqual(["null"]);
+    ).toEqual(["absent", "null"]);
+    expect(
+      CollectionIndex.evaluate(index, rowsById, Predicate.isNull("a"))?.map((r) => r.id)
+    ).toEqual(["absent", "null"]);
+    // `IS NOT NULL` is the complement of a bucket: not narrowing, residual.
+    expect(CollectionIndex.plan(index, Predicate.isNotNull("a"))).toBeUndefined();
+    // A wire `Compare` carrying `null` is unknown for every row (ADR-0028 §5).
+    expect(CollectionIndex.evaluate(index, rowsById, Predicate.compare("eq", "a", null))).toEqual(
+      []
+    );
+    // Range and membership lookups never return the NULL bucket.
+    expect(
+      CollectionIndex.evaluate(index, rowsById, Predicate.gte("a", 0))?.map((r) => r.id)
+    ).toEqual(["one"]);
+    expect(
+      CollectionIndex.evaluate(index, rowsById, Predicate.isIn("a", [1, null]))?.map((r) => r.id)
+    ).toEqual(["one"]);
+  });
+
+  it("orders boolean ranges false < true and text by code point (ADR-0028)", () => {
+    const index = CollectionIndex.empty(["b", "s"]);
+    const rows = [
+      row("t", { b: true, s: "😀" }),
+      row("f", { b: false, s: "￿" }),
+      row("n", { s: "a" }),
+    ];
+    CollectionIndex.rebuild(index, rows);
+    const rowsById = new Map(rows.map((r) => [r.id, r]));
+    const ids = (where: Predicate.Predicate) =>
+      CollectionIndex.evaluate(index, rowsById, where)
+        ?.map((r) => r.id)
+        .toSorted();
+    expect(ids(Predicate.gt("b", false))).toEqual(["t"]);
+    expect(ids(Predicate.lte("b", false))).toEqual(["f"]);
+    expect(ids(Predicate.gte("b", false))).toEqual(["f", "t"]);
+    // U+FFFF sorts below U+1F600 by code point; JS `<` would say the reverse.
+    expect(ids(Predicate.gt("s", "￿"))).toEqual(["t"]);
+    expect(ids(Predicate.lt("s", "😀"))).toEqual(["f", "n"]);
   });
 
   it("plan returns undefined (full-scan fallback) when nothing is indexable", () => {

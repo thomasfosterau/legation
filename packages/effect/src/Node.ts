@@ -7,7 +7,8 @@
  * foreign-key fields its `one` edges declare), the {@link Collection} the
  * engine materializes, the joins and sync windows its edges imply, and the
  * fan-out **derivable set** (ADR-0023: `one`-edge keys + declared
- * `hintKeys`).
+ * `hintKeys`), and the **filterable set** (ADR-0028, #154: the fields a
+ * client may filter or sort by, with their operators and literal kinds).
  *
  * Ids are branded per node type, so a `products` id cannot be passed where
  * a `categories` id is expected; `one`-edge fields carry the **target**
@@ -23,7 +24,8 @@
 import { Schema } from "effect";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
-import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
+import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
+import * as FilterPolicy from "./FilterPolicy.js";
 import * as Subset from "./Subset.js";
 
 /** The branded id schema for a node type: `string & Brand<"<type>/id">`. */
@@ -39,6 +41,12 @@ type ViaFields<Edges extends Record<string, Edge.Edge>> = {
     ? Via
     : never]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
 };
+
+/** The field names of a node's row: `id`, its attributes, its `one`-edge keys. */
+export type FieldName<
+  Fields extends Schema.Struct.Fields,
+  Edges extends Record<string, Edge.Edge>,
+> = "id" | (keyof Fields & string) | (keyof ViaFields<Edges> & string);
 
 /** A node definition. */
 export interface Node<
@@ -61,6 +69,17 @@ export interface Node<
    * {@link Collection.Collection.indexes}.
    */
   readonly indexes: ReadonlyArray<string>;
+  /**
+   * The **filterable set** (ADR-0028 rule d, #154): every field a client may
+   * filter by, with its operators and literal kind. `id` and every
+   * `one`-edge `via` field are filterable by `eq` / `in` (kind `text`) by
+   * default; everything else is declared via `make`'s `filterable` option.
+   * Carried to the derived {@link Collection} and enforced by
+   * `Authorization.authorize` before evaluation.
+   */
+  readonly filterable: Readonly<Record<string, FilterPolicy.FilterableField>>;
+  /** The fields a client may order by (#154); always includes `id` (ADR-0026's tie-break). */
+  readonly sortable: ReadonlyArray<string>;
   /** The branded id schema for this node type. */
   readonly Id: Id<Type>;
   /** The row schema: `{ id } & attributes & one-edge key fields`. */
@@ -85,6 +104,18 @@ export const make = <
     readonly edges?: Edges;
     readonly hintKeys?: ReadonlyArray<string>;
     readonly indexes?: ReadonlyArray<string>;
+    /**
+     * The fields a client may filter by, beyond the `id` / `one`-edge key
+     * defaults: the operators alone (the literal kind is derived from the
+     * attribute's schema — `FilterPolicy.kindOf`), or `{ operators, kind }`
+     * where derivation cannot tell (an `instant` stored as text). A key
+     * field may be listed to widen its default operators.
+     */
+    readonly filterable?: {
+      readonly [K in FieldName<Fields, Edges>]?: FilterPolicy.FilterableInput;
+    };
+    /** The fields a client may order by, beyond `id`. */
+    readonly sortable?: ReadonlyArray<FieldName<Fields, Edges>>;
   }
 ): Node<Type, Fields, Edges> => {
   const edges = options.edges ?? ({} as Edges);
@@ -93,6 +124,13 @@ export const make = <
   for (const edge of Object.values(edges)) {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
   }
+  const declaration = FilterPolicy.resolve({
+    collection: type,
+    attributes: options.attributes,
+    keyFields: ["id", ...Object.keys(viaFields)],
+    filterable: options.filterable as Readonly<Record<string, FilterPolicy.FilterableInput>>,
+    sortable: options.sortable,
+  });
   const row = Schema.Struct({
     id,
     ...options.attributes,
@@ -104,6 +142,8 @@ export const make = <
     edges,
     hintKeys: options.hintKeys ?? [],
     indexes: options.indexes ?? [],
+    filterable: declaration.filterable,
+    sortable: declaration.sortable,
     Id: id,
     row,
   };
@@ -187,33 +227,82 @@ const toCollection = (
     id: (value) => (value as { id: string }).id,
     relationships,
     ...(node.indexes.length > 0 ? { indexes: node.indexes } : {}),
+    // The filterable set travels like `indexes` (#154): the server enforces
+    // it from the collection alone.
+    filterable: node.filterable,
+    sortable: node.sortable,
   });
+};
+
+/** Every field of a node's row: `id`, its attributes, its `one`-edge keys. */
+const rowFields = (node: AnyNode): ReadonlySet<string> => {
+  const fields = new Set<string>(["id", ...Object.keys(node.attributes)]);
+  for (const edge of Object.values(node.edges)) {
+    if (edge.kind === "one") fields.add(edge.via);
+  }
+  return fields;
+};
+
+/**
+ * A paginated edge's declared `order` is what its per-parent windows sort
+ * the **target** by (ADR-0024), so those fields join the target's
+ * `sortable` here — declared on the node graph, so window registration and
+ * the filterable set cannot disagree (as `one`-edge keys are `eq` / `in`).
+ * An order field the target's row does not carry is a definition defect.
+ */
+const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): AnyNode => {
+  const sortable = new Set<string>(node.sortable);
+  const fields = rowFields(node);
+  for (const source of definitions) {
+    for (const [name, edge] of Object.entries(source.edges)) {
+      if (edge.kind !== "paginated" || edge.target !== node.type) continue;
+      for (const term of Subset.parseOrder(edge.order)) {
+        if (!fields.has(term.field)) {
+          throw new FilterDeclarationError({
+            collection: node.type,
+            field: term.field,
+            message: `Paginated edge "${name}" on ${source.type} orders "${node.type}" by "${term.field}", which is not a field of its row`,
+          });
+        }
+        sortable.add(term.field);
+      }
+    }
+  }
+  return sortable.size === node.sortable.length ? node : { ...node, sortable: [...sortable] };
 };
 
 /**
  * Close and validate the node graph: unique types, every edge target
  * present, every collection-valued edge's `inverse` resolving to a `one`
- * edge back to the declaring node. Returns the graph plus the derived
- * engine `CollectionRegistry`.
+ * edge back to the declaring node, every paginated edge's order over fields
+ * its target carries. Returns the graph — each node's `sortable` widened by
+ * the paginated edges ordering it — plus the derived engine
+ * `CollectionRegistry`.
  */
 export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
-  const nodes = new Map<string, AnyNode>();
+  const declared = new Map<string, AnyNode>();
   for (const node of definitions) {
-    if (nodes.has(node.type)) throw new DuplicateNameError({ kind: "collection", name: node.type });
-    nodes.set(node.type, node);
+    if (declared.has(node.type)) {
+      throw new DuplicateNameError({ kind: "collection", name: node.type });
+    }
+    declared.set(node.type, node);
   }
   for (const node of definitions) {
     for (const [name, edge] of Object.entries(node.edges)) {
-      if (!nodes.has(edge.target)) {
+      if (!declared.has(edge.target)) {
         throw new UnknownCollectionError({
           from: node.type,
           relationship: name,
           collection: edge.target,
         });
       }
-      if (edge.kind !== "one") inverseVia(node, name, edge, nodes);
+      if (edge.kind !== "one") inverseVia(node, name, edge, declared);
     }
   }
-  const collections = Collection.registry(definitions.map((node) => toCollection(node, nodes)));
+  const nodes = new Map<string, AnyNode>();
+  for (const node of definitions) nodes.set(node.type, withEdgeOrders(node, definitions));
+  const collections = Collection.registry(
+    [...nodes.values()].map((node) => toCollection(node, nodes))
+  );
   return { nodes, collections };
 };

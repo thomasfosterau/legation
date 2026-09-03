@@ -99,7 +99,11 @@ const backendHandlers = MemoryBackend.validatedHandlers([
 ]);
 
 /** Public collection: read auth is allow-all (this demo has no identities). */
-const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
+const authPolicy = Authorization.policy(
+  { todos: Authorization.allowAll },
+  // The node's filterable set bounds what a client may filter or sort by (#154).
+  { collections: nodes.collections }
+);
 
 /** Seed the backend so a fresh page always has something to sync. */
 const seed = (backend: Backend.Backend): Effect.Effect<void> => {

@@ -94,6 +94,19 @@ export class QueryError extends Data.TaggedError("QueryError")<{
 }> {}
 
 /**
+ * A Node (or Collection) declared a filterable or sortable field its row does
+ * not carry, or a filterable attribute whose literal kind can neither be
+ * derived from its schema nor was given explicitly (#154, ADR-0028). A static
+ * definition bug surfaced at setup time, like {@link DuplicateNameError};
+ * thrown by the synchronous `Node.make`.
+ */
+export class FilterDeclarationError extends Data.TaggedError("FilterDeclarationError")<{
+  readonly collection: string;
+  readonly field: string;
+  readonly message: string;
+}> {}
+
+/**
  * A registry (collections, mutators, queries) was built with a duplicate
  * name — a static configuration bug surfaced at setup time. Thrown by the
  * synchronous `registry` builders; tagged so it is still identifiable.

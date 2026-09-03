@@ -88,8 +88,58 @@ describe("SqlBackend evaluate / getRows", () => {
       // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
       const select = mock.queries.at(-1)!;
+      // No kinds are declared, so nothing collates.
       expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" = ?`);
       expect(select.params).toEqual(["open"]);
+    });
+  });
+
+  it.effect("passes the mapping's kinds to the compiler and decodes 0/1 booleans", () => {
+    const mock = makeMock();
+    // SQLite returns booleans as 0/1; `done` is declared boolean, `flags` is
+    // not (and stays as the driver returned it, ADR-0014).
+    mock.seed("todos", [
+      { id: "1", done: 1, flags: 1, createdAt: "2020-02-29T12:34:56.789Z", version: "a" },
+      { id: "2", done: 0, flags: 0, createdAt: "2024-01-01T00:00:00.000Z", version: "b" },
+    ]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        todos: {
+          table: "todos",
+          versionColumn: "version",
+          kinds: { done: "boolean", createdAt: "instant", status: "text" },
+        },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    const subset = Subset.make({
+      collection: "todos",
+      where: Predicate.and(
+        Predicate.eq("done", false),
+        Predicate.gt("createdAt", "2000-01-01T00:00:00.000Z")
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
+      // The boolean literal was bound as 0, the instant got no collation
+      // clause, and the decoded row (done: false) survived Subset.apply's
+      // re-evaluation against the boolean literal.
+      expect(entries).toEqual([{ id: "2", version: "b" }]);
+      const select = mock.queries.at(-1)!;
+      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "done" = ? AND "createdAt" > ?`);
+      expect(select.params).toEqual([0, "2000-01-01T00:00:00.000Z"]);
+
+      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      expect(rows[0]!.value).toEqual({
+        id: "1",
+        done: true,
+        flags: 1,
+        createdAt: "2020-02-29T12:34:56.789Z",
+        version: "a",
+      });
     });
   });
 
@@ -132,6 +182,69 @@ describe("SqlBackend evaluate / getRows", () => {
     });
   });
 
+  it.effect("resolves Exists like MemoryBackend: NULL foreign values out, kinds decoded", () => {
+    const mock = makeMock();
+    mock.seed("issues", [
+      { id: "i1", projectId: "p1", flagged: 1, version: "a" },
+      { id: "i2", projectId: "p2", flagged: 0, version: "b" },
+    ]);
+    // A membership row without a project (NULL) and one flagged as active
+    // (SQLite's 1 for a boolean column).
+    mock.seed("memberships", [{ projectId: null }, { projectId: "p1" }, { active: 1 }]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        issues: { table: "issues", versionColumn: "version", kinds: { flagged: "boolean" } },
+        memberships: { table: "memberships", kinds: { userId: "text", active: "boolean" } },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    const membership = (where: Predicate.Predicate) =>
+      Predicate.exists({
+        collection: "memberships",
+        localField: "projectId",
+        foreignField: "projectId",
+        where,
+      });
+
+    return Effect.gen(function* () {
+      // NULL equals nothing: `Not(Exists)` keeps i2 (as `Predicate.existsValues`
+      // does for MemoryBackend) instead of going unknown on the NULL.
+      const hidden = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "issues", where: Predicate.not(membership(Predicate.always)) })
+      );
+      expect(hidden.map((e) => e.id)).toEqual(["i2"]);
+      // The subquery took the foreign table's kinds: its text field collates.
+      const subquery = mock.queries.find((q) => q.text.startsWith("SELECT DISTINCT"))!;
+      expect(subquery.text).toBe(`SELECT DISTINCT "projectId" FROM "memberships" WHERE 1 = 1`);
+      const named = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "issues", where: membership(Predicate.eq("userId", "alice")) })
+      );
+      expect(named.map((e) => e.id)).toEqual(["i1"]);
+      expect(mock.queries.at(-2)!.text).toBe(
+        `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?`
+      );
+      // A boolean foreign field yields true/false, not 1/0, so the resolved
+      // `In` matches the decoded local column.
+      const flagged = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({
+          collection: "issues",
+          where: Predicate.exists({
+            collection: "memberships",
+            localField: "flagged",
+            foreignField: "active",
+            where: Predicate.always,
+          }),
+        })
+      );
+      expect(flagged.map((e) => e.id)).toEqual(["i1"]);
+    });
+  });
+
   it.effect("fetches explicit rows by id", () => {
     const mock = makeMock();
     mock.seed("todos", [{ id: "1", version: "a", title: "x" }]);
@@ -146,6 +259,8 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(rows).toEqual([
         { id: "1", version: "a", value: { id: "1", version: "a", title: "x" } },
       ]);
+      // The id column has no declared kind (it may well be a uuid or serial
+      // on Postgres), so the by-id lookup is a plain `IN`.
       expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
     });
   });

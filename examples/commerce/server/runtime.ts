@@ -22,7 +22,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { Authorization, Predicate, Server, Transport } from "@legation/effect";
 import { InvalidationBus } from "@legation/effect/internal";
 import { SqlBackend } from "@legation/sql";
-import { mutators, privateCollections, publicCollections } from "../src/lib/domain.js";
+import { mutators, privateCollections, publicCollections, registry } from "../src/lib/domain.js";
 import { makeExecutor } from "./db.js";
 import { makeHandlers, tables } from "./handlers.js";
 
@@ -37,12 +37,17 @@ const scopedBy =
           Predicate.isIn(field, [])
     );
 
-export const authPolicy: Authorization.AuthPolicy = Authorization.policy({
-  ...Object.fromEntries(publicCollections.map((name) => [name, Authorization.allowAll])),
-  ...Object.fromEntries(
-    privateCollections.map((name) => [name, scopedBy(name === "profiles" ? "id" : "userId")])
-  ),
-});
+export const authPolicy: Authorization.AuthPolicy = Authorization.policy(
+  {
+    ...Object.fromEntries(publicCollections.map((name) => [name, Authorization.allowAll])),
+    ...Object.fromEntries(
+      privateCollections.map((name) => [name, scopedBy(name === "profiles" ? "id" : "userId")])
+    ),
+  },
+  // The registry carries each node's filterable set (#154): a client
+  // subset over anything the domain did not declare is refused up front.
+  { collections: registry }
+);
 
 /** clientGroupId → userId from the `client_groups` binding table. */
 export const currentUser = (clientGroupId: string) =>

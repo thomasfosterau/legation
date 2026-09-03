@@ -2,11 +2,11 @@
  * FilterCorpus
  *
  * Seeded generators for the differential filter harness (issue #153,
- * ADR-0028). Three evaluators of one predicate AST exist — `Predicate.test`
+ * ADR-0028). Three evaluators of one predicate AST exist — `Predicate.evaluate`
  * in JS, `Sql.compileWhere` on SQLite, and `Sql.compileWhere` on Postgres —
  * and Postgres is normative: every other evaluator must agree with it
  * exactly. This module produces the corpus they are compared over: random
- * rows over a fixed fixture schema (string, integer, double, boolean, ISO
+ * rows over a fixed fixture schema (text, integer, double, boolean, ISO
  * instant) including NULL, absent fields, empty strings, boundary numerics,
  * and non-ASCII text up to astral characters; random depth-bounded
  * predicates covering every operator in the core; random `orderBy` terms;
@@ -23,8 +23,9 @@
  *
  * Rule (d) of ADR-0028 — no cross-type comparison — is enforced here by
  * construction: a leaf's literal always has its column's kind. Rule (e)
- * fixes the literal kinds: `integer` (int4 range), `double precision`,
- * boolean, and instants as `Date#toISOString` text compared as text.
+ * fixes the literal kinds (`Predicate.LiteralKind`): `text`, `integer` (int4
+ * range), `double` precision, `boolean`, and `instant` as `Date#toISOString`
+ * text compared as text.
  *
  * `Exists` is never generated; it is relational and has no single-row
  * meaning.
@@ -64,21 +65,19 @@ export const resolveSeed = (override: string | undefined): number => {
 
 // ─── Fixture schema ──────────────────────────────────────────────────────────
 
-/** The literal kinds of ADR-0028 rule (e). */
-export type LiteralKind = "string" | "integer" | "double" | "boolean" | "instant";
-
-/** One column of the fixture schema: a row field with a declared literal kind. */
+/** One column of the fixture schema: a row field with a declared literal kind (`Predicate.LiteralKind`). */
 export interface Column {
   readonly name: string;
-  readonly kind: LiteralKind;
+  readonly kind: Predicate.LiteralKind;
 }
 
 /**
  * The harness's fixture table `corpus`: every non-id column is nullable.
- * Postgres declares `COLLATE "C"` on `id`, `s`, `t`; SQLite uses `BINARY`.
+ * Postgres declares `COLLATE "C"` on `id` and `s` and stores `t` as
+ * `timestamptz`; SQLite uses `BINARY` text throughout.
  */
 export const corpusColumns: ReadonlyArray<Column> = [
-  { name: "s", kind: "string" },
+  { name: "s", kind: "text" },
   { name: "i", kind: "integer" },
   { name: "d", kind: "double" },
   { name: "b", kind: "boolean" },
@@ -89,11 +88,11 @@ export const corpusColumns: ReadonlyArray<Column> = [
 export interface CorpusOptions {
   /**
    * Generate NULL and absent (JS-only: the key is missing) field values.
-   * Default `true`. `false` keeps every field present and non-null — the
-   * setting `BackendContract` uses until #155/#156 make the JS evaluator
-   * and SQL compilers NULL-exact (ADR-0028 rule (a)/(b)) — and also drops
-   * the `isnull` operator, which is a constant predicate over such rows: a
-   * corpus only covers `isnull` with `nulls` on.
+   * Default `true`. `false` keeps every field present and non-null (the
+   * regression floor every evaluator agreed on before ADR-0028's rules
+   * (a)/(b) were implemented) and also drops the `isnull` operator, which is
+   * a constant predicate over such rows: a corpus only covers `isnull` with
+   * `nulls` on.
    */
   readonly nulls?: boolean;
   /**
@@ -106,8 +105,8 @@ export interface CorpusOptions {
   /**
    * Apply the ordered operators (`gt gte lt lte`) to the boolean column too.
    * Default `true`. Postgres orders booleans `false < true` (ADR-0028
-   * section 3); today's JS `compareValues` only orders numbers and strings,
-   * so this is another divergence #155 closes.
+   * section 3), and so does `Predicate.compareLiterals`; `false` is the
+   * regression floor from before that rule was implemented.
    */
   readonly booleanOrder?: boolean;
 }
@@ -207,9 +206,9 @@ const FOREIGN_INSTANTS: ReadonlyArray<string> = [
   new Date("2001-09-09T01:46:40.000Z").toISOString(),
 ];
 
-const poolFor = (kind: LiteralKind, options: ResolvedOptions): Pool => {
+const poolFor = (kind: Predicate.LiteralKind, options: ResolvedOptions): Pool => {
   switch (kind) {
-    case "string":
+    case "text":
       return {
         rows: [...ASCII_STRINGS, ...BMP_STRINGS, ...(options.astral ? ASTRAL_STRINGS : [])],
         foreign: FOREIGN_STRINGS,
@@ -335,9 +334,9 @@ export const generateRows = (
 // ─── Operators ───────────────────────────────────────────────────────────────
 //
 // The operator core of ADR-0028: `eq ne lt lte gt gte in nin isnull` plus
-// `and or not`. `nin` and `isnull` have no dedicated node yet (#155 adds
-// `NotIn` and `IsNull`); until then they are generated through today's
-// shapes. When those nodes land, only the two marked entries change.
+// `and or not`. `nin` is the `NotIn` node and `isnull` the `IsNull` node,
+// negated half the time so `IS NOT NULL` is exercised as its own node and
+// not only as `Not(IsNull)`.
 
 /** Every operator name the generator can emit; coverage is counted by these. */
 export type OperatorName =
@@ -408,16 +407,15 @@ export const leafOperators: ReadonlyArray<LeafOperator> = [
   {
     name: "nin",
     ordered: false,
-    // #155: replace with the `NotIn` node once it exists.
-    build: (field, _literal, list) =>
-      Effect.map(list, (values) => Predicate.not(Predicate.isIn(field, values))),
+    build: (field, _literal, list) => Effect.map(list, (values) => Predicate.notIn(field, values)),
   },
   {
     name: "isnull",
     ordered: false,
-    // `eq(field, null)` is IS NULL in both JS and SQL today (`Sql.ts` null
-    // special case). #155: replace with the `IsNull` node once it exists.
-    build: (field) => Effect.succeed(Predicate.eq(field, null)),
+    build: (field) =>
+      Effect.map(chance(0.5), (negated) =>
+        negated ? Predicate.isNotNull(field) : Predicate.isNull(field)
+      ),
   },
 ];
 
@@ -611,11 +609,12 @@ export const shrinkPredicate = (
     case "Not":
       return [predicate.predicate, ...shrinkPredicate(predicate.predicate).map(Predicate.not)];
     case "In":
+    case "NotIn": {
+      const rebuild = predicate._tag === "In" ? Predicate.isIn : Predicate.notIn;
       return predicate.values.length > 1
-        ? predicate.values.map((_, i) =>
-            Predicate.isIn(predicate.field, without(predicate.values, i))
-          )
+        ? predicate.values.map((_, i) => rebuild(predicate.field, without(predicate.values, i)))
         : [];
+    }
     default:
       return [];
   }

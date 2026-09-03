@@ -124,11 +124,13 @@ const {
 export const categories = Node.make("categories", {
   attributes: categoryAttributes,
   edges: { products: Edge.many("products", { inverse: "category" }) },
+  sortable: ["name"],
 });
 
 export const suppliers = Node.make("suppliers", {
   attributes: supplierAttributes,
   edges: { products: Edge.many("products", { inverse: "supplier" }) },
+  sortable: ["company"],
 });
 
 export const products = Node.make("products", {
@@ -138,11 +140,13 @@ export const products = Node.make("products", {
     supplier: Edge.one("suppliers", { via: "supplierId" }),
     lines: Edge.many("orderDetails", { inverse: "product" }),
   },
+  sortable: ["name"],
 });
 
 export const customers = Node.make("customers", {
   attributes: customerAttributes,
   edges: { orders: Edge.many("orders", { inverse: "customer" }) },
+  sortable: ["company"],
 });
 
 export const employees = Node.make("employees", {
@@ -157,6 +161,7 @@ export const orders = Node.make("orders", {
     employee: Edge.one("employees", { via: "employeeId" }),
     lines: Edge.many("orderDetails", { inverse: "order" }),
   },
+  sortable: ["orderedAt"],
 });
 
 export const orderDetails = Node.make("orderDetails", {

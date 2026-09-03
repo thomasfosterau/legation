@@ -65,9 +65,10 @@ export interface LiveView {
   readonly positions: ReadonlyMap<string, string>;
 }
 
-const byIdCompare = (a: Row, b: Row): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+// Ids order by code point, the same order `Subset.comparator`'s tie-break uses (ADR-0028).
+const byIdCompare = (a: Row, b: Row): number => Predicate.compareText(a.id, b.id);
 const findById = (byId: OrderedTree.Tree<Row>, id: string): Row | undefined =>
-  OrderedTree.findBy(byId, id, (key, row) => (key < row.id ? -1 : key > row.id ? 1 : 0));
+  OrderedTree.findBy(byId, id, (key, row) => Predicate.compareText(key, row.id));
 
 const compareOf = (subset: Subset.Subset) => Subset.comparator(subset.orderBy);
 

@@ -136,15 +136,19 @@ const backendHandlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(createOrderDetail, (a, w) => w.put("orderDetails", a.id, a)),
 ]);
 
-const authPolicy = Authorization.policy({
-  categories: Authorization.allowAll,
-  suppliers: Authorization.allowAll,
-  products: Authorization.allowAll,
-  customers: Authorization.allowAll,
-  employees: Authorization.allowAll,
-  orders: Authorization.allowAll,
-  orderDetails: Authorization.allowAll,
-});
+const authPolicy = Authorization.policy(
+  {
+    categories: Authorization.allowAll,
+    suppliers: Authorization.allowAll,
+    products: Authorization.allowAll,
+    customers: Authorization.allowAll,
+    employees: Authorization.allowAll,
+    orders: Authorization.allowAll,
+    orderDetails: Authorization.allowAll,
+  },
+  // The nodes' filterable sets bound what a client may filter or sort by (#154).
+  { collections: nodes.collections }
+);
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
 

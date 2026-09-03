@@ -40,11 +40,13 @@ const COLLECTION = "contract";
 const EVAL_COLLECTION = `${COLLECTION}_eval`;
 
 // One attribute set covers everything the contract writes: `n` (rows),
-// `rank`/`tag` (subset evaluation), plus the two server rules below.
+// `rank`/`tag` (subset evaluation, whose generated corpus writes NULL and
+// absent values under ADR-0028, so both are nullable and optional), plus the
+// two server rules below.
 const attributes = {
   n: Schema.optionalKey(Schema.Number),
-  rank: Schema.optionalKey(Schema.Number),
-  tag: Schema.optionalKey(Schema.String),
+  rank: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  tag: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** A row the server refuses to store: a permanent rejection (422). */
   poison: Schema.optionalKey(Schema.Boolean),
   /** A row that makes the server fall over: a transient failure (500). */

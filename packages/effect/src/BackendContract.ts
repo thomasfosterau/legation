@@ -336,14 +336,13 @@ const evalSeed: ReadonlyArray<readonly [string, EvalRow]> = [
  * columns, so every backend inherits the check for every operator in the
  * core: `evaluate` must return exactly what `Subset.apply` returns over the
  * same rows, order included, for random predicates, order terms, and
- * limits. NULL/absent values and astral text are deliberately off: ADR-0028
- * makes Postgres normative for both, and the JS evaluator (#155) and the SQL
- * compilers (#156) are not yet exact there — the differential harness in
- * `@legation/sql` pins those divergences; flip the two options here once
- * they land, so the contract catches any backend that regresses. String
- * order is code-point order (ADR-0028 rule (c)): the `tag` pool mixes case
- * and accents, so a backend whose text column carries a locale collation
- * fails here by design — the contract requires `COLLATE "C"` (Postgres) or
+ * limits. NULL/absent values and astral text are on: ADR-0028 makes
+ * Postgres normative for both and the JS evaluator is exact there (#155),
+ * so a backend whose storage treats NULL two-valued, orders NULL first
+ * ascending, or compares text by UTF-16 code unit fails here by design.
+ * String order is code-point order (ADR-0028 rule (c)): the `tag` pool
+ * mixes case and accents, so a backend whose text column carries a locale
+ * collation fails too — the contract requires `COLLATE "C"` (Postgres) or
  * `BINARY` (SQLite).
  */
 const generatedCorpus = (
@@ -355,9 +354,9 @@ const generatedCorpus = (
   Effect.gen(function* () {
     const columns: ReadonlyArray<FilterCorpus.Column> = [
       { name: "rank", kind: "integer" },
-      { name: "tag", kind: "string" },
+      { name: "tag", kind: "text" },
     ];
-    const options: FilterCorpus.CorpusOptions = { nulls: false, astral: false };
+    const options: FilterCorpus.CorpusOptions = { nulls: true, astral: true };
     const corpus = yield* FilterCorpus.generateCorpus({
       seed: FilterCorpus.DEFAULT_SEED,
       columns,
