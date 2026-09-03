@@ -170,7 +170,6 @@ export interface ResolveOptions {
 export const resolve = (options: ResolveOptions): FilterDeclaration => {
   const known = new Set<string>([...options.keyFields, ...Object.keys(options.attributes)]);
   const filterable: Record<string, FilterableField> = {};
-  for (const field of options.keyFields) filterable[field] = keyDefaults;
   for (const [field, input] of Object.entries(options.filterable ?? {})) {
     if (!known.has(field)) {
       throw new FilterDeclarationError({
@@ -199,7 +198,6 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
     }
     filterable[field] = { kind, operators: [...new Set(declared.operators)] };
   }
-  const sortable = new Set<string>(["id"]);
   for (const field of options.sortable ?? []) {
     if (!known.has(field)) {
       throw new FilterDeclarationError({
@@ -208,9 +206,36 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
         message: `Collection "${options.collection}" declares sortable field "${field}", which is not a field of its row`,
       });
     }
-    sortable.add(field);
   }
-  return { filterable, sortable: [...sortable] };
+  return withKeyDefaults(options.keyFields, filterable, options.sortable ?? []);
+};
+
+/**
+ * Overlay a declaration on the key defaults: every key field (`id`, a
+ * `one`-edge / relationship key) is filterable by at least `eq` / `in` — a
+ * declaration naming one **widens** it, never replaces it, because the
+ * engine's own edge windows (`fk = parent`, `id IN (…)`) depend on those
+ * operators — and `id` is always sortable (ADR-0026's tie-break). Shared by
+ * the Node resolution above and `Collection.filterDeclarationOf`.
+ */
+export const withKeyDefaults = (
+  keyFields: ReadonlyArray<string>,
+  filterable: Readonly<Record<string, FilterableField>>,
+  sortable: ReadonlyArray<string>
+): FilterDeclaration => {
+  const merged: Record<string, FilterableField> = {};
+  for (const field of keyFields) merged[field] = keyDefaults;
+  for (const [field, declared] of Object.entries(filterable)) {
+    const base = merged[field];
+    merged[field] =
+      base === undefined
+        ? declared
+        : {
+            kind: declared.kind,
+            operators: [...new Set([...base.operators, ...declared.operators])],
+          };
+  }
+  return { filterable: merged, sortable: [...new Set(["id", ...sortable])] };
 };
 
 // ─── Enforcement (request time) ──────────────────────────────────────────────
@@ -282,12 +307,38 @@ const literalCheck = (
       );
 };
 
+/** An `In` node checked as `in`, or as `nin` when it sits under `Not`. */
+const inCheck = (
+  collection: string,
+  declaration: FilterDeclaration,
+  node: { readonly field: string; readonly values: ReadonlyArray<Literal> },
+  operator: "in" | "nin"
+): AuthorizationError | undefined => {
+  const failed = fieldCheck(collection, declaration, node.field, operator);
+  if (failed !== undefined) return failed;
+  for (const value of node.values) {
+    const mismatch = literalCheck(collection, declaration, node.field, operator, value);
+    if (mismatch !== undefined) return mismatch;
+  }
+  return undefined;
+};
+
+/** Whether a `Compare` is the wire form of `isnull` (a null literal on `eq` / `ne`; ADR-0028 §5). */
+const isNullTest = (node: { readonly op: string; readonly value: Literal }): boolean =>
+  node.value === null && (node.op === "eq" || node.op === "ne");
+
 /**
  * Check a client-authored predicate against a collection's declaration:
  * every `Compare` / `In` names a declared field with that operator and a
  * literal of the field's kind; `Exists` is refused anywhere (only an auth
  * filter may introduce it); the connectives recurse. `undefined` means the
  * predicate is admissible.
+ *
+ * Today's wire forms of the grammar's `nin` and `isnull` are `Not(In)` and
+ * `Compare` against a null literal (negated under `Not`); each is checked
+ * against the operator it desugars to, so a `nin`-only declaration admits
+ * `Not(In)` and an `in`-only one does not. #155's `NotIn` / `IsNull` nodes
+ * slot in beside them.
  */
 export const checkWhere = (
   collection: string,
@@ -299,8 +350,7 @@ export const checkWhere = (
       return undefined;
     case "Compare": {
       if (where.value === null) {
-        // The wire form of `isnull` until #155's `IsNull` node (ADR-0028 §5).
-        return where.op === "eq" || where.op === "ne"
+        return isNullTest(where)
           ? fieldCheck(collection, declaration, where.field, "isnull")
           : deny(
               collection,
@@ -312,15 +362,8 @@ export const checkWhere = (
         literalCheck(collection, declaration, where.field, where.op, where.value)
       );
     }
-    case "In": {
-      const failed = fieldCheck(collection, declaration, where.field, "in");
-      if (failed !== undefined) return failed;
-      for (const value of where.values) {
-        const mismatch = literalCheck(collection, declaration, where.field, "in", value);
-        if (mismatch !== undefined) return mismatch;
-      }
-      return undefined;
-    }
+    case "In":
+      return inCheck(collection, declaration, where, "in");
     case "And":
     case "Or": {
       for (const predicate of where.predicates) {
@@ -329,8 +372,14 @@ export const checkWhere = (
       }
       return undefined;
     }
-    case "Not":
-      return checkWhere(collection, declaration, where.predicate);
+    case "Not": {
+      const inner = where.predicate;
+      if (inner._tag === "In") return inCheck(collection, declaration, inner, "nin");
+      if (inner._tag === "Compare" && isNullTest(inner)) {
+        return fieldCheck(collection, declaration, inner.field, "isnull");
+      }
+      return checkWhere(collection, declaration, inner);
+    }
     case "Exists":
       return deny(collection, `"Exists" is not allowed in a client predicate`);
     default:

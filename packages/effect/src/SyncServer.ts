@@ -24,6 +24,7 @@ import {
   IdentityResolver,
   SyncMiddleware,
   authorize,
+  checkFilterable,
   passthroughMiddleware,
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
@@ -315,10 +316,21 @@ export const makeWithIntrospectionWith = (
           })
         : resolverOption.value.resolve(named.name, named.args, context);
 
-    // Authorize client-authored subsets and server-resolved named queries:
-    // AND each with its collection's mandatory filter. A client subset is
-    // first checked against the filterable set (#154); a named query's
-    // subset is the resolver's — server-authored — so it is exempt.
+    // The filterable set (#154) is checked against the client's OWN text —
+    // the request as it arrived, before middleware may rewrite it — so what
+    // a tenancy middleware ANDs in (a scoping key, an `Exists`) stays
+    // server-authored, like the auth filter and a named query's resolution.
+    const checkClientSubsets = (
+      subsets: ReadonlyArray<Subset>
+    ): Effect.Effect<void, AuthorizationError> =>
+      Effect.forEach(subsets, (subset) => checkFilterable(authPolicy, subset), {
+        discard: true,
+      });
+
+    // Authorize middleware-checked subsets and server-resolved named queries
+    // alike: AND each with its collection's mandatory filter. Both are
+    // server-authored by now (the client's text was checked above), so
+    // `authorize` narrows without re-checking.
     const authorizeAll = (
       context: SyncContext,
       request: PullRequest
@@ -326,7 +338,7 @@ export const makeWithIntrospectionWith = (
       Effect.gen(function* () {
         const authorized: Array<Subset> = [];
         for (const subset of request.subscriptions) {
-          authorized.push(yield* authorize(authPolicy, context, subset));
+          authorized.push(yield* authorize(authPolicy, context, subset, "server"));
         }
         for (const named of request.namedSubscriptions ?? []) {
           authorized.push(
@@ -397,6 +409,7 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId);
+            yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
             const authorized = yield* authorizeAll(context, checked);
@@ -440,12 +453,13 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId);
+            yield* checkClientSubsets(request.subsets);
             const checked = yield* (
               middleware.onRead ?? ((_, r: ReadRequest) => Effect.succeed(r))
             )(context, request);
             const authorized: Array<Subset> = [];
             for (const subset of checked.subsets) {
-              authorized.push(yield* authorize(authPolicy, context, subset));
+              authorized.push(yield* authorize(authPolicy, context, subset, "server"));
             }
             const rows: ReadResponse["rows"][number][] = [];
             for (const subset of authorized) {

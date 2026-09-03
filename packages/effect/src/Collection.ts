@@ -112,21 +112,23 @@ export const make = <A, I>(options: {
 
 /**
  * The filter declaration `authorize` enforces for a collection (#154): the
- * carried `filterable` / `sortable` when the collection declares them
- * (every Node-derived collection does), else the key defaults — `id` plus
- * every `"one"` relationship's local key field by `eq` / `in`, sortable by
- * `id` — so a hand-built collection is closed exactly as an undeclared node
+ * carried `filterable` / `sortable` (every Node-derived collection has
+ * them) overlaid on the key defaults — `id` plus every `"one"`
+ * relationship's local key field by at least `eq` / `in`, `id` always
+ * sortable — so a hand-built collection keeps the same invariants a node
+ * does, and one declaring nothing is closed exactly as an undeclared node
  * would be.
  */
 export const filterDeclarationOf = (collection: AnyCollection): FilterPolicy.FilterDeclaration => {
-  if (collection.filterable !== undefined) {
-    return { filterable: collection.filterable, sortable: collection.sortable ?? ["id"] };
-  }
-  const filterable: Record<string, FilterPolicy.FilterableField> = { id: FilterPolicy.keyDefaults };
+  const keyFields = ["id"];
   for (const relationship of collection.relationships ?? []) {
-    if (relationship.kind === "one") filterable[relationship.localField] = FilterPolicy.keyDefaults;
+    if (relationship.kind === "one") keyFields.push(relationship.localField);
   }
-  return { filterable, sortable: collection.sortable ?? ["id"] };
+  return FilterPolicy.withKeyDefaults(
+    keyFields,
+    collection.filterable ?? {},
+    collection.sortable ?? []
+  );
 };
 
 /**

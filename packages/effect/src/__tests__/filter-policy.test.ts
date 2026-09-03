@@ -73,16 +73,40 @@ describe("FilterPolicy: declaration", () => {
     expect(FilterPolicy.kindOf(Schema.Date)).toBeUndefined();
   });
 
-  it("a key field may widen its default operators", () => {
+  it("a key field listed in filterable widens its eq/in defaults, never replaces them", () => {
     const Widened = Node.make("widened", {
       attributes: {},
       edges: { category: Edge.one("categories", { via: "categoryId" }) },
-      filterable: { categoryId: ["eq", "in", "ne"] },
+      filterable: { categoryId: ["ne"], id: { operators: ["ne"], kind: "text" } },
     });
     expect(Widened.filterable["categoryId"]).toEqual({
       kind: "text",
       operators: ["eq", "in", "ne"],
     });
+    expect(Widened.filterable["id"]).toEqual({ kind: "text", operators: ["eq", "in", "ne"] });
+  });
+
+  it("a paginated edge's order fields join its target's sortable when the graph closes", () => {
+    const Post = Node.make("posts", {
+      attributes: { title: Schema.String },
+      edges: { replies: Edge.paginated("replies", { inverse: "post", order: ["-createdAt"] }) },
+    });
+    const Reply = Node.make("replies", {
+      attributes: { body: Schema.String, createdAt: Schema.String },
+      edges: { post: Edge.one("posts", { via: "postId" }) },
+    });
+    expect(Reply.sortable).toEqual(["id"]);
+    const graph = Node.registry([Post, Reply]);
+    expect(graph.nodes.get("replies")!.sortable).toEqual(["id", "createdAt"]);
+    expect(graph.collections.get("replies")!.sortable).toEqual(["id", "createdAt"]);
+    // Untouched where no paginated edge orders the node.
+    expect(graph.nodes.get("posts")).toBe(Post);
+
+    const Dangling = Node.make("posts", {
+      attributes: {},
+      edges: { replies: Edge.paginated("replies", { inverse: "post", order: ["-score"] }) },
+    });
+    expect(() => Node.registry([Dangling, Reply])).toThrow(FilterDeclarationError);
   });
 
   it("an undeclared field or an underivable kind is a definition-time defect", () => {
@@ -113,6 +137,36 @@ describe("FilterPolicy: declaration", () => {
     expect(Collection.filterDeclarationOf(products)).toEqual({
       filterable: Product.filterable,
       sortable: Product.sortable,
+    });
+  });
+
+  it("a hand-built collection's declaration is overlaid on the key defaults", () => {
+    const comments = Collection.make({
+      name: "comments",
+      schema: Schema.Unknown,
+      id: (value) => (value as { id: string }).id,
+      relationships: [
+        {
+          name: "issue",
+          kind: "one",
+          collection: "issues",
+          localField: "issueId",
+          foreignField: "id",
+        },
+      ],
+      filterable: {
+        body: { kind: "text", operators: ["eq"] },
+        issueId: { kind: "text", operators: ["ne"] },
+      },
+      sortable: ["createdAt"],
+    });
+    expect(Collection.filterDeclarationOf(comments)).toEqual({
+      filterable: {
+        id: FilterPolicy.keyDefaults,
+        issueId: { kind: "text", operators: ["eq", "in", "ne"] },
+        body: { kind: "text", operators: ["eq"] },
+      },
+      sortable: ["id", "createdAt"],
     });
   });
 
@@ -212,6 +266,43 @@ describe("FilterPolicy: authorize", () => {
         Subset.make({ collection: "nullable", where: Predicate.ne("note", null) })
       );
       expect(admitted.collection).toBe("nullable");
+    })
+  );
+
+  it.effect("Not(In) is nin and a negated null test is isnull, in both directions", () =>
+    Effect.gen(function* () {
+      const Tagged = Node.make("tagged", {
+        attributes: {
+          tag: Schema.String,
+          colour: Schema.String,
+          note: Schema.NullOr(Schema.String),
+          kind: Schema.NullOr(Schema.String),
+        },
+        filterable: { tag: ["nin"], colour: ["in"], note: ["isnull"], kind: ["eq"] },
+      });
+      const tagged = Authorization.policy(
+        { tagged: Authorization.allowAll },
+        { collections: Node.registry([Tagged]).collections }
+      );
+      const check = (where: Predicate.Predicate) =>
+        Authorization.authorize(tagged, context, Subset.make({ collection: "tagged", where }));
+
+      // nin-only: Not(In) admitted, In refused.
+      yield* check(Predicate.not(Predicate.isIn("tag", ["a", "b"])));
+      const inOnNin = yield* Effect.flip(check(Predicate.isIn("tag", ["a"])));
+      expect(inOnNin.message).toMatch(/field "tag" is not filterable with "in" \(declared: nin\)/);
+      // in-only: In admitted, Not(In) refused.
+      yield* check(Predicate.isIn("colour", ["red"]));
+      const ninOnIn = yield* Effect.flip(check(Predicate.not(Predicate.isIn("colour", ["red"]))));
+      expect(ninOnIn.message).toMatch(/field "colour" is not filterable with "nin"/);
+      // Literals under Not(In) are still kind-checked.
+      const badLiteral = yield* Effect.flip(check(Predicate.not(Predicate.isIn("tag", [1]))));
+      expect(badLiteral.message).toMatch(/literal 1 for field "tag" \("nin"\)/);
+      // isnull: the null test and its negation both need `isnull`.
+      yield* check(Predicate.not(Predicate.eq("note", null)));
+      yield* check(Predicate.ne("note", null));
+      const nullOnEq = yield* Effect.flip(check(Predicate.not(Predicate.eq("kind", null))));
+      expect(nullOnEq.message).toMatch(/field "kind" is not filterable with "isnull"/);
     })
   );
 
@@ -446,6 +537,62 @@ describe("FilterPolicy: on SyncServer", () => {
           subscriptions: [products({ where: Predicate.eq("id", "p-1") })],
           namedSubscriptions: [{ name: "products/topRated", args: { min: 4 } }],
         });
+        expect(yield* Ref.get(evaluations)).toBe(2);
+      })
+    )
+  );
+
+  it.effect("what middleware ANDs into a subset is server-authored: checked before rewrite", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, evaluations } = yield* recordingBackend;
+        // A tenancy middleware scoping every window by a field no client may
+        // filter, with a relational test on read.
+        const tenant = Predicate.eq("rating", 5);
+        const membership = Predicate.exists({
+          collection: "categories",
+          localField: "categoryId",
+          foreignField: "id",
+        });
+        const middleware: Authorization.SyncMiddleware = {
+          onPush: (_context, request) => Effect.succeed(request),
+          onPull: (_context, request) =>
+            Effect.succeed({
+              ...request,
+              subscriptions: request.subscriptions.map((subset) => ({
+                ...subset,
+                where: Predicate.and(tenant, subset.where),
+              })),
+            }),
+          onRead: (_context, request) =>
+            Effect.succeed({
+              ...request,
+              subsets: request.subsets.map((subset) => ({
+                ...subset,
+                where: Predicate.and(membership, subset.where),
+              })),
+            }),
+        };
+        const server = yield* Server.make({ backend, auth: { policy: policy() }, middleware });
+
+        yield* server.handler.handlePull({
+          clientGroupId: "g",
+          subscriptions: [products({ where: Predicate.eq("categoryId", "c-1") })],
+        });
+        yield* server.handler.handleRead({
+          clientGroupId: "g",
+          subsets: [products({ where: Predicate.eq("categoryId", "c-1") })],
+        });
+        expect(yield* Ref.get(evaluations)).toBe(2);
+
+        // The client's own text is still checked.
+        const error = yield* Effect.flip(
+          server.handler.handlePull({
+            clientGroupId: "g",
+            subscriptions: [products({ where: Predicate.eq("rating", 5) })],
+          })
+        );
+        expect(causeOf(error).message).toMatch(/field "rating" is not filterable/);
         expect(yield* Ref.get(evaluations)).toBe(2);
       })
     )

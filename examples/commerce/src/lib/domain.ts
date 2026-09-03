@@ -159,8 +159,9 @@ export const reviews = Node.make("reviews", {
   attributes: reviewAttributes,
   edges: { product: Edge.one("products", { via: "productId" }) },
   hintKeys: ["userId"],
-  // The paginated `reviews` edge orders by `createdAt`; its per-parent
-  // windows carry that order, so it must be sortable.
+  // `productReviews` reads the collection directly, newest first. (The
+  // paginated `reviews` edge's order joins `sortable` on its own when the
+  // graph closes; this declaration covers the direct read.)
   sortable: ["createdAt"],
 });
 

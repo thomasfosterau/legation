@@ -24,7 +24,7 @@
 import { Schema } from "effect";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
-import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
+import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
 import * as Subset from "./Subset.js";
 
@@ -234,30 +234,75 @@ const toCollection = (
   });
 };
 
+/** Every field of a node's row: `id`, its attributes, its `one`-edge keys. */
+const rowFields = (node: AnyNode): ReadonlySet<string> => {
+  const fields = new Set<string>(["id", ...Object.keys(node.attributes)]);
+  for (const edge of Object.values(node.edges)) {
+    if (edge.kind === "one") fields.add(edge.via);
+  }
+  return fields;
+};
+
+/**
+ * A paginated edge's declared `order` is what its per-parent windows sort
+ * the **target** by (ADR-0024), so those fields join the target's
+ * `sortable` here — declared on the node graph, so window registration and
+ * the filterable set cannot disagree (as `one`-edge keys are `eq` / `in`).
+ * An order field the target's row does not carry is a definition defect.
+ */
+const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): AnyNode => {
+  const sortable = new Set<string>(node.sortable);
+  const fields = rowFields(node);
+  for (const source of definitions) {
+    for (const [name, edge] of Object.entries(source.edges)) {
+      if (edge.kind !== "paginated" || edge.target !== node.type) continue;
+      for (const term of Subset.parseOrder(edge.order)) {
+        if (!fields.has(term.field)) {
+          throw new FilterDeclarationError({
+            collection: node.type,
+            field: term.field,
+            message: `Paginated edge "${name}" on ${source.type} orders "${node.type}" by "${term.field}", which is not a field of its row`,
+          });
+        }
+        sortable.add(term.field);
+      }
+    }
+  }
+  return sortable.size === node.sortable.length ? node : { ...node, sortable: [...sortable] };
+};
+
 /**
  * Close and validate the node graph: unique types, every edge target
  * present, every collection-valued edge's `inverse` resolving to a `one`
- * edge back to the declaring node. Returns the graph plus the derived
- * engine `CollectionRegistry`.
+ * edge back to the declaring node, every paginated edge's order over fields
+ * its target carries. Returns the graph — each node's `sortable` widened by
+ * the paginated edges ordering it — plus the derived engine
+ * `CollectionRegistry`.
  */
 export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
-  const nodes = new Map<string, AnyNode>();
+  const declared = new Map<string, AnyNode>();
   for (const node of definitions) {
-    if (nodes.has(node.type)) throw new DuplicateNameError({ kind: "collection", name: node.type });
-    nodes.set(node.type, node);
+    if (declared.has(node.type)) {
+      throw new DuplicateNameError({ kind: "collection", name: node.type });
+    }
+    declared.set(node.type, node);
   }
   for (const node of definitions) {
     for (const [name, edge] of Object.entries(node.edges)) {
-      if (!nodes.has(edge.target)) {
+      if (!declared.has(edge.target)) {
         throw new UnknownCollectionError({
           from: node.type,
           relationship: name,
           collection: edge.target,
         });
       }
-      if (edge.kind !== "one") inverseVia(node, name, edge, nodes);
+      if (edge.kind !== "one") inverseVia(node, name, edge, declared);
     }
   }
-  const collections = Collection.registry(definitions.map((node) => toCollection(node, nodes)));
+  const nodes = new Map<string, AnyNode>();
+  for (const node of definitions) nodes.set(node.type, withEdgeOrders(node, definitions));
+  const collections = Collection.registry(
+    [...nodes.values()].map((node) => toCollection(node, nodes))
+  );
   return { nodes, collections };
 };
