@@ -993,7 +993,9 @@ export const make = (
       const conjuncts = where._tag === "And" ? where.predicates : [where];
       const fields: Array<string> = [];
       for (const conjunct of conjuncts) {
-        if (conjunct._tag === "Compare" || conjunct._tag === "In") fields.push(conjunct.field);
+        if (conjunct._tag === "Compare" || conjunct._tag === "In" || conjunct._tag === "IsNull") {
+          fields.push(conjunct.field);
+        }
       }
       return fields;
     };

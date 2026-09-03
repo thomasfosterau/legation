@@ -11,6 +11,8 @@
  * - `True` → `1 = 1`
  * - `Compare` → `col <op> ?` (or `col IS [NOT] NULL` for null equality)
  * - `In` → `col IN (?, ?, …)` (empty set → `1 = 0`)
+ * - `NotIn` → `col NOT IN (?, ?, …)` (empty set → `1 = 1`)
+ * - `IsNull` → `col IS NULL` / `col IS NOT NULL`
  * - `And` / `Or` → parenthesized joins (empty And → `1 = 1`, empty Or → `1 = 0`)
  * - `Not` → `NOT (…)`
  */
@@ -74,6 +76,13 @@ const compileNode = (predicate: Predicate.Predicate, dialect: Dialect, params: P
       const placeholders = predicate.values.map((value) => params.bind(value)).join(", ");
       return `${dialect.quote(predicate.field)} IN (${placeholders})`;
     }
+    case "NotIn": {
+      if (predicate.values.length === 0) return "1 = 1";
+      const placeholders = predicate.values.map((value) => params.bind(value)).join(", ");
+      return `${dialect.quote(predicate.field)} NOT IN (${placeholders})`;
+    }
+    case "IsNull":
+      return `${dialect.quote(predicate.field)} IS ${predicate.negated === true ? "NOT " : ""}NULL`;
     case "And":
       if (predicate.predicates.length === 0) return "1 = 1";
       return predicate.predicates.map((inner) => compileNode(inner, dialect, params)).join(" AND ");

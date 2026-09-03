@@ -13,6 +13,11 @@
  *   collation.
  *
  * An absent JS field is inserted as SQL NULL on both (rule (b)).
+ *
+ * Besides the id set a `WHERE` returns, each engine exposes the predicate's
+ * three-valued verdict per row (`SELECT id, (<where>) AS verdict`), so the
+ * harness can compare `Predicate.evaluate`'s `Option<boolean>` row by row
+ * (ADR-0028 section 7) and not only the collapsed result.
  */
 import { PGlite } from "@electric-sql/pglite";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -22,7 +27,10 @@ import { Context, Effect, Layer, type Scope } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import * as Sql from "../../Sql.js";
 
-/** A SQL subject: load rows, filter by predicate, order by terms. Ids only. */
+/** A three-valued verdict: `T` true, `F` false, `U` unknown (SQL NULL). */
+export type Verdict = "T" | "F" | "U";
+
+/** A SQL subject: load rows, filter by predicate, order by terms, and judge per row. */
 export interface Engine {
   readonly name: string;
   readonly load: (rows: ReadonlyArray<FilterCorpus.CorpusRow>) => Effect.Effect<void>;
@@ -30,6 +38,10 @@ export interface Engine {
   readonly where: (predicate: Predicate.Predicate) => Effect.Effect<ReadonlyArray<string>>;
   /** Ids of every loaded row in `ORDER BY <terms>, id` order. */
   readonly order: (orderBy: ReadonlyArray<Subset.OrderBy>) => Effect.Effect<ReadonlyArray<string>>;
+  /** The predicate's three-valued verdict for every loaded row, keyed by id. */
+  readonly verdicts: (
+    predicate: Predicate.Predicate
+  ) => Effect.Effect<ReadonlyMap<string, Verdict>>;
 }
 
 const TABLE = "corpus";
@@ -45,6 +57,13 @@ type Encoder = (value: Predicate.Literal | undefined) => unknown;
 const encodePostgres: Encoder = (value) => value ?? null;
 const encodeSqlite: Encoder = (value) =>
   value === undefined ? null : typeof value === "boolean" ? (value ? 1 : 0) : value;
+
+/**
+ * Decode a `(<where>)` column: Postgres yields `true`/`false`/`null`, SQLite
+ * `1`/`0`/`null`.
+ */
+const decodeVerdict = (raw: unknown): Verdict =>
+  raw === null || raw === undefined ? "U" : raw === true || raw === 1 ? "T" : "F";
 
 /** Column types per dialect, keyed by literal kind, so the DDL follows `corpusColumns`. */
 const columnTypes: Record<"sqlite" | "postgres", Record<FilterCorpus.LiteralKind, string>> = {
@@ -105,12 +124,20 @@ const orderText = (
   return `SELECT ${dialect.quote("id")} FROM ${dialect.quote(TABLE)} ORDER BY ${terms.join(", ")}`;
 };
 
+interface IdRow {
+  readonly id: string;
+}
+
+interface VerdictRow extends IdRow {
+  readonly verdict: unknown;
+}
+
 interface Runner {
   readonly exec: (text: string) => Effect.Effect<void>;
-  readonly query: (
+  readonly query: <Row extends IdRow>(
     text: string,
     params: ReadonlyArray<unknown>
-  ) => Effect.Effect<ReadonlyArray<{ readonly id: string }>>;
+  ) => Effect.Effect<ReadonlyArray<Row>>;
 }
 
 const makeEngine = (
@@ -119,28 +146,38 @@ const makeEngine = (
   encode: Encoder,
   collate: string,
   runner: Runner
-): Engine => ({
-  name,
-  load: (rows) =>
-    Effect.gen(function* () {
-      yield* runner.query(`DELETE FROM ${dialect.quote(TABLE)}`, []);
-      const insert = insertText(dialect);
-      for (const row of rows) yield* runner.query(insert, rowParams(row, encode));
-    }),
-  where: (predicate) => {
-    const { text, params } = Sql.compileSelect({ table: TABLE, where: predicate, dialect });
-    return runner
-      .query(
-        text,
-        params.map((param) => encode(param as Predicate.Literal))
-      )
-      .pipe(Effect.map((rows) => rows.map((row) => row.id).toSorted()));
-  },
-  order: (orderBy) =>
-    runner
-      .query(orderText(orderBy, dialect, collate), [])
-      .pipe(Effect.map((rows) => rows.map((row) => row.id))),
-});
+): Engine => {
+  const bind = (params: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
+    params.map((param) => encode(param as Predicate.Literal));
+  return {
+    name,
+    load: (rows) =>
+      Effect.gen(function* () {
+        yield* runner.query(`DELETE FROM ${dialect.quote(TABLE)}`, []);
+        const insert = insertText(dialect);
+        for (const row of rows) yield* runner.query(insert, rowParams(row, encode));
+      }),
+    where: (predicate) => {
+      const { text, params } = Sql.compileSelect({ table: TABLE, where: predicate, dialect });
+      return runner
+        .query<IdRow>(text, bind(params))
+        .pipe(Effect.map((rows) => rows.map((row) => row.id).toSorted()));
+    },
+    order: (orderBy) =>
+      runner
+        .query<IdRow>(orderText(orderBy, dialect, collate), [])
+        .pipe(Effect.map((rows) => rows.map((row) => row.id))),
+    verdicts: (predicate) => {
+      const { text, params } = Sql.compileWhere(predicate, dialect);
+      const select = `SELECT ${dialect.quote("id")}, (${text}) AS ${dialect.quote("verdict")} FROM ${dialect.quote(TABLE)}`;
+      return runner
+        .query<VerdictRow>(select, bind(params))
+        .pipe(
+          Effect.map((rows) => new Map(rows.map((row) => [row.id, decodeVerdict(row.verdict)])))
+        );
+    },
+  };
+};
 
 /** SQLite on `:memory:` through the Effect SQL client. */
 export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(function* () {
@@ -148,7 +185,8 @@ export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(
   const sql = Context.get(context, SqlClient);
   const runner: Runner = {
     exec: (text) => sql.unsafe(text).unprepared.pipe(Effect.asVoid, Effect.orDie),
-    query: (text, params) => sql.unsafe<{ readonly id: string }>(text, params).pipe(Effect.orDie),
+    query: <Row extends IdRow>(text: string, params: ReadonlyArray<unknown>) =>
+      sql.unsafe<Row>(text, params).pipe(Effect.orDie),
   };
   yield* runner.exec(createText(Sql.sqlite, columnTypes.sqlite));
   return makeEngine("sqlite", Sql.sqlite, encodeSqlite, "BINARY", runner);
@@ -166,8 +204,8 @@ export const makePostgres: Effect.Effect<Engine, never, Scope.Scope> = Effect.ge
   );
   const runner: Runner = {
     exec: (text) => Effect.promise(() => db.exec(text)).pipe(Effect.asVoid),
-    query: (text, params) =>
-      Effect.promise(() => db.query<{ readonly id: string }>(text, [...params])).pipe(
+    query: <Row extends IdRow>(text: string, params: ReadonlyArray<unknown>) =>
+      Effect.promise(() => db.query<Row>(text, [...params])).pipe(
         Effect.map((result) => result.rows)
       ),
   };

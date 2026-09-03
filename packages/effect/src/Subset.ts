@@ -103,6 +103,9 @@ export interface TypedPredicate<A> {
   lt<K extends keyof A & string>(field: K, value: A[K]): Predicate.Predicate;
   lte<K extends keyof A & string>(field: K, value: A[K]): Predicate.Predicate;
   in<K extends keyof A & string>(field: K, values: ReadonlyArray<A[K]>): Predicate.Predicate;
+  notIn<K extends keyof A & string>(field: K, values: ReadonlyArray<A[K]>): Predicate.Predicate;
+  isNull<K extends keyof A & string>(field: K): Predicate.Predicate;
+  isNotNull<K extends keyof A & string>(field: K): Predicate.Predicate;
   and(...predicates: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate;
   or(...predicates: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate;
   not(predicate: Predicate.Predicate): Predicate.Predicate;
@@ -138,6 +141,9 @@ const typedPredicate: TypedPredicate<unknown> = {
   lt: (field, value) => Predicate.lt(field, value as Predicate.Literal),
   lte: (field, value) => Predicate.lte(field, value as Predicate.Literal),
   in: (field, values) => Predicate.isIn(field, values as ReadonlyArray<Predicate.Literal>),
+  notIn: (field, values) => Predicate.notIn(field, values as ReadonlyArray<Predicate.Literal>),
+  isNull: (field) => Predicate.isNull(field),
+  isNotNull: (field) => Predicate.isNotNull(field),
   and: (...predicates) => Predicate.and(...predicates),
   or: (...predicates) => Predicate.or(...predicates),
   not: (predicate) => Predicate.not(predicate),
@@ -184,12 +190,23 @@ const fieldOf = (value: unknown, field: string): unknown =>
     ? (value as Record<string, unknown>)[field]
     : undefined;
 
-/** Compare two field values ascending; null/undefined sort first. */
+/**
+ * Compare two field values ascending, as Postgres orders a column (ADR-0028
+ * section 4): NULL and absent are one value greater than every non-null one
+ * (so they sort last ascending and first descending, Postgres's default);
+ * same-typed values order numerically, by code point, or `false < true`.
+ * Values of differing types never meet on a declared column (rule (d)); to
+ * keep the comparator total anyway they order by type name, then by their
+ * string form.
+ */
 const compareValues = (left: unknown, right: unknown): number => {
-  if (left === right) return 0;
-  if (left === undefined || left === null) return -1;
-  if (right === undefined || right === null) return 1;
-  return (left as number | string) < (right as number | string) ? -1 : 1;
+  const leftNull = Predicate.isNullish(left);
+  const rightNull = Predicate.isNullish(right);
+  if (leftNull || rightNull) return leftNull === rightNull ? 0 : leftNull ? 1 : -1;
+  const ordered = Predicate.compareLiterals(left, right);
+  if (ordered !== undefined) return ordered;
+  const byType = Predicate.compareText(typeof left, typeof right);
+  return byType !== 0 ? byType : Predicate.compareText(String(left), String(right));
 };
 
 /**
@@ -201,24 +218,20 @@ const compareValues = (left: unknown, right: unknown): number => {
  * across the same `orderBy`, so it can both sort a set from scratch
  * (`sortFiltered`) and place one row incrementally (`LiveView`).
  *
- * This is also **the collation seam**, and today it is a deliberate punt:
- * ordering is JS's default `<` over the field's decoded value (code-unit
- * order for strings, numeric for numbers) — no locale-aware collation, no
- * case-insensitive option. `Subset.apply` is the *sole* ordering authority
- * for both the server (every `Backend.evaluate` finalizes order/limit/cursor
- * locally with it — `MemoryBackend`, `@legation/sql`'s `SqlBackend`,
- * `@legation/jsonapi`'s `JsonApiBackend`) and the client (`LiveView`), so
- * client and server always agree on cursor windows *by construction* — but
- * only as long as this stays the one comparator both sides call. A
- * locale-aware collation therefore cannot be a client-local `observe`
- * option (a client sorting `"café" < "cafe"` while the server's cursor
- * assumes code-unit order would silently tear cursor pages); it would have
- * to be declared on the `Subset`/collection itself, wire-serialized, and
- * threaded into this comparator on both sides — the same shape as the
- * derivable-set declaration in ADR-0023. Nothing in this codebase needs
- * non-default collation yet, so that declaration is not added here; this
- * comment is the record the issue asked for. Adding it later is additive
- * (a new optional `Subset.collation` field defaulting to today's behavior).
+ * This is also **the collation seam**. Its order is fixed by ADR-0028
+ * section 4 to be Postgres's: text (the id tie-break included) compares by
+ * code point, the order of `COLLATE "C"` and SQLite `BINARY`; NULL and
+ * absent sort after every value ascending and before every value descending
+ * (`NULLS LAST` / `NULLS FIRST`, Postgres's default); booleans order
+ * `false < true`. The differential harness in `@legation/sql` proves this
+ * comparator agrees with `ORDER BY … COLLATE "C"`. Every backend
+ * (`MemoryBackend`, `@legation/sql`'s `SqlBackend`, `@legation/jsonapi`'s
+ * `JsonApiBackend`) and the client (`LiveView`) call this one comparator, so
+ * client and server agree on cursor windows by construction. There is no
+ * locale-aware or case-insensitive collation, and none can be a client-local
+ * `observe` option (ADR-0026): it would tear cursor pages against a server
+ * assuming code-point order. If one is ever needed it must be declared on
+ * the `Subset`/collection, wire-serialized, and threaded here on both sides.
  */
 export const comparator =
   (orderBy: ReadonlyArray<OrderBy>) =>
@@ -227,7 +240,7 @@ export const comparator =
       const ordered = compareValues(fieldOf(a.value, term.field), fieldOf(b.value, term.field));
       if (ordered !== 0) return term.direction === "asc" ? ordered : -ordered;
     }
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    return Predicate.compareText(a.id, b.id);
   };
 
 /** Filter rows by the subset's predicate and sort by its `orderBy` (no window). */
@@ -267,8 +280,8 @@ export const apply = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): Re
 // an optional `Index.CollectionIndex` in front of the filter step: an
 // indexable `where` resolves via `O(hits)` index lookups instead of testing
 // every row. A predicate the index can't narrow (or no index at all) falls
-// back to exactly today's full scan — this is additive, never a behavior
-// change for unindexed paths.
+// back to exactly the full scan — the index only ever accelerates
+// `Predicate.evaluate`, never changes its answer.
 
 const fullScan = <R extends Row>(
   rowsById: ReadonlyMap<string, R>,

@@ -25,12 +25,26 @@ describe("Sql.compileWhere", () => {
   });
 
   it("handles null equality and empty sets without binds", () => {
+    // ADR-0028 §5: `eq(f, null)` / `ne(f, null)` desugar to `IsNull`, which
+    // compiles to the same `IS [NOT] NULL` text the null special case
+    // produced; the wire `Compare` carrying `null` still hits that special
+    // case until #156 removes it.
     expect(Sql.compileWhere(Predicate.eq("x", null))).toEqual({ text: `"x" IS NULL`, params: [] });
     expect(Sql.compileWhere(Predicate.ne("x", null))).toEqual({
       text: `"x" IS NOT NULL`,
       params: [],
     });
+    expect(Sql.compileWhere(Predicate.isNull("x"))).toEqual({ text: `"x" IS NULL`, params: [] });
+    expect(Sql.compileWhere(Predicate.isNotNull("x"))).toEqual({
+      text: `"x" IS NOT NULL`,
+      params: [],
+    });
     expect(Sql.compileWhere(Predicate.isIn("x", []))).toEqual({ text: `1 = 0`, params: [] });
+    expect(Sql.compileWhere(Predicate.notIn("x", []))).toEqual({ text: `1 = 1`, params: [] });
+    expect(Sql.compileWhere(Predicate.notIn("x", [1, 2]))).toEqual({
+      text: `"x" NOT IN (?, ?)`,
+      params: [1, 2],
+    });
     expect(Sql.compileWhere(Predicate.always)).toEqual({ text: `1 = 1`, params: [] });
   });
 
