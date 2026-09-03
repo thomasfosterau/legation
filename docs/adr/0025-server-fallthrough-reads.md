@@ -1,7 +1,7 @@
 # ADR-0025: Server-fallthrough reads
 
 Date: 2026-07-03
-Status: Accepted (design note for ADR-0022 program step 6; landed in #96)
+Status: Accepted (design note for ADR-0022 program step 6; landed in #96). Coverage rule superseded by ADR-0029
 
 ## Context
 
@@ -69,6 +69,13 @@ it falls through. The check is deliberately **exact**: no subsumption
 true but left as a future refinement), no cross-Client knowledge. A
 false negative costs one server round trip and returns an equally
 correct — in one respect _more_ correct — answer.
+
+> **Coverage superseded by ADR-0029.** The exact hash match above is
+> replaced by conjunct subsumption with strict windows: a subscription on
+> the same collection covers a read when its top-level conjuncts are a
+> subset of the read's, and its window is absent or a prefix of the same
+> order from the same cursor. ADR-0029 §3 states the rule; #162 implements
+> it for the mirror, the owned engine and the JSON:API façade alike.
 
 ### Includes resolve in two phases
 
