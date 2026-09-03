@@ -21,8 +21,9 @@
  * windows applied.
  *
  * **Reads have three tiers and the UI sees none of them** (ADR-0025):
- * `query` answers from the replica when the read's root window is in this
- * Client's ledger; otherwise it falls through to the server — point-in-time,
+ * `query` answers from the replica when a subscription in this Client's
+ * ledger **covers** the read — conjunct subsumption with strict windows
+ * (ADR-0029 section 3, `Coverage`); otherwise it falls through to the server — point-in-time,
  * auth-filtered, no CVR, results never entering the replica — degrading
  * back to the local answer when no transport read is available or the
  * server is unreachable (offline-first: local is always an answer).
@@ -36,6 +37,7 @@ import * as ClientStore from "./ClientStore.js";
 import * as RpcTransport from "./RpcTransport.js";
 import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
+import * as Coverage from "./Coverage.js";
 import type * as Mutator from "./Mutator.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
@@ -66,6 +68,13 @@ export interface Client {
   /** Pin a read's root window beyond any observer's lifetime. */
   readonly subscribe: (read: QueryModule.Read) => Effect.Effect<void, ClientView.ClientViewError>;
   readonly unsubscribe: (read: QueryModule.Read) => Effect.Effect<void, ClientView.ClientViewError>;
+  /**
+   * Which subscription in this Client's ledger covers a read, if any — the
+   * check {@link Client.query} makes before answering locally, exposed for
+   * devtools (ADR-0029 section 4: "which subscription covered the request
+   * is recorded beside it").
+   */
+  readonly coverageOf: (read: QueryModule.Read) => Effect.Effect<Coverage.Verdict>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (
     mutation: string,
@@ -97,25 +106,39 @@ export interface Client {
  * unsubscribe when the last observer ends and no explicit pin remains.
  */
 export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView): Client => {
-  interface Interest {
+  /**
+   * One ledger entry: who holds the window, plus what coverage compares a
+   * read against (ADR-0029 section 3) — the root window and the edge
+   * selects the explicit pin declared. Observers register the root alone;
+   * an explicit pin's `include` declares its edges (their registration is
+   * #159's change), and a second pin of the same root widens them.
+   */
+  interface Interest extends Coverage.Registration {
     readonly observers: number;
     readonly explicit: boolean;
   }
   // One ledger per Client; windows keyed by subset hash.
   const ledger = Ref.makeUnsafe(new Map<string, Interest>());
 
-  const acquire = (subset: Subset.Subset, kind: "observer" | "explicit") =>
+  const acquire = (registration: Coverage.Registration, kind: "observer" | "explicit") =>
     Ref.modify(ledger, (map) => {
-      const key = Subset.hash(subset);
+      const key = Subset.hash(registration.root);
       const next = new Map(map);
       const current = next.get(key);
       next.set(key, {
+        root: registration.root,
+        edges:
+          kind === "explicit"
+            ? Coverage.widenEdges(current?.edges ?? [], registration.edges)
+            : (current?.edges ?? []),
         observers: (current?.observers ?? 0) + (kind === "observer" ? 1 : 0),
         explicit: (current?.explicit ?? false) || kind === "explicit",
       });
       return [current === undefined, next] as const;
     }).pipe(
-      Effect.flatMap((first) => (first ? view.subscribe(subset).pipe(Effect.orDie) : Effect.void))
+      Effect.flatMap((first) =>
+        first ? view.subscribe(registration.root).pipe(Effect.orDie) : Effect.void
+      )
     );
 
   const release = (subset: Subset.Subset, kind: "observer" | "explicit") =>
@@ -124,6 +147,9 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       const current = map.get(key);
       if (current === undefined) return [false, map] as const;
       const updated: Interest = {
+        root: current.root,
+        // Only explicit pins declare edges: releasing the pin drops them.
+        edges: kind === "explicit" ? [] : current.edges,
         observers: Math.max(0, current.observers - (kind === "observer" ? 1 : 0)),
         explicit: kind === "explicit" ? false : current.explicit,
       };
@@ -138,15 +164,31 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       Effect.flatMap((last) => (last ? view.unsubscribe(subset).pipe(Effect.ignore) : Effect.void))
     );
 
-  const selectsOf = (compiled: Query.Plan): ReadonlyArray<Related.EdgeSelect> =>
-    compiled.edges.map((edge) => ({
-      name: edge.edge,
-      ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
-    }));
+  // The covering subscription for a read: an exact hash hit is the fast
+  // path (its edges still have to cover), else a scan under `Coverage`.
+  const coveringOf = (
+    interests: ReadonlyMap<string, Interest>,
+    requested: Coverage.Registration
+  ): Interest | undefined => {
+    const exact = interests.get(Subset.hash(requested.root));
+    if (exact !== undefined && Coverage.coversEdges(exact.edges, requested.edges)) return exact;
+    return Coverage.covering(interests.values(), requested);
+  };
 
-  // The three-tier read (ADR-0025): replica when the root window is in the
-  // ledger; server fallthrough otherwise; local again when fallthrough is
-  // unavailable or fails (offline-first — local is always an answer).
+  const verdictOf = (requested: Coverage.Registration): Effect.Effect<Coverage.Verdict> =>
+    Ref.get(ledger).pipe(
+      Effect.map((interests): Coverage.Verdict => {
+        const by = coveringOf(interests, requested);
+        return by === undefined
+          ? { _tag: "Uncovered" }
+          : { _tag: "Covered", by: { root: by.root, edges: by.edges }, hash: Subset.hash(by.root) };
+      })
+    );
+
+  // The three-tier read (ADR-0025): replica when a ledger subscription
+  // covers the read (ADR-0029); server fallthrough otherwise; local again
+  // when fallthrough is unavailable or fails (offline-first — local is
+  // always an answer).
   const queryOnce = (
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
@@ -154,16 +196,16 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     const readThrough = view.read;
     if (readThrough === undefined) return local;
     const compiled = Query.plan(nodes, read);
-    return Ref.get(ledger).pipe(
-      Effect.flatMap((interests) =>
-        interests.has(Subset.hash(compiled.root))
+    return verdictOf(Coverage.ofPlan(compiled)).pipe(
+      Effect.flatMap((verdict) =>
+        verdict._tag === "Covered"
           ? local
           : Related.queryVia(
               readThrough,
               nodes.collections,
               read.collection,
               compiled.root,
-              selectsOf(compiled)
+              Query.edgeSelects(compiled)
             ).pipe(
               Effect.map((rows) => Query.applyWindows(compiled, rows)),
               Effect.catch(() => local)
@@ -175,8 +217,9 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
   const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
     const compiled = Query.plan(nodes, read);
     if (compiled.edges.length === 0) {
+      const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
-        Effect.acquireRelease(acquire(compiled.root, "observer"), () =>
+        Effect.acquireRelease(acquire(registration, "observer"), () =>
           release(compiled.root, "observer")
         ).pipe(
           Effect.as(
@@ -192,15 +235,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     // windows itself (host-side on a connected engine), scoped to the stream.
     return Stream.unwrap(
       view
-        .related(
-          nodes.collections,
-          read.collection,
-          compiled.root,
-          compiled.edges.map((edge) => ({
-            name: edge.edge,
-            ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
-          }))
-        )
+        .related(nodes.collections, read.collection, compiled.root, Query.edgeSelects(compiled))
         .pipe(
           Effect.map((stream) =>
             stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows)))
@@ -213,8 +248,9 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     nodes,
     query: queryOnce,
     observe,
-    subscribe: (read) => acquire(Query.plan(nodes, read).root, "explicit"),
+    subscribe: (read) => acquire(Coverage.ofPlan(Query.plan(nodes, read)), "explicit"),
     unsubscribe: (read) => release(Query.plan(nodes, read).root, "explicit"),
+    coverageOf: (read) => verdictOf(Coverage.ofPlan(Query.plan(nodes, read))),
     mutate: (mutation, args) => view.mutate(mutation, args),
     mutateWithAck: (mutation, args) => view.mutateWithAck(mutation, args),
     mutationStates: view.mutationStates,
