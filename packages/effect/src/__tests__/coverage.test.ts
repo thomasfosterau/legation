@@ -1,9 +1,9 @@
 /**
  * Coverage (ADR-0029 section 3, issue #162): the two worked tables of the
  * ADR as unit tests, then each rule on its own — canonical conjuncts under
- * structural equality, the strict window, the include rule over a plan's
- * edge selects — and the deliberate false negatives (full implication is
- * not built).
+ * structural equality, the strict window (a cursor alone included), the
+ * include rule over a plan's edge selects — and the deliberate false
+ * negatives (full implication is not built).
  */
 import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
@@ -107,6 +107,13 @@ describe("rule 2: the window", () => {
   });
   const at = (options: Partial<Subset.Subset>): Subset.Subset => ({ ...windowed, ...options });
 
+  it("a limit, a cursor, or both is a window; neither is not", () => {
+    expect(Coverage.isWindowed(Subset.make({ collection: "products" }))).toBe(false);
+    expect(Coverage.isWindowed(Subset.make({ collection: "products", limit: 1 }))).toBe(true);
+    expect(Coverage.isWindowed(Subset.make({ collection: "products", cursor: "p-50" }))).toBe(true);
+    expect(Coverage.isWindowed(Query.plan(nodes, products({ after: "p-50" })).root)).toBe(true);
+  });
+
   it("a windowed subscription never covers an unwindowed request", () => {
     expect(Coverage.coversWindow(windowed, at({ limit: undefined }))).toBe(false);
   });
@@ -122,6 +129,25 @@ describe("rule 2: the window", () => {
     expect(Coverage.coversWindow(fromCursor, { ...fromCursor, limit: 10 })).toBe(true);
     expect(Coverage.coversWindow(fromCursor, { ...fromCursor, cursor: "p-6" })).toBe(false);
     expect(Coverage.coversWindow(fromCursor, { ...fromCursor, cursor: undefined })).toBe(false);
+  });
+
+  it("a cursor without a limit is a window: after p-50 does not hold the whole collection", () => {
+    const afterCursor = Query.plan(nodes, products({ after: "p-50" })).root;
+    const whole = Query.plan(nodes, products()).root;
+    expect(Coverage.covers(afterCursor, whole)).toBe(false);
+    expect(Coverage.covers(afterCursor, { ...whole, cursor: "p-51" })).toBe(false);
+    expect(
+      Coverage.covers(afterCursor, { ...whole, orderBy: [{ field: "name", direction: "asc" }] })
+    ).toBe(false);
+    // The identical window, with any limit, is held: every row after the cursor synced.
+    expect(Coverage.covers(afterCursor, afterCursor)).toBe(true);
+    expect(Coverage.covers(afterCursor, { ...afterCursor, limit: 12 })).toBe(true);
+    // A narrower predicate over the cursor is strict, like any window.
+    expect(
+      Coverage.covers(afterCursor, { ...afterCursor, where: Predicate.eq("categoryId", "c-audio") })
+    ).toBe(false);
+    // The whole collection covers the cursored read.
+    expect(Coverage.covers(whole, afterCursor)).toBe(true);
   });
 
   it("the order must deep-equal: field, direction and term count", () => {
@@ -153,13 +179,24 @@ describe("rule 2: the window", () => {
 
 describe("rule 3: canonical conjuncts", () => {
   const keys = (predicate: Predicate.Predicate) =>
-    Coverage.canonicalConjuncts(predicate).map(Coverage.structuralKey);
+    Coverage.canonicalConjuncts(predicate).map((conjunct) => conjunct.key);
 
   it("an absent where, True and an empty And canonicalise to the empty set", () => {
     expect(keys(Predicate.always)).toEqual([]);
     expect(keys(Predicate.and())).toEqual([]);
     expect(keys(Query.plan(nodes, products()).root.where)).toEqual([]);
     expect(keys(Predicate.and(Predicate.always, Predicate.and()))).toEqual([]);
+  });
+
+  it("each conjunct carries its member and its key, sorted by key", () => {
+    const a = Predicate.eq("categoryId", "c-audio");
+    const b = Predicate.gt("priceCents", 100);
+    const conjuncts = Coverage.canonicalConjuncts(Predicate.and(b, a));
+    expect(conjuncts.map((conjunct) => conjunct.predicate)).toEqual([a, b]);
+    expect(conjuncts.map((conjunct) => conjunct.key)).toEqual([
+      Coverage.structuralKey(a),
+      Coverage.structuralKey(b),
+    ]);
   });
 
   it("flattens nested And and sorts structurally, so member order is irrelevant", () => {
@@ -257,14 +294,12 @@ describe("rule 3: canonical conjuncts", () => {
       orderBy: [{ field: "id", direction: "asc" }],
       limit: 100,
     });
+    const narrower = Predicate.and(a, Predicate.gt("priceCents", 100));
     expect(Coverage.covers(windowed, { ...windowed, limit: 12 })).toBe(true);
-    expect(
-      Coverage.covers(windowed, {
-        ...windowed,
-        where: Predicate.and(a, Predicate.gt("priceCents", 100)),
-        limit: 12,
-      })
-    ).toBe(false);
+    expect(Coverage.covers(windowed, { ...windowed, where: narrower, limit: 12 })).toBe(false);
+    const cursored = { ...windowed, limit: undefined, cursor: "p-50" };
+    expect(Coverage.covers(cursored, { ...cursored, limit: 12 })).toBe(true);
+    expect(Coverage.covers(cursored, { ...cursored, where: narrower })).toBe(false);
     expect(Coverage.covers({ ...windowed, limit: undefined }, { ...windowed, limit: 12 })).toBe(
       true
     );
@@ -294,32 +329,21 @@ describe("rule 4: includes over the plan's edge selects", () => {
     const wholeEdge = products({ include: { reviews: true } });
     expect(coversRead(wholeEdge, products({ include: { reviews: { first: 50 } } }))).toBe(true);
   });
-
-  it("widenEdges keeps the wider select per edge", () => {
-    expect(
-      Coverage.widenEdges(
-        [{ name: "reviews", first: 2 }],
-        [{ name: "reviews", first: 5 }, { name: "variants" }]
-      )
-    ).toEqual([{ name: "reviews", first: 5 }, { name: "variants" }]);
-    expect(Coverage.widenEdges([{ name: "reviews", first: 2 }], [{ name: "reviews" }])).toEqual([
-      { name: "reviews" },
-    ]);
-    expect(Coverage.widenEdges([{ name: "reviews" }], [{ name: "reviews", first: 2 }])).toEqual([
-      { name: "reviews" },
-    ]);
-  });
 });
 
 describe("covering across a ledger", () => {
-  it("returns the first covering subscription, or undefined", () => {
+  it("returns the first covering subscription in iteration order, or undefined", () => {
     const shell = registration(products({ order: ["id"], first: 100 }));
     const whole = registration(products());
+    const audio = registration(products({ where: { categoryId: "c-audio" } }));
     const page = registration(
       products({ where: { categoryId: "c-audio" }, order: ["id"], first: 12 })
     );
     expect(Coverage.covering([shell], page)).toBeUndefined();
     expect(Coverage.covering([shell, whole], page)).toBe(whole);
+    // Both cover; the earlier registration wins, an exact match notwithstanding.
+    expect(Coverage.covering([whole, audio], audio)).toBe(whole);
+    expect(Coverage.covering([audio, whole], audio)).toBe(audio);
     expect(Coverage.covering([], page)).toBeUndefined();
   });
 });

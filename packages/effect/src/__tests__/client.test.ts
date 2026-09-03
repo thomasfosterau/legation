@@ -254,6 +254,9 @@ const productPage = (categoryId?: string) => ({
 /** The commerce shell's products pin (`shellReads`): windowed, ordered by id. */
 const shellProducts = { collection: "products", order: ["id"], first: 100 };
 
+const rootHashes = (engine: ClientEngine.ClientEngine) =>
+  Effect.map(engine.activeSubscriptions, (subsets) => subsets.map(Subset.hash));
+
 describe("Client.query coverage (ADR-0029: conjunct subsumption with strict windows)", () => {
   it.effect("the shell's windowed subscription does not cover productPage({ categoryId })", () =>
     Effect.scoped(
@@ -277,7 +280,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         expect(rows.map((row) => row.id)).toEqual(["p-1"]);
         expect(yield* Ref.get(reads)).toBe(1);
         // Nothing but the pinned root window was ever registered.
-        expect((yield* engine.activeSubscriptions).map(Subset.hash)).toEqual([
+        expect(yield* rootHashes(engine)).toEqual([
           Subset.hash(Query.plan(nodes, shellProducts).root),
         ]);
       })
@@ -310,47 +313,86 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
           Stream.runForEach(client.observe(whole), () => Effect.void).pipe(Effect.ignore)
         );
         yield* sleepReal(50);
-        expect((yield* engine.activeSubscriptions).map(Subset.hash)).toEqual([
-          Subset.hash(Query.plan(nodes, whole).root),
-        ]);
-        // The pin outlives the observer's release; the observer's does not add a second voice.
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+        // The observer outlives the pin's release; it does not add a second voice.
         yield* client.unsubscribe(whole);
         expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Covered");
       })
     )
   );
 
-  it.effect("an explicit pin declares its include edges; the ledger judges rule 4 by them", () =>
+  it.effect(
+    "a cursor without a limit is a window: after p-50 never covers the whole collection",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeCountingEngine;
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+          yield* client.subscribe({ collection: "products", after: "p-50" });
+          expect((yield* client.coverageOf({ collection: "products" }))._tag).toBe("Uncovered");
+          expect(
+            (yield* client.coverageOf({ collection: "products", after: "p-50", first: 5 }))._tag
+          ).toBe("Covered");
+          expect((yield* client.coverageOf({ collection: "products", after: "p-51" }))._tag).toBe(
+            "Uncovered"
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "an explicit pin registers its root alone: a read with include is not covered (#159)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeCountingEngine;
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+          const pinned = { collection: "products", include: { reviews: { first: 2 } } };
+          yield* client.subscribe(pinned);
+          // Only the root window reached the view, so the ledger records no edges ...
+          const root = Query.plan(nodes, pinned).root;
+          expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+          expect(yield* client.coverageOf({ collection: "products" })).toEqual({
+            _tag: "Covered",
+            by: { root, edges: [] },
+            hash: Subset.hash(root),
+          });
+          // ... and a read including the edge is honestly uncovered: its foreign
+          // windows never synced. #159 registers a pin's edge windows.
+          expect(
+            (yield* client.coverageOf({
+              collection: "products",
+              include: { reviews: { first: 1 } },
+            }))._tag
+          ).toBe("Uncovered");
+          expect(
+            (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
+          ).toBe("Uncovered");
+        })
+      )
+  );
+
+  it.effect("two pins sharing a root are released one at a time", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { engine } = yield* makeCountingEngine;
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
-        const pinned = { collection: "products", include: { reviews: { first: 2 } } };
-        yield* client.subscribe(pinned);
+        const plain = { collection: "products" };
+        const withInclude: Query.Read = { collection: "products", include: { reviews: true } };
+        const root = Query.plan(nodes, plain).root;
+        yield* client.subscribe(plain);
+        yield* client.subscribe(withInclude);
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
 
-        const root = Query.plan(nodes, pinned).root;
-        expect(
-          yield* client.coverageOf({ collection: "products", include: { reviews: { first: 1 } } })
-        ).toEqual({
-          _tag: "Covered",
-          by: { root, edges: [{ name: "reviews", first: 2 }] },
-          hash: Subset.hash(root),
-        });
-        expect(
-          (yield* client.coverageOf({ collection: "products", include: { reviews: { first: 3 } } }))
-            ._tag
-        ).toBe("Uncovered");
-        expect(
-          (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
-        ).toBe("Uncovered");
+        // Releasing one pin keeps the other's coverage and its window in the view.
+        yield* client.unsubscribe(plain);
+        expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Covered");
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
 
-        // A second pin of the same root widens the held selects; releasing the pin drops them.
-        yield* client.subscribe({ collection: "products", include: { reviews: true } });
-        expect(
-          (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
-        ).toBe("Covered");
-        yield* client.unsubscribe(pinned);
+        // Releasing the last pin drops both.
+        yield* client.unsubscribe(withInclude);
         expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Uncovered");
+        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
       })
     )
   );

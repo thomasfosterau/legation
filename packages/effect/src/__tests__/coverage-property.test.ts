@@ -7,7 +7,8 @@
  * evaluating it over every row. The converse is not claimed: a pair the
  * syntactic rule rejects may still agree (a false negative costs a round
  * trip, never wrong data), and the strict window is pinned: a windowed
- * subscription never covers a strictly narrower predicate.
+ * subscription (a limit, a cursor, or both) never covers a strictly
+ * narrower predicate.
  *
  * Seeded through Effect's `Random.withSeed`; `LEGATION_CORPUS_SEED`
  * overrides the seed to reproduce a failure.
@@ -43,7 +44,7 @@ interface Window {
 const ids = (rows: ReadonlyArray<Subset.Row>): ReadonlyArray<string> => rows.map((row) => row.id);
 
 const conjunctKeys = (subset: Subset.Subset): ReadonlyArray<string> =>
-  Coverage.canonicalConjuncts(subset.where).map(Coverage.structuralKey);
+  Coverage.canonicalConjuncts(subset.where).map((conjunct) => conjunct.key);
 
 /** Whether `requested`'s conjunct set strictly contains `subscribed`'s. */
 const strictlyNarrower = (pair: Pair): boolean => {
@@ -62,14 +63,22 @@ const exactLocally = (rows: ReadonlyArray<FilterCorpus.CorpusRow>, pair: Pair): 
 
 // ─── Generators ──────────────────────────────────────────────────────────────
 
-/** A window: 1–2 order terms, a limit of 1–24, sometimes a cursor at a real row. */
+/**
+ * A window: 1–2 order terms, a limit of 1–24 three times in four, and a
+ * cursor at a real row three times in ten — so limit-only, cursor-only,
+ * both, and (rarely) an ordered but unwindowed subset all occur.
+ */
 const generateWindow = (rows: ReadonlyArray<FilterCorpus.CorpusRow>): Effect.Effect<Window> =>
   Effect.gen(function* () {
     const orderBy = yield* FilterCorpus.generateOrderBy();
-    const limit = 1 + (yield* int(24));
+    const limit = (yield* chance(0.75)) ? 1 + (yield* int(24)) : undefined;
     const withCursor = yield* chance(0.3);
     const cursor = withCursor ? (yield* Random.choice(rows).pipe(Effect.orDie)).id : undefined;
-    return { orderBy, limit, ...(cursor === undefined ? {} : { cursor }) };
+    return {
+      orderBy,
+      ...(limit === undefined ? {} : { limit }),
+      ...(cursor === undefined ? {} : { cursor }),
+    };
   });
 
 /**
@@ -84,9 +93,7 @@ const requestedWindowFor = (
     const roll = yield* int(4);
     if (roll === 0) return yield* generateWindow(rows);
     if (roll === 1) return { orderBy: [] };
-    if (roll === 2 && subscribed.limit !== undefined) {
-      return { ...subscribed, limit: 1 + (yield* int(subscribed.limit)) };
-    }
+    if (roll === 2) return { ...subscribed, limit: 1 + (yield* int(subscribed.limit ?? 24)) };
     return subscribed;
   });
 
@@ -164,9 +171,35 @@ describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
     expect(uncovered.filter((pair) => exactLocally(rows, pair)).length).toBeGreaterThan(0);
   });
 
+  it("the generators produce cursor-only, limit-only and cursored-and-limited subscriptions", () => {
+    const cursorOnly = pairs.filter(
+      (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit === undefined
+    );
+    const limitOnly = pairs.filter(
+      (pair) => pair.subscribed.cursor === undefined && pair.subscribed.limit !== undefined
+    );
+    const both = pairs.filter(
+      (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit !== undefined
+    );
+    expect(cursorOnly.length).toBeGreaterThan(0);
+    expect(limitOnly.length).toBeGreaterThan(0);
+    expect(both.length).toBeGreaterThan(0);
+    // A cursor-only subscription covers some request (its own window) and
+    // never an unwindowed one: it does not hold the rows before its cursor.
+    expect(cursorOnly.some((pair) => Coverage.covers(pair.subscribed, pair.requested))).toBe(true);
+    expect(
+      cursorOnly.filter(
+        (pair) =>
+          pair.requested.cursor === undefined && Coverage.covers(pair.subscribed, pair.requested)
+      )
+    ).toEqual([]);
+  });
+
   it("the verdict is invariant under conjunct order", () => {
     for (const pair of pairs) {
-      const members = Coverage.canonicalConjuncts(pair.requested.where);
+      const members = Coverage.canonicalConjuncts(pair.requested.where).map(
+        (conjunct) => conjunct.predicate
+      );
       const reversed = { ...pair.requested, where: Predicate.and(...[...members].reverse()) };
       expect(Coverage.covers(pair.subscribed, reversed)).toBe(
         Coverage.covers(pair.subscribed, pair.requested)
@@ -176,7 +209,7 @@ describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
 
   it("a windowed subscription never covers a strictly narrower predicate", () => {
     const narrower = pairs.filter(
-      (pair) => pair.subscribed.limit !== undefined && strictlyNarrower(pair)
+      (pair) => Coverage.isWindowed(pair.subscribed) && strictlyNarrower(pair)
     );
     expect(narrower.length).toBeGreaterThan(0);
     expect(narrower.filter((pair) => Coverage.covers(pair.subscribed, pair.requested))).toEqual([]);

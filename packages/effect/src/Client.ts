@@ -107,38 +107,36 @@ export interface Client {
  */
 export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView): Client => {
   /**
-   * One ledger entry: who holds the window, plus what coverage compares a
-   * read against (ADR-0029 section 3) — the root window and the edge
-   * selects the explicit pin declared. Observers register the root alone;
-   * an explicit pin's `include` declares its edges (their registration is
-   * #159's change), and a second pin of the same root widens them.
+   * One ledger entry: who holds the window (observers and explicit pins,
+   * each counted so release is symmetric with acquire), plus what coverage
+   * compares a read against (ADR-0029 section 3). Today that is the root
+   * window alone: an explicit pin registers only its root with the view,
+   * so its `include` edges are NOT recorded as covering — a read including
+   * them would otherwise be answered from a replica that never synced the
+   * foreign windows. #159 registers a pin's edge windows and records them
+   * here; until then a read with `include` is never covered.
    */
   interface Interest extends Coverage.Registration {
     readonly observers: number;
-    readonly explicit: boolean;
+    readonly pins: number;
   }
   // One ledger per Client; windows keyed by subset hash.
   const ledger = Ref.makeUnsafe(new Map<string, Interest>());
 
-  const acquire = (registration: Coverage.Registration, kind: "observer" | "explicit") =>
+  const acquire = (root: Subset.Subset, kind: "observer" | "explicit") =>
     Ref.modify(ledger, (map) => {
-      const key = Subset.hash(registration.root);
+      const key = Subset.hash(root);
       const next = new Map(map);
       const current = next.get(key);
       next.set(key, {
-        root: registration.root,
-        edges:
-          kind === "explicit"
-            ? Coverage.widenEdges(current?.edges ?? [], registration.edges)
-            : (current?.edges ?? []),
+        root,
+        edges: [],
         observers: (current?.observers ?? 0) + (kind === "observer" ? 1 : 0),
-        explicit: (current?.explicit ?? false) || kind === "explicit",
+        pins: (current?.pins ?? 0) + (kind === "explicit" ? 1 : 0),
       });
       return [current === undefined, next] as const;
     }).pipe(
-      Effect.flatMap((first) =>
-        first ? view.subscribe(registration.root).pipe(Effect.orDie) : Effect.void
-      )
+      Effect.flatMap((first) => (first ? view.subscribe(root).pipe(Effect.orDie) : Effect.void))
     );
 
   const release = (subset: Subset.Subset, kind: "observer" | "explicit") =>
@@ -147,14 +145,12 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       const current = map.get(key);
       if (current === undefined) return [false, map] as const;
       const updated: Interest = {
-        root: current.root,
-        // Only explicit pins declare edges: releasing the pin drops them.
-        edges: kind === "explicit" ? [] : current.edges,
+        ...current,
         observers: Math.max(0, current.observers - (kind === "observer" ? 1 : 0)),
-        explicit: kind === "explicit" ? false : current.explicit,
+        pins: Math.max(0, current.pins - (kind === "explicit" ? 1 : 0)),
       };
       const next = new Map(map);
-      if (updated.observers === 0 && !updated.explicit) {
+      if (updated.observers === 0 && updated.pins === 0) {
         next.delete(key);
         return [true, next] as const;
       }
@@ -164,21 +160,13 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       Effect.flatMap((last) => (last ? view.unsubscribe(subset).pipe(Effect.ignore) : Effect.void))
     );
 
-  // The covering subscription for a read: an exact hash hit is the fast
-  // path (its edges still have to cover), else a scan under `Coverage`.
-  const coveringOf = (
-    interests: ReadonlyMap<string, Interest>,
-    requested: Coverage.Registration
-  ): Interest | undefined => {
-    const exact = interests.get(Subset.hash(requested.root));
-    if (exact !== undefined && Coverage.coversEdges(exact.edges, requested.edges)) return exact;
-    return Coverage.covering(interests.values(), requested);
-  };
-
+  // One rule, one scan: the first ledger entry (in registration order)
+  // that covers the read, under `Coverage`. A subset covers itself, so an
+  // exact hash hit needs no separate path.
   const verdictOf = (requested: Coverage.Registration): Effect.Effect<Coverage.Verdict> =>
     Ref.get(ledger).pipe(
       Effect.map((interests): Coverage.Verdict => {
-        const by = coveringOf(interests, requested);
+        const by = Coverage.covering(interests.values(), requested);
         return by === undefined
           ? { _tag: "Uncovered" }
           : { _tag: "Covered", by: { root: by.root, edges: by.edges }, hash: Subset.hash(by.root) };
@@ -217,9 +205,8 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
   const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
     const compiled = Query.plan(nodes, read);
     if (compiled.edges.length === 0) {
-      const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
-        Effect.acquireRelease(acquire(registration, "observer"), () =>
+        Effect.acquireRelease(acquire(compiled.root, "observer"), () =>
           release(compiled.root, "observer")
         ).pipe(
           Effect.as(
@@ -248,7 +235,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     nodes,
     query: queryOnce,
     observe,
-    subscribe: (read) => acquire(Coverage.ofPlan(Query.plan(nodes, read)), "explicit"),
+    subscribe: (read) => acquire(Query.plan(nodes, read).root, "explicit"),
     unsubscribe: (read) => release(Query.plan(nodes, read).root, "explicit"),
     coverageOf: (read) => verdictOf(Coverage.ofPlan(Query.plan(nodes, read))),
     mutate: (mutation, args) => view.mutate(mutation, args),
