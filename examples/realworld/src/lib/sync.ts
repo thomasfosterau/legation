@@ -164,13 +164,17 @@ const backendHandlers = MemoryBackend.validatedHandlers([
 ]);
 
 /** Reads are public: every collection is allow-all. */
-const authPolicy = Authorization.policy({
-  users: Authorization.allowAll,
-  articles: Authorization.allowAll,
-  comments: Authorization.allowAll,
-  favorites: Authorization.allowAll,
-  follows: Authorization.allowAll,
-});
+const authPolicy = Authorization.policy(
+  {
+    users: Authorization.allowAll,
+    articles: Authorization.allowAll,
+    comments: Authorization.allowAll,
+    favorites: Authorization.allowAll,
+    follows: Authorization.allowAll,
+  },
+  // The nodes' filterable sets bound what a client may filter or sort by (#154).
+  { collections: nodes.collections }
+);
 
 // ─── Seed data ───────────────────────────────────────────────────────────────
 

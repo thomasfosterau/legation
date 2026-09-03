@@ -7,7 +7,8 @@
  * foreign-key fields its `one` edges declare), the {@link Collection} the
  * engine materializes, the joins and sync windows its edges imply, and the
  * fan-out **derivable set** (ADR-0023: `one`-edge keys + declared
- * `hintKeys`).
+ * `hintKeys`), and the **filterable set** (ADR-0028, #154: the fields a
+ * client may filter or sort by, with their operators and literal kinds).
  *
  * Ids are branded per node type, so a `products` id cannot be passed where
  * a `categories` id is expected; `one`-edge fields carry the **target**
@@ -24,6 +25,7 @@ import { Schema } from "effect";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
+import * as FilterPolicy from "./FilterPolicy.js";
 import * as Subset from "./Subset.js";
 
 /** The branded id schema for a node type: `string & Brand<"<type>/id">`. */
@@ -39,6 +41,12 @@ type ViaFields<Edges extends Record<string, Edge.Edge>> = {
     ? Via
     : never]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
 };
+
+/** The field names of a node's row: `id`, its attributes, its `one`-edge keys. */
+export type FieldName<
+  Fields extends Schema.Struct.Fields,
+  Edges extends Record<string, Edge.Edge>,
+> = "id" | (keyof Fields & string) | (keyof ViaFields<Edges> & string);
 
 /** A node definition. */
 export interface Node<
@@ -61,6 +69,17 @@ export interface Node<
    * {@link Collection.Collection.indexes}.
    */
   readonly indexes: ReadonlyArray<string>;
+  /**
+   * The **filterable set** (ADR-0028 rule d, #154): every field a client may
+   * filter by, with its operators and literal kind. `id` and every
+   * `one`-edge `via` field are filterable by `eq` / `in` (kind `text`) by
+   * default; everything else is declared via `make`'s `filterable` option.
+   * Carried to the derived {@link Collection} and enforced by
+   * `Authorization.authorize` before evaluation.
+   */
+  readonly filterable: Readonly<Record<string, FilterPolicy.FilterableField>>;
+  /** The fields a client may order by (#154); always includes `id` (ADR-0026's tie-break). */
+  readonly sortable: ReadonlyArray<string>;
   /** The branded id schema for this node type. */
   readonly Id: Id<Type>;
   /** The row schema: `{ id } & attributes & one-edge key fields`. */
@@ -85,6 +104,18 @@ export const make = <
     readonly edges?: Edges;
     readonly hintKeys?: ReadonlyArray<string>;
     readonly indexes?: ReadonlyArray<string>;
+    /**
+     * The fields a client may filter by, beyond the `id` / `one`-edge key
+     * defaults: the operators alone (the literal kind is derived from the
+     * attribute's schema — `FilterPolicy.kindOf`), or `{ operators, kind }`
+     * where derivation cannot tell (an `instant` stored as text). A key
+     * field may be listed to widen its default operators.
+     */
+    readonly filterable?: {
+      readonly [K in FieldName<Fields, Edges>]?: FilterPolicy.FilterableInput;
+    };
+    /** The fields a client may order by, beyond `id`. */
+    readonly sortable?: ReadonlyArray<FieldName<Fields, Edges>>;
   }
 ): Node<Type, Fields, Edges> => {
   const edges = options.edges ?? ({} as Edges);
@@ -93,6 +124,13 @@ export const make = <
   for (const edge of Object.values(edges)) {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
   }
+  const declaration = FilterPolicy.resolve({
+    collection: type,
+    attributes: options.attributes,
+    keyFields: ["id", ...Object.keys(viaFields)],
+    filterable: options.filterable as Readonly<Record<string, FilterPolicy.FilterableInput>>,
+    sortable: options.sortable,
+  });
   const row = Schema.Struct({
     id,
     ...options.attributes,
@@ -104,6 +142,8 @@ export const make = <
     edges,
     hintKeys: options.hintKeys ?? [],
     indexes: options.indexes ?? [],
+    filterable: declaration.filterable,
+    sortable: declaration.sortable,
     Id: id,
     row,
   };
@@ -187,6 +227,10 @@ const toCollection = (
     id: (value) => (value as { id: string }).id,
     relationships,
     ...(node.indexes.length > 0 ? { indexes: node.indexes } : {}),
+    // The filterable set travels like `indexes` (#154): the server enforces
+    // it from the collection alone.
+    filterable: node.filterable,
+    sortable: node.sortable,
   });
 };
 

@@ -54,6 +54,7 @@ export * as Server from "./Server.js";
 export * as Backend from "./Backend.js";
 export * as MemoryBackend from "./MemoryBackend.js";
 export * as Authorization from "./Authorization.js";
+export * as FilterPolicy from "./FilterPolicy.js";
 export * as Predicate from "./Predicate.js";
 
 // ─── Errors ──────────────────────────────────────────────────────────────────

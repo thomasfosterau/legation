@@ -39,7 +39,7 @@
  */
 
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Edge, Node } from "@legation/effect";
+import { Edge, type FilterPolicy, Node } from "@legation/effect";
 import { Data } from "effect";
 
 /** A definition-time mismatch between a resource graph and the node model. */
@@ -78,6 +78,18 @@ export interface FromResourceOptions {
   readonly order?: Record<string, ReadonlyArray<string>>;
   /** Passed through to the node (fine fan-out topics — ADR-0023). */
   readonly hintKeys?: ReadonlyArray<string>;
+  /**
+   * The filterable set (ADR-0028, #154), passed through to `Node.make`:
+   * the attributes a client may filter by, with their operators (and an
+   * explicit literal kind where the schema cannot tell). `id` and every
+   * bridged one-edge's key field are filterable by `eq` / `in` regardless.
+   * effect-jsonapi 0.12 carries no per-attribute `filterable` annotation;
+   * once thomasfosterau/effect-jsonapi#84 lands, the bridge reads it from
+   * the resource and this option becomes an override.
+   */
+  readonly filterable?: Record<string, FilterPolicy.FilterableInput>;
+  /** The sortable attributes (#154), passed through to `Node.make`; `id` is always sortable. */
+  readonly sortable?: ReadonlyArray<string>;
 }
 
 const fail = (resource: string, relationship: string, message: string): never => {
@@ -163,10 +175,15 @@ const bridge = (
   for (const edge of Object.values(edges)) {
     if (edge.kind === "one") delete attributes[edge.via];
   }
+  // Filterable / sortable come from the bridge options for now; the
+  // per-attribute annotation (thomasfosterau/effect-jsonapi#84) will be
+  // read off `resource.fields.attributes` here when it exists.
   return Node.make(resource.type, {
     attributes,
     edges,
     ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
+    ...(options.filterable === undefined ? {} : { filterable: options.filterable }),
+    ...(options.sortable === undefined ? {} : { sortable: options.sortable }),
   });
 };
 

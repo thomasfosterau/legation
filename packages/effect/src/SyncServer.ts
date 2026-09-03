@@ -315,8 +315,10 @@ export const makeWithIntrospectionWith = (
           })
         : resolverOption.value.resolve(named.name, named.args, context);
 
-    // Authorize client-authored subsets and server-resolved named queries
-    // identically: AND each with its collection's mandatory filter.
+    // Authorize client-authored subsets and server-resolved named queries:
+    // AND each with its collection's mandatory filter. A client subset is
+    // first checked against the filterable set (#154); a named query's
+    // subset is the resolver's — server-authored — so it is exempt.
     const authorizeAll = (
       context: SyncContext,
       request: PullRequest
@@ -328,7 +330,7 @@ export const makeWithIntrospectionWith = (
         }
         for (const named of request.namedSubscriptions ?? []) {
           authorized.push(
-            yield* authorize(authPolicy, context, yield* resolveNamed(context, named))
+            yield* authorize(authPolicy, context, yield* resolveNamed(context, named), "server")
           );
         }
         return authorized;

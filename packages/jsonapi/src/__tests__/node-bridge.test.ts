@@ -268,3 +268,22 @@ describe("a bridged registry over a real engine", () => {
     )
   );
 });
+
+describe("NodeBridge filterable set (#154)", () => {
+  it("passes filterable / sortable through to the node, keeping the key defaults", () => {
+    const node = NodeBridge.fromResource(Review, {
+      edges: { product: { target: "products", via: "productId" } },
+      filterable: { body: ["eq"], createdAt: { operators: ["gt", "lt"], kind: "instant" } },
+      sortable: ["createdAt"],
+    });
+    expect(node.filterable).toEqual({
+      id: { kind: "text", operators: ["eq", "in"] },
+      productId: { kind: "text", operators: ["eq", "in"] },
+      body: { kind: "text", operators: ["eq"] },
+      createdAt: { kind: "instant", operators: ["gt", "lt"] },
+    });
+    expect(node.sortable).toEqual(["id", "createdAt"]);
+    // Nothing declared: only the key fields are reachable.
+    expect(Object.keys(NodeBridge.fromResource(Category).filterable)).toEqual(["id"]);
+  });
+});
