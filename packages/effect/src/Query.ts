@@ -101,9 +101,10 @@ const orderBy = Subset.parseOrder;
 /**
  * A plan's edge selections for the relational read: paginated edges carry
  * their window (`first`), so each parent registers its own windowed subset
- * (ADR-0024); other kinds select unwindowed.
+ * (ADR-0024); other kinds select unwindowed. The same selects are what a
+ * subscription's coverage of an `include` is judged by (ADR-0029 rule 4).
  */
-const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =>
+export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =>
   compiled.edges.map((edge) => ({
     name: edge.edge,
     ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),

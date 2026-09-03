@@ -17,6 +17,7 @@ import {
   MemoryBackend,
   Mutator,
   Node,
+  Query,
   Transport,
 } from "../index.js";
 import {
@@ -26,11 +27,12 @@ import {
   EngineHost,
   InvalidationBus,
   MirrorChannel,
+  Subset,
   SyncServer,
 } from "../internal.js";
 
 const Product = Node.make("products", {
-  attributes: { name: Schema.String },
+  attributes: { name: Schema.String, categoryId: Schema.String },
   edges: { reviews: Edge.paginated("reviews", { inverse: "product", order: ["-createdAt"] }) },
 });
 const Review = Node.make("reviews", {
@@ -214,6 +216,183 @@ describe("Client over an owned engine", () => {
           store.pendingMutations.pipe(Effect.orDie),
           (pending) => pending.length === 0
         );
+      })
+    )
+  );
+});
+
+/** An engine whose transport counts the fallthrough reads it carries. */
+const makeCountingEngine = Effect.gen(function* () {
+  const handler = yield* makeHandler;
+  const store = yield* ClientStore.makeMemory;
+  const transport = yield* Transport.makeInMemory(handler, "group-coverage");
+  const reads = yield* Ref.make(0);
+  const counting: Transport.ClientTransport = {
+    ...transport,
+    read: (request) =>
+      Ref.update(reads, (count) => count + 1).pipe(Effect.flatMap(() => transport.read!(request))),
+  };
+  const engine = yield* ClientEngine.make({
+    clientId: "client-coverage",
+    clientGroupId: "group-coverage",
+    mutators: mutations,
+  }).pipe(
+    Effect.provideService(ClientStore.ClientStore, store),
+    Effect.provideService(Transport.ClientTransport, counting)
+  );
+  return { engine, reads };
+});
+
+/** The commerce example's `productPage` read (`examples/commerce/src/lib/domain.ts`). */
+const productPage = (categoryId?: string) => ({
+  collection: "products",
+  ...(categoryId === undefined ? {} : { where: { categoryId } }),
+  order: ["id"],
+  first: 12,
+});
+
+/** The commerce shell's products pin (`shellReads`): windowed, ordered by id. */
+const shellProducts = { collection: "products", order: ["id"], first: 100 };
+
+const rootHashes = (engine: ClientEngine.ClientEngine) =>
+  Effect.map(engine.activeSubscriptions, (subsets) => subsets.map(Subset.hash));
+
+describe("Client.query coverage (ADR-0029: conjunct subsumption with strict windows)", () => {
+  it.effect("the shell's windowed subscription does not cover productPage({ categoryId })", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine, reads } = yield* makeCountingEngine;
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-audio" });
+        yield* client.mutate("product/set", { id: "p-2", name: "Lamp", categoryId: "c-light" });
+        yield* engine.push.pipe(Effect.orDie);
+
+        yield* client.subscribe(shellProducts);
+        // Row 1 of the windowed table: a prefix of the same window — local.
+        const whole = yield* client.coverageOf(productPage());
+        expect(whole._tag).toBe("Covered");
+        yield* client.query(productPage());
+        expect(yield* Ref.get(reads)).toBe(0);
+
+        // Row 2: a narrower predicate over the window — strict, falls through.
+        expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Uncovered");
+        const rows = yield* client.query(productPage("c-audio"));
+        expect(rows.map((row) => row.id)).toEqual(["p-1"]);
+        expect(yield* Ref.get(reads)).toBe(1);
+        // Nothing but the pinned root window was ever registered.
+        expect(yield* rootHashes(engine)).toEqual([
+          Subset.hash(Query.plan(nodes, shellProducts).root),
+        ]);
+      })
+    )
+  );
+
+  it.effect("an unwindowed products subscription covers productPage({ categoryId }) locally", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine, reads } = yield* makeCountingEngine;
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+        const whole = { collection: "products" };
+        yield* client.subscribe(whole);
+        // Optimistic rows only: a fallthrough would return the server's (none).
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-audio" });
+        yield* client.mutate("product/set", { id: "p-2", name: "Lamp", categoryId: "c-light" });
+
+        const root = Query.plan(nodes, whole).root;
+        expect(yield* client.coverageOf(productPage("c-audio"))).toEqual({
+          _tag: "Covered",
+          by: { root, edges: [] },
+          hash: Subset.hash(root),
+        });
+        const rows = yield* client.query(productPage("c-audio"));
+        expect(rows.map((row) => row.id)).toEqual(["p-1"]);
+        expect(yield* Ref.get(reads)).toBe(0);
+
+        // Observing still registers exactly as before: the root window, once.
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe(whole), () => Effect.void).pipe(Effect.ignore)
+        );
+        yield* sleepReal(50);
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+        // The observer outlives the pin's release; it does not add a second voice.
+        yield* client.unsubscribe(whole);
+        expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Covered");
+      })
+    )
+  );
+
+  it.effect(
+    "a cursor without a limit is a window: after p-50 never covers the whole collection",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeCountingEngine;
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+          yield* client.subscribe({ collection: "products", after: "p-50" });
+          expect((yield* client.coverageOf({ collection: "products" }))._tag).toBe("Uncovered");
+          expect(
+            (yield* client.coverageOf({ collection: "products", after: "p-50", first: 5 }))._tag
+          ).toBe("Covered");
+          expect((yield* client.coverageOf({ collection: "products", after: "p-51" }))._tag).toBe(
+            "Uncovered"
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "an explicit pin registers its root alone: a read with include is not covered (#159)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeCountingEngine;
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+          const pinned = { collection: "products", include: { reviews: { first: 2 } } };
+          yield* client.subscribe(pinned);
+          // Only the root window reached the view, so the ledger records no edges ...
+          const root = Query.plan(nodes, pinned).root;
+          expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+          expect(yield* client.coverageOf({ collection: "products" })).toEqual({
+            _tag: "Covered",
+            by: { root, edges: [] },
+            hash: Subset.hash(root),
+          });
+          // ... and a read including the edge is honestly uncovered: its foreign
+          // windows never synced. #159 registers a pin's edge windows.
+          expect(
+            (yield* client.coverageOf({
+              collection: "products",
+              include: { reviews: { first: 1 } },
+            }))._tag
+          ).toBe("Uncovered");
+          expect(
+            (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
+          ).toBe("Uncovered");
+        })
+      )
+  );
+
+  it.effect("two pins sharing a root are released one at a time", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeCountingEngine;
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+        const plain = { collection: "products" };
+        const withInclude: Query.Read = { collection: "products", include: { reviews: true } };
+        const root = Query.plan(nodes, plain).root;
+        yield* client.subscribe(plain);
+        yield* client.subscribe(withInclude);
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+
+        // Releasing one pin keeps the other's coverage and its window in the view.
+        yield* client.unsubscribe(plain);
+        expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Covered");
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+
+        // Releasing the last pin drops both.
+        yield* client.unsubscribe(withInclude);
+        expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Uncovered");
+        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
       })
     )
   );
