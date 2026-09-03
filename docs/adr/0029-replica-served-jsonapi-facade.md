@@ -253,10 +253,11 @@ same headers, same body. The façade adds nothing and rewrites nothing, so
 the server sees the request the app wrote. Whatever the app composes after
 the façade (the HTTP cache, then `fetch`) handles it.
 
-**Offline** means the forwarded request failed at the transport: the
-network `fetch` rejected, not a status code and not `navigator.onLine`. An
-uncovered request that fails that way returns a spec-compliant JSON:API
-error document with status **503**:
+**Offline** means the network is unreachable: `navigator.onLine` is
+`false`, or the forwarded `fetch` rejected at the transport. A status code
+from the server is never offline. An uncovered request that meets either
+condition returns a spec-compliant JSON:API error document with status
+**503**:
 
 ```json
 {
