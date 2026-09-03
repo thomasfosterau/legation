@@ -39,9 +39,54 @@ server (calls degrade WS→HTTP first, then queue); a no-JS browser.
 
 `bun run test` (from this directory) runs the app's server-side suites in
 the workspace runner: the ADR-0009 contract verification of the SQLite
-executor, and the public/private auth split (anonymous catalog sync, empty
+executor, the public/private auth split (anonymous catalog sync, empty
 private allow-sets, forged-identity rejection, the `order/place` round trip
-with stock decrement and cart clear).
+with stock decrement and cart clear), and the atomic operations endpoint
+(all-or-nothing batches, `lid` resolution, identity, and a `JsonApiBackend`
+pushing through it as one request per batch).
+
+## Atomic operations
+
+Besides the per-resource endpoints, the JSON:API serves the
+[atomic operations extension](https://jsonapi.org/ext/atomic/) at
+`POST /jsonapi/operations` (`Endpoint.operations` over `reviews`,
+`cartItems` and `orders`). One request carries an ordered batch of `add` /
+`update` / `remove` operations; the batch is applied inside one SQL
+transaction under the same authoritative rules as the sync mutators and the
+REST write handlers — identity from the header (never the payload), a
+review's `userId` is the caller, a cart add checks the variant's stock, updates
+and removes only touch the caller's own rows, an order is recomputed from the
+authoritative cart. Relationship operations are not supported.
+
+- **Media type.** Requests and responses carry the extension parameter:
+  `Content-Type: application/vnd.api+json; ext="https://jsonapi.org/ext/atomic"`
+  (and the same `Accept`). The content-negotiation middleware is provided once
+  with the extension declared (`Middleware.layerWith`), which still accepts a
+  bare `application/vnd.api+json` on the ordinary endpoints.
+- **Identity.** The same `x-commerce-user` header contract as every other
+  user-scoped endpoint — set by the SvelteKit process after it resolves the
+  session.
+- **Ids and lids.** effect-jsonapi 0.12's typed `add` operation has no `id`
+  member, so a client-generated id is recovered from the raw request document
+  (as `@legation/jsonapi`'s atomic push always sends one). An `add` without an
+  id gets a server id; give it a `lid` and later operations in the same batch
+  can reference it (`{ "op": "update", "data": { "type": "reviews", "lid": "…" } }`).
+- **Rejection contract.** The first failing operation aborts the transaction —
+  nothing from earlier operations persists — and the response is a single
+  JSON:API error document whose one error carries
+  `source.pointer = /atomic:operations/<index>` of the failing operation:
+  `401` with no identity, `404` for a missing (or someone else's) row, `409`
+  for a client id that names another user's row, `422` for a business rule
+  (insufficient stock, rating out of range, unsupported operation). A
+  statement failure is a `500`, which a pushing client treats as transient.
+- **Success.** A `200` `atomic:results` document with one entry per operation
+  (the resource for `add` / `update`, empty for `remove`), and every touched
+  collection is `broadcast` once so live sync clients are poked.
+
+`@legation/jsonapi`'s `JsonApiSync.inspect` detects the endpoint from the api,
+so a `JsonApiBackend` over this server pushes each journal batch as one
+all-or-nothing request, drops a pointer-named rejection as a permanent
+rejection of that mutation, and resends the rest.
 
 ## Deliberate next steps
 
