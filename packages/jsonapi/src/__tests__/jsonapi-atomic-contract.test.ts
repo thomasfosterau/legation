@@ -173,6 +173,77 @@ const evalRowsLive = (store: Store) =>
  * rather than answering 409, so the contract's `put` (an upsert) can be an
  * `add`.
  */
+type Entry = { readonly data?: AnyResource };
+type BatchOperation = Atomic.Operation<typeof Row | typeof EvalRow>["Type"];
+
+/** `add`: honour the client id recovered from the raw document; apply the two server rules. */
+const applyAdd = (
+  staged: Store,
+  index: number,
+  operation: Extract<BatchOperation, { readonly op: "add" }>,
+  id: string | undefined
+): Effect.Effect<Entry, Rejection> => {
+  if (id === undefined) return Effect.fail(rejection(index, "add without a client-generated id"));
+  const row: Stored = {
+    type: operation.data.type,
+    id,
+    attributes: operation.data.attributes as Record<string, unknown>,
+  };
+  if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
+  if (row.attributes.poison === true)
+    return Effect.fail(rejection(index, "poison rows are refused"));
+  tableOf(staged, row.type).set(id, row);
+  return Effect.succeed({ data: resourceOf(row) });
+};
+
+/** `update`: merge attributes over an existing row. */
+const applyUpdate = (
+  staged: Store,
+  index: number,
+  operation: Extract<BatchOperation, { readonly op: "update" }>
+): Effect.Effect<Entry, Rejection> => {
+  const id = operation.data.id;
+  const current = id === undefined ? undefined : tableOf(staged, operation.data.type).get(id);
+  if (id === undefined || current === undefined) {
+    return Effect.fail(rejection(index, "no such row to update"));
+  }
+  const row: Stored = {
+    ...current,
+    attributes: { ...current.attributes, ...operation.data.attributes },
+  };
+  tableOf(staged, row.type).set(id, row);
+  return Effect.succeed({ data: resourceOf(row) });
+};
+
+/** `remove`: by id only. */
+const applyRemove = (
+  staged: Store,
+  index: number,
+  operation: Extract<BatchOperation, { readonly op: "remove" }>
+): Effect.Effect<Entry, Rejection> => {
+  if (!("id" in operation.ref)) {
+    return Effect.fail(rejection(index, "remove by lid is unsupported"));
+  }
+  tableOf(staged, operation.ref.type).delete(operation.ref.id);
+  return Effect.succeed({});
+};
+
+const applyOperation = (
+  staged: Store,
+  index: number,
+  operation: BatchOperation,
+  clientId: string | undefined
+): Effect.Effect<Entry, Rejection> => {
+  switch (operation.op) {
+    case "add":
+      return applyAdd(staged, index, operation, clientId);
+    case "update":
+      return applyUpdate(staged, index, operation);
+    case "remove":
+      return applyRemove(staged, index, operation);
+  }
+};
+
 const operationsLive = (store: Store) =>
   HttpApiBuilder.group(api, "operations", (handlers) =>
     handlers.handle("operations", ({ payload, request }) =>
@@ -182,51 +253,11 @@ const operationsLive = (store: Store) =>
           readonly "atomic:operations": ReadonlyArray<{ readonly data?: { readonly id?: string } }>;
         };
         const staged: Store = new Map([...store].map(([type, rows]) => [type, new Map(rows)]));
-        const entries: Array<{ readonly data?: AnyResource }> = [];
-
+        const entries: Array<Entry> = [];
         for (const [index, operation] of payload["atomic:operations"].entries()) {
-          switch (operation.op) {
-            case "add": {
-              const id = raw["atomic:operations"][index]?.data?.id;
-              if (id === undefined)
-                return yield* Effect.fail(rejection(index, "add without a client-generated id"));
-              const row: Stored = {
-                type: operation.data.type,
-                id,
-                attributes: operation.data.attributes as Record<string, unknown>,
-              };
-              if (row.attributes.crash === true)
-                return yield* Effect.die(new Error("the server fell over"));
-              if (row.attributes.poison === true)
-                return yield* Effect.fail(rejection(index, "poison rows are refused"));
-              tableOf(staged, row.type).set(id, row);
-              entries.push({ data: resourceOf(row) });
-              break;
-            }
-            case "update": {
-              const id = operation.data.id;
-              const current =
-                id === undefined ? undefined : tableOf(staged, operation.data.type).get(id);
-              if (id === undefined || current === undefined)
-                return yield* Effect.fail(rejection(index, "no such row to update"));
-              const row: Stored = {
-                ...current,
-                attributes: { ...current.attributes, ...operation.data.attributes },
-              };
-              tableOf(staged, row.type).set(id, row);
-              entries.push({ data: resourceOf(row) });
-              break;
-            }
-            case "remove": {
-              if (!("id" in operation.ref))
-                return yield* Effect.fail(rejection(index, "remove by lid is unsupported"));
-              tableOf(staged, operation.ref.type).delete(operation.ref.id);
-              entries.push({});
-              break;
-            }
-          }
+          const clientId = raw["atomic:operations"][index]?.data?.id;
+          entries.push(yield* applyOperation(staged, index, operation, clientId));
         }
-
         // Commit.
         store.clear();
         for (const [type, rows] of staged) store.set(type, rows);
