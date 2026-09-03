@@ -11,10 +11,11 @@
  * Reads go through the `Sql` translator (`Subset` predicate → `WHERE`, exact
  * under ADR-0028 on both dialects), then `Subset.apply` finalises
  * order/limit/cursor locally. A table mapping may declare its columns'
- * literal kinds (`TableMapping.kinds`) so the compiler collates text and binds
- * booleans per dialect; the row decoder maps SQLite's `0`/`1` back to booleans
- * for those columns, and otherwise leaves rows as the driver returns them
- * (values stay opaque, ADR-0014). Writes run app-provided handlers inside one
+ * literal kinds (`TableMapping.kinds`) so the compiler collates declared-text
+ * columns and binds literals by kind (booleans per dialect); the row decoder
+ * maps SQLite's `0`/`1` back to booleans for columns declared `boolean`, and
+ * otherwise leaves rows as the driver returns them (values stay opaque,
+ * ADR-0014). Writes run app-provided handlers inside one
  * transaction with the per-client `lastMutationId` bump — the contract's
  * exactly-once, in-order, atomic guarantee, delegated to the database.
  */
@@ -60,12 +61,15 @@ export interface TableMapping {
   readonly versionColumn?: string;
   /**
    * Declared literal kinds of the filterable columns (field → kind), passed
-   * to the `Sql` compiler: `text` columns get the code-point collation
-   * clause, `instant` columns do not, and `boolean` columns bind and decode
-   * as the dialect stores them (`0`/`1` on SQLite). A column without a kind
-   * falls back to the literal's JS type (see `Sql`). Seam: once a
-   * `Collection`'s filterable attributes carry kinds (#154), a mapping can be
-   * derived from the collection instead of written by hand here.
+   * to the `Sql` compiler: a column declared `text` gets the code-point
+   * collation clause (the clause needs the declaration; a string literal
+   * alone never collates), `instant` columns do not, literals bind by the
+   * declared kind, and `boolean` columns bind and decode as the dialect
+   * stores them (`0`/`1` on SQLite). A column without a kind compiles to a
+   * plain comparison with the literal bound as its JS type (see `Sql`).
+   * Seam: once a `Collection`'s filterable attributes carry kinds (#154), a
+   * mapping can be derived from the collection instead of written by hand
+   * here.
    */
   readonly kinds?: Sql.Kinds;
 }
@@ -109,35 +113,62 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
 
+  // Every mapping's declared kinds, keyed by collection, for the inner
+  // `where` of an `Exists` (the compiler picks the foreign collection's).
+  const foreignKinds: Record<string, Sql.Kinds> = Object.fromEntries(
+    Object.entries(config.tables).flatMap(([collection, mapping]) =>
+      mapping.kinds === undefined ? [] : [[collection, mapping.kinds] as const]
+    )
+  );
+  // The columns declared `boolean` per collection, fixed once so decoding a
+  // row costs nothing for a collection with none.
+  const booleanColumns: Record<string, ReadonlyArray<string>> = Object.fromEntries(
+    Object.entries(config.tables).map(([collection, mapping]) => [
+      collection,
+      Object.entries(mapping.kinds ?? {})
+        .filter(([, kind]) => kind === "boolean")
+        .map(([field]) => field),
+    ])
+  );
+
   // Map a driver row back to the engine's values: a column declared
   // `boolean` comes back as `0`/`1` from SQLite and is decoded to a boolean;
-  // every other column stays exactly as the driver returned it.
+  // every other column stays exactly as the driver returned it, and a row
+  // with nothing to decode is returned as is (no copy).
   const decodeRow = (collection: string, row: SqlRow): SqlRow => {
-    const kinds = config.tables[collection]?.kinds;
-    if (kinds === undefined) return row;
-    const decoded: Record<string, unknown> = { ...row };
-    for (const [field, kind] of Object.entries(kinds)) {
+    let decoded: Record<string, unknown> | undefined;
+    for (const field of booleanColumns[collection] ?? []) {
       const value = row[field];
-      if (kind === "boolean" && (value === 0 || value === 1)) decoded[field] = value === 1;
+      if (value !== 0 && value !== 1) continue;
+      decoded ??= { ...row };
+      decoded[field] = value === 1;
     }
-    return decoded;
+    return decoded ?? row;
   };
 
   // Resolve a correlated Exists to its allow-set via a DISTINCT subquery.
+  // NULL foreign values are left out and the rest decoded by kind, exactly
+  // as `Predicate.existsValues` does for MemoryBackend (ADR-0028 rule (b)):
+  // NULL equals nothing, so it must not make `Not(Exists)` unknown.
   const resolveExistsNode = (
     node: Predicate.ExistsNode
   ): Effect.Effect<ReadonlyArray<Predicate.Literal>, BackendError> => {
     const mapping = config.tables[node.collection];
     if (mapping === undefined) return Effect.succeed([]);
-    // The inner `where` names the foreign collection's fields, so it takes
-    // that table's kinds (the compiler's own `Exists` path cannot know them).
-    const where = Sql.compileWhere(node.where, dialect, { kinds: mapping.kinds });
+    const where = Sql.compileWhere(node.where, dialect, { kinds: mapping.kinds, foreignKinds });
     return executor
       .query({
         text: `SELECT DISTINCT ${q(node.foreignField)} FROM ${q(mapping.table)} WHERE ${where.text}`,
         params: where.params,
       })
-      .pipe(Effect.map((rows) => rows.map((row) => row[node.foreignField] as Predicate.Literal)));
+      .pipe(
+        Effect.map((rows) =>
+          rows.flatMap((row) => {
+            const value = decodeRow(node.collection, row)[node.foreignField];
+            return Predicate.isNullish(value) ? [] : [value as Predicate.Literal];
+          })
+        )
+      );
   };
 
   const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
@@ -146,7 +177,13 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       if (mapping === undefined) return [];
       const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
       const rows = yield* executor.query(
-        Sql.compileSelect({ table: mapping.table, where, dialect, kinds: mapping.kinds })
+        Sql.compileSelect({
+          table: mapping.table,
+          where,
+          dialect,
+          kinds: mapping.kinds,
+          foreignKinds,
+        })
       );
       const idColumn = idOf(subset.collection);
       const values = rows.map((row) => ({

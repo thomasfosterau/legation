@@ -1,27 +1,35 @@
 /**
  * Sql translator tests: predicate → parameterised WHERE on both dialects,
- * exact under ADR-0028 (#156): the collation clause on text operands, typed
- * binds with and without declared `kinds`, and the NULL-bearing forms whose
- * three-valued text must match `Predicate.evaluate`.
+ * exact under ADR-0028 (#156): the collation clause on declared-text
+ * operands, typed binds by declared kind, the plain forms without a
+ * declaration, and the NULL-bearing forms whose three-valued text must match
+ * `Predicate.evaluate`.
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Predicate } from "@legation/effect";
 import * as Sql from "../Sql.js";
 
+const kinds: Sql.Kinds = {
+  s: "text",
+  status: "text",
+  owner: "text",
+  t: "instant",
+  i: "integer",
+  d: "double",
+  b: "boolean",
+};
+
 describe("Sql.compileWhere", () => {
   it("compiles comparisons, IN, and boolean structure", () => {
     expect(Sql.compileWhere(Predicate.eq("status", "open"))).toEqual({
-      text: `"status" COLLATE BINARY = ?`,
+      text: `"status" = ?`,
       params: ["open"],
     });
     expect(
       Sql.compileWhere(
         Predicate.and(Predicate.eq("status", "open"), Predicate.isIn("priority", [1, 2]))
       )
-    ).toEqual({
-      text: `"status" COLLATE BINARY = ? AND "priority" IN (?, ?)`,
-      params: ["open", 1, 2],
-    });
+    ).toEqual({ text: `"status" = ? AND "priority" IN (?, ?)`, params: ["open", 1, 2] });
     expect(Sql.compileWhere(Predicate.or(Predicate.eq("a", 1), Predicate.eq("b", 2)))).toEqual({
       text: `("a" = ? OR "b" = ?)`,
       params: [1, 2],
@@ -49,18 +57,18 @@ describe("Sql.compileWhere", () => {
       text: `"x" NOT IN (?, ?)`,
       params: [1, 2],
     });
-    expect(Sql.compileWhere(Predicate.notIn("x", ["a", "b"]), Sql.postgres)).toEqual({
-      text: `"x" COLLATE "C" NOT IN ($1, $2)`,
+    expect(Sql.compileWhere(Predicate.notIn("s", ["a", "b"]), Sql.postgres, { kinds })).toEqual({
+      text: `"s" COLLATE "C" NOT IN ($1, $2)`,
       params: ["a", "b"],
     });
     // Empty `In` is FALSE and empty `NotIn` is TRUE (ADR-0028 §3), no binds.
     expect(Sql.compileWhere(Predicate.isIn("x", []))).toEqual({ text: `1 = 0`, params: [] });
     expect(Sql.compileWhere(Predicate.notIn("x", []))).toEqual({ text: `1 = 1`, params: [] });
-    expect(Sql.compileWhere(Predicate.isIn("x", []), Sql.postgres)).toEqual({
+    expect(Sql.compileWhere(Predicate.isIn("s", []), Sql.postgres, { kinds })).toEqual({
       text: `1 = 0`,
       params: [],
     });
-    expect(Sql.compileWhere(Predicate.notIn("x", []), Sql.postgres)).toEqual({
+    expect(Sql.compileWhere(Predicate.notIn("s", []), Sql.postgres, { kinds })).toEqual({
       text: `1 = 1`,
       params: [],
     });
@@ -70,30 +78,26 @@ describe("Sql.compileWhere", () => {
     // `ne`, `Not` and `In` compile to plain SQL whose result is unknown on a
     // NULL column, which is exactly what `Predicate.evaluate` says; no
     // `OR col IS NULL` widening (the old "superset" claim) is emitted.
-    expect(Sql.compileWhere(Predicate.ne("status", "done"))).toEqual({
+    expect(Sql.compileWhere(Predicate.ne("status", "done"), Sql.sqlite, { kinds })).toEqual({
       text: `"status" COLLATE BINARY <> ?`,
       params: ["done"],
     });
-    expect(Sql.compileWhere(Predicate.ne("status", "done"), Sql.postgres)).toEqual({
+    expect(Sql.compileWhere(Predicate.ne("status", "done"), Sql.postgres, { kinds })).toEqual({
       text: `"status" COLLATE "C" <> $1`,
       params: ["done"],
     });
-    expect(Sql.compileWhere(Predicate.not(Predicate.eq("status", "done")))).toEqual({
-      text: `NOT ("status" COLLATE BINARY = ?)`,
-      params: ["done"],
-    });
-    expect(Sql.compileWhere(Predicate.not(Predicate.eq("status", "done")), Sql.postgres)).toEqual({
-      text: `NOT ("status" COLLATE "C" = $1)`,
-      params: ["done"],
-    });
-    expect(Sql.compileWhere(Predicate.isIn("status", ["open", "done"]))).toEqual({
-      text: `"status" COLLATE BINARY IN (?, ?)`,
-      params: ["open", "done"],
-    });
-    expect(Sql.compileWhere(Predicate.isIn("status", ["open", "done"]), Sql.postgres)).toEqual({
-      text: `"status" COLLATE "C" IN ($1, $2)`,
-      params: ["open", "done"],
-    });
+    expect(
+      Sql.compileWhere(Predicate.not(Predicate.eq("status", "done")), Sql.sqlite, { kinds })
+    ).toEqual({ text: `NOT ("status" COLLATE BINARY = ?)`, params: ["done"] });
+    expect(
+      Sql.compileWhere(Predicate.not(Predicate.eq("status", "done")), Sql.postgres, { kinds })
+    ).toEqual({ text: `NOT ("status" COLLATE "C" = $1)`, params: ["done"] });
+    expect(
+      Sql.compileWhere(Predicate.isIn("status", ["open", "done"]), Sql.sqlite, { kinds })
+    ).toEqual({ text: `"status" COLLATE BINARY IN (?, ?)`, params: ["open", "done"] });
+    expect(
+      Sql.compileWhere(Predicate.isIn("status", ["open", "done"]), Sql.postgres, { kinds })
+    ).toEqual({ text: `"status" COLLATE "C" IN ($1, $2)`, params: ["open", "done"] });
     // The deprecated wire form with a `null` literal binds NULL (unknown for
     // every row); a NULL among `In` values binds too.
     expect(Sql.compileWhere(Predicate.compare("eq", "x", null))).toEqual({
@@ -104,48 +108,70 @@ describe("Sql.compileWhere", () => {
       text: `"x" <> $1`,
       params: [null],
     });
-    expect(Sql.compileWhere(Predicate.isIn("x", ["a", null]))).toEqual({
-      text: `"x" COLLATE BINARY IN (?, ?)`,
+    expect(Sql.compileWhere(Predicate.isIn("s", ["a", null]), Sql.sqlite, { kinds })).toEqual({
+      text: `"s" COLLATE BINARY IN (?, ?)`,
       params: ["a", null],
     });
   });
 
-  it('uses positional placeholders and COLLATE "C" for postgres', () => {
-    expect(
-      Sql.compileWhere(
-        Predicate.and(Predicate.eq("status", "open"), Predicate.eq("owner", "ada")),
-        Sql.postgres
-      )
-    ).toEqual({
+  it("uses positional placeholders for postgres", () => {
+    const where = Predicate.and(Predicate.eq("status", "open"), Predicate.eq("owner", "ada"));
+    expect(Sql.compileWhere(where, Sql.postgres)).toEqual({
+      text: `"status" = $1 AND "owner" = $2`,
+      params: ["open", "ada"],
+    });
+    expect(Sql.compileWhere(where, Sql.postgres, { kinds })).toEqual({
       text: `"status" COLLATE "C" = $1 AND "owner" COLLATE "C" = $2`,
       params: ["open", "ada"],
     });
   });
 
-  it("emits the collation clause for text operands only", () => {
+  it("emits the collation clause for declared-text operands only", () => {
     for (const dialect of [Sql.sqlite, Sql.postgres]) {
       const clause = `COLLATE ${dialect.textCollation}`;
-      expect(Sql.compileWhere(Predicate.gt("s", "￿"), dialect).text).toBe(
-        `"s" ${clause} > ${dialect.placeholder(1)}`
+      const ph = dialect.placeholder(1);
+      expect(Sql.compileWhere(Predicate.gt("s", "￿"), dialect, { kinds }).text).toBe(
+        `"s" ${clause} > ${ph}`
       );
-      expect(Sql.compileWhere(Predicate.gt("n", 1), dialect).text).toBe(
-        `"n" > ${dialect.placeholder(1)}`
+      expect(
+        Sql.compileWhere(Predicate.gt("t", "2020-01-01T00:00:00.000Z"), dialect, { kinds }).text
+      ).toBe(`"t" > ${ph}`);
+      expect(Sql.compileWhere(Predicate.gt("i", 1), dialect, { kinds }).text).toBe(`"i" > ${ph}`);
+      expect(Sql.compileWhere(Predicate.gt("b", false), dialect, { kinds }).text).toBe(
+        `"b" > ${ph}`
       );
-      expect(Sql.compileWhere(Predicate.gt("b", false), dialect).text).toBe(
-        `"b" > ${dialect.placeholder(1)}`
-      );
-      expect(Sql.compileWhere(Predicate.isNull("s"), dialect).text).toBe(`"s" IS NULL`);
+      expect(Sql.compileWhere(Predicate.isNull("s"), dialect, { kinds }).text).toBe(`"s" IS NULL`);
     }
   });
 
+  it("never collates without a declaration, whatever the literal", () => {
+    // A string literal alone says nothing about the column: it may be bound
+    // against a uuid, date, enum or timestamptz column, none of which
+    // accepts a collation (Postgres: "collations are not supported by type
+    // …"). The clause needs `kinds[field] === "text"`.
+    expect(Sql.compileWhere(Predicate.eq("id", "9d1c…"), Sql.postgres)).toEqual({
+      text: `"id" = $1`,
+      params: ["9d1c…"],
+    });
+    expect(Sql.compileWhere(Predicate.gt("t", "2020-02-29T12:34:56.789Z"), Sql.postgres)).toEqual({
+      text: `"t" > $1`,
+      params: ["2020-02-29T12:34:56.789Z"],
+    });
+    expect(Sql.compileWhere(Predicate.isIn("s", ["a", "b"]), Sql.postgres)).toEqual({
+      text: `"s" IN ($1, $2)`,
+      params: ["a", "b"],
+    });
+    // A field the map does not name is undeclared too.
+    expect(
+      Sql.compileWhere(Predicate.eq("other", "x"), Sql.postgres, { kinds: { s: "text" } }).text
+    ).toBe(`"other" = $1`);
+    // Booleans still bind per dialect without a declaration.
+    expect(Sql.compileWhere(Predicate.eq("done", false)).params).toEqual([0]);
+    expect(Sql.compileWhere(Predicate.eq("done", true)).params).toEqual([1]);
+    expect(Sql.compileWhere(Predicate.eq("done", false), Sql.postgres).params).toEqual([false]);
+  });
+
   it("binds and collates by the declared kinds", () => {
-    const kinds: Sql.Kinds = {
-      s: "text",
-      t: "instant",
-      i: "integer",
-      d: "double",
-      b: "boolean",
-    };
     const where = Predicate.and(
       Predicate.gt("s", "a"),
       Predicate.gt("t", "2020-02-29T12:34:56.789Z"),
@@ -179,31 +205,42 @@ describe("Sql.compileWhere", () => {
     });
   });
 
-  it("falls back to the literal's JS type without a kind", () => {
-    // A string is treated as text (collation emitted) — an instant column
-    // must declare its kind to suppress the clause.
-    expect(Sql.compileWhere(Predicate.gt("t", "2020-02-29T12:34:56.789Z"), Sql.postgres)).toEqual({
-      text: `"t" COLLATE "C" > $1`,
-      params: ["2020-02-29T12:34:56.789Z"],
+  it("binds a cross-type literal as NULL under a declared kind (rule (d))", () => {
+    // `Predicate.evaluate` says unknown for a mismatched pair; so must the
+    // SQL, and SQLite's affinity coercion (`"i" = '1'` is true there) must
+    // never see the raw string.
+    expect(Sql.compileWhere(Predicate.ne("i", "1"), Sql.sqlite, { kinds })).toEqual({
+      text: `"i" <> ?`,
+      params: [null],
     });
-    expect(
-      Sql.compileWhere(Predicate.gt("t", "2020-02-29T12:34:56.789Z"), Sql.postgres, {
-        kinds: { t: "instant" },
-      })
-    ).toEqual({ text: `"t" > $1`, params: ["2020-02-29T12:34:56.789Z"] });
-    // A boolean binds per dialect either way.
-    expect(Sql.compileWhere(Predicate.eq("done", false)).params).toEqual([0]);
-    expect(Sql.compileWhere(Predicate.eq("done", true)).params).toEqual([1]);
-    expect(Sql.compileWhere(Predicate.eq("done", false), Sql.postgres).params).toEqual([false]);
-    // A field the map does not name falls back too.
-    expect(
-      Sql.compileWhere(Predicate.eq("other", "x"), Sql.sqlite, { kinds: { s: "text" } }).text
-    ).toBe(`"other" COLLATE BINARY = ?`);
-    // A `null`-only list has no type to fall back to: no clause.
-    expect(Sql.compileWhere(Predicate.isIn("x", [null])).text).toBe(`"x" IN (?)`);
+    expect(Sql.compileWhere(Predicate.eq("s", 7), Sql.postgres, { kinds })).toEqual({
+      text: `"s" COLLATE "C" = $1`,
+      params: [null],
+    });
+    expect(Sql.compileWhere(Predicate.eq("b", 1), Sql.sqlite, { kinds }).params).toEqual([null]);
+    expect(Sql.compileWhere(Predicate.eq("t", 0), Sql.sqlite, { kinds }).params).toEqual([null]);
+    // In a list a mismatched literal matches nothing and is dropped; a list
+    // left with none binds one NULL (unknown, as `evaluate` says when no
+    // listed literal has the field's type); a NULL in the list stays.
+    expect(Sql.compileWhere(Predicate.isIn("i", [1, "x"]), Sql.sqlite, { kinds })).toEqual({
+      text: `"i" IN (?)`,
+      params: [1],
+    });
+    expect(Sql.compileWhere(Predicate.notIn("i", ["x", "y"]), Sql.sqlite, { kinds })).toEqual({
+      text: `"i" NOT IN (?)`,
+      params: [null],
+    });
+    expect(Sql.compileWhere(Predicate.isIn("i", ["x", null]), Sql.sqlite, { kinds })).toEqual({
+      text: `"i" IN (?)`,
+      params: [null],
+    });
+    // A conforming literal is untouched even when it looks numeric.
+    expect(Sql.compileWhere(Predicate.eq("s", "1"), Sql.sqlite, { kinds }).params).toEqual(["1"]);
+    // Without a declaration there is no kind to mismatch.
+    expect(Sql.compileWhere(Predicate.ne("i", "1")).params).toEqual(["1"]);
   });
 
-  it("compiles a correlated Exists into a subquery, collating its inner text", () => {
+  it("compiles a correlated Exists into a subquery, collating by the foreign kinds", () => {
     const exists = Predicate.exists({
       collection: "memberships",
       localField: "projectId",
@@ -211,16 +248,31 @@ describe("Sql.compileWhere", () => {
       where: Predicate.eq("userId", "alice"),
     });
     expect(Sql.compileWhere(exists)).toEqual({
-      text: `"projectId" IN (SELECT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?)`,
+      text: `"projectId" IN (SELECT "projectId" FROM "memberships" WHERE "userId" = ?)`,
       params: ["alice"],
     });
-    expect(Sql.compileWhere(exists, Sql.postgres)).toEqual({
+    const foreignKinds = { memberships: { userId: "text" } } as const;
+    expect(Sql.compileWhere(exists, Sql.postgres, { foreignKinds })).toEqual({
       text: `"projectId" IN (SELECT "projectId" FROM "memberships" WHERE "userId" COLLATE "C" = $1)`,
       params: ["alice"],
     });
-    // The outer kinds describe the outer collection, not the subquery's.
-    expect(Sql.compileWhere(exists, Sql.postgres, { kinds: { userId: "instant" } }).text).toContain(
-      `"userId" COLLATE "C" = $1`
+    // The outer `kinds` describe the outer collection, not the subquery's.
+    expect(Sql.compileWhere(exists, Sql.postgres, { kinds: { userId: "text" } }).text).toContain(
+      `WHERE "userId" = $1`
+    );
+    // A nested Exists picks its own collection's kinds.
+    const nested = Predicate.exists({
+      collection: "projects",
+      localField: "projectId",
+      foreignField: "id",
+      where: exists,
+    });
+    expect(
+      Sql.compileWhere(nested, Sql.postgres, {
+        foreignKinds: { projects: { id: "text" }, memberships: { userId: "text" } },
+      }).text
+    ).toBe(
+      `"projectId" IN (SELECT "id" FROM "projects" WHERE "projectId" IN (SELECT "projectId" FROM "memberships" WHERE "userId" COLLATE "C" = $1))`
     );
   });
 
@@ -232,13 +284,16 @@ describe("Sql.compileWhere", () => {
     expect(
       Sql.compileSelect({
         table: "events",
-        where: Predicate.gt("at", "2020-02-29T12:34:56.789Z"),
+        where: Predicate.and(
+          Predicate.gt("at", "2020-02-29T12:34:56.789Z"),
+          Predicate.eq("kind", "x")
+        ),
         dialect: Sql.postgres,
-        kinds: { at: "instant" },
+        kinds: { at: "instant", kind: "text" },
       })
     ).toEqual({
-      text: `SELECT * FROM "events" WHERE "at" > $1`,
-      params: ["2020-02-29T12:34:56.789Z"],
+      text: `SELECT * FROM "events" WHERE "at" > $1 AND "kind" COLLATE "C" = $2`,
+      params: ["2020-02-29T12:34:56.789Z", "x"],
     });
   });
 });

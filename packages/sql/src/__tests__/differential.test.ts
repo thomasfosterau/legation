@@ -564,6 +564,19 @@ const focusedWhere: ReadonlyArray<{
     predicate: Predicate.isIn("i", [2147483647, 1]),
     ids: integers,
   },
+  {
+    // Rule (d): a string against a declared integer column is unknown on
+    // every leg — the compiler binds NULL, so SQLite's affinity coercion
+    // (`"i" <> '1'`) never runs and the verdict is `evaluate`'s.
+    name: "cross-type ne on a declared integer column is unknown everywhere",
+    predicate: Predicate.ne("i", "1"),
+    ids: integers,
+  },
+  {
+    name: "cross-type literal in an integer In list is dropped, not coerced",
+    predicate: Predicate.not(Predicate.isIn("i", [1, "7"])),
+    ids: integers,
+  },
 ];
 
 const focusedOrder: ReadonlyArray<{

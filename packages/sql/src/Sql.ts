@@ -26,30 +26,42 @@
  * - `Not` → `NOT (…)`
  * - `Exists` → `localField IN (SELECT foreignField FROM collection WHERE …)`
  *
- * **Collation clause (ADR-0028 §4).** Every text comparison carries an
- * explicit code-point collation on the column side — `"col" COLLATE "C"` on
- * Postgres, `"col" COLLATE BINARY` on SQLite — for `Compare`, `In` and
- * `NotIn`, so text orders by code point even where the column's own
- * collation is not `"C"`. The schema rule stands regardless: filterable and
- * sortable text columns should be declared `COLLATE "C"` (Postgres) or left
- * at `BINARY` (SQLite) so the clause costs no index use; nothing checks DDL.
+ * **Literal kinds (`kinds` option).** `compileWhere` and `compileSelect`
+ * accept a field → `Predicate.LiteralKind` map (`text`, `integer`, `double`,
+ * `boolean`, `instant`), the per-attribute declaration of ADR-0028 §4. It
+ * drives two things:
  *
- * **Literal kinds (`kinds` option).** The compiler cannot tell a text
- * attribute from an instant by the JS literal alone, so `compileWhere` and
- * `compileSelect` accept a field → `Predicate.LiteralKind` map. With a kind:
- * `text` gets the collation clause and binds as a string; `instant` gets no
- * clause (a `timestamptz` column rejects one, and a `text` instant column
- * compares chronologically by code point already) and binds as a string;
- * `integer` and `double` bind as JS numbers (SQLite stores an integral
- * number as INTEGER and the rest as REAL; a Postgres driver sends text the
- * server infers against the column); `boolean` binds as the dialect's
- * boolean (Postgres `true`/`false`, SQLite `1`/`0`). Without a kind the
- * fallback is the JS type of the literal: a string is treated as `text`
- * (collation emitted — declare `instant` to suppress it), a number as a
- * number, a boolean per dialect. Inside an `Exists` subquery the inner
- * `where` names the foreign collection's fields, so it compiles under the
- * fallback; `SqlBackend` resolves `Exists` before compiling and passes the
- * foreign table's own `kinds`.
+ * - **The collation clause.** A `Compare`, `In` or `NotIn` on a field
+ *   declared `text` carries an explicit code-point collation on the column
+ *   side — `"col" COLLATE "C"` on Postgres, `"col" COLLATE BINARY` on
+ *   SQLite — so text orders by code point even where the column's own
+ *   collation is not `"C"`. The clause is emitted for a declared `text`
+ *   field only, never inferred from a string literal: a string may be bound
+ *   against a `uuid`, `date`, enum or `timestamptz` column, none of which
+ *   accepts a collation, and an `instant` compares chronologically without
+ *   one. A field without a declaration compiles to a plain comparison and
+ *   orders by the column's own collation — hence the schema rule, which
+ *   stands regardless: filterable and sortable text columns are declared
+ *   `COLLATE "C"` (Postgres) or left at `BINARY` (SQLite). Nothing checks
+ *   DDL.
+ * - **Typed binds (rule (d)).** A literal of the declared kind's JS type
+ *   binds as that type: strings for `text` and `instant`, numbers for
+ *   `integer` and `double` (SQLite stores an integral number as INTEGER and
+ *   the rest as REAL; a Postgres driver sends text the server infers against
+ *   the column), and booleans as the dialect stores them (Postgres
+ *   `true`/`false`, SQLite `1`/`0`). A literal of another JS type is a
+ *   cross-type comparison, which the grammar cannot express and the sync
+ *   tier rejects; the compiler gives it `Predicate.evaluate`'s verdict —
+ *   unknown — by binding `NULL` in its place, so SQLite's affinity coercion
+ *   (`1 = '1'`) never sees the raw literal. In an `In`/`NotIn` list such
+ *   literals are dropped (a mismatch can match nothing), and a non-empty
+ *   list left with no literal binds one `NULL`, which is unknown.
+ *
+ * Without a declaration a literal binds as its JS type (booleans still per
+ * dialect) and nothing collates. The inner `where` of an `Exists` names the
+ * foreign collection's fields, so it takes that collection's entry in
+ * `foreignKinds` (collection → kinds); `SqlBackend` passes every mapping's
+ * kinds through.
  */
 
 import type { Predicate } from "@legation/effect";
@@ -66,7 +78,7 @@ export interface Dialect {
   readonly placeholder: (index: number) => string;
   /** Quote a column/table identifier. */
   readonly quote: (identifier: string) => string;
-  /** The code-point collation name, emitted as `COLLATE <name>` after a text operand. */
+  /** The code-point collation name, emitted as `COLLATE <name>` after a declared-text operand. */
   readonly textCollation: string;
   /** How a boolean literal binds (Postgres has booleans; SQLite stores `0`/`1`). */
   readonly boolean: (value: boolean) => unknown;
@@ -77,8 +89,10 @@ export type Kinds = Readonly<Record<string, Predicate.LiteralKind>>;
 
 /** Options shared by {@link compileWhere} and {@link compileSelect}. */
 export interface CompileOptions {
-  /** Declared literal kinds of the predicate's fields; a field without one uses the literal-type fallback. */
+  /** Declared literal kinds of the predicate's own fields (see the module doc). */
   readonly kinds?: Kinds | undefined;
+  /** Declared kinds of other collections' fields, keyed by collection, for the inner `where` of an `Exists`. */
+  readonly foreignKinds?: Readonly<Record<string, Kinds>> | undefined;
 }
 
 const quoteDouble = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
@@ -123,75 +137,80 @@ interface Compilation {
   readonly dialect: Dialect;
   readonly params: Params;
   readonly kinds: Kinds | undefined;
+  readonly foreignKinds: Readonly<Record<string, Kinds>> | undefined;
 }
 
-/** The literal-type fallback for a field without a declared kind. */
-const fallbackKind = (
-  values: ReadonlyArray<Predicate.Literal>
-): Predicate.LiteralKind | undefined => {
-  const sample = values.find((value) => value !== null);
-  switch (typeof sample) {
-    case "string":
-      return "text";
-    case "number":
-      return Number.isInteger(sample) ? "integer" : "double";
-    case "boolean":
-      return "boolean";
-    default:
-      return undefined;
-  }
+/** The JS type a literal of each kind has. */
+const jsTypeOf: Record<Predicate.LiteralKind, "string" | "number" | "boolean"> = {
+  text: "string",
+  instant: "string",
+  integer: "number",
+  double: "number",
+  boolean: "boolean",
 };
 
-/** The kind a field's operand compiles under: the declared kind, else the literal-type fallback. */
-const kindOf = (
-  compilation: Compilation,
-  field: string,
-  values: ReadonlyArray<Predicate.Literal>
-): Predicate.LiteralKind | undefined => compilation.kinds?.[field] ?? fallbackKind(values);
+/** Whether a literal can bind as the declared kind: `null` always, else by JS type. */
+const conforms = (kind: Predicate.LiteralKind | undefined, value: Predicate.Literal): boolean =>
+  value === null || kind === undefined || typeof value === jsTypeOf[kind];
 
-/** The column operand: quoted, with the collation clause for `text`. */
-const operand = (
-  compilation: Compilation,
-  field: string,
-  kind: Predicate.LiteralKind | undefined
-) => {
+/** The column operand: quoted, with the collation clause when declared `text`. */
+const operand = (compilation: Compilation, field: string): string => {
   const column = compilation.dialect.quote(field);
-  return kind === "text" ? `${column} COLLATE ${compilation.dialect.textCollation}` : column;
+  return compilation.kinds?.[field] === "text"
+    ? `${column} COLLATE ${compilation.dialect.textCollation}`
+    : column;
 };
 
 /**
- * Bind one literal as the dialect stores its kind. Only booleans need
- * encoding (SQLite has none); strings and numbers bind as they are and
- * `null` binds as `NULL`. The literal's own type decides, so a boolean never
- * reaches a driver that refuses it even when the declared kind disagrees.
+ * Bind one literal under the field's declared kind: a conforming literal as
+ * itself (booleans as the dialect stores them), a cross-type literal as
+ * `NULL` (unknown, rule (d)).
  */
-const bindLiteral = (compilation: Compilation, value: Predicate.Literal): string =>
-  compilation.params.bind(typeof value === "boolean" ? compilation.dialect.boolean(value) : value);
+const bindLiteral = (compilation: Compilation, field: string, value: Predicate.Literal): string => {
+  const { params, dialect, kinds } = compilation;
+  if (!conforms(kinds?.[field], value)) return params.bind(null);
+  return params.bind(typeof value === "boolean" ? dialect.boolean(value) : value);
+};
+
+/**
+ * The literals of an `In`/`NotIn` list that can bind under the declared
+ * kind. A cross-type literal matches nothing, so it is dropped; a non-empty
+ * list left with nothing binds one `NULL`, which makes the membership
+ * unknown — `Predicate.evaluate`'s verdict when no listed literal has the
+ * field's type.
+ */
+const bindableList = (
+  compilation: Compilation,
+  field: string,
+  values: ReadonlyArray<Predicate.Literal>
+): ReadonlyArray<Predicate.Literal> => {
+  const kind = compilation.kinds?.[field];
+  const kept = values.filter((value) => conforms(kind, value));
+  return kept.length === 0 ? [null] : kept;
+};
 
 type CompareNode = Extract<Predicate.Predicate, { readonly _tag: "Compare" }>;
 type ListNode = Extract<Predicate.Predicate, { readonly _tag: "In" | "NotIn" }>;
 type ExistsNode = Extract<Predicate.Predicate, { readonly _tag: "Exists" }>;
 
-const compileCompare = (node: CompareNode, compilation: Compilation): string => {
-  const kind = kindOf(compilation, node.field, [node.value]);
-  const column = operand(compilation, node.field, kind);
-  return `${column} ${comparators[node.op]} ${bindLiteral(compilation, node.value)}`;
-};
+const compileCompare = (node: CompareNode, compilation: Compilation): string =>
+  `${operand(compilation, node.field)} ${comparators[node.op]} ${bindLiteral(compilation, node.field, node.value)}`;
 
 /** `In` / `NotIn`: an empty list is the constant `FALSE` / `TRUE` (ADR-0028 §3). */
 const compileList = (node: ListNode, compilation: Compilation): string => {
   if (node.values.length === 0) return node._tag === "In" ? "1 = 0" : "1 = 1";
-  const kind = kindOf(compilation, node.field, node.values);
-  const column = operand(compilation, node.field, kind);
-  const placeholders = node.values.map((value) => bindLiteral(compilation, value)).join(", ");
-  return `${column} ${node._tag === "In" ? "IN" : "NOT IN"} (${placeholders})`;
+  const placeholders = bindableList(compilation, node.field, node.values)
+    .map((value) => bindLiteral(compilation, node.field, value))
+    .join(", ");
+  return `${operand(compilation, node.field)} ${node._tag === "In" ? "IN" : "NOT IN"} (${placeholders})`;
 };
 
 /** Correlated set membership: `localField IN (SELECT foreignField FROM … WHERE …)`. */
 const compileExists = (node: ExistsNode, compilation: Compilation): string => {
-  // The inner `where` names the foreign collection's fields, so the outer
-  // `kinds` do not apply; it compiles under the literal-type fallback.
-  const inner = compileNode(node.where, { ...compilation, kinds: undefined });
+  // The inner `where` names the foreign collection's fields: its kinds come
+  // from `foreignKinds`, never from the outer collection's `kinds`.
+  const kinds = compilation.foreignKinds?.[node.collection];
+  const inner = compileNode(node.where, { ...compilation, kinds });
   const { quote } = compilation.dialect;
   return `${quote(node.localField)} IN (SELECT ${quote(node.foreignField)} FROM ${quote(node.collection)} WHERE ${inner})`;
 };
@@ -223,9 +242,10 @@ const compileNode = (predicate: Predicate.Predicate, compilation: Compilation): 
 
 /**
  * Compile a predicate into a `WHERE`-ready fragment for a dialect. Pass
- * `options.kinds` (field → literal kind) so text gets its collation clause,
- * instants do not, and booleans bind per dialect; without it the literal's
- * JS type decides (see the module doc).
+ * `options.kinds` (field → literal kind) so declared-text fields get their
+ * collation clause and literals bind by the declared kind; without a
+ * declaration nothing collates and a literal binds as its JS type (see the
+ * module doc).
  */
 export const compileWhere = (
   predicate: Predicate.Predicate,
@@ -233,7 +253,12 @@ export const compileWhere = (
   options: CompileOptions = {}
 ): SqlFragment => {
   const params = new Params(dialect);
-  const text = compileNode(predicate, { dialect, params, kinds: options.kinds });
+  const text = compileNode(predicate, {
+    dialect,
+    params,
+    kinds: options.kinds,
+    foreignKinds: options.foreignKinds,
+  });
   return { text, params: params.values };
 };
 
@@ -252,6 +277,9 @@ export const compileSelect = (
   } & CompileOptions
 ): SqlFragment => {
   const dialect = options.dialect ?? sqlite;
-  const { text, params } = compileWhere(options.where, dialect, { kinds: options.kinds });
+  const { text, params } = compileWhere(options.where, dialect, {
+    kinds: options.kinds,
+    foreignKinds: options.foreignKinds,
+  });
   return { text: `SELECT * FROM ${dialect.quote(options.table)} WHERE ${text}`, params };
 };

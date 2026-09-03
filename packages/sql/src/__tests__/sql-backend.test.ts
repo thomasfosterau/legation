@@ -88,7 +88,8 @@ describe("SqlBackend evaluate / getRows", () => {
       // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
       const select = mock.queries.at(-1)!;
-      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" COLLATE BINARY = ?`);
+      // No kinds are declared, so nothing collates.
+      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" = ?`);
       expect(select.params).toEqual(["open"]);
     });
   });
@@ -175,9 +176,72 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(entries.map((e) => e.id)).toEqual(["i1", "i3"]);
       // The correlated subquery was issued with the inner predicate's params.
       expect(mock.queries[0]).toEqual({
-        text: `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?`,
+        text: `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" = ?`,
         params: ["alice"],
       });
+    });
+  });
+
+  it.effect("resolves Exists like MemoryBackend: NULL foreign values out, kinds decoded", () => {
+    const mock = makeMock();
+    mock.seed("issues", [
+      { id: "i1", projectId: "p1", flagged: 1, version: "a" },
+      { id: "i2", projectId: "p2", flagged: 0, version: "b" },
+    ]);
+    // A membership row without a project (NULL) and one flagged as active
+    // (SQLite's 1 for a boolean column).
+    mock.seed("memberships", [{ projectId: null }, { projectId: "p1" }, { active: 1 }]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        issues: { table: "issues", versionColumn: "version", kinds: { flagged: "boolean" } },
+        memberships: { table: "memberships", kinds: { userId: "text", active: "boolean" } },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    const membership = (where: Predicate.Predicate) =>
+      Predicate.exists({
+        collection: "memberships",
+        localField: "projectId",
+        foreignField: "projectId",
+        where,
+      });
+
+    return Effect.gen(function* () {
+      // NULL equals nothing: `Not(Exists)` keeps i2 (as `Predicate.existsValues`
+      // does for MemoryBackend) instead of going unknown on the NULL.
+      const hidden = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "issues", where: Predicate.not(membership(Predicate.always)) })
+      );
+      expect(hidden.map((e) => e.id)).toEqual(["i2"]);
+      // The subquery took the foreign table's kinds: its text field collates.
+      const subquery = mock.queries.find((q) => q.text.startsWith("SELECT DISTINCT"))!;
+      expect(subquery.text).toBe(`SELECT DISTINCT "projectId" FROM "memberships" WHERE 1 = 1`);
+      const named = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "issues", where: membership(Predicate.eq("userId", "alice")) })
+      );
+      expect(named.map((e) => e.id)).toEqual(["i1"]);
+      expect(mock.queries.at(-2)!.text).toBe(
+        `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?`
+      );
+      // A boolean foreign field yields true/false, not 1/0, so the resolved
+      // `In` matches the decoded local column.
+      const flagged = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({
+          collection: "issues",
+          where: Predicate.exists({
+            collection: "memberships",
+            localField: "flagged",
+            foreignField: "active",
+            where: Predicate.always,
+          }),
+        })
+      );
+      expect(flagged.map((e) => e.id)).toEqual(["i1"]);
     });
   });
 
@@ -195,12 +259,9 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(rows).toEqual([
         { id: "1", version: "a", value: { id: "1", version: "a", title: "x" } },
       ]);
-      // Ids are strings, so the by-id lookup collates like any text `In`;
-      // ADR-0028 §4 already requires the id column to be `COLLATE "C"` (the
-      // order tie-break), so the clause costs no index use there.
-      expect(mock.queries.at(-1)!.text).toBe(
-        `SELECT * FROM "todos" WHERE "id" COLLATE BINARY IN (?)`
-      );
+      // The id column has no declared kind (it may well be a uuid or serial
+      // on Postgres), so the by-id lookup is a plain `IN`.
+      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
     });
   });
 });
