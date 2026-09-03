@@ -17,10 +17,14 @@ A driver-agnostic SQL reference backend for the
   when a collection changes out of band (cron, admin tools, `psql`). See the
   [change-data-capture guide](../../docs/change-data-capture.md).
 
-Reads push the predicate to the database via `WHERE` and finalize
-order/limit/cursor locally with `Subset.apply` (the `WHERE` is a sound
-superset). Writes run app-authored handlers inside one transaction with the
-per-client `lastMutationId` bump.
+Reads push the predicate to the database via `WHERE` and finalise
+order/limit/cursor locally with `Subset.apply`. The `WHERE` is exact on both
+dialects (ADR-0028): every node compiles to the three-valued expression
+`Predicate.evaluate` computes, text comparisons carry an explicit code-point
+collation (`COLLATE "C"` / `COLLATE BINARY`), and a table mapping's `kinds`
+tell the compiler which columns are text, instants or booleans (SQLite stores
+booleans as `0`/`1`; the backend decodes them back). Writes run app-authored
+handlers inside one transaction with the per-client `lastMutationId` bump.
 
 ```bash
 npm install @legation/sql @legation/effect effect

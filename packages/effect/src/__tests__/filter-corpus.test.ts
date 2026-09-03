@@ -12,7 +12,7 @@ import * as Predicate from "../Predicate.js";
 
 const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean => {
   switch (column.kind) {
-    case "string":
+    case "text":
     case "instant":
       return typeof literal === "string";
     case "integer":

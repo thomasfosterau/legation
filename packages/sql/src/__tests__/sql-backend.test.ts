@@ -88,8 +88,57 @@ describe("SqlBackend evaluate / getRows", () => {
       // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
       const select = mock.queries.at(-1)!;
-      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" = ?`);
+      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" COLLATE BINARY = ?`);
       expect(select.params).toEqual(["open"]);
+    });
+  });
+
+  it.effect("passes the mapping's kinds to the compiler and decodes 0/1 booleans", () => {
+    const mock = makeMock();
+    // SQLite returns booleans as 0/1; `done` is declared boolean, `flags` is
+    // not (and stays as the driver returned it, ADR-0014).
+    mock.seed("todos", [
+      { id: "1", done: 1, flags: 1, createdAt: "2020-02-29T12:34:56.789Z", version: "a" },
+      { id: "2", done: 0, flags: 0, createdAt: "2024-01-01T00:00:00.000Z", version: "b" },
+    ]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        todos: {
+          table: "todos",
+          versionColumn: "version",
+          kinds: { done: "boolean", createdAt: "instant", status: "text" },
+        },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    const subset = Subset.make({
+      collection: "todos",
+      where: Predicate.and(
+        Predicate.eq("done", false),
+        Predicate.gt("createdAt", "2000-01-01T00:00:00.000Z")
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
+      // The boolean literal was bound as 0, the instant got no collation
+      // clause, and the decoded row (done: false) survived Subset.apply's
+      // re-evaluation against the boolean literal.
+      expect(entries).toEqual([{ id: "2", version: "b" }]);
+      const select = mock.queries.at(-1)!;
+      expect(select.text).toBe(`SELECT * FROM "todos" WHERE "done" = ? AND "createdAt" > ?`);
+      expect(select.params).toEqual([0, "2000-01-01T00:00:00.000Z"]);
+
+      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      expect(rows[0]!.value).toEqual({
+        id: "1",
+        done: true,
+        flags: 1,
+        createdAt: "2020-02-29T12:34:56.789Z",
+        version: "a",
+      });
     });
   });
 
@@ -126,7 +175,7 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(entries.map((e) => e.id)).toEqual(["i1", "i3"]);
       // The correlated subquery was issued with the inner predicate's params.
       expect(mock.queries[0]).toEqual({
-        text: `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" = ?`,
+        text: `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?`,
         params: ["alice"],
       });
     });
@@ -146,7 +195,12 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(rows).toEqual([
         { id: "1", version: "a", value: { id: "1", version: "a", title: "x" } },
       ]);
-      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
+      // Ids are strings, so the by-id lookup collates like any text `In`;
+      // ADR-0028 §4 already requires the id column to be `COLLATE "C"` (the
+      // order tie-break), so the clause costs no index use there.
+      expect(mock.queries.at(-1)!.text).toBe(
+        `SELECT * FROM "todos" WHERE "id" COLLATE BINARY IN (?)`
+      );
     });
   });
 });

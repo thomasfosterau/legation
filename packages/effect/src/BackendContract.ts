@@ -354,7 +354,7 @@ const generatedCorpus = (
   Effect.gen(function* () {
     const columns: ReadonlyArray<FilterCorpus.Column> = [
       { name: "rank", kind: "integer" },
-      { name: "tag", kind: "string" },
+      { name: "tag", kind: "text" },
     ];
     const options: FilterCorpus.CorpusOptions = { nulls: true, astral: true };
     const corpus = yield* FilterCorpus.generateCorpus({
