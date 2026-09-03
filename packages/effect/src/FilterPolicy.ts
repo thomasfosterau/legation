@@ -102,6 +102,32 @@ const hasIntCheck = (checks: SchemaAST.Checks | undefined): boolean =>
       : check.annotations?.representation?.id === INT_CHECK_ID
   );
 
+/** The kind of a literal schema, by the JS type of its literal. */
+const kindOfLiteral = (literal: SchemaAST.LiteralValue): LiteralKind | undefined => {
+  switch (typeof literal) {
+    case "string":
+      return "text";
+    case "number":
+      return "double";
+    case "boolean":
+      return "boolean";
+    default:
+      return undefined;
+  }
+};
+
+/** The one kind shared by a union's non-null members (`NullOr`, `optional`, `Literals`). */
+const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undefined => {
+  const kinds = new Set<LiteralKind>();
+  for (const member of members) {
+    if (member._tag === "Null" || member._tag === "Undefined") continue;
+    const kind = kindOfAst(member);
+    if (kind === undefined) return undefined;
+    kinds.add(kind);
+  }
+  return kinds.size === 1 ? [...kinds][0] : undefined;
+};
+
 const kindOfAst = (ast: SchemaAST.AST): LiteralKind | undefined => {
   switch (ast._tag) {
     case "String":
@@ -111,24 +137,9 @@ const kindOfAst = (ast: SchemaAST.AST): LiteralKind | undefined => {
     case "Boolean":
       return "boolean";
     case "Literal":
-      return typeof ast.literal === "string"
-        ? "text"
-        : typeof ast.literal === "number"
-          ? "double"
-          : typeof ast.literal === "boolean"
-            ? "boolean"
-            : undefined;
-    case "Union": {
-      // `NullOr` / `optional` / `Literals`: the members' one common kind.
-      const kinds = new Set<LiteralKind>();
-      for (const member of ast.types) {
-        if (member._tag === "Null" || member._tag === "Undefined") continue;
-        const kind = kindOfAst(member);
-        if (kind === undefined) return undefined;
-        kinds.add(kind);
-      }
-      return kinds.size === 1 ? [...kinds][0] : undefined;
-    }
+      return kindOfLiteral(ast.literal);
+    case "Union":
+      return kindOfUnion(ast.types);
     default:
       return undefined;
   }
@@ -171,43 +182,56 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
   const known = new Set<string>([...options.keyFields, ...Object.keys(options.attributes)]);
   const filterable: Record<string, FilterableField> = {};
   for (const [field, input] of Object.entries(options.filterable ?? {})) {
-    if (!known.has(field)) {
-      throw new FilterDeclarationError({
-        collection: options.collection,
-        field,
-        message: `Collection "${options.collection}" declares filterable field "${field}", which is not a field of its row`,
-      });
-    }
-    const declared = Array.isArray(input)
-      ? { operators: input as ReadonlyArray<FilterOperator> }
-      : (input as {
-          readonly operators: ReadonlyArray<FilterOperator>;
-          readonly kind?: LiteralKind;
-        });
-    const attribute = options.attributes[field];
-    const kind =
-      declared.kind ??
-      (attribute === undefined ? keyDefaults.kind : kindOf(attribute)) ??
-      undefined;
-    if (kind === undefined) {
-      throw new FilterDeclarationError({
-        collection: options.collection,
-        field,
-        message: `Collection "${options.collection}" cannot derive a literal kind for filterable field "${field}"; declare its kind explicitly (text, integer, double, boolean or instant)`,
-      });
-    }
-    filterable[field] = { kind, operators: [...new Set(declared.operators)] };
+    assertRowField(options, known, field, "filterable");
+    filterable[field] = resolveField(options, field, normaliseInput(input));
   }
-  for (const field of options.sortable ?? []) {
-    if (!known.has(field)) {
-      throw new FilterDeclarationError({
-        collection: options.collection,
-        field,
-        message: `Collection "${options.collection}" declares sortable field "${field}", which is not a field of its row`,
-      });
-    }
-  }
+  for (const field of options.sortable ?? []) assertRowField(options, known, field, "sortable");
   return withKeyDefaults(options.keyFields, filterable, options.sortable ?? []);
+};
+
+/** One field's declaration with the operators-only shorthand expanded. */
+type DeclaredField = {
+  readonly operators: ReadonlyArray<FilterOperator>;
+  readonly kind?: LiteralKind;
+};
+
+/** The declared form of one field, with the operators-only shorthand expanded. */
+const normaliseInput = (input: FilterableInput): DeclaredField =>
+  Array.isArray(input)
+    ? { operators: input as ReadonlyArray<FilterOperator> }
+    : (input as DeclaredField);
+
+/** A declared field must be a field of the row. */
+const assertRowField = (
+  options: ResolveOptions,
+  known: ReadonlySet<string>,
+  field: string,
+  role: "filterable" | "sortable"
+): void => {
+  if (known.has(field)) return;
+  throw new FilterDeclarationError({
+    collection: options.collection,
+    field,
+    message: `Collection "${options.collection}" declares ${role} field "${field}", which is not a field of its row`,
+  });
+};
+
+/** One field's resolved entry: its explicit or derived kind plus its operators. */
+const resolveField = (
+  options: ResolveOptions,
+  field: string,
+  declared: DeclaredField
+): FilterableField => {
+  const attribute = options.attributes[field];
+  const kind = declared.kind ?? (attribute === undefined ? keyDefaults.kind : kindOf(attribute));
+  if (kind === undefined) {
+    throw new FilterDeclarationError({
+      collection: options.collection,
+      field,
+      message: `Collection "${options.collection}" cannot derive a literal kind for filterable field "${field}"; declare its kind explicitly (text, integer, double, boolean or instant)`,
+    });
+  }
+  return { kind, operators: [...new Set(declared.operators)] };
 };
 
 /**
@@ -348,38 +372,15 @@ export const checkWhere = (
   switch (where._tag) {
     case "True":
       return undefined;
-    case "Compare": {
-      if (where.value === null) {
-        return isNullTest(where)
-          ? fieldCheck(collection, declaration, where.field, "isnull")
-          : deny(
-              collection,
-              `literal null for field "${where.field}" ("${where.op}") is not a comparable value`
-            );
-      }
-      return (
-        fieldCheck(collection, declaration, where.field, where.op) ??
-        literalCheck(collection, declaration, where.field, where.op, where.value)
-      );
-    }
+    case "Compare":
+      return compareCheck(collection, declaration, where);
     case "In":
       return inCheck(collection, declaration, where, "in");
     case "And":
-    case "Or": {
-      for (const predicate of where.predicates) {
-        const failed = checkWhere(collection, declaration, predicate);
-        if (failed !== undefined) return failed;
-      }
-      return undefined;
-    }
-    case "Not": {
-      const inner = where.predicate;
-      if (inner._tag === "In") return inCheck(collection, declaration, inner, "nin");
-      if (inner._tag === "Compare" && isNullTest(inner)) {
-        return fieldCheck(collection, declaration, inner.field, "isnull");
-      }
-      return checkWhere(collection, declaration, inner);
-    }
+    case "Or":
+      return connectiveCheck(collection, declaration, where.predicates);
+    case "Not":
+      return notCheck(collection, declaration, where.predicate);
     case "Exists":
       return deny(collection, `"Exists" is not allowed in a client predicate`);
     default:
@@ -388,6 +389,54 @@ export const checkWhere = (
         `predicate node "${(where as { readonly _tag: string })._tag}" is not allowed in a client predicate`
       );
   }
+};
+
+type CompareNode = Extract<Predicate, { readonly _tag: "Compare" }>;
+
+/** A `Compare`: its operator on its field, or `isnull` for the null-literal wire form. */
+const compareCheck = (
+  collection: string,
+  declaration: FilterDeclaration,
+  node: CompareNode
+): AuthorizationError | undefined => {
+  if (node.value === null) {
+    return isNullTest(node)
+      ? fieldCheck(collection, declaration, node.field, "isnull")
+      : deny(
+          collection,
+          `literal null for field "${node.field}" ("${node.op}") is not a comparable value`
+        );
+  }
+  return (
+    fieldCheck(collection, declaration, node.field, node.op) ??
+    literalCheck(collection, declaration, node.field, node.op, node.value)
+  );
+};
+
+/** `And` / `Or`: the first inadmissible operand decides. */
+const connectiveCheck = (
+  collection: string,
+  declaration: FilterDeclaration,
+  predicates: ReadonlyArray<Predicate>
+): AuthorizationError | undefined => {
+  for (const predicate of predicates) {
+    const failed = checkWhere(collection, declaration, predicate);
+    if (failed !== undefined) return failed;
+  }
+  return undefined;
+};
+
+/** `Not`: `Not(In)` is `nin`, a negated null test is `isnull`, anything else recurses. */
+const notCheck = (
+  collection: string,
+  declaration: FilterDeclaration,
+  inner: Predicate
+): AuthorizationError | undefined => {
+  if (inner._tag === "In") return inCheck(collection, declaration, inner, "nin");
+  if (inner._tag === "Compare" && isNullTest(inner)) {
+    return fieldCheck(collection, declaration, inner.field, "isnull");
+  }
+  return checkWhere(collection, declaration, inner);
 };
 
 /** Check a client-authored `orderBy`: every field must be sortable. */
