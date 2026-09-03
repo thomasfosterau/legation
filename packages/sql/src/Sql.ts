@@ -9,7 +9,10 @@
  *
  * Predicate → SQL:
  * - `True` → `1 = 1`
- * - `Compare` → `col <op> ?` (or `col IS [NOT] NULL` for null equality)
+ * - `Compare` → `col <op> ?`; a `null` literal binds as `NULL`, so the
+ *   comparison is unknown for every row — exactly `Predicate.evaluate`
+ *   (ADR-0028 §5). `IS NULL` is the `IsNull` node, which
+ *   `Predicate.eq(f, null)` desugars to.
  * - `In` → `col IN (?, ?, …)` (empty set → `1 = 0`)
  * - `NotIn` → `col NOT IN (?, ?, …)` (empty set → `1 = 1`)
  * - `IsNull` → `col IS NULL` / `col IS NOT NULL`
@@ -66,9 +69,6 @@ const compileNode = (predicate: Predicate.Predicate, dialect: Dialect, params: P
       return "1 = 1";
     case "Compare": {
       const column = dialect.quote(predicate.field);
-      if (predicate.value === null) {
-        return `${column} IS ${predicate.op === "ne" ? "NOT " : ""}NULL`;
-      }
       return `${column} ${comparators[predicate.op]} ${params.bind(predicate.value)}`;
     }
     case "In": {

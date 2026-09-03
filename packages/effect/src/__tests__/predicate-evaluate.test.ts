@@ -159,6 +159,20 @@ describe("Predicate.evaluate (ADR-0028)", () => {
       expect(Predicate.evaluate(Predicate.notIn("s", ["a"]), {})).toEqual(U);
     });
 
+    it("In/NotIn are unknown on a type mismatch, like Compare (rule d)", () => {
+      // No listed literal has the field's type: unknown, so `Not(In)` and
+      // `Not(eq)` agree instead of one flipping a definite false to true.
+      expect(Predicate.evaluate(Predicate.isIn("n", ["1"]), { n: 1 })).toEqual(U);
+      expect(Predicate.evaluate(Predicate.notIn("n", ["1"]), { n: 1 })).toEqual(U);
+      expect(Predicate.evaluate(Predicate.not(Predicate.isIn("n", ["1"])), { n: 1 })).toEqual(U);
+      expect(Predicate.evaluate(Predicate.isIn("n", [true]), { n: { nested: 1 } })).toEqual(U);
+      // One same-typed literal is enough to make the miss definite.
+      expect(Predicate.evaluate(Predicate.isIn("n", ["1", 2]), { n: 1 })).toEqual(F);
+      expect(Predicate.evaluate(Predicate.notIn("n", ["1", 2]), { n: 1 })).toEqual(T);
+      // A match is definite regardless of the other literals' types.
+      expect(Predicate.evaluate(Predicate.isIn("n", ["1", 1]), { n: 1 })).toEqual(T);
+    });
+
     it("IsNull is always definite", () => {
       expect(Predicate.evaluate(Predicate.isNull("s"), { s: null })).toEqual(T);
       expect(Predicate.evaluate(Predicate.isNull("s"), {})).toEqual(T);

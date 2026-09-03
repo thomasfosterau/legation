@@ -226,14 +226,42 @@ export const compareText = (a: string, b: string): number => {
  * are not of one comparable type — the "type mismatch" of rule (d).
  */
 export const compareLiterals = (left: unknown, right: unknown): number | undefined => {
-  if (typeof left === "number" && typeof right === "number") {
-    return left < right ? -1 : left > right ? 1 : 0;
+  if (typeof left !== typeof right) return undefined;
+  switch (typeof left) {
+    case "number":
+      return numericOrder(left, right as number);
+    case "string":
+      return compareText(left, right as string);
+    case "boolean":
+      return numericOrder(Number(left), Number(right));
+    default:
+      return undefined;
   }
-  if (typeof left === "string" && typeof right === "string") return compareText(left, right);
-  if (typeof left === "boolean" && typeof right === "boolean") {
-    return left === right ? 0 : left ? 1 : -1;
+};
+
+const numericOrder = (left: number, right: number): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
+/**
+ * Whether a comparison operator holds for an ordering result (`-1`, `0`,
+ * `1`) from {@link compareLiterals}: the per-operator table of ADR-0028
+ * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
+ */
+export const holds = (op: Comparison, ordered: number): boolean => {
+  switch (op) {
+    case "eq":
+      return ordered === 0;
+    case "ne":
+      return ordered !== 0;
+    case "gt":
+      return ordered > 0;
+    case "gte":
+      return ordered >= 0;
+    case "lt":
+      return ordered < 0;
+    case "lte":
+      return ordered <= 0;
   }
-  return undefined;
 };
 
 // ─── Evaluation ──────────────────────────────────────────────────────────────
@@ -258,30 +286,21 @@ const UNKNOWN: Option.Option<boolean> = Option.none();
 
 const definite = (value: boolean): Option.Option<boolean> => (value ? TRUE : FALSE);
 
-/** A `Compare` over a present field and a non-null literal (the per-operator table). */
-const compareValues = (op: Comparison, left: unknown, right: Literal): Option.Option<boolean> => {
-  const ordered = compareLiterals(left, right);
-  if (ordered === undefined) return UNKNOWN;
-  switch (op) {
-    case "eq":
-      return definite(ordered === 0);
-    case "ne":
-      return definite(ordered !== 0);
-    case "gt":
-      return definite(ordered > 0);
-    case "gte":
-      return definite(ordered >= 0);
-    case "lt":
-      return definite(ordered < 0);
-    case "lte":
-      return definite(ordered <= 0);
-  }
+type CompareNode = Extract<Predicate, { readonly _tag: "Compare" }>;
+
+/** `Compare`: unknown on a NULL field, a `null` literal or a type mismatch; else the operator. */
+const evaluateCompare = (predicate: CompareNode, row: unknown): Option.Option<boolean> => {
+  const left = fieldValue(row, predicate.field);
+  if (isNullish(left) || predicate.value === null) return UNKNOWN;
+  const ordered = compareLiterals(left, predicate.value);
+  return ordered === undefined ? UNKNOWN : definite(holds(predicate.op, ordered));
 };
 
 /**
  * `In` / `NotIn` over a present field and a non-empty list: `Some(onMatch)`
  * on a match; unknown when no listed literal matches and one of them is
- * `null`; else `Some(!onMatch)`.
+ * `null`, or when no listed literal has the field's type (rule (d), so
+ * `Not(In)` and `Not(eq)` agree on a mismatch); else `Some(!onMatch)`.
  */
 const membership = (
   left: unknown,
@@ -290,8 +309,55 @@ const membership = (
 ): Option.Option<boolean> => {
   if (values.includes(left as Literal)) return definite(onMatch);
   if (values.includes(null)) return UNKNOWN;
+  if (!values.some((value) => compareLiterals(left, value) !== undefined)) return UNKNOWN;
   return definite(!onMatch);
 };
+
+/**
+ * `In` (`onMatch` true) / `NotIn` (`onMatch` false). An empty list is
+ * definite before the field is even read: SQL has no `x IN ()`, and the
+ * compilers render it as `1 = 0` / `1 = 1`, which is false / true for a NULL
+ * row too. The harness pins this.
+ */
+const evaluateMembership = (
+  field: string,
+  values: ReadonlyArray<Literal>,
+  onMatch: boolean,
+  row: unknown
+): Option.Option<boolean> => {
+  if (values.length === 0) return definite(!onMatch);
+  const left = fieldValue(row, field);
+  return isNullish(left) ? UNKNOWN : membership(left, values, onMatch);
+};
+
+/** Kleene `And`: `Some(false)` if any operand is, else unknown if any is, else `Some(true)`. */
+const evaluateAnd = (
+  predicates: ReadonlyArray<Predicate>,
+  row: unknown
+): Option.Option<boolean> => {
+  let unknown = false;
+  for (const inner of predicates) {
+    const result = evaluate(inner, row);
+    if (Option.isNone(result)) unknown = true;
+    else if (!result.value) return FALSE;
+  }
+  return unknown ? UNKNOWN : TRUE;
+};
+
+/** Kleene `Or`: `Some(true)` if any operand is, else unknown if any is, else `Some(false)`. */
+const evaluateOr = (predicates: ReadonlyArray<Predicate>, row: unknown): Option.Option<boolean> => {
+  let unknown = false;
+  for (const inner of predicates) {
+    const result = evaluate(inner, row);
+    if (Option.isNone(result)) unknown = true;
+    else if (result.value) return TRUE;
+  }
+  return unknown ? UNKNOWN : FALSE;
+};
+
+/** Kleene `Not`, over the shared constants rather than `Option.map`: no allocation per row. */
+const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
+  Option.isNone(inner) ? UNKNOWN : inner.value ? FALSE : TRUE;
 
 /**
  * Evaluate a predicate against a row value under Postgres's three-valued
@@ -305,7 +371,7 @@ const membership = (
  * - `In` → `Some(false)` on an empty list (definite even for a NULL field:
  *   the compilers render it `1 = 0`); else unknown if the field is NULL;
  *   `Some(true)` on a match; unknown if no match and a listed literal is
- *   `null`; else `Some(false)`.
+ *   `null` or none has the field's type; else `Some(false)`.
  * - `NotIn` → the same with `true`/`false` swapped (`x <> a AND x <> b`;
  *   empty list `Some(true)`, `1 = 1`).
  * - `IsNull` → always definite: `Some(field is NULL)`, flipped by `negated`.
@@ -320,47 +386,22 @@ const membership = (
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
   switch (predicate._tag) {
     case "True":
-      return TRUE;
-    case "Compare": {
-      const left = fieldValue(row, predicate.field);
-      if (isNullish(left) || predicate.value === null) return UNKNOWN;
-      return compareValues(predicate.op, left, predicate.value);
-    }
-    case "In":
-    case "NotIn": {
-      const onMatch = predicate._tag === "In";
-      // An empty list is definite before the field is even read: SQL has no
-      // `x IN ()`, and the compilers render it as `1 = 0` / `1 = 1`, which is
-      // false / true for a NULL row too. The harness pins this.
-      if (predicate.values.length === 0) return definite(!onMatch);
-      const left = fieldValue(row, predicate.field);
-      if (isNullish(left)) return UNKNOWN;
-      return membership(left, predicate.values, onMatch);
-    }
-    case "IsNull":
-      return definite(isNullish(fieldValue(row, predicate.field)) !== (predicate.negated === true));
-    case "And": {
-      let unknown = false;
-      for (const inner of predicate.predicates) {
-        const result = evaluate(inner, row);
-        if (Option.isNone(result)) unknown = true;
-        else if (!result.value) return FALSE;
-      }
-      return unknown ? UNKNOWN : TRUE;
-    }
-    case "Or": {
-      let unknown = false;
-      for (const inner of predicate.predicates) {
-        const result = evaluate(inner, row);
-        if (Option.isNone(result)) unknown = true;
-        else if (result.value) return TRUE;
-      }
-      return unknown ? UNKNOWN : FALSE;
-    }
-    case "Not":
-      return Option.map(evaluate(predicate.predicate, row), (value) => !value);
     case "Exists":
       return TRUE;
+    case "Compare":
+      return evaluateCompare(predicate, row);
+    case "In":
+      return evaluateMembership(predicate.field, predicate.values, true, row);
+    case "NotIn":
+      return evaluateMembership(predicate.field, predicate.values, false, row);
+    case "IsNull":
+      return definite(isNullish(fieldValue(row, predicate.field)) !== (predicate.negated === true));
+    case "And":
+      return evaluateAnd(predicate.predicates, row);
+    case "Or":
+      return evaluateOr(predicate.predicates, row);
+    case "Not":
+      return negate(evaluate(predicate.predicate, row));
   }
 };
 

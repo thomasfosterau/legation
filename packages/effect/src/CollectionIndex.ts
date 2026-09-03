@@ -83,15 +83,9 @@ export const fieldNames = (index: CollectionIndex): ReadonlySet<string> =>
 
 // ─── Ordered maintenance (binary search insert/remove/range) ────────────────
 
-/** Order two sorted-run values of one type: numbers numerically, text by code point. */
+/** Order two sorted-run values; each run holds one type, so `compareLiterals` always answers. */
 const valueOrder = (a: number | string, b: number | string): number =>
-  typeof a === "string" && typeof b === "string"
-    ? Predicate.compareText(a, b)
-    : a < b
-      ? -1
-      : a > b
-        ? 1
-        : 0;
+  Predicate.compareLiterals(a, b) ?? 0;
 
 const entryOrder = (a: SortedEntry, b: SortedEntry): number => {
   const byValue = valueOrder(a.value, b.value);
@@ -267,57 +261,54 @@ const booleanRangeIds = (
 ): ReadonlySet<RowId> =>
   hashLookupIn(
     fi,
-    [false, true].filter((candidate) => {
-      const ordered = Predicate.compareLiterals(candidate, value)!;
-      switch (op) {
-        case "gt":
-          return ordered > 0;
-        case "gte":
-          return ordered >= 0;
-        case "lt":
-          return ordered < 0;
-        case "lte":
-          return ordered <= 0;
-        default:
-          return false;
-      }
-    })
+    [false, true].filter((candidate) =>
+      Predicate.holds(op, Predicate.compareLiterals(candidate, value) ?? 0)
+    )
   );
 
-/** The narrowed id set an indexable conjunct yields, or `undefined` when it can't narrow. */
+type CompareNode = Extract<Predicate.Predicate, { readonly _tag: "Compare" }>;
+
+/** The ids a `Compare` conjunct narrows to on an indexed field, or `undefined` for `ne`. */
+const compareIds = (fi: FieldIndex, conjunct: CompareNode): ReadonlySet<RowId> | undefined => {
+  if (conjunct.op === "ne") return undefined; // complement of a bucket isn't narrowing
+  if (conjunct.value === null) return EMPTY_IDS; // unknown for every row (ADR-0028 §5)
+  if (conjunct.op === "eq") return hashLookup(fi, conjunct.value);
+  if (typeof conjunct.value === "number") return rangeIds(fi.numbers, conjunct.op, conjunct.value);
+  if (typeof conjunct.value === "string") return rangeIds(fi.strings, conjunct.op, conjunct.value);
+  return booleanRangeIds(fi, conjunct.op, conjunct.value);
+};
+
+/** Apply `narrow` to the field's index when the field is indexed; `undefined` otherwise. */
+const onField = (
+  index: CollectionIndex,
+  field: string,
+  narrow: (fi: FieldIndex) => ReadonlySet<RowId> | undefined
+): ReadonlySet<RowId> | undefined => {
+  const fi = index.fields.get(field);
+  return fi === undefined ? undefined : narrow(fi);
+};
+
+/**
+ * The narrowed id set an indexable conjunct yields, or `undefined` when it
+ * can't narrow. Only `Compare`, `In` and a non-negated `IsNull` narrow; every
+ * other node (`NotIn`, `Not`, `Or`, …) is residual by default, which is also
+ * the safe answer for any node added later.
+ */
 const conjunctIds = (
   index: CollectionIndex,
   conjunct: Predicate.Predicate
 ): ReadonlySet<RowId> | undefined => {
   switch (conjunct._tag) {
-    case "Compare": {
-      const fi = index.fields.get(conjunct.field);
-      if (fi === undefined) return undefined;
-      if (conjunct.op === "ne") return undefined; // complement of a bucket isn't narrowing
-      if (conjunct.value === null) return EMPTY_IDS; // unknown for every row (ADR-0028 §5)
-      if (conjunct.op === "eq") return hashLookup(fi, conjunct.value);
-      if (typeof conjunct.value === "number")
-        return rangeIds(fi.numbers, conjunct.op, conjunct.value);
-      if (typeof conjunct.value === "string")
-        return rangeIds(fi.strings, conjunct.op, conjunct.value);
-      return booleanRangeIds(fi, conjunct.op, conjunct.value);
-    }
-    case "In": {
-      const fi = index.fields.get(conjunct.field);
-      if (fi === undefined) return undefined;
-      return hashLookupIn(fi, conjunct.values);
-    }
-    case "IsNull": {
-      if (conjunct.negated === true) return undefined; // complement isn't narrowing
-      const fi = index.fields.get(conjunct.field);
-      return fi === undefined ? undefined : fi.nulls;
-    }
-    case "NotIn":
-    case "True":
-    case "And":
-    case "Or":
-    case "Not":
-    case "Exists":
+    case "Compare":
+      return onField(index, conjunct.field, (fi) => compareIds(fi, conjunct));
+    case "In":
+      return onField(index, conjunct.field, (fi) => hashLookupIn(fi, conjunct.values));
+    case "IsNull":
+      // `IS NOT NULL` is the complement of a bucket: not narrowing.
+      return conjunct.negated === true
+        ? undefined
+        : onField(index, conjunct.field, (fi) => fi.nulls);
+    default:
       return undefined;
   }
 };

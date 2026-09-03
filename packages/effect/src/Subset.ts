@@ -185,10 +185,7 @@ export interface Row {
   readonly value: unknown;
 }
 
-const fieldOf = (value: unknown, field: string): unknown =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)[field]
-    : undefined;
+const fieldOf = Predicate.fieldValue;
 
 /**
  * Compare two field values ascending, as Postgres orders a column (ADR-0028

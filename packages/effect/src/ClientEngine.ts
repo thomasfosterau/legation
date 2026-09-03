@@ -993,7 +993,12 @@ export const make = (
       const conjuncts = where._tag === "And" ? where.predicates : [where];
       const fields: Array<string> = [];
       for (const conjunct of conjuncts) {
-        if (conjunct._tag === "Compare" || conjunct._tag === "In" || conjunct._tag === "IsNull") {
+        // Mirrors `CollectionIndex.conjunctIds`: `IS NOT NULL` never narrows.
+        if (
+          conjunct._tag === "Compare" ||
+          conjunct._tag === "In" ||
+          (conjunct._tag === "IsNull" && conjunct.negated !== true)
+        ) {
           fields.push(conjunct.field);
         }
       }

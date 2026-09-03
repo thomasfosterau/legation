@@ -461,6 +461,23 @@ const focusedWhere: ReadonlyArray<{
     ids: nullAndAbsent,
   },
   {
+    // The deprecated wire form (ADR-0028 §5): unknown for every row on
+    // every leg, unlike the constructor `eq(f, null)`, which is `IsNull`.
+    name: "wire Compare eq with a null literal (unknown everywhere)",
+    predicate: Predicate.compare("eq", "s", null),
+    ids: nullAndAbsent,
+  },
+  {
+    name: "wire Compare ne with a null literal (unknown everywhere)",
+    predicate: Predicate.compare("ne", "s", null),
+    ids: nullAndAbsent,
+  },
+  {
+    name: "Not(wire Compare eq null) stays unknown",
+    predicate: Predicate.not(Predicate.compare("eq", "s", null)),
+    ids: nullAndAbsent,
+  },
+  {
     name: "IsNull negated over a NULL row and an absent row",
     predicate: Predicate.isNotNull("s"),
     ids: nullAndAbsent,
