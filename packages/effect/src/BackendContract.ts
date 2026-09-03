@@ -353,7 +353,7 @@ const generatedCorpus = (
   nextMutationId: number
 ) =>
   Effect.gen(function* () {
-    const corpus = FilterCorpus.generateCorpus({
+    const corpus = yield* FilterCorpus.generateCorpus({
       seed: FilterCorpus.DEFAULT_SEED,
       columns: [
         { name: "rank", kind: "integer" },

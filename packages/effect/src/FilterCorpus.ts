@@ -13,10 +13,13 @@
  * and a minimiser that shrinks a disagreeing predicate/row pair to its
  * smallest reproducing form.
  *
- * No `fast-check` in this repo's dependency set (see
- * `collection-index-property.test.ts`), so the PRNG is a hand-rolled
- * mulberry32 with a fixed default seed; a failure reports the seed so it
- * reproduces exactly.
+ * The generators are Effects over Effect's `Random` service, and
+ * `generateCorpus` runs them under `Random.withSeed(seed)` — Effect's own
+ * seedable generator — so a seed reproduces a corpus exactly and a failure
+ * reports the seed. This is the repo's shared corpus module; the property
+ * tests elsewhere still carry their own hand-rolled mulberry32 copies (no
+ * `fast-check` in the dependency set), and `Random.withSeed` is the idiom
+ * to reach for instead of another copy.
  *
  * Rule (d) of ADR-0028 — no cross-type comparison — is enforced here by
  * construction: a leaf's literal always has its column's kind. Rule (e)
@@ -27,33 +30,19 @@
  * meaning.
  */
 
-import { Effect } from "effect";
+import { Effect, Random } from "effect";
 import * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
 
-// ─── Deterministic PRNG (mulberry32) ─────────────────────────────────────────
-
-/** A seeded uniform generator over `[0, 1)`. */
-export type Rng = () => number;
-
-/** mulberry32: a small, fast, deterministic PRNG — the repo's convention. */
-export const mulberry32 = (seed: number): Rng => {
-  let state = seed;
-  return () => {
-    state |= 0;
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+// ─── Draws over the Random service ───────────────────────────────────────────
 
 /** A uniform integer in `[0, max)`. */
-export const int = (rng: Rng, max: number): number => Math.floor(rng() * max);
-/** A uniform pick from a non-empty list. */
-export const pick = <A>(rng: Rng, xs: ReadonlyArray<A>): A => xs[int(rng, xs.length)]!;
+const int = (max: number): Effect.Effect<number> =>
+  Random.nextIntBetween(0, max, { halfOpen: true });
+/** A uniform pick from a non-empty list (an empty one is a generator bug). */
+const pick = <A>(xs: ReadonlyArray<A>): Effect.Effect<A> => Random.choice(xs).pipe(Effect.orDie);
 /** `true` with probability `p`. */
-export const chance = (rng: Rng, p: number): boolean => rng() < p;
+const chance = (p: number): Effect.Effect<boolean> => Effect.map(Random.next, (roll) => roll < p);
 
 /** The default corpus seed; `LEGATION_CORPUS_SEED` overrides it. */
 export const DEFAULT_SEED = 20260902;
@@ -161,7 +150,7 @@ const ASCII_STRINGS: ReadonlyArray<string> = [
 ];
 
 /** BMP non-ASCII: Latin-1, a private-use character, and the U+FFFF noncharacter. */
-const BMP_STRINGS: ReadonlyArray<string> = ["é", "ß", "éa", "", "￿", "ｱ"];
+const BMP_STRINGS: ReadonlyArray<string> = ["é", "ß", "éa", "", "￿", "ｱ"];
 
 /** Astral characters, alone and mixed with BMP text. */
 const ASTRAL_STRINGS: ReadonlyArray<string> = [
@@ -249,6 +238,56 @@ export interface CorpusRow {
 const NULL_RATE = 0.12;
 const ABSENT_RATE = 0.08;
 
+/** The shape of one row set: its columns, their pools, and the pinned prefix. */
+interface RowPlan {
+  readonly columns: ReadonlyArray<Column>;
+  readonly pools: ReadonlyArray<ReadonlyArray<Predicate.Literal>>;
+  readonly nulls: boolean;
+  /** Rows 0..pinned-1 are the all-NULL and all-absent rows (with `nulls`). */
+  readonly pinned: number;
+  /** Rows pinned..pinned+sweep-1 walk every pool value into every column. */
+  readonly sweep: number;
+}
+
+const planRows = (columns: ReadonlyArray<Column>, options: ResolvedOptions): RowPlan => {
+  const pools = columns.map((column) => poolFor(column.kind, options).rows);
+  return {
+    columns,
+    pools,
+    nulls: options.nulls,
+    pinned: options.nulls ? 2 : 0,
+    sweep: Math.max(0, ...pools.map((pool) => pool.length)),
+  };
+};
+
+/** A random field value: NULL, absent (`undefined`), or a pool value. */
+const randomField = (
+  pool: ReadonlyArray<Predicate.Literal>,
+  nulls: boolean
+): Effect.Effect<Predicate.Literal | undefined> =>
+  Effect.gen(function* () {
+    if (nulls) {
+      const roll = yield* Random.next;
+      if (roll < NULL_RATE) return null;
+      if (roll < NULL_RATE + ABSENT_RATE) return undefined;
+    }
+    return yield* pick(pool);
+  });
+
+const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
+  Effect.gen(function* () {
+    const value: Record<string, Predicate.Literal> = {};
+    for (const [c, column] of plan.columns.entries()) {
+      const pool = plan.pools[c]!;
+      let field: Predicate.Literal | undefined;
+      if (index < plan.pinned) field = index === 0 ? null : undefined;
+      else if (index < plan.pinned + plan.sweep) field = pool[(index - plan.pinned) % pool.length];
+      else field = yield* randomField(pool, plan.nulls);
+      if (field !== undefined) value[column.name] = field;
+    }
+    return { id: `r${String(index).padStart(3, "0")}`, value };
+  });
+
 /**
  * Generate `count` rows over `columns`. Coverage of the edge values is
  * guaranteed, not left to chance: with `nulls` on, row 0 is all-NULL and row
@@ -260,39 +299,15 @@ const ABSENT_RATE = 0.08;
  * tie-break comparable across legs.
  */
 export const generateRows = (
-  rng: Rng,
   count: number,
   columns: ReadonlyArray<Column> = corpusColumns,
   options?: CorpusOptions
-): ReadonlyArray<CorpusRow> => {
-  const resolved = resolveOptions(options);
-  const pools = columns.map((column) => poolFor(column.kind, resolved).rows);
-  const pinned = resolved.nulls ? 2 : 0;
-  const sweep = Math.max(0, ...pools.map((pool) => pool.length));
-  return Array.from({ length: count }, (_, index) => {
-    const value: Record<string, Predicate.Literal> = {};
-    columns.forEach((column, c) => {
-      const pool = pools[c]!;
-      if (index < pinned) {
-        if (index === 0) value[column.name] = null;
-        return;
-      }
-      if (index < pinned + sweep) {
-        value[column.name] = pool[(index - pinned) % pool.length]!;
-        return;
-      }
-      if (resolved.nulls) {
-        const roll = rng();
-        if (roll < NULL_RATE) {
-          value[column.name] = null;
-          return;
-        }
-        if (roll < NULL_RATE + ABSENT_RATE) return;
-      }
-      value[column.name] = pick(rng, pool);
-    });
-    return { id: `r${String(index).padStart(3, "0")}`, value };
-  });
+): Effect.Effect<ReadonlyArray<CorpusRow>> => {
+  const plan = planRows(columns, resolveOptions(options));
+  return Effect.forEach(
+    Array.from({ length: count }, (_, index) => index),
+    (index) => generateRow(plan, index)
+  );
 };
 
 // ─── Operators ───────────────────────────────────────────────────────────────
@@ -342,34 +357,45 @@ interface LeafOperator {
   readonly name: OperatorName;
   /** An ordered comparison: applied to a boolean column only with `booleanOrder`. */
   readonly ordered: boolean;
+  /** Build the leaf from a literal draw and a list draw; each runs only if used. */
   readonly build: (
     field: string,
-    literal: () => Predicate.Literal,
-    list: () => ReadonlyArray<Predicate.Literal>
-  ) => Predicate.Predicate;
+    literal: Effect.Effect<Predicate.Literal>,
+    list: Effect.Effect<ReadonlyArray<Predicate.Literal>>
+  ) => Effect.Effect<Predicate.Predicate>;
 }
+
+const comparison =
+  (make: (field: string, value: Predicate.Literal) => Predicate.Predicate): LeafOperator["build"] =>
+  (field, literal) =>
+    Effect.map(literal, (value) => make(field, value));
 
 /** The leaf operator table: one constructor per core operator. */
 export const leafOperators: ReadonlyArray<LeafOperator> = [
-  { name: "eq", ordered: false, build: (field, literal) => Predicate.eq(field, literal()) },
-  { name: "ne", ordered: false, build: (field, literal) => Predicate.ne(field, literal()) },
-  { name: "gt", ordered: true, build: (field, literal) => Predicate.gt(field, literal()) },
-  { name: "gte", ordered: true, build: (field, literal) => Predicate.gte(field, literal()) },
-  { name: "lt", ordered: true, build: (field, literal) => Predicate.lt(field, literal()) },
-  { name: "lte", ordered: true, build: (field, literal) => Predicate.lte(field, literal()) },
-  { name: "in", ordered: false, build: (field, _literal, list) => Predicate.isIn(field, list()) },
+  { name: "eq", ordered: false, build: comparison(Predicate.eq) },
+  { name: "ne", ordered: false, build: comparison(Predicate.ne) },
+  { name: "gt", ordered: true, build: comparison(Predicate.gt) },
+  { name: "gte", ordered: true, build: comparison(Predicate.gte) },
+  { name: "lt", ordered: true, build: comparison(Predicate.lt) },
+  { name: "lte", ordered: true, build: comparison(Predicate.lte) },
+  {
+    name: "in",
+    ordered: false,
+    build: (field, _literal, list) => Effect.map(list, (values) => Predicate.isIn(field, values)),
+  },
   {
     name: "nin",
     ordered: false,
     // #155: replace with the `NotIn` node once it exists.
-    build: (field, _literal, list) => Predicate.not(Predicate.isIn(field, list())),
+    build: (field, _literal, list) =>
+      Effect.map(list, (values) => Predicate.not(Predicate.isIn(field, values))),
   },
   {
     name: "isnull",
     ordered: false,
     // `eq(field, null)` is IS NULL in both JS and SQL today (`Sql.ts` null
     // special case). #155: replace with the `IsNull` node once it exists.
-    build: (field) => Predicate.eq(field, null),
+    build: (field) => Effect.succeed(Predicate.eq(field, null)),
   },
 ];
 
@@ -378,32 +404,42 @@ export const leafOperators: ReadonlyArray<LeafOperator> = [
 const EMPTY_IN_RATE = 0.1;
 const LEAF_RATE = 0.55;
 const TRUE_RATE = 0.03;
+const FOREIGN_RATE = 0.3;
 
-const literalFor = (rng: Rng, pool: Pool): Predicate.Literal =>
-  chance(rng, 0.3) && pool.foreign.length > 0 ? pick(rng, pool.foreign) : pick(rng, pool.rows);
+/** A literal of the pool's kind: usually one that occurs, sometimes one that does not. */
+const literalFor = (pool: Pool): Effect.Effect<Predicate.Literal> =>
+  Effect.gen(function* () {
+    const foreign = pool.foreign.length > 0 && (yield* chance(FOREIGN_RATE));
+    return yield* pick(foreign ? pool.foreign : pool.rows);
+  });
+
+/** An `In` list: occasionally empty, otherwise 1–4 literals. */
+const listFor = (pool: Pool): Effect.Effect<ReadonlyArray<Predicate.Literal>> =>
+  Effect.gen(function* () {
+    if (yield* chance(EMPTY_IN_RATE)) return [];
+    const length = 1 + (yield* int(4));
+    return yield* literalFor(pool).pipe(Effect.replicateEffect(length));
+  });
 
 const generateLeaf = (
-  rng: Rng,
   columns: ReadonlyArray<Column>,
   options: ResolvedOptions,
   coverage: Coverage
-): Predicate.Predicate => {
-  if (chance(rng, TRUE_RATE)) {
-    coverage.true++;
-    return Predicate.always;
-  }
-  const column = pick(rng, columns);
-  const pool = poolFor(column.kind, options);
-  const candidates = leafOperators.filter(
-    (op) => !op.ordered || column.kind !== "boolean" || options.booleanOrder
-  );
-  const operator = pick(rng, candidates);
-  coverage[operator.name]++;
-  const literal = () => literalFor(rng, pool);
-  const list = () =>
-    chance(rng, EMPTY_IN_RATE) ? [] : Array.from({ length: 1 + int(rng, 4) }, literal);
-  return operator.build(column.name, literal, list);
-};
+): Effect.Effect<Predicate.Predicate> =>
+  Effect.gen(function* () {
+    if (yield* chance(TRUE_RATE)) {
+      coverage.true++;
+      return Predicate.always;
+    }
+    const column = yield* pick(columns);
+    const pool = poolFor(column.kind, options);
+    const candidates = leafOperators.filter(
+      (op) => !op.ordered || column.kind !== "boolean" || options.booleanOrder
+    );
+    const operator = yield* pick(candidates);
+    coverage[operator.name]++;
+    return yield* operator.build(column.name, literalFor(pool), listFor(pool));
+  });
 
 /**
  * Generate one depth-bounded predicate tree: leaves from the operator table
@@ -412,30 +448,31 @@ const generateLeaf = (
  * tallied into `coverage`.
  */
 export const generatePredicate = (
-  rng: Rng,
   columns: ReadonlyArray<Column>,
   options: CorpusOptions | undefined,
   coverage: Coverage,
   depth = 2
-): Predicate.Predicate => {
+): Effect.Effect<Predicate.Predicate> => {
   const resolved = resolveOptions(options);
-  const go = (remaining: number): Predicate.Predicate => {
-    if (remaining === 0 || chance(rng, LEAF_RATE)) {
-      return generateLeaf(rng, columns, resolved, coverage);
-    }
-    const shape = int(rng, 3);
-    if (shape === 2) {
-      coverage.not++;
-      return Predicate.not(go(remaining - 1));
-    }
-    const children = Array.from({ length: 2 + int(rng, 2) }, () => go(remaining - 1));
-    if (shape === 0) {
-      coverage.and++;
-      return Predicate.and(...children);
-    }
-    coverage.or++;
-    return Predicate.or(...children);
-  };
+  const go = (remaining: number): Effect.Effect<Predicate.Predicate> =>
+    Effect.gen(function* () {
+      if (remaining === 0 || (yield* chance(LEAF_RATE))) {
+        return yield* generateLeaf(columns, resolved, coverage);
+      }
+      const shape = yield* int(3);
+      if (shape === 2) {
+        coverage.not++;
+        return Predicate.not(yield* go(remaining - 1));
+      }
+      const width = 2 + (yield* int(2));
+      const children = yield* go(remaining - 1).pipe(Effect.replicateEffect(width));
+      if (shape === 0) {
+        coverage.and++;
+        return Predicate.and(...children);
+      }
+      coverage.or++;
+      return Predicate.or(...children);
+    });
   return go(depth);
 };
 
@@ -443,19 +480,18 @@ export const generatePredicate = (
 
 /** Generate 1–2 `orderBy` terms over distinct columns with random directions. */
 export const generateOrderBy = (
-  rng: Rng,
   columns: ReadonlyArray<Column> = corpusColumns
-): ReadonlyArray<Subset.OrderBy> => {
-  const count = Math.min(columns.length, 1 + int(rng, 2));
-  const remaining = [...columns];
-  const terms: Array<Subset.OrderBy> = [];
-  for (let n = 0; n < count; n++) {
-    const index = int(rng, remaining.length);
-    const [column] = remaining.splice(index, 1);
-    terms.push({ field: column!.name, direction: chance(rng, 0.5) ? "asc" : "desc" });
-  }
-  return terms;
-};
+): Effect.Effect<ReadonlyArray<Subset.OrderBy>> =>
+  Effect.gen(function* () {
+    const count = Math.min(columns.length, 1 + (yield* int(2)));
+    const shuffled = yield* Random.shuffle(columns);
+    return yield* Effect.forEach(shuffled.slice(0, count), (column) =>
+      Effect.map(
+        Random.nextBoolean,
+        (asc): Subset.OrderBy => ({ field: column.name, direction: asc ? "asc" : "desc" })
+      )
+    );
+  });
 
 // ─── Corpus ──────────────────────────────────────────────────────────────────
 
@@ -483,20 +519,30 @@ export interface Corpus {
   readonly coverage: Coverage;
 }
 
-/** Generate a whole corpus deterministically from a seed. */
-export const generateCorpus = (options: GenerateOptions): Corpus => {
-  const rng = mulberry32(options.seed);
-  const columns = options.columns ?? corpusColumns;
-  const coverage = emptyCoverage();
-  const rows = generateRows(rng, options.rows ?? 64, columns, options);
-  const predicates = Array.from({ length: options.predicates ?? 200 }, () =>
-    generatePredicate(rng, columns, options, coverage, options.depth ?? 2)
-  );
-  const orderBys = Array.from({ length: options.orderBys ?? 60 }, () =>
-    generateOrderBy(rng, columns)
-  );
-  return { seed: options.seed, columns, rows, predicates, orderBys, coverage };
-};
+/**
+ * Generate a whole corpus deterministically from a seed. The generators run
+ * under `Random.withSeed(options.seed)`; the seeding is suspended so every
+ * run of the returned effect starts the sequence afresh and yields the same
+ * corpus.
+ */
+export const generateCorpus = (options: GenerateOptions): Effect.Effect<Corpus> =>
+  Effect.suspend(() => {
+    const columns = options.columns ?? corpusColumns;
+    const coverage = emptyCoverage();
+    return Effect.gen(function* () {
+      const rows = yield* generateRows(options.rows ?? 64, columns, options);
+      const predicates = yield* generatePredicate(
+        columns,
+        options,
+        coverage,
+        options.depth ?? 2
+      ).pipe(Effect.replicateEffect(options.predicates ?? 200));
+      const orderBys = yield* generateOrderBy(columns).pipe(
+        Effect.replicateEffect(options.orderBys ?? 60)
+      );
+      return { seed: options.seed, columns, rows, predicates, orderBys, coverage };
+    }).pipe(Random.withSeed(options.seed));
+  });
 
 // ─── Minimiser ───────────────────────────────────────────────────────────────
 

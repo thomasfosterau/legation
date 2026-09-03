@@ -46,13 +46,23 @@ const leaves = (
 };
 
 describe("FilterCorpus", () => {
-  const corpus = FilterCorpus.generateCorpus({ seed: FilterCorpus.DEFAULT_SEED });
+  const generate = (options: FilterCorpus.GenerateOptions) =>
+    Effect.runSync(FilterCorpus.generateCorpus(options));
+  const corpus = generate({ seed: FilterCorpus.DEFAULT_SEED });
 
   it("is deterministic for a seed", () => {
-    const again = FilterCorpus.generateCorpus({ seed: FilterCorpus.DEFAULT_SEED });
+    const again = generate({ seed: FilterCorpus.DEFAULT_SEED });
     expect(again).toEqual(corpus);
-    const other = FilterCorpus.generateCorpus({ seed: FilterCorpus.DEFAULT_SEED + 1 });
+    const other = generate({ seed: FilterCorpus.DEFAULT_SEED + 1 });
     expect(other.predicates).not.toEqual(corpus.predicates);
+  });
+
+  it("reproduces the same corpus on every run of one generateCorpus effect", () => {
+    // `Random.withSeed` builds its generator when the effect is constructed;
+    // `generateCorpus` suspends that, so re-running one effect value does not
+    // continue the previous run's sequence.
+    const once = FilterCorpus.generateCorpus({ seed: FilterCorpus.DEFAULT_SEED });
+    expect(Effect.runSync(once)).toEqual(Effect.runSync(once));
   });
 
   it("resolves the seed from LEGATION_CORPUS_SEED", () => {
@@ -110,7 +120,7 @@ describe("FilterCorpus", () => {
   });
 
   it("honours { nulls: false, astral: false }", () => {
-    const restricted = FilterCorpus.generateCorpus({
+    const restricted = generate({
       seed: FilterCorpus.DEFAULT_SEED,
       nulls: false,
       astral: false,

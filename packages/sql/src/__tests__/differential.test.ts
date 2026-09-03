@@ -28,19 +28,24 @@ import { type Engine, makePostgres, makeSqlite } from "./differential/engines.js
 
 const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);
 
+// Generation is synchronous and pure (a seeded `Random` service), so the
+// corpora are built once at module load.
+
 /** The full corpus: NULL, absent, astral text, ordered booleans — everything ADR-0028 covers. */
-const full = FilterCorpus.generateCorpus({ seed });
+const full = Effect.runSync(FilterCorpus.generateCorpus({ seed }));
 /**
  * The corpus every evaluator already agrees on: no NULL/absent, no astral
  * text, no ordered comparison on booleans. Same seed as `full` so the seed a
  * disagreement reports reproduces it; the options alone make it distinct.
  */
-const restricted = FilterCorpus.generateCorpus({
-  seed,
-  nulls: false,
-  astral: false,
-  booleanOrder: false,
-});
+const restricted = Effect.runSync(
+  FilterCorpus.generateCorpus({
+    seed,
+    nulls: false,
+    astral: false,
+    booleanOrder: false,
+  })
+);
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;
