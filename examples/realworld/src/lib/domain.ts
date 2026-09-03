@@ -117,6 +117,7 @@ export const articles = Node.make("articles", {
     comments: Edge.many("comments", { inverse: "article" }),
     favorites: Edge.many("favorites", { inverse: "article" }),
   },
+  sortable: ["createdAt"],
 });
 
 export const comments = Node.make("comments", {
@@ -125,6 +126,7 @@ export const comments = Node.make("comments", {
     article: Edge.one("articles", { via: "articleSlug" }),
     author: Edge.one("users", { via: "authorId" }),
   },
+  sortable: ["createdAt"],
 });
 
 export const favorites = Node.make("favorites", {

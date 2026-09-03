@@ -39,8 +39,8 @@
  */
 
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Edge, Node } from "@legation/effect";
-import { Data } from "effect";
+import { Edge, type FilterPolicy, Node } from "@legation/effect";
+import { Data, type Schema } from "effect";
 
 /** A definition-time mismatch between a resource graph and the node model. */
 export class ResourceBridgeError extends Data.TaggedError("ResourceBridgeError")<{
@@ -78,6 +78,18 @@ export interface FromResourceOptions {
   readonly order?: Record<string, ReadonlyArray<string>>;
   /** Passed through to the node (fine fan-out topics — ADR-0023). */
   readonly hintKeys?: ReadonlyArray<string>;
+  /**
+   * The filterable set (ADR-0028, #154), passed through to `Node.make`:
+   * the attributes a client may filter by, with their operators (and an
+   * explicit literal kind where the schema cannot tell). `id` and every
+   * bridged one-edge's key field are filterable by `eq` / `in` regardless.
+   * effect-jsonapi 0.12 carries no per-attribute `filterable` annotation;
+   * once thomasfosterau/effect-jsonapi#84 lands, the bridge reads it from
+   * the resource and this option becomes an override.
+   */
+  readonly filterable?: Record<string, FilterPolicy.FilterableInput>;
+  /** The sortable attributes (#154), passed through to `Node.make`; `id` is always sortable. */
+  readonly sortable?: ReadonlyArray<string>;
 }
 
 const fail = (resource: string, relationship: string, message: string): never => {
@@ -130,43 +142,99 @@ const discoverInverse = (
   );
 };
 
+/** A `many` / `paginated` relationship's descriptor, as the bridge reads it. */
+type CollectionRelationship = Extract<
+  Resource.Any["relationships"][string],
+  { readonly kind: "many" | "paginated" }
+>;
+
+/**
+ * Bridge one collection-valued relationship to its edge: the inverse is
+ * named in the options or discovered on the target; a paginated one also
+ * needs its declared order.
+ */
+const collectionEdge = (
+  resource: Resource.Any,
+  name: string,
+  descriptor: CollectionRelationship,
+  options: FromResourceOptions,
+  oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
+): Edge.Edge => {
+  const target = descriptor.ref();
+  const inverse =
+    options.inverses?.[name] ??
+    discoverInverse(resource.type, name, target.type, oneEdgesOfTarget(target));
+  if (descriptor.kind === "many") return Edge.many(target.type, { inverse });
+  const order = options.order?.[name];
+  if (order === undefined) {
+    return fail(
+      resource.type,
+      name,
+      `a paginated relationship needs an edge order (cursor pagination requires a stable order) — declare it in options.order`
+    );
+  }
+  return Edge.paginated(target.type, { inverse, order });
+};
+
+/** The resource's edges: its one-edges plus every collection-valued relationship's. */
+const edgesOf = (
+  resource: Resource.Any,
+  options: FromResourceOptions,
+  oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
+): Record<string, Edge.Edge> => {
+  const edges: Record<string, Edge.Edge> = { ...oneEdgesOf(resource, options) };
+  for (const [name, descriptor] of Object.entries(resource.relationships)) {
+    if (descriptor.kind !== "many" && descriptor.kind !== "paginated") continue;
+    edges[name] = collectionEdge(resource, name, descriptor, options, oneEdgesOfTarget);
+  }
+  return edges;
+};
+
+/**
+ * The resource's attributes minus every one-edge's key field: a one-edge's
+ * key replaces any attribute of the same name (the promoted-attribute
+ * case); the edge's branded id carries the field.
+ */
+const attributesOf = (
+  resource: Resource.Any,
+  edges: Record<string, Edge.Edge>
+): Schema.Struct.Fields => {
+  const attributes: Record<string, Schema.Constraint> = { ...resource.fields.attributes.fields };
+  for (const edge of Object.values(edges)) {
+    if (edge.kind === "one") delete attributes[edge.via];
+  }
+  return attributes;
+};
+
+/**
+ * The per-node options passed through from the bridge options. Filterable
+ * / sortable come from here for now; the per-attribute annotation
+ * (thomasfosterau/effect-jsonapi#84) will be read off
+ * `resource.fields.attributes` when it exists.
+ */
+const nodeOptionsOf = (
+  options: FromResourceOptions
+): {
+  readonly hintKeys?: ReadonlyArray<string>;
+  readonly filterable?: Record<string, FilterPolicy.FilterableInput>;
+  readonly sortable?: ReadonlyArray<string>;
+} => ({
+  ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
+  ...(options.filterable === undefined ? {} : { filterable: options.filterable }),
+  ...(options.sortable === undefined ? {} : { sortable: options.sortable }),
+});
+
 /** Bridge one resource, resolving inverses through `oneEdgesOfTarget`. */
 const bridge = (
   resource: Resource.Any,
   options: FromResourceOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
 ): Node.AnyNode => {
-  const edges: Record<string, Edge.Edge> = { ...oneEdgesOf(resource, options) };
-  for (const [name, descriptor] of Object.entries(resource.relationships)) {
-    if (descriptor.kind !== "many" && descriptor.kind !== "paginated") continue;
-    const target = descriptor.ref();
-    const inverse =
-      options.inverses?.[name] ??
-      discoverInverse(resource.type, name, target.type, oneEdgesOfTarget(target));
-    if (descriptor.kind === "many") {
-      edges[name] = Edge.many(target.type, { inverse });
-    } else {
-      const order = options.order?.[name];
-      if (order === undefined) {
-        return fail(
-          resource.type,
-          name,
-          `a paginated relationship needs an edge order (cursor pagination requires a stable order) — declare it in options.order`
-        );
-      }
-      edges[name] = Edge.paginated(target.type, { inverse, order });
-    }
-  }
-  const attributes = { ...resource.fields.attributes.fields };
-  // A one-edge's key field replaces any attribute of the same name (the
-  // promoted-attribute case); the edge's branded id carries the field.
-  for (const edge of Object.values(edges)) {
-    if (edge.kind === "one") delete attributes[edge.via];
-  }
+  const edges = edgesOf(resource, options, oneEdgesOfTarget);
   return Node.make(resource.type, {
-    attributes,
+    attributes: attributesOf(resource, edges),
     edges,
-    ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
+    ...nodeOptionsOf(options),
   });
 };
 

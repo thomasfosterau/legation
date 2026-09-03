@@ -20,6 +20,12 @@
  * orders, orderItems) carry a `userId` the auth filters scope by
  * (ADR-0015's denormalized key) — declared as `hintKeys`, so ADR-0023's
  * fine fan-out topics can use the same field.
+ *
+ * Each node also declares its **filterable set** (ADR-0028, #154): exactly
+ * the fields the reads below filter and order by. `id` and every one-edge
+ * key are `eq`/`in` by default; `userId` (a scoping key, not an edge) and
+ * the sort fields are declared explicitly. Anything else is unreachable
+ * from a client.
  */
 import { Effect, Schema } from "effect";
 import { Edge, Mutation, Node, type Query } from "@legation/effect";
@@ -125,7 +131,10 @@ const {
   ...orderItemAttributes
 } = OrderItemSchema.fields;
 
-export const categories = Node.make("categories", { attributes: categoryAttributes });
+export const categories = Node.make("categories", {
+  attributes: categoryAttributes,
+  sortable: ["name"],
+});
 
 export const sellers = Node.make("sellers", { attributes: sellerAttributes });
 
@@ -150,6 +159,10 @@ export const reviews = Node.make("reviews", {
   attributes: reviewAttributes,
   edges: { product: Edge.one("products", { via: "productId" }) },
   hintKeys: ["userId"],
+  // `productReviews` reads the collection directly, newest first. (The
+  // paginated `reviews` edge's order joins `sortable` on its own when the
+  // graph closes; this declaration covers the direct read.)
+  sortable: ["createdAt"],
 });
 
 export const profiles = Node.make("profiles", { attributes: profileAttributes });
@@ -158,12 +171,15 @@ export const cartItems = Node.make("cartItems", {
   attributes: cartItemAttributes,
   edges: { variant: Edge.one("variants", { via: "variantId" }) },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
 });
 
 export const orders = Node.make("orders", {
   attributes: orderAttributes,
   edges: { items: Edge.many("orderItems", { inverse: "order" }) },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
+  sortable: ["createdAt"],
 });
 
 export const orderItems = Node.make("orderItems", {
@@ -173,6 +189,7 @@ export const orderItems = Node.make("orderItems", {
     variant: Edge.one("variants", { via: "variantId" }),
   },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
 });
 
 /** The closed, validated graph: nodes + the derived engine registry. */

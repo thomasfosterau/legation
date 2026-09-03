@@ -10,6 +10,7 @@
 
 import type { Schema } from "effect";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
+import * as FilterPolicy from "./FilterPolicy.js";
 
 /** The identifier of one row within a collection. */
 export type RowId = string;
@@ -78,6 +79,18 @@ export interface Collection<A, I = unknown> {
    * predicate scans, exactly like before this field existed.
    */
   readonly indexes?: ReadonlyArray<string>;
+  /**
+   * The **filterable set** (ADR-0028 rule d, #154): the fields a client may
+   * filter by, each with its operators and literal kind. Resolved on the
+   * Node (`Node.make`'s `filterable` option plus the `id` / `one`-edge key
+   * defaults) and carried here so the server enforces it in `authorize`
+   * without Node definitions — exactly how `indexes` travels. Absent on a
+   * hand-built collection: see {@link filterDeclarationOf} for what is
+   * enforced then.
+   */
+  readonly filterable?: Readonly<Record<string, FilterPolicy.FilterableField>>;
+  /** The fields a client may order by (#154); always includes `id`. */
+  readonly sortable?: ReadonlyArray<string>;
 }
 
 /** A collection definition with the row type erased. */
@@ -93,7 +106,30 @@ export const make = <A, I>(options: {
   readonly id: (value: A) => RowId;
   readonly relationships?: ReadonlyArray<Relationship>;
   readonly indexes?: ReadonlyArray<string>;
+  readonly filterable?: Readonly<Record<string, FilterPolicy.FilterableField>>;
+  readonly sortable?: ReadonlyArray<string>;
 }): Collection<A, I> => options;
+
+/**
+ * The filter declaration `authorize` enforces for a collection (#154): the
+ * carried `filterable` / `sortable` (every Node-derived collection has
+ * them) overlaid on the key defaults — `id` plus every `"one"`
+ * relationship's local key field by at least `eq` / `in`, `id` always
+ * sortable — so a hand-built collection keeps the same invariants a node
+ * does, and one declaring nothing is closed exactly as an undeclared node
+ * would be.
+ */
+export const filterDeclarationOf = (collection: AnyCollection): FilterPolicy.FilterDeclaration => {
+  const keyFields = ["id"];
+  for (const relationship of collection.relationships ?? []) {
+    if (relationship.kind === "one") keyFields.push(relationship.localField);
+  }
+  return FilterPolicy.withKeyDefaults(
+    keyFields,
+    collection.filterable ?? {},
+    collection.sortable ?? []
+  );
+};
 
 /**
  * A set of collections, by name — what an engine or backend is configured
