@@ -273,6 +273,108 @@ describe("atomic operations endpoint", () => {
       })
     )
   );
+
+  it.effect("removes own rows, treats a missing row as a no-op, refuses another user's", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { count, asUser } = yield* makeWorld();
+        const remove = { op: "remove", ref: { type: "reviews", id: "r-gone" } };
+        expect((yield* post(asUser("u1"), [addReview({ id: "r-gone" })])).status).toBe(200);
+        expect((yield* post(asUser("u1"), [remove])).status).toBe(200);
+        expect(yield* count("reviews")).toBe(SEEDED_REVIEWS);
+        // The same batch again (a resend after a lost response) is a no-op, not a 404.
+        expect((yield* post(asUser("u1"), [remove])).status).toBe(200);
+        // Another user's row is refused, and the batch's earlier add rolls back.
+        const foreign = yield* post(asUser("u2"), [
+          addReview({ id: "r-u2" }),
+          { op: "remove", ref: { type: "reviews", id: "r-01" } },
+        ]);
+        expect(foreign.status).toBe(404);
+        expect((foreign.body as ErrorsBody).errors[0]!.source?.pointer).toBe(
+          Atomic.operationPointer(1)
+        );
+        expect(yield* count("reviews")).toBe(SEEDED_REVIEWS);
+      })
+    )
+  );
+
+  it.effect("places an order from the authoritative cart, clearing it and taking stock", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, count, asUser } = yield* makeWorld();
+        const order = (identity: { id?: string; lid?: string }) => ({
+          op: "add",
+          data: {
+            type: "orders",
+            ...identity,
+            attributes: { status: "placed", totalCents: 0, createdAt: "2026-09-01T00:00:00Z" },
+          },
+        });
+        const placed = yield* post(asUser("u1"), [
+          addCartItem({ id: "ci-order" }, "v-01a", 2),
+          order({ lid: "o1" }),
+        ]);
+        expect(placed.status).toBe(200);
+        const result = (placed.body as ResultsBody)["atomic:results"][1]!.data!;
+        expect(result.attributes.totalCents).toBe(2 * 14900);
+        expect(yield* count("cartItems")).toBe(0);
+        const stock = yield* sql<{ stock: number }>`SELECT stock FROM variants WHERE id = ${"v-01a"}`.pipe(
+          Effect.orDie
+        );
+        expect(stock[0]!.stock).toBe(10);
+        // An empty cart cannot be ordered.
+        expect((yield* post(asUser("u1"), [order({})])).status).toBe(422);
+      })
+    )
+  );
+
+  it.effect("409 on another user's id; 422 on an unknown or wrong-type lid; update by ref", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { asUser } = yield* makeWorld();
+        const conflict = yield* post(asUser("u2"), [addReview({ id: "r-01" })]);
+        expect(conflict.status).toBe(409);
+        expect((conflict.body as ErrorsBody).errors[0]!.status).toBe("409");
+
+        const unknown = yield* post(asUser("u1"), [
+          { op: "update", data: { type: "reviews", lid: "never", attributes: { body: "x" } } },
+        ]);
+        expect(unknown.status).toBe(422);
+        expect((unknown.body as ErrorsBody).errors[0]!.title).toBe("Unknown lid");
+
+        // A lid stands for the row its add created; it cannot pose as another type.
+        const wrongType = yield* post(asUser("u1"), [
+          addCartItem({ lid: "x" }, "v-01a", 1),
+          {
+            op: "add",
+            data: {
+              type: "reviews",
+              attributes: reviewAttributes("Nope"),
+              relationships: { product: { data: { type: "products", lid: "x" } } },
+            },
+          },
+        ]);
+        expect(wrongType.status).toBe(422);
+        expect((wrongType.body as ErrorsBody).errors[0]!.source?.pointer).toBe(
+          Atomic.operationPointer(1)
+        );
+
+        // `update` may name its target through `ref` instead of `data.id`.
+        const byRef = yield* post(asUser("u1"), [
+          addReview({ id: "r-ref" }),
+          {
+            op: "update",
+            ref: { type: "reviews", id: "r-ref" },
+            data: { type: "reviews", attributes: { body: "By ref." } },
+          },
+        ]);
+        expect(byRef.status).toBe(200);
+        expect((byRef.body as ResultsBody)["atomic:results"][1]!.data!.attributes.body).toBe(
+          "By ref."
+        );
+      })
+    )
+  );
 });
 
 // ─── #160: JsonApiBackend in atomic mode against this endpoint ──────────────

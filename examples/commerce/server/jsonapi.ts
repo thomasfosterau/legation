@@ -512,6 +512,8 @@ interface Batch {
   readonly clientIds: ReadonlyArray<string | undefined>;
   /** Server ids of lid-created resources, for later operations in the batch. */
   readonly lids: Lid.LidMap;
+  /** The resource type each lid's `add` created, so a ref cannot cross types. */
+  readonly lidTypes: Map<string, string>;
   /** collection → ids: one deduplicated broadcast per collection on commit. */
   readonly touched: Map<string, Set<string>>;
 }
@@ -562,35 +564,56 @@ const fail = (
 ): Effect.Effect<never, OperationFailed> =>
   Effect.fail(new OperationFailed({ status, index, title, detail }));
 
+/** Register an `add`'s lid with the type it created, for later refs in the batch. */
+const assignLid = (batch: Batch, lid: string | undefined, type: string, id: string): void => {
+  if (lid === undefined) return;
+  batch.lids.assign(lid, id);
+  batch.lidTypes.set(lid, type);
+};
+
 const identityAt = (batch: Batch, index: number): Effect.Effect<string, OperationFailed> =>
   batch.userId === undefined
     ? fail(401, index, "Sign in first", "not signed in")
     : Effect.succeed(batch.userId);
 
-/** A ref's id: as given, or the id an earlier `add` registered under its lid. */
-const refId = (
-  batch: Batch,
-  index: number,
-  ref: { readonly id: string } | { readonly lid: string }
-): Effect.Effect<string, OperationFailed> => {
+type Ref = { readonly type: string } & ({ readonly id: string } | { readonly lid: string });
+
+/**
+ * A ref's id: as given, or the id an earlier `add` registered under its lid.
+ * A lid only stands for the type its `add` created, so a review cannot point
+ * its `product` at a cart item made earlier in the batch.
+ */
+const refId = (batch: Batch, index: number, ref: Ref): Effect.Effect<string, OperationFailed> => {
   if ("id" in ref) return Effect.succeed(ref.id);
   const id = batch.lids.id(ref.lid);
-  return id === undefined
-    ? fail(422, index, "Unknown lid", `no earlier operation in this request created lid "${ref.lid}"`)
-    : Effect.succeed(id);
+  if (id === undefined) {
+    return fail(
+      422,
+      index,
+      "Unknown lid",
+      `no earlier operation in this request created lid "${ref.lid}"`
+    );
+  }
+  const created = batch.lidTypes.get(ref.lid);
+  return created === ref.type
+    ? Effect.succeed(id)
+    : fail(422, index, "Wrong lid type", `lid "${ref.lid}" names a ${created}, not a ${ref.type}`);
 };
 
-/** An `update`'s target: its `id`, or the id behind its `lid`. */
+/** An `update`'s target: its `data.id`, the id behind its `data.lid`, or its `ref`. */
 const updateTargetId = (
   batch: Batch,
   index: number,
-  data: { readonly id?: string; readonly lid?: string }
+  data: { readonly type: string; readonly id?: string; readonly lid?: string },
+  ref: Ref | undefined
 ): Effect.Effect<string, OperationFailed> =>
   data.id !== undefined
     ? Effect.succeed(data.id)
     : data.lid !== undefined
-      ? refId(batch, index, { lid: data.lid })
-      : fail(422, index, "Missing target", "an update needs an id or a lid");
+      ? refId(batch, index, { type: data.type, lid: data.lid })
+      : ref !== undefined
+        ? refId(batch, index, ref)
+        : fail(422, index, "Missing target", "an update needs an id, a lid or a ref");
 
 /**
  * A client-generated id on `add` may only name a row the caller already owns
@@ -636,12 +659,12 @@ const applyReview = (
         yield* ownedOrFree(index, userId, (yield* load(id))[0], "review");
         yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
           VALUES (${id}, ${productId}, ${userId}, ${authorName}, ${rating}, ${body}, ${createdAt})`;
-        if (op.data.lid !== undefined) batch.lids.assign(op.data.lid, id);
+        assignLid(batch, op.data.lid, "reviews", id);
         touch(batch, "reviews", [id]);
         return { data: reviewResource((yield* load(id))[0]!) };
       }
       case "update": {
-        const id = yield* updateTargetId(batch, index, op.data);
+        const id = yield* updateTargetId(batch, index, op.data, op.ref);
         const current = (yield* load(id))[0];
         if (current === undefined || current.userId !== userId) {
           return yield* fail(404, index, "Review not found", `no review ${id} of yours`);
@@ -665,7 +688,10 @@ const applyReview = (
       case "remove": {
         const id = yield* refId(batch, index, op.ref);
         const current = (yield* load(id))[0];
-        if (current === undefined || current.userId !== userId) {
+        // A row already gone is a no-op, as the mutators' deletes are: a
+        // batch resent after a lost response must not read as a rejection.
+        if (current === undefined) return Atomic.emptyResult;
+        if (current.userId !== userId) {
           return yield* fail(404, index, "Review not found", `no review ${id} of yours`);
         }
         yield* sql`DELETE FROM reviews WHERE id = ${id} AND userId = ${userId}`;
@@ -702,12 +728,12 @@ const applyCartItem = (
         yield* ownedOrFree(index, userId, (yield* load(id))[0], "cart item");
         yield* sql`INSERT OR REPLACE INTO cartItems (id, userId, variantId, qty)
           VALUES (${id}, ${userId}, ${variantId}, ${qty})`;
-        if (op.data.lid !== undefined) batch.lids.assign(op.data.lid, id);
+        assignLid(batch, op.data.lid, "cartItems", id);
         touch(batch, "cartItems", [id]);
         return { data: cartItemResource((yield* load(id))[0]!) };
       }
       case "update": {
-        const id = yield* updateTargetId(batch, index, op.data);
+        const id = yield* updateTargetId(batch, index, op.data, op.ref);
         const current = (yield* load(id))[0];
         if (current === undefined || current.userId !== userId) {
           return yield* fail(404, index, "Cart item not found", `no cart item ${id} of yours`);
@@ -729,7 +755,9 @@ const applyCartItem = (
       case "remove": {
         const id = yield* refId(batch, index, op.ref);
         const current = (yield* load(id))[0];
-        if (current === undefined || current.userId !== userId) {
+        // A row already gone is a no-op, as `cart/remove` is (see above).
+        if (current === undefined) return Atomic.emptyResult;
+        if (current.userId !== userId) {
           return yield* fail(404, index, "Cart item not found", `no cart item ${id} of yours`);
         }
         yield* sql`DELETE FROM cartItems WHERE id = ${id} AND userId = ${userId}`;
@@ -791,7 +819,7 @@ const applyOrder = (
       yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
     }
     yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
-    if (op.data.lid !== undefined) batch.lids.assign(op.data.lid, orderId);
+    assignLid(batch, op.data.lid, "orders", orderId);
     touch(batch, "orders", [orderId]);
     touch(batch, "orderItems", itemIds);
     touch(batch, "cartItems", cart.map((line) => line.id));
@@ -817,17 +845,22 @@ const operationsLive = HttpApiBuilder.group(api, "operations", (handlers) =>
   handlers.handle("operations", ({ payload, request }) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient;
+      const operations = payload["atomic:operations"];
+      // The raw ids line up with the decoded operations by index; if the two
+      // ever disagree in length, trust neither and assign server ids.
+      const clientIds = yield* clientIdsOf(request);
       const batch: Batch = {
         userId: yield* currentUser,
-        clientIds: yield* clientIdsOf(request),
+        clientIds: clientIds.length === operations.length ? clientIds : [],
         lids: Lid.make(),
+        lidTypes: new Map(),
         touched: new Map(),
       };
       const entries = yield* sql
         .withTransaction(
           Effect.gen(function* () {
             const results: Array<OperationEntry> = [];
-            for (const [index, operation] of payload["atomic:operations"].entries()) {
+            for (const [index, operation] of operations.entries()) {
               results.push(yield* applyOperation(batch, index, operation));
             }
             return results;
