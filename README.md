@@ -14,19 +14,22 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 │ in-memory mirror     │      │ ClientEngine             │      │ named mutators   │
 │ live queries         │◀────▶│  journal (pending        │ push │ (authoritative)  │
 │ optimistic overlay   │ b'cast│   mutations)            │─────▶│ + your storage   │
-└──────────────────────┘      │  ClientStore (IndexedDB) │      ├──────────────────┤
-                              │  pull(cookie) → patch    │◀─────│ SyncServer       │
-                              │  rebase = replay pending │ patch│  auth filters    │
-                              └──────────────────────────┘      │  CVR diffing     │
-                                       ▲      ▲                 │  invalidation bus│
-                              ┌────────┴──────┴────────┐        │  (sync room /    │
-                              │ Transport (customisable │◀──poke─│   Durable Object)│
-                              │ seam; RPC default)      │        └──────────────────┘
+├──────────────────────┤      │  ClientStore (IndexedDB) │      ├──────────────────┤
+│ plain fetch()        │      │  pull(cookie) → patch    │◀─────│ SyncServer       │
+│ GET /jsonapi/…       │◀────▶│  rebase = replay pending │ patch│  auth filters    │
+└──────────────────────┘ fetch│ JSON:API façade (covered │      │  CVR diffing     │
+                              │  → replica, else network)│      │  invalidation bus│
+                              └──────────────────────────┘      │  (sync room /    │
+                                       ▲      ▲                 │   Durable Object)│
+                              ┌────────┴──────┴────────┐        └──────────────────┘
+                              │ Transport (customisable │◀──poke─┘
+                              │ seam; RPC default)      │
                               └─────────────────────────┘
 ```
 
 - **Writes are intents**: named, schema-validated mutators run optimistically on the client and authoritatively on your backend; conflicts resolve by replay (rebase), not merge strategies.
 - **Reads are subscriptions**: collection subsets `(collection, predicate, orderBy, limit/cursor)`, narrowed by deny-by-default auth filters; the server tracks per-client view records (CVRs) and ships minimal row patches.
+- **Three fronts, one engine**: a tab reads through a `Client` (an owned engine or a mirror over the worker's), or through plain `fetch()` of a JSON:API URL, which the worker's **façade** answers from the replica when an explicit subscription covers it and forwards unchanged otherwise ([ADR-0029](docs/adr/0029-replica-served-jsonapi-facade.md)).
 - **Pull is the correctness path**: periodic HTTP-only sync is fully correct; pokes and streaming are latency optimizations.
 - **Bring your own backend**: implement two operations (apply mutations transactionally, evaluate a subset); the library owns CVR bookkeeping, diffing, auth, and fan-out.
 
