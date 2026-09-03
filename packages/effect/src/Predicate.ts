@@ -32,6 +32,16 @@ export type Literal = string | number | boolean | null;
 export type Comparison = "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
 
 /**
+ * The literal kinds of ADR-0028 rule (e): `text` (code-point ordered),
+ * `integer` (int4), `double` (double precision), `boolean`, and `instant`
+ * (an ISO-8601 UTC string in the fixed `Date#toISOString` format, so text
+ * order is chronological order). A declared attribute carries one of these;
+ * the SQL compilers bind and collate by it (`@legation/sql`), and the
+ * differential corpus (`FilterCorpus`) generates literals of it.
+ */
+export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";
+
+/**
  * A predicate expression tree.
  *
  * - `True` matches every row (the empty predicate).

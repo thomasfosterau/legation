@@ -15,7 +15,12 @@
  * Every leg is green since #155 made the JS evaluator three-valued, absent ≡
  * NULL, text order code point, and booleans ordered `false < true`. The
  * restricted corpus (no NULL/absent, no astral text, no ordered booleans)
- * stays as the regression floor that was green before #155.
+ * stays as the regression floor that was green before #155. Since #156 the
+ * SQL legs compile with the corpus columns' declared kinds, so every text
+ * comparison carries the explicit collation clause (`COLLATE "C"` /
+ * `COLLATE BINARY`), instants carry none (the oracle's instant column is a
+ * real `timestamptz`, which would reject one), and booleans reach SQLite as
+ * `1`/`0` from the compiler, not from the harness.
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
@@ -405,7 +410,8 @@ function prefixedCorpus(prefix: string, corpus: FilterCorpus.Corpus): FilterCorp
 /**
  * Hand-written rows for the focused cases: an explicit NULL, an absent
  * field, a plain value, the two strings whose order differs between UTF-16
- * code units and code points, and the two booleans.
+ * code units and code points, the two booleans, three instants and three
+ * integers (an int4 bound among them).
  */
 const focusedRows: Rows = [
   { id: "f-null", value: { s: null } },
@@ -416,9 +422,17 @@ const focusedRows: Rows = [
   { id: "f-astral", value: { s: "😀" } },
   { id: "f-true", value: { b: true } },
   { id: "f-false", value: { b: false } },
+  { id: "f-t-epoch", value: { t: "1970-01-01T00:00:00.000Z" } },
+  { id: "f-t-2020", value: { t: "2020-02-29T12:34:56.789Z" } },
+  { id: "f-t-2038", value: { t: "2038-01-19T03:14:07.000Z" } },
+  { id: "f-i-1", value: { i: 1 } },
+  { id: "f-i-7", value: { i: 7 } },
+  { id: "f-i-max", value: { i: 2147483647 } },
 ];
 
 const nullAndAbsent = ["f-null", "f-absent", "f-x"];
+const instants = ["f-t-epoch", "f-t-2020", "f-t-2038", "f-absent"];
+const integers = ["f-i-1", "f-i-7", "f-i-max", "f-absent"];
 
 const focusedWhere: ReadonlyArray<{
   readonly name: string;
@@ -500,6 +514,69 @@ const focusedWhere: ReadonlyArray<{
     predicate: Predicate.gt("b", false),
     ids: ["f-true", "f-false", "f-absent"],
   },
+  // #156: the collation clause and typed binds, node by node.
+  {
+    // `"s" COLLATE "C" < $1` against an astral literal: U+FFFF sorts below
+    // U+1F600 by code point (both SQL legs) but above it by UTF-16 code unit.
+    name: "text lt against an astral literal (collation clause)",
+    predicate: Predicate.lt("s", "😀"),
+    ids: ["f-a", "f-ffff", "f-astral"],
+  },
+  {
+    name: "text In against an astral literal (collation clause on IN)",
+    predicate: Predicate.isIn("s", ["😀", "a"]),
+    ids: ["f-a", "f-ffff", "f-astral", "f-absent"],
+  },
+  {
+    name: "text NotIn against an astral literal (collation clause on NOT IN)",
+    predicate: Predicate.notIn("s", ["😀"]),
+    ids: ["f-a", "f-ffff", "f-astral", "f-absent"],
+  },
+  {
+    // No collation clause: the oracle's `t` is `timestamptz` and would
+    // reject one; SQLite's `t` is text and compares by code point.
+    name: "instant gt without a collation clause (timestamptz on Postgres)",
+    predicate: Predicate.gt("t", "2000-01-01T00:00:00.000Z"),
+    ids: instants,
+  },
+  {
+    name: "instant In without a collation clause",
+    predicate: Predicate.isIn("t", ["2020-02-29T12:34:56.789Z", "2038-01-19T03:14:07.000Z"]),
+    ids: instants,
+  },
+  {
+    name: "boolean eq bound as 1/0 on SQLite and as a boolean on Postgres",
+    predicate: Predicate.eq("b", true),
+    ids: ["f-true", "f-false", "f-absent"],
+  },
+  {
+    name: "boolean In bound per dialect",
+    predicate: Predicate.isIn("b", [false]),
+    ids: ["f-true", "f-false", "f-absent"],
+  },
+  {
+    name: "integer gte against an integral literal",
+    predicate: Predicate.gte("i", 7),
+    ids: integers,
+  },
+  {
+    name: "integer In at the int4 bound",
+    predicate: Predicate.isIn("i", [2147483647, 1]),
+    ids: integers,
+  },
+  {
+    // Rule (d): a string against a declared integer column is unknown on
+    // every leg — the compiler binds NULL, so SQLite's affinity coercion
+    // (`"i" <> '1'`) never runs and the verdict is `evaluate`'s.
+    name: "cross-type ne on a declared integer column is unknown everywhere",
+    predicate: Predicate.ne("i", "1"),
+    ids: integers,
+  },
+  {
+    name: "cross-type literal in an integer In list is dropped, not coerced",
+    predicate: Predicate.not(Predicate.isIn("i", [1, "7"])),
+    ids: integers,
+  },
 ];
 
 const focusedOrder: ReadonlyArray<{
@@ -526,5 +603,10 @@ const focusedOrder: ReadonlyArray<{
     name: "boolean ordering (false < true)",
     orderBy: [{ field: "b", direction: "asc" }],
     ids: ["f-true", "f-false"],
+  },
+  {
+    name: "instant ordering (timestamptz on Postgres, text on SQLite)",
+    orderBy: [{ field: "t", direction: "desc" }],
+    ids: instants,
   },
 ];

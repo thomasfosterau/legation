@@ -6,7 +6,7 @@
  * in JS, `Sql.compileWhere` on SQLite, and `Sql.compileWhere` on Postgres —
  * and Postgres is normative: every other evaluator must agree with it
  * exactly. This module produces the corpus they are compared over: random
- * rows over a fixed fixture schema (string, integer, double, boolean, ISO
+ * rows over a fixed fixture schema (text, integer, double, boolean, ISO
  * instant) including NULL, absent fields, empty strings, boundary numerics,
  * and non-ASCII text up to astral characters; random depth-bounded
  * predicates covering every operator in the core; random `orderBy` terms;
@@ -23,8 +23,9 @@
  *
  * Rule (d) of ADR-0028 — no cross-type comparison — is enforced here by
  * construction: a leaf's literal always has its column's kind. Rule (e)
- * fixes the literal kinds: `integer` (int4 range), `double precision`,
- * boolean, and instants as `Date#toISOString` text compared as text.
+ * fixes the literal kinds (`Predicate.LiteralKind`): `text`, `integer` (int4
+ * range), `double` precision, `boolean`, and `instant` as `Date#toISOString`
+ * text compared as text.
  *
  * `Exists` is never generated; it is relational and has no single-row
  * meaning.
@@ -64,21 +65,19 @@ export const resolveSeed = (override: string | undefined): number => {
 
 // ─── Fixture schema ──────────────────────────────────────────────────────────
 
-/** The literal kinds of ADR-0028 rule (e). */
-export type LiteralKind = "string" | "integer" | "double" | "boolean" | "instant";
-
-/** One column of the fixture schema: a row field with a declared literal kind. */
+/** One column of the fixture schema: a row field with a declared literal kind (`Predicate.LiteralKind`). */
 export interface Column {
   readonly name: string;
-  readonly kind: LiteralKind;
+  readonly kind: Predicate.LiteralKind;
 }
 
 /**
  * The harness's fixture table `corpus`: every non-id column is nullable.
- * Postgres declares `COLLATE "C"` on `id`, `s`, `t`; SQLite uses `BINARY`.
+ * Postgres declares `COLLATE "C"` on `id` and `s` and stores `t` as
+ * `timestamptz`; SQLite uses `BINARY` text throughout.
  */
 export const corpusColumns: ReadonlyArray<Column> = [
-  { name: "s", kind: "string" },
+  { name: "s", kind: "text" },
   { name: "i", kind: "integer" },
   { name: "d", kind: "double" },
   { name: "b", kind: "boolean" },
@@ -207,9 +206,9 @@ const FOREIGN_INSTANTS: ReadonlyArray<string> = [
   new Date("2001-09-09T01:46:40.000Z").toISOString(),
 ];
 
-const poolFor = (kind: LiteralKind, options: ResolvedOptions): Pool => {
+const poolFor = (kind: Predicate.LiteralKind, options: ResolvedOptions): Pool => {
   switch (kind) {
-    case "string":
+    case "text":
       return {
         rows: [...ASCII_STRINGS, ...BMP_STRINGS, ...(options.astral ? ASTRAL_STRINGS : [])],
         foreign: FOREIGN_STRINGS,
