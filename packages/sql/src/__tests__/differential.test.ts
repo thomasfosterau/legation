@@ -8,15 +8,17 @@
  * `ORDER BY … COLLATE "C"` with explicit NULL placement. A disagreement is
  * shrunk to the minimal predicate/row pair and reported with the seed.
  *
- * What is red today is marked `it.fails` with the issue that turns it green:
- * the JS evaluator is two-valued where SQL is three-valued (`ne`, `Not`, `In`
- * over NULL/absent), `eq(f, null)` misses an absent field, and JS compares
- * text by UTF-16 code unit where Postgres `COLLATE "C"` and SQLite `BINARY`
+ * Where JS still diverges, the case asserts the divergence itself — a
+ * reported disagreement, not merely any rejection, so a thrown regression in
+ * `Predicate.test`, `Subset.comparator` or the oracle cannot pass for the
+ * known gap — and names the issue that flips it to agreement: the JS
+ * evaluator is two-valued where SQL is three-valued (`ne`, `Not`, `In` over
+ * NULL/absent), `eq(f, null)` misses an absent field, and JS compares text
+ * by UTF-16 code unit where Postgres `COLLATE "C"` and SQLite `BINARY`
  * compare by code point — so astral characters sort differently — and JS
  * refuses ordered comparison on booleans where Postgres orders them
- * `false < true`. SQLite and Postgres agree on all of it (plain `it`), and so
- * does JS on the corpus without NULL/absent values, astral text and ordered
- * booleans.
+ * `false < true`. SQLite and Postgres agree on all of it, and so does JS on
+ * the corpus without NULL/absent values, astral text and ordered booleans.
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
@@ -46,6 +48,8 @@ const restricted = Effect.runSync(
     booleanOrder: false,
   })
 );
+/** `restricted` re-id'd so it can share the SQL tables with `full`; the one place the prefix is chosen. */
+const restrictedQ = prefixedCorpus("q", restricted);
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;
@@ -231,7 +235,7 @@ describe("differential filter harness (ADR-0028)", () => {
     };
     // Both SQL legs hold the union of every row set used below; ids are
     // disjoint across corpora and focused cases, so restriction is exact.
-    const loaded = [...full.rows, ...prefixed("q", restricted.rows), ...focusedRows];
+    const loaded = [...full.rows, ...restrictedQ.rows, ...focusedRows];
     await Effect.runPromise(engines.sqliteEngine.load(loaded));
     await Effect.runPromise(engines.postgresEngine.load(loaded));
   }, 120_000);
@@ -242,6 +246,13 @@ describe("differential filter harness (ADR-0028)", () => {
 
   /** Run a check; it resolves when every case agrees and rejects with the minimal case otherwise. */
   const run = (effect: Effect.Effect<void>) => Effect.runPromise(effect);
+  /**
+   * What a case JS is known to get wrong (ADR-0028; #155 closes it) must
+   * reject with: a reported disagreement — the subject line
+   * `formatDisagreement` prints — not just any error. Flip those cases to
+   * `resolves.toBeUndefined()` when the divergence is fixed.
+   */
+  const disagreement = /^js (order )?disagrees with postgres \(seed \d+;/;
 
   it("reports the seed and operator coverage", () => {
     console.info(`differential corpus seed ${seed}; coverage ${JSON.stringify(full.coverage)}`);
@@ -268,16 +279,12 @@ describe("differential filter harness (ADR-0028)", () => {
   describe("JS Predicate.test vs Postgres", () => {
     it(
       "agrees on the corpus without NULL/absent values, astral text or ordered booleans",
-      () =>
-        expect(
-          run(checkWhere(prefixedCorpus("q", restricted), js, postgres))
-        ).resolves.toBeUndefined(),
+      () => expect(run(checkWhere(restrictedQ, js, postgres))).resolves.toBeUndefined(),
       60_000
     );
-    // ADR-0028: red until #155 (JS evaluator); remove `fails` there.
-    it.fails(
-      "agrees on the full corpus (NULL, absent, astral text, ordered booleans)",
-      () => expect(run(checkWhere(full, js, postgres))).resolves.toBeUndefined(),
+    it(
+      "still disagrees on the full corpus (NULL, absent, astral text, ordered booleans) until #155",
+      () => expect(run(checkWhere(full, js, postgres))).rejects.toThrow(disagreement),
       60_000
     );
   });
@@ -285,16 +292,12 @@ describe("differential filter harness (ADR-0028)", () => {
   describe("JS Subset.comparator vs Postgres ORDER BY", () => {
     it(
       "agrees on the corpus without NULL/absent values or astral text",
-      () =>
-        expect(
-          run(checkOrder(prefixedCorpus("q", restricted), js, postgres))
-        ).resolves.toBeUndefined(),
+      () => expect(run(checkOrder(restrictedQ, js, postgres))).resolves.toBeUndefined(),
       60_000
     );
-    // ADR-0028: red until #155 (JS evaluator); remove `fails` there.
-    it.fails(
-      "agrees on the full corpus (NULL, astral text)",
-      () => expect(run(checkOrder(full, js, postgres))).resolves.toBeUndefined(),
+    it(
+      "still disagrees on the full corpus (NULL, astral text) until #155",
+      () => expect(run(checkOrder(full, js, postgres))).rejects.toThrow(disagreement),
       60_000
     );
   });
@@ -305,20 +308,16 @@ describe("differential filter harness (ADR-0028)", () => {
       const single = { ...full, predicates: [focused.predicate], rows };
       it(`SQLite agrees with Postgres: ${focused.name}`, () =>
         expect(run(checkWhere(single, sqlite, postgres))).resolves.toBeUndefined());
-      // ADR-0028: red until #155 (JS evaluator); remove `fails` there.
-      it.fails(`JS agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkWhere(single, js, postgres))).resolves.toBeUndefined()
-      );
+      it(`JS still disagrees with Postgres until #155: ${focused.name}`, () =>
+        expect(run(checkWhere(single, js, postgres))).rejects.toThrow(disagreement));
     }
     for (const focused of focusedOrder) {
       const rows = focusedRows.filter((row) => focused.ids.includes(row.id));
       const single = { ...full, orderBys: [focused.orderBy], rows };
       it(`SQLite agrees with Postgres: ${focused.name}`, () =>
         expect(run(checkOrder(single, sqlite, postgres))).resolves.toBeUndefined());
-      // ADR-0028: red until #155 (JS evaluator); remove `fails` there.
-      it.fails(`JS agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkOrder(single, js, postgres))).resolves.toBeUndefined()
-      );
+      it(`JS still disagrees with Postgres until #155: ${focused.name}`, () =>
+        expect(run(checkOrder(single, js, postgres))).rejects.toThrow(disagreement));
     }
   });
 });

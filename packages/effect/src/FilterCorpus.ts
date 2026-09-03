@@ -91,7 +91,9 @@ export interface CorpusOptions {
    * Generate NULL and absent (JS-only: the key is missing) field values.
    * Default `true`. `false` keeps every field present and non-null — the
    * setting `BackendContract` uses until #155/#156 make the JS evaluator
-   * and SQL compilers NULL-exact (ADR-0028 rule (a)/(b)).
+   * and SQL compilers NULL-exact (ADR-0028 rule (a)/(b)) — and also drops
+   * the `isnull` operator, which is a constant predicate over such rows: a
+   * corpus only covers `isnull` with `nulls` on.
    */
   readonly nulls?: boolean;
   /**
@@ -289,14 +291,28 @@ const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
   });
 
 /**
+ * The fewest rows {@link generateRows} accepts for `columns` under
+ * `options`: the pinned NULL/absent rows plus the sweep that puts every pool
+ * value into every column. Fewer would silently drop guaranteed edge values.
+ */
+export const minimumRows = (
+  columns: ReadonlyArray<Column> = corpusColumns,
+  options?: CorpusOptions
+): number => {
+  const plan = planRows(columns, resolveOptions(options));
+  return plan.pinned + plan.sweep;
+};
+
+/**
  * Generate `count` rows over `columns`. Coverage of the edge values is
  * guaranteed, not left to chance: with `nulls` on, row 0 is all-NULL and row
  * 1 all-absent; then one row per pool position sweeps every pool value into
  * every column (int4 bounds, `-0`, `2^53±1`, the empty string, U+FFFF, the
  * astral characters, …); the remaining rows are random with NULL/absent
- * rolls. Ids are zero-padded ASCII (`r000`, `r001`, …) so their order is the
- * same in JS, SQLite `BINARY`, and Postgres `COLLATE "C"`, keeping the id
- * tie-break comparable across legs.
+ * rolls. `count` below {@link minimumRows} is an error rather than a
+ * truncated sweep. Ids are zero-padded ASCII (`r000`, `r001`, …) so their
+ * order is the same in JS, SQLite `BINARY`, and Postgres `COLLATE "C"`,
+ * keeping the id tie-break comparable across legs.
  */
 export const generateRows = (
   count: number,
@@ -304,6 +320,12 @@ export const generateRows = (
   options?: CorpusOptions
 ): Effect.Effect<ReadonlyArray<CorpusRow>> => {
   const plan = planRows(columns, resolveOptions(options));
+  const minimum = plan.pinned + plan.sweep;
+  if (count < minimum) {
+    throw new Error(
+      `generateRows needs at least ${minimum} rows for these columns (the pinned rows plus the pool sweep), got ${count}`
+    );
+  }
   return Effect.forEach(
     Array.from({ length: count }, (_, index) => index),
     (index) => generateRow(plan, index)
@@ -433,8 +455,12 @@ const generateLeaf = (
     }
     const column = yield* pick(columns);
     const pool = poolFor(column.kind, options);
+    // Ordered operators reach the boolean column only with `booleanOrder`;
+    // `isnull` is only worth emitting when NULL/absent rows exist.
     const candidates = leafOperators.filter(
-      (op) => !op.ordered || column.kind !== "boolean" || options.booleanOrder
+      (op) =>
+        (!op.ordered || column.kind !== "boolean" || options.booleanOrder) &&
+        (op.name !== "isnull" || options.nulls)
     );
     const operator = yield* pick(candidates);
     coverage[operator.name]++;
@@ -655,22 +681,30 @@ export interface Disagreement {
 }
 
 /**
+ * `JSON.stringify` that keeps `-0` visible (as the string `"-0"`): plain
+ * JSON prints it as `0`, and a minimal case built on `-0` would not
+ * reproduce from its own report.
+ */
+const print = (value: unknown): string =>
+  JSON.stringify(value, (_key, field: unknown) => (Object.is(field, -0) ? "-0" : field));
+
+/**
  * Render a disagreement: the seed, the (minimal) predicate or order terms,
- * the (minimal) rows — absent keys stay absent, `null` prints as `null` —
- * and every subject's ids.
+ * the (minimal) rows — absent keys stay absent, `null` prints as `null`,
+ * `-0` prints as `"-0"` — and every subject's ids.
  */
 export const formatDisagreement = (disagreement: Disagreement): string => {
   const reproduce = disagreement.reproduce ?? "set LEGATION_CORPUS_SEED to reproduce";
   const lines = [`${disagreement.subject} (seed ${disagreement.seed}; ${reproduce})`];
   if (disagreement.predicate !== undefined) {
-    lines.push(`predicate: ${JSON.stringify(disagreement.predicate)}`);
+    lines.push(`predicate: ${print(disagreement.predicate)}`);
   }
   if (disagreement.orderBy !== undefined) {
-    lines.push(`orderBy: ${JSON.stringify(disagreement.orderBy)}`);
+    lines.push(`orderBy: ${print(disagreement.orderBy)}`);
   }
   lines.push("rows:");
   for (const row of disagreement.rows) {
-    lines.push(`  ${row.id} ${JSON.stringify(row.value)}`);
+    lines.push(`  ${row.id} ${print(row.value)}`);
   }
   for (const [name, ids] of Object.entries(disagreement.results)) {
     lines.push(`${name}: ${JSON.stringify(ids)}`);

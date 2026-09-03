@@ -135,6 +135,33 @@ describe("FilterCorpus", () => {
       (row) => typeof row.value.s === "string" && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
     );
     expect(astral).toEqual([]);
+    // `isnull` over rows with no NULL/absent field is a constant predicate;
+    // it is not generated, so its coverage requires `nulls`.
+    expect(restricted.coverage.isnull).toBe(0);
+    expect(corpus.coverage.isnull).toBeGreaterThan(0);
+  });
+
+  it("refuses a row count below the guaranteed sweep", () => {
+    const minimum = FilterCorpus.minimumRows();
+    // Two pinned rows plus the widest pool (the string column with astral text).
+    expect(minimum).toBeGreaterThan(2);
+    expect(() => generate({ seed: FilterCorpus.DEFAULT_SEED, rows: minimum - 1 })).toThrow(
+      new RegExp(`at least ${minimum} rows`)
+    );
+    expect(generate({ seed: FilterCorpus.DEFAULT_SEED, rows: minimum }).rows).toHaveLength(minimum);
+    expect(FilterCorpus.minimumRows(corpus.columns, { nulls: false })).toBe(minimum - 2);
+  });
+
+  it("prints -0 distinctly in a disagreement report", () => {
+    const report = FilterCorpus.formatDisagreement({
+      seed: 1,
+      subject: "js disagrees with postgres",
+      predicate: Predicate.eq("d", -0),
+      rows: [{ id: "r0", value: { d: -0 } }],
+      results: { postgres: ["r0"], js: [] },
+    });
+    expect(report).toContain('predicate: {"_tag":"Compare","op":"eq","field":"d","value":"-0"}');
+    expect(report).toContain('  r0 {"d":"-0"}');
   });
 
   it("generates 1–2 orderBy terms over distinct columns", () => {

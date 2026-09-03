@@ -353,17 +353,19 @@ const generatedCorpus = (
   nextMutationId: number
 ) =>
   Effect.gen(function* () {
+    const columns: ReadonlyArray<FilterCorpus.Column> = [
+      { name: "rank", kind: "integer" },
+      { name: "tag", kind: "string" },
+    ];
+    const options: FilterCorpus.CorpusOptions = { nulls: false, astral: false };
     const corpus = yield* FilterCorpus.generateCorpus({
       seed: FilterCorpus.DEFAULT_SEED,
-      columns: [
-        { name: "rank", kind: "integer" },
-        { name: "tag", kind: "string" },
-      ],
-      rows: 30,
+      columns,
+      // The guaranteed pool sweep plus a handful of random rows.
+      rows: FilterCorpus.minimumRows(columns, options) + 10,
       predicates: 40,
       orderBys: 40,
-      nulls: false,
-      astral: false,
+      ...options,
     });
     const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
     yield* h.expectOk(
