@@ -20,9 +20,19 @@
  * prefix (`/api`, version segments) is ignored. Endpoints that don't fit the
  * table — nested routes, RPCs, custom actions — are simply not part of the
  * derived CRUD surface; the app can still call them directly.
+ *
+ * One endpoint is recognised structurally rather than by path: an atomic
+ * operations endpoint (the JSON:API Atomic Operations extension, e.g.
+ * effect-jsonapi's `Endpoint.operations`, conventionally `POST /operations`)
+ * is any endpoint whose request payload is an `atomic:operations` document.
+ * By path shape alone it would read as `create` on a phantom `operations`
+ * resource, so `reflectResources` skips it and `reflectAtomic` reports it
+ * instead — the backend then pushes a whole batch as one request.
  */
 
+import type * as SchemaAST from "effect/SchemaAST";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
 /** A JSON:API role a CRUD endpoint plays for one resource type. */
@@ -96,9 +106,57 @@ export const classify = (
   return operation === undefined ? undefined : { type, operation };
 };
 
+/** The top-level member that makes a request an atomic operations document. */
+const ATOMIC_OPERATIONS_MEMBER = "atomic:operations";
+
+/** Depth bound for walking a payload schema's unions and suspensions. */
+const MEMBER_WALK_DEPTH = 8;
+
+/**
+ * Whether a schema is (or, through unions and suspensions, may be) an object
+ * with a top-level `atomic:operations` member.
+ */
+const hasAtomicMember = (ast: SchemaAST.AST, depth = 0): boolean => {
+  if (depth > MEMBER_WALK_DEPTH) return false;
+  switch (ast._tag) {
+    case "Objects":
+      return ast.propertySignatures.some((property) => property.name === ATOMIC_OPERATIONS_MEMBER);
+    case "Union":
+      return ast.types.some((member) => hasAtomicMember(member, depth + 1));
+    case "Suspend":
+      return hasAtomicMember(ast.thunk(), depth + 1);
+    default:
+      return false;
+  }
+};
+
+/**
+ * Whether an endpoint takes an `atomic:operations` request document: some
+ * payload schema (any content type) is an object with a top-level
+ * `atomic:operations` member, possibly one arm of a union. This is what
+ * makes an endpoint the atomic operations endpoint — not its path, which is
+ * configurable.
+ */
+export const isAtomicEndpoint = (endpoint: HttpApiEndpoint.Top): boolean => {
+  for (const { schemas } of endpoint.payload.values()) {
+    for (const schema of schemas) {
+      if (hasAtomicMember(schema.ast)) return true;
+    }
+  }
+  return false;
+};
+
+const refOf = (group: HttpApiGroup.Top, endpoint: HttpApiEndpoint.Top): EndpointRef => ({
+  groupId: group.identifier,
+  name: endpoint.identifier,
+  method: endpoint.method,
+  path: endpoint.path,
+});
+
 /**
  * Reflect an `HttpApi` into its JSON:API resource surface. The first endpoint
- * matching each (type, role) wins; later duplicates are ignored.
+ * matching each (type, role) wins; later duplicates are ignored. An atomic
+ * operations endpoint is never a resource (see `reflectAtomic`).
  */
 export const reflectResources = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
@@ -111,19 +169,33 @@ export const reflectResources = <Id extends string, Groups extends HttpApiGroup.
   HttpApi.reflect(api, {
     onGroup: () => {},
     onEndpoint: ({ group, endpoint }) => {
+      if (isAtomicEndpoint(endpoint)) return;
       const role = classify(endpoint.method, endpoint.path);
       if (role === undefined) return;
       const existing = resources.get(role.type) ?? { type: role.type };
       if (existing[role.operation] !== undefined) return;
-      existing[role.operation] = {
-        groupId: group.identifier,
-        name: endpoint.name,
-        method: endpoint.method,
-        path: endpoint.path,
-      };
+      existing[role.operation] = refOf(group, endpoint);
       resources.set(role.type, existing);
     },
   });
 
   return resources;
+};
+
+/**
+ * Reflect an `HttpApi`'s atomic operations endpoint, if it declares one: the
+ * first endpoint whose request payload is an `atomic:operations` document.
+ * `JsonApiSync` uses it to push a batch as one all-or-nothing request.
+ */
+export const reflectAtomic = <Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>
+): EndpointRef | undefined => {
+  let atomic: EndpointRef | undefined;
+  HttpApi.reflect(api, {
+    onGroup: () => {},
+    onEndpoint: ({ group, endpoint }) => {
+      if (atomic === undefined && isAtomicEndpoint(endpoint)) atomic = refOf(group, endpoint);
+    },
+  });
+  return atomic;
 };
