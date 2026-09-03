@@ -36,6 +36,7 @@
 
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
+import * as Predicate from "./Predicate.js";
 import type { RowChange } from "./RowChange.js";
 import * as Subset from "./Subset.js";
 
@@ -154,9 +155,9 @@ export const deltaFromChanges = (
   return { added, removed };
 };
 
-/** Materialize a result map to a page in a deterministic (id-ascending) order. */
+/** Materialize a result map to a page in a deterministic (id-ascending, code-point) order. */
 export const pageOf = (result: ReadonlyMap<string, Row>): ReadonlyArray<Row> =>
-  [...result.values()].toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  [...result.values()].toSorted((a, b) => Predicate.compareText(a.id, b.id));
 
 // ─── Operators ───────────────────────────────────────────────────────────────
 

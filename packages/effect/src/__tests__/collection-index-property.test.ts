@@ -2,13 +2,19 @@
  * Property test (issue #113 acceptance criterion): indexed evaluation must be
  * exactly equivalent to full-scan `Subset.apply` for randomized predicates and
  * data — including null/absent fields and type-mismatched comparisons
- * (`Predicate.ts` semantics, `test`/`compareValues`). No `fast-check` in this
+ * (`Predicate.ts` semantics: `evaluate` under ADR-0028, where absent ≡ NULL
+ * and a NULL field makes every comparison unknown). No `fast-check` in this
  * repo's dependency set, so this is a small hand-rolled seeded-PRNG generator:
  * deterministic (fixed seed) so a failure reproduces exactly, with the seed
- * and failing case printed on assertion failure.
+ * and failing case printed on assertion failure. The last block runs the
+ * same equivalence over the differential harness corpus (`FilterCorpus`,
+ * #153) with NULL, absent and astral text on — ADR-0028's acceptance
+ * criterion for the index.
  */
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import * as CollectionIndex from "../CollectionIndex.js";
+import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 
@@ -33,9 +39,12 @@ const chance = (rng: Rng, p: number): boolean => rng() < p;
 // number, sometimes absent; `b` a plain string, sometimes explicitly `null`;
 // `mixed` holds either a number or a string across different rows (so a range
 // query against one type must ignore rows holding the other, exactly like
-// `compareValues`'s same-type-only check); `flag` is a boolean/null (never
-// indexable by range, only by `eq`/`In`); `rank` is unique per row, used only
-// as an orderBy tiebreak so sorted-pipeline comparisons are order-exact.
+// rule (d)'s unknown on a type mismatch); `flag` is a boolean/null (ADR-0028
+// orders booleans `false < true`, so it is range-indexable too); `rank` is
+// unique per row, used only as an orderBy tiebreak so sorted-pipeline
+// comparisons are order-exact. Absent `a`, null `b` and null `flag` rows are
+// generated on purpose: under ADR-0028 rule (b) they share the index's NULL
+// bucket, which only `IsNull` may return.
 
 interface TestRow {
   readonly id: string;
@@ -79,14 +88,17 @@ const RANGE_OPS: ReadonlyArray<Predicate.Comparison> = ["gt", "gte", "lt", "lte"
 
 const randomConjunct = (rng: Rng): Predicate.Predicate => {
   const field = pick(rng, COMPARE_FIELDS);
-  const kind = int(rng, 4);
+  const kind = int(rng, 6);
+  // `eq`/`ne` with `null` desugar to `IsNull` / negated `IsNull` (ADR-0028).
   if (kind === 0) return Predicate.eq(field, pick(rng, COMPARE_VALUES));
   if (kind === 1) return Predicate.ne(field, pick(rng, COMPARE_VALUES));
-  if (kind === 2) {
-    const values = Array.from({ length: 1 + int(rng, 3) }, () => pick(rng, COMPARE_VALUES));
-    return Predicate.isIn(field, values);
+  if (kind === 2 || kind === 3) {
+    const values = Array.from({ length: int(rng, 4) }, () => pick(rng, COMPARE_VALUES));
+    return kind === 2 ? Predicate.isIn(field, values) : Predicate.notIn(field, values);
   }
-  return Predicate.compare(pick(rng, RANGE_OPS), field, pick(rng, COMPARE_VALUES));
+  // A raw `Compare` may carry `null`: unknown for every row, never a match.
+  if (kind === 4) return Predicate.compare(pick(rng, RANGE_OPS), field, pick(rng, COMPARE_VALUES));
+  return Predicate.compare("eq", field, pick(rng, COMPARE_VALUES));
 };
 
 /** A random top-level predicate: mostly an `And` of a few conjuncts (the shape the
@@ -105,6 +117,8 @@ const randomPredicate = (rng: Rng): Predicate.Predicate => {
 
 const idsOf = (rows: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<string> =>
   rows.map((r) => r.id).toSorted();
+const same = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
 
 const TRIALS = 400;
 const ROWS_PER_TRIAL = 60;
@@ -169,21 +183,90 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
     CollectionIndex.rebuild(index, rows);
 
     const cases: ReadonlyArray<Predicate.Predicate> = [
+      // ADR-0028: `eq("a", null)` is `IsNull("a")`, selecting the absent row
+      // and the null row alike (it used to select only the explicit null).
       Predicate.eq("a", null),
+      Predicate.isNull("a"),
+      Predicate.isNotNull("a"),
+      Predicate.compare("eq", "a", null), // wire form: unknown everywhere
       Predicate.eq("a", 1),
       Predicate.ne("a", 1),
       Predicate.isIn("a", [1, 2]),
+      Predicate.isIn("a", [1, null]),
+      Predicate.notIn("a", [1]),
+      Predicate.notIn("a", []),
       Predicate.gt("a", 0),
       Predicate.gte("a", 1),
       Predicate.lt("a", 2),
       Predicate.compare("gt", "a", "1"), // string literal vs numeric+string rows
       Predicate.and(Predicate.gt("a", 0), Predicate.ne("a", 2)),
+      Predicate.and(Predicate.isNull("a"), Predicate.gt("rank", 0)),
     ];
-    for (const where of cases) {
+    const mismatches = cases.flatMap((where) => {
       const subset = Subset.make({ collection: "t", where });
       const expected = idsOf(Subset.apply(rows, subset));
       const actual = idsOf(Subset.applyIndexed(rowsById, subset, index));
-      expect(actual).toEqual(expected);
+      return JSON.stringify(actual) === JSON.stringify(expected)
+        ? []
+        : [{ where, expected, actual }];
+    });
+    expect(mismatches).toEqual([]);
+    // The ADR-0028 rule (b) answer, stated outright.
+    expect(
+      idsOf(
+        Subset.applyIndexed(
+          rowsById,
+          Subset.make({ collection: "t", where: Predicate.eq("a", null) }),
+          index
+        )
+      )
+    ).toEqual(["absent", "null-a"]);
+  });
+
+  it("matches the full scan over the differential corpus (NULL, absent, astral text)", () => {
+    // Every corpus column is indexed, so every `eq`/`In`/`IsNull`/range leaf
+    // at the top level of an `And` is planned through the index; `ne`,
+    // `NotIn`, negated `IsNull`, `Or` and `Not` stay residual.
+    const corpus = Effect.runSync(
+      FilterCorpus.generateCorpus({
+        seed: FilterCorpus.DEFAULT_SEED,
+        nulls: true,
+        astral: true,
+        booleanOrder: true,
+        predicates: 400,
+      })
+    );
+    const index = CollectionIndex.empty(corpus.columns.map((column) => column.name));
+    CollectionIndex.rebuild(index, corpus.rows);
+    const rowsById = new Map(corpus.rows.map((row) => [row.id, row]));
+    const fullScan = (where: Predicate.Predicate) =>
+      idsOf(corpus.rows.filter((row) => Predicate.test(where, row.value)));
+    /** Every predicate where the index (planned or fallen back) disagrees with the full scan. */
+    const disagreements = (predicates: ReadonlyArray<Predicate.Predicate>) =>
+      predicates.flatMap((where) => {
+        const expected = fullScan(where);
+        const viaIndex = CollectionIndex.evaluate(index, rowsById, where);
+        const planned = viaIndex === undefined ? expected : idsOf(viaIndex);
+        const subset = Subset.make({ collection: "corpus", where });
+        const applied = idsOf(Subset.applyIndexed(rowsById, subset, index));
+        return same(planned, expected) && same(applied, expected)
+          ? []
+          : [{ where, expected, planned, applied }];
+      });
+
+    expect(disagreements(corpus.predicates)).toEqual([]);
+    // The index must actually have been exercised, not bypassed.
+    const planned = corpus.predicates.filter(
+      (where) => CollectionIndex.plan(index, where) !== undefined
+    );
+    expect(planned.length).toBeGreaterThan(100);
+
+    // Incremental maintenance agrees with the rebuild: move every row through
+    // a NULL and back, then re-check a slice of the predicates.
+    for (const row of corpus.rows) {
+      CollectionIndex.upsertRow(index, row.id, {});
+      CollectionIndex.upsertRow(index, row.id, row.value);
     }
+    expect(disagreements(corpus.predicates.slice(0, 100))).toEqual([]);
   });
 });

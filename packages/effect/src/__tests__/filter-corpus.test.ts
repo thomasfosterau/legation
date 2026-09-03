@@ -32,7 +32,10 @@ const leaves = (
     case "Compare":
       return [{ field: predicate.field, literal: predicate.value }];
     case "In":
+    case "NotIn":
       return predicate.values.map((literal) => ({ field: predicate.field, literal }));
+    case "IsNull":
+      return [];
     case "And":
     case "Or":
       return predicate.predicates.flatMap(leaves);
