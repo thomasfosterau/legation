@@ -614,8 +614,13 @@ const locate = (
     : Effect.fail(new QueryError({ message, query: url.pathname }));
 };
 
-/** A single-row read is `filter[id]=…`, first 1 (ADR-0029 §3); it takes `include` and `fields` only. */
-const singleRow = (
+/**
+ * The query of a single-row read — `filter[id]=…`, first 1 (ADR-0029 §3) —
+ * from a `/{type}/{id}` request's own query, which takes `include` and
+ * `fields[…]` only. Shared by {@link parseRead} and the derived `get`
+ * handler, which has the id from the route instead of the path.
+ */
+export const singleRowParams = (
   collection: string,
   id: string,
   params: URLSearchParams
@@ -650,7 +655,7 @@ export const parseRead = (
     const params =
       located.id === undefined
         ? parsed.searchParams
-        : yield* singleRow(located.collection, located.id, parsed.searchParams);
+        : yield* singleRowParams(located.collection, located.id, parsed.searchParams);
     return yield* parseParams(nodes, located.collection, params);
   });
 

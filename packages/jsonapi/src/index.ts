@@ -38,8 +38,10 @@ export * as CollectionLoader from "./CollectionLoader.js";
 // Convention-first sync derivation from an app's JSON:API HttpApi.
 export * as Convention from "./Convention.js";
 export * as Derive from "./Derive.js";
+export * as DocumentWriter from "./DocumentWriter.js";
 export * as JsonApiBackend from "./JsonApiBackend.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
 export * as NodeBridge from "./NodeBridge.js";
 export * as Relationships from "./Relationships.js";
+export * as RestHandlers from "./RestHandlers.js";
