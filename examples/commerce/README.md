@@ -21,6 +21,7 @@ becomes offline-first and live.
 | Order-status notifications                                  | a non-UI live-query consumer watching `orders`; the fulfilment worker advances statuses out-of-band on the sync server                                                                                                                                                                                                                          |
 | Durable storage                                             | `SqlBackend` over Effect's SQL packages (`@effect/sql-sqlite-node`'s `SqlClient`; the `SqlExecutor` seam is a thin adapter) that **passes `verifyBackendContract`** (see `tests/`); client side on IndexedDB                                                                                                                                    |
 | HTTP cache                                                  | the service worker serves assets cache-first and pages stale-while-revalidate via `CacheApiHttpCache`                                                                                                                                                                                                                                          |
+| Plain `fetch` served from the replica                       | the **façade** (ADR-0029, `JsonApiFacade.fetchHandler` composed first in `src/service-worker.ts`): the catalog load is universal (`src/routes/+page.ts`), so on client navigation its plain `fetch` of a canonical URL is intercepted in the worker and answered from the replica when the shell's pins cover it (`x-legation-served-at`); uncovered goes to the network, offline and uncovered is the 503 `offline` document; a pending cart write shows in a covered response (`tests/facade-browser.test.ts`) |
 
 ## The JSON:API
 
@@ -53,6 +54,14 @@ Each endpoint declares its query as the graph's own codec
 the api's contract and the handler's parse are one grammar. The writes (`create` / `delete`) stay hand-written SQL that
 `broadcast`s its hints.
 
+The sync server trusts `x-commerce-user`, so a browser never reaches it
+directly: the app serves the same URLs on its own origin through a **read
+proxy** (`src/routes/jsonapi/[...path]/+server.ts`) that forwards a `GET`
+with the header set from the Better Auth session — the trust boundary the
+loads already cross. The universal catalog load calls it in-process on the
+server and through the service worker in the browser, where the façade
+answers covered URLs from the replica before the proxy is ever reached.
+
 **Collation.** ADR-0028 orders and filters text by code point. SQLite's
 default `BINARY` collation already is (`server/db.ts` says so beside the
 DDL); a Postgres deployment declares its filterable and sortable text
@@ -70,7 +79,14 @@ bun run dev                           # the SvelteKit app (port 5178, proxies /s
 Sign in with any username (demo auth — the point is the `IdentityResolver`
 seam, not the credential ceremony). Try: two browsers with different users;
 DevTools offline while adding to cart, then reconnect; killing the sync
-server (calls degrade WS→HTTP first, then queue); a no-JS browser.
+server (calls degrade WS→HTTP first, then queue); a no-JS browser; DevTools
+offline, then a plain `fetch("/jsonapi/products?page[limit]=4&sort=id", { headers: { accept: "application/vnd.api+json" } })`
+in the console — the response carries `x-legation-served-at`.
+
+A production build (`bun run build`, adapter-node) needs `BETTER_AUTH_SECRET`
+set, and serves the read proxy itself; put a reverse proxy in front that
+routes `/sync*` to the sync server, as the dev server and the browser test's
+harness do.
 
 ## Tests
 
@@ -92,17 +108,42 @@ the workspace runner:
   graph, and the tier's promises (policy scoping, 400 with
   `source.parameter`, `fields[]`, cursor paging).
 - `no-js-loads.test.ts` — the no-JS baseline: the real SvelteKit `load`
-  functions run against the in-process api, page by page. Rendering the
-  markup itself needs the Kit runtime and stays a manual check.
+  functions (the server loads and the universal catalog load, as the server
+  runs it for the first render) run against the in-process api, page by
+  page, plus the read proxy's identity rule. Rendering the markup itself
+  needs the Kit runtime and stays a manual check.
+- `replica-documents.test.ts` — same URL, same result (ADR-0029 §6): every
+  declared read's document from a synced replica equals the derived REST
+  handler's byte for byte, and the façade over that replica answers covered
+  URLs with those bytes.
+- `facade-browser.test.ts` — the façade end to end in a browser (#168):
+  the harness (`tests/support/app.ts`) builds the app (`vite build`, about
+  fifteen seconds) and serves it in-process with its service worker active,
+  in front of the sync server on ephemeral ports; Playwright drives the
+  pre-installed Chromium and issues plain `fetch()`es from the page. It
+  asserts, in order: online, an uncovered URL is the network's and a
+  covered one is served from the replica once pulled, byte for byte the
+  network's document; offline (`context.setOffline(true)` — Playwright's
+  CDP network emulation over the page and the worker, the DevTools
+  toggle's equivalent), the covered URL is still served, header present;
+  offline, the uncovered URL is the 503 `offline` error document, both when
+  the browser reads offline and when it reads online but the harness drops
+  the worker's forward at the socket (the emulation leaves the worker's own
+  fetches reachable); offline, "Add to cart" journals a mutation the
+  covered cart URL shows before the server has the row, and the server
+  catches up on reconnect. It needs Chromium: `bunx playwright-core install
+  chromium` (or `PLAYWRIGHT_BROWSERS_PATH` pointing at an install); without
+  it the suite fails naming the missing binary — it never skips. About
+  forty seconds wall time, most of it the build and the engine's first pull.
 
 ## Deliberate next steps
 
 - Host the engine in the service worker with tab mirrors over `ClientView`
   (ADR-0010/0021) — the binding-level proof already exists in
   `@legation/svelte`'s mirror test.
-- Serve the same URLs from the replica in the service worker (ADR-0029): the
-  loads already fetch canonical strings, so `Client.subscribe(url)` keys the
-  same subscriptions.
+- Convert the remaining page loads to universal loads over the read proxy,
+  so client navigation to the product, cart and orders pages also reads
+  through the façade (the catalog is the one that does today).
 - Swap the demo sign-in for Better Auth behind the same `client_groups` +
   `IdentityResolver` seam.
 - An SSR-stub runtime helper for `@legation/svelte/kit` (see `lib/engine.ts`).

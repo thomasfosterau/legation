@@ -53,9 +53,14 @@ export const handle: Handle = async ({ event, resolve }) => {
     ? { id: session.user.id, name: session.user.name, email: session.user.email }
     : undefined;
 
-  await runtime.runPromise(
-    alignBinding(event.cookies.get("legation-client-group"), event.locals.user?.id)
-  );
+  // A universal load's in-process `fetch` of the read proxy is a
+  // sub-request of a page request that already aligned the binding; it
+  // needs the session (the proxy vouches for it) and nothing else.
+  if (!event.isSubRequest) {
+    await runtime.runPromise(
+      alignBinding(event.cookies.get("legation-client-group"), event.locals.user?.id)
+    );
+  }
 
   return svelteKitHandler({ auth, event, resolve, building });
 };

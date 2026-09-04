@@ -38,6 +38,9 @@ jobs:
       - name: Typecheck examples
         run: bun run typecheck:examples
 
+      - name: Install Chromium (the commerce façade's browser test)
+        run: bunx playwright-core install --with-deps chromium
+
       - name: Test with coverage
         run: bun run test:coverage
 

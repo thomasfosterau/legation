@@ -30,8 +30,7 @@ import {
 import { HttpApiClient } from "effect/unstable/httpapi";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@legation/effect";
-import { JsonApiQuery } from "@legation/jsonapi";
-import { nodes } from "../src/lib/domain.js";
+import { readPath } from "../src/lib/reads.js";
 import { api } from "./jsonapi.js";
 
 export const SYNC_ORIGIN =
@@ -46,13 +45,14 @@ const asUser = (userId: string | undefined) =>
 // ─── Reads: canonical URLs ───────────────────────────────────────────────────
 
 /**
- * The JSON:API URL of a read: its canonical string under the api's mount
- * path. Throws a `QueryError` for a read the grammar cannot spell (an
- * unknown collection, a field outside the filterable set) — a definition
- * bug in the app's reads, never request state.
+ * The JSON:API URL of a read on the sync server: its canonical string under
+ * the api's mount path (`readPath`, `src/lib/reads.ts` — the one spelling
+ * the loads, the proxy and the browser share). Throws a `QueryError` for a
+ * read the grammar cannot spell (an unknown collection, a field outside the
+ * filterable set) — a definition bug in the app's reads, never request
+ * state.
  */
-export const readUrl = (read: Query.Read): string =>
-  `${SYNC_ORIGIN}/jsonapi${JsonApiQuery.canonical(nodes, read)}`;
+export const readUrl = (read: Query.Read): string => `${SYNC_ORIGIN}${readPath(read)}`;
 
 /**
  * `GET` a read's canonical URL as `userId` (or anonymously) and decode the
