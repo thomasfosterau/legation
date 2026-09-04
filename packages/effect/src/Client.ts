@@ -34,7 +34,7 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
-import { Context, Effect, Exit, Option, Ref, Scope, Stream } from "effect";
+import { Context, Effect, Exit, Option, Ref, Scope, Semaphore, Stream } from "effect";
 import * as ClientEngine from "./ClientEngine.js";
 import * as ClientStore from "./ClientStore.js";
 import * as RpcTransport from "./RpcTransport.js";
@@ -182,6 +182,23 @@ const oneFewer = (count: number, kind: Kind, tracked: Kind): number =>
 const unheld = (interest: Interest): boolean => interest.observers === 0 && interest.pins === 0;
 
 /**
+ * An entry with one unit of `kind` fewer. The canonical URL is a pin's
+ * identity, so it goes with the last pin even while observers keep the
+ * entry: {@link Client.coverageOf} names only what {@link Client.subscriptions}
+ * lists.
+ */
+const oneFewerOn = (current: Interest, kind: Kind): Interest => {
+  const { url, ...rest } = current;
+  const pins = oneFewer(current.pins, kind, "explicit");
+  return {
+    ...rest,
+    observers: oneFewer(current.observers, kind, "observer"),
+    pins,
+    ...(pins > 0 && url !== undefined ? { url } : {}),
+  };
+};
+
+/**
  * The ledger key of a registration: the root window's hash alone, or with
  * its edge selects — the same key the mirror protocol gives a relational
  * registration — so a read with `include` is its own entry beside the
@@ -223,6 +240,11 @@ export const fromView = (
   const ledger = Ref.makeUnsafe(new Map<string, Interest>());
   const roots = Ref.makeUnsafe(new Map<string, number>());
   const edgeScopes = new Map<string, Scope.Closeable>();
+  // The ledger update and the view registration it decides are one
+  // critical section: an unsubscribe interleaved with an in-flight
+  // subscribe of the same read would otherwise release before the
+  // registration exists, leaking it.
+  const lock = Semaphore.makeUnsafe(1);
 
   // ─── Root windows: one voice per window across every registration ────────
 
@@ -249,18 +271,17 @@ export const fromView = (
 
   // ─── Edge windows: the relational registration, held open per entry ──────
 
-  // The same registration `observe` runs (ADR-0029 section 2): the view's
-  // relational read — host-side over a connected engine, the scoped
-  // reconcile loop over an owned one — kept open in a scope of its own and
-  // drained, so the loop keeps the foreign windows tracking the linkage.
+  // The registration `observe`'s relational read makes (ADR-0029 section 2)
+  // without its join — host-side over a connected engine, the reconcile
+  // loop over an owned one — kept open in a scope of its own so the foreign
+  // windows keep tracking the linkage until the entry is released.
   const openEdges = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const { root, edges } = registration;
-      const stream = yield* view
-        .related(nodes.collections, root.collection, root, edges)
+      yield* view
+        .pinEdges(nodes.collections, root.collection, root, edges)
         .pipe(Scope.provide(scope));
-      yield* Effect.forkIn(Stream.runDrain(stream), scope);
       edgeScopes.set(key, scope);
     });
 
@@ -286,6 +307,12 @@ export const fromView = (
     registration: Coverage.Registration,
     kind: Kind,
     url?: string
+  ): Effect.Effect<void> => Semaphore.withPermit(lock, acquireUnlocked(registration, kind, url));
+
+  const acquireUnlocked = (
+    registration: Coverage.Registration,
+    kind: Kind,
+    url: string | undefined
   ): Effect.Effect<void> =>
     Ref.modify(ledger, (map) => {
       const key = keyOf(registration);
@@ -304,15 +331,14 @@ export const fromView = (
 
   /** Drop one unit of interest; releases from the view when it was the last. */
   const release = (registration: Coverage.Registration, kind: Kind): Effect.Effect<void> =>
+    Semaphore.withPermit(lock, releaseUnlocked(registration, kind));
+
+  const releaseUnlocked = (registration: Coverage.Registration, kind: Kind): Effect.Effect<void> =>
     Ref.modify(ledger, (map) => {
       const key = keyOf(registration);
       const current = map.get(key);
       if (current === undefined) return [undefined, map] as const;
-      const updated: Interest = {
-        ...current,
-        observers: oneFewer(current.observers, kind, "observer"),
-        pins: oneFewer(current.pins, kind, "explicit"),
-      };
+      const updated = oneFewerOn(current, kind);
       const next = new Map(map);
       if (unheld(updated)) {
         next.delete(key);

@@ -790,21 +790,17 @@ export const canonical = (
   return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
 };
 
-/** {@link canonical} as an effect: its `QueryError` becomes a typed failure. */
+/** {@link canonical} as an effect: the `QueryError` it throws becomes a typed failure. */
 const tryCanonical = (
   nodes: Node.NodeRegistry,
   read: Query.Read
 ): Effect.Effect<string, QueryError> =>
-  Effect.try({
-    try: () => canonical(nodes, read),
-    catch: (error) =>
-      error instanceof QueryError
-        ? error
-        : new QueryError({
-            message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
-            query: read.collection,
-            cause: error,
-          }),
+  Effect.suspend(() => {
+    try {
+      return Effect.succeed(canonical(nodes, read));
+    } catch (error) {
+      return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
+    }
   });
 
 /**

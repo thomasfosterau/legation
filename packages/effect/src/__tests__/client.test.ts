@@ -7,7 +7,7 @@
  * engine over a channel with identical component-facing behavior.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect";
 import {
   Authorization,
   Backend,
@@ -453,6 +453,42 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
     )
   );
 
+  it.effect("an unsubscribe racing an in-flight subscribe of the same read leaks nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeCountingEngine;
+        // A view whose edge registration waits on a gate: the subscribe is
+        // mid-registration when the unsubscribe arrives.
+        const gate = yield* Deferred.make<void>();
+        const view = ClientView.fromEngine(engine);
+        const slow: ClientView.ClientView = {
+          ...view,
+          pinEdges: (registry, collection, subset, edges) =>
+            Deferred.await(gate).pipe(
+              Effect.andThen(view.pinEdges(registry, collection, subset, edges))
+            ),
+        };
+        const client = Client.fromView(nodes, slow);
+        const pinned: Query.Read = { collection: "products", include: { reviews: true } };
+
+        const subscribing = yield* Effect.forkScoped(client.subscribe(pinned));
+        yield* sleepReal(20);
+        const unsubscribing = yield* Effect.forkScoped(client.unsubscribe(pinned));
+        yield* sleepReal(20);
+        // The unsubscribe must wait for the registration rather than run
+        // ahead of it: otherwise it releases nothing and the registration
+        // then lands with nobody holding it.
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(subscribing);
+        yield* Fiber.join(unsubscribing);
+
+        expect((yield* client.coverageOf(pinned))._tag).toBe("Uncovered");
+        expect(yield* client.subscriptions).toEqual([]);
+        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+      })
+    )
+  );
+
   it.effect("two pins sharing a root are released one at a time", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -610,6 +646,37 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
         // Pins by read still work, and are listed only when they have a URL.
         yield* client.subscribe({ collection: "products" });
         expect(yield* client.subscriptions).toEqual([]);
+      })
+    )
+  );
+
+  it.effect("the URL leaves with the last pin, even while an observer keeps the entry", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeCountingEngine;
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
+        const read: Query.Read = { collection: "products" };
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe(read), () => Effect.void).pipe(Effect.ignore)
+        );
+        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 1);
+
+        yield* client.subscribe("/products");
+        expect(yield* client.subscriptions).toEqual(["/products"]);
+        const pinned = yield* client.coverageOf(read);
+        expect(pinned._tag === "Covered" ? pinned.url : pinned).toBe("/products");
+
+        // The observer keeps the entry (and the window); the pin's identity goes.
+        yield* client.unsubscribe("/products");
+        expect(yield* client.subscriptions).toEqual([]);
+        const observed = yield* client.coverageOf(read);
+        expect(observed._tag).toBe("Covered");
+        expect(observed._tag === "Covered" ? observed.url : "listed").toBeUndefined();
+        expect(yield* rootHashes(engine)).toHaveLength(1);
+
+        // Pinning again names it again.
+        yield* client.subscribe(read);
+        expect(yield* client.subscriptions).toEqual(["/products"]);
       })
     )
   );

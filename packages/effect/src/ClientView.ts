@@ -111,6 +111,20 @@ export interface ClientView {
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /**
+   * Hold a subset's edge windows registered for the scope's lifetime
+   * without resolving the join — what an explicit pin with `include` needs
+   * (ADR-0029 section 2): the narrowed foreign windows keep tracking the
+   * base rows, and are released when the scope closes. Over an engine this
+   * is `Related.trackEdges`; a mirror registers the relational read with
+   * its host and never reads the resolved rows.
+   */
+  readonly pinEdges: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<string | Related.EdgeSelect>
+  ) => Effect.Effect<void, never, Scope.Scope>;
+  /**
    * Point-in-time server-fallthrough read (ADR-0025): auth-filtered,
    * no CVR, results never enter the replica. Present only when the
    * underlying tier can reach a server (a transport with `read`, or a
@@ -161,6 +175,8 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     observeNamed: (name, args) => engine.observeNamed(name, args),
     related: (registry, collectionName, subset, edges) =>
       Related.related(engine, registry, collectionName, subset, edges),
+    pinEdges: (registry, collectionName, subset, edges) =>
+      Related.trackEdges(engine, registry, collectionName, subset, edges),
     ...(engine.readThrough === undefined
       ? {}
       : {

@@ -150,6 +150,10 @@ describe("Subscriptions.counted", () => {
         yield* engine.subscribe(allTodos);
         yield* counted.unsubscribe(allTodos);
         expect(yield* hashes()).toEqual([]);
+
+        // Counting a counted engine returns it: one voice per engine, however
+        // many fronts wrap it.
+        expect(Subscriptions.counted(counted)).toBe(counted);
       }).pipe(Effect.scoped)
   );
 });

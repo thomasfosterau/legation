@@ -31,6 +31,7 @@ import {
   EngineHost,
   Mirror,
   MirrorProtocol,
+  Subscriptions,
   Subset,
 } from "@legation/effect/internal";
 import { Effect, Exit, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect";
@@ -206,6 +207,28 @@ const switchingView = (
             )
           )
         ),
+      // A held edge registration has no stream to redo the switch for it:
+      // re-pin on every view this switches to (the current one first —
+      // `changes` replays it), releasing the previous tier's hold.
+      pinEdges: (registry, collectionName, subset, edges) =>
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const held = yield* Ref.make<Scope.Closeable | undefined>(undefined);
+          yield* Effect.forkIn(
+            Stream.runForEach(SubscriptionRef.changes(viewRef), (view) =>
+              Effect.gen(function* () {
+                const previous = yield* Ref.getAndSet(held, undefined);
+                if (previous !== undefined) yield* Scope.close(previous, Exit.void);
+                const child = yield* Scope.fork(scope);
+                yield* view
+                  .pinEdges(registry, collectionName, subset, edges)
+                  .pipe(Scope.provide(child));
+                yield* Ref.set(held, child);
+              })
+            ).pipe(Effect.ignore),
+            scope
+          );
+        }),
       read: (subsets) =>
         withCurrent((view) =>
           view.read === undefined
@@ -248,13 +271,18 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
 
     const becomeHost = Effect.gen(function* () {
       const hostClientId = options.hostClientId ?? `host-${options.clientGroupId}`;
-      const engine = yield* ClientEngine.make({
-        clientId: hostClientId,
-        clientGroupId: options.clientGroupId,
-        mutators: options.mutations,
-        ...(options.queries === undefined ? {} : { queries: options.queries }),
-        ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      }).pipe(Effect.provide(options.dependencies));
+      // One counted voice for both fronts over this engine — the host
+      // serving other tabs and this tab's own view — so a mirror releasing
+      // a window never drops one this tab's Client still pins.
+      const engine = Subscriptions.counted(
+        yield* ClientEngine.make({
+          clientId: hostClientId,
+          clientGroupId: options.clientGroupId,
+          mutators: options.mutations,
+          ...(options.queries === undefined ? {} : { queries: options.queries }),
+          ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
+        }).pipe(Effect.provide(options.dependencies))
+      );
       const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
       yield* EngineHost.run({
         channel: hostChannel,

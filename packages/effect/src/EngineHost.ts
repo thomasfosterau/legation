@@ -60,9 +60,10 @@ export interface EngineHostOptions {
   readonly channel: MirrorChannel;
   readonly engine: ClientEngine.ClientEngine;
   /**
-   * The collection registry `related` registrations resolve against. Without
-   * it, `SubscribeRelated` messages are answered with empty results and a
-   * logged warning — pass it whenever mirrors use relational reads.
+   * The collection registry `related` registrations resolve against.
+   * Defaults to `nodes.collections` when `nodes` is given; without either,
+   * `SubscribeRelated` messages are answered with empty results and a
+   * logged warning — pass one whenever mirrors use relational reads.
    */
   readonly registry?: Collection.CollectionRegistry;
   /**
@@ -243,7 +244,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       edges: ReadonlyArray<Related.EdgeSelect>
     ) => {
       const key = MirrorProtocol.relatedKey(collection, subset, edges);
-      const registry = options.registry;
+      const registry = options.registry ?? options.nodes?.collections;
       if (registry === undefined) {
         return Effect.logWarning(
           "EngineHost: SubscribeRelated received but no collection registry was configured"

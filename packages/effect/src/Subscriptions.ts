@@ -65,6 +65,9 @@ export interface Subscriptions {
   readonly preloadQuery: (name: string, args: unknown) => Effect.Effect<void, QueryError>;
 }
 
+/** The engines {@link counted} built, so counting one again returns it. */
+const countedEngines = new WeakSet<ClientEngine>();
+
 /**
  * One counted voice over the engine's set-based subscription list. The
  * engine's `subscribe` / `unsubscribe` register or drop a window outright,
@@ -76,10 +79,15 @@ export interface Subscriptions {
  * last. A window this facade never counted (registered on the engine
  * directly) is released as before, so the engine's own semantics survive
  * for callers that bypass it. Everything else passes through untouched.
+ *
+ * Idempotent: counting a counted engine returns it, so one engine handed
+ * to several fronts — an `EngineHost` and a `ClientView.fromEngine` in the
+ * same tab, ADR-0010's main-thread path — has one voice, not one per front.
  */
 export const counted = (engine: ClientEngine): ClientEngine => {
+  if (countedEngines.has(engine)) return engine;
   const holds = new Map<string, number>();
-  return {
+  const facade: ClientEngine = {
     ...engine,
     subscribe: (subset) =>
       Effect.suspend(() => {
@@ -101,6 +109,8 @@ export const counted = (engine: ClientEngine): ClientEngine => {
         return engine.unsubscribe(subset);
       }),
   };
+  countedEngines.add(facade);
+  return facade;
 };
 
 interface Entry {

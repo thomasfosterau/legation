@@ -460,6 +460,20 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
     })
   );
 
+  it.effect("nodes alone suffice: the registry defaults to nodes.collections", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      // No `registry`: an include URL must still pin its edge windows, not
+      // just the root with a warning.
+      yield* EngineHost.run({ channel: host, engine, nodes, urls: stubUrls });
+      yield* engine.mutate("todo/set", { id: "1", title: "by url", done: false, authorId: "u1" });
+      yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
+      const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
+      expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+    })
+  );
+
   it.effect("a host without URL reads ignores SubscribeUrl and keeps serving", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;

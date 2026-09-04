@@ -14,11 +14,12 @@ import {
   MemoryBackend,
   Mutator,
   Node,
+  Query,
   Transport,
 } from "@legation/effect";
-import { Cvr, InvalidationBus, SyncServer } from "@legation/effect/internal";
+import { Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Layer, Option, Schema, Scope, Stream } from "effect";
+import { Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope, Stream } from "effect";
 import * as ElectedHost from "../ElectedHost.js";
 import type { Role } from "../ElectedHost.js";
 
@@ -152,6 +153,72 @@ const dependenciesOf = (
   );
 
 describe("ElectedHost (#119)", () => {
+  // Real clock: the periodic pull runs on `Schedule.spaced`, which the
+  // TestClock would freeze.
+  it.live(
+    "the hosting tab's own pin survives a mirror's subscribe and unsubscribe of the same window",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const locks = makeFakeLockManager();
+          const clientGroupId = `group-voice-${Date.now()}`;
+          const channelName = `legation-elected-voice-${Date.now()}`;
+          const handler = yield* makeServer;
+          const store = yield* ClientStoreModule.makeMemory;
+          // The engine's subscription list is observable through what each
+          // pull carries: record it from the transport the host is wired with.
+          const pulls = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+          const dependencies = Layer.mergeAll(
+            Layer.succeed(ClientStoreModule.ClientStore)(store),
+            Layer.effect(Transport.ClientTransport)(
+              Effect.map(
+                Transport.makeInMemory(handler, clientGroupId),
+                (transport): Transport.ClientTransport => ({
+                  ...transport,
+                  pull: (request) =>
+                    Ref.update(pulls, (seen) => [
+                      ...seen,
+                      request.subscriptions.map(Subset.hash),
+                    ]).pipe(Effect.andThen(transport.pull(request))),
+                })
+              )
+            )
+          );
+          const options = {
+            clientGroupId,
+            nodes,
+            mutations,
+            channelName,
+            locks,
+            dependencies,
+            syncLoop: { pushDebounce: "5 millis" as const, pullInterval: "20 millis" as const },
+          };
+          const read = { collection: "todos" };
+          const root = Subset.hash(Query.plan(nodes, read).root);
+
+          const tabA = yield* ElectedHost.run(options);
+          yield* eventually(currentRole(tabA.role), (role) => role === "host");
+          const tabB = yield* ElectedHost.run(options);
+          expect(yield* currentRole(tabB.role)).toBe("mirror");
+
+          // The host's own Client pins the window; a mirror comes and goes.
+          yield* tabA.client.subscribe(read).pipe(Effect.orDie);
+          yield* tabB.client.subscribe(read).pipe(Effect.orDie);
+          yield* eventually(Ref.get(pulls), (seen) => seen.at(-1)?.includes(root) === true);
+          yield* tabB.client.unsubscribe(read).pipe(Effect.orDie);
+
+          // Every pull after the mirror let go still carries the window:
+          // both fronts count on one voice, so the mirror's release was not
+          // the last hold.
+          const before = (yield* Ref.get(pulls)).length;
+          const seen = yield* eventually(Ref.get(pulls), (all) => all.length >= before + 3);
+          expect(seen.slice(before).every((subscriptions) => subscriptions.includes(root))).toBe(
+            true
+          );
+        })
+      )
+  );
+
   it.effect(
     "exactly one tab hosts; the second mirrors, and death promotes it from the persisted store",
     () =>
