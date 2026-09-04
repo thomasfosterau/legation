@@ -46,20 +46,13 @@
  *   `next`. An optional `prefix` (the api's mount path) is prepended to
  *   every link; ADR-0029 §6 lets the host differ, nothing else.
  *
- * **Row shapes.** Where a row keeps its linkage is the one thing the
- * engine's two row shapes disagree on, and a {@link RowShape} names it. A
- * **node row** (the default, {@link nodeRows} — what `Node.row` decodes and
- * `Query.run` resolves) carries a `one` edge's key in its `via` field and
- * no collection-valued linkage of its own. A **`JsonApiRow`**
- * ({@link jsonApiRows} — `Derive.ts`'s shape, attributes flattened plus the
- * server's `relationships` linkage) carries every relationship's
- * identifiers under `relationships[name]`, so a `many` edge the read did
- * not resolve still links through the identifiers the row holds. Both
- * shapes flatten attributes at the top level, so attributes need no
- * strategy. The graph is still the node graph: a `JsonApiRow` collection
- * is written against the registry that declares its type (`NodeBridge`
- * over the app's resources); `Derive.ts`'s own collections declare no
- * graph and cannot be written until one does.
+ * Only **node rows** are written (a row value carrying the node's attributes
+ * and its `one`-edge key fields, as `Node.row` decodes and `Query.run`
+ * resolves). The `JsonApiRow` shape of `Derive.ts` (linkage under
+ * `relationships`, no node graph) is not a second strategy here: its
+ * collections declare no graph to plan against, so nothing can write them
+ * until a bridge (`NodeBridge` over the app's resources) gives them one —
+ * the seam is {@link relationshipOf}, the one place a row's linkage is read.
  */
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
@@ -107,55 +100,6 @@ export type Linkage = ReadonlyMap<
   ReadonlyMap<string, Readonly<Record<string, ReadonlyArray<unknown>>>>
 >;
 
-/** A row value as a record (a row value always is one). */
-export type RowValue = Readonly<Record<string, unknown>>;
-
-/**
- * Where a row value keeps its linkage (see the module doc): the key a
- * `one` edge links through, and the identifiers a collection-valued edge
- * carries on the row itself when its rows were not resolved.
- */
-export interface RowShape {
-  /** The target id a `one` edge links to on this row; `null` or `undefined` for none. */
-  readonly oneKey: (value: RowValue, name: string, via: string) => unknown;
-  /**
-   * The target ids of a collection-valued edge the row itself carries, or
-   * `undefined` when the row carries none (the edge is then omitted unless
-   * the read resolved its rows). Absent for a shape whose rows carry no
-   * such linkage.
-   */
-  readonly manyIds?: (value: RowValue, name: string) => ReadonlyArray<string> | undefined;
-}
-
-/** Node rows: a `one` edge's key is its `via` field; collection-valued linkage comes from resolved rows alone. */
-export const nodeRows: RowShape = {
-  oneKey: (value, _name, via) => value[via],
-};
-
-/** A `JsonApiRow`'s linkage for one relationship: an identifier, a list of them, or `null`. */
-type RowLinkage = Identifier | ReadonlyArray<Identifier> | null | undefined;
-
-/** The `relationships` member of a `JsonApiRow`, by relationship name. */
-const rowLinkageOf = (value: RowValue, name: string): RowLinkage =>
-  (value["relationships"] as Readonly<Record<string, RowLinkage>> | undefined)?.[name];
-
-const isIdentifierList = (linkage: RowLinkage): linkage is ReadonlyArray<Identifier> =>
-  Array.isArray(linkage);
-
-/** `JsonApiRow`s: every edge's linkage is the identifier(s) under `relationships[name]`. */
-export const jsonApiRows: RowShape = {
-  oneKey: (value, name) => {
-    const linkage = rowLinkageOf(value, name);
-    return linkage === undefined || linkage === null || isIdentifierList(linkage)
-      ? null
-      : linkage.id;
-  },
-  manyIds: (value, name) => {
-    const linkage = rowLinkageOf(value, name);
-    return isIdentifierList(linkage) ? linkage.map((identifier) => identifier.id) : undefined;
-  },
-};
-
 /** What a document is a function of (ADR-0029 §6). */
 export interface Input {
   readonly nodes: Node.NodeRegistry;
@@ -179,9 +123,20 @@ export interface Input {
   readonly fields?: JsonApiQuery.Projection;
   /** Prepended to every link (the api's mount path, e.g. `/jsonapi`); default `""`. */
   readonly prefix?: string;
-  /** How the rows carry their linkage; default {@link nodeRows}. */
-  readonly shape?: RowShape;
 }
+
+// ─── Row helpers (shared with the linkage derivation) ────────────────────────
+
+/** A row value as a record (a node row always is one). */
+const recordOf = (value: unknown): Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+
+/** The row id a row value carries (node rows carry `id` in the value). */
+export const idOf = (value: unknown): string => String(recordOf(value)["id"]);
+
+/** A resolved edge's value as its rows: a list as it is, a single row alone, `null` / `undefined` as none. */
+export const relatedValuesOf = (value: Related.RelatedValue): ReadonlyArray<unknown> =>
+  Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
 
 // ─── Rows → resource objects ─────────────────────────────────────────────────
 
@@ -190,25 +145,16 @@ interface Env {
   readonly nodes: Node.NodeRegistry;
   readonly linkage: Linkage | undefined;
   readonly prefix: string;
-  readonly shape: RowShape;
 }
 
 const envOf = (input: Input): Env => ({
   nodes: input.nodes,
   linkage: input.linkage,
   prefix: input.prefix ?? "",
-  shape: input.shape ?? nodeRows,
 });
 
-/** A row value as a record (a row value always is one). */
-const recordOf = (value: unknown): RowValue =>
-  typeof value === "object" && value !== null ? (value as RowValue) : {};
-
-/** The row id a related value carries (rows carry `id` in the value). */
-const idOf = (value: unknown): string => String(recordOf(value)["id"]);
-
 /** The node's declared attributes off the row value, in declaration order; absent ones are left out. */
-const attributesOf = (node: Node.AnyNode, value: RowValue) => {
+const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown>>) => {
   const attributes: Record<string, unknown> = {};
   for (const field of Object.keys(node.attributes)) {
     if (value[field] !== undefined) attributes[field] = value[field];
@@ -234,20 +180,12 @@ const edgeRowsOf = (
   return Array.isArray(related) ? related : env.linkage?.get(node.type)?.get(row.id)?.[name];
 };
 
-/** The identifiers a collection-valued edge links to: the resolved rows', else those the row itself carries. */
-const identifiersOf = (
-  env: Env,
-  node: Node.AnyNode,
-  row: Row,
-  name: string,
-  target: string
-): ReadonlyArray<Identifier> | undefined => {
-  const rows = edgeRowsOf(env, node, row, name);
-  const ids = rows === undefined ? env.shape.manyIds?.(recordOf(row.value), name) : rows.map(idOf);
-  return ids?.map((id) => ({ type: target, id }));
-};
-
-/** The relationship object of one edge, or `undefined` when nothing is known about it. */
+/**
+ * The relationship object of one edge, or `undefined` when nothing is known
+ * about it. This is where a row's linkage is read: a `one` edge's key off
+ * its `via` field, a collection-valued edge's identifiers off its resolved
+ * rows.
+ */
 const relationshipOf = (
   env: Env,
   node: Node.AnyNode,
@@ -256,13 +194,16 @@ const relationshipOf = (
 ): RelationshipValue | undefined => {
   const edge = node.edges[name]!;
   if (edge.kind === "one") {
-    const key = env.shape.oneKey(recordOf(row.value), name, edge.via);
+    const key = recordOf(row.value)[edge.via];
     return {
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
     };
   }
-  const identifiers = identifiersOf(env, node, row, name, edge.target);
-  const data = identifiers === undefined ? undefined : { data: identifiers };
+  const rows = edgeRowsOf(env, node, row, name);
+  const data =
+    rows === undefined
+      ? undefined
+      : { data: rows.map((value) => ({ type: edge.target, id: idOf(value) })) };
   if (edge.kind === "many") return data;
   return {
     links: {
@@ -298,13 +239,7 @@ const includedOf = (
   const target = env.nodes.nodes.get(node.edges[name]!.target)!;
   const included: Array<ResourceValue> = [];
   for (const row of rows) {
-    const value = row.related[name];
-    const values = Array.isArray(value)
-      ? value
-      : value === null || value === undefined
-        ? []
-        : [value];
-    for (const related of values) {
+    for (const related of relatedValuesOf(row.related[name])) {
       included.push(resourceOf(env, target, { id: idOf(related), value: related }));
     }
   }

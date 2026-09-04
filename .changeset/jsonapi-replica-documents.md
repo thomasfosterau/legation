@@ -17,29 +17,26 @@ replica as from the derived REST handler (ADR-0029 §6).
   a parsed read. Linkage follows the resource declarations it is given —
   the resources the REST endpoints are declared with, so both sides emit the
   same relationships by construction — or, without any, the node graph's
-  synthetic resources (`JsonApiQuery.resourcesOf(nodes)`). `toCover(read)`
-  names the reads a request needs covered for its document to be faithful:
-  the read itself, plus one whole-collection read per collection the
-  declared linkage resolves from beyond the read's includes; the caller
-  (the façade) serves a URL only when every one is covered
-  (`Client.coverageOf`). The module depends on nothing but `effect` and the
-  engine, so it runs in a service worker.
-- `Linkage` is the shared derivation of what a document's relationships are
-  resolved from beside the URL's includes — the resource's declared `many`
-  relationships on the primary and on each included resource — with
-  `Linkage.resolve(fetch, …)` running the read and the included resources'
-  linkage batch over any row source: `SyncServer.readSubsets` on the REST
-  side, the local view on the replica side. `RestHandlers` now derives its
-  linkage through it; its behaviour is unchanged.
-- `DocumentWriter.Input.shape` selects how rows carry their linkage:
-  `nodeRows` (the default — a `one` edge's key in its `via` field) or
-  `jsonApiRows` (`Derive`'s `JsonApiRow`: identifiers under
-  `relationships[name]`, so a `many` edge the read did not resolve still
-  links through the identifiers the row holds). Attributes need no
-  strategy: both shapes flatten them.
+  synthetic resources (`JsonApiQuery.resourcesOf(nodes)`). Parity holds when
+  the endpoint is declared with the node-derived codec
+  (`JsonApiQuery.querySchema`) and collection edges are `many`; an `include`
+  edge or a `fields[type]` type the bound resource does not declare is
+  refused with the codec's `QueryError` shape before any query runs.
+  `toCover(read)` names the reads a request needs covered for its document
+  to be faithful: the read itself, plus one whole-collection read per
+  collection the declared linkage resolves from beyond the read's includes;
+  the caller (the façade) serves a URL only when every one is covered
+  (`Client.coverageOf`). A collection no bound resource declares is a
+  `QueryError` from every entry point, never a defect. The module depends on
+  nothing but `effect` and the engine, so it runs in a service worker.
+- `RestHandlers` derives its linkage through the same package-internal
+  derivation the replica-side writer uses (what a document's relationships
+  are resolved from beside the URL's includes, over any row source); its
+  behaviour is unchanged.
 - `JsonApiQuery.parseRead` reports the row id a `/{type}/{id}` path
   addressed (`ParsedRead.id`), so a caller knows to write a single-resource
-  document.
+  document. `JsonApiQuery.invalidParameter` builds the `QueryError` shape
+  the codec's checks raise.
 - The commerce example checks every read `src/lib/domain.ts` declares
   against the same seed on both sides, byte for byte
   (`examples/commerce/tests/replica-documents.test.ts`).

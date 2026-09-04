@@ -31,13 +31,16 @@
  * evaluation on the REST side (`SyncServer.readSubsets`), the replica's
  * local view on the worker side. One plan, one join, whichever source
  * answers (ADR-0025).
+ *
+ * Package-internal: the two callers import it directly; nothing outside
+ * `@legation/jsonapi` derives linkage.
  */
 
 import { Effect } from "effect";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@legation/effect";
 import { type Related, Subset } from "@legation/effect/internal";
-import type * as DocumentWriter from "./DocumentWriter.js";
+import * as DocumentWriter from "./DocumentWriter.js";
 
 /** A batch of subsets evaluated to rows — the row source a read runs over. */
 export type Fetch<E> = (
@@ -161,9 +164,6 @@ export const collectionsOf = (
 
 // ─── The included resources' batch ───────────────────────────────────────────
 
-/** The row id a related value carries (node rows carry `id` in the value). */
-const idOf = (value: unknown): string => String((value as { readonly id: unknown }).id);
-
 /** The ids of the rows one included edge resolved across the root rows. */
 const includedIds = (
   rows: ReadonlyArray<Related.RelatedRow>,
@@ -171,9 +171,8 @@ const includedIds = (
 ): ReadonlySet<string> => {
   const ids = new Set<string>();
   for (const row of rows) {
-    const value = row.related[name];
-    for (const related of Array.isArray(value) ? value : value == null ? [] : [value]) {
-      ids.add(idOf(related));
+    for (const related of DocumentWriter.relatedValuesOf(row.related[name])) {
+      ids.add(DocumentWriter.idOf(related));
     }
   }
   return ids;

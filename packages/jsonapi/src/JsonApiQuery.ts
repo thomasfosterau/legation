@@ -427,12 +427,25 @@ const recordOf = (
   return record;
 };
 
-const invalid = (collection: string, parameter: string, detail: string): QueryError =>
+/**
+ * The rejection of one query parameter, in the shape every check here
+ * raises (`parameter` names the offending key, so a caller answers 400 with
+ * `source.parameter`). Exported for a caller that checks a parsed URL
+ * against a declaration of its own — the replica-side writer against the
+ * resource it is bound to — and must reject the way the codec does.
+ */
+export const invalidParameter = (
+  collection: string,
+  parameter: string,
+  detail: string
+): QueryError =>
   new QueryError({
     message: `Invalid query for "${collection}" (${parameter}): ${detail}`,
     query: collection,
     parameter,
   });
+
+const invalid = invalidParameter;
 
 const nodeOf = (
   nodes: Node.NodeRegistry,

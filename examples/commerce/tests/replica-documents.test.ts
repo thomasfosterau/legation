@@ -319,8 +319,8 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
         // `Product` declares `variants` many: a products listing needs the
         // variants collection whole beside its own read — which the shell pins.
         const page = productPage({});
-        expect(docs.toCover(page)).toEqual([page, { collection: "variants" }]);
-        for (const read of docs.toCover(page)) {
+        expect(yield* docs.toCover(page)).toEqual([page, { collection: "variants" }]);
+        for (const read of yield* docs.toCover(page)) {
           expect((yield* client.coverageOf(read))._tag, JSON.stringify(read)).toBe("Covered");
         }
         // A category-narrowed page over the windowed products pin is ADR-0029's
@@ -329,7 +329,7 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
           "Uncovered"
         );
         // Declarations without a `many` relationship need nothing beyond the read.
-        expect(docs.toCover(allCategories)).toEqual([allCategories]);
+        expect(yield* docs.toCover(allCategories)).toEqual([allCategories]);
       })
     )
   );

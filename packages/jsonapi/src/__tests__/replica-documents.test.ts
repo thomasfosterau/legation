@@ -280,24 +280,61 @@ describe("ReplicaDocuments over the replica", () => {
         const docs = ReplicaDocuments.make({ nodes, resources: declared });
         const { read: bare } = yield* JsonApiQuery.parseRead(nodes, "/products?sort=name");
         // `variants` is declared `many` and not included: its collection must be held whole.
-        expect(docs.toCover(bare)).toEqual([bare, { collection: "variants" }]);
+        expect(yield* docs.toCover(bare)).toEqual([bare, { collection: "variants" }]);
         // Included, the edge is covered by rule 4 itself; the included variants'
         // own declared `offers` is what must be held whole.
         const { read: included } = yield* JsonApiQuery.parseRead(
           nodes,
           "/products?include=variants"
         );
-        expect(docs.toCover(included)).toEqual([included, { collection: "offers" }]);
+        expect(yield* docs.toCover(included)).toEqual([included, { collection: "offers" }]);
         // A type whose declaration has no `many` relationship needs nothing beyond the read.
         const { read: plain } = yield* JsonApiQuery.parseRead(nodes, "/categories");
-        expect(docs.toCover(plain)).toEqual([plain]);
+        expect(yield* docs.toCover(plain)).toEqual([plain]);
         // The synthetic resources declare every collection edge, paginated included.
         const synthetic = ReplicaDocuments.make({ nodes });
-        expect(synthetic.toCover(bare)).toEqual([
+        expect(yield* synthetic.toCover(bare)).toEqual([
           bare,
           { collection: "variants" },
           { collection: "reviews" },
         ]);
+      })
+  );
+
+  it.effect(
+    "refuses an include or fields[] the bound resource does not declare, before any query runs",
+    () =>
+      Effect.gen(function* () {
+        let queries = 0;
+        const counting: ClientView.Reader = {
+          query: (subset) => {
+            queries++;
+            return view.query(subset);
+          },
+          observe: view.observe,
+        };
+        const docs = ReplicaDocuments.make({ nodes, resources: declared });
+        // The node has a `reviews` edge; the `Product` resource declares no such
+        // relationship, so the endpoint over it cannot emit it.
+        const include = yield* Effect.flip(docs.fromUrl(counting, "/products?include=reviews"));
+        expect(include).toBeInstanceOf(QueryError);
+        expect(include).toMatchObject({ query: "products", parameter: "include" });
+        expect(include.message).toMatch(/"reviews" is not a relationship the "products" resource/);
+        // A projection over a type the resource's document never carries.
+        const fields = yield* Effect.flip(
+          docs.fromUrl(counting, "/products?fields[reviews]=body&include=variants")
+        );
+        expect(fields).toMatchObject({ query: "products", parameter: "fields[reviews]" });
+        // The same checks guard a read handed over already parsed.
+        const parsed = yield* JsonApiQuery.parseRead(nodes, "/products/p-1?include=reviews");
+        const data = yield* Effect.flip(docs.data(counting, parsed));
+        expect(data).toMatchObject({ parameter: "include" });
+        expect(queries).toBe(0);
+        // What the resource does declare passes; the synthetic resources declare every edge.
+        expect((yield* docs.fromUrl(counting, "/products?include=variants")).data).toHaveLength(3);
+        const synthetic = ReplicaDocuments.make({ nodes });
+        const served = (yield* synthetic.fromUrl(view, "/products/p-1?include=reviews")) as any;
+        expect(served.included.map((review: any) => review.id)).toEqual(["r-2", "r-1"]);
       })
   );
 
@@ -317,7 +354,7 @@ describe("ReplicaDocuments over the replica", () => {
     })
   );
 
-  it("treats a declaration the graph cannot serve, or a type nothing declares, as a defect", () => {
+  it("treats a declaration the graph cannot serve as a definition-time defect", () => {
     const Secret = Resource.make("secrets", { attributes: { name: Schema.String } });
     expect(() =>
       ReplicaDocuments.make({ nodes, resources: new Map([["secrets", Secret as Resource.Any]]) })
@@ -332,9 +369,29 @@ describe("ReplicaDocuments over the replica", () => {
         resources: new Map([["categories", Mislinked as Resource.Any]]),
       })
     ).toThrow(/"owner".*not an edge/);
-    const docs = ReplicaDocuments.make({ nodes, resources: declared });
-    expect(() => docs.toCover({ collection: "reviews" })).toThrow(/no resource declares "reviews"/);
-    const exit = Effect.runSyncExit(docs.collection(view, { read: { collection: "reviews" } }));
-    expect(Exit.isFailure(exit) && exit.cause.reasons[0]!._tag === "Die").toBe(true);
   });
+
+  it.effect(
+    "fails a collection no bound resource declares with a QueryError from every entry point — a URL is network input",
+    () =>
+      Effect.gen(function* () {
+        const docs = ReplicaDocuments.make({ nodes, resources: declared });
+        const failures = [
+          yield* Effect.flip(docs.toCover({ collection: "reviews" })),
+          yield* Effect.flip(docs.fromUrl(view, "/reviews?sort=-createdAt")),
+          yield* Effect.flip(docs.collection(view, { read: { collection: "reviews" } })),
+          yield* Effect.flip(docs.data(view, { read: { collection: "reviews" }, id: "r-1" })),
+        ];
+        for (const failure of failures) {
+          expect(failure).toBeInstanceOf(QueryError);
+          expect(failure.message).toMatch(/No resource declares "reviews"/);
+          expect(failure.query).toBe("reviews");
+        }
+        // Nothing died: the failures were typed, so a façade can route the request on.
+        const exit = yield* Effect.exit(docs.fromUrl(view, "/reviews"));
+        expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => r._tag === "Fail")).toBe(
+          true
+        );
+      })
+  );
 });
