@@ -36,7 +36,7 @@
     "analyze:dead-code": "fallow dead-code",
     "analyze:dupes": "fallow dupes",
     "analyze:audit": "fallow audit --ci",
-    "analyze:audit:ci": "fallow audit --ci --coverage coverage/coverage-final.json --base origin/main",
+    "analyze:audit:ci": "fallow audit --ci --coverage coverage/coverage-final.json --base origin/trunk",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "bun run build && changeset publish",
