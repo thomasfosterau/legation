@@ -77,8 +77,9 @@ WebSocketTransport.make({ url, webSocketConstructor: (u) => new MyWebSocket(u) }
 `ServiceWorkerHost.run` serves mirrors and runs the sync loop forever.
 `ServiceWorkerHost.start` does the same and returns the `Host` — the engine it
 serves and `registrations`, the root windows and relational registrations the
-host holds on its mirrors' behalf at that moment (with the canonical URL of a
-`SubscribeUrl`). That is the ledger a JSON:API façade (`JsonApiFacade` in
+host holds on its mirrors' behalf at that moment — listed once the engine
+holds their windows, with the canonical URL of a `SubscribeUrl` while some
+party still holds it by URL. That is the ledger a JSON:API façade (`JsonApiFacade` in
 `@legation/jsonapi`, ADR-0029) consults in a worker, where no `Client`'s own
 ledger sees the tabs' pins:
 

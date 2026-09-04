@@ -404,11 +404,15 @@ Recorded when the handler shipped; the decisions above stand.
   `Host.registrations`; `Coverage.coverageOf(nodes, host.registrations)` is
   the façade's coverage check there, the same rule and the same `Verdict`
   as `Client.coverageOf`. A registration is listed once its engine
-  registration exists and dropped when the last mirror releases it or is
-  swept, so a read judged covered is one whose rows the engine syncs. A
-  URL identity is known to the host only for `SubscribeUrl`; a connected
-  Client's `subscribe(url)` arrives as `Subscribe` / `SubscribeRelated`,
-  and its URL stays in that Client's ledger.
+  registration exists — the root subscribed; for a relational registration,
+  the reconcile loop started, which a `SubscribeRelated` naming an edge the
+  registry does not declare never reaches — and dropped when the last
+  mirror releases it or is swept, so a read judged covered is one whose
+  rows the engine syncs. A URL identity is known to the host only for
+  `SubscribeUrl`, and reported only while some party holds the registration
+  by that URL; a connected Client's `subscribe(url)` arrives as
+  `Subscribe` / `SubscribeRelated`, and its URL stays in that Client's
+  ledger.
 - **`x-legation-served-at`** carries the client store's pull cookie
   (`ClientStore.getCookie`), which is the replica's CVR cookie; the engine
   itself does not expose it, so the façade takes it as an option. It is
@@ -416,14 +420,21 @@ Recorded when the handler shipped; the decisions above stand.
   `Cache-Control: no-store`, on every response it synthesises — the 400 and
   503 documents included — so any local answer is distinguishable from a
   network one.
-- **Two forwards section 1 did not name.** A single-resource request whose
+- **Forwards section 1 did not name.** A single-resource request whose
   row a covered replica does not hold is forwarded: the 404 is the
-  endpoint's own error class, which only the server writes. And a `GET`
+  endpoint's own error class, which only the server writes. A reflected
+  route whose type is no node of the graph is never a candidate. A `GET`
   whose `Accept` does not name `application/vnd.api+json` — `*/*` included
   — is not a candidate, per section 1's wording.
+- **The parity assumption, stated.** Answering a parse failure locally
+  presumes the server's read endpoints are declared with the graph's codec
+  (`JsonApiQuery.querySchema` / `singleRowSchema`) and served by the
+  derived handlers, as the commerce api is since #165. A hand-written
+  server with another grammar must not compose the façade.
 - **Composition in the commerce worker.** Façade, then the HTTP cache
   (under its unchanged policy), then the network; a candidate whose forward
   rejects at the transport becomes the 503 document in the worker
-  (`JsonApiFacade.offlineResponse`). The worker's routes are the server's
-  read routes restated in `src/lib/facade.ts`, because the server's api
-  module pulls in the SQL runtime and cannot load in a worker.
+  (`facade.offline`, cookie included). The api's shape — endpoints and
+  wire errors, no handlers, no SQL — lives in `server/api.ts`, loaded by
+  both the server and the worker, so the façade reflects the routes the
+  server serves by construction.

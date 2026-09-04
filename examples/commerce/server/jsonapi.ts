@@ -24,6 +24,10 @@
  * writes keep their SQL and their `broadcast`: they are the mutators'
  * out-of-band twins.
  *
+ * The api's shape — endpoints and wire errors — lives in `server/api.ts`,
+ * which the service worker also loads to reflect the read routes for the
+ * façade (ADR-0029): this module binds the handlers to it and re-exports it.
+ *
  * Identity for user-scoped endpoints arrives as an `x-commerce-user`
  * header set by the SvelteKit process after it resolves the Better Auth
  * session — the trust boundary between the two server processes (swap for
@@ -32,31 +36,20 @@
  * directly — vite/Kit only proxy `/sync*`).
  */
 import { Context, Effect, Layer } from "effect";
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 import type { HttpServerRequest } from "effect/unstable/http";
 import { HttpServerRequest as Request } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import { ApiError, Endpoint, Group, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
+import { ApiError, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@legation/effect";
-import { JsonApiQuery, RestHandlers } from "@legation/jsonapi";
+import { RestHandlers } from "@legation/jsonapi";
 import { nodes } from "../src/lib/domain.js";
+import { api, NotFound, Unauthorized } from "./api.js";
 import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "./resources.js";
 import { authPolicy, CommerceSync } from "./runtime.js";
 
-// ─── Errors ──────────────────────────────────────────────────────────────────
-
-export class Unauthorized extends ApiError.make<Unauthorized>()("Unauthorized", {
-  status: 401,
-  code: "unauthorized",
-  title: "Sign in first",
-}) {}
-
-export class NotFound extends ApiError.make<NotFound>()("NotFound", {
-  status: 404,
-  code: "not_found",
-  title: "Resource not found",
-}) {}
+export { api, NotFound, Unauthorized } from "./api.js";
 
 // ─── Row → resource-object mapping (the writes' responses) ──────────────────
 //
@@ -101,54 +94,6 @@ const orderResource = (row: Row): typeof Order.Type => ({
     createdAt: String(row.createdAt),
   },
 });
-
-// ─── API shape ───────────────────────────────────────────────────────────────
-
-/** A collection's `list` query, as the node graph declares it: the grammar the derived handler parses. */
-const query = (collection: string) => JsonApiQuery.querySchema(nodes, collection);
-
-/** A collection's `get` query — `include` and `fields[…]` — from the same graph. */
-const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(nodes, collection);
-
-export const api = HttpApi.make("commerce")
-  .add(Group.make(Category, Endpoint.list(Category, { query: query("categories") })))
-  .add(
-    Group.make(
-      Product,
-      Endpoint.list(Product, { query: query("products") }),
-      Endpoint.get(Product, { query: singleRowQuery("products"), errors: [NotFound] })
-    )
-  )
-  // The catalog page reads every variant (`allVariants`) for its stock badges.
-  .add(Group.make(Variant, Endpoint.list(Variant, { query: query("variants") })))
-  .add(
-    Group.make(
-      Review,
-      Endpoint.list(Review, { query: query("reviews") }),
-      Endpoint.create(Review, { errors: [Unauthorized] })
-    )
-  )
-  .add(
-    Group.make(
-      CartItem,
-      Endpoint.list(CartItem, { query: query("cartItems") }),
-      Endpoint.create(CartItem, {
-        errors: [Unauthorized, ApiError.BadRequest],
-      }),
-      Endpoint.delete(CartItem, { errors: [Unauthorized] })
-    )
-  )
-  .add(
-    Group.make(
-      Order,
-      Endpoint.list(Order, { query: query("orders") }),
-      Endpoint.create(Order, {
-        errors: [Unauthorized, ApiError.BadRequest],
-      })
-    )
-  )
-  .add(Group.make(OrderItem, Endpoint.list(OrderItem, { query: query("orderItems") })))
-  .prefix("/jsonapi");
 
 // ─── Identity ────────────────────────────────────────────────────────────────
 

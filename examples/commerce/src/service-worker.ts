@@ -35,7 +35,7 @@ import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientView, Coverage, type HttpCache } from "@legation/effect/internal";
 import { CacheApiHttpCache } from "@legation/browser";
-import { JsonApiFacade } from "@legation/jsonapi";
+import type { JsonApiFacade } from "@legation/jsonapi";
 import { nodes } from "./lib/domain.js";
 import { makeFacade } from "./lib/facade.js";
 import { runHost } from "./lib/host.js";
@@ -79,12 +79,13 @@ let facade: JsonApiFacade.FetchHandler | undefined;
 /**
  * The network, last. A JSON:API request the façade recognised but could not
  * cover, whose forward rejected at the transport, is offline by ADR-0029
- * §4's definition and gets the 503 `offline` document rather than a failed
- * fetch; anything else fails as it always did.
+ * §4's definition and gets the 503 `offline` document (with the replica's
+ * cookie, as every façade answer) rather than a failed fetch; anything else
+ * fails as it always did.
  */
 const network = (request: Request, candidate: boolean): Promise<Response> =>
   fetch(request).catch((error: unknown) => {
-    if (candidate) return JsonApiFacade.offlineResponse();
+    if (candidate && facade !== undefined) return Effect.runPromise(facade.offline);
     throw error;
   });
 

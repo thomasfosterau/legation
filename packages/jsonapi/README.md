@@ -398,15 +398,21 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     Effect.runPromise(facade.handle(event.request))
       .then((local) => local ?? httpCacheThenNetwork(event.request))
-      .catch(() => (candidate ? JsonApiFacade.offlineResponse() : fetch(event.request)))
+      .catch(() => (candidate ? Effect.runPromise(facade.offline) : fetch(event.request)))
   );
 });
 ```
 
 - **What it recognises.** A `GET` whose `Accept` names
   `application/vnd.api+json` on one of the api's reflected `list` / `getOne`
-  routes under `baseUrl` (default: the page's own origin). Everything else
-  — another path, a `POST`, a navigation — is `undefined`: not its business.
+  routes whose type is a node of the graph, under `baseUrl` (default: the
+  page's own origin). Everything else — a server-only resource, another
+  path, a `POST`, a navigation — is `undefined`: not its business.
+- **The parity assumption.** The api's read endpoints are declared with the
+  graph's codec (`JsonApiQuery.querySchema` / `singleRowSchema`) and served
+  by the derived handlers, so the server rules on a URL exactly as the
+  façade does — which is what lets a parse failure be answered locally. A
+  hand-written server with another grammar must not compose the façade.
 - **What it answers.** A covered request: `200`, the document the one writer
   produces (byte-equal in content to the derived REST handler's for the same
   declarations), `Cache-Control: no-store`, and `x-legation-served-at` set to
@@ -420,11 +426,13 @@ self.addEventListener("fetch", (event) => {
   row the replica does not hold — the 404 is the endpoint's own error class,
   which only the server can write. A forward that rejects at the transport
   is the other half of "offline": the worker answers it with
-  `JsonApiFacade.offlineResponse()` when `matches(request)` held.
+  `facade.offline` (the same document, with the replica's cookie) when
+  `matches(request)` held.
 - **Coverage is the ledger's.** `coverageOf` is `Client.coverageOf` over a
   Client, or `Coverage.coverageOf(nodes, host.registrations)` over the
   registrations an `EngineHost` holds on its mirrors' behalf — the only
-  ledger in a worker that knows what the tabs pinned. Every read
+  ledger in a worker that knows what the tabs pinned; a registration is
+  listed only once the engine holds its windows. Every read
   `ReplicaDocuments.toCover` names must be covered; the façade never
   subscribes on a request's behalf.
 - **The overlay.** A covered response sees pending optimistic mutations as

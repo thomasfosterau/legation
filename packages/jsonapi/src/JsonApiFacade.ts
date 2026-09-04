@@ -11,17 +11,20 @@
  * The handler is built from the app's `HttpApi` and the replica it reads:
  *
  * 1. **Route reflection.** `Convention.reflectResources(api)` gives the
- *    `list` and `getOne` routes per type. A request is the façade's
- *    business iff its method is `GET`, its `Accept` names
- *    `application/vnd.api+json`, and its path — under {@link Options.baseUrl}
- *    — matches one of those route templates. Anything else yields
- *    `undefined` and the caller composes what comes next.
+ *    `list` and `getOne` routes per type; those whose type is a node of the
+ *    graph are kept, so a route the replica cannot read (a server-only
+ *    resource) is never the façade's. A request is its business iff its
+ *    method is `GET`, its `Accept` names `application/vnd.api+json`, and its
+ *    path — under {@link Options.baseUrl} — matches one of those route
+ *    templates segment for segment. Anything else yields `undefined` and
+ *    the caller composes what comes next.
  * 2. **Parse.** The URL becomes a `Query.Read` through the one grammar
  *    (`JsonApiQuery.parseRead`). A URL the grammar rejects is answered with
  *    the codec's 400 error document (`RestHandlers.queryErrorDocument`),
- *    because the server would reject it identically — except an `include`
- *    the graph does not declare, which goes to the network where the server
- *    rules on it (ADR-0029 §1).
+ *    whether or not the request is covered, because the server rejects it
+ *    identically — except an `include` the graph does not declare, which
+ *    goes to the network where the server rules on it (ADR-0029 §1), and a
+ *    path the graph cannot place, likewise.
  * 3. **Coverage.** Every read `ReplicaDocuments.toCover` names for the
  *    request — the read itself and the whole collections its declared
  *    linkage resolves from — is checked with {@link Options.coverageOf}, the
@@ -39,11 +42,21 @@
  *    tell a local answer from a network one.
  * 5. **Offline.** An uncovered request while the network is unreachable —
  *    `navigator.onLine === false` here, or a forwarded fetch that rejected
- *    at the transport in the caller — is answered with the 503 `offline`
- *    error document ({@link offlineResponse}), the one error the façade
- *    synthesises that the server never would (ADR-0029 §4). A status code
- *    from the server is never offline, and a covered request is never
+ *    at the transport in the caller ({@link FetchHandler.offline}) — is
+ *    answered with the 503 `offline` error document, the one error the
+ *    façade synthesises that the server never would (ADR-0029 §4). A status
+ *    code from the server is never offline, and a covered request is never
  *    affected by connectivity.
+ *
+ * **The parity assumption.** Answering a parse failure locally, and a
+ * covered request at all, presumes the server rules on the same URL the
+ * same way: its read endpoints are declared with the graph's own codec
+ * (`JsonApiQuery.querySchema` for a `list`, `singleRowSchema` for a `get`)
+ * and served by the derived handlers (`RestHandlers`), as the commerce
+ * example does. A hand-written server with another grammar — a filter key
+ * the node does not declare, a `sort` the codec refuses, a different `page`
+ * vocabulary — must not compose the façade: its 400s and its documents
+ * would diverge from the server's.
  *
  * What it never does: register a subscription because a request arrived,
  * touch a non-`GET`, or rewrite a request it forwards. A single-resource
@@ -59,7 +72,7 @@
  * handler needs from the host.
  */
 
-import { Effect } from "effect";
+import { Effect, SchemaError } from "effect";
 import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
@@ -76,7 +89,12 @@ import * as RestHandlers from "./RestHandlers.js";
 export interface Options<Id extends string, Groups extends HttpApiGroup.Constraint> {
   /** The node graph URLs are parsed against and documents are written by. */
   readonly nodes: Node.NodeRegistry;
-  /** The app's api; its `list` / `getOne` routes (the api's own prefix included) are what the façade recognises. */
+  /**
+   * The app's api; its `list` / `getOne` routes (the api's own prefix
+   * included) whose type is a node of the graph are what the façade
+   * recognises. Its read endpoints must be declared with the graph's codec
+   * (the module doc's parity assumption).
+   */
   readonly api: HttpApi.HttpApi<Id, Groups>;
   /**
    * Where the api is served as the browser sees it, in front of the routes
@@ -96,7 +114,8 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
   readonly coverageOf: (read: Query.Read) => Effect.Effect<Coverage.Verdict>;
   /**
    * The replica's CVR cookie, for `x-legation-served-at` — the store's
-   * `getCookie`. Absent, or failing, the header is empty.
+   * `getCookie`, read only when a response is synthesised. Absent, or
+   * failing, the header is empty.
    */
   readonly cookie?: Effect.Effect<string | undefined, unknown>;
   /**
@@ -121,7 +140,7 @@ export interface FetchHandler {
    * Whether a request is the façade's business: a `GET` accepting
    * `application/vnd.api+json` on a reflected route under `baseUrl`. A
    * worker uses it to know that a forward which rejected at the transport
-   * should become {@link offlineResponse}.
+   * should become {@link FetchHandler.offline}.
    */
   readonly matches: (request: Request) => boolean;
   /**
@@ -133,6 +152,12 @@ export interface FetchHandler {
    * `Query.run` treats it.
    */
   readonly handle: (request: Request) => Effect.Effect<Response | undefined>;
+  /**
+   * The 503 `offline` response with the replica's current cookie — what a
+   * worker answers when the forward of a request {@link matches} held for
+   * rejected at the transport, the other half of ADR-0029 §4's definition.
+   */
+  readonly offline: Effect.Effect<Response>;
 }
 
 // ─── Headers and documents ───────────────────────────────────────────────────
@@ -163,11 +188,7 @@ const respondWith = (status: number, body: unknown, cookie: string | undefined):
     },
   });
 
-/**
- * The 503 response of an uncovered request while offline. A worker also
- * answers with it when the forward of a request {@link FetchHandler.matches}
- * rejected at the transport — the other half of ADR-0029 §4's definition.
- */
+/** The 503 response of an uncovered request while offline, marked with the cookie when known. */
 export const offlineResponse = (cookie?: string): Response =>
   respondWith(503, offlineDocument, cookie);
 
@@ -176,27 +197,26 @@ export const offlineResponse = (cookie?: string): Response =>
 /** One reflected read route, ready to match a request path against. */
 interface Route {
   readonly type: string;
-  /** The template's segments; a `:param` segment matches any non-empty one. */
+  /** The template's segments (`Convention.segmentsOf`); a `:param` segment matches any one. */
   readonly segments: ReadonlyArray<string>;
   /** The link prefix the route implies: the template before `/{type}`. */
   readonly prefix: string;
 }
 
 const routeOf = (type: string, template: string, single: boolean): Route => {
-  const segments = template.split("/");
-  return {
-    type,
-    segments,
-    prefix: segments.slice(0, segments.length - (single ? 2 : 1)).join("/"),
-  };
+  const segments = Convention.segmentsOf(template);
+  const prefix = segments.slice(0, segments.length - (single ? 2 : 1));
+  return { type, segments, prefix: prefix.length === 0 ? "" : `/${prefix.join("/")}` };
 };
 
-/** The read routes of the api: a `list` and a `getOne` per resource that declares them. */
+/** The read routes of the api whose type the graph declares: a `list` and a `getOne` per such resource. */
 const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
-  api: HttpApi.HttpApi<Id, Groups>
+  api: HttpApi.HttpApi<Id, Groups>,
+  nodes: Node.NodeRegistry
 ): ReadonlyArray<Route> => {
   const routes: Array<Route> = [];
   for (const resource of Convention.reflectResources(api).values()) {
+    if (!nodes.nodes.has(resource.type)) continue;
     if (resource.list !== undefined) routes.push(routeOf(resource.type, resource.list.path, false));
     if (resource.getOne !== undefined) {
       routes.push(routeOf(resource.type, resource.getOne.path, true));
@@ -205,12 +225,10 @@ const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   return routes;
 };
 
-const isParam = (segment: string): boolean => segment.startsWith(":");
-
 const matchesTemplate = (route: Route, segments: ReadonlyArray<string>): boolean =>
   route.segments.length === segments.length &&
   route.segments.every((template, index) =>
-    isParam(template) ? segments[index]!.length > 0 : template === segments[index]
+    Convention.isParam(template) ? true : template === segments[index]
   );
 
 /** Where the api is served: an origin to require, and the path in front of the routes. */
@@ -225,10 +243,14 @@ const baseOf = (baseUrl: string): Base => {
   return { origin: url.origin, path: url.pathname.replace(/\/+$/, "") };
 };
 
-/** The request path relative to the base, or `undefined` when it lies elsewhere. */
+/**
+ * The request path relative to the base, or `undefined` when it lies
+ * elsewhere. A trailing slash is left to the server: the route templates
+ * carry none, and whether `/products/` is `/products` is its ruling.
+ */
 const pathUnder = (base: Base, url: URL): string | undefined => {
   if (base.origin !== undefined && url.origin !== base.origin) return undefined;
-  if (!url.pathname.startsWith(base.path)) return undefined;
+  if (!url.pathname.startsWith(base.path) || url.pathname.endsWith("/")) return undefined;
   const rest = url.pathname.slice(base.path.length);
   return rest.startsWith("/") ? rest : undefined;
 };
@@ -245,6 +267,12 @@ const navigatorOnline = (): boolean => {
   return navigator?.onLine !== false;
 };
 
+/** A candidate request: the route it matched and its URL, parsed once. */
+interface Candidate {
+  readonly route: Route;
+  readonly url: URL;
+}
+
 // ─── Outcomes ────────────────────────────────────────────────────────────────
 
 /** How a candidate request leaves the façade short of a document: forwarded, or answered with an error. */
@@ -256,12 +284,15 @@ const forward: Outcome = { _tag: "Forward" };
 const respond = (response: Response): Outcome => ({ _tag: "Respond", response });
 
 /**
- * A grammar rejection as the server would rule on it: an `include` the
- * graph does not declare is the server's call (ADR-0029 §1); anything else
- * is the codec's 400, which the server would return identically.
+ * A grammar rejection as the server would rule on it. An `include` the
+ * graph does not declare is the server's call (ADR-0029 §1), and so is a
+ * path the graph cannot place (no parameter, no decoding issue: the URL
+ * names something the graph does not); anything else is the codec's 400,
+ * which the server returns identically.
  */
 const queryFailure = (error: QueryError, cookie: string | undefined): Outcome =>
-  error.parameter === "include"
+  error.parameter === "include" ||
+  (error.parameter === undefined && !SchemaError.isSchemaError(error.cause))
     ? forward
     : respond(respondWith(400, RestHandlers.queryErrorDocument(error), cookie));
 
@@ -276,9 +307,10 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   options: Options<Id, Groups>
 ): FetchHandler => {
   const { nodes, view, coverageOf } = options;
-  const routes = routesOf(options.api);
+  const routes = routesOf(options.api, nodes);
   const base = baseOf(options.baseUrl ?? "");
   const online = options.online ?? navigatorOnline;
+  /** The cookie at the time of an answer; read only when a response is synthesised. */
   const cookie: Effect.Effect<string | undefined> =
     options.cookie === undefined
       ? Effect.succeed(undefined)
@@ -299,14 +331,16 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     }
   }
 
-  const routeOfRequest = (request: Request): Route | undefined => {
+  const candidateOf = (request: Request): Candidate | undefined => {
     if (request.method !== "GET" || !acceptsJsonApi(request.headers.get("accept"))) {
       return undefined;
     }
-    const path = pathUnder(base, new URL(request.url));
+    const url = new URL(request.url);
+    const path = pathUnder(base, url);
     if (path === undefined) return undefined;
-    const segments = path.split("/");
-    return routes.find((route) => matchesTemplate(route, segments));
+    const segments = Convention.segmentsOf(path);
+    const route = routes.find((candidate) => matchesTemplate(candidate, segments));
+    return route === undefined ? undefined : { route, url };
   };
 
   /** Rules 1 to 4 for every read the request needs: covered by the ledger, or not the façade's to answer. */
@@ -315,35 +349,43 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       Effect.map((verdicts) => verdicts.every((verdict) => verdict._tag === "Covered"))
     );
 
-  const answer = (route: Route, url: URL, served: string | undefined) =>
+  /** A rejection as an outcome, with the cookie read for the response it may carry. */
+  const rejected = (error: QueryError): Effect.Effect<never, Outcome> =>
+    Effect.flatMap(cookie, (served) => Effect.fail(queryFailure(error, served)));
+
+  const answer = ({ route, url }: Candidate) =>
     Effect.gen(function* () {
       const docs = writers.get(options.prefix ?? route.prefix)!;
-      const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(
-        Effect.mapError((error) => queryFailure(error, served))
-      );
+      const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
       if (!(yield* covered(needed))) {
-        return yield* Effect.fail(online() ? forward : respond(offlineResponse(served)));
+        if (online()) return yield* Effect.fail(forward);
+        return yield* Effect.flatMap(cookie, (served) =>
+          Effect.fail(respond(offlineResponse(served)))
+        );
       }
       const write: Effect.Effect<ReplicaDocuments.Document, QueryError> =
         parsed.id === undefined ? docs.collection(view, parsed) : docs.data(view, parsed);
-      const document = yield* write.pipe(Effect.mapError((error) => queryFailure(error, served)));
+      const document = yield* write.pipe(Effect.catch(rejected));
       // No such row in a faithful replica: the 404 is the endpoint's own.
       if (parsed.id !== undefined && document.data === null) return yield* Effect.fail(forward);
-      return respondWith(200, document, served);
+      return respondWith(200, document, yield* cookie);
     });
 
   const handle: FetchHandler["handle"] = (request) => {
-    const route = routeOfRequest(request);
-    if (route === undefined) return Effect.succeed(undefined);
-    return cookie.pipe(
-      Effect.flatMap((served) => answer(route, new URL(request.url), served)),
+    const candidate = candidateOf(request);
+    if (candidate === undefined) return Effect.succeed(undefined);
+    return answer(candidate).pipe(
       Effect.catch((outcome) =>
         Effect.succeed(outcome._tag === "Forward" ? undefined : outcome.response)
       )
     );
   };
 
-  return { matches: (request) => routeOfRequest(request) !== undefined, handle };
+  return {
+    matches: (request) => candidateOf(request) !== undefined,
+    handle,
+    offline: Effect.map(cookie, offlineResponse),
+  };
 };

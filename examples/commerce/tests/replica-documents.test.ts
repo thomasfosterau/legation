@@ -358,13 +358,13 @@ describe("the commerce façade against the derived REST handler (ADR-0029 §6)",
         });
         const urlOf = (read: Query.Read) => `/jsonapi${JsonApiQuery.canonical(nodes, read)}`;
         // What the shell's pins cover (ADR-0029 §3), as plain fetches of the
-        // URLs: the pins themselves (the server lists no sellers, variants or
-        // profiles, so the façade has no such routes), a prefix of the
+        // URLs: the pins themselves (the api lists no sellers or profiles, so
+        // the façade, reflecting it, has no such routes), a prefix of the
         // products window, a projection over it, and the reviews of one
         // product under the unwindowed reviews pin.
         const local = [
           ...shellReads(USER)
-            .filter((read) => !["sellers", "variants", "profiles"].includes(read.collection))
+            .filter((read) => !["sellers", "profiles"].includes(read.collection))
             .map(urlOf),
           urlOf(productPage({})),
           urlOf(productReviews("p-03")),

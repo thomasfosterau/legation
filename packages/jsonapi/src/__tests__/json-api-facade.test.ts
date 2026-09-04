@@ -88,6 +88,14 @@ const api = HttpApi.make("shop")
         })
       )
       .add(HttpApiEndpoint.get("variants", "/variants", open))
+      // A server-only resource: no node reads it, so the façade never answers it.
+      .add(HttpApiEndpoint.get("promotions", "/promotions", open))
+      .add(
+        HttpApiEndpoint.get("promotion", "/promotions/:id", {
+          params: Schema.Struct({ id: Schema.String }),
+          ...open,
+        })
+      )
   )
   .prefix("/jsonapi");
 
@@ -314,11 +322,17 @@ describe("JsonApiFacade", () => {
         // A covered request is never affected by connectivity.
         const covered = yield* handler.handle(jsonApi("/jsonapi/products/p-2"));
         expect(covered!.status).toBe(200);
-        // The factory a worker uses for a forward that rejected at the transport.
-        const synthesised = JsonApiFacade.offlineResponse("cookie-1");
+        // What a worker answers for a forward that rejected at the transport:
+        // the same document, with the replica's current cookie.
+        const synthesised = yield* handler.offline;
         expect(synthesised.status).toBe(503);
-        expect(synthesised.headers.get(JsonApiFacade.servedAtHeader)).toBe("cookie-1");
+        expect(synthesised.headers.get(JsonApiFacade.servedAtHeader)).toBe(
+          response!.headers.get(JsonApiFacade.servedAtHeader)
+        );
         expect(yield* body(synthesised)).toEqual(JsonApiFacade.offlineDocument);
+        expect(
+          JsonApiFacade.offlineResponse("cookie-1").headers.get(JsonApiFacade.servedAtHeader)
+        ).toBe("cookie-1");
       })
     )
   );
@@ -354,6 +368,10 @@ describe("JsonApiFacade", () => {
       Effect.gen(function* () {
         const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         const passes = [
+          // A reflected route whose type is no node: the server's alone, even
+          // with a query the grammar could not parse.
+          jsonApi("/jsonapi/promotions"),
+          jsonApi("/jsonapi/promotions/x?filter[nope]=1"),
           // Not a reflected route: another path, a nested path, a trailing slash, the sync endpoint.
           jsonApi("/api/products"),
           jsonApi("/jsonapi/products/p-1/variants"),

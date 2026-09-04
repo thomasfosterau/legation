@@ -605,6 +605,86 @@ describe("EngineHost.Host.registrations", () => {
       )
   );
 
+  it.effect("records a relational registration only once the engine holds it", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes });
+      const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+      // An edge the registry does not declare: `Related` would ignore it and
+      // register the root alone, so the host refuses the registration
+      // outright — nothing held, nothing credited, the root not even subscribed.
+      yield* channel.post({
+        _tag: "SubscribeRelated",
+        mirrorId: "page",
+        collection: "todos",
+        subset: allTodos,
+        edges: [{ name: "nope" }],
+      });
+      yield* sleepReal(50);
+      expect(yield* host.registrations).toEqual([]);
+      expect(yield* hashes(engine)).toEqual([]);
+      // A declared edge is held with its root and edge windows registered
+      // before it is listed.
+      yield* channel.post({
+        _tag: "SubscribeRelated",
+        mirrorId: "page",
+        collection: "todos",
+        subset: allTodos,
+        edges: [{ name: "author" }],
+      });
+      const held = yield* eventually(host.registrations, (current) => current.length === 1);
+      expect(held).toEqual([{ root: allTodos, edges: [{ name: "author" }] }]);
+      expect(yield* hashes(engine)).toContain(todosRoot);
+      expect((yield* coverageOf({ collection: "todos", include: { author: true } }))._tag).toBe(
+        "Covered"
+      );
+      // Releasing it drops the relational read's windows with the entry.
+      yield* channel.post({
+        _tag: "UnsubscribeRelated",
+        mirrorId: "page",
+        collection: "todos",
+        subset: allTodos,
+        edges: [{ name: "author" }],
+      });
+      yield* eventually(host.registrations, (current) => current.length === 0);
+      yield* eventually(hashes(engine), (current) => current.length === 0);
+    })
+  );
+
+  it.effect("names a URL only while a party holds the registration by that URL", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeEngine;
+        const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+        const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes, urls: stubUrls });
+        const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+        const mirror = yield* Mirror.make({ channel, mutators });
+        // A tab's plain pin and a page's URL pin share one root window: the
+        // entry carries the page's URL while the page holds it...
+        yield* mirror.subscribe(allTodos);
+        yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos" });
+        const both = yield* eventually(
+          host.registrations,
+          (current) => current.length === 1 && current[0]!.url === "/todos"
+        );
+        expect(both).toEqual([{ root: allTodos, edges: [], url: "/todos" }]);
+        expect(yield* coverageOf({ collection: "todos" })).toMatchObject({ url: "/todos" });
+        // ...and no longer once the page releases: the tab still holds the
+        // window, so it stays covered, but no URL names it.
+        yield* channel.post({ _tag: "UnsubscribeUrl", mirrorId: "page", url: "/todos" });
+        const tabOnly = yield* eventually(
+          host.registrations,
+          (current) => current.length === 1 && current[0]!.url === undefined
+        );
+        expect(tabOnly).toEqual([{ root: allTodos, edges: [] }]);
+        const verdict = yield* coverageOf({ collection: "todos" });
+        expect(verdict._tag).toBe("Covered");
+        expect(verdict._tag === "Covered" && verdict.url).toBeUndefined();
+      })
+    )
+  );
+
   it.effect("does not list named-query or mutation-state registrations", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
