@@ -75,7 +75,8 @@ correct — in one respect _more_ correct — answer.
 > the same collection covers a read when its top-level conjuncts are a
 > subset of the read's, and its window is absent or a prefix of the same
 > order from the same cursor. ADR-0029 §3 states the rule; #162 implements
-> it for the mirror, the owned engine and the JSON:API façade alike.
+> it in `Coverage` for the mirror and the owned engine, and the JSON:API
+> façade (#166) reuses `Coverage` for the same verdict.
 
 ### Includes resolve in two phases
 
