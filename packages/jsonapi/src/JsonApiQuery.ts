@@ -1,82 +1,898 @@
 /**
  * JsonApiQuery
  *
- * The seam that turns a `Subset` (predicate + order + paging) into a JSON:API
- * query string. JSON:API deliberately leaves filter/page syntax
- * implementation-defined, so this is the "strictly JSON:API" encoding that a
- * dedicated JSON:API package owns — swap `QueryEncoder` to match your server's
- * conventions (operator filters, cursor pages, sparse fieldsets, …).
+ * The bridge between the filter grammar's URL form and the engine's plan
+ * (ADR-0028 §5, issue #161). effect-jsonapi owns the grammar — its AST
+ * (`Filter.Ast`), the `filter[...]` ⇄ AST codec (`Query.Filter`), the whole
+ * query codec (`Query.schema`) and the canonical query string
+ * (`Query.canonical`); this module owns the three translations legation
+ * needs on top of them:
  *
- * **Soundness contract.** The backend always re-runs the full predicate, order
- * and limit locally with `Subset.apply`, so an encoder only has to return a
- * *superset* of the desired rows. The shipped default therefore encodes only
- * what it can express without changing the result set:
+ * - **Filter AST ⇄ `Predicate`** ({@link fromFilterAst}, {@link toFilterAst}):
+ *   total from the grammar to the engine (every grammar node has a
+ *   `Predicate` node now that `IsNull` / `NotIn` exist), partial the other
+ *   way. `Exists` is server-only and has no URL form; an empty `In` /
+ *   `NotIn` list and a `null` literal are not representable either (the
+ *   grammar's lists are non-empty and `NULL` is never a literal —
+ *   `isnull` names it). Those return `None`, and callers fail closed.
+ *   {@link foldConstants} removes the two definite cases before encoding:
+ *   an empty `In` is false and an empty `NotIn` is true under ADR-0028's
+ *   per-operator table, so they fold away exactly.
+ * - **URL → `Query.Read`** ({@link parseRead}, {@link parseParams}): a
+ *   request URL is decoded with effect-jsonapi's `Query.schema` for the
+ *   collection's node — `include`, `fields`, `sort`, `page` and `filter` —
+ *   and mapped onto the declarative read: `filter` → `where`, `sort` →
+ *   `order`, `page[limit]` / `page[after]` → `first` / `after`, `include`
+ *   → the edge selects. `fields[]` is a serialisation-time projection
+ *   (ADR-0029 §5) and is carried beside the read, never into the plan.
+ *   Every rejection is a `QueryError` naming the parameter, so a façade or
+ *   a derived REST handler answers 400 with `source.parameter` set.
+ * - **`Query.Read` → canonical string** ({@link canonical}): the read is
+ *   compiled with `Query.plan` and its plan is encoded through the
+ *   canonical encoder, so two reads with one plan have one string —
+ *   subscription identity for `Client.subscribe(url)` (ADR-0029 §2).
  *
- * - top-level `eq` / `in` conjuncts → `filter[field]=...` (dropping operators
- *   and `or`/`not` it can't represent makes the server filter *less*
- *   restrictive, which is safe);
- * - `orderBy` → `sort=field,-field` (a hint; local order is authoritative);
- * - it does **not** push `limit`/`cursor`, since server-side paging would drop
- *   rows the local order still needs. An encoder that owns a cursor contract
- *   can add `page[...]`.
+ * The query codec is derived from the **node graph**, not from an
+ * effect-jsonapi resource: {@link resourcesOf} synthesises one resource per
+ * node whose filterable attributes carry the node's filterable set (the
+ * operators and literal kinds of ADR-0028 rule d, #154) and whose
+ * relationships are the node's edges. A filter names the row field the
+ * engine evaluates — a `one`-edge is filtered by its key field
+ * (`filter[categoryId]=c-audio`, as in ADR-0029's worked examples), not by
+ * the edge name. Include paths are single level (decision D1 of ADR-0028):
+ * a read includes a node's own edges only, so `include=variants.product` is
+ * rejected as a parse failure.
+ *
+ * The **exact encoder** ({@link defaultEncoder}) is what `JsonApiBackend`
+ * pushes to the server: the whole predicate as the grammar's canonical
+ * `filter[...]` record (operators, `or`, `not`, `isnull` and `nin`
+ * included — nothing is dropped any more), plus `sort`. Order, cursor and
+ * limit stay local: `Subset.apply` still finalises the window, which is now
+ * redundancy over an exact filter rather than correction of a superset
+ * (ADR-0028 §6). A predicate that can never match (an empty allow-set)
+ * encodes to `None` and the backend skips the request.
  */
 
-import { Predicate } from "@legation/effect";
-import { Subset } from "@legation/effect/internal";
-import { buildQueryString } from "./CollectionLoader.js";
-import type { JsonApiRequestOptions } from "./types.js";
+import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
+import { Effect, Option, Schema, SchemaIssue, type SchemaError } from "effect";
+import { FilterPolicy, type Node, Predicate, Query, QueryError } from "@legation/effect";
+import type { Subset } from "@legation/effect/internal";
+import type { JsonApiRequestOptions, SortTerm } from "./types.js";
 
-/** Encode a subset into a JSON:API query string (incl. leading `?`, or ``). */
-export interface QueryEncoder {
-  readonly encode: (subset: Subset.Subset) => string;
+// ─── Filter AST ⇄ Predicate ──────────────────────────────────────────────────
+
+/** A grammar literal as a `Predicate` literal: scalars as they are, a `Date` as its instant text (ADR-0028 rule e). */
+const literalOf = (field: string, value: unknown): Predicate.Literal => {
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+      return value;
+    default:
+      if (value instanceof Date) return value.toISOString();
+      throw new QueryError({
+        message: `Filter literal ${JSON.stringify(value)} for field "${field}" is not a scalar`,
+        parameter: `filter[${field}]`,
+      });
+  }
+};
+
+/**
+ * The engine form of a filter AST (total): `Compare` / `In` / `NotIn` /
+ * `IsNull` map node for node, `And` / `Or` / `Not` recurse, and the empty
+ * conjunction (the grammar's "true") is `Predicate.always`. The map is
+ * structural — a singleton group, which the grammar's normal form keeps
+ * after deduplicating `Or(x, x)`, stays a singleton group rather than
+ * collapsing through `Predicate.or` — so {@link canonical} is idempotent.
+ * Literals are the codec's decoded scalars; a `Date` (a `DateFromString`
+ * attribute) becomes its ISO-8601 UTC text.
+ */
+export const fromFilterAst = (ast: Filter.Node): Predicate.Predicate => {
+  switch (ast._tag) {
+    case "Compare":
+      return Predicate.compare(ast.op, ast.field, literalOf(ast.field, ast.value));
+    case "In":
+      return Predicate.isIn(
+        ast.field,
+        ast.values.map((value) => literalOf(ast.field, value))
+      );
+    case "NotIn":
+      return Predicate.notIn(
+        ast.field,
+        ast.values.map((value) => literalOf(ast.field, value))
+      );
+    case "IsNull":
+      return ast.negated ? Predicate.isNotNull(ast.field) : Predicate.isNull(ast.field);
+    case "And":
+      return ast.members.length === 0
+        ? Predicate.always
+        : { _tag: "And", predicates: ast.members.map(fromFilterAst) };
+    case "Or":
+      return { _tag: "Or", predicates: ast.members.map(fromFilterAst) };
+    case "Not":
+      return Predicate.not(fromFilterAst(ast.member));
+  }
+};
+
+/** A non-empty list of non-null literals, or `None` (the grammar has neither an empty list nor a `NULL` literal). */
+const literalList = (
+  values: ReadonlyArray<Predicate.Literal>
+): Option.Option<readonly [Predicate.Literal, ...Array<Predicate.Literal>]> => {
+  const [head, ...tail] = values;
+  return head === undefined || head === null || tail.includes(null)
+    ? Option.none()
+    : Option.some([head, ...(tail as Array<Predicate.Literal>)]);
+};
+
+/**
+ * The grammar form of a predicate, or `None` where it has no URL form:
+ * `Exists` (server-only, ADR-0028 §5), an empty `In` / `NotIn` list, or a
+ * `null` literal (the deprecated wire form of `isnull`; it evaluates to
+ * unknown and cannot be folded). `True` is the empty conjunction.
+ * `fromFilterAst ∘ toFilterAst` is the identity on every constructor-built
+ * predicate it accepts.
+ */
+export const toFilterAst = (predicate: Predicate.Predicate): Option.Option<Filter.Node> => {
+  switch (predicate._tag) {
+    case "True":
+      return Option.some(Filter.and());
+    case "Compare":
+      return predicate.value === null
+        ? Option.none()
+        : Option.some({
+            _tag: "Compare",
+            op: predicate.op,
+            field: predicate.field,
+            value: predicate.value,
+          } satisfies Filter.Compare);
+    case "In":
+      return Option.map(literalList(predicate.values), (values) =>
+        Filter.isIn(predicate.field, values)
+      );
+    case "NotIn":
+      return Option.map(literalList(predicate.values), (values) =>
+        Filter.notIn(predicate.field, values)
+      );
+    case "IsNull":
+      return Option.some(Filter.isNull(predicate.field, predicate.negated === true));
+    case "And":
+      return Option.map(Option.all(predicate.predicates.map(toFilterAst)), (members) =>
+        Filter.and(...members)
+      );
+    case "Or":
+      return Option.map(Option.all(predicate.predicates.map(toFilterAst)), (members) =>
+        Filter.or(...members)
+      );
+    case "Not":
+      return Option.map(toFilterAst(predicate.predicate), Filter.not);
+    case "Exists":
+      return Option.none();
+  }
+};
+
+// ─── Constant folding ────────────────────────────────────────────────────────
+
+/** The definite-false predicate: the empty disjunction (`Some(false)` for every row). */
+const FALSE: Predicate.Predicate = { _tag: "Or", predicates: [] };
+
+const isTrue = (predicate: Predicate.Predicate): boolean => predicate._tag === "True";
+const isFalse = (predicate: Predicate.Predicate): boolean =>
+  predicate._tag === "Or" && predicate.predicates.length === 0;
+
+/** Kleene `And` over folded members: any false is false; true members vanish. */
+const foldAnd = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
+  const kept: Array<Predicate.Predicate> = [];
+  for (const member of members) {
+    const folded = foldConstants(member);
+    if (isFalse(folded)) return FALSE;
+    if (!isTrue(folded)) kept.push(folded);
+  }
+  return kept.length === 0 ? Predicate.always : Predicate.and(...kept);
+};
+
+/** Kleene `Or` over folded members: any true is true; false members vanish. */
+const foldOr = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
+  const kept: Array<Predicate.Predicate> = [];
+  for (const member of members) {
+    const folded = foldConstants(member);
+    if (isTrue(folded)) return Predicate.always;
+    if (!isFalse(folded)) kept.push(folded);
+  }
+  return kept.length === 0 ? FALSE : Predicate.or(...kept);
+};
+
+const foldNot = (inner: Predicate.Predicate): Predicate.Predicate => {
+  const folded = foldConstants(inner);
+  return isTrue(folded) ? FALSE : isFalse(folded) ? Predicate.always : Predicate.not(folded);
+};
+
+/**
+ * Fold the definite constants out of a predicate, exactly under ADR-0028's
+ * three-valued semantics: an empty `In` is false and an empty `NotIn` is
+ * true for every row (the compilers render them `1 = 0` / `1 = 1`), a
+ * false conjunct or a true disjunct decides its connective, and true
+ * conjuncts / false disjuncts vanish. Unknown is never folded — a `null`
+ * literal stays where it is. The result is `Predicate.always`, the empty
+ * `Or` (false), or a predicate free of empty lists.
+ */
+export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predicate => {
+  switch (predicate._tag) {
+    case "In":
+      return predicate.values.length === 0 ? FALSE : predicate;
+    case "NotIn":
+      return predicate.values.length === 0 ? Predicate.always : predicate;
+    case "And":
+      return foldAnd(predicate.predicates);
+    case "Or":
+      return foldOr(predicate.predicates);
+    case "Not":
+      return foldNot(predicate.predicate);
+    default:
+      return predicate;
+  }
+};
+
+// ─── The node graph as a query declaration ───────────────────────────────────
+
+/** Int4 bounds (ADR-0028 rule e): `integer` literals are Postgres `int4`. */
+const INT4_MIN = -2147483648;
+const INT4_MAX = 2147483647;
+
+/** A check that a decoded literal is a value of the kind (`FilterPolicy.matchesKind`). */
+const kindCheck = (kind: FilterPolicy.LiteralKind) =>
+  Schema.makeFilter<Predicate.Literal>((value) => FilterPolicy.matchesKind(kind, value), {
+    title: kind,
+    description: `a literal of kind "${kind}"`,
+  });
+
+/**
+ * The attribute schema a filter literal of the kind decodes through: the
+ * wire string is parsed as the scalar the schema's encoded form names, then
+ * checked against the kind (int4 range, the fixed instant format).
+ */
+const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top => {
+  switch (kind) {
+    case "text":
+      return Schema.String;
+    case "instant":
+      return Schema.String.pipe(Schema.check(kindCheck("instant")));
+    case "integer":
+      return Schema.Number.pipe(
+        Schema.check(Schema.isInt(), Schema.isBetween({ minimum: INT4_MIN, maximum: INT4_MAX }))
+      );
+    case "double":
+      return Schema.Number;
+    case "boolean":
+      return Schema.Boolean;
+  }
+};
+
+/**
+ * The synthetic resource's attributes: every filterable field (`id` and the
+ * `one`-edge keys included) with its kind's schema and its operators
+ * declared through `Filter.able`; every other attribute as `Unknown`, so
+ * `fields[type]` still names it but no filter reaches it.
+ */
+const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
+  const attributes: Record<string, Schema.Top> = {};
+  for (const [field, declared] of Object.entries(node.filterable)) {
+    attributes[field] = literalSchema(declared.kind).pipe(Filter.able(declared.operators));
+  }
+  for (const field of Object.keys(node.attributes)) {
+    attributes[field] ??= Schema.Unknown;
+  }
+  return attributes;
+};
+
+/** The synthetic resource's relationships: the node's edges, targets resolved lazily through the graph. */
+const relationshipsOf = (
+  node: Node.AnyNode,
+  resources: ReadonlyMap<string, Resource.Any>
+): Record<string, Relationship.Descriptor> => {
+  const relationships: Record<string, Relationship.Descriptor> = {};
+  for (const [name, edge] of Object.entries(node.edges)) {
+    const target = () => resources.get(edge.target)!;
+    relationships[name] =
+      edge.kind === "one"
+        ? Relationship.one(target)
+        : edge.kind === "many"
+          ? Relationship.many(target)
+          : Relationship.paginated(target);
+  }
+  return relationships;
+};
+
+const resourceGraphs = new WeakMap<Node.NodeRegistry, ReadonlyMap<string, Resource.Any>>();
+
+/**
+ * The node graph as effect-jsonapi resource definitions, one per node —
+ * the declaration the URL codecs are derived from. Attributes are typed by
+ * the node's filterable set (kind and operators), relationships are its
+ * edges; nothing else about the resource is faithful (a document is never
+ * serialised through it). Memoised per registry.
+ */
+export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resource.Any> => {
+  const cached = resourceGraphs.get(nodes);
+  if (cached !== undefined) return cached;
+  const resources = new Map<string, Resource.Any>();
+  for (const node of nodes.nodes.values()) {
+    resources.set(
+      node.type,
+      Resource.make(node.type, {
+        attributes: attributesOf(node),
+        relationships: relationshipsOf(node, resources),
+      })
+    );
+  }
+  resourceGraphs.set(nodes, resources);
+  return resources;
+};
+
+/**
+ * The root window's page parameters: `page[limit]` is the read's `first`
+ * (a positive integer), `page[after]` its `after` cursor (a row id,
+ * opaque on the wire). Declared in that order, which the canonical string
+ * keeps.
+ */
+export const PageWindow = {
+  limit: Schema.optionalKey(
+    Schema.FiniteFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)))
+  ),
+  after: Schema.optionalKey(Schema.String),
+};
+
+/** The decoded shape of a collection's query, as the node-derived codec produces it. */
+interface DecodedQuery {
+  readonly include?: ReadonlyArray<string>;
+  readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly sort?: ReadonlyArray<SortTerm>;
+  readonly page?: { readonly limit?: number; readonly after?: string };
+  readonly filter?: Filter.Node;
 }
 
-const literal = (value: Predicate.Literal): string => (value === null ? "null" : String(value));
+/** One collection's query codec and its canonical encoder. */
+interface QueryCodec {
+  readonly schema: Schema.Codec<DecodedQuery, Readonly<Record<string, unknown>>>;
+  readonly canonical: (decoded: DecodedQuery) => string;
+}
 
-/** Flatten a predicate's top-level AND into its conjuncts (`True` → none). */
-const conjuncts = (predicate: Predicate.Predicate): ReadonlyArray<Predicate.Predicate> => {
-  if (predicate._tag === "True") return [];
-  if (predicate._tag === "And") return predicate.predicates.flatMap(conjuncts);
-  return [predicate];
+const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
+
+/** Build (or fetch) the query codec of one node: `Query.schema` over its synthetic resource. */
+const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec => {
+  let codecs = queryCodecs.get(nodes);
+  if (codecs === undefined) {
+    codecs = new Map();
+    queryCodecs.set(nodes, codecs);
+  }
+  const cached = codecs.get(node.type);
+  if (cached !== undefined) return cached;
+  const resource = resourcesOf(nodes).get(node.type)!;
+  const schema = UrlQuery.schema(resource, {
+    // Single-level paths only (ADR-0028 D1); no edges, no `include` at all.
+    include: Object.keys(node.edges).length > 0 ? { depth: 1 } : false,
+    fields: true,
+    sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
+    page: PageWindow,
+    filter: true,
+  }) as unknown as QueryCodec["schema"];
+  const codec: QueryCodec = {
+    schema,
+    canonical: UrlQuery.canonical(schema as unknown as UrlQuery.FlatQuerySchema) as (
+      decoded: DecodedQuery
+    ) => string,
+  };
+  codecs.set(node.type, codec);
+  return codec;
 };
 
+// ─── URL → Query.Read ────────────────────────────────────────────────────────
+
+/** A sparse-fieldset projection: attribute names by resource type (ADR-0029 §5). */
+export type Projection = Readonly<Record<string, ReadonlyArray<string>>>;
+
+/** A parsed URL: the declarative read, and the `fields[]` projection beside it. */
+export interface ParsedRead {
+  readonly read: Query.Read;
+  readonly fields?: Projection;
+}
+
+/** The flat query record: `URLSearchParams` with repeated keys as arrays (as `UrlParams.toRecord` does). */
+const recordOf = (
+  params: URLSearchParams | Readonly<Record<string, string | ReadonlyArray<string>>>
+): Record<string, string | ReadonlyArray<string>> => {
+  if (!(params instanceof URLSearchParams)) return { ...params };
+  const record: Record<string, string | ReadonlyArray<string>> = {};
+  for (const [key, value] of params) {
+    const existing = record[key];
+    record[key] =
+      existing === undefined
+        ? value
+        : typeof existing === "string"
+          ? [existing, value]
+          : [...existing, value];
+  }
+  return record;
+};
+
+const invalid = (collection: string, parameter: string, detail: string): QueryError =>
+  new QueryError({
+    message: `Invalid query for "${collection}" (${parameter}): ${detail}`,
+    query: collection,
+    parameter,
+  });
+
+const nodeOf = (
+  nodes: Node.NodeRegistry,
+  collection: string
+): Effect.Effect<Node.AnyNode, QueryError> => {
+  const node = nodes.nodes.get(collection);
+  return node === undefined
+    ? Effect.fail(
+        new QueryError({ message: `Unknown collection: ${collection}`, query: collection })
+      )
+    : Effect.succeed(node);
+};
+
+/** The `include` tokens of the wire value: the comma form, the repeated key, or both. */
+const includeTokens = (value: string | ReadonlyArray<string> | undefined): ReadonlyArray<string> =>
+  value === undefined
+    ? []
+    : (typeof value === "string" ? [value] : value).flatMap((item) => item.split(","));
+
 /**
- * The safe `filter` map: equality and membership conjuncts only. Operators
- * (`ne`/`gt`/…), `or`, `not`, and `eq null` are dropped — local `Subset.apply`
- * enforces the exact result over whatever superset the server returns.
+ * Check `include` before decoding: every path is one of the node's own
+ * edges. A nested path is rejected by decision D1; an undeclared edge is
+ * rejected so the caller can rule on it (a façade falls through, ADR-0029
+ * §1). The codec would reject both too; the check gives the reason.
  */
-const safeFilters = (where: Predicate.Predicate): Record<string, string> => {
-  const filter: Record<string, string> = {};
-  for (const conjunct of conjuncts(where)) {
-    if (conjunct._tag === "Compare" && conjunct.op === "eq" && conjunct.value !== null) {
-      filter[conjunct.field] = literal(conjunct.value);
-    } else if (conjunct._tag === "In") {
-      filter[conjunct.field] = conjunct.values.map(literal).join(",");
+const checkInclude = (
+  node: Node.AnyNode,
+  value: string | ReadonlyArray<string> | undefined
+): Effect.Effect<void, QueryError> => {
+  for (const token of includeTokens(value)) {
+    if (token.includes(".")) {
+      return Effect.fail(
+        invalid(
+          node.type,
+          "include",
+          `nested include path "${token}" is not supported; a read includes a node's own edges only (ADR-0028 D1)`
+        )
+      );
+    }
+    if (node.edges[token] === undefined) {
+      return Effect.fail(
+        invalid(
+          node.type,
+          "include",
+          `"${token}" is not an edge of "${node.type}" (edges: ${Object.keys(node.edges).join(", ")})`
+        )
+      );
     }
   }
-  return filter;
+  return Effect.void;
 };
 
-const sortTerms = (
-  subset: Subset.Subset
-): ReadonlyArray<{ readonly field: string; readonly direction: "asc" | "desc" }> =>
-  subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
+/** One segment of a Standard Schema issue path: a key, or an object carrying one. */
+type PathSegment = PropertyKey | { readonly key: PropertyKey };
+
+const keyOf = (segment: PathSegment): PropertyKey =>
+  typeof segment === "object" ? segment.key : segment;
 
 /**
- * Translate a subset into the JSON:API request options the default encodes.
- * Sort terms are carried in the library's `Query.Sort` decoded shape; the
- * loader serializes them to the `-field,field` wire form on encode.
+ * Check `fields[…]` keys before decoding: each names the node's own type or
+ * an edge target's. The codec silently drops a type outside that set; a
+ * projection nobody can apply is a client mistake worth a 400.
  */
-export const toRequestOptions = (subset: Subset.Subset): JsonApiRequestOptions => {
-  const filter = safeFilters(subset.where);
-  const sort = sortTerms(subset);
+const checkFields = (
+  node: Node.AnyNode,
+  record: Readonly<Record<string, unknown>>
+): Effect.Effect<void, QueryError> => {
+  const types = new Set([node.type, ...Object.values(node.edges).map((edge) => edge.target)]);
+  for (const key of Object.keys(record)) {
+    const match = /^fields\[(.*)\]$/.exec(key);
+    if (match !== null && !types.has(match[1]!)) {
+      return Effect.fail(
+        invalid(
+          node.type,
+          key,
+          `"${match[1]}" is not a type this read can carry (types: ${[...types].join(", ")})`
+        )
+      );
+    }
+  }
+  return Effect.void;
+};
+
+/** The query-string parameter an issue path names: the flat key itself, or `family[member]` for the nested families. */
+const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | undefined => {
+  const [head, second] = (path ?? []).map(keyOf);
+  if (typeof head !== "string") return undefined;
+  return (head === "fields" || head === "page") && typeof second === "string"
+    ? `${head}[${second}]`
+    : head;
+};
+
+/** A codec rejection as a `QueryError` naming the parameter (the issue's path is the flat key). */
+const decodeError =
+  (collection: string) =>
+  (error: SchemaError.SchemaError): QueryError => {
+    const issue = SchemaIssue.makeFormatterStandardSchemaV1()(error.issue).issues[0];
+    const parameter = parameterOf(issue?.path);
+    return new QueryError({
+      message: `Invalid query for "${collection}"${parameter === undefined ? "" : ` (${parameter})`}: ${issue?.message ?? error.message}`,
+      query: collection,
+      parameter,
+      cause: error,
+    });
+  };
+
+/** Sort terms as `order` tokens (`name`, `-createdAt`). */
+const orderOf = (sort: ReadonlyArray<SortTerm>): ReadonlyArray<string> =>
+  sort.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field));
+
+/** The declarative read a decoded query describes. */
+const readOf = (collection: string, decoded: DecodedQuery): Query.Read => ({
+  collection,
+  ...(decoded.filter === undefined ? {} : { where: fromFilterAst(decoded.filter) }),
+  ...(decoded.include === undefined || decoded.include.length === 0
+    ? {}
+    : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
+  ...(decoded.sort === undefined || decoded.sort.length === 0
+    ? {}
+    : { order: orderOf(decoded.sort) }),
+  ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
+  ...(decoded.page?.after === undefined ? {} : { after: decoded.page.after }),
+});
+
+/**
+ * Parse a collection's query parameters into a read. `include`, `fields`,
+ * `sort`, `page` and `filter` are decoded with the node-derived query codec
+ * (unknown filter fields, undeclared operators, literals of the wrong kind,
+ * unsortable fields, unknown sparse fields and nested include paths all
+ * fail with a `QueryError` naming the parameter) and mapped onto the read;
+ * `fields[]` rides beside it as the projection.
+ */
+export const parseParams = (
+  nodes: Node.NodeRegistry,
+  collection: string,
+  params: URLSearchParams | Readonly<Record<string, string | ReadonlyArray<string>>>
+): Effect.Effect<ParsedRead, QueryError> =>
+  Effect.gen(function* () {
+    const node = yield* nodeOf(nodes, collection);
+    const record = recordOf(params);
+    yield* checkInclude(node, record["include"]);
+    yield* checkFields(node, record);
+    const decoded = yield* Schema.decodeUnknownEffect(codecOf(nodes, node).schema)(record).pipe(
+      Effect.mapError(decodeError(collection))
+    );
+    return {
+      read: readOf(collection, decoded),
+      ...(decoded.fields === undefined ? {} : { fields: decoded.fields }),
+    };
+  });
+
+/** The resource a request path addresses: `…/{type}` (a listing) or `…/{type}/{id}` (one row). */
+const locate = (
+  nodes: Node.NodeRegistry,
+  url: URL
+): Effect.Effect<{ readonly collection: string; readonly id?: string }, QueryError> => {
+  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+  const last = segments.at(-1);
+  const previous = segments.at(-2);
+  if (last !== undefined && nodes.nodes.has(last)) return Effect.succeed({ collection: last });
+  if (last !== undefined && previous !== undefined && nodes.nodes.has(previous)) {
+    return Effect.succeed({ collection: previous, id: decodeURIComponent(last) });
+  }
+  return Effect.fail(
+    new QueryError({ message: `No collection on path "${url.pathname}"`, query: url.pathname })
+  );
+};
+
+/** A single-row read is `filter[id]=…`, first 1 (ADR-0029 §3); it takes `include` and `fields` only. */
+const singleRow = (
+  collection: string,
+  id: string,
+  params: URLSearchParams
+): Effect.Effect<URLSearchParams, QueryError> => {
+  for (const key of params.keys()) {
+    if (key === "include" || key.startsWith("fields[")) continue;
+    return Effect.fail(
+      invalid(collection, key, `a single-resource request takes "include" and "fields[…]" only`)
+    );
+  }
+  const widened = new URLSearchParams(params);
+  widened.set("filter[id]", id);
+  widened.set("page[limit]", "1");
+  return Effect.succeed(widened);
+};
+
+/**
+ * Parse a request URL into a read. The collection is the path's last
+ * segment that names a node (`/api/products?…`, any prefix), or the
+ * segment before a row id (`/api/products/p-1?…`, which reads as
+ * `filter[id]=p-1` with `first` 1). The query is then {@link parseParams}.
+ */
+export const parseRead = (
+  nodes: Node.NodeRegistry,
+  url: string | URL
+): Effect.Effect<ParsedRead, QueryError> =>
+  Effect.gen(function* () {
+    const parsed = typeof url === "string" ? new URL(url, "http://localhost") : url;
+    const located = yield* locate(nodes, parsed);
+    const params =
+      located.id === undefined
+        ? parsed.searchParams
+        : yield* singleRow(located.collection, located.id, parsed.searchParams);
+    return yield* parseParams(nodes, located.collection, params);
+  });
+
+// ─── Query.Read → canonical string ───────────────────────────────────────────
+
+const noUrlForm = (collection: string, detail: string): QueryError =>
+  new QueryError({
+    message: `Read on "${collection}" has no URL form: ${detail}`,
+    query: collection,
+  });
+
+/** The plan's edge selects as include paths, in code-point order (the include set is unordered). */
+const includeOf = (collection: string, edges: Query.Plan["edges"]): ReadonlyArray<string> =>
+  edges
+    .map((edge) => {
+      if (edge.first !== undefined) {
+        throw noUrlForm(
+          collection,
+          `the per-edge window on "${edge.edge}" (include: { first }) has no query parameter`
+        );
+      }
+      return edge.edge;
+    })
+    .toSorted((a, b) => Predicate.compareText(a, b));
+
+const astOf = (collection: string, predicate: Predicate.Predicate): Filter.Node =>
+  Option.getOrThrowWith(toFilterAst(predicate), () =>
+    noUrlForm(collection, `"${predicate._tag}" carries an Exists node or a null literal`)
+  );
+
+/** Passes {@link filterOf} allows the normal form to settle in; two suffice in practice. */
+const NORMAL_FORM_PASSES = 8;
+
+/**
+ * The plan's root predicate as a filter AST in normal form; `undefined` for
+ * the whole collection. Two normalisations meet here: {@link foldConstants}
+ * on the engine side (constants, singleton groups) and `Filter.normalise`
+ * on the grammar side (member order, deduplication, literal-list order).
+ * Each can hand the other new work — deduplicating `Or(x, x)` leaves a
+ * singleton group the fold then collapses — so the result is their
+ * fixpoint, which makes {@link canonical} idempotent: parsing a canonical
+ * string and canonicalising again gives the same string.
+ */
+const filterOf = (
+  collection: string,
+  declaration: Filter.LiteralCodecs,
+  where: Predicate.Predicate
+): Filter.Node | undefined => {
+  let predicate = foldConstants(where);
+  for (let pass = 0; pass < NORMAL_FORM_PASSES; pass++) {
+    if (isTrue(predicate)) return undefined;
+    const ast = Filter.normalise(astOf(collection, predicate), declaration);
+    const next = foldConstants(fromFilterAst(ast));
+    if (JSON.stringify(next) === JSON.stringify(predicate)) return ast;
+    predicate = next;
+  }
+  return astOf(collection, predicate);
+};
+
+/** The decoded query a compiled read denotes. */
+const decodedOf = (
+  compiled: Query.Plan,
+  declaration: Filter.LiteralCodecs,
+  fields: Projection | undefined
+): DecodedQuery => {
+  const { root } = compiled;
+  const include = includeOf(root.collection, compiled.edges);
+  const filter = filterOf(root.collection, declaration, root.where);
+  const page = {
+    ...(root.limit === undefined ? {} : { limit: root.limit }),
+    ...(root.cursor === undefined ? {} : { after: root.cursor }),
+  };
   return {
-    ...(Object.keys(filter).length > 0 ? { filter } : {}),
-    ...(sort.length > 0 ? { sort } : {}),
+    ...(include.length === 0 ? {} : { include }),
+    ...(fields === undefined ? {} : { fields: projectionOf(fields) }),
+    ...(filter === undefined ? {} : { filter }),
+    ...(root.orderBy.length === 0 ? {} : { sort: root.orderBy }),
+    ...(Object.keys(page).length === 0 ? {} : { page }),
   };
 };
 
-/** The shipped default encoder (sound superset; see module docs). */
+/** A projection with each type's field list in code-point order (a set). */
+const projectionOf = (fields: Projection): Projection =>
+  Object.fromEntries(
+    Object.entries(fields).map(([type, names]) => [type, names.toSorted(Predicate.compareText)])
+  );
+
+/**
+ * The canonical URL of a read — `/{collection}?{query}` (no API prefix;
+ * `parseRead` accepts it back) — through effect-jsonapi's canonical encoder
+ * over the compiled plan: one string per plan, whatever spelling the read
+ * used (`where` as a map or a predicate, conjuncts in any order, `True`
+ * conjuncts). It is the subscription identity of ADR-0029 §2. Throws a
+ * `QueryError` for a read the plan or the grammar refuses: an unknown
+ * collection or edge, a field outside the filterable set, an `Exists`, a
+ * `null` literal, or a per-edge window. A `fields[]` projection rides
+ * along when given.
+ */
+export const canonical = (
+  nodes: Node.NodeRegistry,
+  read: Query.Read,
+  fields?: Projection
+): string => {
+  const compiled = Query.plan(nodes, read);
+  const node = nodes.nodes.get(read.collection);
+  if (node === undefined) {
+    throw new QueryError({
+      message: `Unknown collection: ${read.collection}`,
+      query: read.collection,
+    });
+  }
+  let query: string;
+  try {
+    const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
+    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields));
+  } catch (error) {
+    if (error instanceof QueryError) throw error;
+    throw new QueryError({
+      message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
+      query: read.collection,
+      cause: error,
+    });
+  }
+  return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
+};
+
+// ─── The exact encoder ───────────────────────────────────────────────────────
+
+/** The attribute schema of a field whose literals have the JS type. */
+const scalarSchema = (type: "string" | "number" | "boolean"): Schema.Top =>
+  type === "string" ? Schema.String : type === "number" ? Schema.Number : Schema.Boolean;
+
+/** Collect the literal JS types each field of a tree is compared with (mutates `types`). */
+const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>): void => {
+  const add = (field: string, value: unknown) => {
+    const set = types.get(field) ?? new Set<string>();
+    set.add(typeof value);
+    types.set(field, set);
+  };
+  switch (ast._tag) {
+    case "Compare":
+      return add(ast.field, ast.value);
+    case "In":
+    case "NotIn":
+      return ast.values.forEach((value) => add(ast.field, value));
+    case "IsNull":
+      return void (types.get(ast.field) ?? types.set(ast.field, new Set()));
+    case "And":
+    case "Or":
+      return ast.members.forEach((member) => collectLiteralTypes(member, types));
+    case "Not":
+      return collectLiteralTypes(ast.member, types);
+  }
+};
+
+/**
+ * A declaration for encoding a tree without a node graph: each field it
+ * names admits every operator, typed by the JS type of its literals. The
+ * wire form of a scalar does not depend on its declared kind, so this
+ * encodes exactly what the typed codec would.
+ */
+const declarationOf = (ast: Filter.Node): Resource.Any => {
+  const types = new Map<string, Set<string>>();
+  collectLiteralTypes(ast, types);
+  const attributes: Record<string, Schema.Top> = {};
+  for (const [field, kinds] of types) {
+    const [kind, ...rest] = kinds;
+    if (rest.length > 0) {
+      throw new QueryError({
+        message: `Field "${field}" is compared with literals of several types (${[...kinds].join(", ")}); ADR-0028 rule (d) admits one`,
+        parameter: `filter[${field}]`,
+      });
+    }
+    attributes[field] = scalarSchema((kind ?? "string") as "string" | "number" | "boolean").pipe(
+      Filter.able()
+    );
+  }
+  return Resource.make("query", { attributes });
+};
+
+/**
+ * The canonical flat `filter[...]` record of a filter AST — the grammar's
+ * own encoder (`Query.Filter`), so the shorthand, the group form, escaping
+ * and member order are effect-jsonapi's byte for byte.
+ */
+export const flatFilter = (ast: Filter.Node): Readonly<Record<string, string>> =>
+  Schema.encodeSync(
+    UrlQuery.Filter(declarationOf(ast)) as Schema.Codec<
+      Filter.Node,
+      Readonly<Record<string, string>>
+    >
+  )(ast);
+
+/**
+ * Serialize sort terms into the JSON:API `sort` value (`-field,field`) through
+ * the library's `Query.Sort` codec, so the wire encoding matches the spec's
+ * descending-prefix convention by construction.
+ */
+const encodeSort = (terms: ReadonlyArray<SortTerm>): string =>
+  Schema.encodeSync(UrlQuery.Sort(terms.map((term) => term.field)))(
+    terms.map((term) => ({ field: term.field, direction: term.direction }))
+  );
+
+/**
+ * Build the JSON:API query string (with its leading `?`, or `` when empty)
+ * for `include` / `fields` / `filter` / `sort` / `page`, in the canonical
+ * family order and percent-encoding (`Query.serialise`). `filter` is a
+ * filter AST, encoded exactly through {@link flatFilter}.
+ */
+export const buildQueryString = (options?: JsonApiRequestOptions): string => {
+  if (options === undefined) return "";
+  const pairs: Array<UrlQuery.Pair> = [];
+  if (options.include && options.include.length > 0)
+    pairs.push(["include", options.include.join(",")]);
+  for (const [type, names] of Object.entries(options.fields ?? {})) {
+    pairs.push([`fields[${type}]`, names.join(",")]);
+  }
+  if (options.filter !== undefined) pairs.push(...Object.entries(flatFilter(options.filter)));
+  if (options.sort && options.sort.length > 0) pairs.push(["sort", encodeSort(options.sort)]);
+  for (const [key, value] of Object.entries(options.page ?? {})) {
+    if (value !== undefined) pairs.push([`page[${key}]`, String(value)]);
+  }
+  const query = UrlQuery.serialise(pairs);
+  return query === "" ? "" : `?${query}`;
+};
+
+/**
+ * Encode a subset into a JSON:API query string (incl. leading `?`, or ``),
+ * or `None` when no row can match it (the request is skipped). A predicate
+ * without a URL form is a `QueryError`: the backend fails closed.
+ */
+export interface QueryEncoder {
+  readonly encode: (subset: Subset.Subset) => Effect.Effect<Option.Option<string>, QueryError>;
+}
+
+/**
+ * The request options a subset encodes to, or `None` when its predicate
+ * folds to false. The filter is the whole predicate, constants folded;
+ * `orderBy` becomes `sort`. Limit and cursor are not pushed: the window is
+ * applied locally over the exact filter. Throws a `QueryError` for a
+ * predicate with no URL form (`Exists`, a `null` literal).
+ */
+export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRequestOptions> => {
+  const where = foldConstants(subset.where);
+  if (isFalse(where)) return Option.none();
+  const filter = isTrue(where)
+    ? undefined
+    : Option.getOrThrowWith(toFilterAst(where), () =>
+        noUrlForm(subset.collection, "the predicate carries an Exists node or a null literal")
+      );
+  const sort = subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
+  return Option.some({
+    ...(filter === undefined ? {} : { filter }),
+    ...(sort.length === 0 ? {} : { sort }),
+  });
+};
+
+/** The shipped encoder: exact under ADR-0028 (see the module doc). */
 export const defaultEncoder: QueryEncoder = {
-  encode: (subset) => buildQueryString(toRequestOptions(subset)),
+  encode: (subset) =>
+    Effect.try({
+      try: () => Option.map(toRequestOptions(subset), buildQueryString),
+      catch: (error) =>
+        error instanceof QueryError
+          ? error
+          : new QueryError({
+              message: `Subset on "${subset.collection}" could not be encoded: ${error instanceof Error ? error.message : String(error)}`,
+              query: subset.collection,
+              cause: error,
+            }),
+    }),
 };

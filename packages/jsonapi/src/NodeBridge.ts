@@ -33,12 +33,25 @@
  * relationship-derived alike — so the acyclic graph bridges without ever
  * naming an inverse by hand.
  *
+ * **The filterable set** (ADR-0028 rule d, #154) is read off the resource's
+ * own declaration (effect-jsonapi 0.13: `Filter.able` / `Sort.able` piped
+ * onto an attribute schema, `Resource.attribute(schema, { filter, sort })`,
+ * `Relationship.one(ref, { filter })`) through `Resource.filterable` /
+ * `Resource.sortable`. An attribute keeps its name and derives its literal
+ * kind from its schema exactly as `Node.make` does; a to-one relationship's
+ * declaration lands on the edge's **key field** (`author` → `authorId`,
+ * kind `text`), which is the field the engine filters by. The
+ * `filterable` / `sortable` options remain as overrides: an option entry
+ * replaces the resource's declaration for that field (the way to give an
+ * `instant` its kind, which no schema can tell), and adds fields the
+ * resource does not declare.
+ *
  * All mismatches are definition-time defects (a thrown
  * {@link ResourceBridgeError}), never runtime failures: a resource graph
  * either bridges completely or not at all.
  */
 
-import type { Resource } from "@thomasfosterau/effect-jsonapi";
+import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@legation/effect";
 import { Data, type Schema } from "effect";
 
@@ -79,16 +92,16 @@ export interface FromResourceOptions {
   /** Passed through to the node (fine fan-out topics — ADR-0023). */
   readonly hintKeys?: ReadonlyArray<string>;
   /**
-   * The filterable set (ADR-0028, #154), passed through to `Node.make`:
-   * the attributes a client may filter by, with their operators (and an
-   * explicit literal kind where the schema cannot tell). `id` and every
-   * bridged one-edge's key field are filterable by `eq` / `in` regardless.
-   * effect-jsonapi 0.12 carries no per-attribute `filterable` annotation;
-   * once thomasfosterau/effect-jsonapi#84 lands, the bridge reads it from
-   * the resource and this option becomes an override.
+   * Overrides and additions to the resource's own filterable declaration
+   * (ADR-0028, #154; see the module doc), by row field: the operators
+   * alone (the literal kind is derived from the attribute schema), or
+   * `{ operators, kind }` where the schema cannot tell the kind (an
+   * `instant` stored as text). An entry replaces the resource's declaration
+   * for that field. `id` and every bridged one-edge's key field are
+   * filterable by `eq` / `in` regardless.
    */
   readonly filterable?: Record<string, FilterPolicy.FilterableInput>;
-  /** The sortable attributes (#154), passed through to `Node.make`; `id` is always sortable. */
+  /** Sortable fields beyond the resource's `Sort.able` declaration; `id` is always sortable. */
   readonly sortable?: ReadonlyArray<string>;
 }
 
@@ -206,22 +219,52 @@ const attributesOf = (
   return attributes;
 };
 
+/** One entry of `Resource.filterable`, as the bridge reads it. */
+interface DeclaredField {
+  readonly operators: ReadonlyArray<FilterPolicy.FilterOperator>;
+}
+
 /**
- * The per-node options passed through from the bridge options. Filterable
- * / sortable come from here for now; the per-attribute annotation
- * (thomasfosterau/effect-jsonapi#84) will be read off
- * `resource.fields.attributes` when it exists.
+ * The filterable set the resource declares, keyed by **row field**: an
+ * attribute under its own name, with the kind left to `Node.make` to derive
+ * from its schema; a to-one relationship under its edge's key field, kind
+ * `text` (an id).
+ */
+const declaredFilterable = (
+  resource: Resource.Any,
+  edges: Record<string, Edge.Edge>
+): Record<string, FilterPolicy.FilterableInput> => {
+  const declared: Record<string, FilterPolicy.FilterableInput> = {};
+  const attributes = resource.fields.attributes.fields;
+  const entries = Object.entries(Resource.filterable(resource)) as Array<[string, DeclaredField]>;
+  for (const [key, entry] of entries) {
+    const edge = edges[key];
+    if (attributes[key] === undefined && edge?.kind === "one") {
+      declared[edge.via] = { operators: entry.operators, kind: "text" };
+    } else {
+      declared[key] = entry.operators;
+    }
+  }
+  return declared;
+};
+
+/**
+ * The per-node options: hint keys from the bridge options; the filterable
+ * set and sortable fields from the resource's declaration, each option
+ * entry replacing the resource's for its field.
  */
 const nodeOptionsOf = (
+  resource: Resource.Any,
+  edges: Record<string, Edge.Edge>,
   options: FromResourceOptions
 ): {
   readonly hintKeys?: ReadonlyArray<string>;
-  readonly filterable?: Record<string, FilterPolicy.FilterableInput>;
-  readonly sortable?: ReadonlyArray<string>;
+  readonly filterable: Record<string, FilterPolicy.FilterableInput>;
+  readonly sortable: ReadonlyArray<string>;
 } => ({
   ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
-  ...(options.filterable === undefined ? {} : { filterable: options.filterable }),
-  ...(options.sortable === undefined ? {} : { sortable: options.sortable }),
+  filterable: { ...declaredFilterable(resource, edges), ...options.filterable },
+  sortable: [...Resource.sortable(resource), ...(options.sortable ?? [])],
 });
 
 /** Bridge one resource, resolving inverses through `oneEdgesOfTarget`. */
@@ -234,7 +277,7 @@ const bridge = (
   return Node.make(resource.type, {
     attributes: attributesOf(resource, edges),
     edges,
-    ...nodeOptionsOf(options),
+    ...nodeOptionsOf(resource, edges, options),
   });
 };
 

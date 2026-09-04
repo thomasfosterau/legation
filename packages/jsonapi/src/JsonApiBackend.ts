@@ -9,9 +9,12 @@
  * CVR diffing on top.
  *
  * Mapping:
- * - `evaluate` lists the collection (`GET /{type}`), pushing the predicate to
- *   the server via the `QueryEncoder` (best-effort `filter[...]`) and applying
- *   the full predicate/order/limit locally with `Subset.apply` (the authority).
+ * - `evaluate` lists the collection (`GET /{type}`), pushing the whole
+ *   predicate to the server as the filter grammar's canonical `filter[...]`
+ *   form via the `QueryEncoder` (exact under ADR-0028; a predicate that can
+ *   never match skips the request) and applying predicate, order and limit
+ *   locally with `Subset.apply` — the window is local, and re-running the
+ *   filter is redundancy over an exact server answer, not correction.
  *   With `includes`, it adds `?include=...` and harvests the compound document's
  *   related rows, serving auto-subscribed `id IN (...)` subsets from that cache.
  * - `getRows` serves row values from the cache `evaluate` populates (the sync
@@ -101,7 +104,7 @@ export interface JsonApiBackendConfig {
    * (`Convention.reflectAtomic`).
    */
   readonly atomic?: { readonly path: string };
-  /** Subset → JSON:API query string. Defaults to a sound-superset encoder. */
+  /** Subset → JSON:API query string. Defaults to the exact filter-grammar encoder. */
   readonly query?: QueryEncoder;
   /**
    * Relationship names to compound-load per collection (`?include=...`). When a
@@ -469,11 +472,16 @@ export const make = (
           }
         }
 
-        // Server-side narrowing is best-effort; `Subset.apply` below is the
-        // authority, so the encoded query only needs to return a superset.
+        // The exact filter goes to the server; a predicate no row can match
+        // (an empty allow-set) is answered here without a request. A
+        // predicate with no URL form fails closed.
+        const encoded = yield* encoder
+          .encode(subset)
+          .pipe(Effect.mapError(backendError(`Subset on "${subset.collection}" has no URL form`)));
+        if (Option.isNone(encoded)) return [];
         const includeParam = (includes[subset.collection] ?? []).join(",");
         const query = appendQuery(
-          encoder.encode(subset),
+          encoded.value,
           includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
         );
         const url = urlFor(config.baseUrl, list.path) + query;
