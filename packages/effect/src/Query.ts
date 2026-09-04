@@ -243,6 +243,45 @@ export const run = (
 };
 
 /**
+ * Run a read once over an **external row source** — the server-fallthrough
+ * tier (ADR-0025) and the derived REST handlers alike: the root window is
+ * fetched first, then the edge subsets its rows pin in one batch
+ * (`Related.queryVia`: `id IN (…)` for `one` edges, `fk IN (…)` for `many`,
+ * ADR-0024's per-parent windows for paginated edges), then the plan's edge
+ * windows are applied. One plan, one join, whichever source answers.
+ * Compiling the read happens inside the effect, so a read the graph
+ * refuses (an unknown edge) is a defect of the effect, not of the caller.
+ */
+export const runVia = <E>(
+  fetch: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<Related.SourcedRow>, E>,
+  nodes: Node.NodeRegistry,
+  read: Read
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, E> =>
+  Effect.suspend(() => runPlanVia(fetch, nodes, plan(nodes, read)));
+
+/**
+ * {@link runVia} over an already-compiled plan, for a caller that compiled
+ * the read for its own purposes (the Client's coverage check keys its
+ * ledger by the plan's root window) so the read is compiled once.
+ */
+export const runPlanVia = <E>(
+  fetch: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<Related.SourcedRow>, E>,
+  nodes: Node.NodeRegistry,
+  compiled: Plan
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, E> =>
+  Related.queryVia(
+    fetch,
+    nodes.collections,
+    compiled.root.collection,
+    compiled.root,
+    edgeSelects(compiled)
+  ).pipe(Effect.map((rows) => applyWindows(compiled, rows)));
+
+/**
  * Observe a read over the local view: emits current rows now and re-emits
  * as the root window or any included edge's rows change.
  */

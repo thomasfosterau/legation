@@ -18,6 +18,7 @@
     "@effect/sql-sqlite-node": "catalog:",
     "@legation/browser": "workspace:*",
     "@legation/effect": "workspace:*",
+    "@legation/jsonapi": "workspace:*",
     "@legation/node": "workspace:*",
     "@legation/sql": "workspace:*",
     "@legation/svelte": "workspace:*",

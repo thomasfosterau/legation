@@ -243,6 +243,69 @@ finalises the window, now as redundancy over an exact filter rather than as
 correction of a superset. Pass your own `queryEncoder` to `JsonApiSync.layer`
 to match a server with a different filter contract.
 
+## Derived REST handlers
+
+A JSON:API `GET` is the engine's `read` operation (ADR-0025) with a document
+body, so a `list` / `get` endpoint can be derived from the node graph instead
+of hand-written: the URL is parsed by the one grammar, the request's identity
+becomes a `SyncContext`, and the read runs through the same filterable check,
+the same deny-by-default auth filters and the same `Backend.evaluate` +
+`getRows` the sync tier runs — two carriers, one evaluator, one auth path.
+
+```ts
+import { Effect } from "effect";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { RestHandlers } from "@legation/jsonapi";
+import { api, NotFound, Product } from "./my-json-api";
+import { backend, nodes, policy } from "./my-server";
+
+const rest = RestHandlers.make({
+  nodes,
+  backend,
+  policy,
+  // HTTP request → SyncContext: identity from the verified session, never from a client-supplied id.
+  context: (request) =>
+    Effect.succeed({ clientGroupId: "http", identity: request.headers["x-user"] }),
+  prefix: "/api",
+});
+
+const productsLive = HttpApiBuilder.group(api, "products", (handlers) =>
+  handlers
+    .handle("list", rest.list(Product))
+    .handle("get", rest.get(Product, { notFound: () => new NotFound() }))
+);
+```
+
+What the derivation guarantees:
+
+- **Scoping is the policy's.** A request without identity to a private
+  collection sees the policy's empty allow-set: an empty collection for
+  `list`, a 404 for `get` — exactly what the sync tier syncs. No `WHERE
+userId` lives in a handler.
+- **Sorting and paging are `Subset.apply`'s** (ADR-0026 / ADR-0028): code-point
+  text order, NULLs last, the id tie-break, `page[after]` as the cursor.
+  `links.next` continues after the last row when the window is full.
+- **A URL the grammar rejects is the codec's 400** with `source.parameter`,
+  before any backend call; a collection the policy does not declare is a 403.
+- **Includes resolve in two phases**, and every `Relationship.many` the
+  endpoint's resource declares is resolved for linkage — on the primary and
+  the included resources alike, since effect-jsonapi's resource schemas
+  require every declared relationship — while nothing the resource does not
+  declare is touched; `include` decides what is compounded into `included`.
+  A paginated node edge lists and includes under a `Relationship.many`
+  declaration (links plus its rows' linkage) and carries links only under
+  `Relationship.paginated`.
+- **`fields[type]` is a projection** applied at serialisation over full rows
+  (ADR-0029 §5). A resource that serves sparse fieldsets declares its
+  attributes `Resource.attribute(schema, { resource: "optional" })`, or the
+  endpoint's success encoder refuses the sparse object.
+
+Derivation is opt-in per endpoint, beside hand-written handlers on the same
+api. The rows-to-document step is its own module, `DocumentWriter`: a pure
+function of the node graph, the read, the resolved rows and the projection,
+so the service-worker façade serving the same URL from the replica produces
+the same document content (ADR-0029 §6).
+
 ## Types, schemas, and errors
 
 JSON:API document types (`ResourceObject`, `JsonApiDocument`, `Relationship`,

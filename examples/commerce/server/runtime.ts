@@ -19,7 +19,7 @@
  */
 import { Context, Effect, Layer, Scope } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { Authorization, Predicate, Server, Transport } from "@legation/effect";
+import { Authorization, type Backend, Predicate, Server, Transport } from "@legation/effect";
 import { InvalidationBus } from "@legation/effect/internal";
 import { SqlBackend } from "@legation/sql";
 import { mutators, privateCollections, publicCollections, registry } from "../src/lib/domain.js";
@@ -70,10 +70,15 @@ export const bindClientGroup = (clientGroupId: string, userId: string | undefine
     }
   });
 
-/** The app's Server (handler + broadcast) and the bus hint sources share. */
+/**
+ * The app's Server (handler + broadcast), the bus hint sources share, and
+ * the backend the Server evaluates through — exposed so the derived REST
+ * handlers (#163) read the same tables under the same policy.
+ */
 export interface CommerceSync {
   readonly server: Server.Server;
   readonly bus: InvalidationBus.InvalidationBus;
+  readonly backend: Backend.Backend;
 }
 export const CommerceSync = Context.Service<CommerceSync>("commerce/CommerceSync");
 
@@ -87,13 +92,14 @@ const commerceSync: Effect.Effect<CommerceSync, never, SqlClient | Scope.Scope> 
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const bus = yield* InvalidationBus.makeInProcess;
+    const backend = SqlBackend.make({
+      executor: makeExecutor(sql),
+      tables,
+      mutators: mutators.mutators,
+      handlers: makeHandlers(sql),
+    });
     const server = yield* Server.make({
-      backend: SqlBackend.make({
-        executor: makeExecutor(sql),
-        tables,
-        mutators: mutators.mutators,
-        handlers: makeHandlers(sql),
-      }),
+      backend,
       auth: {
         policy: authPolicy,
         identity: {
@@ -107,7 +113,7 @@ const commerceSync: Effect.Effect<CommerceSync, never, SqlClient | Scope.Scope> 
       },
       bus,
     });
-    return { server, bus };
+    return { server, bus, backend };
   });
 
 export const syncLayer: Layer.Layer<
