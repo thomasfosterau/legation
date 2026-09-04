@@ -3,7 +3,14 @@
   import { useAggregateGrouped, useQuery } from "@legation/svelte";
   import { AsyncResult } from "effect/unstable/reactivity";
   import { Aggregate } from "@legation/effect";
-  import { allCategories, allVariants, productPage, type Category, type Product } from "../lib/domain.js";
+  import {
+    allCategories,
+    allVariants,
+    CATALOG_PAGE_SIZE,
+    productPage,
+    type Category,
+    type Product,
+  } from "../lib/domain.js";
   import { productRows, toRow, variantRows } from "../lib/rows.js";
 
   const { data } = $props();
@@ -14,13 +21,13 @@
   const categoryId = $derived(kitPage.url.searchParams.get("category") ?? undefined);
   let cursor = $state<string | undefined>(undefined);
   let search = $state("");
-  const PAGE = 4;
+  const PAGE = CATALOG_PAGE_SIZE;
 
   // svelte-ignore state_referenced_locally
   const productsQuery = useQuery(() => productPage({ categoryId, cursor, limit: PAGE }), {
-    // The load returns the whole (filtered) list; the subset's window is the
-    // first page.
-    initial: productRows(data.products).slice(0, PAGE),
+    // The load fetched exactly this read (the first page, at its canonical
+    // URL), so the seed is the window.
+    initial: productRows(data.products),
   });
   // svelte-ignore state_referenced_locally
   const categoriesQuery = useQuery(() => allCategories, {

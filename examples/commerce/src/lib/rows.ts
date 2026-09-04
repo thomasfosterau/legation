@@ -51,7 +51,9 @@ export const productRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArr
   resources.map((resource) => toRow(resource, ["category", "seller"]));
 
 export const variantRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  // `productId` is a plain attribute on the variant resource already.
+  resources.map((resource) => toRow(resource, ["product"]));
+
+export const sellerRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
   resources.map((resource) => toRow(resource));
 
 export const reviewRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>

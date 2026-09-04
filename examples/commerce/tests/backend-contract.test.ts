@@ -4,7 +4,11 @@
  * over the Effect SQL sqlite client — proving in-order application,
  * idempotent skips, atomic id-bumps (transient aborts leave nothing),
  * permanent rejections that stage-and-rollback, subset evaluation, and row
- * versions.
+ * versions. Rule 6 carries the differential harness's generated corpus
+ * (#153): random predicates over every operator in the core, NULL and absent
+ * values, astral text, order terms and limits — so this one call also proves
+ * the SQLite compiler exact against `Subset.apply` (ADR-0028) on the app's
+ * own executor.
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Layer } from "effect";

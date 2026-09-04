@@ -348,7 +348,7 @@ export const PageWindow = {
 };
 
 /** The decoded shape of a collection's query, as the node-derived codec produces it. */
-interface DecodedQuery {
+export interface DecodedQuery {
   readonly include?: ReadonlyArray<string>;
   readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly sort?: ReadonlyArray<SortTerm>;
@@ -390,6 +390,34 @@ const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec => {
   };
   codecs.set(node.type, codec);
   return codec;
+};
+
+/**
+ * The query codec of a collection's `list` endpoint — `include`, `fields[…]`,
+ * `sort`, `page[…]` and `filter[…]` exactly as the node graph declares them:
+ * the codec {@link parseParams} decodes with, so an effect-jsonapi endpoint
+ * served by a derived handler (`RestHandlers.list`) declares the grammar the
+ * handler parses when it is passed as `Endpoint.list(R, { query })`.
+ * effect-jsonapi's own `filter: true` derives a grammar from the *resource*
+ * instead, and the two spell a to-one relationship's filter differently: the
+ * resource grammar names the relationship (`filter[category]=c-audio`), the
+ * node graph — and every URL the engine emits ({@link canonical}) — names the
+ * key field (`filter[categoryId]=c-audio`, as ADR-0029's URLs do). One codec
+ * on both sides keeps the endpoint's contract and the handler's parse the
+ * same language. Every edge is includable under it, so a resource served
+ * with it declares its collection-valued edges `Relationship.many`, never
+ * `paginated` (whose `include=` only the resource grammar refuses). Throws a
+ * `QueryError` for an unknown collection — a definition-time defect.
+ */
+export const querySchema = (
+  nodes: Node.NodeRegistry,
+  collection: string
+): Schema.Codec<DecodedQuery, Readonly<Record<string, unknown>>> => {
+  const node = nodes.nodes.get(collection);
+  if (node === undefined) {
+    throw new QueryError({ message: `Unknown collection: ${collection}`, query: collection });
+  }
+  return codecOf(nodes, node).schema;
 };
 
 // ─── URL → Query.Read ────────────────────────────────────────────────────────

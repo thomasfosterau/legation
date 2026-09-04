@@ -1,0 +1,35 @@
+{
+  "url": "/jsonapi/categories?sort=name",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "categories",
+        "id": "c-audio",
+        "attributes": {
+          "name": "Audio",
+          "slug": "audio"
+        }
+      },
+      {
+        "type": "categories",
+        "id": "c-desks",
+        "attributes": {
+          "name": "Desks",
+          "slug": "desks"
+        }
+      },
+      {
+        "type": "categories",
+        "id": "c-keyboards",
+        "attributes": {
+          "name": "Keyboards",
+          "slug": "keyboards"
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/categories?sort=name"
+    }
+  }
+}

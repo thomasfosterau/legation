@@ -1,309 +1,215 @@
 /**
- * The derived REST handlers against the commerce server (#163): every
- * hand-written `list` / `get` endpoint in `server/jsonapi.ts` beside its
- * derivation over the same tables — `RestHandlers` running ADR-0025's read
- * (`Query.plan` → `authorize` → `SqlBackend.evaluate` + `getRows`) under
- * the app's own `authPolicy`, serialised by `DocumentWriter`. The two are
- * served in-process and compared on the seed data, modulo `links` and the
- * ways `server/resources.ts` and `src/lib/domain.ts` declare the domain
- * differently (listed at {@link normalise}). #165 swaps the hand-written
- * handlers for these; nothing here replaces them.
+ * The commerce JSON:API's reads are derived (#163, #165): every `list` /
+ * `get` in `server/jsonapi.ts` is `RestHandlers` over the app's node graph,
+ * its backend and its auth policy, so this file is the phase-1 stack end to
+ * end — the grammar in the URL, the read path, the auth policy, the
+ * serialiser — on the app's own seed.
  *
- * Beside the comparison, the tier's own promises: an anonymous request to a
- * private collection is an empty collection (`list`) or a 404 (`get`) — the
- * policy's empty allow-set, no `WHERE userId` anywhere on the derived path;
- * `fields[products]=name` projects at serialisation over full rows; a filter
- * over an undeclared field is the codec's 400 with `source.parameter`
- * before any backend call.
+ * Three things are pinned:
+ *
+ * 1. **The documents.** Each read the app makes (`src/lib/domain.ts`), at
+ *    the canonical URL the SvelteKit loads fetch it by, against a committed
+ *    fixture (`fixtures/rest/<read>.json`) — what #163's comparison with the
+ *    hand-written handlers turned into once those were deleted. Regenerate
+ *    with `COMMERCE_FIXTURES=write bun run test` and review the diff.
+ * 2. **The declarations agree.** `server/resources.ts` bridged through
+ *    `NodeBridge.registry` is the hand-written graph of `src/lib/domain.ts`,
+ *    node for node: attributes, edges, the filterable set, the sortable
+ *    fields, the hint keys.
+ * 3. **The tier's own promises.** Scoping is the policy's (anonymous reads
+ *    of a private collection are empty, no `WHERE userId` anywhere); a URL
+ *    the grammar rejects — an undeclared field, a literal of the wrong kind,
+ *    an unsortable field, an edge no node has — is a 400 error document with
+ *    `source.parameter`, before any backend call; `fields[]` projects at
+ *    serialisation over full rows; paging is `Subset.apply`'s cursor window,
+ *    continued by `links.next`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Layer, Schema } from "effect";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import type { Backend } from "@legation/effect";
-import { RestHandlers } from "@legation/jsonapi";
-import { nodes } from "../src/lib/domain.js";
-import { migrate } from "../server/db.js";
-import { jsonApiLive, NotFound } from "../server/jsonapi.js";
-import { CartItem, Category, Order, OrderItem, Product, Review } from "../server/resources.js";
-import { authPolicy, CommerceSync, syncLayer } from "../server/runtime.js";
+import { Effect } from "effect";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { JsonApiQuery, NodeBridge } from "@legation/jsonapi";
+import type { Node, Query } from "@legation/effect";
+import {
+  allCategories,
+  allVariants,
+  myCartItems,
+  myOrderItems,
+  myOrders,
+  nodes,
+  productDetail,
+  productPage,
+  productReviews,
+} from "../src/lib/domain.js";
+import { resources } from "../server/resources.js";
+import { type Json, makeWorld } from "./support/world.js";
 
-// ─── The derived api: the same routes, plain endpoints, derived handlers ────
-//
-// Plain `HttpApiEndpoint`s with an open success schema, so the comparison is
-// about the documents the derivation writes and nothing about how
-// `server/resources.ts` would encode them (its declarations differ from the
-// node graph — see `normalise`). `/orders/:id` has no hand-written twin; it
-// is here for the private `get` promise.
+// ─── 1. The documents: the app's reads against committed fixtures ────────────
 
-const idParam = { params: Schema.Struct({ id: Schema.String }), error: NotFound.wire };
-const open = { success: Schema.Unknown };
-const derivedApi = HttpApi.make("derived")
-  .add(
-    HttpApiGroup.make("catalog")
-      .add(HttpApiEndpoint.get("categories", "/categories", open))
-      .add(HttpApiEndpoint.get("products", "/products", open))
-      .add(HttpApiEndpoint.get("product", "/products/:id", { ...idParam, ...open }))
-      .add(HttpApiEndpoint.get("reviews", "/reviews", open))
-  )
-  .add(
-    HttpApiGroup.make("account")
-      .add(HttpApiEndpoint.get("cartItems", "/cartItems", open))
-      .add(HttpApiEndpoint.get("orders", "/orders", open))
-      .add(HttpApiEndpoint.get("order", "/orders/:id", { ...idParam, ...open }))
-      .add(HttpApiEndpoint.get("orderItems", "/orderItems", open))
-  )
-  .prefix("/jsonapi");
+/** The app's reads, each with the identity it is made under. */
+const reads: ReadonlyArray<{ readonly name: string; readonly read: Query.Read; readonly user?: string }> =
+  [
+    { name: "all-categories", read: allCategories },
+    { name: "all-variants", read: allVariants },
+    { name: "product-page", read: productPage({}) },
+    { name: "product-page-keyboards", read: productPage({ categoryId: "c-keyboards" }) },
+    { name: "product-page-after-p-04", read: productPage({ cursor: "p-04" }) },
+    { name: "product-detail-p-01", read: productDetail("p-01") },
+    { name: "product-reviews-p-01", read: productReviews("p-01") },
+    { name: "my-cart-items-u1", read: myCartItems("u1"), user: "u1" },
+    { name: "my-orders-u1", read: myOrders("u1"), user: "u1" },
+    { name: "my-order-items-u1", read: myOrderItems("u1"), user: "u1" },
+  ];
 
-const notFound = { notFound: () => new NotFound() };
+const fixturesDir = fileURLToPath(new URL("./fixtures/rest/", import.meta.url));
 
-const derivedLive = (rest: RestHandlers.RestHandlers) =>
-  Layer.mergeAll(
-    HttpApiBuilder.group(derivedApi, "catalog", (handlers) =>
-      handlers
-        .handle("categories", rest.list(Category))
-        .handle("products", rest.list(Product))
-        .handle("product", rest.get(Product, notFound))
-        .handle("reviews", rest.list(Review))
-    ),
-    HttpApiBuilder.group(derivedApi, "account", (handlers) =>
-      handlers
-        .handle("cartItems", rest.list(CartItem))
-        .handle("orders", rest.list(Order))
-        .handle("order", rest.get(Order, notFound))
-        .handle("orderItems", rest.list(OrderItem))
-    )
-  );
-
-// ─── The world ───────────────────────────────────────────────────────────────
-
-type Json = any;
-
-const makeWorld = Effect.gen(function* () {
-  const context = yield* Layer.build(
-    syncLayer.pipe(Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })))
-  );
-  const sql = Context.get(context, SqlClient);
-  yield* migrate.pipe(Effect.provideService(SqlClient, sql));
-  // Private rows for two users, so scoping has something to hide.
-  yield* sql`INSERT INTO cartItems (id, userId, variantId, qty)
-    VALUES ('ci-1', 'u1', 'v-01a', 2), ('ci-2', 'u1', 'v-03a', 1), ('ci-3', 'u2', 'v-02a', 1)`;
-  yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
-    VALUES ('o-1', 'u1', 'placed', 29800, '2026-07-01T00:00:00Z'),
-           ('o-2', 'u1', 'shipped', 12900, '2026-07-02T00:00:00Z'),
-           ('o-3', 'u2', 'placed', 9900, '2026-07-03T00:00:00Z')`;
-  yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
-    VALUES ('o-1-0', 'o-1', 'u1', 'v-01a', 2, 14900), ('o-2-0', 'o-2', 'u1', 'v-03a', 1, 12900),
-           ('o-3-0', 'o-3', 'u2', 'v-02a', 1, 9900)`;
-
-  const { backend: sqlBackend } = Context.get(context, CommerceSync);
-  let calls = 0;
-  const backend: Backend.Backend = {
-    ...sqlBackend,
-    evaluate: (ctx, subset) => {
-      calls++;
-      return sqlBackend.evaluate(ctx, subset);
-    },
-    getRows: (ctx, collection, ids) => {
-      calls++;
-      return sqlBackend.getRows(ctx, collection, ids);
-    },
-  };
-  const rest = RestHandlers.make({
-    nodes,
-    backend,
-    policy: authPolicy,
-    // The same trust boundary as `server/jsonapi.ts`: the Kit process's verdict as a header.
-    context: (request) => {
-      const user = request.headers["x-commerce-user"];
-      return Effect.succeed({
-        clientGroupId: "http",
-        ...(typeof user === "string" && user.length > 0 ? { identity: user } : {}),
-      });
-    },
-    prefix: "/jsonapi",
-  });
-
-  const serve = <E>(app: Layer.Layer<never, E, HttpRouter.HttpRouter>) =>
-    Effect.acquireRelease(
-      Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
-      ({ dispose }) => Effect.promise(dispose)
-    ).pipe(
-      Effect.map(
-        ({ handler }) =>
-          (path: string, user?: string) =>
-            Effect.promise(async () => {
-              const response = await handler(
-                new Request(`http://commerce.test${path}`, {
-                  headers: {
-                    accept: "application/vnd.api+json",
-                    ...(user === undefined ? {} : { "x-commerce-user": user }),
-                  },
-                })
-              );
-              return { status: response.status, body: (await response.json()) as Json };
-            })
-      )
-    );
-
-  const handWritten = yield* serve(
-    jsonApiLive.pipe(
-      Layer.provide(Layer.succeedContext(context)),
-      Layer.provide(HttpServer.layerServices)
-    ) as Layer.Layer<never, never, HttpRouter.HttpRouter>
-  );
-  const derived = yield* serve(
-    HttpApiBuilder.layer(derivedApi).pipe(
-      Layer.provide(derivedLive(rest)),
-      Layer.provide(HttpServer.layerServices)
-    ) as Layer.Layer<never, never, HttpRouter.HttpRouter>
-  );
-  return { handWritten, derived, calls: () => calls };
-});
-
-// ─── Normalisation: links, and where the two declarations of the domain differ ──
-//
-// `server/resources.ts` (the REST contract) and `src/lib/domain.ts` (the
-// node graph) describe the same tables differently, and the derivation
-// speaks the node graph's dialect:
-//
-// 1. `userId` is an attribute of the reviews / cartItems / orders /
-//    orderItems nodes (the sync tier ships it), and the REST resources do
-//    not expose it.
-// 2. A variant's `productId` is a `one` edge on the node (`product`) and a
-//    plain attribute on the resource (the resource graph is acyclic).
-// 3. The products node has a paginated `reviews` edge the resource does
-//    not declare, so the derivation writes its `links` (the orders node's
-//    undeclared `items` edge is neither resolved nor written).
-// 4. `links` — `self` / `next` and the paginated edge's links — which the
-//    hand-written handlers never set.
-//
-// Each is a declaration gap for #165 to close, not a behaviour of the read
-// path; the normaliser removes exactly these.
-
-const normaliseResource = (resource: Json): Json => {
-  const { userId: _userId, ...attributes } = resource.attributes ?? {};
-  const relationships: Record<string, Json> = { ...(resource.relationships ?? {}) };
-  delete relationships["reviews"];
-  if (resource.type === "variants" && relationships["product"] !== undefined) {
-    attributes.productId = relationships["product"].data.id;
-    delete relationships["product"];
+/** The committed document of a route, written when `COMMERCE_FIXTURES=write`. */
+const fixture = (name: string, actual: Json): Json => {
+  const path = `${fixturesDir}${name}.json`;
+  if (process.env.COMMERCE_FIXTURES === "write") {
+    mkdirSync(fixturesDir, { recursive: true });
+    writeFileSync(path, `${JSON.stringify(actual, null, 2)}\n`);
   }
-  return {
-    type: resource.type,
-    id: resource.id,
-    attributes,
-    ...(Object.keys(relationships).length === 0 ? {} : { relationships }),
-  };
+  if (!existsSync(path)) {
+    throw new Error(`no fixture ${path} — run with COMMERCE_FIXTURES=write to create it`);
+  }
+  return JSON.parse(readFileSync(path, "utf8"));
 };
 
-const normalise = (document: Json): Json => ({
-  data: Array.isArray(document.data)
-    ? document.data.map(normaliseResource)
-    : normaliseResource(document.data),
-  ...(document.included === undefined ? {} : { included: document.included.map(normaliseResource) }),
-});
-
-/** The hand-written handlers order implicitly; the derived ones order by the URL. */
-const routes: ReadonlyArray<{
-  readonly name: string;
-  readonly handWritten: string;
-  readonly derived: string;
-  readonly user?: string;
-}> = [
-  { name: "categories", handWritten: "/jsonapi/categories", derived: "/jsonapi/categories?sort=name" },
-  { name: "products", handWritten: "/jsonapi/products", derived: "/jsonapi/products?sort=id" },
-  {
-    name: "products in a category, with variants",
-    handWritten: "/jsonapi/products?filter[categoryId]=c-keyboards&include=variants",
-    derived: "/jsonapi/products?filter[categoryId]=c-keyboards&include=variants&sort=id",
-  },
-  {
-    name: "one product with variants",
-    handWritten: "/jsonapi/products/p-01?include=variants",
-    derived: "/jsonapi/products/p-01?include=variants",
-  },
-  {
-    name: "reviews of a product",
-    handWritten: "/jsonapi/reviews?filter[productId]=p-03",
-    derived: "/jsonapi/reviews?filter[productId]=p-03&sort=-createdAt",
-  },
-  {
-    name: "a user's cart with variants",
-    handWritten: "/jsonapi/cartItems?include=variant",
-    derived: "/jsonapi/cartItems?include=variant",
-    user: "u1",
-  },
-  {
-    name: "a user's orders",
-    handWritten: "/jsonapi/orders",
-    derived: "/jsonapi/orders?sort=-createdAt",
-    user: "u1",
-  },
-  {
-    name: "a user's order items",
-    handWritten: "/jsonapi/orderItems",
-    derived: "/jsonapi/orderItems",
-    user: "u1",
-  },
-];
-
-describe("derived REST handlers over the commerce server", () => {
-  for (const route of routes) {
-    it.effect(`${route.name}: the derived document equals the hand-written one modulo links`, () =>
+describe("the app's reads, at their canonical URLs, against the committed fixtures", () => {
+  for (const { name, read, user } of reads) {
+    it.effect(name, () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { handWritten, derived } = yield* makeWorld;
-          const expected = yield* handWritten(route.handWritten, route.user);
-          const actual = yield* derived(route.derived, route.user);
-          expect(expected.status).toBe(200);
-          expect(actual.status).toBe(200);
-          expect(actual.body.data).not.toEqual([]);
-          expect(normalise(actual.body)).toEqual(normalise(expected.body));
+          const world = yield* makeWorld;
+          const url = `/jsonapi${JsonApiQuery.canonical(nodes, read)}`;
+          const { status, body } = yield* world.get(url, user);
+          expect(status).toBe(200);
+          expect(body.data).not.toEqual([]);
+          // `links.self` is the request's own canonical string: the load's URL
+          // is the subscription identity a tab would use (ADR-0029 §2).
+          expect(body.links.self).toBe(url);
+          expect({ url, user, status, body }).toEqual(fixture(name, { url, user, status, body }));
         })
       )
     );
   }
 
-  it.effect("scopes private collections by the auth policy: anonymous is empty, or 404 for a get", () =>
+  it.effect("the single-resource route is the same read as filter[id], first 1", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { derived } = yield* makeWorld;
-        for (const path of ["/jsonapi/cartItems", "/jsonapi/orders", "/jsonapi/orderItems"]) {
-          const { status, body } = yield* derived(path);
-          expect(status).toBe(200);
-          expect(body.data).toEqual([]);
-        }
-        const anonymous = yield* derived("/jsonapi/orders/o-1");
-        expect(anonymous.status).toBe(404);
-        expect(anonymous.body.errors[0]).toMatchObject({ status: "404", code: "not_found" });
-        const someoneElse = yield* derived("/jsonapi/orders/o-1", "u2");
-        expect(someoneElse.status).toBe(404);
-        const owner = yield* derived("/jsonapi/orders/o-1", "u1");
-        expect(owner.status).toBe(200);
-        expect(owner.body.data.id).toBe("o-1");
-        // A filter for another user's rows only narrows what the policy allows.
-        const narrowed = yield* derived("/jsonapi/orders?filter[userId]=u2", "u1");
-        expect(narrowed.body.data).toEqual([]);
+        const world = yield* makeWorld;
+        const url = "/jsonapi/products/p-01?include=variants";
+        const { status, body } = yield* world.get(url);
+        expect(status).toBe(200);
+        expect(body.data.id).toBe("p-01");
+        expect(body.included.map((v: Json) => v.id)).toEqual(["v-01a", "v-01b"]);
+        expect(body.links.self).toBe("/jsonapi/products?include=variants&filter[id]=p-01&page[limit]=1");
+        expect({ url, status, body }).toEqual(fixture("get-product-p-01", { url, status, body }));
+        const missing = yield* world.get("/jsonapi/products/p-99");
+        expect(missing.status).toBe(404);
+        expect(missing.body.errors[0]).toMatchObject({ status: "404", code: "not_found" });
       })
     )
   );
 
-  it.effect("fields[products]=name returns only name while the backend was asked for full rows", () =>
+  it("spells the loads' URLs in the grammar (the README's examples)", () => {
+    const url = (read: Query.Read) => JsonApiQuery.canonical(nodes, read);
+    expect(url(productPage({ categoryId: "c-audio" }))).toBe(
+      "/products?filter[categoryId]=c-audio&sort=id&page[limit]=4"
+    );
+    // The canonical string percent-encodes the include list's comma.
+    expect(url(productDetail("p-01"))).toBe("/products?include=seller%2Cvariants&filter[id]=p-01");
+    expect(url(productReviews("p-01"))).toBe("/reviews?filter[productId]=p-01&sort=-createdAt");
+    expect(url(myCartItems("u1"))).toBe("/cartItems?include=variant&filter[userId]=u1");
+    expect(url(myOrders("u1"))).toBe("/orders?filter[userId]=u1&sort=-createdAt");
+    expect(url(allCategories)).toBe("/categories?sort=name");
+  });
+});
+
+// ─── 2. The declarations agree ───────────────────────────────────────────────
+
+/** What a node declares, as the bridge and the hand-written graph must both say it. */
+const declarationOf = (node: Node.AnyNode) => ({
+  attributes: Object.keys(node.attributes).toSorted(),
+  edges: node.edges,
+  filterable: node.filterable,
+  sortable: [...node.sortable].toSorted(),
+  hintKeys: node.hintKeys,
+});
+
+describe("server/resources.ts agrees with src/lib/domain.ts", () => {
+  it("bridges to the hand-written node graph, declaration for declaration", () => {
+    // Hint keys are ADR-0023 fan-out state, not part of a JSON:API resource:
+    // the one thing the bridge is told beside the resources.
+    const hintKeys = { hintKeys: ["userId"] };
+    const bridged = NodeBridge.registry([...resources], {
+      reviews: hintKeys,
+      cartItems: hintKeys,
+      orders: hintKeys,
+      orderItems: hintKeys,
+    });
+    expect([...bridged.nodes.keys()].toSorted()).toEqual(
+      [...nodes.nodes.keys()].filter((type) => type !== "profiles").toSorted()
+    );
+    for (const [type, node] of bridged.nodes) {
+      expect(declarationOf(node), type).toEqual(declarationOf(nodes.nodes.get(type)!));
+    }
+  });
+
+  it("declares the usage table of #148: eq/in on the key fields, eq on userId, sortable name and createdAt", () => {
+    const products = nodes.nodes.get("products")!;
+    expect(products.filterable).toEqual({
+      id: { kind: "text", operators: ["eq", "in"] },
+      categoryId: { kind: "text", operators: ["eq", "in"] },
+      sellerId: { kind: "text", operators: ["eq", "in"] },
+    });
+    expect(nodes.nodes.get("reviews")!.filterable["productId"]).toEqual({
+      kind: "text",
+      operators: ["eq", "in"],
+    });
+    expect(nodes.nodes.get("orders")!.filterable["userId"]).toEqual({
+      kind: "text",
+      operators: ["eq"],
+    });
+    expect(nodes.nodes.get("categories")!.sortable).toEqual(["id", "name"]);
+    expect(nodes.nodes.get("orders")!.sortable).toEqual(["id", "createdAt"]);
+  });
+});
+
+// ─── 3. The tier's promises ──────────────────────────────────────────────────
+
+describe("the derived reads over the commerce server", () => {
+  it.effect("scopes private collections by the auth policy: anonymous is empty, a filter only narrows", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { derived } = yield* makeWorld;
-        const { body } = yield* derived("/jsonapi/products?fields[products]=name&sort=id");
+        const world = yield* makeWorld;
+        for (const path of ["/jsonapi/cartItems", "/jsonapi/orders", "/jsonapi/orderItems"]) {
+          const { status, body } = yield* world.get(path);
+          expect(status).toBe(200);
+          expect(body.data).toEqual([]);
+        }
+        // Without a filter, the policy alone scopes: u1 sees u1's rows.
+        const mine = yield* world.get("/jsonapi/orders?sort=-createdAt", "u1");
+        expect(mine.body.data.map((o: Json) => o.id)).toEqual(["o-2", "o-1"]);
+        // A filter for another user's rows only narrows what the policy allows.
+        const theirs = yield* world.get("/jsonapi/orders?filter[userId]=u2", "u1");
+        expect(theirs.body.data).toEqual([]);
+        // `userId` is served: the sync tier ships it, the resource declares it.
+        expect(mine.body.data[0].attributes.userId).toBe("u1");
+      })
+    )
+  );
+
+  it.effect("fields[products]=name returns only name while linkage rides on the full row", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const { status, body } = yield* world.get("/jsonapi/products?fields[products]=name&sort=id");
+        expect(status).toBe(200);
         expect(body.data).toHaveLength(6);
         for (const product of body.data) {
           expect(Object.keys(product.attributes)).toEqual(["name"]);
-          // Linkage is read off the full row, never projected away.
           expect(product.relationships.category.data.type).toBe("categories");
           expect(product.relationships.variants.data.length).toBeGreaterThan(0);
         }
@@ -312,19 +218,33 @@ describe("derived REST handlers over the commerce server", () => {
     )
   );
 
-  it.effect("a filter over an undeclared field is the codec's 400 with source.parameter, before any backend call", () =>
+  it.effect("a URL the grammar rejects is a 400 error document with source.parameter, before any backend call", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { derived, calls } = yield* makeWorld;
-        const before = calls();
-        const { status, body } = yield* derived("/jsonapi/products?filter[description]=oak");
-        expect(status).toBe(400);
-        expect(body.errors[0]).toMatchObject({
-          status: "400",
-          code: "bad_request",
-          source: { parameter: "filter[description]" },
-        });
-        expect(calls()).toBe(before);
+        const world = yield* makeWorld;
+        const rejected: ReadonlyArray<readonly [string, string]> = [
+          // The issue's hand-crafted request: `priceCents` is not in the filterable set.
+          ["/jsonapi/products?filter[priceCents][gt]=abc", "filter[priceCents][gt]"],
+          ["/jsonapi/products?filter[description]=oak", "filter[description]"],
+          // `categoryId` is `eq` / `in` only.
+          ["/jsonapi/products?filter[categoryId][gt]=c", "filter[categoryId][gt]"],
+          // Only `id` sorts products; `name` sorts categories.
+          ["/jsonapi/products?sort=name", "sort"],
+          // Reviews are read as their own collection, not as a product edge.
+          ["/jsonapi/products?include=reviews", "include"],
+          // A single-resource request takes `include` and `fields[…]` only.
+          ["/jsonapi/products/p-01?sort=id", "sort"],
+        ];
+        for (const [path, parameter] of rejected) {
+          const before = world.calls();
+          const { status, body } = yield* world.get(path);
+          expect(status, path).toBe(400);
+          expect(body.errors[0], path).toMatchObject({
+            status: "400",
+            source: { parameter },
+          });
+          expect(world.calls(), path).toBe(before);
+        }
       })
     )
   );
@@ -332,13 +252,37 @@ describe("derived REST handlers over the commerce server", () => {
   it.effect("pages by Subset.apply's cursor window: links.next continues after the last id", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { derived } = yield* makeWorld;
-        const first = yield* derived("/jsonapi/products?sort=id&page[limit]=4");
+        const world = yield* makeWorld;
+        const first = yield* world.get(`/jsonapi${JsonApiQuery.canonical(nodes, productPage({}))}`);
         expect(first.body.data.map((p: Json) => p.id)).toEqual(["p-01", "p-02", "p-03", "p-04"]);
         expect(first.body.links.next).toBe("/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04");
-        const second = yield* derived(first.body.links.next);
+        expect(first.body.links.next).toBe(
+          `/jsonapi${JsonApiQuery.canonical(nodes, productPage({ cursor: "p-04" }))}`
+        );
+        const second = yield* world.get(first.body.links.next);
         expect(second.body.data.map((p: Json) => p.id)).toEqual(["p-05", "p-06"]);
         expect(second.body.links.next).toBeUndefined();
+      })
+    )
+  );
+
+  it.effect("a variant's product and a review's reviewer are linkage and attribute, as the graph declares them", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const variants = yield* world.get("/jsonapi/variants?filter[productId]=p-01");
+        expect(variants.body.data.map((v: Json) => v.id)).toEqual(["v-01a", "v-01b"]);
+        expect(variants.body.data[0].attributes.productId).toBeUndefined();
+        expect(variants.body.data[0].relationships.product).toEqual({
+          data: { type: "products", id: "p-01" },
+        });
+        const reviews = yield* world.get(
+          `/jsonapi${JsonApiQuery.canonical(nodes, productReviews("p-01"))}`
+        );
+        expect(reviews.body.data.map((r: Json) => [r.id, r.attributes.userId])).toEqual([
+          ["r-04", "u2"],
+          ["r-01", "seed-user"],
+        ]);
       })
     )
   );

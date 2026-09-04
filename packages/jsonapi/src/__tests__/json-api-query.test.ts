@@ -782,3 +782,27 @@ describe("JsonApiQuery.resourcesOf", () => {
     ]);
   });
 });
+
+describe("JsonApiQuery.querySchema", () => {
+  it("is the codec parseParams decodes with: the key-field spelling, sort by id, the page window", () => {
+    const schema = JsonApiQuery.querySchema(nodes, "products");
+    const decoded = Schema.decodeUnknownSync(schema)({
+      "filter[categoryId]": "c-audio",
+      sort: "id",
+      "page[limit]": "4",
+      include: "variants",
+    });
+    expect(decoded.filter).toEqual(Filter.eq("categoryId", "c-audio"));
+    expect(decoded.sort).toEqual([{ field: "id", direction: "asc" }]);
+    expect(decoded.page).toEqual({ limit: 4 });
+    expect(decoded.include).toEqual(["variants"]);
+    // The relationship-name spelling is the resource grammar's, not the graph's.
+    expect(() => Schema.decodeUnknownSync(schema)({ "filter[category]": "c-audio" })).toThrow();
+    expect(() => Schema.decodeUnknownSync(schema)({ sort: "description" })).toThrow();
+    expect(JsonApiQuery.querySchema(nodes, "products")).toBe(schema);
+  });
+
+  it("throws a QueryError for an unknown collection", () => {
+    expect(() => JsonApiQuery.querySchema(nodes, "nope")).toThrow(QueryError);
+  });
+});

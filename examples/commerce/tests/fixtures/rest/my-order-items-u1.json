@@ -1,0 +1,58 @@
+{
+  "url": "/jsonapi/orderItems?filter[userId]=u1",
+  "user": "u1",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "orderItems",
+        "id": "o-1-0",
+        "attributes": {
+          "userId": "u1",
+          "qty": 2,
+          "priceCents": 14900
+        },
+        "relationships": {
+          "order": {
+            "data": {
+              "type": "orders",
+              "id": "o-1"
+            }
+          },
+          "variant": {
+            "data": {
+              "type": "variants",
+              "id": "v-01a"
+            }
+          }
+        }
+      },
+      {
+        "type": "orderItems",
+        "id": "o-2-0",
+        "attributes": {
+          "userId": "u1",
+          "qty": 1,
+          "priceCents": 12900
+        },
+        "relationships": {
+          "order": {
+            "data": {
+              "type": "orders",
+              "id": "o-2"
+            }
+          },
+          "variant": {
+            "data": {
+              "type": "variants",
+              "id": "v-03a"
+            }
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/orderItems?filter[userId]=u1"
+    }
+  }
+}
