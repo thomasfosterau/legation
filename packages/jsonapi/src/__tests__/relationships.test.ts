@@ -54,10 +54,12 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
     }>;
   };
 
+  // The grammar's shorthand: `filter[f]=v` (eq), `filter[f]=a,b` (in), or
+  // `filter[f][eq|in]=…` — enough for the id windows the engine pushes.
   const list = (type: string, params: URLSearchParams): Response => {
     let rows = [...store.values()].filter((r) => r.type === type);
     for (const [key, value] of params) {
-      const match = key.match(/^filter\[(.+)\]$/);
+      const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
       if (match === null) continue;
       const field = match[1]!;
       const allowed = value.split(",");
@@ -287,10 +289,11 @@ describe("Relationships", () => {
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
         ).toEqual(["first", "second"]);
-        // The referenced collections were fetched narrowed to the linked ids.
-        expect(
-          server.requests.some((u) => u.startsWith("/comments?") && u.includes("filter%5Bid%5D="))
-        ).toBe(true);
+        // The referenced collections were fetched narrowed to the linked ids,
+        // in the grammar's canonical form (`in` over a list; a one-id list
+        // takes the operator form so it decodes back as `in`, not `eq`).
+        expect(server.requests).toContain("/comments?filter[id]=c1%2Cc2");
+        expect(server.requests).toContain("/people?filter[id][in]=p1");
       }),
       server
     );

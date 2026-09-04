@@ -7,11 +7,12 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
-import { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
+import { Filter, Relationship, Resource, Sort } from "@thomasfosterau/effect-jsonapi";
 import {
   Authorization,
   Client,
   ClientStore,
+  FilterPolicy,
   MemoryBackend,
   Mutator,
   Node,
@@ -269,7 +270,60 @@ describe("a bridged registry over a real engine", () => {
   );
 });
 
-describe("NodeBridge filterable set (#154)", () => {
+describe("NodeBridge filterable set (#154, #161)", () => {
+  it("reads the resource's own declaration; relationship filters land on the key field", () => {
+    const Author = Resource.make("authors", { attributes: { name: Schema.String } });
+    const Article = Resource.make("articles", {
+      attributes: {
+        title: Schema.String.pipe(Filter.able(["eq", "in"]), Sort.able()),
+        words: Resource.attribute(Schema.Int, { filter: true, sort: true }),
+        rating: Schema.NullOr(Schema.Number.pipe(Filter.able(["gte", "isnull"]))),
+        body: Schema.String,
+        publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])),
+      },
+      relationships: { author: Relationship.one(() => Author, { filter: ["eq", "in", "isnull"] }) },
+    });
+    const node = NodeBridge.fromResource(Article, {
+      // The option overrides a field's declaration: the kind no schema can tell.
+      filterable: { publishedAt: { operators: ["gt", "lt"], kind: "instant" } },
+      sortable: ["publishedAt"],
+    });
+    expect(node.filterable).toEqual({
+      id: { kind: "text", operators: ["eq", "in"] },
+      authorId: { kind: "text", operators: ["eq", "in", "isnull"] },
+      title: { kind: "text", operators: ["eq", "in"] },
+      words: { kind: "integer", operators: FilterPolicy.operators },
+      rating: { kind: "double", operators: ["gte", "isnull"] },
+      publishedAt: { kind: "instant", operators: ["gt", "lt"] },
+    });
+    expect(node.sortable).toEqual(["id", "title", "words", "publishedAt"]);
+  });
+
+  it("rejects a key field declared filterable twice, by relationship and by attribute", () => {
+    const Author = Resource.make("authors", { attributes: { name: Schema.String } });
+    const Article = Resource.make("articles", {
+      attributes: {
+        title: Schema.String,
+        // The key the `author` relationship is stored in, declared in its own right.
+        authorId: Schema.String.pipe(Filter.able(["eq"])),
+      },
+      relationships: { author: Relationship.one(() => Author, { filter: ["eq", "in"] }) },
+    });
+    expect(() => NodeBridge.fromResource(Article)).toThrow(NodeBridge.ResourceBridgeError);
+    expect(() => NodeBridge.fromResource(Article)).toThrow(
+      /"authorId" is declared filterable twice/
+    );
+    // Either declaration alone bridges.
+    const byAttribute = Resource.make("articles", {
+      attributes: { title: Schema.String, authorId: Schema.String.pipe(Filter.able(["eq"])) },
+      relationships: { author: Relationship.one(() => Author) },
+    });
+    expect(NodeBridge.fromResource(byAttribute).filterable["authorId"]).toEqual({
+      kind: "text",
+      operators: ["eq", "in"],
+    });
+  });
+
   it("passes filterable / sortable through to the node, keeping the key defaults", () => {
     const node = NodeBridge.fromResource(Review, {
       edges: { product: { target: "products", via: "productId" } },

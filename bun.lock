@@ -35,7 +35,7 @@
         "@legation/node": "workspace:*",
         "@legation/sql": "workspace:*",
         "@legation/svelte": "workspace:*",
-        "@thomasfosterau/effect-jsonapi": "^0.12.0",
+        "@thomasfosterau/effect-jsonapi": "^0.13.0",
         "better-auth": "^1.6.23",
         "better-sqlite3": "^12",
         "effect": "catalog:",
@@ -175,7 +175,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@legation/effect": "workspace:^",
-        "@thomasfosterau/effect-jsonapi": "^0.12.0",
+        "@thomasfosterau/effect-jsonapi": "^0.13.0",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -631,7 +631,7 @@
 
     "@sveltejs/vite-plugin-svelte-inspector": ["@sveltejs/vite-plugin-svelte-inspector@3.0.1", "", { "dependencies": { "debug": "^4.3.7" }, "peerDependencies": { "@sveltejs/vite-plugin-svelte": "^4.0.0-next.0||^4.0.0", "svelte": "^5.0.0-next.96 || ^5.0.0", "vite": "^5.0.0" } }, "sha512-2CKypmj1sM4GE7HjllT7UKmo4Q6L5xFRd7VMGEWhYnZ+wc6AUVU01IBd7yUi6WnFndEwWoMNOd6e8UjoN0nbvQ=="],
 
-    "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.12.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.104" } }, "sha512-pCzCgN2JmiYaeU86BjEURplQGW4ixtko7Z4a1W52FEIgArrsNGyaD9fvUUn5x7Op5hLahMe+i7HILAXCIopv1A=="],
+    "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.13.0", "", { "peerDependencies": { "effect": ">=4.0.0-beta.104" } }, "sha512-cIAtFfiPXMZJQbdyTjRnLakNfCQAfkmD06vyAANJQjNgJra6shRjR7dupbuig4jaHUQNlpxp+DnDGCHvP/uVBA=="],
 
     "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.3.2", "", { "peerDependencies": { "effect": "^4.0.0-beta.75", "svelte": "^5.40.0" } }, "sha512-TTuSVgUiPVEB6/9hO2hvBFkvNi/KgbfmVhowTRm9zgkBlOw/QzPts2MVoxlCWSv/IGLfz+JE0TVjegdvpXmBNQ=="],
 
