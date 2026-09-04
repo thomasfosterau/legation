@@ -1,0 +1,32 @@
+{
+  "url": "/jsonapi/orders?filter[userId]=u1&sort=-createdAt",
+  "user": "u1",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "orders",
+        "id": "o-2",
+        "attributes": {
+          "userId": "u1",
+          "status": "shipped",
+          "totalCents": 12900,
+          "createdAt": "2026-07-02T00:00:00Z"
+        }
+      },
+      {
+        "type": "orders",
+        "id": "o-1",
+        "attributes": {
+          "userId": "u1",
+          "status": "placed",
+          "totalCents": 29800,
+          "createdAt": "2026-07-01T00:00:00Z"
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/orders?filter[userId]=u1&sort=-createdAt"
+    }
+  }
+}

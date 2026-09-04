@@ -1,0 +1,82 @@
+{
+  "url": "/jsonapi/cartItems?include=variant&filter[userId]=u1",
+  "user": "u1",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "cartItems",
+        "id": "ci-1",
+        "attributes": {
+          "userId": "u1",
+          "qty": 2
+        },
+        "relationships": {
+          "variant": {
+            "data": {
+              "type": "variants",
+              "id": "v-01a"
+            }
+          }
+        }
+      },
+      {
+        "type": "cartItems",
+        "id": "ci-2",
+        "attributes": {
+          "userId": "u1",
+          "qty": 1
+        },
+        "relationships": {
+          "variant": {
+            "data": {
+              "type": "variants",
+              "id": "v-03a"
+            }
+          }
+        }
+      }
+    ],
+    "included": [
+      {
+        "type": "variants",
+        "id": "v-01a",
+        "attributes": {
+          "sku": "HP-BLK",
+          "name": "Black",
+          "priceCents": 14900,
+          "stock": 12
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-03a",
+        "attributes": {
+          "sku": "KB-TKL-R",
+          "name": "Red switches",
+          "priceCents": 12900,
+          "stock": 8
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-03"
+            }
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/cartItems?include=variant&filter[userId]=u1"
+    }
+  }
+}

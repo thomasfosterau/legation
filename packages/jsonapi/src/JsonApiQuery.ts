@@ -348,7 +348,7 @@ export const PageWindow = {
 };
 
 /** The decoded shape of a collection's query, as the node-derived codec produces it. */
-interface DecodedQuery {
+export interface DecodedQuery {
   readonly include?: ReadonlyArray<string>;
   readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly sort?: ReadonlyArray<SortTerm>;
@@ -362,34 +362,116 @@ interface QueryCodec {
   readonly canonical: (decoded: DecodedQuery) => string;
 }
 
+/** A value derived per node, memoised per registry then per node type. */
+const memoised = <A>(
+  store: WeakMap<Node.NodeRegistry, Map<string, A>>,
+  nodes: Node.NodeRegistry,
+  node: Node.AnyNode,
+  build: () => A
+): A => {
+  let byType = store.get(nodes);
+  if (byType === undefined) {
+    byType = new Map();
+    store.set(nodes, byType);
+  }
+  const cached = byType.get(node.type);
+  if (cached !== undefined) return cached;
+  const value = build();
+  byType.set(node.type, value);
+  return value;
+};
+
+/** The `include` option of a node's query codecs: single-level paths only (ADR-0028 D1); no edges, no `include` at all. */
+const includeOption = (node: Node.AnyNode) =>
+  Object.keys(node.edges).length > 0 ? ({ depth: 1 } as const) : false;
+
 const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
 
 /** Build (or fetch) the query codec of one node: `Query.schema` over its synthetic resource. */
-const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec => {
-  let codecs = queryCodecs.get(nodes);
-  if (codecs === undefined) {
-    codecs = new Map();
-    queryCodecs.set(nodes, codecs);
+const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
+  memoised(queryCodecs, nodes, node, () => {
+    const resource = resourcesOf(nodes).get(node.type)!;
+    const schema = UrlQuery.schema(resource, {
+      include: includeOption(node),
+      fields: true,
+      sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
+      page: PageWindow,
+      filter: true,
+    }) as unknown as QueryCodec["schema"];
+    return {
+      schema,
+      canonical: UrlQuery.canonical(schema as unknown as UrlQuery.FlatQuerySchema) as (
+        decoded: DecodedQuery
+      ) => string,
+    };
+  });
+
+/** The node a collection names, or a `QueryError` thrown — a definition-time defect. */
+const nodeOrThrow = (nodes: Node.NodeRegistry, collection: string): Node.AnyNode => {
+  const node = nodes.nodes.get(collection);
+  if (node === undefined) {
+    throw new QueryError({ message: `Unknown collection: ${collection}`, query: collection });
   }
-  const cached = codecs.get(node.type);
-  if (cached !== undefined) return cached;
-  const resource = resourcesOf(nodes).get(node.type)!;
-  const schema = UrlQuery.schema(resource, {
-    // Single-level paths only (ADR-0028 D1); no edges, no `include` at all.
-    include: Object.keys(node.edges).length > 0 ? { depth: 1 } : false,
-    fields: true,
-    sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
-    page: PageWindow,
-    filter: true,
-  }) as unknown as QueryCodec["schema"];
-  const codec: QueryCodec = {
-    schema,
-    canonical: UrlQuery.canonical(schema as unknown as UrlQuery.FlatQuerySchema) as (
-      decoded: DecodedQuery
-    ) => string,
-  };
-  codecs.set(node.type, codec);
-  return codec;
+  return node;
+};
+
+/**
+ * The query codec of a collection's `list` endpoint — `include`, `fields[…]`,
+ * `sort`, `page[…]` and `filter[…]` exactly as the node graph declares them:
+ * the codec {@link parseParams} decodes with, so an effect-jsonapi endpoint
+ * served by a derived handler (`RestHandlers.list`) declares the grammar the
+ * handler parses when it is passed as `Endpoint.list(R, { query })`.
+ * effect-jsonapi's own `filter: true` derives a grammar from the *resource*
+ * instead, and the two spell a to-one relationship's filter differently: the
+ * resource grammar names the relationship (`filter[category]=c-audio`), the
+ * node graph — and every URL the engine emits ({@link canonical}) — names the
+ * key field (`filter[categoryId]=c-audio`, as ADR-0029's URLs do). One codec
+ * on both sides keeps the endpoint's contract and the handler's parse the
+ * same language. Every edge is includable under it, so a resource served
+ * with it declares its collection-valued edges `Relationship.many`, never
+ * `paginated` (whose `include=` only the resource grammar refuses). Throws a
+ * `QueryError` for an unknown collection — a definition-time defect.
+ */
+export const querySchema = (
+  nodes: Node.NodeRegistry,
+  collection: string
+): Schema.Codec<DecodedQuery, Readonly<Record<string, unknown>>> =>
+  codecOf(nodes, nodeOrThrow(nodes, collection)).schema;
+
+/** The decoded shape of a single-resource request's query: `include` and `fields[…]` only. */
+export interface SingleRowQuery {
+  readonly include?: ReadonlyArray<string>;
+  readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
+}
+
+const singleRowCodecs = new WeakMap<
+  Node.NodeRegistry,
+  Map<string, Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>>
+>();
+
+/**
+ * The query codec of a collection's `get` endpoint — `include` and
+ * `fields[…]` exactly as the node graph declares them, the two parameters a
+ * single-resource request takes ({@link singleRowParams}) — for
+ * `Endpoint.get(R, { query })`, the counterpart of {@link querySchema}: the
+ * endpoint's contract and the derived handler's parse are one grammar on
+ * the single-row route too. Throws a `QueryError` for an unknown collection.
+ */
+export const singleRowSchema = (
+  nodes: Node.NodeRegistry,
+  collection: string
+): Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>> => {
+  const node = nodeOrThrow(nodes, collection);
+  return memoised(
+    singleRowCodecs,
+    nodes,
+    node,
+    () =>
+      UrlQuery.schema(resourcesOf(nodes).get(node.type)!, {
+        include: includeOption(node),
+        fields: true,
+      }) as unknown as Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>
+  );
 };
 
 // ─── URL → Query.Read ────────────────────────────────────────────────────────

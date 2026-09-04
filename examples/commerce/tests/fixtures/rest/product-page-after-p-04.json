@@ -1,0 +1,77 @@
+{
+  "url": "/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "products",
+        "id": "p-05",
+        "attributes": {
+          "name": "Standing Desk",
+          "description": "Dual-motor sit-stand desk.",
+          "priceCents": 54900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-desks"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-nordic"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-05a"
+              },
+              {
+                "type": "variants",
+                "id": "v-05b"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "products",
+        "id": "p-06",
+        "attributes": {
+          "name": "Desk Shelf",
+          "description": "Solid oak monitor shelf.",
+          "priceCents": 8900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-desks"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-nordic"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-06a"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04"
+    }
+  }
+}

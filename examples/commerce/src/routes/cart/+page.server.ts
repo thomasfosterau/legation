@@ -1,24 +1,25 @@
 /**
- * Cart load + no-JS actions, all through the JSON:API: lines with their
- * variants included; remove and place-order as plain form posts (the order
- * is recomputed server-side from the authoritative cart either way).
+ * Cart load + no-JS actions, all through the JSON:API: the lines with their
+ * variants included (`myCartItems`, at its canonical URL — the read the
+ * page keeps live); remove and place-order as plain form posts through the
+ * typed client (the order is recomputed server-side from the authoritative
+ * cart either way).
  */
 import type { Actions, PageServerLoad } from "./$types";
 import { redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { apiFor, run } from "../../../server/client.js";
+import { myCartItems } from "../../lib/domain.js";
+import { apiFor, readCollection, run } from "../../../server/client.js";
 import { cartItemId } from "../../../server/jsonapi.js";
+import { CartItem } from "../../../server/resources.js";
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load = (async ({ locals }) => {
   if (locals.user === undefined) return { lines: [], variants: [] };
-  const api = await Effect.runPromise(apiFor(locals.user.id));
   const cart = await Effect.runPromise(
-    api.cartItems
-      .list({ query: { include: ["variant"] } })
-      .pipe(Effect.catchTag("Unauthorized", () => Effect.succeed({ data: [], included: [] })))
+    readCollection(locals.user.id, CartItem.collection(), myCartItems(locals.user.id))
   );
   return { lines: cart.data, variants: cart.included ?? [] };
-};
+}) satisfies PageServerLoad;
 
 export const actions: Actions = {
   remove: async ({ request, locals }) => {

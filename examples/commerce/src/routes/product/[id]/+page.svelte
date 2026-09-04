@@ -10,7 +10,7 @@
     type Seller,
     type Variant,
   } from "../../../lib/domain.js";
-  import { reviewRows, toRow, variantRows } from "../../../lib/rows.js";
+  import { reviewRows, sellerRows, toRow, variantRows } from "../../../lib/rows.js";
 
   const { data } = $props();
 
@@ -28,7 +28,7 @@
           ...toRow(data.product, ["category", "seller"]),
           related: {
             variants: variantRows(data.variants).map((row) => row.value),
-            seller: null,
+            seller: data.seller === undefined ? null : sellerRows([data.seller])[0]!.value,
           },
         },
       ],

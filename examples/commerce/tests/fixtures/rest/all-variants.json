@@ -1,0 +1,173 @@
+{
+  "url": "/jsonapi/variants",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "variants",
+        "id": "v-01a",
+        "attributes": {
+          "sku": "HP-BLK",
+          "name": "Black",
+          "priceCents": 14900,
+          "stock": 12
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-01b",
+        "attributes": {
+          "sku": "HP-WHT",
+          "name": "White",
+          "priceCents": 14900,
+          "stock": 3
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-02a",
+        "attributes": {
+          "sku": "MIC-STD",
+          "name": "Standard",
+          "priceCents": 9900,
+          "stock": 20
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-02"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-03a",
+        "attributes": {
+          "sku": "KB-TKL-R",
+          "name": "Red switches",
+          "priceCents": 12900,
+          "stock": 8
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-03"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-03b",
+        "attributes": {
+          "sku": "KB-TKL-B",
+          "name": "Brown switches",
+          "priceCents": 12900,
+          "stock": 0
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-03"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-04a",
+        "attributes": {
+          "sku": "KB-SPL",
+          "name": "Kit",
+          "priceCents": 24900,
+          "stock": 5
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-04"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-05a",
+        "attributes": {
+          "sku": "DSK-120",
+          "name": "120 cm",
+          "priceCents": 54900,
+          "stock": 2
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-05"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-05b",
+        "attributes": {
+          "sku": "DSK-160",
+          "name": "160 cm",
+          "priceCents": 59900,
+          "stock": 4
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-05"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-06a",
+        "attributes": {
+          "sku": "SHL-STD",
+          "name": "Standard",
+          "priceCents": 8900,
+          "stock": 15
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-06"
+            }
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/variants"
+    }
+  }
+}

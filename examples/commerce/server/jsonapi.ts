@@ -7,6 +7,23 @@
  * hints into the same bus that pokes live sync clients. The sync engine is
  * one more consumer of the same tables.
  *
+ * **Reads are derived, writes are hand-written.** Every `list` / `get` is
+ * `RestHandlers` (#163) over the app's node graph, backend and auth policy:
+ * the URL is the filter grammar (ADR-0028) — `filter[categoryId]=c-audio`,
+ * `filter[userId]=u1`, `sort=-createdAt`, `page[limit]=4&page[after]=p-04`,
+ * `include=variants`, `fields[products]=name` — parsed once into a
+ * `Query.Read`, run through the same `Query.plan` → `authorize` →
+ * `SqlBackend.evaluate` path the sync tier's pulls take, and serialised by
+ * `DocumentWriter`. No `WHERE userId` lives here: a private collection is
+ * scoped by the policy's identity filter (an anonymous request sees the
+ * empty allow-set — an empty collection, or a 404 for a `get`), and a URL
+ * the grammar rejects is a 400 error document with `source.parameter`. Each
+ * endpoint declares its query as the graph's own codec
+ * (`JsonApiQuery.querySchema` for a `list`, `singleRowSchema` for a `get`),
+ * so the contract the api publishes is the grammar the handler parses. The
+ * writes keep their SQL and their `broadcast`: they are the mutators'
+ * out-of-band twins.
+ *
  * Identity for user-scoped endpoints arrives as an `x-commerce-user`
  * header set by the SvelteKit process after it resolves the Better Auth
  * session — the trust boundary between the two server processes (swap for
@@ -14,14 +31,18 @@
  * never trusts a client-supplied id, because browsers never reach it
  * directly — vite/Kit only proxy `/sync*`).
  */
-import { Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
-import { HttpServerRequest } from "effect/unstable/http";
+import type { HttpServerRequest } from "effect/unstable/http";
+import { HttpServerRequest as Request } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { ApiError, Endpoint, Group, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
-import { CartItem, Category, Order, OrderItem, Product, Review, Seller, Variant } from "./resources.js";
-import { CommerceSync } from "./runtime.js";
+import type { Backend } from "@legation/effect";
+import { JsonApiQuery, RestHandlers } from "@legation/jsonapi";
+import { nodes } from "../src/lib/domain.js";
+import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "./resources.js";
+import { authPolicy, CommerceSync } from "./runtime.js";
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -37,62 +58,20 @@ export class NotFound extends ApiError.make<NotFound>()("NotFound", {
   title: "Resource not found",
 }) {}
 
-// ─── Row → resource-object mapping ──────────────────────────────────────────
+// ─── Row → resource-object mapping (the writes' responses) ──────────────────
 //
 // Rows come from our own SQL; each mapper constructs the resource with the
 // library's branded id constructors (`X.Id.make`), so the objects satisfy
-// `typeof X.Type` structurally — no casts.
+// `typeof X.Type` structurally — no casts. The reads never come through
+// here: the derivation writes their documents from the node graph.
 
 type Row = Record<string, unknown>;
-
-const categoryResource = (row: Row): typeof Category.Type => ({
-  type: "categories",
-  id: Category.Id.make(String(row.id)),
-  attributes: { name: String(row.name), slug: String(row.slug) },
-});
-
-const sellerResource = (row: Row): typeof Seller.Type => ({
-  type: "sellers",
-  id: Seller.Id.make(String(row.id)),
-  attributes: { name: String(row.name) },
-});
-
-const variantResource = (row: Row): typeof Variant.Type => ({
-  type: "variants",
-  id: Variant.Id.make(String(row.id)),
-  attributes: {
-    productId: String(row.productId),
-    sku: String(row.sku),
-    name: String(row.name),
-    priceCents: Number(row.priceCents),
-    stock: Number(row.stock),
-  },
-});
-
-const productResource = (row: Row, variantRows: ReadonlyArray<Row>): typeof Product.Type => ({
-  type: "products",
-  id: Product.Id.make(String(row.id)),
-  attributes: {
-    name: String(row.name),
-    description: String(row.description),
-    priceCents: Number(row.priceCents),
-  },
-  relationships: {
-    category: { data: { type: "categories", id: Category.Id.make(String(row.categoryId)) } },
-    seller: { data: { type: "sellers", id: Seller.Id.make(String(row.sellerId)) } },
-    variants: {
-      data: variantRows.map((variant) => ({
-        type: "variants" as const,
-        id: Variant.Id.make(String(variant.id)),
-      })),
-    },
-  },
-});
 
 const reviewResource = (row: Row): typeof Review.Type => ({
   type: "reviews",
   id: Review.Id.make(String(row.id)),
   attributes: {
+    userId: String(row.userId),
     authorName: String(row.authorName),
     rating: Number(row.rating),
     body: String(row.body),
@@ -106,7 +85,7 @@ const reviewResource = (row: Row): typeof Review.Type => ({
 const cartItemResource = (row: Row): typeof CartItem.Type => ({
   type: "cartItems",
   id: CartItem.Id.make(String(row.id)),
-  attributes: { qty: Number(row.qty) },
+  attributes: { userId: String(row.userId), qty: Number(row.qty) },
   relationships: {
     variant: { data: { type: "variants", id: Variant.Id.make(String(row.variantId)) } },
   },
@@ -116,47 +95,43 @@ const orderResource = (row: Row): typeof Order.Type => ({
   type: "orders",
   id: Order.Id.make(String(row.id)),
   attributes: {
+    userId: String(row.userId),
     status: String(row.status),
     totalCents: Number(row.totalCents),
     createdAt: String(row.createdAt),
   },
 });
 
-const orderItemResource = (row: Row): typeof OrderItem.Type => ({
-  type: "orderItems",
-  id: OrderItem.Id.make(String(row.id)),
-  attributes: { qty: Number(row.qty), priceCents: Number(row.priceCents) },
-  relationships: {
-    order: { data: { type: "orders", id: Order.Id.make(String(row.orderId)) } },
-    variant: { data: { type: "variants", id: Variant.Id.make(String(row.variantId)) } },
-  },
-});
-
 // ─── API shape ───────────────────────────────────────────────────────────────
 
+/** A collection's `list` query, as the node graph declares it: the grammar the derived handler parses. */
+const query = (collection: string) => JsonApiQuery.querySchema(nodes, collection);
+
+/** A collection's `get` query — `include` and `fields[…]` — from the same graph. */
+const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(nodes, collection);
+
 export const api = HttpApi.make("commerce")
-  .add(Group.make(Category, Endpoint.list(Category)))
+  .add(Group.make(Category, Endpoint.list(Category, { query: query("categories") })))
   .add(
     Group.make(
       Product,
-      Endpoint.list(Product, {
-        include: true,
-        filter: { categoryId: Schema.optional(Schema.String) },
-      }),
-      Endpoint.get(Product, { include: true, errors: [NotFound] })
+      Endpoint.list(Product, { query: query("products") }),
+      Endpoint.get(Product, { query: singleRowQuery("products"), errors: [NotFound] })
     )
   )
+  // The catalog page reads every variant (`allVariants`) for its stock badges.
+  .add(Group.make(Variant, Endpoint.list(Variant, { query: query("variants") })))
   .add(
     Group.make(
       Review,
-      Endpoint.list(Review, { filter: { productId: Schema.String } }),
+      Endpoint.list(Review, { query: query("reviews") }),
       Endpoint.create(Review, { errors: [Unauthorized] })
     )
   )
   .add(
     Group.make(
       CartItem,
-      Endpoint.list(CartItem, { include: true, errors: [Unauthorized] }),
+      Endpoint.list(CartItem, { query: query("cartItems") }),
       Endpoint.create(CartItem, {
         errors: [Unauthorized, ApiError.BadRequest],
       }),
@@ -166,36 +141,79 @@ export const api = HttpApi.make("commerce")
   .add(
     Group.make(
       Order,
-      Endpoint.list(Order, { errors: [Unauthorized] }),
+      Endpoint.list(Order, { query: query("orders") }),
       Endpoint.create(Order, {
         errors: [Unauthorized, ApiError.BadRequest],
       })
     )
   )
-  .add(Group.make(OrderItem, Endpoint.list(OrderItem, { errors: [Unauthorized] })))
+  .add(Group.make(OrderItem, Endpoint.list(OrderItem, { query: query("orderItems") })))
   .prefix("/jsonapi");
 
-// ─── Handlers ────────────────────────────────────────────────────────────────
+// ─── Identity ────────────────────────────────────────────────────────────────
 
 /** The Kit process's session verdict — see the module docs' trust note. */
-const currentUser = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
+const userOf = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
   const user = request.headers["x-commerce-user"];
   return typeof user === "string" && user.length > 0 ? user : undefined;
-});
+};
+
+const currentUser = Effect.map(Request.HttpServerRequest, userOf);
 
 const requireUser = Effect.flatMap(currentUser, (user) =>
   user === undefined ? Effect.fail(new Unauthorized()) : Effect.succeed(user)
 );
 
+/**
+ * The derived reads' identity seam: the same header, as the `SyncContext`
+ * the auth filters see — `identity` present iff the Kit process vouched for
+ * a user, exactly what the `IdentityResolver` gives the sync tier.
+ */
+const restContext = (
+  request: HttpServerRequest.HttpServerRequest
+): Effect.Effect<Backend.SyncContext> => {
+  const user = userOf(request);
+  return Effect.succeed({
+    clientGroupId: "http",
+    ...(user === undefined ? {} : { identity: user }),
+  });
+};
+
+// ─── Derived reads ───────────────────────────────────────────────────────────
+
+/**
+ * The read handlers, bound to the app's graph, the Server's backend and its
+ * auth policy — the same three the sync tier evaluates through, so
+ * `GET /jsonapi/products?filter[categoryId]=c-audio` and a subscription to
+ * `productPage({ categoryId: "c-audio" })` are one read (ADR-0029 §6).
+ * A service, built once and shared by every group.
+ */
+const Rest = Context.Service<RestHandlers.RestHandlers>("commerce/RestHandlers");
+
+const restLive: Layer.Layer<RestHandlers.RestHandlers, never, CommerceSync> = Layer.effect(Rest)(
+  Effect.map(CommerceSync, ({ backend }) =>
+    RestHandlers.make({
+      nodes,
+      backend,
+      policy: authPolicy,
+      context: restContext,
+      prefix: "/jsonapi",
+    })
+  )
+);
+
+const notFound = { notFound: () => new NotFound() };
+
+// ─── Handlers ────────────────────────────────────────────────────────────────
+
 const orDie = <A, R>(effect: Effect.Effect<A, SqlError, R>): Effect.Effect<A, never, R> =>
   Effect.orDie(effect);
 
 /**
- * These handlers write SQL directly, bypassing the sync protocol's push path
- * — so they announce the change themselves. `broadcast` is ADR-0022's single
- * verb for exactly that: subscribers whose windows may be affected are poked
- * and pull.
+ * The write handlers write SQL directly, bypassing the sync protocol's push
+ * path — so they announce the change themselves. `broadcast` is ADR-0022's
+ * single verb for exactly that: subscribers whose windows may be affected
+ * are poked and pull.
  */
 const broadcast = (collection: string, ids: ReadonlyArray<string>) =>
   Effect.flatMap(CommerceSync, (sync) => sync.server.broadcast({ collection, ids }));
@@ -206,73 +224,22 @@ export const cartItemId = CartItem.Id.make;
 export const variantId = Variant.Id.make;
 
 const categoriesLive = HttpApiBuilder.group(api, "categories", (handlers) =>
-  handlers.handle("list", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient;
-      const rows = yield* orDie(sql`SELECT * FROM categories ORDER BY name`);
-      return Handlers.collection(rows.map(categoryResource));
-    })
-  )
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(Category)))
 );
 
 const productsLive = HttpApiBuilder.group(api, "products", (handlers) =>
-  handlers
-    .handle("list", ({ query }) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient;
-        const categoryId = query.filter?.categoryId;
-        const rows = yield* orDie(
-          categoryId === undefined
-            ? sql`SELECT * FROM products ORDER BY id`
-            : sql`SELECT * FROM products WHERE categoryId = ${categoryId} ORDER BY id`
-        );
-        const ids = rows.map((row) => String(row.id));
-        const variants =
-          ids.length === 0
-            ? []
-            : yield* orDie(sql`SELECT * FROM variants WHERE productId IN ${sql.in(ids)}`);
-        const byProduct = new Map<string, Array<Row>>();
-        for (const variant of variants) {
-          const key = String(variant.productId);
-          byProduct.set(key, [...(byProduct.get(key) ?? []), variant]);
-        }
-        const resources = rows.map((row) =>
-          productResource(row, byProduct.get(String(row.id)) ?? [])
-        );
-        const includeVariants = query.include?.includes("variants") ?? false;
-        return Handlers.collection(resources, {
-          included: includeVariants ? variants.map(variantResource) : [],
-        });
-      })
-    )
-    .handle("get", ({ params, query }) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient;
-        const rows = yield* orDie(sql`SELECT * FROM products WHERE id = ${params.id}`);
-        if (rows.length === 0) return yield* Effect.fail(new NotFound());
-        const variants = yield* orDie(
-          sql`SELECT * FROM variants WHERE productId = ${params.id} ORDER BY id`
-        );
-        const includeVariants = query.include?.includes("variants") ?? false;
-        return Handlers.data(productResource(rows[0]!, variants), {
-          included: includeVariants ? variants.map(variantResource) : [],
-        });
-      })
-    )
+  Effect.map(Rest, (rest) =>
+    handlers.handle("list", rest.list(Product)).handle("get", rest.get(Product, notFound))
+  )
+);
+
+const variantsLive = HttpApiBuilder.group(api, "variants", (handlers) =>
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(Variant)))
 );
 
 const reviewsLive = HttpApiBuilder.group(api, "reviews", (handlers) =>
-  handlers
-    .handle("list", ({ query }) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient;
-        const rows = yield* orDie(
-          sql`SELECT * FROM reviews WHERE productId = ${query.filter?.productId ?? ""} ORDER BY createdAt DESC`
-        );
-        return Handlers.collection(rows.map(reviewResource));
-      })
-    )
-    .handle("create", ({ payload }) =>
+  Effect.map(Rest, (rest) =>
+    handlers.handle("list", rest.list(Review)).handle("create", ({ payload }) =>
       Effect.gen(function* () {
         const userId = yield* requireUser;
         const sql = yield* SqlClient;
@@ -288,125 +255,103 @@ const reviewsLive = HttpApiBuilder.group(api, "reviews", (handlers) =>
         return Handlers.data(reviewResource(rows[0]!));
       })
     )
+  )
 );
 
 const cartItemsLive = HttpApiBuilder.group(api, "cartItems", (handlers) =>
-  handlers
-    .handle("list", ({ query }) =>
-      Effect.gen(function* () {
-        const userId = yield* requireUser;
-        const sql = yield* SqlClient;
-        const rows = yield* orDie(sql`SELECT * FROM cartItems WHERE userId = ${userId}`);
-        const variantIds = rows.map((row) => String(row.variantId));
-        const variants =
-          variantIds.length === 0
-            ? []
-            : yield* orDie(sql`SELECT * FROM variants WHERE id IN ${sql.in(variantIds)}`);
-        const includeVariants = query.include?.includes("variant") ?? false;
-        return Handlers.collection(rows.map(cartItemResource), {
-          included: includeVariants ? variants.map(variantResource) : [],
-        });
-      })
-    )
-    .handle("create", ({ payload }) =>
-      Effect.gen(function* () {
-        const userId = yield* requireUser;
-        const sql = yield* SqlClient;
-        const variantId = payload.data.relationships.variant.data.id;
-        const variant = yield* orDie(sql`SELECT stock FROM variants WHERE id = ${variantId}`);
-        if (variant.length === 0) return yield* Effect.fail(new ApiError.BadRequest({}));
-        const id = `ci-${crypto.randomUUID()}`;
-        yield* orDie(
-          sql`INSERT INTO cartItems (id, userId, variantId, qty)
-              VALUES (${id}, ${userId}, ${variantId}, ${payload.data.attributes.qty})`
-        );
-        yield* broadcast("cartItems", [id]);
-        const rows = yield* orDie(sql`SELECT * FROM cartItems WHERE id = ${id}`);
-        return Handlers.data(cartItemResource(rows[0]!));
-      })
-    )
-    .handle("delete", ({ params }) =>
-      Effect.gen(function* () {
-        const userId = yield* requireUser;
-        const sql = yield* SqlClient;
-        yield* orDie(sql`DELETE FROM cartItems WHERE id = ${params.id} AND userId = ${userId}`);
-        yield* broadcast("cartItems", [params.id]);
-      })
-    )
+  Effect.map(Rest, (rest) =>
+    handlers
+      .handle("list", rest.list(CartItem))
+      .handle("create", ({ payload }) =>
+        Effect.gen(function* () {
+          const userId = yield* requireUser;
+          const sql = yield* SqlClient;
+          const variantId = payload.data.relationships.variant.data.id;
+          const variant = yield* orDie(sql`SELECT stock FROM variants WHERE id = ${variantId}`);
+          if (variant.length === 0) return yield* Effect.fail(new ApiError.BadRequest({}));
+          const id = `ci-${crypto.randomUUID()}`;
+          yield* orDie(
+            sql`INSERT INTO cartItems (id, userId, variantId, qty)
+                VALUES (${id}, ${userId}, ${variantId}, ${payload.data.attributes.qty})`
+          );
+          yield* broadcast("cartItems", [id]);
+          const rows = yield* orDie(sql`SELECT * FROM cartItems WHERE id = ${id}`);
+          return Handlers.data(cartItemResource(rows[0]!));
+        })
+      )
+      .handle("delete", ({ params }) =>
+        Effect.gen(function* () {
+          const userId = yield* requireUser;
+          const sql = yield* SqlClient;
+          yield* orDie(sql`DELETE FROM cartItems WHERE id = ${params.id} AND userId = ${userId}`);
+          yield* broadcast("cartItems", [params.id]);
+        })
+      )
+  )
 );
 
 const ordersLive = HttpApiBuilder.group(api, "orders", (handlers) =>
-  handlers
-    .handle("list", () =>
-      Effect.gen(function* () {
-        const userId = yield* requireUser;
-        const sql = yield* SqlClient;
-        const rows = yield* orDie(
-          sql`SELECT * FROM orders WHERE userId = ${userId} ORDER BY createdAt DESC`
-        );
-        return Handlers.collection(rows.map(orderResource));
-      })
-    )
-    // Order placement: recomputed from the authoritative cart, exactly like
-    // the sync mutator's server half — the client's payload only carries the
-    // metadata (createdAt); items/total/stock all derive server-side.
-    .handle("create", ({ payload }) =>
-      Effect.gen(function* () {
-        const userId = yield* requireUser;
-        const sql = yield* SqlClient;
-        const orderId = `o-${crypto.randomUUID()}`;
-        const createdAt = payload.data.attributes.createdAt;
-        const result = yield* orDie(
-          sql.withTransaction(
-            Effect.gen(function* () {
-              const cart = yield* sql<{
-                id: string;
-                variantId: string;
-                qty: number;
-                priceCents: number;
-                stock: number;
-              }>`SELECT c.id, c.variantId, c.qty, v.priceCents, v.stock
-                 FROM cartItems c JOIN variants v ON v.id = c.variantId
-                 WHERE c.userId = ${userId}`;
-              if (cart.length === 0 || cart.some((line) => line.stock < line.qty)) {
-                return undefined;
-              }
-              const total = cart.reduce((sum, line) => sum + line.priceCents * line.qty, 0);
-              yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
-                VALUES (${orderId}, ${userId}, 'placed', ${total}, ${createdAt})`;
-              const itemIds: Array<string> = [];
-              for (const [index, line] of cart.entries()) {
-                const itemId = `${orderId}-${index}`;
-                itemIds.push(itemId);
-                yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
-                  VALUES (${itemId}, ${orderId}, ${userId}, ${line.variantId}, ${line.qty}, ${line.priceCents})`;
-                yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
-              }
-              yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
-              return { itemIds, cartIds: cart.map((line) => line.id), variantIds: cart.map((line) => line.variantId) };
-            })
-          )
-        );
-        if (result === undefined) return yield* Effect.fail(new ApiError.BadRequest({}));
-        yield* broadcast("orders", [orderId]);
-        yield* broadcast("orderItems", result.itemIds);
-        yield* broadcast("cartItems", result.cartIds);
-        yield* broadcast("variants", result.variantIds);
-        const rows = yield* orDie(sql`SELECT * FROM orders WHERE id = ${orderId}`);
-        return Handlers.data(orderResource(rows[0]!));
-      })
-    )
+  Effect.map(Rest, (rest) =>
+    handlers
+      .handle("list", rest.list(Order))
+      // Order placement: recomputed from the authoritative cart, exactly like
+      // the sync mutator's server half — the client's payload only carries the
+      // metadata (createdAt); items/total/stock all derive server-side.
+      .handle("create", ({ payload }) =>
+        Effect.gen(function* () {
+          const userId = yield* requireUser;
+          const sql = yield* SqlClient;
+          const orderId = `o-${crypto.randomUUID()}`;
+          const createdAt = payload.data.attributes.createdAt;
+          const result = yield* orDie(
+            sql.withTransaction(
+              Effect.gen(function* () {
+                const cart = yield* sql<{
+                  id: string;
+                  variantId: string;
+                  qty: number;
+                  priceCents: number;
+                  stock: number;
+                }>`SELECT c.id, c.variantId, c.qty, v.priceCents, v.stock
+                   FROM cartItems c JOIN variants v ON v.id = c.variantId
+                   WHERE c.userId = ${userId}`;
+                if (cart.length === 0 || cart.some((line) => line.stock < line.qty)) {
+                  return undefined;
+                }
+                const total = cart.reduce((sum, line) => sum + line.priceCents * line.qty, 0);
+                yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
+                  VALUES (${orderId}, ${userId}, 'placed', ${total}, ${createdAt})`;
+                const itemIds: Array<string> = [];
+                for (const [index, line] of cart.entries()) {
+                  const itemId = `${orderId}-${index}`;
+                  itemIds.push(itemId);
+                  yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
+                    VALUES (${itemId}, ${orderId}, ${userId}, ${line.variantId}, ${line.qty}, ${line.priceCents})`;
+                  yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
+                }
+                yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
+                return {
+                  itemIds,
+                  cartIds: cart.map((line) => line.id),
+                  variantIds: cart.map((line) => line.variantId),
+                };
+              })
+            )
+          );
+          if (result === undefined) return yield* Effect.fail(new ApiError.BadRequest({}));
+          yield* broadcast("orders", [orderId]);
+          yield* broadcast("orderItems", result.itemIds);
+          yield* broadcast("cartItems", result.cartIds);
+          yield* broadcast("variants", result.variantIds);
+          const rows = yield* orDie(sql`SELECT * FROM orders WHERE id = ${orderId}`);
+          return Handlers.data(orderResource(rows[0]!));
+        })
+      )
+  )
 );
 
 const orderItemsLive = HttpApiBuilder.group(api, "orderItems", (handlers) =>
-  handlers.handle("list", () =>
-    Effect.gen(function* () {
-      const userId = yield* requireUser;
-      const sql = yield* SqlClient;
-      const rows = yield* orDie(sql`SELECT * FROM orderItems WHERE userId = ${userId}`);
-      return Handlers.collection(rows.map(orderItemResource));
-    })
-  )
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(OrderItem)))
 );
 
 /** Registers the JSON:API's routes on the ambient `HttpRouter`. */
@@ -415,11 +360,12 @@ export const jsonApiLive = HttpApiBuilder.layer(api).pipe(
     Layer.mergeAll(
       categoriesLive,
       productsLive,
+      variantsLive,
       reviewsLive,
       cartItemsLive,
       ordersLive,
       orderItemsLive
-    ).pipe(Layer.provide(Middleware.layer))
+    ).pipe(Layer.provide(Middleware.layer), Layer.provide(restLive))
   ),
   Layer.provide(Middleware.layer)
 );
