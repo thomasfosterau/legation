@@ -24,21 +24,30 @@
  * text order, NULLs last, the id tie-break, `page[after]` as the cursor —
  * the REST tier inherits them by construction.
  *
- * **Linkage.** effect-jsonapi's resource schemas require every declared
- * relationship on every resource object, so the derived read resolves every
- * `many` edge of the node beside the edges the URL `include`s: the extra
- * edge subsets ride in the same second phase (one `fk IN (…)` per edge),
- * and their rows become linkage, not `included`. A `one` edge's linkage is
- * its key field; a paginated edge carries `links`, and its rows' linkage
- * only when included — on a resource declaring it `Relationship.paginated`
- * the success encoder drops that linkage (the schema promises none), so an
- * endpoint that serves `include=` for such an edge declares it `many`, as
- * `JsonApiQuery.resourcesOf` does.
+ * **Linkage follows the resource's declaration.** effect-jsonapi's resource
+ * schemas require every declared relationship on every resource object, so
+ * the derivation resolves, beside the URL's includes, the rows of every
+ * `Relationship.many` the endpoint's resource declares — on the primary
+ * resource, and on each included resource's own declaration — and writes
+ * them as linkage, not `included`. A `one` relationship's linkage is the
+ * edge's key field and costs nothing. The primary resource's `many`
+ * relationships ride in the read's second phase; the included resources'
+ * ride in one more batch, keyed by the included rows. Nothing the resource
+ * does not declare is resolved, so a collection the URL never named is
+ * never touched — neither for its cost nor for its policy verdict. A
+ * paginated node edge is served under either declaration: as
+ * `Relationship.many` it carries the spec's `links` and its rows' linkage
+ * (the edge's declared order) and can be `include`d; as
+ * `Relationship.paginated` it carries `links` only and the endpoint's own
+ * codec refuses `include=` for it. A declaration the node graph cannot
+ * serve (a relationship that is no edge, or of the other kind) is a
+ * definition-time defect.
  *
  * **Outcomes the derivation owns.** A URL the grammar rejects is answered
  * with the codec's 400 error document, `source.parameter` naming the
  * offending key, before any backend call; a collection the policy denies
- * (no auth filter declared) is a 403. Both are written as JSON:API error
+ * (no auth filter declared) is a 403, and within a batch every subset is
+ * authorized before any is evaluated. Both are written as JSON:API error
  * responses by the handler — effect-jsonapi's `ApiError` classes carry no
  * `source` member, and every endpoint already declares the 400. A `get`
  * that matches no row fails with the error the caller declares on the
@@ -58,6 +67,7 @@ import {
   type Document,
   MEDIA_TYPE,
   Middleware,
+  type Relationship,
   type Resource,
 } from "@thomasfosterau/effect-jsonapi";
 import {
@@ -65,11 +75,13 @@ import {
   AuthorizationError,
   type Backend,
   BackendError,
+  Collection,
   type Node,
+  Predicate,
   Query,
   QueryError,
 } from "@legation/effect";
-import { type Related, type Subset, SyncServer } from "@legation/effect/internal";
+import { type Related, Subset, SyncServer } from "@legation/effect/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 
@@ -212,20 +224,175 @@ const errorResponse = (
 const searchParamsOf = (request: HttpServerRequest): URLSearchParams =>
   new URL(request.url, "http://localhost").searchParams;
 
-// ─── The read path ───────────────────────────────────────────────────────────
+// ─── Linkage: what the resource declares ─────────────────────────────────────
 
 /**
- * The read the handler runs: the URL's read with every `many` edge of the
- * node selected beside the URL's includes, for linkage (see the module doc).
+ * The edges resolved beside the URL's includes, read off the resource's
+ * declared relationships: the root resource's `Relationship.many` edges,
+ * and per includable relationship, the target resource's own — the edge
+ * names each included row's linkage is resolved for.
  */
-const withLinkage = (node: Node.AnyNode, read: Query.Read): Query.Read => {
-  const include: Record<string, true | Query.IncludeOptions> = {};
-  for (const [name, edge] of Object.entries(node.edges)) {
-    if (edge.kind === "many") include[name] = true;
+interface LinkagePlan {
+  readonly root: ReadonlyArray<string>;
+  readonly included: ReadonlyMap<string, ReadonlyArray<string>>;
+}
+
+const declared = (resource: Resource.Any, name: string): string =>
+  `RestHandlers: relationship "${name}" of resource "${resource.type}"`;
+
+/**
+ * The resource's relationships as node edges, each checked against the
+ * node's edge of that name: same name, same arity, same target. Returns
+ * the `Relationship.many` names — the edges resolved for linkage.
+ */
+const manyEdgesOf = (resource: Resource.Any, node: Node.AnyNode): ReadonlyArray<string> => {
+  const names: Array<string> = [];
+  for (const [name, descriptor] of Object.entries(resource.relationships) as ReadonlyArray<
+    [string, Relationship.Descriptor]
+  >) {
+    const edge = node.edges[name];
+    if (edge === undefined) {
+      throw new Error(`${declared(resource, name)} is not an edge of the "${node.type}" node`);
+    }
+    const toMany = descriptor.kind === "many" || descriptor.kind === "paginated";
+    if (toMany === (edge.kind === "one")) {
+      throw new Error(
+        `${declared(resource, name)} is "${descriptor.kind}" but the node edge is "${edge.kind}"`
+      );
+    }
+    if (descriptor.ref().type !== edge.target) {
+      throw new Error(
+        `${declared(resource, name)} targets "${descriptor.ref().type}" but the node edge targets "${edge.target}"`
+      );
+    }
+    if (descriptor.kind === "many") names.push(name);
   }
+  return names;
+};
+
+/** The linkage plan of a resource over its node (a definition-time check of the whole declaration). */
+const linkagePlanOf = (
+  nodes: Node.NodeRegistry,
+  resource: Resource.Any,
+  node: Node.AnyNode
+): LinkagePlan => {
+  const root = manyEdgesOf(resource, node);
+  const included = new Map<string, ReadonlyArray<string>>();
+  for (const [name, descriptor] of Object.entries(resource.relationships) as ReadonlyArray<
+    [string, Relationship.Descriptor]
+  >) {
+    if (descriptor.kind === "paginated") continue;
+    const target = descriptor.ref();
+    included.set(name, manyEdgesOf(target, nodes.nodes.get(target.type)!));
+  }
+  return { root, included };
+};
+
+/** The read the handler runs: the URL's read with the root linkage edges selected beside its includes. */
+const withLinkage = (plan: LinkagePlan, read: Query.Read): Query.Read => {
+  const include: Record<string, true | Query.IncludeOptions> = {};
+  for (const name of plan.root) include[name] = true;
   Object.assign(include, read.include);
   return Object.keys(include).length === 0 ? read : { ...read, include };
 };
+
+/** The row id a related value carries (node rows carry `id` in the value). */
+const idOf = (value: unknown): string => String((value as { readonly id: unknown }).id);
+
+/** The ids of the rows one included edge resolved across the root rows. */
+const includedIds = (
+  rows: ReadonlyArray<Related.RelatedRow>,
+  name: string
+): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const value = row.related[name];
+    for (const related of Array.isArray(value) ? value : value == null ? [] : [value]) {
+      ids.add(idOf(related));
+    }
+  }
+  return ids;
+};
+
+/** One subset of the included-linkage batch: an edge's rows for a set of included parents. */
+interface LinkageQuery {
+  readonly type: string;
+  readonly edge: string;
+  readonly collection: string;
+  readonly field: string;
+  readonly order: ReadonlyArray<Subset.OrderBy>;
+  readonly parents: Set<string>;
+}
+
+/** Add an included type's `many` edge to the batch for a set of parents, merging into the entry the batch already has. */
+const addLinkageQuery = (
+  nodes: Node.NodeRegistry,
+  queries: Map<string, LinkageQuery>,
+  type: string,
+  edge: string,
+  parents: ReadonlySet<string>
+): void => {
+  const key = `${type}\0${edge}`;
+  const existing = queries.get(key);
+  if (existing !== undefined) {
+    for (const id of parents) existing.parents.add(id);
+    return;
+  }
+  const relationship = Collection.relationshipsOf(nodes.collections, type).get(edge)!;
+  queries.set(key, {
+    type,
+    edge,
+    collection: relationship.collection,
+    field: relationship.foreignField,
+    order: relationship.order ?? [],
+    parents: new Set(parents),
+  });
+};
+
+/** The included-linkage batch a read needs: one subset per (included type, `many` edge), parents merged. */
+const linkageQueries = (
+  nodes: Node.NodeRegistry,
+  plan: LinkagePlan,
+  node: Node.AnyNode,
+  read: Query.Read,
+  rows: ReadonlyArray<Related.RelatedRow>
+): ReadonlyArray<LinkageQuery> => {
+  const queries = new Map<string, LinkageQuery>();
+  for (const name of Object.keys(read.include ?? {})) {
+    const edges = plan.included.get(name) ?? [];
+    const parents = includedIds(rows, name);
+    if (edges.length === 0 || parents.size === 0) continue;
+    const type = node.edges[name]!.target;
+    for (const edge of edges) addLinkageQuery(nodes, queries, type, edge, parents);
+  }
+  return [...queries.values()];
+};
+
+/** The fetched rows of the batch, assigned to their parents: every parent gets every edge, empty or not. */
+const assignLinkage = (
+  queries: ReadonlyArray<LinkageQuery>,
+  fetched: ReadonlyArray<Related.SourcedRow>
+): DocumentWriter.Linkage => {
+  const linkage = new Map<string, Map<string, Record<string, Array<unknown>>>>();
+  const bucket = (type: string, parent: string, edge: string): Array<unknown> => {
+    const byId = linkage.get(type) ?? new Map<string, Record<string, Array<unknown>>>();
+    linkage.set(type, byId);
+    const edges = byId.get(parent) ?? {};
+    byId.set(parent, edges);
+    return (edges[edge] ??= []);
+  };
+  for (const query of queries) {
+    for (const parent of query.parents) bucket(query.type, parent, query.edge);
+    for (const row of fetched) {
+      if (row.collection !== query.collection) continue;
+      const parent = String((row.value as Record<string, unknown>)[query.field]);
+      if (query.parents.has(parent)) bucket(query.type, parent, query.edge).push(row.value);
+    }
+  }
+  return linkage;
+};
+
+// ─── Failures ────────────────────────────────────────────────────────────────
 
 /** An outcome the derivation owns, as a response; a backend failure is a defect. */
 const respondToFailures = <A, E>(
@@ -242,10 +409,14 @@ const respondToFailures = <A, E>(
     return Effect.fail(error as E);
   });
 
+// ─── The handlers ────────────────────────────────────────────────────────────
+
 /**
  * Bind the derived handlers to a graph and a read path. The node of a
- * resource is looked up by its `type` when the handler is built, so a
- * resource without a node is a definition-time defect, never a 500.
+ * resource is looked up by its `type` when the handler is built and the
+ * resource's relationships are checked against the node's edges then, so a
+ * declaration the graph cannot serve is a definition-time defect, never a
+ * 500.
  */
 export const make = (options: Options): RestHandlers => {
   const { nodes, backend, policy, middleware, prefix } = options;
@@ -264,31 +435,56 @@ export const make = (options: Options): RestHandlers => {
   };
 
   // ADR-0025's read behind the request's identity: `readSubsets` per batch
-  // (filterable check, middleware, auth filters, evaluate + getRows), the
-  // two phases and the edge windows by `Query.runVia`.
-  const run = (context: Backend.SyncContext, node: Node.AnyNode, read: Query.Read) =>
-    Query.runVia(
-      (subsets: ReadonlyArray<Subset.Subset>) =>
-        SyncServer.readSubsets(deps, context, { clientGroupId: context.clientGroupId, subsets }),
-      nodes,
-      withLinkage(node, read)
-    );
+  // (filterable check, middleware, auth filters, evaluate + getRows); the
+  // two phases and the edge windows by `Query.runVia`; then the included
+  // resources' linkage in one more batch.
+  const run = (
+    context: Backend.SyncContext,
+    node: Node.AnyNode,
+    plan: LinkagePlan,
+    read: Query.Read
+  ) => {
+    const fetch = (subsets: ReadonlyArray<Subset.Subset>) =>
+      SyncServer.readSubsets(deps, context, { clientGroupId: context.clientGroupId, subsets });
+    return Effect.gen(function* () {
+      const rows = yield* Query.runVia(fetch, nodes, withLinkage(plan, read));
+      const queries = linkageQueries(nodes, plan, node, read, rows);
+      const fetched =
+        queries.length === 0
+          ? []
+          : yield* fetch(
+              queries.map((query) =>
+                Subset.make({
+                  collection: query.collection,
+                  where: Predicate.isIn(query.field, [...query.parents]),
+                  orderBy: query.order,
+                })
+              )
+            );
+      return { rows, linkage: assignLinkage(queries, fetched) };
+    });
+  };
 
   /** The writer's input for a read's rows (the projection and prefix only when given). */
   const input = (
     read: Query.Read,
-    rows: ReadonlyArray<Related.RelatedRow>,
+    resolved: {
+      readonly rows: ReadonlyArray<Related.RelatedRow>;
+      readonly linkage: DocumentWriter.Linkage;
+    },
     fields: JsonApiQuery.Projection | undefined
   ): DocumentWriter.Input => ({
     nodes,
     read,
-    rows,
+    rows: resolved.rows,
+    linkage: resolved.linkage,
     ...(fields === undefined ? {} : { fields }),
     ...(prefix === undefined ? {} : { prefix }),
   });
 
   const list = <R extends Resource.Any>(resource: R) => {
     const node = nodeOf(resource);
+    const plan = linkagePlanOf(nodes, resource, node);
     return ({ request }: ListInput) =>
       respondToFailures<CollectionDocumentOf<R>, never>(
         Effect.gen(function* () {
@@ -298,12 +494,12 @@ export const make = (options: Options): RestHandlers => {
             node.type,
             searchParamsOf(request)
           );
-          const rows = yield* run(context, node, read);
+          const resolved = yield* run(context, node, plan, read);
           // The endpoint's success encoder checks the document against the
           // resource at runtime; the type here is the default collection
           // document the resource declares.
           return DocumentWriter.collection(
-            input(read, rows, fields)
+            input(read, resolved, fields)
           ) as unknown as CollectionDocumentOf<R>;
         })
       );
@@ -311,6 +507,7 @@ export const make = (options: Options): RestHandlers => {
 
   const get = <R extends Resource.Any, E>(resource: R, { notFound }: GetOptions<E>) => {
     const node = nodeOf(resource);
+    const plan = linkagePlanOf(nodes, resource, node);
     return ({ params, request }: GetInput) =>
       respondToFailures<DataDocumentOf<R>, E>(
         Effect.gen(function* () {
@@ -321,9 +518,9 @@ export const make = (options: Options): RestHandlers => {
             searchParamsOf(request)
           );
           const { read, fields } = yield* JsonApiQuery.parseParams(nodes, node.type, single);
-          const rows = yield* run(context, node, read);
-          if (rows.length === 0) return yield* Effect.fail(notFound());
-          return DocumentWriter.data(input(read, rows, fields)) as unknown as DataDocumentOf<R>;
+          const resolved = yield* run(context, node, plan, read);
+          if (resolved.rows.length === 0) return yield* Effect.fail(notFound());
+          return DocumentWriter.data(input(read, resolved, fields)) as unknown as DataDocumentOf<R>;
         })
       );
   };

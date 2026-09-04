@@ -178,8 +178,9 @@ const makeWorld = Effect.gen(function* () {
 //    not expose it.
 // 2. A variant's `productId` is a `one` edge on the node (`product`) and a
 //    plain attribute on the resource (the resource graph is acyclic).
-// 3. The products node has a paginated `reviews` edge and the orders node
-//    a `many` `items` edge; the resources declare neither.
+// 3. The products node has a paginated `reviews` edge the resource does
+//    not declare, so the derivation writes its `links` (the orders node's
+//    undeclared `items` edge is neither resolved nor written).
 // 4. `links` — `self` / `next` and the paginated edge's links — which the
 //    hand-written handlers never set.
 //
@@ -190,7 +191,6 @@ const normaliseResource = (resource: Json): Json => {
   const { userId: _userId, ...attributes } = resource.attributes ?? {};
   const relationships: Record<string, Json> = { ...(resource.relationships ?? {}) };
   delete relationships["reviews"];
-  delete relationships["items"];
   if (resource.type === "variants" && relationships["product"] !== undefined) {
     attributes.productId = relationships["product"].data.id;
     delete relationships["product"];

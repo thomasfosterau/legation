@@ -287,9 +287,14 @@ userId` lives in a handler.
   `links.next` continues after the last row when the window is full.
 - **A URL the grammar rejects is the codec's 400** with `source.parameter`,
   before any backend call; a collection the policy does not declare is a 403.
-- **Includes resolve in two phases** and every `many` edge is resolved for
-  linkage (effect-jsonapi's resource schemas require every declared
-  relationship); `include` decides what is compounded into `included`.
+- **Includes resolve in two phases**, and every `Relationship.many` the
+  endpoint's resource declares is resolved for linkage — on the primary and
+  the included resources alike, since effect-jsonapi's resource schemas
+  require every declared relationship — while nothing the resource does not
+  declare is touched; `include` decides what is compounded into `included`.
+  A paginated node edge lists and includes under a `Relationship.many`
+  declaration (links plus its rows' linkage) and carries links only under
+  `Relationship.paginated`.
 - **`fields[type]` is a projection** applied at serialisation over full rows
   (ADR-0029 §5). A resource that serves sparse fieldsets declares its
   attributes `Resource.attribute(schema, { resource: "optional" })`, or the

@@ -259,16 +259,27 @@ export const runVia = <E>(
   nodes: Node.NodeRegistry,
   read: Read
 ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, E> =>
-  Effect.suspend(() => {
-    const compiled = plan(nodes, read);
-    return Related.queryVia(
-      fetch,
-      nodes.collections,
-      read.collection,
-      compiled.root,
-      edgeSelects(compiled)
-    ).pipe(Effect.map((rows) => applyWindows(compiled, rows)));
-  });
+  Effect.suspend(() => runPlanVia(fetch, nodes, plan(nodes, read)));
+
+/**
+ * {@link runVia} over an already-compiled plan, for a caller that compiled
+ * the read for its own purposes (the Client's coverage check keys its
+ * ledger by the plan's root window) so the read is compiled once.
+ */
+export const runPlanVia = <E>(
+  fetch: (
+    subsets: ReadonlyArray<Subset.Subset>
+  ) => Effect.Effect<ReadonlyArray<Related.SourcedRow>, E>,
+  nodes: Node.NodeRegistry,
+  compiled: Plan
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, E> =>
+  Related.queryVia(
+    fetch,
+    nodes.collections,
+    compiled.root.collection,
+    compiled.root,
+    edgeSelects(compiled)
+  ).pipe(Effect.map((rows) => applyWindows(compiled, rows)));
 
 /**
  * Observe a read over the local view: emits current rows now and re-emits

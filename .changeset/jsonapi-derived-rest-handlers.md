@@ -20,9 +20,15 @@ path — the premise of ADR-0029's "same URL, same result".
   allow-set behaves. A URL the grammar rejects is the codec's 400 error
   document with `source.parameter`, before any backend call; a collection the
   policy does not declare is a 403; a missing row fails with the endpoint's own
-  404 class. Every `many` edge of the node is resolved for linkage (effect-jsonapi
-  resource schemas require every declared relationship); `include` decides
-  `included`. Derivation is opt-in per endpoint, beside hand-written handlers.
+  404 class. Linkage follows the resource's declaration: every
+  `Relationship.many` the endpoint's resource declares is resolved — on the
+  primary resource and on each included resource's own declaration — because
+  effect-jsonapi resource schemas require every declared relationship, and
+  nothing the resource does not declare is touched; `include` decides
+  `included`. A paginated node edge lists and includes under a
+  `Relationship.many` declaration (links plus its rows' linkage in the edge's
+  order) and carries links only under `Relationship.paginated`. Derivation is
+  opt-in per endpoint, beside hand-written handlers.
 - `DocumentWriter.collection(input)` / `DocumentWriter.data(input)` is the one
   rows-to-document function both the REST handlers and the service-worker façade
   (#164) serialise through: a pure function of the node graph, the read, the
@@ -32,7 +38,8 @@ path — the premise of ADR-0029's "same URL, same result".
   when included); `included` is deduplicated
   with full linkage checked; `fields[type]` projects attributes after linkage;
   `links.self` is the read's canonical string and `links.next` the same query
-  with `page[after]` at the last row when the window is full. Node rows only —
-  `Derive.ts`'s `JsonApiRow` has no node graph to plan against.
+  with `page[after]` at the last row when the window is full; `linkage` carries
+  the edge rows resolved for included resources. Node rows only — `Derive.ts`'s
+  `JsonApiRow` has no node graph to plan against.
 - `RestHandlers.queryErrorDocument(error)` renders a `QueryError` as the 400
   document (the codec's own when the rejection was a decoding failure).

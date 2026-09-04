@@ -29,8 +29,9 @@
  *   code-point order of edge name then root-row order, deduplicated by
  *   `(type, id)` with full linkage checked (`Handlers.buildIncluded`). An
  *   included resource carries its own `one`-edge linkage and paginated
- *   links; its collection-valued edges are not resolved (ADR-0025's two
- *   phases stop at the included rows).
+ *   links, and the collection-valued linkage the caller resolved for it
+ *   ({@link Input.linkage} — the REST tier's third batch, keyed by the
+ *   included rows); an edge with no resolved rows is omitted.
  * - **`fields[type]`** is applied last, to attributes only, on primary and
  *   included resources alike (ADR-0029 §5: a serialisation-time projection
  *   over full rows). Linkage is never projected away.
@@ -88,6 +89,12 @@ export type CollectionDocument = Handlers.DocumentValue<
 /** A single-resource document: `{ data: resource | null, included?, links }`. */
 export type DataDocument = Handlers.DocumentValue<ResourceValue | null, ResourceValue>;
 
+/** Edge rows by collection, then row id, then edge name (see {@link Input.linkage}). */
+export type Linkage = ReadonlyMap<
+  string,
+  ReadonlyMap<string, Readonly<Record<string, ReadonlyArray<unknown>>>>
+>;
+
 /** What a document is a function of (ADR-0029 §6). */
 export interface Input {
   readonly nodes: Node.NodeRegistry;
@@ -100,6 +107,13 @@ export interface Input {
    * `many` edge for linkage); they contribute linkage, not `included`.
    */
   readonly rows: ReadonlyArray<Related.RelatedRow>;
+  /**
+   * Collection-valued edge rows resolved for resources beyond the root rows
+   * — the included resources' own `many` edges — by collection, then row
+   * id, then edge name. Consulted where a row has no `related` entry for
+   * the edge; a parent listed with an empty array gets `data: []`.
+   */
+  readonly linkage?: Linkage;
   /** The `fields[]` projection, applied to attributes at the end. */
   readonly fields?: JsonApiQuery.Projection;
   /** Prepended to every link (the api's mount path, e.g. `/jsonapi`); default `""`. */
@@ -128,24 +142,42 @@ const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown
 const linkageOf = (type: string, rows: ReadonlyArray<unknown>): ReadonlyArray<Identifier> =>
   rows.map((row) => ({ type, id: idOf(row) }));
 
+/** A row as the writer sees it: its id and value, the root rows' `related`, and everything else's linkage. */
+interface Row {
+  readonly id: string;
+  readonly value: unknown;
+  readonly related?: Related.RelatedRow["related"];
+}
+
+/** The resolved rows of one collection-valued edge of a row: `related` first, then the caller's linkage. */
+const edgeRowsOf = (
+  node: Node.AnyNode,
+  row: Row,
+  name: string,
+  linkage: Linkage | undefined
+): ReadonlyArray<unknown> | undefined => {
+  const related = row.related?.[name];
+  return Array.isArray(related) ? related : linkage?.get(node.type)?.get(row.id)?.[name];
+};
+
 /** The relationship object of one edge, or `undefined` when nothing is known about it. */
 const relationshipOf = (
   node: Node.AnyNode,
-  id: string,
+  row: Row,
   name: string,
-  value: Readonly<Record<string, unknown>>,
-  related: Readonly<Record<string, Related.RelatedValue>> | undefined,
+  linkage: Linkage | undefined,
   prefix: string
 ): RelationshipValue | undefined => {
   const edge = node.edges[name]!;
+  const { id } = row;
   if (edge.kind === "one") {
-    const key = value[edge.via];
+    const key = recordOf(row.value)[edge.via];
     return {
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
     };
   }
-  const rows = related?.[name];
-  const data = Array.isArray(rows) ? { data: linkageOf(edge.target, rows) } : undefined;
+  const rows = edgeRowsOf(node, row, name, linkage);
+  const data = rows === undefined ? undefined : { data: linkageOf(edge.target, rows) };
   if (edge.kind === "many") return data;
   return {
     links: {
@@ -159,23 +191,19 @@ const relationshipOf = (
 /** The resource object of one row of a node. */
 const resourceOf = (
   node: Node.AnyNode,
-  row: {
-    readonly id: string;
-    readonly value: unknown;
-    readonly related?: Related.RelatedRow["related"];
-  },
+  row: Row,
+  linkage: Linkage | undefined,
   prefix: string
 ): ResourceValue => {
-  const value = recordOf(row.value);
   const relationships: Record<string, RelationshipValue> = {};
   for (const name of Object.keys(node.edges)) {
-    const relationship = relationshipOf(node, row.id, name, value, row.related, prefix);
+    const relationship = relationshipOf(node, row, name, linkage, prefix);
     if (relationship !== undefined) relationships[name] = relationship;
   }
   return {
     type: node.type,
     id: row.id,
-    attributes: attributesOf(node, value),
+    attributes: attributesOf(node, recordOf(row.value)),
     ...(Object.keys(relationships).length === 0 ? {} : { relationships }),
   };
 };
@@ -186,6 +214,7 @@ const includedOf = (
   node: Node.AnyNode,
   rows: ReadonlyArray<Related.RelatedRow>,
   name: string,
+  linkage: Linkage | undefined,
   prefix: string
 ): ReadonlyArray<ResourceValue> => {
   const target = nodes.nodes.get(node.edges[name]!.target)!;
@@ -197,8 +226,9 @@ const includedOf = (
       : value === null || value === undefined
         ? []
         : [value];
-    for (const related of values)
-      included.push(resourceOf(target, { id: idOf(related), value: related }, prefix));
+    for (const related of values) {
+      included.push(resourceOf(target, { id: idOf(related), value: related }, linkage, prefix));
+    }
   }
   return included;
 };
@@ -230,10 +260,12 @@ const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
 /** The primary resources and the compound `included`, both projected. */
 const assemble = (input: Input, node: Node.AnyNode) => {
   const prefix = input.prefix ?? "";
-  const data = input.rows.map((row) => project(resourceOf(node, row, prefix), input.fields));
+  const data = input.rows.map((row) =>
+    project(resourceOf(node, row, input.linkage, prefix), input.fields)
+  );
   const included = Object.keys(input.read.include ?? {})
     .toSorted(Predicate.compareText)
-    .flatMap((name) => includedOf(input.nodes, node, input.rows, name, prefix))
+    .flatMap((name) => includedOf(input.nodes, node, input.rows, name, input.linkage, prefix))
     .map((resource) => project(resource, input.fields));
   return { data, included };
 };

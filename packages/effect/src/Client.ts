@@ -174,10 +174,11 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
     );
 
   // The three-tier read (ADR-0025): replica when a ledger subscription
-  // covers the read (ADR-0029); server fallthrough otherwise (`Query.runVia`
-  // over the transport's read — the same plan and join the derived REST
-  // handlers run server-side); local again when fallthrough is unavailable
-  // or fails (offline-first — local is always an answer).
+  // covers the read (ADR-0029); server fallthrough otherwise
+  // (`Query.runPlanVia` over the transport's read — the same plan and join
+  // the derived REST handlers run server-side — with the plan compiled once,
+  // for the coverage verdict and the run); local again when fallthrough is
+  // unavailable or fails (offline-first — local is always an answer).
   const queryOnce = (
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
@@ -189,7 +190,7 @@ export const fromView = (nodes: Node.NodeRegistry, view: ClientView.ClientView):
       Effect.flatMap((verdict) =>
         verdict._tag === "Covered"
           ? local
-          : Query.runVia(readThrough, nodes, read).pipe(Effect.catch(() => local))
+          : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
       )
     );
   };

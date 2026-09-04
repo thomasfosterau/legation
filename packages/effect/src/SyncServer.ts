@@ -94,11 +94,13 @@ const evaluateRows = (
  * ADR-0025's read without its carrier: pull's front half, then
  * `Backend.evaluate` + `getRows`, and nothing else. The subsets are checked
  * against the filterable set as the client's own text (#154), handed to
- * `SyncMiddleware.onRead`, narrowed by the deny-by-default auth filters,
- * then each is evaluated to its current rows in subset order. No cookie, no
- * CVR read or write, no `lastMutationIds`. `handleRead` is this behind the
- * protocol's identity resolution; a derived REST handler is this behind an
- * HTTP request's — one read path, two carriers.
+ * `SyncMiddleware.onRead`, narrowed by the deny-by-default auth filters —
+ * every subset before any is evaluated, so a denied subset anywhere in the
+ * batch means no backend call at all — then each is evaluated to its
+ * current rows in subset order. No cookie, no CVR read or write, no
+ * `lastMutationIds`. `handleRead` is this behind the protocol's identity
+ * resolution; a derived REST handler is this behind an HTTP request's —
+ * one read path, two carriers.
  */
 export const readSubsets = (
   deps: ReadDeps,
@@ -111,10 +113,13 @@ export const readSubsets = (
     });
     const onRead = deps.middleware?.onRead;
     const checked = onRead === undefined ? request : yield* onRead(context, request);
-    const rows: Array<ReadRow> = [];
+    const authorized: Array<Subset> = [];
     for (const subset of checked.subsets) {
-      const authorized = yield* authorize(deps.authPolicy, context, subset, "server");
-      rows.push(...(yield* evaluateRows(deps.backend, context, authorized)));
+      authorized.push(yield* authorize(deps.authPolicy, context, subset, "server"));
+    }
+    const rows: Array<ReadRow> = [];
+    for (const subset of authorized) {
+      rows.push(...(yield* evaluateRows(deps.backend, context, subset)));
     }
     return rows;
   });
