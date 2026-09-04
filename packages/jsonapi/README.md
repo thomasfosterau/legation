@@ -306,6 +306,63 @@ function of the node graph, the read, the resolved rows and the projection,
 so the service-worker façade serving the same URL from the replica produces
 the same document content (ADR-0029 §6).
 
+## The same documents from the replica
+
+`ReplicaDocuments` is the other caller of that one serialiser: it runs a URL
+(or a parsed read with its `fields[]` projection) over a local view — the
+rows the replica holds, optimistic overlay included — and writes the document
+the derived REST handler would write for the same URL. It depends on nothing
+but `effect` and the engine, so it runs where the engine runs, a service
+worker included; the façade (ADR-0029) is built on it.
+
+```ts
+import { Effect } from "effect";
+import { JsonApiQuery, ReplicaDocuments } from "@legation/jsonapi";
+import { nodes } from "./my-domain";
+import { CartItem, Product, Variant } from "./my-json-api";
+
+const docs = ReplicaDocuments.make({
+  nodes,
+  // The resources the REST endpoints are declared with, so linkage matches them.
+  resources: new Map([Product, Variant, CartItem].map((resource) => [resource.type, resource])),
+  prefix: "/api",
+});
+
+// In the worker: serve only what the replica covers (ADR-0029 §3).
+const serve = (url: string) =>
+  Effect.gen(function* () {
+    const { read } = yield* JsonApiQuery.parseRead(nodes, url);
+    const verdicts = yield* Effect.forEach(yield* docs.toCover(read), (needed) =>
+      client.coverageOf(needed)
+    );
+    if (verdicts.some((verdict) => verdict._tag === "Uncovered")) return undefined; // network
+    return yield* docs.fromUrl(client.view, url); // a collection or single-resource document
+  });
+```
+
+- **Linkage follows the same declarations.** Pass the resources the REST
+  endpoints are declared with and the replica emits exactly the
+  relationships the derived handler emits, by construction (one linkage
+  derivation, two callers). Without `resources`, the node graph's synthetic
+  resources (`JsonApiQuery.resourcesOf(nodes)`) apply: every collection edge
+  resolved, paginated edges as `many`.
+- **One grammar on both sides.** URLs are parsed with the node-derived codec,
+  so parity holds when the endpoint is declared with the same codec
+  (`JsonApiQuery.querySchema(nodes, collection)`, or equivalent declarations)
+  and collection edges are `many`. An `include` edge or a `fields[type]` type
+  the bound resource does not declare is refused with the codec's own
+  `QueryError` shape before any query runs.
+- **Coverage is the caller's guard.** The writer cannot tell a missing row
+  from an absent one, so `toCover(read)` names the reads a request needs
+  covered — the read itself, plus one whole-collection read per collection
+  the declared linkage resolves from beyond the read's includes. Serve a URL
+  only when every one is covered; an uncovered URL goes to the network.
+- **`fromUrl` writes the shape the path asks for**: a single-resource
+  document (`data: null` when the replica holds no row) for `/{type}/{id}`, a
+  collection document otherwise. A URL the grammar rejects, or one naming a
+  collection no bound resource declares, fails with a `QueryError` — never a
+  defect, since a URL is network input.
+
 ## Types, schemas, and errors
 
 JSON:API document types (`ResourceObject`, `JsonApiDocument`, `Relationship`,

@@ -3,11 +3,12 @@
  *
  * Rows to a JSON:API compound document — the **one serialiser** ADR-0029 §6
  * binds both the derived REST handlers ({@link RestHandlers}, #163) and the
- * service-worker façade (#164) to: "same URL, same result". The document is
- * a pure function of the node graph, the read, the resolved rows and the
- * `fields[]` projection — no HTTP, no backend, no clock — so the two sides
- * agree byte for byte on document content whichever source produced the
- * rows.
+ * replica-side writer behind the service-worker façade
+ * ({@link ReplicaDocuments}, #164) to: "same URL, same result". The
+ * document is a pure function of the node graph, the read, the resolved
+ * rows and the `fields[]` projection — no HTTP, no backend, no clock — so
+ * the two sides agree byte for byte on document content whichever source
+ * produced the rows.
  *
  * The mapping, node for node (CONTEXT.md: a `type` is a collection, a
  * resource `id` is a row id, a resource is a row value):
@@ -16,22 +17,24 @@
  *   read off the row value. A `one`-edge's key field (`categoryId`) is not
  *   an attribute: it is linkage.
  * - **Relationships** come from two places. A `one` edge's linkage is its
- *   `via` field on the row (`{ data: { type, id } }`, or `data: null` when
- *   the key is null). A collection-valued edge's linkage is the edge rows
- *   the read resolved onto the row (`related[edge]`): present when the read
- *   path fetched them, absent otherwise — a relationship never claims an
- *   empty list it did not see. A paginated edge always carries the spec's
- *   `links` (`self` / `related`, effect-jsonapi's model of an unbounded
+ *   key on the row (`{ data: { type, id } }`, or `data: null` when the key
+ *   is null). A collection-valued edge's linkage is the edge rows the read
+ *   resolved onto the row (`related[edge]`): present when the read path
+ *   fetched them, absent otherwise — a relationship never claims an empty
+ *   list it did not see. A paginated edge always carries the spec's `links`
+ *   (`self` / `related`, effect-jsonapi's model of an unbounded
  *   relationship) and, when the read resolved its rows (`include=reviews`
  *   includes a paginated edge like any other; only a per-edge window has no
  *   URL form), their linkage beside the links.
  * - **`included`** holds the rows of every edge the read `include`s, in
  *   code-point order of edge name then root-row order, deduplicated by
- *   `(type, id)` with full linkage checked (`Handlers.buildIncluded`). An
- *   included resource carries its own `one`-edge linkage and paginated
- *   links, and the collection-valued linkage the caller resolved for it
- *   ({@link Input.linkage} — the REST tier's third batch, keyed by the
- *   included rows); an edge with no resolved rows is omitted.
+ *   `(type, id)` with full linkage checked (`Handlers.buildIncluded`: an
+ *   included row no resource identifier in the document references is
+ *   thrown at, never emitted). An included resource carries its own
+ *   `one`-edge linkage and paginated links, and the collection-valued
+ *   linkage the caller resolved for it ({@link Input.linkage} — the third
+ *   batch, keyed by the included rows); an edge with no resolved rows is
+ *   omitted.
  * - **`fields[type]`** is applied last, to attributes only, on primary and
  *   included resources alike (ADR-0029 §5: a serialisation-time projection
  *   over full rows). Linkage is never projected away.
@@ -44,10 +47,12 @@
  *   every link; ADR-0029 §6 lets the host differ, nothing else.
  *
  * Only **node rows** are written (a row value carrying the node's attributes
- * and its `one`-edge key fields, as `Node.row` decodes). The `JsonApiRow`
- * shape of `Derive.ts` (linkage under `relationships`, no node graph) is not
- * a second strategy here: it has no registry to plan against, and nothing
- * serves it over REST yet.
+ * and its `one`-edge key fields, as `Node.row` decodes and `Query.run`
+ * resolves). The `JsonApiRow` shape of `Derive.ts` (linkage under
+ * `relationships`, no node graph) is not a second strategy here: its
+ * collections declare no graph to plan against, so nothing can write them
+ * until a bridge (`NodeBridge` over the app's resources) gives them one —
+ * the seam is {@link relationshipOf}, the one place a row's linkage is read.
  */
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
@@ -103,8 +108,8 @@ export interface Input {
   /**
    * The read's resolved rows (`Query.runVia` / `Query.run`): root rows in
    * window order, each with the edge rows resolved onto `related`. Edges
-   * beyond `read.include` may be present (the REST tier resolves every
-   * `many` edge for linkage); they contribute linkage, not `included`.
+   * beyond `read.include` may be present (the linkage plan resolves every
+   * declared `many` edge); they contribute linkage, not `included`.
    */
   readonly rows: ReadonlyArray<Related.RelatedRow>;
   /**
@@ -120,14 +125,33 @@ export interface Input {
   readonly prefix?: string;
 }
 
-// ─── Rows → resource objects ─────────────────────────────────────────────────
+// ─── Row helpers (shared with the linkage derivation) ────────────────────────
 
 /** A row value as a record (a node row always is one). */
 const recordOf = (value: unknown): Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 
-/** The row id a related value carries (node rows carry `id` in the value). */
-const idOf = (value: unknown): string => String(recordOf(value)["id"]);
+/** The row id a row value carries (node rows carry `id` in the value). */
+export const idOf = (value: unknown): string => String(recordOf(value)["id"]);
+
+/** A resolved edge's value as its rows: a list as it is, a single row alone, `null` / `undefined` as none. */
+export const relatedValuesOf = (value: Related.RelatedValue): ReadonlyArray<unknown> =>
+  Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+
+// ─── Rows → resource objects ─────────────────────────────────────────────────
+
+/** The per-document constants every row is written under. */
+interface Env {
+  readonly nodes: Node.NodeRegistry;
+  readonly linkage: Linkage | undefined;
+  readonly prefix: string;
+}
+
+const envOf = (input: Input): Env => ({
+  nodes: input.nodes,
+  linkage: input.linkage,
+  prefix: input.prefix ?? "",
+});
 
 /** The node's declared attributes off the row value, in declaration order; absent ones are left out. */
 const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown>>) => {
@@ -138,10 +162,6 @@ const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown
   return attributes;
 };
 
-/** The identifier list of resolved edge rows. */
-const linkageOf = (type: string, rows: ReadonlyArray<unknown>): ReadonlyArray<Identifier> =>
-  rows.map((row) => ({ type, id: idOf(row) }));
-
 /** A row as the writer sees it: its id and value, the root rows' `related`, and everything else's linkage. */
 interface Row {
   readonly id: string;
@@ -151,53 +171,54 @@ interface Row {
 
 /** The resolved rows of one collection-valued edge of a row: `related` first, then the caller's linkage. */
 const edgeRowsOf = (
+  env: Env,
   node: Node.AnyNode,
   row: Row,
-  name: string,
-  linkage: Linkage | undefined
+  name: string
 ): ReadonlyArray<unknown> | undefined => {
   const related = row.related?.[name];
-  return Array.isArray(related) ? related : linkage?.get(node.type)?.get(row.id)?.[name];
+  return Array.isArray(related) ? related : env.linkage?.get(node.type)?.get(row.id)?.[name];
 };
 
-/** The relationship object of one edge, or `undefined` when nothing is known about it. */
+/**
+ * The relationship object of one edge, or `undefined` when nothing is known
+ * about it. This is where a row's linkage is read: a `one` edge's key off
+ * its `via` field, a collection-valued edge's identifiers off its resolved
+ * rows.
+ */
 const relationshipOf = (
+  env: Env,
   node: Node.AnyNode,
   row: Row,
-  name: string,
-  linkage: Linkage | undefined,
-  prefix: string
+  name: string
 ): RelationshipValue | undefined => {
   const edge = node.edges[name]!;
-  const { id } = row;
   if (edge.kind === "one") {
     const key = recordOf(row.value)[edge.via];
     return {
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
     };
   }
-  const rows = edgeRowsOf(node, row, name, linkage);
-  const data = rows === undefined ? undefined : { data: linkageOf(edge.target, rows) };
+  const rows = edgeRowsOf(env, node, row, name);
+  const data =
+    rows === undefined
+      ? undefined
+      : { data: rows.map((value) => ({ type: edge.target, id: idOf(value) })) };
   if (edge.kind === "many") return data;
   return {
     links: {
-      self: `${prefix}${Handlers.relationshipLink(node.type, id, name)}`,
-      related: `${prefix}${Handlers.relatedLink(node.type, id, name)}`,
+      self: `${env.prefix}${Handlers.relationshipLink(node.type, row.id, name)}`,
+      related: `${env.prefix}${Handlers.relatedLink(node.type, row.id, name)}`,
     },
     ...data,
   };
 };
 
 /** The resource object of one row of a node. */
-const resourceOf = (
-  node: Node.AnyNode,
-  row: Row,
-  linkage: Linkage | undefined,
-  prefix: string
-): ResourceValue => {
+const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
   const relationships: Record<string, RelationshipValue> = {};
   for (const name of Object.keys(node.edges)) {
-    const relationship = relationshipOf(node, row, name, linkage, prefix);
+    const relationship = relationshipOf(env, node, row, name);
     if (relationship !== undefined) relationships[name] = relationship;
   }
   return {
@@ -210,24 +231,16 @@ const resourceOf = (
 
 /** The edge rows of one included edge across the root rows, as resources of the target node. */
 const includedOf = (
-  nodes: Node.NodeRegistry,
+  env: Env,
   node: Node.AnyNode,
   rows: ReadonlyArray<Related.RelatedRow>,
-  name: string,
-  linkage: Linkage | undefined,
-  prefix: string
+  name: string
 ): ReadonlyArray<ResourceValue> => {
-  const target = nodes.nodes.get(node.edges[name]!.target)!;
+  const target = env.nodes.nodes.get(node.edges[name]!.target)!;
   const included: Array<ResourceValue> = [];
   for (const row of rows) {
-    const value = row.related[name];
-    const values = Array.isArray(value)
-      ? value
-      : value === null || value === undefined
-        ? []
-        : [value];
-    for (const related of values) {
-      included.push(resourceOf(target, { id: idOf(related), value: related }, linkage, prefix));
+    for (const related of relatedValuesOf(row.related[name])) {
+      included.push(resourceOf(env, target, { id: idOf(related), value: related }));
     }
   }
   return included;
@@ -259,13 +272,11 @@ const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
 
 /** The primary resources and the compound `included`, both projected. */
 const assemble = (input: Input, node: Node.AnyNode) => {
-  const prefix = input.prefix ?? "";
-  const data = input.rows.map((row) =>
-    project(resourceOf(node, row, input.linkage, prefix), input.fields)
-  );
+  const env = envOf(input);
+  const data = input.rows.map((row) => project(resourceOf(env, node, row), input.fields));
   const included = Object.keys(input.read.include ?? {})
     .toSorted(Predicate.compareText)
-    .flatMap((name) => includedOf(input.nodes, node, input.rows, name, input.linkage, prefix))
+    .flatMap((name) => includedOf(env, node, input.rows, name))
     .map((resource) => project(resource, input.fields));
   return { data, included };
 };
