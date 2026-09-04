@@ -119,6 +119,17 @@ export type MirrorMessage =
       readonly subset: Subset.Subset;
       readonly edges: ReadonlyArray<Related.EdgeSelect>;
     }
+  /**
+   * A URL-keyed subscription (ADR-0029 section 2, #159) from a party with
+   * no `Client` of its own — a page posting on the channel. The host parses
+   * the URL through its `UrlReads`, and registers the read's root window
+   * and edge windows under `mirrorId` exactly as a mirror's `Subscribe` and
+   * `SubscribeRelated` would: refcounted per party, replayed on `HostReady`
+   * by the party, and reclaimed by the liveness sweep unless the party
+   * heartbeats. A URL the host cannot parse registers nothing.
+   */
+  | { readonly _tag: "SubscribeUrl"; readonly mirrorId: string; readonly url: string }
+  | { readonly _tag: "UnsubscribeUrl"; readonly mirrorId: string; readonly url: string }
   /** A server-fallthrough read (ADR-0025), answered by `ReadResult`. */
   | {
       readonly _tag: "Read";
@@ -175,6 +186,12 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     collection: Schema.String,
     subset: Subset.SubsetSchema,
     edges: Schema.Array(EdgeSelectSchema),
+  }),
+  Schema.Struct({ _tag: Schema.tag("SubscribeUrl"), mirrorId: Schema.String, url: Schema.String }),
+  Schema.Struct({
+    _tag: Schema.tag("UnsubscribeUrl"),
+    mirrorId: Schema.String,
+    url: Schema.String,
   }),
   Schema.Struct({
     _tag: Schema.tag("Read"),
