@@ -32,6 +32,7 @@ import type * as MutationState from "./MutationState.js";
 import * as Related from "./Related.js";
 import type { RowChange } from "./RowChange.js";
 import type * as Subset from "./Subset.js";
+import * as Subscriptions from "./Subscriptions.js";
 
 /**
  * The union of what either host may fail a view operation with: the engine
@@ -110,6 +111,20 @@ export interface ClientView {
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /**
+   * Hold a subset's edge windows registered for the scope's lifetime
+   * without resolving the join — what an explicit pin with `include` needs
+   * (ADR-0029 section 2): the narrowed foreign windows keep tracking the
+   * base rows, and are released when the scope closes. Over an engine this
+   * is `Related.trackEdges`; a mirror registers the relational read with
+   * its host and never reads the resolved rows.
+   */
+  readonly pinEdges: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<string | Related.EdgeSelect>
+  ) => Effect.Effect<void, never, Scope.Scope>;
+  /**
    * Point-in-time server-fallthrough read (ADR-0025): auth-filtered,
    * no CVR, results never enter the replica. Present only when the
    * underlying tier can reach a server (a transport with `read`, or a
@@ -138,37 +153,48 @@ export type Reader = Pick<ClientView, "query" | "observe">;
 
 export const ClientView = Context.Service<ClientView>("@legation/effect/ClientView");
 
-/** Present a {@link ClientEngine} as a {@link ClientView}. */
-export const fromEngine = (engine: ClientEngine): ClientView => ({
-  query: (subset) => engine.query(subset),
-  observe: (subset) => engine.observe(subset),
-  observeWindow: (subset) => engine.observeWindow(subset),
-  observeChanges: (subset, options) => engine.observeChanges(subset, options),
-  subscribe: (subset) => engine.subscribe(subset),
-  unsubscribe: (subset) => engine.unsubscribe(subset),
-  subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
-  unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
-  queryNamed: (name, args) => engine.queryNamed(name, args),
-  observeNamed: (name, args) => engine.observeNamed(name, args),
-  related: (registry, collectionName, subset, edges) =>
-    Related.related(engine, registry, collectionName, subset, edges),
-  ...(engine.readThrough === undefined
-    ? {}
-    : {
-        read: (subsets: ReadonlyArray<Subset.Subset>) =>
-          engine.readThrough!(subsets).pipe(
-            Effect.mapError((error) =>
-              error._tag === "VersionNotSupportedError"
-                ? new TransportError({ message: error.message, cause: error })
-                : error
-            )
-          ),
-      }),
-  mutate: (mutator, args) => engine.mutate(mutator, args),
-  mutateWithAck: (mutator, args) =>
-    engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),
-  mutationStates: engine.mutationStates,
-});
+/**
+ * Present a {@link ClientEngine} as a {@link ClientView}. Subscriptions go
+ * through one counted voice (`Subscriptions.counted`): an explicit
+ * `subscribe` of a window and a `related` read's own registration of the
+ * same window release independently, and the engine drops the window only
+ * when the last of them lets go.
+ */
+export const fromEngine = (raw: ClientEngine): ClientView => {
+  const engine = Subscriptions.counted(raw);
+  return {
+    query: (subset) => engine.query(subset),
+    observe: (subset) => engine.observe(subset),
+    observeWindow: (subset) => engine.observeWindow(subset),
+    observeChanges: (subset, options) => engine.observeChanges(subset, options),
+    subscribe: (subset) => engine.subscribe(subset),
+    unsubscribe: (subset) => engine.unsubscribe(subset),
+    subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
+    unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
+    queryNamed: (name, args) => engine.queryNamed(name, args),
+    observeNamed: (name, args) => engine.observeNamed(name, args),
+    related: (registry, collectionName, subset, edges) =>
+      Related.related(engine, registry, collectionName, subset, edges),
+    pinEdges: (registry, collectionName, subset, edges) =>
+      Related.trackEdges(engine, registry, collectionName, subset, edges),
+    ...(engine.readThrough === undefined
+      ? {}
+      : {
+          read: (subsets: ReadonlyArray<Subset.Subset>) =>
+            engine.readThrough!(subsets).pipe(
+              Effect.mapError((error) =>
+                error._tag === "VersionNotSupportedError"
+                  ? new TransportError({ message: error.message, cause: error })
+                  : error
+              )
+            ),
+        }),
+    mutate: (mutator, args) => engine.mutate(mutator, args),
+    mutateWithAck: (mutator, args) =>
+      engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),
+    mutationStates: engine.mutationStates,
+  };
+};
 
 /**
  * Derive the {@link ClientView} from the in-context engine. Compose with

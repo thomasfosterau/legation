@@ -11,6 +11,7 @@
  */
 
 import type * as ClientEngine from "./ClientEngine.js";
+import type * as ClientView from "./ClientView.js";
 import type * as Collection from "./Collection.js";
 import { MutatorError, TransportError } from "./Errors.js";
 import type * as Mutator from "./Mutator.js";
@@ -186,6 +187,14 @@ export interface Mirror {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  /**
+   * Hold a relational registration with the host for the scope's lifetime
+   * without reading its resolved rows — an explicit pin's edge windows
+   * (ADR-0029 section 2). The host runs the same reconcile loop it runs for
+   * {@link related}; the signature is `ClientView`'s (the `registry`
+   * parameter exists for that parity alone).
+   */
+  readonly pinEdges: ClientView.ClientView["pinEdges"];
 }
 
 export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope.Scope> =>
@@ -594,6 +603,30 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         })
       );
 
+    // One unit of interest in a relational registration for the scope's
+    // lifetime (counted like an observer's: pins of one registration add
+    // up, and the host is told once). Returns the key the rows arrive under.
+    const holdRelated = (
+      collectionName: string,
+      subset: Subset.Subset,
+      edgeInputs: ReadonlyArray<string | Related.EdgeSelect>
+    ): Effect.Effect<string, never, Scope.Scope> =>
+      Effect.gen(function* () {
+        const edges = edgeInputs.map(Related.edgeSelect);
+        const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
+        const registration = { mirrorId, collection: collectionName, subset, edges };
+        yield* acquireInterest(
+          key,
+          {
+            subscribe: { _tag: "SubscribeRelated", ...registration },
+            unsubscribe: { _tag: "UnsubscribeRelated", ...registration },
+          },
+          "observer"
+        );
+        yield* Effect.addFinalizer(() => releaseInterest(key, "observer"));
+        return key;
+      });
+
     return {
       mutate: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
@@ -685,31 +718,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         observeKey(MirrorProtocol.MUTATION_STATES_KEY, readMutationStates)
       ),
       related: (_registry, collectionName, subset, edgeInputs) =>
-        Effect.gen(function* () {
-          const edges = edgeInputs.map(Related.edgeSelect);
-          const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
-          yield* acquireInterest(
-            key,
-            {
-              subscribe: {
-                _tag: "SubscribeRelated",
-                mirrorId,
-                collection: collectionName,
-                subset,
-                edges,
-              },
-              unsubscribe: {
-                _tag: "UnsubscribeRelated",
-                mirrorId,
-                collection: collectionName,
-                subset,
-                edges,
-              },
-            },
-            "observer"
-          );
-          yield* Effect.addFinalizer(() => releaseInterest(key, "observer"));
-          return observeKey(key, readRelated(key));
-        }),
+        holdRelated(collectionName, subset, edgeInputs).pipe(
+          Effect.map((key) => observeKey(key, readRelated(key)))
+        ),
+      pinEdges: (_registry, collectionName, subset, edgeInputs) =>
+        Effect.asVoid(holdRelated(collectionName, subset, edgeInputs)),
     };
   });

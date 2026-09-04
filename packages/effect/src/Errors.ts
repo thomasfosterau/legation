@@ -86,11 +86,32 @@ export class MutatorError extends Data.TaggedError("MutatorError")<{
   readonly cause?: unknown;
 }> {}
 
-/** A named query was missing or its args failed validation. */
+/**
+ * A named query was missing or its args failed validation; or a declarative
+ * read could not be compiled (an unknown collection or edge) or parsed from
+ * a URL. `parameter` names the offending query-string parameter
+ * (`filter[age][gt]`, `include`, `page[limit]`) when the error comes from
+ * URL parsing (`@legation/jsonapi`'s `JsonApiQuery.parseRead`) — the value a
+ * JSON:API 400 document carries as `source.parameter`.
+ */
 export class QueryError extends Data.TaggedError("QueryError")<{
   readonly message: string;
   readonly query?: string | undefined;
+  readonly parameter?: string | undefined;
   readonly cause?: unknown;
+}> {}
+
+/**
+ * A Node (or Collection) declared a filterable or sortable field its row does
+ * not carry, or a filterable attribute whose literal kind can neither be
+ * derived from its schema nor was given explicitly (#154, ADR-0028). A static
+ * definition bug surfaced at setup time, like {@link DuplicateNameError};
+ * thrown by the synchronous `Node.make`.
+ */
+export class FilterDeclarationError extends Data.TaggedError("FilterDeclarationError")<{
+  readonly collection: string;
+  readonly field: string;
+  readonly message: string;
 }> {}
 
 /**

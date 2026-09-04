@@ -8,6 +8,13 @@
  * can only narrow the authorized set. Write authorization is plain code
  * inside backend mutators.
  *
+ * Before the auth filter is AND-ed in, a client-authored subset is checked
+ * against its collection's **filterable set** (FilterPolicy.ts, ADR-0028
+ * rule d, #154): every field it filters or sorts by must be declared with
+ * that operator and a literal of the declared kind, and `Exists` is refused
+ * outright. The auth filter's own predicate and server-resolved named
+ * queries are server-authored and exempt.
+ *
  * Cross-cutting concerns (tenancy, cost control, telemetry) attach via
  * SyncMiddleware, which can rewrite or reject requests around the core
  * push/pull handling.
@@ -16,6 +23,8 @@
 import { Context, Effect } from "effect";
 import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
+import * as Collection from "./Collection.js";
+import * as FilterPolicy from "./FilterPolicy.js";
 import type { Predicate } from "./Predicate.js";
 import * as Predicates from "./Predicate.js";
 import type { PullRequest, PushRequest, ReadRequest } from "./Protocol.js";
@@ -30,19 +39,78 @@ export const allowAll: AuthFilter = () => Effect.succeed(Predicates.always);
 /** Per-collection auth filters. Subscribing to an unlisted collection fails. */
 export interface AuthPolicy {
   readonly filters: ReadonlyMap<string, AuthFilter>;
+  /**
+   * The filterable set per collection (#154), from the collection registry
+   * the policy was built with. When present, every client-authored subset
+   * is checked against its collection's declaration — a collection the
+   * registry does not know gets {@link FilterPolicy.bare} (`id` by `eq` /
+   * `in`, sortable by `id`). Absent (a policy built without `collections`),
+   * the filter surface is not enforced: the pre-#154 open behaviour, kept
+   * for policies that never see a Node graph.
+   */
+  readonly declarations?: ReadonlyMap<string, FilterPolicy.FilterDeclaration>;
 }
 
 export const AuthPolicy = Context.Service<AuthPolicy>("@legation/effect/AuthPolicy");
 
-export const policy = (filters: Readonly<Record<string, AuthFilter>>): AuthPolicy => ({
+/** Options for {@link policy}. */
+export interface PolicyOptions {
+  /**
+   * The collection registry (`Node.registry(...).collections`) whose
+   * `filterable` / `sortable` declarations `authorize` enforces. Pass it:
+   * without it, nothing bounds what a client may filter or sort by.
+   */
+  readonly collections?: Collection.CollectionRegistry;
+}
+
+export const policy = (
+  filters: Readonly<Record<string, AuthFilter>>,
+  options?: PolicyOptions
+): AuthPolicy => ({
   filters: new Map(Object.entries(filters)),
+  ...(options?.collections === undefined
+    ? {}
+    : {
+        declarations: new Map(
+          [...options.collections.values()].map(
+            (collection) => [collection.name, Collection.filterDeclarationOf(collection)] as const
+          )
+        ),
+      }),
 });
 
-/** Narrow a subset with its collection's auth filter (deny by default). */
+/**
+ * Who authored a subset. A `"client"` subset came off the wire and is
+ * checked against the filterable set; a `"server"` subset (a named-query
+ * resolver's output) is trusted and only narrowed by the auth filter.
+ */
+export type SubsetOrigin = "client" | "server";
+
+/**
+ * Admit a client subset's `where` / `orderBy` against its collection's
+ * filterable set, or fail naming the collection, field and operator.
+ * A no-op for a policy without declarations.
+ */
+export const checkFilterable = (
+  authPolicy: AuthPolicy,
+  subset: Subset
+): Effect.Effect<void, AuthorizationError> => {
+  if (authPolicy.declarations === undefined) return Effect.void;
+  const declaration = authPolicy.declarations.get(subset.collection) ?? FilterPolicy.bare;
+  const failure = FilterPolicy.check(subset.collection, declaration, subset);
+  return failure === undefined ? Effect.void : Effect.fail(failure);
+};
+
+/**
+ * Narrow a subset with its collection's auth filter (deny by default). A
+ * `"client"` subset is first checked against the filterable set (#154) —
+ * before the filter runs, so nothing undeclared reaches `Backend.evaluate`.
+ */
 export const authorize = (
   authPolicy: AuthPolicy,
   context: SyncContext,
-  subset: Subset
+  subset: Subset,
+  origin: SubsetOrigin = "client"
 ): Effect.Effect<Subset, AuthorizationError> => {
   const filter = authPolicy.filters.get(subset.collection);
   if (filter === undefined) {
@@ -53,7 +121,9 @@ export const authorize = (
       })
     );
   }
-  return filter(context).pipe(
+  const admitted = origin === "client" ? checkFilterable(authPolicy, subset) : Effect.void;
+  return admitted.pipe(
+    Effect.andThen(filter(context)),
     Effect.map((mandatory) => ({ ...subset, where: Predicates.and(mandatory, subset.where) }))
   );
 };

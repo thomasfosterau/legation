@@ -27,13 +27,30 @@
  * sweep fiber reclaims registrations from mirrors silent past
  * `mirrorTimeout`. This is
  * the disconnect detection a BroadcastChannel can't provide on its own.
+ *
+ * Engine subscriptions are made through one counted voice
+ * (`Subscriptions.counted`): a subset registration and a `related`
+ * registration of the same root window — or two `related` registrations
+ * pinning one foreign window — release independently, and the engine drops
+ * the window only when the last registration lets go.
+ *
+ * A party with no `Client` at all — a page whose only JavaScript is a
+ * `postMessage` — registers by URL (`SubscribeUrl`, ADR-0029 section 2,
+ * #159): given `nodes` and `urls`, the host parses the URL, plans the read
+ * and registers its root and edge windows under the party's `mirrorId`,
+ * exactly as `Subscribe` and `SubscribeRelated` would.
  */
 
+import type { UrlReads } from "./Client.js";
 import * as ClientEngine from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
-import { TransportError } from "./Errors.js";
+import * as Coverage from "./Coverage.js";
+import { QueryError, TransportError } from "./Errors.js";
 import type * as MutationState from "./MutationState.js";
+import type * as Node from "./Node.js";
+import * as Query from "./Query.js";
 import * as Related from "./Related.js";
+import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
 import { Clock, Duration, Effect, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
@@ -43,11 +60,19 @@ export interface EngineHostOptions {
   readonly channel: MirrorChannel;
   readonly engine: ClientEngine.ClientEngine;
   /**
-   * The collection registry `related` registrations resolve against. Without
-   * it, `SubscribeRelated` messages are answered with empty results and a
-   * logged warning — pass it whenever mirrors use relational reads.
+   * The collection registry `related` registrations resolve against.
+   * Defaults to `nodes.collections` when `nodes` is given; without either,
+   * `SubscribeRelated` messages are answered with empty results and a
+   * logged warning — pass one whenever mirrors use relational reads.
    */
   readonly registry?: Collection.CollectionRegistry;
+  /**
+   * The node graph and URL-keyed reads `SubscribeUrl` registrations are
+   * parsed and planned against (#159). Without both, a `SubscribeUrl` is
+   * answered with a logged warning and registers nothing.
+   */
+  readonly nodes?: Node.NodeRegistry;
+  readonly urls?: UrlReads;
   /**
    * Liveness sweep: reclaim registrations from mirrors not heard from within
    * `mirrorTimeout`, checked every `sweepInterval`. Defaults: 30s timeout,
@@ -82,7 +107,8 @@ const livenessOf = (options: EngineHostOptions) => ({
  */
 export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { channel, engine } = options;
+    const { channel } = options;
+    const engine = Subscriptions.counted(options.engine);
     const inbox = yield* channel.subscribe;
     const active = yield* Ref.make(new Map<string, Active>());
     const lastSeen = yield* Ref.make(new Map<string, number>());
@@ -218,7 +244,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       edges: ReadonlyArray<Related.EdgeSelect>
     ) => {
       const key = MirrorProtocol.relatedKey(collection, subset, edges);
-      const registry = options.registry;
+      const registry = options.registry ?? options.nodes?.collections;
       if (registry === undefined) {
         return Effect.logWarning(
           "EngineHost: SubscribeRelated received but no collection registry was configured"
@@ -266,6 +292,54 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
             Effect.ignore
           ),
         })
+      );
+
+    // A URL-keyed registration (#159) from a party without a Client: parsed
+    // and planned here, then registered as the party's Subscribe (root) and
+    // SubscribeRelated (edge windows) would be — same refcount per mirrorId,
+    // same liveness sweep. A URL the host cannot parse registers nothing.
+    const { nodes, urls } = options;
+    const registrationOfUrl = (url: string): Effect.Effect<Coverage.Registration, QueryError> =>
+      urls === undefined || nodes === undefined
+        ? Effect.fail(
+            new QueryError({
+              message: "EngineHost: SubscribeUrl received but no `nodes`/`urls` were configured",
+              query: url,
+            })
+          )
+        : urls.parse(url).pipe(
+            Effect.flatMap((read) => Query.tryPlan(nodes, read)),
+            Effect.map(Coverage.ofPlan)
+          );
+
+    const handleSubscribeUrl = (mirrorId: string, url: string) =>
+      registrationOfUrl(url).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning(`EngineHost: SubscribeUrl "${url}" rejected: ${error.message}`)
+        ),
+        Effect.flatMap(({ root, edges }) =>
+          handleSubscribe(mirrorId, root).pipe(
+            Effect.andThen(
+              edges.length === 0
+                ? Effect.void
+                : handleSubscribeRelated(mirrorId, root.collection, root, edges)
+            )
+          )
+        )
+      );
+
+    const handleUnsubscribeUrl = (mirrorId: string, url: string) =>
+      registrationOfUrl(url).pipe(
+        Effect.flatMap(({ root, edges }) =>
+          release(mirrorId, Subset.hash(root)).pipe(
+            Effect.andThen(
+              edges.length === 0
+                ? Effect.void
+                : release(mirrorId, MirrorProtocol.relatedKey(root.collection, root, edges))
+            )
+          )
+        ),
+        Effect.ignore
       );
 
     // The server-fallthrough read (ADR-0025): the host owns the transport, so
@@ -379,6 +453,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
                 MirrorProtocol.relatedKey(message.collection, message.subset, message.edges)
               )
             )
+          );
+        case "SubscribeUrl":
+          return touch(message.mirrorId).pipe(
+            Effect.andThen(handleSubscribeUrl(message.mirrorId, message.url))
+          );
+        case "UnsubscribeUrl":
+          return touch(message.mirrorId).pipe(
+            Effect.andThen(handleUnsubscribeUrl(message.mirrorId, message.url))
           );
         case "Read":
           return handleRead(message.requestId, message.subsets);

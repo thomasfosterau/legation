@@ -1,0 +1,49 @@
+{
+  "url": "/jsonapi/reviews?filter[productId]=p-01&sort=-createdAt",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "reviews",
+        "id": "r-04",
+        "attributes": {
+          "userId": "u2",
+          "authorName": "Edsger",
+          "rating": 3,
+          "body": "Cable is short.",
+          "createdAt": "2026-06-20T08:00:00Z"
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      },
+      {
+        "type": "reviews",
+        "id": "r-01",
+        "attributes": {
+          "userId": "seed-user",
+          "authorName": "Ada",
+          "rating": 5,
+          "body": "Flat response, comfy pads.",
+          "createdAt": "2026-06-01T10:00:00Z"
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/reviews?filter[productId]=p-01&sort=-createdAt"
+    }
+  }
+}

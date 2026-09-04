@@ -31,6 +31,7 @@ import {
   EngineHost,
   Mirror,
   MirrorProtocol,
+  Subscriptions,
   Subset,
 } from "@legation/effect/internal";
 import { Effect, Exit, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect";
@@ -66,6 +67,12 @@ export interface ElectedHostOptions {
   readonly channelName?: string;
   /** Forwarded to {@link EngineHost.run} for mirrors' `related` registrations. */
   readonly registry?: Collection.CollectionRegistry;
+  /**
+   * URL-keyed reads (#159): lets the returned Client `subscribe(url)`, and
+   * — with `nodes` — lets the hosting tab answer `SubscribeUrl` from pages
+   * without a Client (forwarded to {@link EngineHost.run}).
+   */
+  readonly urls?: Client.UrlReads;
   readonly queries?: Query.QueryRegistry;
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /** Override for tests/non-browser injection. Defaults to `navigator.locks`. */
@@ -200,6 +207,28 @@ const switchingView = (
             )
           )
         ),
+      // A held edge registration has no stream to redo the switch for it:
+      // re-pin on every view this switches to (the current one first —
+      // `changes` replays it), releasing the previous tier's hold.
+      pinEdges: (registry, collectionName, subset, edges) =>
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const held = yield* Ref.make<Scope.Closeable | undefined>(undefined);
+          yield* Effect.forkIn(
+            Stream.runForEach(SubscriptionRef.changes(viewRef), (view) =>
+              Effect.gen(function* () {
+                const previous = yield* Ref.getAndSet(held, undefined);
+                if (previous !== undefined) yield* Scope.close(previous, Exit.void);
+                const child = yield* Scope.fork(scope);
+                yield* view
+                  .pinEdges(registry, collectionName, subset, edges)
+                  .pipe(Scope.provide(child));
+                yield* Ref.set(held, child);
+              })
+            ).pipe(Effect.ignore),
+            scope
+          );
+        }),
       read: (subsets) =>
         withCurrent((view) =>
           view.read === undefined
@@ -242,17 +271,26 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
 
     const becomeHost = Effect.gen(function* () {
       const hostClientId = options.hostClientId ?? `host-${options.clientGroupId}`;
-      const engine = yield* ClientEngine.make({
-        clientId: hostClientId,
-        clientGroupId: options.clientGroupId,
-        mutators: options.mutations,
-        ...(options.queries === undefined ? {} : { queries: options.queries }),
-        ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      }).pipe(Effect.provide(options.dependencies));
+      // One counted voice for both fronts over this engine — the host
+      // serving other tabs and this tab's own view — so a mirror releasing
+      // a window never drops one this tab's Client still pins.
+      const engine = Subscriptions.counted(
+        yield* ClientEngine.make({
+          clientId: hostClientId,
+          clientGroupId: options.clientGroupId,
+          mutators: options.mutations,
+          ...(options.queries === undefined ? {} : { queries: options.queries }),
+          ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
+        }).pipe(Effect.provide(options.dependencies))
+      );
       const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
-      yield* options.registry === undefined
-        ? EngineHost.run({ channel: hostChannel, engine })
-        : EngineHost.run({ channel: hostChannel, engine, registry: options.registry });
+      yield* EngineHost.run({
+        channel: hostChannel,
+        engine,
+        nodes: options.nodes,
+        ...(options.registry === undefined ? {} : { registry: options.registry }),
+        ...(options.urls === undefined ? {} : { urls: options.urls }),
+      });
       yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
       yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));
       yield* SubscriptionRef.set(roleRef, "host");
@@ -283,5 +321,10 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
     }
 
     const view = yield* switchingView(viewRef);
-    return { client: Client.fromView(options.nodes, view), role: SubscriptionRef.changes(roleRef) };
+    const client = Client.fromView(
+      options.nodes,
+      view,
+      options.urls === undefined ? {} : { urls: options.urls }
+    );
+    return { client, role: SubscriptionRef.changes(roleRef) };
   });

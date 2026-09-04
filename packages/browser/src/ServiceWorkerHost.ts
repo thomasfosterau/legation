@@ -24,7 +24,7 @@
  * ```
  */
 
-import { type Collection } from "@legation/effect";
+import type { Client, Collection, Node } from "@legation/effect";
 import { ClientEngine, EngineHost } from "@legation/effect/internal";
 import { Effect, Scope } from "effect";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
@@ -38,6 +38,15 @@ export interface ServiceWorkerHostOptions {
    * relational reads.
    */
   readonly registry?: Collection.CollectionRegistry;
+  /**
+   * The node graph and URL-keyed reads for `SubscribeUrl` registrations
+   * (#159): a page with no `Client` posts `{ _tag: "SubscribeUrl",
+   * mirrorId, url }` on the channel and the host pins the URL's windows
+   * under that id — forwarded to {@link EngineHost.run}. Build `urls` with
+   * `JsonApiQuery.urlReads(nodes)` from `@legation/jsonapi`.
+   */
+  readonly nodes?: Node.NodeRegistry;
+  readonly urls?: Client.UrlReads;
 }
 
 /** The default channel name; Mirror setups should use the same one. */
@@ -54,12 +63,16 @@ export const run = (
   options: ServiceWorkerHostOptions = {}
 ): Effect.Effect<never, never, ClientEngine.ClientEngine | Scope.Scope> =>
   Effect.gen(function* () {
-    const { channelName = defaultChannelName, registry } = options;
+    const { channelName = defaultChannelName, registry, nodes, urls } = options;
     const engine = yield* ClientEngine.ClientEngine;
     const channel = yield* BroadcastMirrorChannel.make(channelName);
-    yield* registry === undefined
-      ? EngineHost.run({ channel, engine })
-      : EngineHost.run({ channel, engine, registry });
+    yield* EngineHost.run({
+      channel,
+      engine,
+      ...(registry === undefined ? {} : { registry }),
+      ...(nodes === undefined ? {} : { nodes }),
+      ...(urls === undefined ? {} : { urls }),
+    });
     yield* engine.runSync.pipe(Effect.ignore);
     return yield* Effect.never;
   });

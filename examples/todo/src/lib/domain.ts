@@ -38,7 +38,13 @@ export type RemoveArgs = typeof RemoveArgs.Type;
 
 const { id: _id, ...todoAttributes } = Todo.fields;
 
-export const todos = Node.make("todos", { attributes: todoAttributes });
+// The filterable set (#154): `activeTodos` filters `done`, `allTodos` orders
+// by `createdAt`; nothing else is reachable from a client.
+export const todos = Node.make("todos", {
+  attributes: todoAttributes,
+  filterable: { done: ["eq"] },
+  sortable: ["createdAt"],
+});
 
 export const nodes = Node.registry([todos]);
 

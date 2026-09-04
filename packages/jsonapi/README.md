@@ -142,12 +142,13 @@ an `Effect` requiring an `HttpClient` and a `JsonApiSource`.
 ```ts
 import { Effect } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import { Filter } from "@thomasfosterau/effect-jsonapi";
 import { CollectionLoader } from "@legation/jsonapi";
 
 const program = CollectionLoader.load("articles", {
   include: ["author"],
   sort: [{ field: "createdAt", direction: "desc" }],
-  filter: { status: "published" },
+  filter: Filter.eq("status", "published"),
   page: { number: 1, size: 20 },
 }).pipe(
   Effect.provide(FetchHttpClient.layer),
@@ -166,8 +167,10 @@ const { rows, included } = await Effect.runPromise(program);
   primary rows and its compound `included` rows.
 
 The request `options` are a `JsonApiRequestOptions`: `include`, `fields`,
-`sort` (the library's `{ field, direction }` term shape), `filter`, and `page`
-(an offset/limit, number/size, or cursor/size strategy from the library's
+`sort` (the library's `{ field, direction }` term shape), `filter` (a filter
+grammar AST — `Filter.eq("status", "published")`, `Filter.and(...)` — encoded
+exactly through the grammar's canonical `filter[...]` form), and `page` (an
+offset/limit, number/size, or cursor/size strategy from the library's
 `Query.Page`).
 
 ## Relationships
@@ -202,25 +205,163 @@ const program = Effect.gen(function* () {
   (you manage the subscriptions).
 - `query(engine, subset, names)` — a one-shot resolved snapshot.
 
-## Query encoding
+## Query encoding, URL parsing, and canonical strings
 
-`JsonApiQuery` is the seam that turns a core `Subset` (predicate + order +
-paging) into a JSON:API query string. JSON:API deliberately leaves filter/page
-syntax implementation-defined, so the shipped `defaultEncoder` follows a
-**soundness contract**: the backend always re-runs the full predicate, order,
-and limit locally with `Subset.apply`, so the encoder only has to return a
-_superset_ of the desired rows. It therefore encodes:
+`JsonApiQuery` is the bridge between the **filter grammar** (ADR-0028 — the
+one filter language shared by REST URLs, sync predicates and the façade,
+owned by effect-jsonapi) and the engine's plan:
 
-- top-level `eq` / `in` conjuncts → `filter[field]=...` (operators, `or`/`not`,
-  and `eq null` are dropped — that only makes the server filter _less_
-  restrictive, which is safe);
-- `orderBy` → `sort=-field,field` via the library's `Query.Sort` codec (a hint;
-  local order is authoritative);
-- it does **not** push `limit`/`cursor`, since server-side paging would drop
-  rows the local order still needs.
+- **Filter AST ⇄ `Predicate`** — `fromFilterAst(ast)` is total: every
+  grammar node has an engine node. `toFilterAst(predicate)` is partial and
+  returns `None` where the grammar has no form: `Exists` (server-only), an
+  empty `In` / `NotIn` list, a `null` literal. `foldConstants` folds the two
+  definite cases away exactly (an empty `In` is false, an empty `NotIn` true)
+  before anything is encoded.
+- **URL → `Query.Read`** — `parseRead(nodes, url)` / `parseParams(nodes,
+collection, params)` decode `include`, `fields`, `sort`, `page` and `filter`
+  with effect-jsonapi's `Query.schema` derived from the node graph (each
+  node's filterable set and edges become the codec's declaration), then map
+  them onto the read: `filter` → `where`, `sort` → `order`, `page[limit]` /
+  `page[after]` → `first` / `after`, `include` → the edge selects (single
+  level only). `fields[]` rides beside the read as a projection, never into
+  the plan. A nested include path, an undeclared field or operator, a literal
+  of the wrong kind, an unsortable field or a bad page fails with a
+  `QueryError` whose `parameter` names the offending key — the 400's
+  `source.parameter`.
+- **`Query.Read` → canonical string** — `canonical(nodes, read)` compiles
+  the read and encodes its plan through effect-jsonapi's canonical encoder:
+  `/products?filter[categoryId]=c-audio&sort=id&page[limit]=12`. Two reads
+  with one plan give one string, whatever their spelling; it is the
+  subscription identity of ADR-0029, and `parseRead` accepts it back.
 
-Pass your own `queryEncoder` to `JsonApiSync.layer` to match a server that owns
-an operator-filter or cursor-page contract.
+The shipped `defaultEncoder` is what `JsonApiBackend` pushes to the server:
+the **whole** predicate as the grammar's canonical `filter[...]` form
+(operators, `or`, `not`, `isnull`, `nin` included — nothing is dropped), plus
+`orderBy` as `sort`. A subset whose predicate folds to false is answered
+without a request. Order, cursor and limit stay local: `Subset.apply` still
+finalises the window, now as redundancy over an exact filter rather than as
+correction of a superset. Pass your own `queryEncoder` to `JsonApiSync.layer`
+to match a server with a different filter contract.
+
+## Derived REST handlers
+
+A JSON:API `GET` is the engine's `read` operation (ADR-0025) with a document
+body, so a `list` / `get` endpoint can be derived from the node graph instead
+of hand-written: the URL is parsed by the one grammar, the request's identity
+becomes a `SyncContext`, and the read runs through the same filterable check,
+the same deny-by-default auth filters and the same `Backend.evaluate` +
+`getRows` the sync tier runs — two carriers, one evaluator, one auth path.
+
+```ts
+import { Effect } from "effect";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { RestHandlers } from "@legation/jsonapi";
+import { api, NotFound, Product } from "./my-json-api";
+import { backend, nodes, policy } from "./my-server";
+
+const rest = RestHandlers.make({
+  nodes,
+  backend,
+  policy,
+  // HTTP request → SyncContext: identity from the verified session, never from a client-supplied id.
+  context: (request) =>
+    Effect.succeed({ clientGroupId: "http", identity: request.headers["x-user"] }),
+  prefix: "/api",
+});
+
+const productsLive = HttpApiBuilder.group(api, "products", (handlers) =>
+  handlers
+    .handle("list", rest.list(Product))
+    .handle("get", rest.get(Product, { notFound: () => new NotFound() }))
+);
+```
+
+What the derivation guarantees:
+
+- **Scoping is the policy's.** A request without identity to a private
+  collection sees the policy's empty allow-set: an empty collection for
+  `list`, a 404 for `get` — exactly what the sync tier syncs. No `WHERE
+userId` lives in a handler.
+- **Sorting and paging are `Subset.apply`'s** (ADR-0026 / ADR-0028): code-point
+  text order, NULLs last, the id tie-break, `page[after]` as the cursor.
+  `links.next` continues after the last row when the window is full.
+- **A URL the grammar rejects is the codec's 400** with `source.parameter`,
+  before any backend call; a collection the policy does not declare is a 403.
+- **Includes resolve in two phases**, and every `Relationship.many` the
+  endpoint's resource declares is resolved for linkage — on the primary and
+  the included resources alike, since effect-jsonapi's resource schemas
+  require every declared relationship — while nothing the resource does not
+  declare is touched; `include` decides what is compounded into `included`.
+  A paginated node edge lists and includes under a `Relationship.many`
+  declaration (links plus its rows' linkage) and carries links only under
+  `Relationship.paginated`.
+- **`fields[type]` is a projection** applied at serialisation over full rows
+  (ADR-0029 §5). A resource that serves sparse fieldsets declares its
+  attributes `Resource.attribute(schema, { resource: "optional" })`, or the
+  endpoint's success encoder refuses the sparse object.
+
+Derivation is opt-in per endpoint, beside hand-written handlers on the same
+api. The rows-to-document step is its own module, `DocumentWriter`: a pure
+function of the node graph, the read, the resolved rows and the projection,
+so the service-worker façade serving the same URL from the replica produces
+the same document content (ADR-0029 §6).
+
+## The same documents from the replica
+
+`ReplicaDocuments` is the other caller of that one serialiser: it runs a URL
+(or a parsed read with its `fields[]` projection) over a local view — the
+rows the replica holds, optimistic overlay included — and writes the document
+the derived REST handler would write for the same URL. It depends on nothing
+but `effect` and the engine, so it runs where the engine runs, a service
+worker included; the façade (ADR-0029) is built on it.
+
+```ts
+import { Effect } from "effect";
+import { JsonApiQuery, ReplicaDocuments } from "@legation/jsonapi";
+import { nodes } from "./my-domain";
+import { CartItem, Product, Variant } from "./my-json-api";
+
+const docs = ReplicaDocuments.make({
+  nodes,
+  // The resources the REST endpoints are declared with, so linkage matches them.
+  resources: new Map([Product, Variant, CartItem].map((resource) => [resource.type, resource])),
+  prefix: "/api",
+});
+
+// In the worker: serve only what the replica covers (ADR-0029 §3).
+const serve = (url: string) =>
+  Effect.gen(function* () {
+    const { read } = yield* JsonApiQuery.parseRead(nodes, url);
+    const verdicts = yield* Effect.forEach(yield* docs.toCover(read), (needed) =>
+      client.coverageOf(needed)
+    );
+    if (verdicts.some((verdict) => verdict._tag === "Uncovered")) return undefined; // network
+    return yield* docs.fromUrl(client.view, url); // a collection or single-resource document
+  });
+```
+
+- **Linkage follows the same declarations.** Pass the resources the REST
+  endpoints are declared with and the replica emits exactly the
+  relationships the derived handler emits, by construction (one linkage
+  derivation, two callers). Without `resources`, the node graph's synthetic
+  resources (`JsonApiQuery.resourcesOf(nodes)`) apply: every collection edge
+  resolved, paginated edges as `many`.
+- **One grammar on both sides.** URLs are parsed with the node-derived codec,
+  so parity holds when the endpoint is declared with the same codec
+  (`JsonApiQuery.querySchema(nodes, collection)`, or equivalent declarations)
+  and collection edges are `many`. An `include` edge or a `fields[type]` type
+  the bound resource does not declare is refused with the codec's own
+  `QueryError` shape before any query runs.
+- **Coverage is the caller's guard.** The writer cannot tell a missing row
+  from an absent one, so `toCover(read)` names the reads a request needs
+  covered — the read itself, plus one whole-collection read per collection
+  the declared linkage resolves from beyond the read's includes. Serve a URL
+  only when every one is covered; an uncovered URL goes to the network.
+- **`fromUrl` writes the shape the path asks for**: a single-resource
+  document (`data: null` when the replica holds no row) for `/{type}/{id}`, a
+  collection document otherwise. A URL the grammar rejects, or one naming a
+  collection no bound resource declares, fails with a `QueryError` — never a
+  defect, since a URL is network input.
 
 ## Types, schemas, and errors
 

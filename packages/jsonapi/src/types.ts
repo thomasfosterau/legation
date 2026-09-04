@@ -14,7 +14,7 @@
  * strategies).
  */
 
-import { Query } from "@thomasfosterau/effect-jsonapi";
+import { type Filter, Query } from "@thomasfosterau/effect-jsonapi";
 import { Schema } from "effect";
 
 export type {
@@ -50,12 +50,15 @@ const PageParamsSchema = Schema.Union([
 export type PageParams = typeof PageParamsSchema.Type;
 
 /**
- * JSON:API Request Options
+ * JSON:API Request Options. `filter` is a filter-grammar AST (ADR-0028;
+ * `Filter.eq("status", "open")`, `Filter.and(...)`, …), encoded exactly
+ * through the grammar's canonical `filter[...]` form by
+ * `JsonApiQuery.buildQueryString`.
  */
 export interface JsonApiRequestOptions {
-  include?: string[];
-  fields?: Record<string, string[]>;
+  include?: ReadonlyArray<string>;
+  fields?: Readonly<Record<string, ReadonlyArray<string>>>;
   sort?: ReadonlyArray<SortTerm>;
-  filter?: Record<string, string>;
+  filter?: Filter.Node;
   page?: PageParams;
 }

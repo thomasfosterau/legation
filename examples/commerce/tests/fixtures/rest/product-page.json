@@ -1,0 +1,144 @@
+{
+  "url": "/jsonapi/products?sort=id&page[limit]=4",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "type": "products",
+        "id": "p-01",
+        "attributes": {
+          "name": "Studio Headphones",
+          "description": "Closed-back monitoring headphones.",
+          "priceCents": 14900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-audio"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-acme"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-01a"
+              },
+              {
+                "type": "variants",
+                "id": "v-01b"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "products",
+        "id": "p-02",
+        "attributes": {
+          "name": "USB Microphone",
+          "description": "Cardioid condenser microphone.",
+          "priceCents": 9900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-audio"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-acme"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-02a"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "products",
+        "id": "p-03",
+        "attributes": {
+          "name": "Tenkeyless Keyboard",
+          "description": "Hot-swappable TKL board.",
+          "priceCents": 12900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-keyboards"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-acme"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-03a"
+              },
+              {
+                "type": "variants",
+                "id": "v-03b"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "products",
+        "id": "p-04",
+        "attributes": {
+          "name": "Ergonomic Split Keyboard",
+          "description": "Columnar split with tenting.",
+          "priceCents": 24900
+        },
+        "relationships": {
+          "category": {
+            "data": {
+              "type": "categories",
+              "id": "c-keyboards"
+            }
+          },
+          "seller": {
+            "data": {
+              "type": "sellers",
+              "id": "s-nordic"
+            }
+          },
+          "variants": {
+            "data": [
+              {
+                "type": "variants",
+                "id": "v-04a"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/products?sort=id&page[limit]=4",
+      "next": "/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04"
+    }
+  }
+}

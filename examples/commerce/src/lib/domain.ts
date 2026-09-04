@@ -9,17 +9,27 @@
  *
  * The graph is declared as **Nodes and Edges** (ADR-0022): each foreign key
  * is declared exactly once, on the child (`Edge.one(..., { via })`), and the
- * parent names the inverse — the engine registry, the joins, the sync
- * windows, and the fan-out topics all derive from the same declarations
- * (the old hand-written both-directions `Collection.relationships` are
- * gone). `reviews` is a **paginated** edge: its order is part of the edge's
- * identity, and a windowed include syncs per-parent windows (ADR-0024).
+ * parent names the inverse where the app traverses it — the engine registry,
+ * the joins, the sync windows, and the fan-out topics all derive from the
+ * same declarations (the old hand-written both-directions
+ * `Collection.relationships` are gone). Only the edges the app reads are
+ * declared: a product's `variants` (the catalog and detail pages include
+ * them); reviews and order items are read as their own collections filtered
+ * by the parent's key (`productReviews`, `myOrderItems`), so no parent edge
+ * names them. The REST resources (`server/resources.ts`) declare the same
+ * graph, and `tests/derived-rest.test.ts` checks the two agree.
  *
  * Public catalog collections (products, variants, categories, sellers,
  * reviews) are readable by anyone; private collections (profiles, cartItems,
  * orders, orderItems) carry a `userId` the auth filters scope by
  * (ADR-0015's denormalized key) — declared as `hintKeys`, so ADR-0023's
  * fine fan-out topics can use the same field.
+ *
+ * Each node also declares its **filterable set** (ADR-0028, #154): exactly
+ * the fields the reads below filter and order by. `id` and every one-edge
+ * key are `eq`/`in` by default; `userId` (a scoping key, not an edge) and
+ * the sort fields are declared explicitly. Anything else is unreachable
+ * from a client.
  */
 import { Effect, Schema } from "effect";
 import { Edge, Mutation, Node, type Query } from "@legation/effect";
@@ -125,7 +135,10 @@ const {
   ...orderItemAttributes
 } = OrderItemSchema.fields;
 
-export const categories = Node.make("categories", { attributes: categoryAttributes });
+export const categories = Node.make("categories", {
+  attributes: categoryAttributes,
+  sortable: ["name"],
+});
 
 export const sellers = Node.make("sellers", { attributes: sellerAttributes });
 
@@ -135,9 +148,6 @@ export const products = Node.make("products", {
     category: Edge.one("categories", { via: "categoryId" }),
     seller: Edge.one("sellers", { via: "sellerId" }),
     variants: Edge.many("variants", { inverse: "product" }),
-    // Order is part of the edge's identity (cursor windows need it) — the
-    // newest-first review feed is declared here, not per query.
-    reviews: Edge.paginated("reviews", { inverse: "product", order: ["-createdAt"] }),
   },
 });
 
@@ -150,6 +160,8 @@ export const reviews = Node.make("reviews", {
   attributes: reviewAttributes,
   edges: { product: Edge.one("products", { via: "productId" }) },
   hintKeys: ["userId"],
+  // `productReviews` reads the collection directly, newest first.
+  sortable: ["createdAt"],
 });
 
 export const profiles = Node.make("profiles", { attributes: profileAttributes });
@@ -158,12 +170,14 @@ export const cartItems = Node.make("cartItems", {
   attributes: cartItemAttributes,
   edges: { variant: Edge.one("variants", { via: "variantId" }) },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
 });
 
 export const orders = Node.make("orders", {
   attributes: orderAttributes,
-  edges: { items: Edge.many("orderItems", { inverse: "order" }) },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
+  sortable: ["createdAt"],
 });
 
 export const orderItems = Node.make("orderItems", {
@@ -173,6 +187,7 @@ export const orderItems = Node.make("orderItems", {
     variant: Edge.one("variants", { via: "variantId" }),
   },
   hintKeys: ["userId"],
+  filterable: { userId: ["eq"] },
 });
 
 /** The closed, validated graph: nodes + the derived engine registry. */
@@ -218,6 +233,9 @@ export const productDetail = (id: string): Query.Read => ({
   include: { variants: true, seller: true },
 });
 
+/** The catalog's page size — the SSR load and the live hook window the same read. */
+export const CATALOG_PAGE_SIZE = 4;
+
 /** One catalog page: ordered by id, cursor + limit windowed. */
 export const productPage = (options: {
   categoryId?: string;
@@ -227,7 +245,7 @@ export const productPage = (options: {
   collection: "products",
   ...(options.categoryId !== undefined ? { where: { categoryId: options.categoryId } } : {}),
   order: ["id"],
-  first: options.limit ?? 12,
+  first: options.limit ?? CATALOG_PAGE_SIZE,
   ...(options.cursor !== undefined ? { after: options.cursor } : {}),
 });
 

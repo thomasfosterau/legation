@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -40,11 +40,13 @@ const COLLECTION = "contract";
 const EVAL_COLLECTION = `${COLLECTION}_eval`;
 
 // One attribute set covers everything the contract writes: `n` (rows),
-// `rank`/`tag` (subset evaluation), plus the two server rules below.
+// `rank`/`tag` (subset evaluation, whose generated corpus writes NULL and
+// absent values under ADR-0028, so both are nullable and optional), plus the
+// two server rules below.
 const attributes = {
   n: Schema.optionalKey(Schema.Number),
-  rank: Schema.optionalKey(Schema.Number),
-  tag: Schema.optionalKey(Schema.String),
+  rank: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  tag: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** A row the server refuses to store: a permanent rejection (422). */
   poison: Schema.optionalKey(Schema.Boolean),
   /** A row that makes the server fall over: a transient failure (500). */
@@ -365,9 +367,10 @@ const makeBackend = Effect.gen(function* () {
     operations: new Map(),
     writes,
     atomic: { path: atomic!.path },
-    // The server declares no filter/sort parameters; the backend re-applies
-    // the subset locally anyway, so an empty query is a sound superset.
-    query: { encode: () => "" },
+    // The server declares no filter/sort parameters (its list endpoint is the
+    // whole table); the backend re-applies the subset locally anyway, so an
+    // empty query is exact over this server.
+    query: { encode: () => Effect.succeed(Option.some("")) },
   }).pipe(Effect.provideService(HttpClient.HttpClient, client));
   return { backend, requests, store };
 });

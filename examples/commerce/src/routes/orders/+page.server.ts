@@ -1,15 +1,17 @@
-/** Orders load — the naive tier's read, straight from the JSON:API. */
+/**
+ * Orders load — the naive tier's read, straight from the JSON:API at the
+ * canonical URL of `myOrders` (newest first), the read the page keeps live.
+ */
 import type { PageServerLoad } from "./$types";
 import { Effect } from "effect";
-import { apiFor } from "../../../server/client.js";
+import { myOrders } from "../../lib/domain.js";
+import { readCollection } from "../../../server/client.js";
+import { Order } from "../../../server/resources.js";
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load = (async ({ locals }) => {
   if (locals.user === undefined) return { orders: [] };
-  const api = await Effect.runPromise(apiFor(locals.user.id));
   const orders = await Effect.runPromise(
-    api.orders
-      .list({ query: {} })
-      .pipe(Effect.catchTag("Unauthorized", () => Effect.succeed({ data: [] })))
+    readCollection(locals.user.id, Order.collection(), myOrders(locals.user.id))
   );
   return { orders: orders.data };
-};
+}) satisfies PageServerLoad;

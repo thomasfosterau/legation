@@ -150,11 +150,15 @@ describe("the server tier", () => {
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         yield* engine.push.pipe(Effect.orDie);
+        // A windowed observation: under ADR-0029 an unwindowed one would
+        // cover any sort of the collection, so the fallthrough below needs
+        // a read the strict window rule rejects (a different sort).
+        const observed = { collection: "products", order: ["-name"], first: 5 };
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
         yield* Effect.forkScoped(
-          Stream.runForEach(client.observe({ collection: "products" }), (rows) =>
-            Ref.set(latest, rows)
-          ).pipe(Effect.ignore)
+          Stream.runForEach(client.observe(observed), (rows) => Ref.set(latest, rows)).pipe(
+            Effect.ignore
+          )
         );
         // The observer registered its window; a pull hydrates it.
         yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
@@ -175,9 +179,12 @@ describe("the server tier", () => {
           .pipe(Effect.orDie);
 
         // Covered (the observed root window): answered from the replica.
-        const covered = yield* client.query({ collection: "products" });
+        const covered = yield* client.query(observed);
         expect(covered).toHaveLength(1);
-        // A different root window is uncovered: the fallthrough sees the truth.
+        // A shorter prefix of the same window is covered too (ADR-0029 rule 2).
+        const prefix = yield* client.query({ ...observed, first: 2 });
+        expect(prefix).toHaveLength(1);
+        // A different sort is uncovered: the fallthrough sees the truth.
         const uncovered = yield* client.query({
           collection: "products",
           order: ["name"],

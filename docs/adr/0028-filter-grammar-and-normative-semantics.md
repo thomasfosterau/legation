@@ -166,6 +166,12 @@ is the typed value on the node.
 | `And` / `Or` / `Not`              | The Kleene tables above                                                                                                                                                                     |
 | `Exists`                          | Server-only. A backend resolves it to `In` before evaluation (`resolveExists`), as today. On the client `evaluate` stays permissive, `Some(true)`, because the server already narrowed rows |
 
+The empty-list rule of `In` and `NotIn` is decided **before** the field is
+read: an empty `In` is `Some(false)` and an empty `NotIn` is `Some(true)`
+even when the field is `None`. Postgres agrees, because the compilers
+render an empty list as `1 = 0` / `1 = 1` (section 6), which is definite on
+a NULL row; the differential harness (#153) pins the order (#155).
+
 Comparison of same-typed operands: numbers numerically, text by code point
 (rule c), booleans with `false < true`. Postgres orders booleans; JS `<` and
 SQLite's 0/1 agree.

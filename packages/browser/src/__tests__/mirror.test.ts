@@ -7,9 +7,14 @@
 import {
   Authorization,
   Backend,
+  Client,
   ClientStore,
+  Edge,
   MemoryBackend,
   Mutator,
+  Node,
+  Predicate,
+  QueryError,
   Transport,
 } from "@legation/effect";
 import {
@@ -30,8 +35,19 @@ const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   done: Schema.Boolean,
+  authorId: Schema.optional(Schema.String),
 });
 type Todo = typeof TodoArgs.Type;
+
+// The node graph the URL-keyed tests (#159) compile against: a todo's
+// `author` edge is what a `SubscribeUrl` with `include=author` must pin.
+const nodes = Node.registry([
+  Node.make("todos", {
+    attributes: { title: Schema.String, done: Schema.Boolean, authorId: Schema.String },
+    edges: { author: Edge.one("users", { via: "authorId" }) },
+  }),
+  Node.make("users", { attributes: { name: Schema.String } }),
+]);
 
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
@@ -65,7 +81,7 @@ const makeEngine = Effect.gen(function* () {
     Effect.provideService(Backend.Backend, backend),
     Effect.provideService(
       Authorization.AuthPolicy,
-      Authorization.policy({ todos: Authorization.allowAll })
+      Authorization.policy({ todos: Authorization.allowAll, users: Authorization.allowAll })
     ),
     Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
@@ -362,5 +378,161 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
       const exit = yield* Effect.exit(Fiber.join(outcome));
       expect(Exit.isSuccess(exit)).toBe(true);
     })
+  );
+});
+
+// ─── URL-keyed subscriptions (#159, ADR-0029 section 2) ──────────────────────
+
+/**
+ * A stand-in for `@legation/jsonapi`'s `JsonApiQuery.urlReads` (this package
+ * cannot depend on it, ADR-0006): `/{collection}` with an optional
+ * `include=a,b`, canonicalised with the include set sorted.
+ */
+const stubUrls: Client.UrlReads = {
+  parse: (url) =>
+    Effect.suspend(() => {
+      const { pathname, searchParams } = new URL(url, "http://localhost");
+      const collection = pathname.split("/").findLast((s) => s.length > 0) ?? "";
+      if (!nodes.nodes.has(collection)) {
+        return Effect.fail(
+          new QueryError({ message: `Unknown collection: ${collection}`, query: collection })
+        );
+      }
+      const include = searchParams.get("include");
+      return Effect.succeed({
+        collection,
+        ...(include === null
+          ? {}
+          : {
+              include: Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
+            }),
+      });
+    }),
+  canonical: (read) =>
+    Effect.succeed(
+      `/${read.collection}${
+        read.include === undefined
+          ? ""
+          : `?include=${Object.keys(read.include).toSorted().join(",")}`
+      }`
+    ),
+};
+
+const hashes = (engine: ClientEngine.ClientEngine) =>
+  Effect.map(engine.activeSubscriptions, (subs) => subs.map(Subset.hash));
+const todosRoot = Subset.hash(allTodos);
+const authorWindow = Subset.hash(
+  Subset.make({ collection: "users", where: Predicate.isIn("id", ["u1"]) })
+);
+
+describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
+  it.effect("a page with no Client registers by URL: SubscribeUrl pins root and edge windows", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      yield* EngineHost.run({
+        channel: host,
+        engine,
+        registry: nodes.collections,
+        nodes,
+        urls: stubUrls,
+      });
+      yield* engine.mutate("todo/set", { id: "1", title: "by url", done: false, authorId: "u1" });
+
+      // Nothing but a message on the channel: the host parses, plans and
+      // registers under the page's id, exactly as Subscribe + SubscribeRelated.
+      yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
+      const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
+      expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+
+      // A URL the host cannot parse registers nothing (and is logged).
+      yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/widgets" });
+      yield* sleepReal(30);
+      expect(yield* hashes(engine)).toHaveLength(2);
+
+      // The same URL, however spelt, releases both windows.
+      yield* channel.post({
+        _tag: "UnsubscribeUrl",
+        mirrorId: "page",
+        url: "/api/todos?include=author",
+      });
+      yield* eventually(hashes(engine), (current) => current.length === 0);
+    })
+  );
+
+  it.effect("nodes alone suffice: the registry defaults to nodes.collections", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      // No `registry`: an include URL must still pin its edge windows, not
+      // just the root with a warning.
+      yield* EngineHost.run({ channel: host, engine, nodes, urls: stubUrls });
+      yield* engine.mutate("todo/set", { id: "1", title: "by url", done: false, authorId: "u1" });
+      yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
+      const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
+      expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+    })
+  );
+
+  it.effect("a host without URL reads ignores SubscribeUrl and keeps serving", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      yield* EngineHost.run({ channel: host, engine });
+      yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos" });
+      yield* sleepReal(30);
+      expect(yield* hashes(engine)).toHaveLength(0);
+      const mirror = yield* Mirror.make({ channel, mutators });
+      yield* mirror.subscribe(allTodos);
+      yield* eventually(hashes(engine), (current) => current.length === 1);
+    })
+  );
+
+  it.effect(
+    "a connected Client subscribes by URL; an edged pin releases without dropping the root",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeEngine;
+          const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+          yield* EngineHost.run({ channel: host, engine, registry: nodes.collections });
+          const client = yield* Client.connect({
+            nodes,
+            mutations: mutators,
+            channel,
+            urls: stubUrls,
+          });
+          yield* client.mutate("todo/set", {
+            id: "1",
+            title: "pinned",
+            done: false,
+            authorId: "u1",
+          });
+
+          yield* client.subscribe("/todos");
+          yield* client.subscribe("/todos?include=author");
+          expect(yield* client.subscriptions).toEqual(["/todos", "/todos?include=author"]);
+          // The host holds the root once for both pins, plus the author window.
+          const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
+          expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+          expect(
+            (yield* client.coverageOf({ collection: "todos", include: { author: true } }))._tag
+          ).toBe("Covered");
+
+          // Releasing the edged pin drops the author window and nothing else:
+          // the plain pin's root survives the relational registration's teardown.
+          yield* client.unsubscribe("/todos?include=author");
+          yield* eventually(hashes(engine), (current) => current.length === 1);
+          expect(yield* hashes(engine)).toEqual([todosRoot]);
+          expect(
+            (yield* client.coverageOf({ collection: "todos", include: { author: true } }))._tag
+          ).toBe("Uncovered");
+          expect((yield* client.coverageOf({ collection: "todos" }))._tag).toBe("Covered");
+
+          yield* client.unsubscribe("/todos");
+          yield* eventually(hashes(engine), (current) => current.length === 0);
+          expect(yield* client.subscriptions).toEqual([]);
+        })
+      )
   );
 });

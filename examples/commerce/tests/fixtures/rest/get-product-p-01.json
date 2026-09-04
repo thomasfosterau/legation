@@ -1,0 +1,82 @@
+{
+  "url": "/jsonapi/products/p-01?include=variants",
+  "status": 200,
+  "body": {
+    "data": {
+      "type": "products",
+      "id": "p-01",
+      "attributes": {
+        "name": "Studio Headphones",
+        "description": "Closed-back monitoring headphones.",
+        "priceCents": 14900
+      },
+      "relationships": {
+        "category": {
+          "data": {
+            "type": "categories",
+            "id": "c-audio"
+          }
+        },
+        "seller": {
+          "data": {
+            "type": "sellers",
+            "id": "s-acme"
+          }
+        },
+        "variants": {
+          "data": [
+            {
+              "type": "variants",
+              "id": "v-01a"
+            },
+            {
+              "type": "variants",
+              "id": "v-01b"
+            }
+          ]
+        }
+      }
+    },
+    "included": [
+      {
+        "type": "variants",
+        "id": "v-01a",
+        "attributes": {
+          "sku": "HP-BLK",
+          "name": "Black",
+          "priceCents": 14900,
+          "stock": 12
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      },
+      {
+        "type": "variants",
+        "id": "v-01b",
+        "attributes": {
+          "sku": "HP-WHT",
+          "name": "White",
+          "priceCents": 14900,
+          "stock": 3
+        },
+        "relationships": {
+          "product": {
+            "data": {
+              "type": "products",
+              "id": "p-01"
+            }
+          }
+        }
+      }
+    ],
+    "links": {
+      "self": "/jsonapi/products?include=variants&filter[id]=p-01&page[limit]=1"
+    }
+  }
+}

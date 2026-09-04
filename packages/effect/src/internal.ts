@@ -12,6 +12,7 @@
 // ─── Plan vocabulary (compiled from Query reads) ─────────────────────────────
 export * as Subset from "./Subset.js";
 export * as Related from "./Related.js";
+export * as Coverage from "./Coverage.js";
 export * as Hash from "./Hash.js";
 export * as CollectionIndex from "./CollectionIndex.js";
 
@@ -48,6 +49,7 @@ export * as Mirror from "./Mirror.js";
 
 // ─── Server assembly ─────────────────────────────────────────────────────────
 export * as BackendContract from "./BackendContract.js";
+export * as FilterCorpus from "./FilterCorpus.js";
 export * as Cvr from "./Cvr.js";
 export * as InvalidationBus from "./InvalidationBus.js";
 export * as FanoutTopics from "./FanoutTopics.js";

@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
 
 describe("resourceToRow", () => {
@@ -74,14 +75,15 @@ describe("buildQueryString", () => {
       include: ["author"],
       sort: [{ field: "createdAt", direction: "desc" }],
       fields: { articles: ["title", "body"] },
-      filter: { status: "published" },
+      filter: Filter.and(Filter.eq("status", "published"), Filter.gt("rating", 3)),
       page: { number: 2, size: 10 },
     });
     expect(query).toContain("include=author");
     expect(query).toContain("sort=-createdAt");
-    expect(query).toContain("fields%5Barticles%5D=title%2Cbody");
-    expect(query).toContain("filter%5Bstatus%5D=published");
-    expect(query).toContain("page%5Bnumber%5D=2");
+    expect(query).toContain("fields[articles]=title%2Cbody");
+    // The filter is the grammar's exact form: the operator reaches the wire.
+    expect(query).toContain("filter[rating][gt]=3&filter[status]=published");
+    expect(query).toContain("page[number]=2");
   });
 
   it("is empty without options", () => {

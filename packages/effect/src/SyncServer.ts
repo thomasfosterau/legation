@@ -24,12 +24,14 @@ import {
   IdentityResolver,
   SyncMiddleware,
   authorize,
+  checkFilterable,
   passthroughMiddleware,
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 import {
   AuthorizationError,
+  BackendError,
   QueryError,
   StoreError,
   TransportError,
@@ -52,6 +54,75 @@ import type { Subset } from "./Subset.js";
 
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
+
+/** One row a read returns: its collection beside the backend's `(id, version, value)`. */
+export type ReadRow = ReadResponse["rows"][number];
+
+/** What ADR-0025's read needs beside the request: the backend, the policy, and the middleware seam. */
+export interface ReadDeps {
+  readonly backend: Backend;
+  readonly authPolicy: AuthPolicy;
+  /** The interception seam; absent means passthrough. */
+  readonly middleware?: SyncMiddleware;
+}
+
+/**
+ * Evaluate one already-authorized subset to its current rows: `evaluate`
+ * gives the `(id, version)` set in subset order, `getRows` the values, and
+ * the rows are returned in the **evaluated order** — `getRows` promises
+ * nothing about order (a SQL `IN` returns whatever the engine likes), and
+ * the order is the window's identity (ADR-0026).
+ */
+const evaluateRows = (
+  backend: Backend,
+  context: SyncContext,
+  subset: Subset
+): Effect.Effect<ReadonlyArray<ReadRow>, BackendError> =>
+  Effect.gen(function* () {
+    const ids = (yield* backend.evaluate(context, subset)).map((entry) => entry.id);
+    const fetched = yield* backend.getRows(context, subset.collection, ids);
+    const byId = new Map(fetched.map((row) => [row.id, row] as const));
+    const rows: Array<ReadRow> = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (row !== undefined) rows.push({ collection: subset.collection, ...row });
+    }
+    return rows;
+  });
+
+/**
+ * ADR-0025's read without its carrier: pull's front half, then
+ * `Backend.evaluate` + `getRows`, and nothing else. The subsets are checked
+ * against the filterable set as the client's own text (#154), handed to
+ * `SyncMiddleware.onRead`, narrowed by the deny-by-default auth filters —
+ * every subset before any is evaluated, so a denied subset anywhere in the
+ * batch means no backend call at all — then each is evaluated to its
+ * current rows in subset order. No cookie, no CVR read or write, no
+ * `lastMutationIds`. `handleRead` is this behind the protocol's identity
+ * resolution; a derived REST handler is this behind an HTTP request's —
+ * one read path, two carriers.
+ */
+export const readSubsets = (
+  deps: ReadDeps,
+  context: SyncContext,
+  request: ReadRequest
+): Effect.Effect<ReadonlyArray<ReadRow>, AuthorizationError | BackendError> =>
+  Effect.gen(function* () {
+    yield* Effect.forEach(request.subsets, (subset) => checkFilterable(deps.authPolicy, subset), {
+      discard: true,
+    });
+    const onRead = deps.middleware?.onRead;
+    const checked = onRead === undefined ? request : yield* onRead(context, request);
+    const authorized: Array<Subset> = [];
+    for (const subset of checked.subsets) {
+      authorized.push(yield* authorize(deps.authPolicy, context, subset, "server"));
+    }
+    const rows: Array<ReadRow> = [];
+    for (const subset of authorized) {
+      rows.push(...(yield* evaluateRows(deps.backend, context, subset)));
+    }
+    return rows;
+  });
 
 /**
  * Server construction options (#48). Both default to today's behaviour: an
@@ -315,8 +386,21 @@ export const makeWithIntrospectionWith = (
           })
         : resolverOption.value.resolve(named.name, named.args, context);
 
-    // Authorize client-authored subsets and server-resolved named queries
-    // identically: AND each with its collection's mandatory filter.
+    // The filterable set (#154) is checked against the client's OWN text —
+    // the request as it arrived, before middleware may rewrite it — so what
+    // a tenancy middleware ANDs in (a scoping key, an `Exists`) stays
+    // server-authored, like the auth filter and a named query's resolution.
+    const checkClientSubsets = (
+      subsets: ReadonlyArray<Subset>
+    ): Effect.Effect<void, AuthorizationError> =>
+      Effect.forEach(subsets, (subset) => checkFilterable(authPolicy, subset), {
+        discard: true,
+      });
+
+    // Authorize middleware-checked subsets and server-resolved named queries
+    // alike: AND each with its collection's mandatory filter. Both are
+    // server-authored by now (the client's text was checked above), so
+    // `authorize` narrows without re-checking.
     const authorizeAll = (
       context: SyncContext,
       request: PullRequest
@@ -324,11 +408,11 @@ export const makeWithIntrospectionWith = (
       Effect.gen(function* () {
         const authorized: Array<Subset> = [];
         for (const subset of request.subscriptions) {
-          authorized.push(yield* authorize(authPolicy, context, subset));
+          authorized.push(yield* authorize(authPolicy, context, subset, "server"));
         }
         for (const named of request.namedSubscriptions ?? []) {
           authorized.push(
-            yield* authorize(authPolicy, context, yield* resolveNamed(context, named))
+            yield* authorize(authPolicy, context, yield* resolveNamed(context, named), "server")
           );
         }
         return authorized;
@@ -395,6 +479,7 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId);
+            yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
             const authorized = yield* authorizeAll(context, checked);
@@ -427,10 +512,11 @@ export const makeWithIntrospectionWith = (
         Effect.withSpan(Telemetry.span.serverPull)
       );
 
-    // The fallthrough read (ADR-0025): pull's front half — identity,
-    // middleware, deny-by-default auth — then evaluate + fetch. No cookie,
-    // no CVR read or write, no lastMutationIds: a read never perturbs sync
-    // state, so the worst it can be is stale (pull stays the correctness path).
+    // The fallthrough read (ADR-0025): identity, then `readSubsets` — pull's
+    // front half (filterable check, middleware, deny-by-default auth), then
+    // evaluate + fetch. No cookie, no CVR read or write, no lastMutationIds:
+    // a read never perturbs sync state, so the worst it can be is stale
+    // (pull stays the correctness path).
     const handleRead = (
       request: ReadRequest
     ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
@@ -438,20 +524,7 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId);
-            const checked = yield* (
-              middleware.onRead ?? ((_, r: ReadRequest) => Effect.succeed(r))
-            )(context, request);
-            const authorized: Array<Subset> = [];
-            for (const subset of checked.subsets) {
-              authorized.push(yield* authorize(authPolicy, context, subset));
-            }
-            const rows: ReadResponse["rows"][number][] = [];
-            for (const subset of authorized) {
-              const ids = (yield* backend.evaluate(context, subset)).map((entry) => entry.id);
-              for (const row of yield* backend.getRows(context, subset.collection, ids)) {
-                rows.push({ collection: subset.collection, ...row });
-              }
-            }
+            const rows = yield* readSubsets({ backend, authPolicy, middleware }, context, request);
             return { rows };
           }).pipe(Effect.mapError(asTransportError))
         ),

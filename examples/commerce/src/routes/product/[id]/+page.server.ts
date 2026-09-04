@@ -1,31 +1,36 @@
 /**
- * Product detail — the naive tier loads the product (variants included) and
- * its reviews from the JSON:API; the no-JS forms write back through it
- * (cart add, review post). Signed-out writes bounce to /account.
+ * Product detail — the naive tier loads the product with its detail edges
+ * (`productDetail`: variants and seller included) and its reviews
+ * (`productReviews`, newest first) from the JSON:API at their canonical
+ * URLs — the reads the page's live hooks subscribe to. A product the read
+ * does not match is the page's 404. The no-JS forms write back through the
+ * typed client (cart add, review post); signed-out writes bounce to
+ * /account.
  */
 import type { Actions, PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { apiFor, run } from "../../../../server/client.js";
+import { productDetail, productReviews } from "../../../lib/domain.js";
+import { apiFor, readCollection } from "../../../../server/client.js";
 import { productId, variantId } from "../../../../server/jsonapi.js";
+import { Product, Review, Seller, Variant } from "../../../../server/resources.js";
 
-export const load: PageServerLoad = async ({ locals, params }) => {
-  const api = await Effect.runPromise(apiFor(locals.user?.id));
-  const [product, reviews] = await Promise.all([
-    run(
-      api.products.get({ params: { id: productId(params.id) }, query: { include: ["variants"] } }).pipe(
-        Effect.catchTag("NotFound", () => Effect.succeed(undefined))
-      )
-    ),
-    Effect.runPromise(api.reviews.list({ query: { filter: { productId: params.id } } })),
+export const load = (async ({ locals, params }) => {
+  const user = locals.user?.id;
+  const [detail, reviews] = await Promise.all([
+    Effect.runPromise(readCollection(user, Product.collection(), productDetail(params.id))),
+    Effect.runPromise(readCollection(user, Review.collection(), productReviews(params.id))),
   ]);
-  if (product?.data == null) error(404, "no such product");
+  const product = detail.data[0];
+  if (product === undefined) error(404, "no such product");
+  const included = detail.included ?? [];
   return {
-    product: product.data,
-    variants: product.included ?? [],
+    product,
+    variants: included.filter((resource): resource is typeof Variant.Type => resource.type === "variants"),
+    seller: included.find((resource): resource is typeof Seller.Type => resource.type === "sellers"),
     reviews: reviews.data,
   };
-};
+}) satisfies PageServerLoad;
 
 export const actions: Actions = {
   addToCart: async ({ request, locals }) => {

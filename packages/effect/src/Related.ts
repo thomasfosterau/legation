@@ -746,20 +746,60 @@ const reconcile = (
     return changed;
   });
 
+/** Whether a background pull is running, and whether another is wanted after it. */
+interface PullState {
+  readonly running: boolean;
+  readonly wanted: boolean;
+}
+
 /**
- * Auto-subscribing relational read: subscribes the base subset and, from its
- * rows, the narrowed `foreignField IN (...)` subsets of each targeted
- * collection — so the related rows sync without the caller wiring subscriptions.
- * The subscriptions track the live linkage (re-derived on every change) and are
- * torn down when the scope closes. Returns a stream that emits the resolved rows
- * and re-emits on any change.
+ * A pull request that never blocks its caller: the pull runs on a fiber of
+ * `scope`, at most one at a time, and a request made while one runs queues
+ * exactly one more (so a subset registered mid-pull is still fetched). A
+ * failed pull (an offline transport, a server away) only delays rows: the
+ * engine's own sync loop recovers — local is always an answer.
  */
-export const relatedWith = (
+const makePullSoon = (
+  engine: ClientEngine,
+  scope: Scope.Scope
+): Effect.Effect<Effect.Effect<void>> =>
+  Effect.map(Ref.make<PullState>({ running: false, wanted: false }), (state) => {
+    const worker: Effect.Effect<void> = engine.pull.pipe(
+      Effect.ignore,
+      Effect.andThen(
+        Ref.modify(state, (current) =>
+          current.wanted
+            ? ([true, { running: true, wanted: false }] as const)
+            : ([false, { running: false, wanted: false }] as const)
+        )
+      ),
+      Effect.flatMap((again) => (again ? worker : Effect.void))
+    );
+    return Ref.modify(state, (current) =>
+      current.running
+        ? ([false, { running: true, wanted: true }] as const)
+        : ([true, { running: true, wanted: false }] as const)
+    ).pipe(
+      Effect.flatMap((start) => (start ? Effect.asVoid(Effect.forkIn(worker, scope)) : Effect.void))
+    );
+  });
+
+/**
+ * Keep a base subset's narrowed foreign subsets registered for the scope's
+ * lifetime — the reconcile loop alone, no join: the base is subscribed,
+ * the foreign subsets are reconciled from its rows now and on every change
+ * to it, and everything is released when the scope closes. The
+ * registration is complete when this returns; the pulls that bring the
+ * rows in run in the background ({@link makePullSoon}), so a stalled
+ * transport delays rows and never blocks the caller.
+ */
+const trackWith = (
   engine: ClientEngine,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never>, never, Scope.Scope> =>
+): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
+    const scope = yield* Effect.scope;
     const subscribed = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
     yield* engine.subscribe(subset);
     yield* Effect.addFinalizer(() =>
@@ -769,20 +809,36 @@ export const relatedWith = (
         )
       )
     );
-    // Initial base sync so the first relationship derivation sees real rows.
-    yield* engine.pull.pipe(Effect.orDie);
-
+    const pullSoon = yield* makePullSoon(engine, scope);
     const refresh = Effect.gen(function* () {
       const base = yield* engine.query(subset).pipe(Effect.orDie);
       const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
-      if (changed) yield* engine.pull.pipe(Effect.orDie);
+      if (changed) yield* pullSoon;
     });
-
-    // Sync the targeted collections up front so the first join is complete, then
-    // keep the subscriptions tracking the live linkage as it changes.
+    // The base syncs in the background; the derivation runs over what the
+    // replica holds now and again on every change to the base rows.
+    yield* pullSoon;
     yield* refresh;
-    return observeWith(engine, strategy, subset).pipe(Stream.tap(() => refresh));
+    yield* Effect.forkIn(
+      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh),
+      scope
+    );
   });
+
+/**
+ * Auto-subscribing relational read: subscribes the base subset and, from its
+ * rows, the narrowed `foreignField IN (...)` subsets of each targeted
+ * collection — so the related rows sync without the caller wiring subscriptions.
+ * The subscriptions track the live linkage (re-derived on every change to the
+ * base rows) and are torn down when the scope closes. Returns a stream that
+ * emits the resolved rows and re-emits on any change.
+ */
+export const relatedWith = (
+  engine: ClientEngine,
+  strategy: Strategy,
+  subset: Subset.Subset
+): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never>, never, Scope.Scope> =>
+  trackWith(engine, strategy, subset).pipe(Effect.as(observeWith(engine, strategy, subset)));
 
 /** A row from an external source, tagged with its collection. */
 export interface SourcedRow {
@@ -855,6 +911,25 @@ export const observe = (
 ): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
   observeWith(
     view,
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
+    subset
+  );
+
+/**
+ * Keep the foreign windows of a subset's selected edges registered for the
+ * scope's lifetime, without resolving the join — what an explicit pin with
+ * `include` holds (ADR-0029 section 2): {@link related}'s reconcile loop
+ * alone, no rows materialised.
+ */
+export const trackEdges = (
+  engine: ClientEngine,
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  subset: Subset.Subset,
+  edges: ReadonlyArray<string | EdgeSelect>
+): Effect.Effect<void, never, Scope.Scope> =>
+  trackWith(
+    engine,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
     subset
   );
