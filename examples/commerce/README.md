@@ -51,12 +51,59 @@ policy's empty allow-set), never a 401: the loads guard sign-in themselves.
 Each endpoint declares its query as the graph's own codec
 (`JsonApiQuery.querySchema` for a `list`, `singleRowSchema` for a `get`), so
 the api's contract and the handler's parse are one grammar. The writes (`create` / `delete`) stay hand-written SQL that
-`broadcast`s its hints.
+`broadcast`s its hints, and so does the atomic operations endpoint below.
 
 **Collation.** ADR-0028 orders and filters text by code point. SQLite's
 default `BINARY` collation already is (`server/db.ts` says so beside the
 DDL); a Postgres deployment declares its filterable and sortable text
 columns `COLLATE "C"`.
+
+## Atomic operations
+
+Besides the per-resource endpoints, the JSON:API serves the
+[atomic operations extension](https://jsonapi.org/ext/atomic/) at
+`POST /jsonapi/operations` (`Endpoint.operations` over `reviews`,
+`cartItems` and `orders`). One request carries an ordered batch of `add` /
+`update` / `remove` operations; the batch is applied inside one SQL
+transaction under the same authoritative rules as the sync mutators and the
+REST write handlers — identity from the header (never the payload), a
+review's `userId` is the caller, a cart add checks the variant's stock, updates
+and removes only touch the caller's own rows, an order is recomputed from the
+authoritative cart. Relationship operations are not supported.
+
+- **Media type.** Requests and responses carry the extension parameter:
+  `Content-Type: application/vnd.api+json; ext="https://jsonapi.org/ext/atomic"`
+  (and the same `Accept`). The content-negotiation middleware is provided once
+  with the extension declared (`Middleware.layerWith`), which still accepts a
+  bare `application/vnd.api+json` on the ordinary endpoints.
+- **Identity.** The same `x-commerce-user` header contract as every other
+  user-scoped endpoint — set by the SvelteKit process after it resolves the
+  session.
+- **Ids and lids.** effect-jsonapi's typed `add` operation has no `id`
+  member, so a client-generated id is recovered from the raw request document
+  (as `@legation/jsonapi`'s atomic push always sends one). An `add` without an
+  id gets a server id; give it a `lid` and later operations in the same batch
+  can reference it (`{ "op": "update", "data": { "type": "reviews", "lid": "…" } }`,
+  or through the operation's `ref`). A lid stands only for the type its `add`
+  created; a ref that crosses types is a `422`.
+- **Rejection contract.** The first failing operation aborts the transaction —
+  nothing from earlier operations persists — and the response is a single
+  JSON:API error document whose one error carries
+  `source.pointer = /atomic:operations/<index>` of the failing operation:
+  `401` with no identity, `404` for someone else's row, `409` for a client id
+  that names another user's row, `422` for a business rule (insufficient
+  stock, rating out of range, unknown lid, unsupported operation). A `remove`
+  of a row already gone is a no-op, as the mutators' deletes are, so a batch
+  resent after a lost response is not read as a rejection. A statement
+  failure is a `500`, which a pushing client treats as transient.
+- **Success.** A `200` `atomic:results` document with one entry per operation
+  (the resource for `add` / `update`, empty for `remove`), and every touched
+  collection is `broadcast` once so live sync clients are poked.
+
+`@legation/jsonapi`'s `JsonApiSync.inspect` detects the endpoint from the api,
+so a `JsonApiBackend` over this server pushes each journal batch as one
+all-or-nothing request, drops a pointer-named rejection as a permanent
+rejection of that mutation, and resends the rest.
 
 ## Running it
 
@@ -91,6 +138,10 @@ the workspace runner:
   resources bridged through `NodeBridge` equal to the hand-written node
   graph, and the tier's promises (policy scoping, 400 with
   `source.parameter`, `fields[]`, cursor paging).
+- `atomic-operations.test.ts` — the atomic operations endpoint:
+  all-or-nothing batches, `lid` resolution, identity, remove-as-no-op, order
+  placement, and a `JsonApiBackend` pushing through it as one request per
+  batch (#160's contract, end to end against this server).
 - `no-js-loads.test.ts` — the no-JS baseline: the real SvelteKit `load`
   functions run against the in-process api, page by page. Rendering the
   markup itself needs the Kit runtime and stays a manual check.

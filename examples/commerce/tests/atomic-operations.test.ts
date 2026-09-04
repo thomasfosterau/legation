@@ -58,7 +58,7 @@ const makeWorld = Effect.fnUntraced(function* () {
   );
   const context = yield* Layer.build(infrastructure);
   const sql = Context.get(context, SqlClient);
-  // effect-jsonapi 0.12's `:id` endpoint declarations leak an `unknown`
+  // effect-jsonapi's `:id` endpoint declarations leak an `unknown`
   // requirement into their handlers (see server/client.ts); the runtime
   // carries nothing, so narrow it here.
   const app = jsonApiLive.pipe(

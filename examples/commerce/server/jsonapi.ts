@@ -24,6 +24,13 @@
  * writes keep their SQL and their `broadcast`: they are the mutators'
  * out-of-band twins.
  *
+ * The `operations` group is the JSON:API Atomic Operations extension over
+ * the same rules: one request carrying an ordered batch of `add` / `update`
+ * / `remove` operations on reviews, cart items and orders, applied inside one
+ * SQL transaction — the first failure rolls the whole batch back and names
+ * the failing operation. `@legation/jsonapi`'s `JsonApiBackend` pushes its
+ * journal through it as one request per batch when the api advertises it.
+ *
  * Identity for user-scoped endpoints arrives as an `x-commerce-user`
  * header set by the SvelteKit process after it resolves the Better Auth
  * session — the trust boundary between the two server processes (swap for
@@ -31,13 +38,22 @@
  * never trusts a client-supplied id, because browsers never reach it
  * directly — vite/Kit only proxy `/sync*`).
  */
-import { Context, Effect, Layer } from "effect";
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
+import { Context, Data, Effect, Layer, Schema } from "effect";
+import { HttpApi, HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi";
 import type { HttpServerRequest } from "effect/unstable/http";
 import { HttpServerRequest as Request } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import { ApiError, Endpoint, Group, Handlers, Middleware } from "@thomasfosterau/effect-jsonapi";
+import {
+  ApiError,
+  Atomic,
+  Document,
+  Endpoint,
+  Group,
+  Handlers,
+  Lid,
+  Middleware,
+} from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@legation/effect";
 import { JsonApiQuery, RestHandlers } from "@legation/jsonapi";
 import { nodes } from "../src/lib/domain.js";
@@ -57,6 +73,58 @@ export class NotFound extends ApiError.make<NotFound>()("NotFound", {
   code: "not_found",
   title: "Resource not found",
 }) {}
+
+/**
+ * One operation's failure inside an atomic batch — the in-handler form. The
+ * extension wants the error document to name the failing operation through
+ * `source.pointer`; `ApiError.make` carries custom fields under `meta`, not
+ * `source`, so the wire shape is declared structurally below (any
+ * `{ status, wire }` is an `ErrorClass`) and this class is what the batch
+ * logic fails with. `detail` doubles as the rejection reason a pushing
+ * `JsonApiBackend` records, so it mirrors the sync mutators' reasons.
+ */
+class OperationFailed extends Data.TaggedError("OperationFailed")<{
+  readonly status: 401 | 404 | 409 | 422;
+  readonly index: number;
+  readonly title: string;
+  readonly detail: string;
+}> {}
+
+/**
+ * A JSON:API error document at `status`, discriminated inside the endpoint's
+ * error union by the error object's `status` literal (the same trick
+ * `ApiError`'s own wire schemas use), so the four statuses below encode to
+ * the right response even though their documents are otherwise alike.
+ */
+const operationErrorWire = (status: number) =>
+  Document.ErrorDocument(
+    Schema.Struct({ ...Document.ErrorObject.fields, status: Schema.Literals([String(status)]) })
+  ).pipe(
+    HttpApiSchema.asJson({ contentType: "application/vnd.api+json" }),
+    HttpApiSchema.status(status)
+  );
+
+/** No identity for an operation that needs one. */
+export const OperationUnauthorized = { status: 401, wire: operationErrorWire(401) } as const;
+/** The operation's target row does not exist (or is not the caller's). */
+export const OperationNotFound = { status: 404, wire: operationErrorWire(404) } as const;
+/** A client-generated id on `add` that names another user's row. */
+export const OperationConflict = { status: 409, wire: operationErrorWire(409) } as const;
+/** A business rule refused the operation (stock, rating, unsupported op). */
+export const OperationRejected = { status: 422, wire: operationErrorWire(422) } as const;
+
+type OperationFailureDocument = (typeof OperationRejected.wire)["Type"];
+
+const failureDocument = (failure: OperationFailed): OperationFailureDocument => ({
+  errors: [
+    {
+      status: String(failure.status),
+      title: failure.title,
+      detail: failure.detail,
+      source: { pointer: Atomic.operationPointer(failure.index) },
+    },
+  ],
+});
 
 // ─── Row → resource-object mapping (the writes' responses) ──────────────────
 //
@@ -148,6 +216,16 @@ export const api = HttpApi.make("commerce")
     )
   )
   .add(Group.make(OrderItem, Endpoint.list(OrderItem, { query: query("orderItems") })))
+  // The atomic operations extension over the writable resources. Errors are
+  // per-operation (pointer-bearing) — see `OperationFailed`.
+  .add(
+    Group.make(
+      "operations",
+      Endpoint.operations([Review, CartItem, Order], {
+        errors: [OperationUnauthorized, OperationNotFound, OperationConflict, OperationRejected],
+      })
+    )
+  )
   .prefix("/jsonapi");
 
 // ─── Identity ────────────────────────────────────────────────────────────────
@@ -398,8 +476,8 @@ type CartItemRow = { id: string; userId: string; variantId: string; qty: number 
 type OrderRow = { id: string; userId: string; status: string; totalCents: number; createdAt: string };
 
 /**
- * effect-jsonapi 0.12's typed `add` operation carries `lid` but no `id`, so
- * a client-generated id is dropped by decoding — and `@legation/jsonapi`'s
+ * effect-jsonapi's typed `add` operation carries `lid` but no `id`, so a
+ * client-generated id is dropped by decoding — and `@legation/jsonapi`'s
  * atomic push always sends one, so a `JsonApiBackend` push must keep its
  * ids. As in #160's contract server, the id is recovered from the raw request
  * document (the body is cached, so re-reading it after decoding is free); an
@@ -766,8 +844,9 @@ export const jsonApiLive = HttpApiBuilder.layer(api).pipe(
       reviewsLive,
       cartItemsLive,
       ordersLive,
-      orderItemsLive
-    ).pipe(Layer.provide(Middleware.layer), Layer.provide(restLive))
+      orderItemsLive,
+      operationsLive
+    ).pipe(Layer.provide(middleware), Layer.provide(restLive))
   ),
   Layer.provide(middleware)
 );
