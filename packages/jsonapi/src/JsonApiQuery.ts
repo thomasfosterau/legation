@@ -397,10 +397,16 @@ const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec => {
 /** A sparse-fieldset projection: attribute names by resource type (ADR-0029 §5). */
 export type Projection = Readonly<Record<string, ReadonlyArray<string>>>;
 
-/** A parsed URL: the declarative read, and the `fields[]` projection beside it. */
+/**
+ * A parsed URL: the declarative read, the `fields[]` projection beside it,
+ * and — from {@link parseRead} of a `/{type}/{id}` path — the row id the
+ * path addressed, so the caller knows to write a single-resource document
+ * (the read already carries it as `filter[id]`, first 1).
+ */
 export interface ParsedRead {
   readonly read: Query.Read;
   readonly fields?: Projection;
+  readonly id?: string;
 }
 
 /** The flat query record: `URLSearchParams` with repeated keys as arrays (as `UrlParams.toRecord` does). */
@@ -665,7 +671,8 @@ export const parseRead = (
       located.id === undefined
         ? parsed.searchParams
         : yield* singleRowParams(located.collection, located.id, parsed.searchParams);
-    return yield* parseParams(nodes, located.collection, params);
+    const result = yield* parseParams(nodes, located.collection, params);
+    return located.id === undefined ? result : { ...result, id: located.id };
   });
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────

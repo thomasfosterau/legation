@@ -306,6 +306,55 @@ function of the node graph, the read, the resolved rows and the projection,
 so the service-worker façade serving the same URL from the replica produces
 the same document content (ADR-0029 §6).
 
+## The same documents from the replica
+
+`ReplicaDocuments` is the other caller of that one serialiser: it runs a URL
+(or a parsed read with its `fields[]` projection) over a local view — the
+rows the replica holds, optimistic overlay included — and writes the document
+the derived REST handler would write for the same URL. It depends on nothing
+but `effect` and the engine, so it runs where the engine runs, a service
+worker included; the façade (ADR-0029) is built on it.
+
+```ts
+import { ReplicaDocuments } from "@legation/jsonapi";
+import { nodes } from "./my-domain";
+import { CartItem, Product, Variant } from "./my-json-api";
+
+const docs = ReplicaDocuments.make({
+  nodes,
+  // The resources the REST endpoints are declared with, so linkage matches them.
+  resources: new Map([Product, Variant, CartItem].map((resource) => [resource.type, resource])),
+  prefix: "/api",
+});
+
+// In the worker: serve only what the replica covers (ADR-0029 §3).
+const { read } = yield * JsonApiQuery.parseRead(nodes, url);
+const verdicts = yield * Effect.forEach(docs.toCover(read), (needed) => client.coverageOf(needed));
+if (verdicts.every((verdict) => verdict._tag === "Covered")) {
+  const document = yield * docs.fromUrl(client.view, url); // a collection or single-resource document
+}
+```
+
+- **Linkage follows the same declarations.** Pass the resources the REST
+  endpoints are declared with and the replica emits exactly the
+  relationships the derived handler emits, by construction (`Linkage` is one
+  module, two callers). Without `resources`, the node graph's synthetic
+  resources (`JsonApiQuery.resourcesOf(nodes)`) apply: every collection edge
+  resolved, paginated edges as `many`.
+- **Coverage is the caller's guard.** The writer cannot tell a missing row
+  from an absent one, so `toCover(read)` names the reads a request needs
+  covered — the read itself, plus one whole-collection read per collection
+  the declared linkage resolves from beyond the read's includes. Serve a URL
+  only when every one is covered; an uncovered URL goes to the network.
+- **`fromUrl` writes the shape the path asks for**: a single-resource
+  document (`data: null` when the replica holds no row) for `/{type}/{id}`, a
+  collection document otherwise. A URL the grammar rejects fails with the
+  same `QueryError` the server answers 400 with.
+- **Row shapes.** `DocumentWriter` writes node rows by default; a `JsonApiRow`
+  collection (`Derive`'s shape, linkage under `relationships`) is written
+  through `shape: DocumentWriter.jsonApiRows` against a node graph that
+  declares its types.
+
 ## Types, schemas, and errors
 
 JSON:API document types (`ResourceObject`, `JsonApiDocument`, `Relationship`,

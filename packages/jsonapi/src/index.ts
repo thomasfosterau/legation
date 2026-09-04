@@ -42,6 +42,8 @@ export * as DocumentWriter from "./DocumentWriter.js";
 export * as JsonApiBackend from "./JsonApiBackend.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
+export * as Linkage from "./Linkage.js";
 export * as NodeBridge from "./NodeBridge.js";
 export * as Relationships from "./Relationships.js";
+export * as ReplicaDocuments from "./ReplicaDocuments.js";
 export * as RestHandlers from "./RestHandlers.js";
