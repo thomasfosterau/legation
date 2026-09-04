@@ -479,10 +479,16 @@ export const singleRowSchema = (
 /** A sparse-fieldset projection: attribute names by resource type (ADR-0029 §5). */
 export type Projection = Readonly<Record<string, ReadonlyArray<string>>>;
 
-/** A parsed URL: the declarative read, and the `fields[]` projection beside it. */
+/**
+ * A parsed URL: the declarative read, the `fields[]` projection beside it,
+ * and — from {@link parseRead} of a `/{type}/{id}` path — the row id the
+ * path addressed, so the caller knows to write a single-resource document
+ * (the read already carries it as `filter[id]`, first 1).
+ */
 export interface ParsedRead {
   readonly read: Query.Read;
   readonly fields?: Projection;
+  readonly id?: string;
 }
 
 /** The flat query record: `URLSearchParams` with repeated keys as arrays (as `UrlParams.toRecord` does). */
@@ -503,12 +509,25 @@ const recordOf = (
   return record;
 };
 
-const invalid = (collection: string, parameter: string, detail: string): QueryError =>
+/**
+ * The rejection of one query parameter, in the shape every check here
+ * raises (`parameter` names the offending key, so a caller answers 400 with
+ * `source.parameter`). Exported for a caller that checks a parsed URL
+ * against a declaration of its own — the replica-side writer against the
+ * resource it is bound to — and must reject the way the codec does.
+ */
+export const invalidParameter = (
+  collection: string,
+  parameter: string,
+  detail: string
+): QueryError =>
   new QueryError({
     message: `Invalid query for "${collection}" (${parameter}): ${detail}`,
     query: collection,
     parameter,
   });
+
+const invalid = invalidParameter;
 
 const nodeOf = (
   nodes: Node.NodeRegistry,
@@ -747,7 +766,8 @@ export const parseRead = (
       located.id === undefined
         ? parsed.searchParams
         : yield* singleRowParams(located.collection, located.id, parsed.searchParams);
-    return yield* parseParams(nodes, located.collection, params);
+    const result = yield* parseParams(nodes, located.collection, params);
+    return located.id === undefined ? result : { ...result, id: located.id };
   });
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────

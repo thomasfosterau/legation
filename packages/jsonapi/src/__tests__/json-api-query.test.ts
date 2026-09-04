@@ -422,13 +422,18 @@ describe("JsonApiQuery.parseRead", () => {
     ).toEqual(Predicate.isNull("createdAt"));
   });
 
-  it("reads a single resource as filter[id], first 1", () => {
-    expect(parse("/api/products/p-1?include=variants").read).toEqual({
-      collection: "products",
-      where: Predicate.eq("id", "p-1"),
-      include: { variants: true },
-      first: 1,
+  it("reads a single resource as filter[id], first 1, and names the id it addressed", () => {
+    expect(parse("/api/products/p-1?include=variants")).toEqual({
+      read: {
+        collection: "products",
+        where: Predicate.eq("id", "p-1"),
+        include: { variants: true },
+        first: 1,
+      },
+      id: "p-1",
     });
+    // A listing addresses no row, even one filtered to a single id.
+    expect(parse("/api/products?filter[id]=p-1")).not.toHaveProperty("id");
     expect(parseFailure("/products/p-1?sort=name")).toMatchObject({ parameter: "sort" });
     expect(parseFailure("/nothing/here").message).toMatch(/No collection/);
   });
