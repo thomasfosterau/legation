@@ -60,10 +60,12 @@ export interface ResourceEndpoints {
 /** Resource endpoints keyed by type (collection name). */
 export type ResourceMap = ReadonlyMap<string, ResourceEndpoints>;
 
-const segmentsOf = (path: string): ReadonlyArray<string> =>
+/** A route template's segments, empty ones dropped (`/todos/:id` is `["todos", ":id"]`). */
+export const segmentsOf = (path: string): ReadonlyArray<string> =>
   path.split("/").filter((segment) => segment.length > 0);
 
-const isParam = (segment: string): boolean => segment.startsWith(":");
+/** Whether a template segment is a path parameter (`:id`). */
+export const isParam = (segment: string): boolean => segment.startsWith(":");
 
 /** Map an HTTP method + whether the route has a trailing id to a CRUD role. */
 const roleOf = (method: string, hasId: boolean): Operation | undefined => {

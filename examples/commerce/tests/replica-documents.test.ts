@@ -14,7 +14,9 @@
  * identity resolver binds the replica's client group to `u1`, synced into an
  * owned engine by the shell's own pins (`shellReads("u1")`). The replica
  * holds what a signed-in user's shell holds; the writer reads it as the
- * façade would.
+ * façade would — and the façade itself (`src/lib/facade.ts`, #166) is then
+ * run over the same replica: a covered URL's response body is the served
+ * document byte for byte, an uncovered one is the network's.
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -39,6 +41,7 @@ import {
   productReviews,
   shellReads,
 } from "../src/lib/domain.js";
+import { makeFacade } from "../src/lib/facade.js";
 import { migrate } from "../server/db.js";
 import { NotFound } from "../server/jsonapi.js";
 import {
@@ -216,19 +219,20 @@ const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly
       },
     });
     const transport = yield* Transport.makeInMemory(server.handler, GROUP);
+    const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId: "client-u1",
       clientGroupId: GROUP,
       mutators,
     }).pipe(
-      Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),
+      Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
     );
     const view = ClientView.fromEngine(engine);
     const client = Client.fromView(nodes, view);
     yield* Effect.forEach(shellReads(USER), (read) => client.subscribe(read), { discard: true });
     yield* engine.pull;
-    return { view, client };
+    return { view, client, store };
   });
 
 const makeWorlds = Effect.gen(function* () {
@@ -330,6 +334,76 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
         );
         // Declarations without a `many` relationship need nothing beyond the read.
         expect(yield* docs.toCover(allCategories)).toEqual([allCategories]);
+      })
+    )
+  );
+});
+
+// ─── The façade over the same replica (#166) ─────────────────────────────────
+
+const jsonApi = (url: string) =>
+  new Request(`http://commerce.test${url}`, { headers: { accept: "application/vnd.api+json" } });
+
+describe("the commerce façade against the derived REST handler (ADR-0029 §6)", () => {
+  it.effect("answers a covered URL with the served document's bytes, and forwards the rest", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fetch, client, store } = yield* makeWorlds;
+        const online = { current: true };
+        const facade = makeFacade({
+          view: client.view,
+          coverageOf: client.coverageOf,
+          cookie: store.getCookie,
+          online: () => online.current,
+        });
+        const urlOf = (read: Query.Read) => `/jsonapi${JsonApiQuery.canonical(nodes, read)}`;
+        // What the shell's pins cover (ADR-0029 §3), as plain fetches of the
+        // URLs: the pins themselves (the api lists no sellers or profiles, so
+        // the façade, reflecting it, has no such routes), a prefix of the
+        // products window, a projection over it, and the reviews of one
+        // product under the unwindowed reviews pin.
+        const local = [
+          ...shellReads(USER)
+            .filter((read) => !["sellers", "profiles"].includes(read.collection))
+            .map(urlOf),
+          urlOf(productPage({})),
+          urlOf(productReviews("p-03")),
+          "/jsonapi/products?fields[products]=name&sort=id&page[limit]=3",
+        ];
+        for (const url of local) {
+          const request = jsonApi(url);
+          expect(facade.matches(request), url).toBe(true);
+          const response = yield* facade.handle(request);
+          expect(response, url).toBeDefined();
+          expect(response!.status, url).toBe(200);
+          expect(response!.headers.get("cache-control"), url).toBe("no-store");
+          expect(response!.headers.get("x-legation-served-at"), url).toBe(yield* store.getCookie);
+          const served = yield* fetch(url);
+          expect(bytes(yield* Effect.promise(() => response!.json())), url).toBe(bytes(served.body));
+        }
+        // What they do not: a narrower predicate or another cursor over the
+        // windowed products pin (rule 2, the strict window — `productDetail`
+        // and a single product by path included), and every user's cart items
+        // when the pin holds one user's (rule 3). The network's, unchanged.
+        const narrowed = urlOf(productPage({ categoryId: "c-keyboards" }));
+        const network = [
+          narrowed,
+          urlOf(productPage({ cursor: "p-02", limit: 2 })),
+          urlOf(productDetail("p-01")),
+          "/jsonapi/products/p-01",
+          "/jsonapi/cartItems?include=variant",
+        ];
+        for (const url of network) {
+          const request = jsonApi(url);
+          expect(facade.matches(request), url).toBe(true);
+          expect(yield* facade.handle(request), url).toBeUndefined();
+        }
+        // Offline, the same uncovered URL is the 503 `offline` document.
+        online.current = false;
+        expect((yield* facade.handle(jsonApi(narrowed)))!.status).toBe(503);
+        // The page's own reads (the app shell, its assets) are never the façade's.
+        expect(facade.matches(new Request("http://commerce.test/product/p-01"))).toBe(false);
+        expect(facade.matches(new Request("http://commerce.test/sync"))).toBe(false);
       })
     )
   );
