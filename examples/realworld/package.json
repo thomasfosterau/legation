@@ -1,7 +1,7 @@
 {
   "name": "legation-realworld",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "RealWorld (Conduit) app driving the legation engine through @legation/svelte on SvelteKit: file-based routing, optimistic mutators, relational live queries joined over the mirror, server-side write authorization.",
   "scripts": {

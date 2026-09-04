@@ -1,6 +1,6 @@
 {
   "name": "@legation/cloudflare",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cloudflare Workers reference topology for the legation sync engine: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
   "type": "module",
   "main": "./dist/index.js",

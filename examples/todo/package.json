@@ -1,7 +1,7 @@
 {
   "name": "legation-todo",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "SvelteKit todo app driving the legation engine through @legation/svelte: offline-first, optimistic writes, live views, push/pull rebase, with the filter in the URL.",
   "scripts": {

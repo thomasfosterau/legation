@@ -1,7 +1,7 @@
 {
   "name": "legation-commerce",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "SvelteKit commerce catalog driving the legation engine end to end: SSR + hydration with CVR continuation, public/private auth split over IdentityResolver, live relational joins, cursor pagination, offline-first writes over WebSockets with HTTP fallback, and a no-JS baseline.",
   "scripts": {

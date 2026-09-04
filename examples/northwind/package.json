@@ -1,7 +1,7 @@
 {
   "name": "legation-northwind",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "Northwind Traders admin dashboard driving the legation engine through @legation/svelte on SvelteKit: a route per screen, seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
