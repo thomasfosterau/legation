@@ -156,12 +156,16 @@ subscription in the ledger covers it. A subscription covers a request iff
 all of the following hold.
 
 1. **Collection.** `subscribed.collection === requested.collection`.
-2. **Window.** Either `subscribed.limit === undefined` (the subscription is
-   unwindowed), or all three of: `subscribed.orderBy` deep-equals
-   `requested.orderBy`; `requested.cursor === subscribed.cursor`;
-   `requested.limit <= subscribed.limit`. Anything else is not covered.
-   In particular a windowed subscription never covers an unwindowed request,
-   a request with a different sort, or a request with a different cursor.
+2. **Window.** A subset is _windowed_ when it has a `limit` or a `cursor`
+   (`Query.plan` emits a cursor without a limit for `{ after }`, and
+   `Subset.window` applies it regardless). Either the subscription is
+   unwindowed, or all three of: `subscribed.orderBy` deep-equals
+   `requested.orderBy`; `requested.cursor === subscribed.cursor`; and, when
+   the subscription has a `limit`, `requested.limit <= subscribed.limit`.
+   Anything else is not covered. In particular a windowed subscription
+   never covers an unwindowed request, a request with a different sort, or
+   a request with a different cursor, and a limited subscription never
+   covers an unlimited request.
 3. **Predicate.** Canonicalise both predicates to a set of top-level
    conjuncts: flatten nested `And`, then sort the conjuncts structurally.
    An absent `where`, `True`, and an empty `And` all canonicalise to the
@@ -171,7 +175,10 @@ all of the following hold.
    lists in canonical order). `Or` and `Not` subtrees compare only by
    structural equality as whole conjuncts; nothing is inferred through
    them. A `True` subscription (empty set) covers any predicate on that
-   collection, subject to rule 2.
+   collection, subject to rule 2. **Under a windowed subscription the two
+   sets must be equal**, not merely in the subset relation: a narrower
+   predicate over a window may need rows past its edge (the second worked
+   table below, and "Why rule 2 is strict").
 4. **Include.** Each edge the request includes must be present in the
    covering subscription's edge selects, because those selects registered
    the foreign windows (ADR-0024, `Related.desiredSubsets`). For a
