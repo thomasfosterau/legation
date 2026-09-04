@@ -3,18 +3,18 @@
  * (`syncLayer` over an in-memory SQLite, the seed, a few private rows for
  * two users) and the JSON:API (`jsonApiLive`) served through a web handler,
  * so a test — or a SvelteKit load pointed at it — issues plain `Request`s.
- * The backend is wrapped to count its calls, so "before any backend call"
- * is a fact the derived-read tests can assert.
+ * The backend is wrapped to count its calls (`counted.ts`), so "before any
+ * backend call" is a fact the derived-read tests can assert.
  */
 import { Context, Effect, Layer } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import type { Backend } from "@legation/effect";
 import { migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";
 import { CommerceSync, syncLayer } from "../../server/runtime.js";
+import { type Calls, countedBackend } from "./counted.js";
 
 export type Json = any;
 
@@ -56,21 +56,10 @@ export const makeWorld = Effect.gen(function* () {
   yield* migrate.pipe(Effect.provideService(SqlClient, sql));
   yield* seedPrivateRows(sql);
 
-  const sync = Context.get(context, CommerceSync);
-  let calls = 0;
-  const backend: Backend.Backend = {
-    ...sync.backend,
-    evaluate: (ctx, subset) => {
-      calls++;
-      return sync.backend.evaluate(ctx, subset);
-    },
-    getRows: (ctx, collection, ids) => {
-      calls++;
-      return sync.backend.getRows(ctx, collection, ids);
-    },
-  };
+  const calls: Calls = { n: 0 };
+  const sync = countedBackend(Context.get(context, CommerceSync), calls);
   const app = jsonApiLive.pipe(
-    Layer.provide(Layer.succeedContext(Context.add(context, CommerceSync, { ...sync, backend }))),
+    Layer.provide(Layer.succeedContext(Context.add(context, CommerceSync, sync))),
     Layer.provide(HttpServer.layerServices)
   ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
   const { handler } = yield* Effect.acquireRelease(
@@ -91,6 +80,6 @@ export const makeWorld = Effect.gen(function* () {
       return { status: response.status, body: (await response.json()) as Json };
     });
 
-  const world: World = { get, handler, calls: () => calls };
+  const world: World = { get, handler, calls: () => calls.n };
   return world;
 });

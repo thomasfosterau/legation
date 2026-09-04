@@ -24,11 +24,18 @@ let world: World;
 let scope: Scope.Closeable;
 const realFetch = globalThis.fetch;
 
+/** Every URL handed to {@link apiFetch}, in order — what the read proxy sent upstream. */
+const forwarded: Array<string> = [];
+
 /** The api's handler as a `fetch`: a relative URL is the app's own origin. */
-const apiFetch = ((input: string | URL | Request, init?: RequestInit) =>
-  world.handler(
-    new Request(input instanceof Request ? input : new URL(input, "http://app.test"), init)
-  )) as typeof fetch;
+const apiFetch = ((input: string | URL | Request, init?: RequestInit) => {
+  const request = new Request(
+    input instanceof Request ? input : new URL(input, "http://app.test"),
+    init
+  );
+  forwarded.push(request.url);
+  return world.handler(request);
+}) as typeof fetch;
 
 beforeAll(async () => {
   scope = Effect.runSync(Scope.make());
@@ -165,5 +172,11 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
     // The server's verdict on a URL outside the grammar passes through as is.
     const rejected = await proxied(u1, "/jsonapi/products?filter[priceCents][gt]=abc");
     expect(rejected.status).toBe(400);
+    // The URL goes upstream as spelt — the raw path, never the decoded
+    // route param — so a percent-encoded `#` in an id keeps its query and
+    // reaches the server as that id (which it rules on: no such product).
+    const encoded = await proxied(u1, "/jsonapi/products/p%2301?include=variants");
+    expect(forwarded.at(-1)).toBe("http://localhost:3100/jsonapi/products/p%2301?include=variants");
+    expect(encoded.status).toBe(404);
   });
 });

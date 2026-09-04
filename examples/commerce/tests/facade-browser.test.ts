@@ -26,10 +26,15 @@
  *    asked), and the browser reading online while the forward rejects at
  *    the transport (the harness drops the worker's connection). The
  *    covered URL is unaffected either way.
- * 4. **Offline, a pending write.** "Add to cart" journals `cart/add`; the
- *    covered cart URL shows the pending line under the optimistic overlay
- *    while the server's table has none (§4, "the optimistic overlay");
- *    back online the journal pushes and the server catches up.
+ * 4. **Offline, a pending write.** On the product page (served offline
+ *    from the worker's page cache, visited once online in 1) "Add to
+ *    cart" journals `cart/add`; the covered cart URL shows the pending
+ *    line under the optimistic overlay while the server's table has none
+ *    (§4, "the optimistic overlay"); back online the journal pushes and
+ *    the server catches up.
+ *
+ * Each demonstration sets the connectivity it needs at its start, so a
+ * failure in one cannot leave the next in the wrong state.
  *
  * Offline is `context.setOffline(true)` rather than a raw CDP session per
  * target: Playwright applies the `Network.emulateNetworkConditions`
@@ -144,8 +149,11 @@ describe("the façade in a browser: plain fetch over the service worker's replic
   }, 120_000);
 
   afterAll(async () => {
-    await browser?.close();
-    await app?.close();
+    try {
+      await browser?.close();
+    } finally {
+      await app?.close();
+    }
   }, 30_000);
 
   it("boots: signs up, the worker controls the page, the engine serves the shell's pins", async () => {
@@ -202,6 +210,12 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     const again = await fetched(page, firstPage);
     expect(served(again)).toBe(true);
     expect(app.restCalls()).toBe(calls);
+
+    // Visit the product page once online so the worker's page cache holds
+    // it: demonstration 4 navigates there offline, and must not depend on
+    // how the browser's offline emulation treats the worker's own fetches.
+    await page.goto(`${app.origin}/product/p-01`);
+    await expect.poll(() => page.locator("h1").textContent()).toContain("Studio Headphones");
   }, 60_000);
 
   it("2. offline: the covered URL is served from the replica, header present, same bytes", async () => {
@@ -224,6 +238,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     };
     // The browser reads offline: the worker's `navigator.onLine` is false,
     // so nothing is forwarded and the server is never asked.
+    await context.setOffline(true);
     const calls = app.restCalls();
     isOfflineDocument(await fetched(page, keyboardsPage));
     expect(app.restCalls()).toBe(calls);
@@ -243,10 +258,10 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     } finally {
       app.blackout(false);
     }
-    await context.setOffline(true);
   }, 20_000);
 
   it("4. offline: a pending optimistic cart write is visible in the covered cart response", async () => {
+    await context.setOffline(true);
     const cartPath = readPath(myCartItems(userId));
     // The cart is empty on both sides, and the cart URL is covered (the
     // shell pins `myCartItems` for a signed-in user).
@@ -254,9 +269,12 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     expect(served(empty)).toBe(true);
     expect((JSON.parse(empty.body) as Json).data).toEqual([]);
 
-    // Add to cart offline: `cart/add` journals in the worker's engine and
-    // renders in the optimistic overlay; the push cannot reach the server.
-    await page.goto(`${app.origin}/product/p-01`);
+    // Add to cart offline: the product page comes from the worker's page
+    // cache (visited online in demonstration 1); `cart/add` journals in
+    // the worker's engine and renders in the optimistic overlay; the push
+    // cannot reach the server.
+    const navigation = await page.goto(`${app.origin}/product/p-01`);
+    expect(navigation?.fromServiceWorker()).toBe(true);
     await page.locator("button", { hasText: "Add to cart" }).first().click();
     const pending = await until(
       () => fetched(page, cartPath),

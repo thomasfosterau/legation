@@ -10,20 +10,22 @@
  * client sent under that name is dropped. Reads only — the writes stay
  * form actions through the typed client (the façade's writes are #169).
  *
- * The URL is forwarded as received: the derived handler parses the same
- * grammar the façade parses, and a locally served document must be the
- * document this route returns for the same URL, byte for byte on content
- * (ADR-0029 §6; `tests/facade-browser.test.ts` checks it in a browser).
- * The universal catalog load (`src/routes/+page.ts`) calls this route
- * in-process on the server and through the service worker in the browser.
+ * The URL is forwarded as received — the raw path and query, never the
+ * decoded route param, so a percent-encoded `#`, `?` or `/` in an id
+ * reaches the sync server as the client spelt it: the derived handler
+ * parses the same grammar the façade parses, and a locally served document
+ * must be the document this route returns for the same URL, byte for byte
+ * on content (ADR-0029 §6; `tests/facade-browser.test.ts` checks it in a
+ * browser). The universal catalog load (`src/routes/+page.ts`) calls this
+ * route in-process on the server and through the service worker in the
+ * browser.
  */
 import type { RequestHandler } from "./$types";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
 import { SYNC_ORIGIN } from "../../../../server/client.js";
-import { API_PREFIX } from "../../../lib/reads.js";
 
-export const GET: RequestHandler = async ({ params, url, request, locals }) => {
-  const upstream = await fetch(`${SYNC_ORIGIN}${API_PREFIX}/${params.path}${url.search}`, {
+export const GET: RequestHandler = async ({ url, request, locals }) => {
+  const upstream = await fetch(`${SYNC_ORIGIN}${url.pathname}${url.search}`, {
     headers: {
       accept: request.headers.get("accept") ?? MEDIA_TYPE,
       ...(locals.user === undefined ? {} : { "x-commerce-user": locals.user.id }),

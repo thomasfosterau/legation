@@ -41,6 +41,7 @@ import { HttpSyncServer } from "@legation/node";
 import { clientLayer, migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";
 import { CommerceSync, syncLayer } from "../../server/runtime.js";
+import { type Calls, countedBackend } from "./counted.js";
 
 /** The example's directory. */
 const app = fileURLToPath(new URL("../../", import.meta.url));
@@ -84,22 +85,9 @@ const build = () => {
 };
 
 /** The sync server on an ephemeral port, its REST reads counted. */
-const syncServer = (dbPath: string, calls: { n: number }) => {
+const syncServer = (dbPath: string, calls: Calls) => {
   const counted = Layer.effect(CommerceSync)(
-    Effect.map(CommerceSync, (sync) => ({
-      ...sync,
-      backend: {
-        ...sync.backend,
-        evaluate: (ctx, subset) => {
-          calls.n++;
-          return sync.backend.evaluate(ctx, subset);
-        },
-        getRows: (ctx, collection, ids) => {
-          calls.n++;
-          return sync.backend.getRows(ctx, collection, ids);
-        },
-      },
-    }))
+    Effect.map(CommerceSync, (sync) => countedBackend(sync, calls))
   );
   const carriers = Layer.mergeAll(
     HttpSyncServer.layerWebSocket({ path: "/sync-ws" }),
@@ -162,7 +150,7 @@ export const serveApp = async (): Promise<App> => {
   build();
   const dir = mkdtempSync(join(tmpdir(), "legation-commerce-"));
   const dbPath = join(dir, "commerce.db");
-  const calls = { n: 0 };
+  const calls: Calls = { n: 0 };
 
   const scope = Effect.runSync(Scope.make());
   const context = await Effect.runPromise(
