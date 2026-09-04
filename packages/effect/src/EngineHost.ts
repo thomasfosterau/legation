@@ -39,11 +39,24 @@
  * #159): given `nodes` and `urls`, the host parses the URL, plans the read
  * and registers its root and edge windows under the party's `mirrorId`,
  * exactly as `Subscribe` and `SubscribeRelated` would.
+ *
+ * The host is the only party in a worker that knows what the mirrors hold,
+ * so {@link run} hands back a {@link Host} listing its registrations —
+ * every root window and relational registration it made with the engine,
+ * with the canonical URL of a `SubscribeUrl` while a party still holds it
+ * by URL — as the ledger a façade's coverage check scans
+ * (`Coverage.coverageOf`, ADR-0029 section 3). A registration is listed
+ * once its engine registration has been made — the root subscribed, or the
+ * relational read's root and edge windows registered — and dropped when
+ * its last mirror releases it or is swept, so a read judged covered is one
+ * whose rows the engine syncs. A relational registration naming an edge
+ * the registry does not declare registers nothing: the engine would never
+ * sync that edge, so nothing may be credited for it.
  */
 
 import type { UrlReads } from "./Client.js";
 import * as ClientEngine from "./ClientEngine.js";
-import type * as Collection from "./Collection.js";
+import * as Collection from "./Collection.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, TransportError } from "./Errors.js";
 import type * as MutationState from "./MutationState.js";
@@ -52,7 +65,7 @@ import * as Query from "./Query.js";
 import * as Related from "./Related.js";
 import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
-import { Clock, Duration, Effect, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
+import { Clock, Duration, Effect, Exit, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -84,15 +97,67 @@ export interface EngineHostOptions {
   };
 }
 
+/** The running host: what a worker can consult about the mirrors it serves. */
+export interface Host {
+  /**
+   * The registrations the host holds on mirrors' behalf at this moment:
+   * root windows (`Subscribe`), relational registrations with their edge
+   * selects (`SubscribeRelated`) and both halves of a `SubscribeUrl`, the
+   * latter carrying its canonical URL for as long as some party holds it
+   * by that URL. Named-query and mutation-state registrations cover no
+   * read and are not listed. The ledger a coverage check scans:
+   * `Coverage.coverageOf(nodes, host.registrations)`.
+   */
+  readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Subscription>>;
+}
+
+/** What a read's registration covers, and the URL identity a `SubscribeUrl` gave it. */
+interface Registered {
+  readonly registration: Coverage.Registration;
+  readonly url?: string;
+}
+
 /** One actively-broadcast registration: which mirrors hold it, its fiber, teardown. */
 interface Active {
   readonly mirrors: ReadonlySet<string>;
+  /** The mirrors holding this registration by URL (`SubscribeUrl`); the URL is reported while any remains. */
+  readonly urlMirrors: ReadonlySet<string>;
   readonly fiber: Fiber.Fiber<void, never>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
   readonly teardown: Effect.Effect<void>;
   /** Re-hydrate a newly-joining mirror from the current result. */
   readonly hydrate: Effect.Effect<void>;
+  /** What the registration covers, when it is a read's (not a named query's or the mutation states'). */
+  readonly registered?: Registered;
 }
+
+/** Whether a registration's edges are all declared by the registry; the first that is not, otherwise. */
+const undeclaredEdge = (
+  registry: Collection.CollectionRegistry,
+  collection: string,
+  edges: ReadonlyArray<Related.EdgeSelect>
+): Related.EdgeSelect | undefined => {
+  const declared = Collection.relationshipsOf(registry, collection);
+  return edges.find((edge) => !declared.has(edge.name));
+};
+
+/** The subscription an entry reports: its registration, with the URL while a party holds it by URL. */
+const subscriptionOf = (entry: Active): Coverage.Subscription | undefined =>
+  entry.registered === undefined
+    ? undefined
+    : {
+        ...entry.registered.registration,
+        ...(entry.urlMirrors.size > 0 && entry.registered.url !== undefined
+          ? { url: entry.registered.url }
+          : {}),
+      };
+
+/** A set with one member fewer. */
+const without = (set: ReadonlySet<string>, member: string): ReadonlySet<string> => {
+  const next = new Set(set);
+  next.delete(member);
+  return next;
+};
 
 /** Liveness settings with their defaults applied. */
 const livenessOf = (options: EngineHostOptions) => ({
@@ -105,7 +170,7 @@ const livenessOf = (options: EngineHostOptions) => ({
  * established before this effect completes; message handling runs on a
  * scoped background fiber.
  */
-export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scope.Scope> =>
+export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { channel } = options;
     const engine = Subscriptions.counted(options.engine);
@@ -140,7 +205,10 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     /**
      * Register (or refcount) one broadcastable registration. `start` begins
      * the engine registration and returns the broadcast loop to fork; a mirror
-     * joining an already-active key is hydrated from the current result.
+     * joining an already-active key is hydrated from the current result. What
+     * a read's registration covers is recorded only once `start` has
+     * succeeded — the engine holds the windows — and its URL identity while
+     * some mirror holds the key by URL.
      */
     const acquire = (
       mirrorId: string,
@@ -151,23 +219,42 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
           readonly teardown: Effect.Effect<void>;
           readonly hydrate: Effect.Effect<void>;
         },
-        unknown
-      >
+        unknown,
+        Scope.Scope
+      >,
+      registered?: Registered
     ): Effect.Effect<void, unknown, Scope.Scope> =>
       Effect.gen(function* () {
+        const byUrl = registered?.url !== undefined;
         const existing = (yield* Ref.get(active)).get(key);
         if (existing !== undefined) {
+          // A URL identity learnt later (a `SubscribeUrl` joining a plain
+          // `Subscribe` of the same window) is kept on the entry.
+          const known = existing.registered?.url === undefined ? registered : existing.registered;
           yield* Ref.update(active, (map) =>
-            new Map(map).set(key, { ...existing, mirrors: new Set(existing.mirrors).add(mirrorId) })
+            new Map(map).set(key, {
+              ...existing,
+              mirrors: new Set(existing.mirrors).add(mirrorId),
+              urlMirrors: byUrl ? new Set(existing.urlMirrors).add(mirrorId) : existing.urlMirrors,
+              ...(known === undefined ? {} : { registered: known }),
+            })
           );
           return yield* existing.hydrate;
         }
-        // A failed start (e.g. an unknown named query) registers nothing; the
-        // message loop swallows the error and the mirror simply never hydrates.
+        // A failed start (an unknown named query, an undeclared edge) registers
+        // nothing and records nothing; the message loop swallows the error and
+        // the mirror simply never hydrates.
         const { loop, teardown, hydrate } = yield* start;
         const fiber = yield* Effect.forkScoped(loop.pipe(Effect.ignore));
         yield* Ref.update(active, (map) =>
-          new Map(map).set(key, { mirrors: new Set([mirrorId]), fiber, teardown, hydrate })
+          new Map(map).set(key, {
+            mirrors: new Set([mirrorId]),
+            urlMirrors: new Set(byUrl ? [mirrorId] : []),
+            fiber,
+            teardown,
+            hydrate,
+            ...(registered === undefined ? {} : { registered }),
+          })
         );
       });
 
@@ -176,10 +263,15 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       Effect.gen(function* () {
         const entry = (yield* Ref.get(active)).get(key);
         if (entry === undefined || !entry.mirrors.has(mirrorId)) return;
-        const mirrors = new Set(entry.mirrors);
-        mirrors.delete(mirrorId);
+        const mirrors = without(entry.mirrors, mirrorId);
         if (mirrors.size > 0) {
-          yield* Ref.update(active, (map) => new Map(map).set(key, { ...entry, mirrors }));
+          yield* Ref.update(active, (map) =>
+            new Map(map).set(key, {
+              ...entry,
+              mirrors,
+              urlMirrors: without(entry.urlMirrors, mirrorId),
+            })
+          );
           return;
         }
         yield* Fiber.interrupt(entry.fiber);
@@ -191,7 +283,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
         });
       });
 
-    const handleSubscribe = (mirrorId: string, subset: Subset.Subset) => {
+    const handleSubscribe = (mirrorId: string, subset: Subset.Subset, url?: string) => {
       const key = Subset.hash(subset);
       return acquire(
         mirrorId,
@@ -209,7 +301,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
               Effect.ignore
             ),
           };
-        })
+        }),
+        { registration: { root: subset, edges: [] }, ...(url === undefined ? {} : { url }) }
       );
     };
 
@@ -241,7 +334,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       mirrorId: string,
       collection: string,
       subset: Subset.Subset,
-      edges: ReadonlyArray<Related.EdgeSelect>
+      edges: ReadonlyArray<Related.EdgeSelect>,
+      url?: string
     ) => {
       const key = MirrorProtocol.relatedKey(collection, subset, edges);
       const registry = options.registry ?? options.nodes?.collections;
@@ -253,22 +347,41 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
       return acquire(
         mirrorId,
         key,
-        Effect.succeed({
-          // The related read is scoped (its reconcile loop holds engine
-          // subscriptions): run it inside the fiber's own scope so
-          // interrupting the fiber releases everything.
-          loop: Effect.scoped(
-            Effect.gen(function* () {
-              const stream = yield* Related.related(engine, registry, collection, subset, edges);
-              yield* Stream.runForEach(stream, (rows) => broadcastRelated(key, rows));
-            })
-          ),
-          teardown: Effect.void,
-          hydrate: Related.query(engine, registry, collection, subset, edges).pipe(
-            Effect.flatMap((rows) => broadcastRelated(key, rows)),
-            Effect.ignore
-          ),
-        })
+        Effect.gen(function* () {
+          // `Related` selects the edges it knows and ignores the rest, so an
+          // undeclared edge must be refused here: nothing registers, nothing
+          // is credited for it.
+          const undeclared = undeclaredEdge(registry, collection, edges);
+          if (undeclared !== undefined) {
+            return yield* Effect.fail(
+              new QueryError({
+                message: `EngineHost: SubscribeRelated on "${collection}" names an edge the registry does not declare: "${undeclared.name}"`,
+                query: collection,
+              })
+            );
+          }
+          // The relational read is established here — its root subscribed,
+          // its edge windows registered by the reconcile loop — in a scope of
+          // its own under the host's, closed by the teardown; the broadcast
+          // loop merely drains its stream.
+          const scope = yield* Scope.fork(yield* Effect.scope);
+          const stream = yield* Related.related(engine, registry, collection, subset, edges).pipe(
+            Scope.provide(scope)
+          );
+          return {
+            loop: Stream.runForEach(stream, (rows) => broadcastRelated(key, rows)),
+            teardown: Scope.close(scope, Exit.void),
+            hydrate: Related.query(engine, registry, collection, subset, edges).pipe(
+              Effect.flatMap((rows) => broadcastRelated(key, rows)),
+              Effect.ignore
+            ),
+          };
+        }).pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning(`EngineHost: SubscribeRelated rejected: ${String(error)}`)
+          )
+        ),
+        { registration: { root: subset, edges }, ...(url === undefined ? {} : { url }) }
       );
     };
 
@@ -299,7 +412,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     // SubscribeRelated (edge windows) would be — same refcount per mirrorId,
     // same liveness sweep. A URL the host cannot parse registers nothing.
     const { nodes, urls } = options;
-    const registrationOfUrl = (url: string): Effect.Effect<Coverage.Registration, QueryError> =>
+    const registrationOfUrl = (url: string): Effect.Effect<Coverage.Subscription, QueryError> =>
       urls === undefined || nodes === undefined
         ? Effect.fail(
             new QueryError({
@@ -307,24 +420,29 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
               query: url,
             })
           )
-        : urls.parse(url).pipe(
-            Effect.flatMap((read) => Query.tryPlan(nodes, read)),
-            Effect.map(Coverage.ofPlan)
-          );
+        : Effect.gen(function* () {
+            const read = yield* urls.parse(url);
+            const plan = yield* Query.tryPlan(nodes, read);
+            // The canonical URL is the registration's identity (ADR-0029
+            // section 2); a URL the parser accepted always has one.
+            return { ...Coverage.ofPlan(plan), url: yield* urls.canonical(read) };
+          });
 
+    // The URL names the whole registration: the relational entry when the
+    // URL includes edges, the root entry otherwise.
     const handleSubscribeUrl = (mirrorId: string, url: string) =>
       registrationOfUrl(url).pipe(
         Effect.tapError((error) =>
           Effect.logWarning(`EngineHost: SubscribeUrl "${url}" rejected: ${error.message}`)
         ),
-        Effect.flatMap(({ root, edges }) =>
-          handleSubscribe(mirrorId, root).pipe(
-            Effect.andThen(
-              edges.length === 0
-                ? Effect.void
-                : handleSubscribeRelated(mirrorId, root.collection, root, edges)
-            )
-          )
+        Effect.flatMap(({ root, edges, url: canonical }) =>
+          edges.length === 0
+            ? handleSubscribe(mirrorId, root, canonical)
+            : handleSubscribe(mirrorId, root).pipe(
+                Effect.andThen(
+                  handleSubscribeRelated(mirrorId, root.collection, root, edges, canonical)
+                )
+              )
         )
       );
 
@@ -507,4 +625,15 @@ export const run = (options: EngineHostOptions): Effect.Effect<void, never, Scop
     // Announce readiness LAST: mirrors that raced this host's boot (or survived
     // a previous host) answer by re-posting their registrations.
     yield* channel.post({ _tag: "HostReady" }).pipe(Effect.ignore);
+
+    return {
+      registrations: Ref.get(active).pipe(
+        Effect.map((entries) =>
+          [...entries.values()].flatMap((entry) => {
+            const subscription = subscriptionOf(entry);
+            return subscription === undefined ? [] : [subscription];
+          })
+        )
+      ),
+    };
   });

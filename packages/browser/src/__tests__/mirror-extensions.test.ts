@@ -386,3 +386,36 @@ describe("HostReady replay", () => {
     20_000
   );
 });
+
+describe("ServiceWorkerHost.start", () => {
+  it.effect(
+    "serves as run does and hands back the engine and the mirrors' registrations",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const engine = yield* makeEngine;
+          const name = `legation-swh-start-${Math.random().toString(36).slice(2)}`;
+          const host = yield* ServiceWorkerHost.start({
+            channelName: name,
+            registry: collections,
+          }).pipe(Effect.provideService(ClientEngine.ClientEngine, engine));
+          expect(host.engine).toBe(engine);
+          expect(yield* host.registrations).toEqual([]);
+          yield* sleepReal(200);
+
+          // A tab's pin shows up as a registration the façade's coverage
+          // check can scan; its release drops it.
+          const mirror = yield* Mirror.make({
+            channel: yield* BroadcastMirrorChannel.make(name),
+            mutators,
+          });
+          yield* mirror.subscribe(allTodos);
+          const held = yield* eventually(host.registrations, (current) => current.length === 1);
+          expect(held).toEqual([{ root: allTodos, edges: [] }]);
+          yield* mirror.unsubscribe(allTodos);
+          yield* eventually(host.registrations, (current) => current.length === 0);
+        })
+      ),
+    20_000
+  );
+});

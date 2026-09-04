@@ -152,14 +152,12 @@ export interface ViewOptions {
   readonly urls?: UrlReads;
 }
 
-/** One ledger entry: who holds a registration, and what it covers. */
-interface Interest extends Coverage.Registration {
+/** One ledger entry: who holds a registration, and what it covers (with its URL identity when known). */
+interface Interest extends Coverage.Subscription {
   /** Live observers (a live read without `include`). */
   readonly observers: number;
   /** Explicit pins, counted so release is symmetric with subscribe. */
   readonly pins: number;
-  /** The canonical URL — the subscription identity — when the read has one. */
-  readonly url?: string;
 }
 
 /** What a subscribe or unsubscribe resolved its input to. */
@@ -383,17 +381,7 @@ export const fromView = (
   // exact hash hit needs no separate path.
   const verdictOf = (requested: Coverage.Registration): Effect.Effect<Coverage.Verdict> =>
     Ref.get(ledger).pipe(
-      Effect.map((interests): Coverage.Verdict => {
-        const by = Coverage.covering(interests.values(), requested);
-        return by === undefined
-          ? { _tag: "Uncovered" }
-          : {
-              _tag: "Covered",
-              by: { root: by.root, edges: by.edges },
-              hash: Subset.hash(by.root),
-              ...(by.url === undefined ? {} : { url: by.url }),
-            };
-      })
+      Effect.map((interests) => Coverage.verdictOf(interests.values(), requested))
     );
 
   // The three-tier read (ADR-0025): replica when a ledger subscription

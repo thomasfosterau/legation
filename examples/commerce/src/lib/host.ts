@@ -24,10 +24,19 @@
  * collapses to a leading + trailing journal write per cart line instead of
  * one per click. `bootElected` does not wire this in — it demonstrates the
  * plain topology, and a paced elected host is unexercised follow-up.
+ *
+ * The worker also serves the JSON:API façade (ADR-0029, #166) beside the
+ * mirrors: `runHost` starts the host through `ServiceWorkerHost.start` and
+ * hands `onStart` what the façade reads — the engine, the registrations the
+ * host holds on the tabs' behalf (the only ledger in the worker that knows
+ * what the mirrors pinned), and the store's cookie — so
+ * `src/service-worker.ts` can build it from `lib/facade.ts`. The host is
+ * given `nodes` and `urls` too, so a page with no `Client` can pin a URL
+ * (`SubscribeUrl`) and have the façade serve it.
  */
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type { IndexedDb } from "@effect/platform-browser";
-import { Client, Transport } from "@legation/effect";
+import { Client, ClientStore, type StoreError, Transport } from "@legation/effect";
 import { ClientEngine, Paced, RpcTransport } from "@legation/effect/internal";
 import {
   BrowserConnectivity,
@@ -35,8 +44,15 @@ import {
   IndexedDbClientStore,
   ServiceWorkerHost,
 } from "@legation/browser";
+import { JsonApiQuery } from "@legation/jsonapi";
 import { mutators, nodes, registry, shellReads } from "./domain.js";
 import type { CartSetQty } from "./domain.js";
+
+/** The serving host, as the worker's façade needs it. */
+export interface StartedHost extends ServiceWorkerHost.Host {
+  /** The replica's CVR cookie, for `x-legation-served-at`. */
+  readonly cookie: Effect.Effect<string | undefined, StoreError>;
+}
 
 export interface HostOptions {
   readonly clientGroupId: string;
@@ -44,6 +60,8 @@ export interface HostOptions {
   readonly syncOrigin: string;
   readonly clientId: string;
   readonly indexedDb: Layer.Layer<IndexedDb.IndexedDb>;
+  /** Called once the host serves: the worker installs the façade here. */
+  readonly onStart?: (host: StartedHost) => void;
 }
 
 /**
@@ -90,8 +108,10 @@ const withPacedCartQty = (
       : engine.mutateWithAck(mutator, args),
 });
 
-/** The raw engine layer, wrapped so `cart/setQty` is debounced (#117's demo). */
-const pacedEngineLayer = (options: HostOptions): Layer.Layer<ClientEngine.ClientEngine> =>
+/** The raw engine layer over the store in context, wrapped so `cart/setQty` is debounced (#117's demo). */
+const pacedEngineLayer = (
+  options: HostOptions
+): Layer.Layer<ClientEngine.ClientEngine, never, ClientStore.ClientStore> =>
   Layer.effect(ClientEngine.ClientEngine)(
     Effect.gen(function* () {
       const engine = yield* ClientEngine.ClientEngine;
@@ -105,17 +125,27 @@ const pacedEngineLayer = (options: HostOptions): Layer.Layer<ClientEngine.Client
         clientGroupId: options.clientGroupId,
         mutators,
         syncLoop: { pullInterval: "15 seconds", pushDebounce: "300 millis" },
-      }).pipe(
-        Layer.provide(transportLayer(options)),
-        Layer.provide(IndexedDbClientStore.layer().pipe(Layer.provide(options.indexedDb)))
-      )
+      }).pipe(Layer.provide(transportLayer(options)))
     )
   );
 
-/** Serve mirrors + run the sync loop until the scope closes. */
+/** The durable store, kept in context beside the engine: the façade reads its cookie. */
+const storeLayer = (options: HostOptions): Layer.Layer<ClientStore.ClientStore> =>
+  IndexedDbClientStore.layer().pipe(Layer.provide(options.indexedDb));
+
+/** Serve mirrors + run the sync loop until the scope closes, telling `onStart` what the façade needs. */
 export const runHost = (options: HostOptions): Effect.Effect<never> =>
-  ServiceWorkerHost.run({ registry }).pipe(
-    Effect.provide(pacedEngineLayer(options)),
+  Effect.gen(function* () {
+    const host = yield* ServiceWorkerHost.start({
+      registry,
+      nodes,
+      urls: JsonApiQuery.urlReads(nodes),
+    });
+    const store = yield* ClientStore.ClientStore;
+    options.onStart?.({ ...host, cookie: store.getCookie });
+    return yield* Effect.never;
+  }).pipe(
+    Effect.provide(pacedEngineLayer(options).pipe(Layer.provideMerge(storeLayer(options)))),
     Effect.scoped
   );
 

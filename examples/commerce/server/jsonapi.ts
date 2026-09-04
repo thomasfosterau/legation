@@ -31,6 +31,10 @@
  * the failing operation. `@legation/jsonapi`'s `JsonApiBackend` pushes its
  * journal through it as one request per batch when the api advertises it.
  *
+ * The api's shape — endpoints and wire errors — lives in `server/api.ts`,
+ * which the service worker also loads to reflect the read routes for the
+ * façade (ADR-0029): this module binds the handlers to it and re-exports it.
+ *
  * Identity for user-scoped endpoints arrives as an `x-commerce-user`
  * header set by the SvelteKit process after it resolves the Better Auth
  * session — the trust boundary between the two server processes (swap for
@@ -38,49 +42,38 @@
  * never trusts a client-supplied id, because browsers never reach it
  * directly — vite/Kit only proxy `/sync*`).
  */
-import { Context, Data, Effect, Layer, Schema } from "effect";
-import { HttpApi, HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi";
+import { Context, Data, Effect, Layer } from "effect";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 import type { HttpServerRequest } from "effect/unstable/http";
 import { HttpServerRequest as Request } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import {
-  ApiError,
-  Atomic,
-  Document,
-  Endpoint,
-  Group,
-  Handlers,
-  Lid,
-  Middleware,
-} from "@thomasfosterau/effect-jsonapi";
+import { ApiError, Atomic, Handlers, Lid, Middleware } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@legation/effect";
-import { JsonApiQuery, RestHandlers } from "@legation/jsonapi";
+import { RestHandlers } from "@legation/jsonapi";
 import { nodes } from "../src/lib/domain.js";
+import { api, NotFound, Unauthorized } from "./api.js";
+import type { OperationRejected } from "./api.js";
 import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "./resources.js";
 import { authPolicy, CommerceSync } from "./runtime.js";
 
-// ─── Errors ──────────────────────────────────────────────────────────────────
-
-export class Unauthorized extends ApiError.make<Unauthorized>()("Unauthorized", {
-  status: 401,
-  code: "unauthorized",
-  title: "Sign in first",
-}) {}
-
-export class NotFound extends ApiError.make<NotFound>()("NotFound", {
-  status: 404,
-  code: "not_found",
-  title: "Resource not found",
-}) {}
+export {
+  api,
+  NotFound,
+  OperationConflict,
+  OperationNotFound,
+  OperationRejected,
+  OperationUnauthorized,
+  Unauthorized,
+} from "./api.js";
 
 /**
  * One operation's failure inside an atomic batch — the in-handler form. The
  * extension wants the error document to name the failing operation through
  * `source.pointer`; `ApiError.make` carries custom fields under `meta`, not
- * `source`, so the wire shape is declared structurally below (any
- * `{ status, wire }` is an `ErrorClass`) and this class is what the batch
- * logic fails with. `detail` doubles as the rejection reason a pushing
+ * `source`, so the wire shape is declared structurally in `server/api.ts`
+ * (any `{ status, wire }` is an `ErrorClass`, one per status) and this class
+ * is what the batch logic fails with. `detail` doubles as the rejection reason a pushing
  * `JsonApiBackend` records, so it mirrors the sync mutators' reasons.
  */
 class OperationFailed extends Data.TaggedError("OperationFailed")<{
@@ -89,29 +82,6 @@ class OperationFailed extends Data.TaggedError("OperationFailed")<{
   readonly title: string;
   readonly detail: string;
 }> {}
-
-/**
- * A JSON:API error document at `status`, discriminated inside the endpoint's
- * error union by the error object's `status` literal (the same trick
- * `ApiError`'s own wire schemas use), so the four statuses below encode to
- * the right response even though their documents are otherwise alike.
- */
-const operationErrorWire = (status: number) =>
-  Document.ErrorDocument(
-    Schema.Struct({ ...Document.ErrorObject.fields, status: Schema.Literals([String(status)]) })
-  ).pipe(
-    HttpApiSchema.asJson({ contentType: "application/vnd.api+json" }),
-    HttpApiSchema.status(status)
-  );
-
-/** No identity for an operation that needs one. */
-export const OperationUnauthorized = { status: 401, wire: operationErrorWire(401) } as const;
-/** The operation's target row does not exist (or is not the caller's). */
-export const OperationNotFound = { status: 404, wire: operationErrorWire(404) } as const;
-/** A client-generated id on `add` that names another user's row. */
-export const OperationConflict = { status: 409, wire: operationErrorWire(409) } as const;
-/** A business rule refused the operation (stock, rating, unsupported op). */
-export const OperationRejected = { status: 422, wire: operationErrorWire(422) } as const;
 
 type OperationFailureDocument = (typeof OperationRejected.wire)["Type"];
 
@@ -169,64 +139,6 @@ const orderResource = (row: Row): typeof Order.Type => ({
     createdAt: String(row.createdAt),
   },
 });
-
-// ─── API shape ───────────────────────────────────────────────────────────────
-
-/** A collection's `list` query, as the node graph declares it: the grammar the derived handler parses. */
-const query = (collection: string) => JsonApiQuery.querySchema(nodes, collection);
-
-/** A collection's `get` query — `include` and `fields[…]` — from the same graph. */
-const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(nodes, collection);
-
-export const api = HttpApi.make("commerce")
-  .add(Group.make(Category, Endpoint.list(Category, { query: query("categories") })))
-  .add(
-    Group.make(
-      Product,
-      Endpoint.list(Product, { query: query("products") }),
-      Endpoint.get(Product, { query: singleRowQuery("products"), errors: [NotFound] })
-    )
-  )
-  // The catalog page reads every variant (`allVariants`) for its stock badges.
-  .add(Group.make(Variant, Endpoint.list(Variant, { query: query("variants") })))
-  .add(
-    Group.make(
-      Review,
-      Endpoint.list(Review, { query: query("reviews") }),
-      Endpoint.create(Review, { errors: [Unauthorized] })
-    )
-  )
-  .add(
-    Group.make(
-      CartItem,
-      Endpoint.list(CartItem, { query: query("cartItems") }),
-      Endpoint.create(CartItem, {
-        errors: [Unauthorized, ApiError.BadRequest],
-      }),
-      Endpoint.delete(CartItem, { errors: [Unauthorized] })
-    )
-  )
-  .add(
-    Group.make(
-      Order,
-      Endpoint.list(Order, { query: query("orders") }),
-      Endpoint.create(Order, {
-        errors: [Unauthorized, ApiError.BadRequest],
-      })
-    )
-  )
-  .add(Group.make(OrderItem, Endpoint.list(OrderItem, { query: query("orderItems") })))
-  // The atomic operations extension over the writable resources. Errors are
-  // per-operation (pointer-bearing) — see `OperationFailed`.
-  .add(
-    Group.make(
-      "operations",
-      Endpoint.operations([Review, CartItem, Order], {
-        errors: [OperationUnauthorized, OperationNotFound, OperationConflict, OperationRejected],
-      })
-    )
-  )
-  .prefix("/jsonapi");
 
 // ─── Identity ────────────────────────────────────────────────────────────────
 

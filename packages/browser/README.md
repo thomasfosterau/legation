@@ -72,6 +72,26 @@ For tests or non-global environments, pass a `webSocketConstructor`:
 WebSocketTransport.make({ url, webSocketConstructor: (u) => new MyWebSocket(u) });
 ```
 
+## `ServiceWorkerHost.start`: what a worker's façade needs
+
+`ServiceWorkerHost.run` serves mirrors and runs the sync loop forever.
+`ServiceWorkerHost.start` does the same and returns the `Host` — the engine it
+serves and `registrations`, the root windows and relational registrations the
+host holds on its mirrors' behalf at that moment — listed once the engine
+holds their windows, with the canonical URL of a `SubscribeUrl` while some
+party still holds it by URL. That is the ledger a JSON:API façade (`JsonApiFacade` in
+`@legation/jsonapi`, ADR-0029) consults in a worker, where no `Client`'s own
+ledger sees the tabs' pins:
+
+```ts
+const host = yield * ServiceWorkerHost.start({ nodes, urls, registry });
+const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+// ... build the façade over ClientView.fromEngine(host.engine) and coverageOf,
+// then keep the scope open: yield* Effect.never
+```
+
+`EngineHost.run` itself now returns the same `Host`.
+
 ## `ElectedHost`: leader election for the no-service-worker topology
 
 `ServiceWorkerHost.run` is the recommended deployment (the engine lives in
