@@ -43,10 +43,12 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
+import { Effect } from "effect";
+import type * as Node from "./Node.js";
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import type * as Related from "./Related.js";
-import type * as Subset from "./Subset.js";
+import * as Subset from "./Subset.js";
 
 /**
  * What a subscription registers and a request asks for: the root window
@@ -63,6 +65,17 @@ export const ofPlan = (plan: Query.Plan): Registration => ({
   root: plan.root,
   edges: Query.edgeSelects(plan),
 });
+
+/**
+ * A registration as a ledger holds it: what it covers, and its canonical
+ * URL — the subscription identity of ADR-0029 section 2 — when the ledger
+ * knows one. A Client's ledger entries and the registrations an
+ * `EngineHost` holds on mirrors' behalf are both this shape, so one
+ * {@link verdictOf} scans either.
+ */
+export interface Subscription extends Registration {
+  readonly url?: string;
+}
 
 /**
  * The outcome of a coverage check, recorded for devtools: which
@@ -319,3 +332,39 @@ export const covering = <S extends Registration>(
   }
   return undefined;
 };
+
+// ─── The verdict ─────────────────────────────────────────────────────────────
+
+/**
+ * The verdict of one scan: the first subscription, in iteration order,
+ * covering the request — named by registration, subset hash and canonical
+ * URL when it has one — or `Uncovered`. `Client.coverageOf` and a façade's
+ * coverage check over a host's registrations both answer with this.
+ */
+export const verdictOf = (
+  subscriptions: Iterable<Subscription>,
+  requested: Registration
+): Verdict => {
+  const by = covering(subscriptions, requested);
+  return by === undefined
+    ? { _tag: "Uncovered" }
+    : {
+        _tag: "Covered",
+        by: { root: by.root, edges: by.edges },
+        hash: Subset.hash(by.root),
+        ...(by.url === undefined ? {} : { url: by.url }),
+      };
+};
+
+/**
+ * A coverage check in `Client.coverageOf`'s shape over any ledger: the read
+ * is compiled against the graph and its registration scanned against the
+ * subscriptions the ledger holds at that moment. A façade in a service
+ * worker builds its check from the host's registrations
+ * (`EngineHost.Host.registrations`), where no Client's ledger sees the
+ * mirrors' pins.
+ */
+export const coverageOf =
+  (nodes: Node.NodeRegistry, subscriptions: Effect.Effect<Iterable<Subscription>>) =>
+  (read: Query.Read): Effect.Effect<Verdict> =>
+    Effect.map(subscriptions, (held) => verdictOf(held, ofPlan(Query.plan(nodes, read))));

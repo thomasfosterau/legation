@@ -363,6 +363,82 @@ const serve = (url: string) =>
   collection no bound resource declares, fails with a `QueryError` — never a
   defect, since a URL is network input.
 
+## The façade: covered JSON:API `GET`s answered from the replica
+
+`JsonApiFacade` is ADR-0029's third front over one engine: a fetch handler a
+service worker composes **first** — before its HTTP cache and the network —
+that answers a JSON:API `GET` from the replica when an explicit subscription
+covers it, and stays out of the way otherwise. It is built from the app's
+`HttpApi` (route reflection, as `JsonApiSync` does), the graph, the replica's
+view and a coverage source; it lives here rather than in `@legation/browser`
+because everything it needs is this package's plus the standard `Request` /
+`Response` globals (ADR-0006).
+
+```ts
+import { Effect } from "effect";
+import { ClientView, Coverage } from "@legation/effect/internal";
+import { ServiceWorkerHost } from "@legation/browser";
+import { JsonApiFacade, JsonApiQuery } from "@legation/jsonapi";
+import { api, resources } from "./my-json-api"; // the HttpApi and its Resource declarations
+import { nodes } from "./my-domain";
+
+// In the worker, once the engine has booted:
+const host = yield * ServiceWorkerHost.start({ nodes, urls: JsonApiQuery.urlReads(nodes) });
+const facade = JsonApiFacade.fetchHandler({
+  nodes,
+  api, // its `list` / `getOne` routes, prefix included, are what is recognised
+  resources, // so linkage matches the derived REST handler's
+  view: ClientView.fromEngine(host.engine), // confirmed rows + optimistic overlay
+  coverageOf: Coverage.coverageOf(nodes, host.registrations), // the mirrors' pins
+  cookie: store.getCookie, // `x-legation-served-at`
+});
+
+self.addEventListener("fetch", (event) => {
+  const candidate = facade.matches(event.request);
+  event.respondWith(
+    Effect.runPromise(facade.handle(event.request))
+      .then((local) => local ?? httpCacheThenNetwork(event.request))
+      .catch(() => (candidate ? Effect.runPromise(facade.offline) : fetch(event.request)))
+  );
+});
+```
+
+- **What it recognises.** A `GET` whose `Accept` names
+  `application/vnd.api+json` on one of the api's reflected `list` / `getOne`
+  routes whose type is a node of the graph, under `baseUrl` (default: the
+  page's own origin). Everything else — a server-only resource, another
+  path, a `POST`, a navigation — is `undefined`: not its business.
+- **The parity assumption.** The api's read endpoints are declared with the
+  graph's codec (`JsonApiQuery.querySchema` / `singleRowSchema`) and served
+  by the derived handlers, so the server rules on a URL exactly as the
+  façade does — which is what lets a parse failure be answered locally. A
+  hand-written server with another grammar must not compose the façade.
+- **What it answers.** A covered request: `200`, the document the one writer
+  produces (byte-equal in content to the derived REST handler's for the same
+  declarations), `Cache-Control: no-store`, and `x-legation-served-at` set to
+  the replica's CVR cookie (empty until the first pull). A URL the grammar
+  rejects: the codec's `400` document, which the server would return
+  identically — except an `include` the graph does not declare, which the
+  server rules on. Uncovered and offline (`navigator.onLine === false`, or
+  `online()`): the `503` `offline` error document of ADR-0029 §4.
+- **What it forwards** (`undefined`): an uncovered request while online, a
+  collection no bound resource declares, and a single-resource request whose
+  row the replica does not hold — the 404 is the endpoint's own error class,
+  which only the server can write. A forward that rejects at the transport
+  is the other half of "offline": the worker answers it with
+  `facade.offline` (the same document, with the replica's cookie) when
+  `matches(request)` held.
+- **Coverage is the ledger's.** `coverageOf` is `Client.coverageOf` over a
+  Client, or `Coverage.coverageOf(nodes, host.registrations)` over the
+  registrations an `EngineHost` holds on its mirrors' behalf — the only
+  ledger in a worker that knows what the tabs pinned; a registration is
+  listed only once the engine holds its windows. Every read
+  `ReplicaDocuments.toCover` names must be covered; the façade never
+  subscribes on a request's behalf.
+- **The overlay.** A covered response sees pending optimistic mutations as
+  `Client.query` does; an uncovered network response is the server's
+  authoritative answer and does not (ADR-0029 §4).
+
 ## Types, schemas, and errors
 
 JSON:API document types (`ResourceObject`, `JsonApiDocument`, `Relationship`,
