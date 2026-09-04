@@ -234,10 +234,6 @@ export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predica
 
 // ─── The node graph as a query declaration ───────────────────────────────────
 
-/** Int4 bounds (ADR-0028 rule e): `integer` literals are Postgres `int4`. */
-const INT4_MIN = -2147483648;
-const INT4_MAX = 2147483647;
-
 /** A check that a decoded literal is a value of the kind (`FilterPolicy.matchesKind`). */
 const kindCheck = (kind: FilterPolicy.LiteralKind) =>
   Schema.makeFilter<Predicate.Literal>((value) => FilterPolicy.matchesKind(kind, value), {
@@ -257,9 +253,7 @@ const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top => {
     case "instant":
       return Schema.String.pipe(Schema.check(kindCheck("instant")));
     case "integer":
-      return Schema.Number.pipe(
-        Schema.check(Schema.isInt(), Schema.isBetween({ minimum: INT4_MIN, maximum: INT4_MAX }))
-      );
+      return Schema.Number.pipe(Schema.check(kindCheck("integer")));
     case "double":
       return Schema.Number;
     case "boolean":
@@ -284,7 +278,14 @@ const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
   return attributes;
 };
 
-/** The synthetic resource's relationships: the node's edges, targets resolved lazily through the graph. */
+/**
+ * The synthetic resource's relationships: the node's edges, targets
+ * resolved lazily through the graph. A paginated edge is a `many`
+ * relationship here: effect-jsonapi keeps `Relationship.paginated` out of
+ * `include` paths, whereas a read includes a paginated edge like any other
+ * (its per-parent window is the plan's, not the URL's — {@link canonical}
+ * refuses `include: { first }`).
+ */
 const relationshipsOf = (
   node: Node.AnyNode,
   resources: ReadonlyMap<string, Resource.Any>
@@ -293,11 +294,7 @@ const relationshipsOf = (
   for (const [name, edge] of Object.entries(node.edges)) {
     const target = () => resources.get(edge.target)!;
     relationships[name] =
-      edge.kind === "one"
-        ? Relationship.one(target)
-        : edge.kind === "many"
-          ? Relationship.many(target)
-          : Relationship.paginated(target);
+      edge.kind === "one" ? Relationship.one(target) : Relationship.many(target);
   }
   return relationships;
 };
@@ -479,27 +476,36 @@ type PathSegment = PropertyKey | { readonly key: PropertyKey };
 const keyOf = (segment: PathSegment): PropertyKey =>
   typeof segment === "object" ? segment.key : segment;
 
+/** The types a read on the node can carry: its own and its edge targets'. */
+const carriedTypes = (node: Node.AnyNode): ReadonlySet<string> =>
+  new Set([node.type, ...Object.values(node.edges).map((edge) => edge.target)]);
+
 /**
- * Check `fields[…]` keys before decoding: each names the node's own type or
- * an edge target's. The codec silently drops a type outside that set; a
- * projection nobody can apply is a client mistake worth a 400.
+ * The rejection of a `fields[type]` projection the read cannot carry, or
+ * `undefined` when it can. The codec silently drops such a type; a
+ * projection nobody can apply is a client mistake worth a 400, and the same
+ * rule keeps {@link canonical} and {@link parseParams} in agreement.
  */
+const projectionError = (node: Node.AnyNode, type: string): QueryError | undefined => {
+  const types = carriedTypes(node);
+  return types.has(type)
+    ? undefined
+    : invalid(
+        node.type,
+        `fields[${type}]`,
+        `"${type}" is not a type this read can carry (types: ${[...types].join(", ")})`
+      );
+};
+
+/** Check every `fields[…]` key before decoding (see {@link projectionError}). */
 const checkFields = (
   node: Node.AnyNode,
   record: Readonly<Record<string, unknown>>
 ): Effect.Effect<void, QueryError> => {
-  const types = new Set([node.type, ...Object.values(node.edges).map((edge) => edge.target)]);
   for (const key of Object.keys(record)) {
     const match = /^fields\[(.*)\]$/.exec(key);
-    if (match !== null && !types.has(match[1]!)) {
-      return Effect.fail(
-        invalid(
-          node.type,
-          key,
-          `"${match[1]}" is not a type this read can carry (types: ${[...types].join(", ")})`
-        )
-      );
-    }
+    const error = match === null ? undefined : projectionError(node, match[1]!);
+    if (error !== undefined) return Effect.fail(error);
   }
   return Effect.void;
 };
@@ -572,7 +578,22 @@ export const parseParams = (
     };
   });
 
-/** The resource a request path addresses: `…/{type}` (a listing) or `…/{type}/{id}` (one row). */
+/** A path segment percent-decoded, or a `QueryError` naming `id` when it is malformed. */
+const decodeId = (collection: string, segment: string): Effect.Effect<string, QueryError> =>
+  Effect.try({
+    try: () => decodeURIComponent(segment),
+    catch: () => invalid(collection, "id", `path segment "${segment}" is not percent-encoded`),
+  });
+
+/**
+ * The resource a request path addresses: `…/{type}/{id}` (one row) when the
+ * segment before the last names a node, else `…/{type}` (a listing) when
+ * the last does. A node named earlier on the path — the spec's related
+ * resource (`/products/p-1/variants`) and relationship (`…/relationships/…`)
+ * URLs — is not a read this parser serves (read the related collection
+ * with its key filter instead), so it is rejected rather than misread as a
+ * whole-collection listing.
+ */
 const locate = (
   nodes: Node.NodeRegistry,
   url: URL
@@ -580,13 +601,17 @@ const locate = (
   const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
   const last = segments.at(-1);
   const previous = segments.at(-2);
-  if (last !== undefined && nodes.nodes.has(last)) return Effect.succeed({ collection: last });
-  if (last !== undefined && previous !== undefined && nodes.nodes.has(previous)) {
-    return Effect.succeed({ collection: previous, id: decodeURIComponent(last) });
+  if (previous !== undefined && nodes.nodes.has(previous)) {
+    return Effect.map(decodeId(previous, last!), (id) => ({ collection: previous, id }));
   }
-  return Effect.fail(
-    new QueryError({ message: `No collection on path "${url.pathname}"`, query: url.pathname })
-  );
+  const message = segments.slice(0, -2).some((segment) => nodes.nodes.has(segment))
+    ? `Nested resource path "${url.pathname}" is not a read; filter the related collection by its key instead`
+    : last !== undefined && nodes.nodes.has(last)
+      ? undefined
+      : `No collection on path "${url.pathname}"`;
+  return message === undefined
+    ? Effect.succeed({ collection: last! })
+    : Effect.fail(new QueryError({ message, query: url.pathname }));
 };
 
 /** A single-row read is `filter[id]=…`, first 1 (ADR-0029 §3); it takes `include` and `fields` only. */
@@ -602,7 +627,9 @@ const singleRow = (
     );
   }
   const widened = new URLSearchParams(params);
-  widened.set("filter[id]", id);
+  // Through the grammar's own encoder, so an id carrying `,` or `\` is
+  // escaped as a literal rather than read as a list.
+  widened.set("filter[id]", flatFilter(Filter.eq("id", id))["filter[id]"]!);
   widened.set("page[limit]", "1");
   return Effect.succeed(widened);
 };
@@ -735,6 +762,10 @@ export const canonical = (
       query: read.collection,
     });
   }
+  for (const type of Object.keys(fields ?? {})) {
+    const error = projectionError(node, type);
+    if (error !== undefined) throw error;
+  }
   let query: string;
   try {
     const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
@@ -779,16 +810,11 @@ const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>):
   }
 };
 
-/**
- * A declaration for encoding a tree without a node graph: each field it
- * names admits every operator, typed by the JS type of its literals. The
- * wire form of a scalar does not depend on its declared kind, so this
- * encodes exactly what the typed codec would.
- */
-const declarationOf = (ast: Filter.Node): Resource.Any => {
+/** The one JS type each field of a tree is compared with (`string` for a field only null-tested). */
+const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
   const types = new Map<string, Set<string>>();
   collectLiteralTypes(ast, types);
-  const attributes: Record<string, Schema.Top> = {};
+  const resolved = new Map<string, string>();
   for (const [field, kinds] of types) {
     const [kind, ...rest] = kinds;
     if (rest.length > 0) {
@@ -797,11 +823,38 @@ const declarationOf = (ast: Filter.Node): Resource.Any => {
         parameter: `filter[${field}]`,
       });
     }
-    attributes[field] = scalarSchema((kind ?? "string") as "string" | "number" | "boolean").pipe(
-      Filter.able()
-    );
+    resolved.set(field, kind ?? "string");
   }
-  return Resource.make("query", { attributes });
+  return resolved;
+};
+
+/** The flat `filter[...]` codec of an untyped declaration. */
+type FlatFilterCodec = Schema.Codec<Filter.Node, Readonly<Record<string, string>>>;
+
+const flatFilterCodecs = new Map<string, FlatFilterCodec>();
+
+/**
+ * The codec for encoding a tree without a node graph: each field it names
+ * admits every operator, typed by the JS type of its literals. The wire
+ * form of a scalar does not depend on its declared kind, so this encodes
+ * exactly what the typed codec would. Memoised by the field → type
+ * signature, since a backend encodes the same shapes on every pull.
+ */
+const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
+  const types = literalTypesOf(ast);
+  const signature = [...types]
+    .map(([field, type]) => `${field}:${type}`)
+    .toSorted(Predicate.compareText)
+    .join("\n");
+  const cached = flatFilterCodecs.get(signature);
+  if (cached !== undefined) return cached;
+  const attributes: Record<string, Schema.Top> = {};
+  for (const [field, type] of types) {
+    attributes[field] = scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able());
+  }
+  const codec = UrlQuery.Filter(Resource.make("query", { attributes })) as FlatFilterCodec;
+  flatFilterCodecs.set(signature, codec);
+  return codec;
 };
 
 /**
@@ -810,12 +863,7 @@ const declarationOf = (ast: Filter.Node): Resource.Any => {
  * and member order are effect-jsonapi's byte for byte.
  */
 export const flatFilter = (ast: Filter.Node): Readonly<Record<string, string>> =>
-  Schema.encodeSync(
-    UrlQuery.Filter(declarationOf(ast)) as Schema.Codec<
-      Filter.Node,
-      Readonly<Record<string, string>>
-    >
-  )(ast);
+  Schema.encodeSync(flatFilterCodecOf(ast))(ast);
 
 /**
  * Serialize sort terms into the JSON:API `sort` value (`-field,field`) through

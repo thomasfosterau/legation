@@ -228,7 +228,9 @@ interface DeclaredField {
  * The filterable set the resource declares, keyed by **row field**: an
  * attribute under its own name, with the kind left to `Node.make` to derive
  * from its schema; a to-one relationship under its edge's key field, kind
- * `text` (an id).
+ * `text` (an id). A key field declared twice — the relationship and the
+ * attribute it is stored in both filterable — is a definition-time defect:
+ * neither declaration may silently win.
  */
 const declaredFilterable = (
   resource: Resource.Any,
@@ -239,11 +241,18 @@ const declaredFilterable = (
   const entries = Object.entries(Resource.filterable(resource)) as Array<[string, DeclaredField]>;
   for (const [key, entry] of entries) {
     const edge = edges[key];
-    if (attributes[key] === undefined && edge?.kind === "one") {
-      declared[edge.via] = { operators: entry.operators, kind: "text" };
-    } else {
-      declared[key] = entry.operators;
+    const viaRelationship = attributes[key] === undefined && edge?.kind === "one";
+    const field = viaRelationship ? edge.via : key;
+    if (declared[field] !== undefined) {
+      fail(
+        resource.type,
+        key,
+        `key field "${field}" is declared filterable twice (by relationship "${key}" and by the attribute it is stored in) — declare it once`
+      );
     }
+    declared[field] = viaRelationship
+      ? { operators: entry.operators, kind: "text" }
+      : entry.operators;
   }
   return declared;
 };

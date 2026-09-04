@@ -424,6 +424,60 @@ describe("JsonApiQuery.parseRead", () => {
     expect(parseFailure("/nothing/here").message).toMatch(/No collection/);
   });
 
+  it("escapes a row id through the grammar: commas and backslashes stay one literal", () => {
+    expect(parse("/products/a,b").read.where).toEqual(Predicate.eq("id", "a,b"));
+    expect(parse("/products/a%2Cb").read.where).toEqual(Predicate.eq("id", "a,b"));
+    expect(parse("/products/a%5Cb").read.where).toEqual(Predicate.eq("id", "a\\b"));
+    // The canonical string of such a read decodes back to it.
+    const read: Query.Read = {
+      collection: "products",
+      where: Predicate.eq("id", "a,b\\c"),
+      first: 1,
+    };
+    expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
+  });
+
+  it("a malformed id segment is a QueryError naming the parameter, not a defect", () => {
+    expect(parseFailure("/products/100%")).toMatchObject({ parameter: "id", query: "products" });
+    expect(parseFailure("/products/100%").message).toMatch(/percent-encoded/);
+  });
+
+  it("reads /{type}/{id} over /{type} and rejects nested resource paths", () => {
+    // An id that happens to name a node is still an id.
+    expect(parse("/products/categories").read).toEqual({
+      collection: "products",
+      where: Predicate.eq("id", "categories"),
+      first: 1,
+    });
+    // The spec's related-resource and relationship URLs are not reads here.
+    for (const url of [
+      "/products/p-1/variants",
+      "/products/p-1/relationships/variants",
+      "/api/products/p-1/variants?include=product",
+    ]) {
+      const failure = parseFailure(url);
+      expect(failure).toBeInstanceOf(QueryError);
+      expect(failure.message).toMatch(/Nested resource path/);
+    }
+  });
+
+  it("includes a paginated edge like any other; only its window has no URL form", () => {
+    // ADR-0029's worked example.
+    expect(parse("/products?include=variants,reviews").read.include).toEqual({
+      variants: true,
+      reviews: true,
+    });
+    const read: Query.Read = { collection: "products", include: { reviews: true, variants: true } };
+    expect(JsonApiQuery.canonical(nodes, read)).toBe("/products?include=reviews%2Cvariants");
+    expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
+    expect(() =>
+      JsonApiQuery.canonical(nodes, { collection: "products", include: { reviews: { first: 5 } } })
+    ).toThrow(/no URL form/);
+    expect(parseFailure("/products?fields[reviews]=nope")).toMatchObject({
+      parameter: "fields[reviews]",
+    });
+  });
+
   it("rejects nested include paths (D1) and undeclared edges, naming the parameter", () => {
     const nested = parseFailure("/products?include=variants.product");
     expect(nested).toBeInstanceOf(QueryError);
@@ -509,6 +563,23 @@ describe("JsonApiQuery.canonical", () => {
     expect(
       JsonApiQuery.canonical(nodes, { collection: "products", where: Predicate.isIn("id", []) })
     ).toBe("/products?filter[g0][group][conjunction]=OR");
+  });
+
+  it("applies the projection rule parseRead applies, so fields[] round-trips or fails on both sides", () => {
+    const read: Query.Read = { collection: "products", include: { variants: true } };
+    const fields = { variants: ["sku"], products: ["name"] };
+    const url = JsonApiQuery.canonical(nodes, read, fields);
+    expect(url).toBe("/products?include=variants&fields[products]=name&fields[variants]=sku");
+    expect(parse(url)).toEqual({ read, fields });
+    // A type the read cannot carry is refused, not dropped: the same error
+    // parseRead gives for `fields[orders]=id`.
+    expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(QueryError);
+    expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(
+      /fields\[orders\]/
+    );
+    expect(parseFailure("/products?include=variants&fields[orders]=id")).toMatchObject({
+      parameter: "fields[orders]",
+    });
   });
 
   it("refuses what the plan or the grammar refuses", () => {
