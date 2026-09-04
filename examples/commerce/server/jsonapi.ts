@@ -33,7 +33,9 @@
  * session — the trust boundary between the two server processes (swap for
  * a forwarded session token in a real deployment; the JSON:API itself
  * never trusts a client-supplied id, because browsers never reach it
- * directly — vite/Kit only proxy `/sync*`).
+ * directly — vite/Kit only proxy `/sync*`, and the browser's own JSON:API
+ * reads go through the Kit read proxy, `src/routes/jsonapi/[...path]/+server.ts`,
+ * which sets this header from the session and drops the client's).
  */
 import { Context, Effect, Layer } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";

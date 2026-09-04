@@ -1,15 +1,19 @@
 /**
  * The no-JS baseline (README): with JavaScript disabled the pages render
- * from their SvelteKit server loads alone, and the loads read the JSON:API
- * at the canonical URLs of the app's declarative reads. This runs the real
- * `load` functions of `src/routes/**\/+page.server.ts` against the commerce
- * server in-process — `fetch` is pointed at the api's web handler, so
- * `SYNC_ORIGIN` is never dialled — and checks the data each page renders
- * without a client: the catalog filtered by category, the product detail
- * with its variants and seller, the reviews newest first, the cart lines
- * with their variants, the orders newest first. Rendering the Svelte markup
- * itself needs the Kit runtime and stays a manual check (`bun run dev`,
- * JavaScript off).
+ * from their SvelteKit loads alone, and the loads read the JSON:API at the
+ * canonical URLs of the app's declarative reads. This runs the real `load`
+ * functions of `src/routes/**\/+page.server.ts` — and the catalog's
+ * universal `+page.ts` (#168), which the server runs for the first render
+ * exactly as it runs a server load — against the commerce server
+ * in-process: `fetch`, global and the load event's alike, is pointed at
+ * the api's web handler, so `SYNC_ORIGIN` is never dialled. It checks the
+ * data each page renders without a client: the catalog filtered by
+ * category, the product detail with its variants and seller, the reviews
+ * newest first, the cart lines with their variants, the orders newest
+ * first — and that the read proxy the universal load calls
+ * (`src/routes/jsonapi/[...path]/+server.ts`) vouches for the session and
+ * for nothing else. Rendering the Svelte markup itself needs the Kit
+ * runtime and stays a manual check (`bun run dev`, JavaScript off).
  */
 import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Scope } from "effect";
@@ -20,12 +24,18 @@ let world: World;
 let scope: Scope.Closeable;
 const realFetch = globalThis.fetch;
 
+/** The api's handler as a `fetch`: a relative URL is the app's own origin. */
+const apiFetch = ((input: string | URL | Request, init?: RequestInit) =>
+  world.handler(
+    new Request(input instanceof Request ? input : new URL(input, "http://app.test"), init)
+  )) as typeof fetch;
+
 beforeAll(async () => {
   scope = Effect.runSync(Scope.make());
   world = await Effect.runPromise(makeWorld.pipe(Scope.provide(scope)));
-  // The loads' `FetchHttpClient` reads `globalThis.fetch` per request.
-  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) =>
-    world.handler(new Request(input, init))) as typeof fetch;
+  // The server loads' `FetchHttpClient`, and the read proxy, read
+  // `globalThis.fetch` per request.
+  globalThis.fetch = apiFetch;
 });
 
 afterAll(async () => {
@@ -33,7 +43,11 @@ afterAll(async () => {
   await Effect.runPromise(Scope.close(scope, Exit.void));
 });
 
-/** A load's event: the loads read `locals`, `url` and `params` only. */
+/**
+ * A load's event: the server loads read `locals`, `url` and `params`; the
+ * universal catalog load reads `url` and its `fetch`, which on the server
+ * calls the read proxy in-process — here, the api's handler directly.
+ */
 const event = (input: {
   readonly user?: { readonly id: string; readonly name: string; readonly email: string };
   readonly url?: string;
@@ -43,13 +57,14 @@ const event = (input: {
     locals: { user: input.user },
     url: new URL(input.url ?? "http://app.test/"),
     params: input.params ?? {},
+    fetch: apiFetch,
   }) as never;
 
 const u1 = { id: "u1", name: "Ada", email: "ada@example.test" };
 
 describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", () => {
   it("catalog: the first page by id, every category by name, every variant for the stock badges", async () => {
-    const { load } = await import("../src/routes/+page.server.js");
+    const { load } = await import("../src/routes/+page.js");
     const data = await load(event({}));
     expect(data.categoryId).toBeUndefined();
     expect(data.after).toBeUndefined();
@@ -63,7 +78,7 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
   });
 
   it("catalog filtered by category: `?category=` is filter[categoryId] on the same read", async () => {
-    const { load } = await import("../src/routes/+page.server.js");
+    const { load } = await import("../src/routes/+page.js");
     const data = await load(event({ url: "http://app.test/?category=c-keyboards" }));
     expect(data.categoryId).toBe("c-keyboards");
     expect(data.products.map((p) => p.id)).toEqual(["p-03", "p-04"]);
@@ -75,7 +90,7 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
   });
 
   it("catalog paged by `?after=`: the second page is the same read one window on, and the last", async () => {
-    const { load } = await import("../src/routes/+page.server.js");
+    const { load } = await import("../src/routes/+page.js");
     const first = await load(event({}));
     const second = await load(event({ url: `http://app.test/?after=${first.nextCursor}` }));
     expect(second.after).toBe("p-04");
@@ -122,5 +137,33 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
     const someoneElse = await load(event({ user: { ...u1, id: "u3" } }));
     expect(someoneElse.orders).toEqual([]);
     expect(await load(event({}))).toEqual({ orders: [] });
+  });
+
+  it("the read proxy: forwards a URL as the session user, never as the header the client sent", async () => {
+    const { GET } = await import("../src/routes/jsonapi/[...path]/+server.js");
+    const cart = "/jsonapi/cartItems?filter[userId]=u1&include=variant";
+    const proxied = (user: typeof u1 | undefined, path: string) =>
+      GET({
+        params: { path: path.slice("/jsonapi/".length, path.indexOf("?")) },
+        url: new URL(`http://app.test${path}`),
+        request: new Request(`http://app.test${path}`, {
+          // A client asserting an identity: dropped, not forwarded.
+          headers: { accept: "application/vnd.api+json", "x-commerce-user": "u1" },
+        }),
+        locals: { user },
+      } as never);
+    const mine = await proxied(u1, cart);
+    expect(mine.status).toBe(200);
+    expect(mine.headers.get("content-type")).toBe("application/vnd.api+json");
+    const document = (await mine.json()) as { data: ReadonlyArray<{ id: string }> };
+    expect(document.data.map((line) => line.id)).toEqual(["ci-1", "ci-2"]);
+    // Signed out, the same URL is the policy's empty allow-set: nothing.
+    const anonymous = (await (await proxied(undefined, cart)).json()) as {
+      data: ReadonlyArray<unknown>;
+    };
+    expect(anonymous.data).toEqual([]);
+    // The server's verdict on a URL outside the grammar passes through as is.
+    const rejected = await proxied(u1, "/jsonapi/products?filter[priceCents][gt]=abc");
+    expect(rejected.status).toBe(400);
   });
 });

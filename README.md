@@ -147,18 +147,20 @@ pipeline in the page** (`Server.make` over a `MemoryBackend`) against a durable
 `localStorage` client store; the fourth is the full-stack deployment, with a
 real server process and the engine in a service worker.
 
-| App                     | Example                           | Exercises                                                                                                                                                                                                          |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                        |
-| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                   |
-| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                          |
-| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/svelte/kit`](packages/svelte), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, and a no-JS baseline |
+| App                     | Example                           | Exercises                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                                                                                                                                                              |
+| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                                                                                                                                                                         |
+| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                                                                                                                                                                                |
+| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/svelte/kit`](packages/svelte), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, a no-JS baseline, and the JSON:API **façade** (ADR-0029): plain `fetch()` of a catalog URL answered from the worker's replica, proven in a Chromium test that goes offline |
 
 The first three are SvelteKit **SPAs** — the engine, its store, and the demo
 backend are browser-only, so they turn SSR off in the root layout and build
 through `adapter-static` with a fallback page. `commerce` is the one that
 renders on the server; it is also the only example with tests, run as part of
-`bun run test:run`.
+`bun run test:run` — including a browser test of the façade that needs
+Chromium (`bunx playwright-core install chromium`; it fails, never skips,
+without it).
 
 ## Development
 
