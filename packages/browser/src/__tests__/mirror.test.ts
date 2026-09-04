@@ -19,6 +19,7 @@ import {
 } from "@legation/effect";
 import {
   ClientEngine,
+  Coverage,
   Cvr,
   EngineHost,
   InvalidationBus,
@@ -534,5 +535,86 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
           expect(yield* client.subscriptions).toEqual([]);
         })
       )
+  );
+});
+
+// ─── The host's registrations as a coverage ledger (#166, ADR-0029 section 3) ─
+
+describe("EngineHost.Host.registrations", () => {
+  it.effect(
+    "lists what the host holds for its mirrors, with URL identity, and answers coverage like the Client",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeEngine;
+          const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+          const host = yield* EngineHost.run({
+            channel: hostChannel,
+            engine,
+            registry: nodes.collections,
+            nodes,
+            urls: stubUrls,
+          });
+          const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+          const client = yield* Client.connect({
+            nodes,
+            mutations: mutators,
+            channel,
+            urls: stubUrls,
+          });
+          const withAuthor = { collection: "todos", include: { author: true } } as const;
+
+          // Nothing held: nothing covered — the façade would go to the network.
+          expect(yield* host.registrations).toEqual([]);
+          expect((yield* coverageOf({ collection: "todos" }))._tag).toBe("Uncovered");
+
+          // A connected Client's edged pin arrives as Subscribe + SubscribeRelated:
+          // the host records the root and the relational registration (root +
+          // edge selects) once their engine registrations exist. The URL
+          // identity of that pin lives in the Client's own ledger, not here.
+          yield* client.subscribe("/todos?include=author");
+          const held = yield* eventually(host.registrations, (current) => current.length === 2);
+          expect(held.map((entry) => Subset.hash(entry.root))).toEqual([todosRoot, todosRoot]);
+          const edged = held.find((entry) => entry.edges.length === 1)!;
+          expect(edged.edges).toEqual([{ name: "author" }]);
+          expect(edged.url).toBeUndefined();
+
+          // The same verdicts the Client's own ledger gives, from the host's side.
+          for (const read of [{ collection: "todos" }, withAuthor]) {
+            const verdict = yield* coverageOf(read);
+            expect(verdict._tag, JSON.stringify(read)).toBe("Covered");
+            expect(verdict._tag).toBe((yield* client.coverageOf(read))._tag);
+          }
+          expect((yield* coverageOf({ collection: "users" }))._tag).toBe("Uncovered");
+
+          // A page with no Client at all registers by URL: listed the same
+          // way, and the host knows its canonical URL.
+          yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/api/users" });
+          const withPage = yield* eventually(host.registrations, (current) => current.length === 3);
+          expect(withPage.find((entry) => entry.root.collection === "users")?.url).toBe("/users");
+          const users = yield* coverageOf({ collection: "users" });
+          expect(users).toMatchObject({ _tag: "Covered", url: "/users" });
+
+          // Release drops the entries; nothing is covered by a registration the
+          // engine no longer holds.
+          yield* client.unsubscribe("/todos?include=author");
+          yield* channel.post({ _tag: "UnsubscribeUrl", mirrorId: "page", url: "/users" });
+          yield* eventually(host.registrations, (current) => current.length === 0);
+          expect((yield* coverageOf({ collection: "todos" }))._tag).toBe("Uncovered");
+        })
+      )
+  );
+
+  it.effect("does not list named-query or mutation-state registrations", () =>
+    Effect.gen(function* () {
+      const { engine } = yield* makeEngine;
+      const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+      const host = yield* EngineHost.run({ channel: hostChannel, engine });
+      const mirror = yield* Mirror.make({ channel, mutators });
+      yield* channel.post({ _tag: "SubscribeMutationStates", mirrorId: "page" });
+      yield* mirror.subscribe(allTodos);
+      const held = yield* eventually(host.registrations, (current) => current.length === 1);
+      expect(held).toEqual([{ root: allTodos, edges: [] }]);
+    })
   );
 });

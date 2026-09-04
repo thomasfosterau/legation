@@ -40,6 +40,7 @@ export * as Convention from "./Convention.js";
 export * as Derive from "./Derive.js";
 export * as DocumentWriter from "./DocumentWriter.js";
 export * as JsonApiBackend from "./JsonApiBackend.js";
+export * as JsonApiFacade from "./JsonApiFacade.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
 export * as NodeBridge from "./NodeBridge.js";
