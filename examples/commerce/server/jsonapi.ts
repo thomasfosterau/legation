@@ -19,9 +19,10 @@
  * empty allow-set — an empty collection, or a 404 for a `get`), and a URL
  * the grammar rejects is a 400 error document with `source.parameter`. Each
  * endpoint declares its query as the graph's own codec
- * (`JsonApiQuery.querySchema`), so the contract the api publishes is the
- * grammar the handler parses. The writes keep their SQL and their
- * `broadcast`: they are the mutators' out-of-band twins.
+ * (`JsonApiQuery.querySchema` for a `list`, `singleRowSchema` for a `get`),
+ * so the contract the api publishes is the grammar the handler parses. The
+ * writes keep their SQL and their `broadcast`: they are the mutators'
+ * out-of-band twins.
  *
  * Identity for user-scoped endpoints arrives as an `x-commerce-user`
  * header set by the SvelteKit process after it resolves the Better Auth
@@ -30,7 +31,7 @@
  * never trusts a client-supplied id, because browsers never reach it
  * directly — vite/Kit only proxy `/sync*`).
  */
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
 import type { HttpServerRequest } from "effect/unstable/http";
 import { HttpServerRequest as Request } from "effect/unstable/http";
@@ -103,8 +104,11 @@ const orderResource = (row: Row): typeof Order.Type => ({
 
 // ─── API shape ───────────────────────────────────────────────────────────────
 
-/** A collection's query, as the node graph declares it: the grammar the derived handler parses. */
+/** A collection's `list` query, as the node graph declares it: the grammar the derived handler parses. */
 const query = (collection: string) => JsonApiQuery.querySchema(nodes, collection);
+
+/** A collection's `get` query — `include` and `fields[…]` — from the same graph. */
+const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(nodes, collection);
 
 export const api = HttpApi.make("commerce")
   .add(Group.make(Category, Endpoint.list(Category, { query: query("categories") })))
@@ -112,7 +116,7 @@ export const api = HttpApi.make("commerce")
     Group.make(
       Product,
       Endpoint.list(Product, { query: query("products") }),
-      Endpoint.get(Product, { include: { depth: 1 }, fields: true, errors: [NotFound] })
+      Endpoint.get(Product, { query: singleRowQuery("products"), errors: [NotFound] })
     )
   )
   // The catalog page reads every variant (`allVariants`) for its stock badges.
@@ -182,15 +186,20 @@ const restContext = (
  * auth policy — the same three the sync tier evaluates through, so
  * `GET /jsonapi/products?filter[categoryId]=c-audio` and a subscription to
  * `productPage({ categoryId: "c-audio" })` are one read (ADR-0029 §6).
+ * A service, built once and shared by every group.
  */
-const derived = Effect.map(CommerceSync, ({ backend }) =>
-  RestHandlers.make({
-    nodes,
-    backend,
-    policy: authPolicy,
-    context: restContext,
-    prefix: "/jsonapi",
-  })
+const Rest = Context.Service<RestHandlers.RestHandlers>("commerce/RestHandlers");
+
+const restLive: Layer.Layer<RestHandlers.RestHandlers, never, CommerceSync> = Layer.effect(Rest)(
+  Effect.map(CommerceSync, ({ backend }) =>
+    RestHandlers.make({
+      nodes,
+      backend,
+      policy: authPolicy,
+      context: restContext,
+      prefix: "/jsonapi",
+    })
+  )
 );
 
 const notFound = { notFound: () => new NotFound() };
@@ -215,21 +224,21 @@ export const cartItemId = CartItem.Id.make;
 export const variantId = Variant.Id.make;
 
 const categoriesLive = HttpApiBuilder.group(api, "categories", (handlers) =>
-  Effect.map(derived, (rest) => handlers.handle("list", rest.list(Category)))
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(Category)))
 );
 
 const productsLive = HttpApiBuilder.group(api, "products", (handlers) =>
-  Effect.map(derived, (rest) =>
+  Effect.map(Rest, (rest) =>
     handlers.handle("list", rest.list(Product)).handle("get", rest.get(Product, notFound))
   )
 );
 
 const variantsLive = HttpApiBuilder.group(api, "variants", (handlers) =>
-  Effect.map(derived, (rest) => handlers.handle("list", rest.list(Variant)))
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(Variant)))
 );
 
 const reviewsLive = HttpApiBuilder.group(api, "reviews", (handlers) =>
-  Effect.map(derived, (rest) =>
+  Effect.map(Rest, (rest) =>
     handlers.handle("list", rest.list(Review)).handle("create", ({ payload }) =>
       Effect.gen(function* () {
         const userId = yield* requireUser;
@@ -250,7 +259,7 @@ const reviewsLive = HttpApiBuilder.group(api, "reviews", (handlers) =>
 );
 
 const cartItemsLive = HttpApiBuilder.group(api, "cartItems", (handlers) =>
-  Effect.map(derived, (rest) =>
+  Effect.map(Rest, (rest) =>
     handlers
       .handle("list", rest.list(CartItem))
       .handle("create", ({ payload }) =>
@@ -282,7 +291,7 @@ const cartItemsLive = HttpApiBuilder.group(api, "cartItems", (handlers) =>
 );
 
 const ordersLive = HttpApiBuilder.group(api, "orders", (handlers) =>
-  Effect.map(derived, (rest) =>
+  Effect.map(Rest, (rest) =>
     handlers
       .handle("list", rest.list(Order))
       // Order placement: recomputed from the authoritative cart, exactly like
@@ -342,7 +351,7 @@ const ordersLive = HttpApiBuilder.group(api, "orders", (handlers) =>
 );
 
 const orderItemsLive = HttpApiBuilder.group(api, "orderItems", (handlers) =>
-  Effect.map(derived, (rest) => handlers.handle("list", rest.list(OrderItem)))
+  Effect.map(Rest, (rest) => handlers.handle("list", rest.list(OrderItem)))
 );
 
 /** Registers the JSON:API's routes on the ambient `HttpRouter`. */
@@ -356,7 +365,7 @@ export const jsonApiLive = HttpApiBuilder.layer(api).pipe(
       cartItemsLive,
       ordersLive,
       orderItemsLive
-    ).pipe(Layer.provide(Middleware.layer))
+    ).pipe(Layer.provide(Middleware.layer), Layer.provide(restLive))
   ),
   Layer.provide(Middleware.layer)
 );

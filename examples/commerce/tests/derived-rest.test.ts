@@ -106,6 +106,10 @@ describe("the app's reads, at their canonical URLs, against the committed fixtur
         expect(body.included.map((v: Json) => v.id)).toEqual(["v-01a", "v-01b"]);
         expect(body.links.self).toBe("/jsonapi/products?include=variants&filter[id]=p-01&page[limit]=1");
         expect({ url, status, body }).toEqual(fixture("get-product-p-01", { url, status, body }));
+        // The single-row route takes the graph's `fields[…]` too.
+        const sparse = yield* world.get("/jsonapi/products/p-01?fields[products]=name");
+        expect(sparse.status).toBe(200);
+        expect(Object.keys(sparse.body.data.attributes)).toEqual(["name"]);
         const missing = yield* world.get("/jsonapi/products/p-99");
         expect(missing.status).toBe(404);
         expect(missing.body.errors[0]).toMatchObject({ status: "404", code: "not_found" });

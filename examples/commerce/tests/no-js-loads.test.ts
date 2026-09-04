@@ -52,7 +52,10 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
     const { load } = await import("../src/routes/+page.server.js");
     const data = await load(event({}));
     expect(data.categoryId).toBeUndefined();
+    expect(data.after).toBeUndefined();
     expect(data.products.map((p) => p.id)).toEqual(["p-01", "p-02", "p-03", "p-04"]);
+    // The page's "Next page" link: the document said there is more, from the last row.
+    expect(data.nextCursor).toBe("p-04");
     expect(data.categories.map((c) => c.attributes.name)).toEqual(["Audio", "Desks", "Keyboards"]);
     expect(data.variants).toHaveLength(9);
     // A variant's product is linkage — what the stock aggregate groups by.
@@ -67,6 +70,17 @@ describe("the SvelteKit loads (the no-JS baseline) over the derived JSON:API", (
     for (const product of data.products) {
       expect(product.relationships?.category.data.id).toBe("c-keyboards");
     }
+    // Two keyboards fill no window: no next page.
+    expect(data.nextCursor).toBeUndefined();
+  });
+
+  it("catalog paged by `?after=`: the second page is the same read one window on, and the last", async () => {
+    const { load } = await import("../src/routes/+page.server.js");
+    const first = await load(event({}));
+    const second = await load(event({ url: `http://app.test/?after=${first.nextCursor}` }));
+    expect(second.after).toBe("p-04");
+    expect(second.products.map((p) => p.id)).toEqual(["p-05", "p-06"]);
+    expect(second.nextCursor).toBeUndefined();
   });
 
   it("product detail: the product with its variants and seller, and its reviews newest first", async () => {

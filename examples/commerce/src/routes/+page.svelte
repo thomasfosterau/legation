@@ -15,12 +15,22 @@
 
   const { data } = $props();
 
-  // The category filter lives in the URL (`?category=`): links keep the
-  // no-JS tier working, SPA navigation makes the same links reactive inputs
-  // for the live hooks. The cursor and search are enhanced-tier state.
+  // The category filter and the cursor live in the URL (`?category=`,
+  // `?after=`): links keep the no-JS tier working, SPA navigation makes the
+  // same links reactive inputs for the live hooks, so both tiers page the
+  // one read. Search is enhanced-tier state.
   const categoryId = $derived(kitPage.url.searchParams.get("category") ?? undefined);
-  let cursor = $state<string | undefined>(undefined);
+  const cursor = $derived(kitPage.url.searchParams.get("after") ?? undefined);
   let search = $state("");
+
+  /** The catalog URL of a page: the current category, at `after`. */
+  const pageHref = (after?: string) => {
+    const params = new URLSearchParams();
+    if (categoryId !== undefined) params.set("category", categoryId);
+    if (after !== undefined) params.set("after", after);
+    const query = params.toString();
+    return query === "" ? "/" : `/?${query}`;
+  };
   const PAGE = CATALOG_PAGE_SIZE;
 
   // svelte-ignore state_referenced_locally
@@ -54,13 +64,6 @@
       .filter((product) => needle === "" || product.name.toLowerCase().includes(needle));
   });
   const stockOf = $derived(AsyncResult.getOrElse(stock.current, () => ({})) as Record<string, number>);
-
-  const nextPage = async () => {
-    const rows = await productsQuery.promise;
-    const last = rows[rows.length - 1];
-    if (last !== undefined && rows.length === PAGE) cursor = last.id;
-  };
-  const firstPage = () => (cursor = undefined);
 </script>
 
 <h1>Catalog</h1>
@@ -85,8 +88,9 @@
     {/each}
   </ul>
 
+  <!-- Plain links: the no-JS visitor pages the same read, one window on. -->
   <p>
-    <button onclick={firstPage} disabled={cursor === undefined}>First page</button>
-    <button onclick={nextPage}>Next page</button>
+    {#if cursor !== undefined}<a href={pageHref()}>First page</a>{/if}
+    {#if data.nextCursor !== undefined}<a href={pageHref(data.nextCursor)}>Next page</a>{/if}
   </p>
 </svelte:boundary>
