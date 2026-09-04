@@ -66,6 +66,12 @@ export interface ElectedHostOptions {
   readonly channelName?: string;
   /** Forwarded to {@link EngineHost.run} for mirrors' `related` registrations. */
   readonly registry?: Collection.CollectionRegistry;
+  /**
+   * URL-keyed reads (#159): lets the returned Client `subscribe(url)`, and
+   * — with `nodes` — lets the hosting tab answer `SubscribeUrl` from pages
+   * without a Client (forwarded to {@link EngineHost.run}).
+   */
+  readonly urls?: Client.UrlReads;
   readonly queries?: Query.QueryRegistry;
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /** Override for tests/non-browser injection. Defaults to `navigator.locks`. */
@@ -250,9 +256,13 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
         ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
       }).pipe(Effect.provide(options.dependencies));
       const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
-      yield* options.registry === undefined
-        ? EngineHost.run({ channel: hostChannel, engine })
-        : EngineHost.run({ channel: hostChannel, engine, registry: options.registry });
+      yield* EngineHost.run({
+        channel: hostChannel,
+        engine,
+        nodes: options.nodes,
+        ...(options.registry === undefined ? {} : { registry: options.registry }),
+        ...(options.urls === undefined ? {} : { urls: options.urls }),
+      });
       yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
       yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));
       yield* SubscriptionRef.set(roleRef, "host");
@@ -283,5 +293,10 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
     }
 
     const view = yield* switchingView(viewRef);
-    return { client: Client.fromView(options.nodes, view), role: SubscriptionRef.changes(roleRef) };
+    const client = Client.fromView(
+      options.nodes,
+      view,
+      options.urls === undefined ? {} : { urls: options.urls }
+    );
+    return { client, role: SubscriptionRef.changes(roleRef) };
   });

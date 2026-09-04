@@ -66,11 +66,17 @@ export const ofPlan = (plan: Query.Plan): Registration => ({
 
 /**
  * The outcome of a coverage check, recorded for devtools: which
- * subscription (by registration and subset hash) answered a read locally,
- * or that none did and the read fell through.
+ * subscription (by registration, subset hash and — when the subscription
+ * has a URL form — canonical URL, the identity of ADR-0029 section 2)
+ * answered a read locally, or that none did and the read fell through.
  */
 export type Verdict =
-  | { readonly _tag: "Covered"; readonly by: Registration; readonly hash: string }
+  | {
+      readonly _tag: "Covered";
+      readonly by: Registration;
+      readonly hash: string;
+      readonly url?: string;
+    }
   | { readonly _tag: "Uncovered" };
 
 // ─── Structural keys ─────────────────────────────────────────────────────────

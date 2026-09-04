@@ -65,6 +65,44 @@ export interface Subscriptions {
   readonly preloadQuery: (name: string, args: unknown) => Effect.Effect<void, QueryError>;
 }
 
+/**
+ * One counted voice over the engine's set-based subscription list. The
+ * engine's `subscribe` / `unsubscribe` register or drop a window outright,
+ * so two independent registrations of one window — an explicit pin beside
+ * a relational read's own root subscription, two relational reads pinning
+ * one foreign window — would drop it for both when the first released.
+ * Registrations made through the returned engine hold a count per window:
+ * the engine hears `subscribe` on the first hold and `unsubscribe` on the
+ * last. A window this facade never counted (registered on the engine
+ * directly) is released as before, so the engine's own semantics survive
+ * for callers that bypass it. Everything else passes through untouched.
+ */
+export const counted = (engine: ClientEngine): ClientEngine => {
+  const holds = new Map<string, number>();
+  return {
+    ...engine,
+    subscribe: (subset) =>
+      Effect.suspend(() => {
+        const key = Subset.hash(subset);
+        const count = holds.get(key) ?? 0;
+        holds.set(key, count + 1);
+        return count === 0 ? engine.subscribe(subset) : Effect.void;
+      }),
+    unsubscribe: (subset) =>
+      Effect.suspend(() => {
+        const key = Subset.hash(subset);
+        const count = holds.get(key);
+        if (count === undefined) return engine.unsubscribe(subset);
+        if (count > 1) {
+          holds.set(key, count - 1);
+          return Effect.void;
+        }
+        holds.delete(key);
+        return engine.unsubscribe(subset);
+      }),
+  };
+};
+
 interface Entry {
   count: number;
   readonly unsubscribe: Effect.Effect<void>;

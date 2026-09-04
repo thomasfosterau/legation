@@ -125,3 +125,31 @@ describe("Subscriptions", () => {
     }).pipe(Effect.scoped)
   );
 });
+
+describe("Subscriptions.counted", () => {
+  it.effect(
+    "holds a window until its last registration releases; unknown windows pass through",
+    () =>
+      Effect.gen(function* () {
+        const { engine } = yield* setup;
+        const counted = Subscriptions.counted(engine);
+        const hashes = () =>
+          Effect.map(engine.activeSubscriptions, (subs) => subs.map(Subset.hash));
+
+        // Two holds through the facade: the engine hears one subscribe.
+        yield* counted.subscribe(allTodos);
+        yield* counted.subscribe(allTodos);
+        expect(yield* hashes()).toEqual([Subset.hash(allTodos)]);
+        // The first release keeps it; the second drops it.
+        yield* counted.unsubscribe(allTodos);
+        expect(yield* hashes()).toEqual([Subset.hash(allTodos)]);
+        yield* counted.unsubscribe(allTodos);
+        expect(yield* hashes()).toEqual([]);
+
+        // A window registered on the engine directly is released as before.
+        yield* engine.subscribe(allTodos);
+        yield* counted.unsubscribe(allTodos);
+        expect(yield* hashes()).toEqual([]);
+      }).pipe(Effect.scoped)
+  );
+});

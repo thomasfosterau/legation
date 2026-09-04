@@ -178,6 +178,20 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
   return { root, edges };
 };
 
+/**
+ * {@link plan} as an effect: the `QueryError` it throws for an unknown
+ * collection or edge becomes a typed failure, for callers that compile a
+ * read they did not write (a URL, a message off a channel).
+ */
+export const tryPlan = (nodes: Node.NodeRegistry, read: Read): Effect.Effect<Plan, QueryError> =>
+  Effect.suspend(() => {
+    try {
+      return Effect.succeed(plan(nodes, read));
+    } catch (error) {
+      return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
+    }
+  });
+
 /** Order + window one edge's resolved rows (the client-side edge window). */
 const applyEdgeWindow = (
   values: ReadonlyArray<unknown>,

@@ -12,7 +12,16 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
-import { Edge, FilterPolicy, Node, Predicate, Query, QueryError } from "@legation/effect";
+import {
+  Client,
+  Edge,
+  FilterPolicy,
+  Mutator,
+  Node,
+  Predicate,
+  Query,
+  QueryError,
+} from "@legation/effect";
 import { ClientEngine, FilterCorpus, Subset } from "@legation/effect/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
@@ -661,6 +670,99 @@ describe("JsonApiQuery.canonical", () => {
 
 const orderTokens = (orderBy: ReadonlyArray<Subset.OrderBy>): ReadonlyArray<string> =>
   orderBy.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field));
+
+// ─── The UrlReads seam ───────────────────────────────────────────────────────
+
+describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", () => {
+  const products = "/products?include=category%2Cvariants&filter[name]=Desk";
+  const read: Query.Read = {
+    collection: "products",
+    where: { name: "Desk" },
+    include: { variants: true, category: true },
+  };
+  const makeClient = Client.make({
+    nodes,
+    mutations: Mutator.registry([]),
+    urls: JsonApiQuery.urlReads(nodes),
+  });
+
+  it.effect("subscribe(url) and subscribe(read) of one query are one subscription", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+        yield* client.subscribe(products);
+        yield* client.subscribe(read);
+        expect(yield* client.subscriptions).toEqual([products]);
+        const verdict = yield* client.coverageOf(read);
+        expect(verdict._tag === "Covered" ? verdict.url : verdict).toBe(products);
+        // Both pins release one at a time; the entry lives until the last.
+        yield* client.unsubscribe(read);
+        expect(yield* client.subscriptions).toEqual([products]);
+        yield* client.unsubscribe(products);
+        expect(yield* client.subscriptions).toEqual([]);
+        expect((yield* client.coverageOf(read))._tag).toBe("Uncovered");
+      })
+    )
+  );
+
+  it.effect("a non-canonical URL subscribes to the canonical entry", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+        // Parameter order, the repeated include key, an API prefix, and a
+        // projection — none of them changes what is subscribed.
+        yield* client.subscribe(
+          "/api/products?filter[name]=Desk&include=variants&include=category"
+        );
+        yield* client.subscribe(
+          "http://shop.test/jsonapi/products?include=variants,category&filter[name]=Desk&fields[products]=name"
+        );
+        expect(yield* client.subscriptions).toEqual([products]);
+        yield* client.unsubscribe("/products?include=category,variants&filter[name]=Desk");
+        yield* client.unsubscribe("/products?filter[name]=Desk&include=category&include=variants");
+        expect(yield* client.subscriptions).toEqual([]);
+      })
+    )
+  );
+
+  it.effect("an unknown collection or an unparsable filter fails, naming the parameter", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+        const unknown = yield* Effect.flip(client.subscribe("/widgets"));
+        expect(unknown).toBeInstanceOf(QueryError);
+        expect(unknown.message).toMatch(/No collection/);
+        const literal = yield* Effect.flip(client.subscribe("/products?filter[priceCents]=abc"));
+        expect(literal).toMatchObject({ _tag: "QueryError", parameter: "filter[priceCents]" });
+        const operator = yield* Effect.flip(client.subscribe("/products?filter[name][gt]=x"));
+        expect(operator).toMatchObject({ _tag: "QueryError", parameter: "filter[name][gt]" });
+        const edge = yield* Effect.flip(client.subscribe("/products?include=nope"));
+        expect(edge).toMatchObject({ _tag: "QueryError", parameter: "include" });
+        // Nothing was registered by any of them.
+        expect(yield* client.subscriptions).toEqual([]);
+        expect((yield* client.coverageOf({ collection: "products" }))._tag).toBe("Uncovered");
+      })
+    )
+  );
+
+  it.effect("canonical is the seam's identity; a read with no URL form fails it", () =>
+    Effect.gen(function* () {
+      const urls = JsonApiQuery.urlReads(nodes);
+      expect(yield* urls.canonical(read)).toBe(products);
+      expect(yield* urls.parse("/api/products/p-1?include=variants")).toEqual({
+        collection: "products",
+        where: Predicate.eq("id", "p-1"),
+        include: { variants: true },
+        first: 1,
+      });
+      const windowed = yield* Effect.flip(
+        urls.canonical({ collection: "products", include: { reviews: { first: 5 } } })
+      );
+      expect(windowed).toBeInstanceOf(QueryError);
+      expect(windowed.message).toMatch(/no URL form/);
+    })
+  );
+});
 
 describe("JsonApiQuery.resourcesOf", () => {
   it("synthesises one resource per node, memoised per registry", () => {

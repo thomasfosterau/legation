@@ -31,6 +31,8 @@
  *   compiled with `Query.plan` and its plan is encoded through the
  *   canonical encoder, so two reads with one plan have one string —
  *   subscription identity for `Client.subscribe(url)` (ADR-0029 §2).
+ *   {@link urlReads} packages the parse and the canonical string as the
+ *   `Client.UrlReads` seam a Client or an engine host is built with (#159).
  *
  * The query codec is derived from the **node graph**, not from an
  * effect-jsonapi resource: {@link resourcesOf} synthesises one resource per
@@ -55,7 +57,14 @@
 
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Effect, Option, Schema, SchemaIssue, type SchemaError } from "effect";
-import { FilterPolicy, type Node, Predicate, Query, QueryError } from "@legation/effect";
+import {
+  type Client,
+  FilterPolicy,
+  type Node,
+  Predicate,
+  Query,
+  QueryError,
+} from "@legation/effect";
 import type { Subset } from "@legation/effect/internal";
 import type { JsonApiRequestOptions, SortTerm } from "./types.js";
 
@@ -780,6 +789,38 @@ export const canonical = (
   }
   return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
 };
+
+/** {@link canonical} as an effect: its `QueryError` becomes a typed failure. */
+const tryCanonical = (
+  nodes: Node.NodeRegistry,
+  read: Query.Read
+): Effect.Effect<string, QueryError> =>
+  Effect.try({
+    try: () => canonical(nodes, read),
+    catch: (error) =>
+      error instanceof QueryError
+        ? error
+        : new QueryError({
+            message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
+            query: read.collection,
+            cause: error,
+          }),
+  });
+
+/**
+ * The `Client.UrlReads` seam over this bridge (#159, ADR-0029 §2): pass as
+ * `urls` to `Client.make` / `Client.connect` / `Client.fromView` so
+ * `client.subscribe(url)` parses through {@link parseRead} and keys the pin
+ * by {@link canonical}, and to an engine host (`ServiceWorkerHost.run`) so
+ * a page with no Client can register by URL. The `fields[]` projection a
+ * URL carries is dropped: it never changes what a subscription syncs
+ * (ADR-0029 §5), so two URLs differing only in `fields[]` are one
+ * subscription.
+ */
+export const urlReads = (nodes: Node.NodeRegistry): Client.UrlReads => ({
+  parse: (url) => Effect.map(parseRead(nodes, url), (parsed) => parsed.read),
+  canonical: (read) => tryCanonical(nodes, read),
+});
 
 // ─── The exact encoder ───────────────────────────────────────────────────────
 

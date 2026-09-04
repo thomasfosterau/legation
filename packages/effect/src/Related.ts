@@ -770,12 +770,15 @@ export const relatedWith = (
       )
     );
     // Initial base sync so the first relationship derivation sees real rows.
-    yield* engine.pull.pipe(Effect.orDie);
+    // A failed pull (an offline transport, a server away) only delays rows:
+    // the join runs over what the replica holds and the engine's own sync
+    // loop recovers — local is always an answer.
+    yield* engine.pull.pipe(Effect.ignore);
 
     const refresh = Effect.gen(function* () {
       const base = yield* engine.query(subset).pipe(Effect.orDie);
       const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
-      if (changed) yield* engine.pull.pipe(Effect.orDie);
+      if (changed) yield* engine.pull.pipe(Effect.ignore);
     });
 
     // Sync the targeted collections up front so the first join is complete, then
