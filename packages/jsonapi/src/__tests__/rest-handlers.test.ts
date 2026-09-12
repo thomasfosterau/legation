@@ -526,6 +526,44 @@ describe("RestHandlers over the read path", () => {
   );
 
   it.effect(
+    "pages by offset (#209): links stay in the offset idiom, a short page has no next but keeps prev",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fetch } = yield* makeWorld();
+          const first = yield* fetch("/api/products?sort=name&page[offset]=0&page[limit]=2");
+          expect(ids(first.body.data)).toEqual(["p-3", "p-1"]);
+          expect(first.body.links).toEqual({
+            self: "/api/products?sort=name&page[limit]=2&page[offset]=0",
+            next: "/api/products?sort=name&page[limit]=2&page[offset]=2",
+          });
+          const second = yield* fetch(first.body.links.next);
+          expect(ids(second.body.data)).toEqual(["p-2"]);
+          expect(second.body.links).toEqual({
+            self: "/api/products?sort=name&page[limit]=2&page[offset]=2",
+            prev: "/api/products?sort=name&page[limit]=2&page[offset]=0",
+          });
+          // An offset past every row is a valid, empty page — never a fallthrough
+          // or an error; the server has no coverage concept, only the façade does.
+          const empty = yield* fetch("/api/products?sort=name&page[offset]=50&page[limit]=2");
+          expect(empty.status).toBe(200);
+          expect(empty.body.data).toEqual([]);
+        })
+      )
+  );
+
+  it.effect("rejects page[offset] and page[after] together", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fetch } = yield* makeWorld();
+        const { status, body } = yield* fetch("/api/products?page[offset]=1&page[after]=p-1");
+        expect(status).toBe(400);
+        expect(body.errors[0].source).toEqual({ parameter: "page[offset]" });
+      })
+    )
+  );
+
+  it.effect(
     "projects fields[type] at serialisation while the backend was asked for full rows",
     () =>
       Effect.scoped(

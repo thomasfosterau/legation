@@ -492,6 +492,41 @@ describe("JsonApiQuery.parseRead", () => {
     });
   });
 
+  it("parses page[offset] alongside page[limit] (#209): every listing in the audited apps pages by it", () => {
+    expect(parse("/products?page[offset]=20&page[limit]=5").read).toEqual({
+      collection: "products",
+      offset: 20,
+      first: 5,
+    });
+    // offset: 0 is a real, distinct value from "no offset" — the first
+    // page of the offset idiom, not the cursor idiom's absence of a page.
+    expect(parse("/products?page[offset]=0&page[limit]=5").read).toEqual({
+      collection: "products",
+      offset: 0,
+      first: 5,
+    });
+    // offset alone (no limit) reads as "every row past offset".
+    expect(parse("/products?page[offset]=20").read).toEqual({ collection: "products", offset: 20 });
+    expect(
+      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.limit
+    ).toBe(25);
+    expect(
+      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.cursor
+    ).toBeUndefined();
+  });
+
+  it("rejects page[offset] and page[after] together: different pagination idioms, one per request", () => {
+    const failure = parseFailure("/products?page[offset]=10&page[after]=p-9");
+    expect(failure).toBeInstanceOf(QueryError);
+    expect(failure.parameter).toBe("page[offset]");
+    expect(failure.message).toMatch(/different pagination idioms/);
+  });
+
+  it("rejects a negative page[offset], naming the parameter", () => {
+    expect(parseFailure("/products?page[offset]=-1")).toMatchObject({ parameter: "page[offset]" });
+    expect(parseFailure("/products?page[offset]=abc")).toMatchObject({ parameter: "page[offset]" });
+  });
+
   it("rejects nested include paths (D1) and undeclared edges, naming the parameter", () => {
     const nested = parseFailure("/products?include=variants.product");
     expect(nested).toBeInstanceOf(QueryError);
@@ -577,6 +612,20 @@ describe("JsonApiQuery.canonical", () => {
     expect(
       JsonApiQuery.canonical(nodes, { collection: "products", where: Predicate.isIn("id", []) })
     ).toBe("/products?filter[g0][group][conjunction]=OR");
+  });
+
+  it("emits page[offset] from the read, not the inflated fetch window (#209)", () => {
+    const read: Query.Read = { collection: "products", order: ["id"], offset: 20, first: 5 };
+    const url = JsonApiQuery.canonical(nodes, read);
+    // The compiled window over-fetches (limit 25) to slice locally; the
+    // canonical URL must still say what the caller asked for, offset 20
+    // limit 5 — never the inflated limit.
+    expect(url).toBe("/products?sort=id&page[limit]=5&page[offset]=20");
+    expect(parse(url).read).toEqual(read);
+    // offset alone (no first) round-trips with no page[limit].
+    const offsetOnly: Query.Read = { collection: "products", offset: 20 };
+    expect(JsonApiQuery.canonical(nodes, offsetOnly)).toBe("/products?page[offset]=20");
+    expect(parse(JsonApiQuery.canonical(nodes, offsetOnly)).read).toEqual(offsetOnly);
   });
 
   it("applies the projection rule parseRead applies, so fields[] round-trips or fails on both sides", () => {

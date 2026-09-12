@@ -438,6 +438,19 @@ self.addEventListener("fetch", (event) => {
 - **The overlay.** A covered response sees pending optimistic mutations as
   `Client.query` does; an uncovered network response is the server's
   authoritative answer and does not (ADR-0029 §4).
+- **Offset pagination is covered by slicing, not by an offset window**
+  (#209). `page[offset]` parses beside `page[after]` — the two are different
+  pagination idioms, and a request naming both is a `400`. An offset read
+  compiles to a plain limit-only window (`limit = offset + first`, no
+  `cursor`), so it is covered by the ordinary rule: the subsuming
+  subscription is unwindowed, or its own limit is at least `offset +
+first`. A deep offset past what is covered falls through exactly like any
+  other uncovered window — the façade never fetches more rows to satisfy
+  it, online or off. `links.next` / `links.prev` come back in the offset
+  idiom when the request used it, never switching a caller to cursors
+  mid-collection. See ADR-0029's amendment for the full rule and why an
+  offset _window_ (as opposed to an offset _read_, translated at read time)
+  was rejected.
 
 ## Types, schemas, and errors
 
