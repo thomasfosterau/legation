@@ -7,7 +7,13 @@
  *
  * - {@link make} owns the engine in this thread (store + transport come
  *   from context; the sync loop starts automatically — the class of bug
- *   where an app forgets `runSync` ends here).
+ *   where an app forgets `runSync` ends here). Starting the loop is **not**
+ *   the same as auto-pushing, though: on its own it only wires the baseline
+ *   triggers (pull on poke, push+pull on reconnect), so a mutation journaled
+ *   on an already-connected client sits until one of those fires or the app
+ *   calls `push` explicitly. Auto-push is `syncLoop.pushDebounce` — opt in
+ *   with it if writes should reach the server without anything else
+ *   happening first (the examples use `"300 millis"`).
  * - {@link connect} joins an engine hosted elsewhere — a service worker,
  *   an Electron main process, a daemon — over a `MirrorChannel`; the
  *   machinery behind it (the mirror) is internal vocabulary.
@@ -498,6 +504,13 @@ export interface MakeOptions extends ViewOptions {
    */
   readonly transport?: Transport.ClientTransport | { readonly url: string };
   readonly queries?: QueryModule.QueryRegistry;
+  /**
+   * Sync-loop scheduling: push-on-mutate debounce, interval pull (see
+   * {@link ClientEngine.SyncLoopOptions}). Both legs are opt-in — unset,
+   * `runSync` still starts (see {@link MakeOptions.sync}) but a journaled
+   * mutation is not pushed until a reconnect, a poke-driven pull, or an
+   * explicit `push`.
+   */
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /**
    * Auto-discover indexable fields from registered subsets and index them
@@ -507,7 +520,8 @@ export interface MakeOptions extends ViewOptions {
   readonly autoIndex?: boolean;
   /**
    * Start the sync loop automatically. Defaults to `true` with a
-   * transport, `false` when the Client defaulted to offline.
+   * transport, `false` when the Client defaulted to offline. This alone
+   * does not auto-push journaled mutations — see {@link MakeOptions.syncLoop}.
    */
   readonly sync?: boolean;
 }

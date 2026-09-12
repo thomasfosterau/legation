@@ -284,12 +284,19 @@ export interface SyncLoopOptions {
   /**
    * Auto-push after `mutate`/`mutateEncoded` journals a mutation, debounced so
    * a burst of mutations inside the window coalesces into a single push (the
-   * journal already batches naturally).
+   * journal already batches naturally). Unset, a journaled mutation is not
+   * pushed until something else triggers one — a reconnect, a poke-driven
+   * pull cycle, or an explicit `push` — so on an already-connected client it
+   * can sit in the journal indefinitely, with nothing surfaced as an error.
+   * The examples and `examples/commerce`'s host use `"300 millis"`.
    */
   readonly pushDebounce?: Duration.Input;
   /**
    * Periodic pull as the correctness backstop, so the client converges over
    * pull alone even when no pokes arrive ("pull is the correctness path").
+   * Unset, convergence depends entirely on pokes arriving — if the poke
+   * stream drops or never connects, nothing else notices until a reconnect
+   * or an explicit `pull`.
    */
   readonly pullInterval?: Duration.Input;
 }
