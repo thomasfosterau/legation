@@ -26,6 +26,11 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
   HTTP POSTs plus one reconnecting poke socket. Sync stays correct over HTTP
   alone — a dead socket only delays pokes, and the pull interval is the safety
   net.
+- **`BindingTransport`** — the same protocol over a **service binding**
+  (`env.API.fetch`), for the two-Worker shape where the Worker rendering the
+  page is not the Worker holding the backend. It forwards the inbound cookie
+  and origin, so the bound Worker resolves the same caller — and therefore the
+  same room — that the browser will reach on its own first pull.
 
 ```ts
 // worker.ts
@@ -62,3 +67,33 @@ export default {
 ```bash
 npm install @legation/cloudflare @legation/effect @legation/sql effect
 ```
+
+## SSR from a separate Worker
+
+A binding-only API Worker (`workersDev: false`, no custom domain) is reachable
+only through the front door's service binding, so an SSR render cannot hold the
+sync server in-process. `Hydration.snapshot` takes a `ClientTransport`; give it
+a `BindingTransport` and the render pulls over the binding:
+
+```ts
+// +page.server.ts — the effect an Effect-based `load` runs
+import { BindingTransport } from "@legation/cloudflare";
+import { loadSnapshot } from "@legation/svelte/kit";
+
+const pageSnapshot = ({ cookies, request, platform }) =>
+  loadSnapshot(cookies, {
+    nodes,
+    reads: [{ collection: "products" }],
+    transport: BindingTransport.make({
+      binding: platform.env.API,
+      request, // the document request: its cookie and origin are forwarded
+    }),
+  });
+```
+
+The render happens under the _browser's_ client group id, so the snapshot's
+pull cookie continues that group's CVR conversation and the browser's first
+pull is a delta rather than a reset. That only holds while the hop preserves
+the caller's identity — drop the cookie and the snapshot still carries the
+right rows while its cookie belongs to another room's CVR, which is a silent
+reset on every first paint. `binding-snapshot.test.ts` pins both sides of that.
