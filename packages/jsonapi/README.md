@@ -52,11 +52,17 @@ const sync = JsonApiSync.layer(api, {
   baseUrl: "https://api.example.com",
   clientId: "device-1",
   clientGroupId: "user-42",
+  // Both legs are opt-in: without `pushDebounce` a journaled mutation waits
+  // for a reconnect, a poke-driven pull, or an explicit `push` — an
+  // already-connected client would sit on unflushed writes. `pullInterval`
+  // is the correctness backstop for when pokes don't arrive.
+  pullInterval: Duration.seconds(5),
+  pushDebounce: Duration.millis(300),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 const program = Effect.gen(function* () {
-  // Run the sync loop + background polling (lives until the scope closes).
-  yield* JsonApiSync.start({ pollInterval: Duration.seconds(5) });
+  // Run the sync loop (push-on-mutate + periodic pull; lives until the scope closes).
+  yield* JsonApiSync.start;
 
   const engine = yield* ClientEngine.ClientEngine;
   const open = Subset.make({
