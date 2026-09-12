@@ -42,7 +42,9 @@ const makeBulkSeededStore = (
     };
     let journal: ReadonlyArray<Mutation> = [];
     let cookie: string | undefined;
+    let identity: string | undefined;
     const counters = new Map<string, number>();
+    const quarantine = new Map<string, ReadonlyArray<Mutation>>();
     return ClientStore.of({
       getRow: (collection, id) => Effect.sync(() => collections.get(collection)?.get(id)),
       listRows: (collection) =>
@@ -85,6 +87,28 @@ const makeBulkSeededStore = (
         }),
       getCookie: Effect.sync(() => cookie),
       setCookie: (value) => Effect.sync(() => void (cookie = value)),
+      clearCookie: Effect.sync(() => void (cookie = undefined)),
+      // The identity boundary plays no part in a query-path benchmark: this
+      // store is never stamped and never quarantines.
+      getIdentity: Effect.sync(() => identity),
+      setIdentity: (fingerprint) => Effect.sync(() => void (identity = fingerprint)),
+      quarantinePending: (fingerprint) =>
+        Effect.sync(() => {
+          const moved = journal;
+          quarantine.set(fingerprint, [...(quarantine.get(fingerprint) ?? []), ...moved]);
+          journal = [];
+          return moved.length;
+        }),
+      quarantinedMutations: (fingerprint) => Effect.sync(() => quarantine.get(fingerprint) ?? []),
+      quarantines: Effect.sync(() => [...quarantine.keys()]),
+      releaseQuarantine: (fingerprint) =>
+        Effect.sync(() => {
+          const held = quarantine.get(fingerprint) ?? [];
+          journal = journal.concat(held);
+          quarantine.delete(fingerprint);
+          return held.length;
+        }),
+      discardQuarantine: (fingerprint) => Effect.sync(() => void quarantine.delete(fingerprint)),
     });
   });
 

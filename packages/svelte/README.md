@@ -152,19 +152,39 @@ export const load = serverLoad((event) =>
 // $lib/engine.ts — boot once, hand the runtime to the hooks.
 import { clientRuntime } from "@legation/svelte/kit";
 import { IndexedDbClientStore } from "@legation/browser";
+import { Identity } from "@legation/effect";
 import { mutations, nodes, shellReads } from "$lib/domain";
 
-export const boot = (data: { snapshot: Snapshot; clientGroupId: string }) =>
+export const boot = (data: {
+  snapshot: Snapshot;
+  clientGroupId: string;
+  identity: Identity.Fingerprint;
+}) =>
   clientRuntime({
     nodes,
     mutations,
     clientGroupId: data.clientGroupId,
-    store: IndexedDbClientStore.layerWindow(),
+    store: IndexedDbClientStore.layerWindow({ identity: data.identity }),
     transport: rpcTransportLayer,
     snapshot: data.snapshot,
     subscribe: shellReads,
   });
 ```
+
+> **Pass an `identity`.** A durable replica belongs to exactly one resolved
+> identity, and an identity change is a reset, not a rebase (CONTEXT.md,
+> "Identity boundary"). Without it, a multi-tenant app on a shared device
+> boots the next person onto the last person's private rows — the replica is
+> the freshest thing on the machine, and nothing else in the engine has a
+> reason to distrust it. The value is an **opaque fingerprint** the app
+> computes — a hash of the session subject, never PII and never a credential —
+> and `Identity.anonymous` while nobody is signed in, so the first sign-in is
+> recognised as the one benign upgrade and keeps its warm replica. Call
+> `client.reset(fingerprint)` when the session changes mid-page.
+>
+> For a device with two regular users, `IndexedDbClientStore.layerNamespaced`
+> gives each principal its own replica instead, so switching back costs no
+> re-pull.
 
 ```svelte
 <!-- +layout.svelte -->

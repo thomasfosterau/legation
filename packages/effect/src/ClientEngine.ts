@@ -32,6 +32,7 @@ import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
+import * as Identity from "./Identity.js";
 import * as Index from "./CollectionIndex.js";
 import {
   MutatorError,
@@ -321,6 +322,22 @@ export const defaultRetryPolicy: Schedule.Schedule<unknown, unknown> = Schedule.
   ]),
   Schedule.recurs(5),
 ]);
+
+/**
+ * What {@link ClientEngine.reset} did — an identity change is not a silent
+ * operation, so the caller is told which branch of the boundary's transition
+ * rule ran and what it moved.
+ */
+export interface ResetOutcome {
+  /** The branch {@link Identity.transitionOf} chose. */
+  readonly transition: Identity.Transition;
+  /** The superseded fingerprint the journal was quarantined under, on a `Reset`. */
+  readonly quarantinedUnder?: Identity.Fingerprint;
+  /** How many unpushed entries moved into that quarantine. */
+  readonly quarantined: number;
+  /** How many entries the adopted identity's own quarantine released back into the journal. */
+  readonly released: number;
+}
 
 /** A terminal sync failure surfaced after the retry policy was exhausted. */
 export interface SyncFailure {
@@ -654,6 +671,47 @@ export interface ClientEngine {
     mutationIds: ReadonlyArray<number>
   ) => Effect.Effect<ReadonlyArray<number>, StoreError>;
   /**
+   * Adopt an identity, applying the boundary's transition rule (#212,
+   * CONTEXT.md "Identity boundary") — the same rule the store applies on
+   * open, so boot and runtime cannot disagree:
+   *
+   * - **Unchanged** — the same principal; the replica is untouched.
+   * - **Upgrade** — {@link Identity.anonymous} → signed in: the warm replica,
+   *   its subscriptions and its journal all survive. Public rows are a subset
+   *   of what the new identity may read.
+   * - **Reset** — every other change, sign-out included. Unpushed journal
+   *   entries are quarantined under the **superseded** fingerprint; confirmed
+   *   rows, the pull cookie, and every registered subscription are dropped.
+   *
+   * A quarantine already held under the adopted fingerprint is released back
+   * into the journal on every transition, `Unchanged` included: re-signing in
+   * is what makes that identity's own unpushed writes pushable again. No
+   * transition ever *discards* a quarantine — see
+   * {@link ClientEngine.discardQuarantine}.
+   *
+   * Does not wait for an in-flight push. Quarantining preserves mutation ids
+   * exactly, so an entry that was already on the wire is at worst
+   * acknowledged and skipped by the backend's exactly-once ledger when it is
+   * released, never applied twice.
+   */
+  readonly reset: (identity: Identity.Fingerprint) => Effect.Effect<ResetOutcome, StoreError>;
+  /** The fingerprint this replica is stamped with, if any (see {@link reset}). */
+  readonly identity: Effect.Effect<Identity.Fingerprint | undefined, StoreError>;
+  /** Fingerprints currently holding quarantined write intents. */
+  readonly quarantines: Effect.Effect<ReadonlyArray<Identity.Fingerprint>, StoreError>;
+  /** The entries quarantined under a fingerprint, in causal order. */
+  readonly quarantinedMutations: (
+    identity: Identity.Fingerprint
+  ) => Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
+  /**
+   * Destroy a quarantine. The **only** path that discards a superseded
+   * identity's unpushed write intents, and deliberately an explicit call —
+   * no reset and no boot triggers it. Holding a departed user's intents on
+   * the device indefinitely is the deliberate trade the quarantine makes, so
+   * an app that needs them gone has to say so.
+   */
+  readonly discardQuarantine: (identity: Identity.Fingerprint) => Effect.Effect<void, StoreError>;
+  /**
    * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
    * server rejects this build's `schemaVersion` (#48); see {@link push}.
    */
@@ -697,6 +755,31 @@ export const make = (
       Effect.catch(() => Effect.succeed<ReadonlyArray<Mutation>>([]))
     );
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
+    // #212: with the identity boundary on, the sync-protocol client identity
+    // is scoped to the principal. It has to be: mutation ids are a per-client
+    // sequence the backend requires to be contiguous (ADR-0008's exactly-once
+    // ledger), so a second principal continuing the first's numbering pushes a
+    // gap the backend rejects, and restarting it collides with ids the first
+    // already had applied. A derived id gives each principal its own sequence
+    // — and gives a returning principal back exactly the sequence they left,
+    // so quarantined entries released later are still contiguous under the
+    // client that authored them.
+    //
+    // Derived, not stored, so it survives a reload with no extra durable
+    // state; and left exactly as configured when no identity is stamped, so
+    // an app that does not use the boundary sees no change at all.
+    const clientIdFor = (identity: Identity.Fingerprint | undefined): string =>
+      identity === undefined
+        ? options.clientId
+        : `${options.clientId}#${Identity.keySegment(identity)}`;
+    const clientIdRef = yield* Ref.make(
+      clientIdFor(
+        yield* store.getIdentity.pipe(
+          Effect.catch(() => Effect.succeed<Identity.Fingerprint | undefined>(undefined))
+        )
+      )
+    );
+    const currentClientId: Effect.Effect<string> = Ref.get(clientIdRef);
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
     // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
     // prefetches of the same subset share one pull instead of racing N of them.
@@ -794,24 +877,26 @@ export const make = (
       mutationId: number,
       phase: MutationEvent["phase"],
       reason?: string
-    ): Effect.Effect<void> => {
-      const clientId = options.clientId;
-      switch (phase) {
-        case "journaled":
-          return emitEngineEvent({ _tag: "MutationJournaled", clientId, mutationId });
-        case "acknowledged":
-          return emitEngineEvent({ _tag: "MutationAcknowledged", clientId, mutationId });
-        case "rejected":
-          return emitEngineEvent({
-            _tag: "MutationRejected",
-            clientId,
-            mutationId,
-            reason: reason ?? "",
-          });
-        case "dropped":
-          return emitEngineEvent({ _tag: "MutationDropped", clientId, mutationId });
-      }
-    };
+    ): Effect.Effect<void> =>
+      currentClientId.pipe(
+        Effect.flatMap((clientId) => {
+          switch (phase) {
+            case "journaled":
+              return emitEngineEvent({ _tag: "MutationJournaled", clientId, mutationId });
+            case "acknowledged":
+              return emitEngineEvent({ _tag: "MutationAcknowledged", clientId, mutationId });
+            case "rejected":
+              return emitEngineEvent({
+                _tag: "MutationRejected",
+                clientId,
+                mutationId,
+                reason: reason ?? "",
+              });
+            case "dropped":
+              return emitEngineEvent({ _tag: "MutationDropped", clientId, mutationId });
+          }
+        })
+      );
     // Project the four mutation variants back to the #36 `MutationEvent` shape.
     const toMutationEvent = (event: EngineEvent): MutationEvent | undefined => {
       switch (event._tag) {
@@ -1350,8 +1435,9 @@ export const make = (
     // Resolve deferreds for the mutations this client had permanently rejected.
     const settleRejected = (response: PushResponse): Effect.Effect<void> =>
       Effect.gen(function* () {
+        const mine = yield* currentClientId;
         for (const entry of response.rejected ?? []) {
-          if (entry.clientId !== options.clientId) continue;
+          if (entry.clientId !== mine) continue;
           yield* rejectAck(entry.mutationId, entry.reason);
         }
       });
@@ -1361,7 +1447,7 @@ export const make = (
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
           yield* store.acknowledge(clientId, upTo);
         }
-        const lastId = lastMutationIds[options.clientId];
+        const lastId = lastMutationIds[yield* currentClientId];
         if (lastId !== undefined) yield* settleApplied(lastId);
         yield* invalidateOverlay; // trimming the journal shifts the overlay
         yield* sampleJournalDepth; // the trim changed journal depth
@@ -1380,12 +1466,13 @@ export const make = (
         if (mutationIds.length === 0) return [];
         if ((yield* Ref.get(pushInFlight)) > 0) return [];
         const pending = yield* store.pendingMutations;
+        const clientId = yield* currentClientId;
         const stillPending = new Set(
-          pending.filter((m) => m.clientId === options.clientId).map((m) => m.mutationId)
+          pending.filter((m) => m.clientId === clientId).map((m) => m.mutationId)
         );
         const droppable = mutationIds.filter((id) => stillPending.has(id));
         if (droppable.length === 0) return [];
-        yield* store.dropPending(options.clientId, droppable);
+        yield* store.dropPending(clientId, droppable);
         // Fold the drop into `mutationStates` (#116) — without this, a
         // compacted entry's state would never transition off `"pending"`
         // even though the journal no longer has it, leaving a devtools
@@ -1399,6 +1486,72 @@ export const make = (
         yield* sampleJournalDepth;
         yield* publishChange(REBUILD);
         return droppable;
+      });
+
+    // #212: the identity boundary at runtime. The transition rule itself
+    // lives in `Identity`, so this and the store's open-time check are the
+    // same decision applied at two moments — a sign-out mid-session and a
+    // reload under a new session must not disagree about whether the replica
+    // survives.
+    //
+    // On a `Reset` the order matters: quarantine the journal FIRST (nothing
+    // is destroyed, and the entries leave the keyspace `push` reads), then
+    // drop rows, the cookie and every registered subscription. The stamp is
+    // written last, so an interrupted reset leaves the store stamped for the
+    // superseded identity and the next open re-runs the whole transition
+    // rather than trusting a half-applied one.
+    const reset: ClientEngine["reset"] = (next) =>
+      Effect.gen(function* () {
+        const current = (yield* store.getIdentity) ?? Identity.unstamped;
+        const transition = Identity.transitionOf(current, next);
+        let quarantined = 0;
+        if (transition === "Reset") {
+          quarantined = yield* store.quarantinePending(current);
+          yield* store.clearRows;
+          yield* store.clearCookie;
+          yield* Ref.set(subscriptions, []);
+          yield* Ref.set(namedSubs, []);
+          // Outcome deferreds were issued to the superseded identity's
+          // session; that session is over and the backend will never settle
+          // them here. Interrupt them so no `mutateWithAck` caller hangs —
+          // the same treatment scope close gives them.
+          yield* Ref.getAndSet(acks, new Map()).pipe(
+            Effect.flatMap((map) => Effect.forEach([...map.values()], Deferred.interrupt))
+          );
+        }
+        if (transition !== "Unchanged") {
+          yield* store.setIdentity(next);
+          // The scoped client identity moves with the stamp, so this
+          // principal's mutations get their own contiguous id sequence (see
+          // `clientIdFor`). Journal entries already written keep the client
+          // id they were authored under, and push under it — each ledger
+          // stays contiguous on its own.
+          yield* Ref.set(clientIdRef, clientIdFor(next));
+        }
+        // Every branch, `Unchanged` included: re-signing in is what makes an
+        // identity's own quarantined entries pushable again, and running it
+        // unconditionally also closes the window where a reset was
+        // interrupted between stamping and releasing.
+        const released = yield* store.releaseQuarantine(next);
+        if (transition === "Unchanged" && released === 0) {
+          return { transition, quarantined: 0, released: 0 };
+        }
+        // The journal and the confirmed rows both moved: reseed the keyed
+        // state map from what is actually pending now, drop the materialized
+        // overlay, and reveal the whole thing with one unscoped rebuild.
+        yield* SubscriptionRef.set(
+          mutationStates,
+          MutationState.seed(yield* store.pendingMutations)
+        );
+        yield* invalidateOverlay;
+        yield* sampleJournalDepth;
+        yield* publishChange(REBUILD);
+        return {
+          transition,
+          ...(transition === "Reset" ? { quarantinedUnder: current } : {}),
+          quarantined,
+          released,
+        };
       });
 
     // Latch so an ongoing schema-version rejection (#48) fires `onUpdateNeeded`
@@ -2194,10 +2347,11 @@ export const make = (
           // would otherwise double-count it: once from the replay, once from
           // `trackedWriter`).
           const pendingBefore = yield* store.pendingMutations;
-          const mutationId = yield* store.nextMutationId(options.clientId);
+          const clientId = yield* currentClientId;
+          const mutationId = yield* store.nextMutationId(clientId);
           const journaledAt = yield* Clock.currentTimeMillis;
           const mutation: Mutation = {
-            clientId: options.clientId,
+            clientId,
             mutationId,
             mutator,
             args: encoded,
@@ -2311,6 +2465,11 @@ export const make = (
       push,
       pull,
       dropIfPending,
+      reset,
+      identity: store.getIdentity,
+      quarantines: store.quarantines,
+      quarantinedMutations: store.quarantinedMutations,
+      discardQuarantine: store.discardQuarantine,
       ...(transport.read === undefined
         ? {}
         : {

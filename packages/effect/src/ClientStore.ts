@@ -9,12 +9,19 @@
  * Rows stored here are *confirmed* (authoritative) state only; optimistic
  * effects live in the overlay and are recomputed by replay, never persisted
  * as rows.
+ *
+ * The store is also where the **identity boundary** lives (CONTEXT.md): it
+ * stamps the {@link Identity.Fingerprint} whose session authorised the rows
+ * it holds, compares that stamp on open, and owns the **quarantine** — the
+ * keyspace a superseded identity's unpushed journal entries move to, so they
+ * are neither discarded nor adopted by the next principal.
  */
 
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
+import * as Identity from "./Identity.js";
 import { MutationSchema, type Mutation, type PatchOp } from "./Protocol.js";
 
 /**
@@ -76,6 +83,69 @@ export interface ClientStore {
   // Sync bookkeeping
   readonly getCookie: Effect.Effect<string | undefined, StoreError>;
   readonly setCookie: (cookie: string) => Effect.Effect<void, StoreError>;
+  /**
+   * Forget the pull cookie, so the next pull is a full reset (`Cvr` sends
+   * `Clear` + full puts for an absent cookie). Part of dropping a replica on
+   * an identity change — a cookie kept past its rows would ask the server for
+   * a *diff* against rows this client no longer has.
+   */
+  readonly clearCookie: Effect.Effect<void, StoreError>;
+
+  // Identity boundary
+  /**
+   * The fingerprint whose session authorised the rows this store holds, or
+   * `undefined` when the store has never been stamped (see
+   * {@link Identity.unstamped}).
+   */
+  readonly getIdentity: Effect.Effect<Identity.Fingerprint | undefined, StoreError>;
+  /** Stamp the replica as belonging to `fingerprint`. */
+  readonly setIdentity: (fingerprint: Identity.Fingerprint) => Effect.Effect<void, StoreError>;
+
+  // Quarantine
+  /**
+   * Move every pending journal entry into the quarantine keyed by
+   * `fingerprint`, emptying the journal. Returns how many entries moved.
+   *
+   * This is the answer to the one question an identity change has no safe
+   * default for: discarding a user's unsynced writes on sign-out is data
+   * loss, and adopting them into the next session is a security bug. A
+   * quarantined entry is **outside the journal**, so `pendingMutations` — and
+   * therefore every push — cannot see it: it is unpushable under any identity
+   * but the one it is keyed by.
+   *
+   * Mutation ids are preserved exactly. A quarantined entry may have been
+   * in flight when the reset happened, and the backend's exactly-once ledger
+   * (ADR-0008) is keyed by mutation id: renumbering could apply a write
+   * twice, where keeping the id at worst has it acknowledged and skipped.
+   * Re-quarantining under a fingerprint that already holds one appends,
+   * preserving causal order within each batch.
+   */
+  readonly quarantinePending: (
+    fingerprint: Identity.Fingerprint
+  ) => Effect.Effect<number, StoreError>;
+  /** The entries held under `fingerprint`, in causal order; empty when none. */
+  readonly quarantinedMutations: (
+    fingerprint: Identity.Fingerprint
+  ) => Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
+  /** Every fingerprint currently holding a quarantine — what an app lists to offer a discard. */
+  readonly quarantines: Effect.Effect<ReadonlyArray<Identity.Fingerprint>, StoreError>;
+  /**
+   * Move `fingerprint`'s quarantined entries back into the journal, making
+   * them pushable again — what re-signing in as that identity does. Returns
+   * how many entries were released. Appends to whatever is already pending.
+   */
+  readonly releaseQuarantine: (
+    fingerprint: Identity.Fingerprint
+  ) => Effect.Effect<number, StoreError>;
+  /**
+   * Delete `fingerprint`'s quarantine outright. **The only path that destroys
+   * a quarantined write intent**, and deliberately an explicit call: no reset
+   * and no boot may trigger it, because the alternative is an engine that
+   * quietly throws away a departed user's unsynced work.
+   */
+  readonly discardQuarantine: (
+    fingerprint: Identity.Fingerprint
+  ) => Effect.Effect<void, StoreError>;
 }
 
 export const ClientStore = Context.Service<ClientStore>("@legation/effect/ClientStore");
@@ -86,6 +156,8 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const journal = yield* Ref.make<ReadonlyArray<Mutation>>([]);
   const counters = yield* Ref.make(new Map<string, number>());
   const cookie = yield* Ref.make<string | undefined>(undefined);
+  const identity = yield* Ref.make<Identity.Fingerprint | undefined>(undefined);
+  const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
 
   const collectionMap = (map: Map<string, Map<RowId, StoredRow>>, collection: string) =>
     map.get(collection) ?? new Map<RowId, StoredRow>();
@@ -151,11 +223,97 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
 
     getCookie: Ref.get(cookie),
     setCookie: (value) => Ref.set(cookie, value),
+    clearCookie: Ref.set(cookie, undefined),
+
+    getIdentity: Ref.get(identity),
+    setIdentity: (fingerprint) => Ref.set(identity, fingerprint),
+
+    quarantinePending: (fingerprint) =>
+      Effect.gen(function* () {
+        const entries = yield* Ref.getAndSet(journal, []);
+        if (entries.length === 0) return 0;
+        yield* Ref.update(quarantine, (held) =>
+          new Map(held).set(fingerprint, [...(held.get(fingerprint) ?? []), ...entries])
+        );
+        return entries.length;
+      }),
+    quarantinedMutations: (fingerprint) =>
+      Ref.get(quarantine).pipe(Effect.map((held) => held.get(fingerprint) ?? [])),
+    quarantines: Ref.get(quarantine).pipe(Effect.map((held) => [...held.keys()])),
+    releaseQuarantine: (fingerprint) =>
+      Effect.gen(function* () {
+        const held = yield* Ref.get(quarantine);
+        const entries = held.get(fingerprint) ?? [];
+        if (entries.length === 0) return 0;
+        yield* Ref.update(journal, (pending) => [...pending, ...entries]);
+        yield* Ref.update(quarantine, (map) => {
+          const next = new Map(map);
+          next.delete(fingerprint);
+          return next;
+        });
+        return entries.length;
+      }),
+    discardQuarantine: (fingerprint) =>
+      Ref.update(quarantine, (map) => {
+        const next = new Map(map);
+        next.delete(fingerprint);
+        return next;
+      }),
   });
 });
 
 /** Layer providing the in-memory store. */
 export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(makeMemory);
+
+/**
+ * A store that refuses every operation with `cause`.
+ *
+ * The fail-closed end of the identity boundary (#212). If the open-time
+ * identity transition cannot be completed — a corrupt journal blob, a KVS
+ * that errors mid-reset — the replica's rows may still belong to the
+ * superseded principal and its journal may still hold that principal's
+ * unpushed intents. Serving either is the exact bug the boundary exists to
+ * prevent, and neither clearing (data loss) nor continuing (a security bug)
+ * is acceptable, so the store is sealed instead: reads and writes fail
+ * loudly, nothing is pushed, and nothing is destroyed. The durable state is
+ * untouched and the next open retries the whole transition.
+ */
+const sealed = (cause: StoreError): ClientStore => {
+  const refuse = <A>(): Effect.Effect<A, StoreError> =>
+    Effect.fail(
+      new StoreError({
+        message:
+          "ClientStore is sealed: the identity boundary could not be established on open, " +
+          "so this replica cannot safely be read or written. The durable state is intact; " +
+          "retry by reopening the store.",
+        cause,
+      })
+    );
+  return ClientStore.of({
+    getRow: () => refuse(),
+    listRows: () => refuse(),
+    listCollections: refuse(),
+    putRow: () => refuse(),
+    delRow: () => refuse(),
+    clearRows: refuse(),
+    applyRowOps: () => refuse(),
+    appendMutation: () => refuse(),
+    pendingMutations: refuse(),
+    acknowledge: () => refuse(),
+    dropPending: () => refuse(),
+    nextMutationId: () => refuse(),
+    getCookie: refuse(),
+    setCookie: () => refuse(),
+    clearCookie: refuse(),
+    getIdentity: refuse(),
+    setIdentity: () => refuse(),
+    quarantinePending: () => refuse(),
+    quarantinedMutations: () => refuse(),
+    quarantines: refuse(),
+    releaseQuarantine: () => refuse(),
+    discardQuarantine: () => refuse(),
+  });
+};
 
 // ─── KeyValueStore-backed implementation ─────────────────────────────────────
 
@@ -180,6 +338,36 @@ export interface KeyValueOptions {
    * push once the fresh rows land. Unset means no buster (today's behaviour).
    */
   readonly storeVersion?: string;
+  /**
+   * The identity this replica belongs to (CONTEXT.md, "Identity boundary").
+   * Supplying it turns the boundary on: the store compares this fingerprint
+   * with its stamp on open and applies {@link Identity.transitionOf} —
+   *
+   * - **Unchanged**: the same principal, so nothing happens.
+   * - **Upgrade** ({@link Identity.anonymous} → signed in): the warm replica
+   *   and the journal survive; only the stamp changes. Public rows are a
+   *   subset of what the new identity may read, and the pending writes are
+   *   the same person's, made on this device moments earlier.
+   * - **Reset**: every other change, sign-out included. Unpushed journal
+   *   entries are quarantined under the **superseded** fingerprint (never
+   *   discarded, never inherited), then confirmed rows and the pull cookie
+   *   are dropped, so the next pull rehydrates from scratch under the new
+   *   identity. A replica that has never been stamped counts as
+   *   {@link Identity.unstamped} and therefore always resets — one full
+   *   re-pull the first time an app turns the boundary on, which is the safe
+   *   direction.
+   *
+   * Either way, a quarantine already held under the adopted fingerprint is
+   * released back into the journal: re-signing in makes that identity's own
+   * unpushed writes pushable again. Nothing here ever *discards* a
+   * quarantine — that is {@link ClientStore.discardQuarantine} alone.
+   *
+   * Unset leaves the store unstamped and unchecked (today's behaviour). The
+   * alternative to resetting is namespacing: derive {@link KeyValueOptions.prefix}
+   * (or the IndexedDB database) from the fingerprint so each principal has
+   * its own replica — see `IndexedDbClientStore.layerNamespaced`.
+   */
+  readonly identity?: Identity.Fingerprint;
 }
 
 /**
@@ -190,12 +378,25 @@ const CURRENT_LAYOUT = "2";
 const LAYOUT_KEY = "__layout";
 /** Where the app-supplied {@link KeyValueOptions.storeVersion} is persisted (#48). */
 const STORE_VERSION_KEY = "__storeVersion";
+/** Where the replica's {@link Identity.Fingerprint} stamp is persisted (#212). */
+const IDENTITY_KEY = "__identity";
+/** The index of fingerprints currently holding a quarantine. */
+const QUARANTINE_INDEX_KEY = "quarantineIndex";
 
 /** Per-row / per-mutation key builders (layout 2). */
 const rowKey = (collection: string, id: string) => `row/${collection}/${id}`;
 const rowIndexKey = (collection: string) => `rowIndex/${collection}`;
 const journalBodyKey = (clientId: string, mutationId: number) =>
   `journal/${clientId}/${mutationId}`;
+/**
+ * A quarantine's whole body, keyed by the fingerprint it is held under
+ * (percent-encoded, since a fingerprint is opaque app-supplied text). Unlike
+ * the journal this is a single blob: a quarantine is written once on reset
+ * and read once on release, so the per-entry write amplification layout 2
+ * exists to avoid never arises.
+ */
+const quarantineKey = (fingerprint: Identity.Fingerprint) =>
+  `quarantine/${Identity.keySegment(fingerprint)}`;
 /** Legacy (layout 1) whole-collection / whole-journal blob keys. */
 const legacyRowsKey = (collection: string) => `rows/${collection}`;
 const LEGACY_JOURNAL_KEY = "journal";
@@ -214,9 +415,27 @@ const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const MutationFromJson = Schema.fromJsonString(MutationSchema);
 const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntrySchema));
 const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
+/** A quarantine body, and the index of fingerprints holding one. */
+const MutationsFromJson = Schema.fromJsonString(Schema.Array(MutationSchema));
+const FingerprintsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 /** Legacy whole-blob codecs, read only on the migration / fallback path. */
 const RowMapFromJson = Schema.fromJsonString(Schema.Record(Schema.String, StoredRowSchema));
-const JournalFromJson = Schema.fromJsonString(Schema.Array(MutationSchema));
+const JournalFromJson = MutationsFromJson;
+
+/**
+ * Append `incoming` to `held`, skipping entries already there by
+ * (clientId, mutationId). Quarantining is not one atomic KVS write, so a
+ * crash between writing the quarantine and emptying the journal leaves the
+ * open path to re-quarantine the same entries on the next boot; deduping
+ * makes that retry idempotent instead of doubling the batch.
+ */
+const appendDistinct = (
+  held: ReadonlyArray<Mutation>,
+  incoming: ReadonlyArray<Mutation>
+): ReadonlyArray<Mutation> => {
+  const seen = new Set(held.map((m) => `${m.clientId}/${m.mutationId}`));
+  return [...held, ...incoming.filter((m) => !seen.has(`${m.clientId}/${m.mutationId}`))];
+};
 
 /** A batch of row ops grouped by collection: `null` marks a deletion. */
 type RowChanges = Map<string, StoredRow | null>;
@@ -363,6 +582,91 @@ export const makeKeyValue = (
       }
     );
 
+    // ─── Quarantine (unlocked inner forms; #212) ───────────────────────────
+    //
+    // A quarantine lives in its own keyspace, not in the journal — that is
+    // the security property, not an implementation detail: `pendingMutations`
+    // reads the journal, `push` reads `pendingMutations`, so an entry moved
+    // here is structurally unreachable from any push, whatever identity is
+    // signed in. Nothing but `discardQuarantine` ever deletes one.
+
+    const quarantineIndexOf: Effect.Effect<
+      ReadonlyArray<Identity.Fingerprint>,
+      StoreError
+    > = readDecoded(QUARANTINE_INDEX_KEY, FingerprintsFromJson).pipe(
+      Effect.map((list) => list ?? [])
+    );
+
+    const quarantinedOf = (
+      fingerprint: Identity.Fingerprint
+    ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
+      readDecoded(quarantineKey(fingerprint), MutationsFromJson).pipe(
+        Effect.map((entries) => entries ?? [])
+      );
+
+    // Empty the journal outright — bodies, index, and any legacy blob — with
+    // no acknowledgement implied. Only ever called with the entries already
+    // safely written to a quarantine.
+    const clearJournalInner = Effect.gen(function* () {
+      for (const entry of yield* journalIndex) {
+        yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
+      }
+      yield* writeJson("journalIndex", []);
+      yield* remove(LEGACY_JOURNAL_KEY);
+    });
+
+    // Quarantine first, empty the journal second: a crash between the two
+    // leaves the entries in both places, which the next boot re-quarantines
+    // idempotently (`appendDistinct`) — where the opposite order would lose
+    // them. The identity stamp is written after all of this, so an
+    // interrupted reset simply runs again on the next open.
+    const quarantinePendingInner = (
+      fingerprint: Identity.Fingerprint
+    ): Effect.Effect<number, StoreError> =>
+      Effect.gen(function* () {
+        const pending = yield* pendingMutationsOf;
+        if (pending.length === 0) return 0;
+        const held = yield* quarantinedOf(fingerprint);
+        yield* writeJson(quarantineKey(fingerprint), appendDistinct(held, pending));
+        const index = yield* quarantineIndexOf;
+        if (!index.includes(fingerprint)) {
+          yield* writeJson(QUARANTINE_INDEX_KEY, [...index, fingerprint]);
+        }
+        yield* clearJournalInner;
+        return pending.length;
+      });
+
+    const discardQuarantineInner = (
+      fingerprint: Identity.Fingerprint
+    ): Effect.Effect<void, StoreError> =>
+      Effect.gen(function* () {
+        yield* remove(quarantineKey(fingerprint));
+        const index = yield* quarantineIndexOf;
+        if (index.includes(fingerprint)) {
+          yield* writeJson(
+            QUARANTINE_INDEX_KEY,
+            index.filter((held) => held !== fingerprint)
+          );
+        }
+      });
+
+    const releaseQuarantineInner = (
+      fingerprint: Identity.Fingerprint
+    ): Effect.Effect<number, StoreError> =>
+      Effect.gen(function* () {
+        const entries = yield* quarantinedOf(fingerprint);
+        if (entries.length === 0) return 0;
+        const index = yield* journalIndex;
+        const restored: Array<JournalIndexEntry> = [];
+        for (const entry of entries) {
+          yield* writeJson(journalBodyKey(entry.clientId, entry.mutationId), entry);
+          restored.push({ clientId: entry.clientId, mutationId: entry.mutationId });
+        }
+        yield* writeJson("journalIndex", [...index, ...restored]);
+        yield* discardQuarantineInner(fingerprint);
+        return entries.length;
+      });
+
     // Clear every tracked collection's rows and indexes (unlocked inner form,
     // reused by clearRows, applyRowOps, and the migration reset).
     const clearRowsInner = Effect.gen(function* () {
@@ -481,6 +785,54 @@ export const makeKeyValue = (
     });
     yield* openStoreVersion.pipe(Effect.catch(() => Effect.void));
 
+    // The identity boundary on open (#212): compare the configured
+    // fingerprint with the replica's stamp and apply `Identity.transitionOf`.
+    // A `Reset` quarantines the unpushed journal under the **superseded**
+    // fingerprint before dropping rows and the cookie, so the previous
+    // principal's rows are never served to this one and their write intents
+    // are neither lost nor inherited. The stamp is the last write of the
+    // transition, so an interrupted reset re-runs on the next open rather
+    // than leaving a replica stamped for an identity it was never cleared
+    // for. The release runs on every open, `Unchanged` included: it is how
+    // re-signing in makes this identity's own quarantined entries pushable
+    // again, and it closes the crash window between stamping and releasing.
+    //
+    // Unset `identity` means the boundary is off — no stamp, no comparison,
+    // behaviour identical to before. Kept infallible at construction, like
+    // the migration and store-version opens above.
+    const openIdentity = Effect.gen(function* () {
+      const next = options?.identity;
+      if (next === undefined) return;
+      const stamped = yield* store
+        .get(IDENTITY_KEY)
+        .pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`)));
+      const current = stamped ?? Identity.unstamped;
+      const transition = Identity.transitionOf(current, next);
+      const stamp = store
+        .set(IDENTITY_KEY, next)
+        .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`)));
+      yield* locked(
+        Effect.gen(function* () {
+          if (transition === "Reset") {
+            yield* quarantinePendingInner(current);
+            yield* clearRowsInner;
+            yield* remove("cookie");
+          }
+          if (transition !== "Unchanged") yield* stamp;
+          yield* releaseQuarantineInner(next);
+        })
+      );
+    });
+    // Unlike the two opens above, this one is NOT swallowed: a boundary that
+    // could not be established must not be reported as established. The store
+    // is sealed instead (see {@link sealed}) — nothing served, nothing pushed,
+    // nothing destroyed, and the next open retries.
+    const boundaryFailure = yield* openIdentity.pipe(
+      Effect.as<StoreError | undefined>(undefined),
+      Effect.catch((error) => Effect.succeed<StoreError | undefined>(error))
+    );
+    if (boundaryFailure !== undefined) return sealed(boundaryFailure);
+
     return ClientStore.of({
       getRow: (collection, id) => readDecoded(rowKey(collection, id), RowFromJson),
       listRows: listRowsOf,
@@ -568,6 +920,21 @@ export const makeKeyValue = (
       getCookie: store.get("cookie").pipe(Effect.mapError(storeError(`Failed to read "cookie"`))),
       setCookie: (value) =>
         store.set("cookie", value).pipe(Effect.mapError(storeError(`Failed to write "cookie"`))),
+      clearCookie: locked(remove("cookie")),
+
+      getIdentity: store
+        .get(IDENTITY_KEY)
+        .pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`))),
+      setIdentity: (fingerprint) =>
+        store
+          .set(IDENTITY_KEY, fingerprint)
+          .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`))),
+
+      quarantinePending: (fingerprint) => locked(quarantinePendingInner(fingerprint)),
+      quarantinedMutations: quarantinedOf,
+      quarantines: quarantineIndexOf,
+      releaseQuarantine: (fingerprint) => locked(releaseQuarantineInner(fingerprint)),
+      discardQuarantine: (fingerprint) => locked(discardQuarantineInner(fingerprint)),
     });
   });
 

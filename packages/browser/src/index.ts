@@ -3,7 +3,9 @@
  *
  * Browser-runtime adapters for the legation engine (ADR-0010):
  *
- * - `IndexedDbClientStore`: durable ClientStore over IndexedDB
+ * - `IndexedDbClientStore`: durable ClientStore over IndexedDB, scoped to one
+ *   resolved identity (`identity`) or namespaced per identity
+ *   (`layerNamespaced`) — see CONTEXT.md, "Identity boundary"
  * - `BroadcastMirrorChannel`: the mirror seam's BroadcastChannel binding
  *   (the seam itself — `MirrorChannel` / `MirrorProtocol` / `EngineHost` /
  *   `Mirror` — is runtime-agnostic and lives in `@legation/effect`;
