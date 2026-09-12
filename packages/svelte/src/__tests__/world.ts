@@ -143,6 +143,76 @@ export const makeClientRuntime = (): ClientWorldRuntime =>
     ).pipe(Layer.provideMerge(engineLayer))
   );
 
+/**
+ * One recorded `transport.pull` call: the request's `subscriptions` is
+ * exactly what proves whether a given window rode along on the wire — the
+ * ledger (`engine.activeSubscriptions`) says what's registered locally,
+ * this says what was actually asked of the transport.
+ */
+export interface RecordedPull {
+  readonly subscriptions: ReadonlyArray<unknown>;
+}
+
+/**
+ * The same engine graph as {@link engineLayer}, its transport wrapped to
+ * record every `pull` call — proof that an opted-out read (#141) issues no
+ * request, not merely that it registers no window.
+ */
+const countingEngineLayer = (pulls: Array<RecordedPull>): typeof engineLayer =>
+  ClientEngine.layer({
+    clientId: "c1",
+    clientGroupId: "group-1",
+    mutators,
+    queries,
+  }).pipe(
+    Layer.provide(
+      Layer.effect(Transport.ClientTransport)(
+        Effect.map(Transport.ClientTransport, (transport) => ({
+          ...transport,
+          pull: (request: Parameters<Transport.ClientTransport["pull"]>[0]) =>
+            Effect.tap(transport.pull(request), () =>
+              Effect.sync(() => pulls.push({ subscriptions: request.subscriptions }))
+            ),
+        }))
+      ).pipe(
+        Layer.provide(
+          Transport.layerInMemory("group-1").pipe(
+            Layer.provide(
+              SyncRoom.layer.pipe(
+                Layer.provide(Layer.effect(Backend.Backend)(MemoryBackend.make(handlers))),
+                Layer.provide(
+                  Layer.succeed(Authorization.AuthPolicy)(
+                    Authorization.policy({
+                      todos: Authorization.allowAll,
+                      users: Authorization.allowAll,
+                    })
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    ),
+    Layer.provide(ClientStore.layerMemory)
+  );
+
+/** A fresh Client runtime per test, plus a live log of `pull` calls. */
+export const makeCountingClientRuntime = (): {
+  readonly runtime: ClientWorldRuntime;
+  readonly pulls: Array<RecordedPull>;
+} => {
+  const pulls: Array<RecordedPull> = [];
+  const runtime = ManagedRuntime.make(
+    Layer.effect(Client.Client)(
+      Effect.map(ClientEngine.ClientEngine, (engine) =>
+        Client.fromView(nodes, ClientView.fromEngine(engine))
+      )
+    ).pipe(Layer.provideMerge(countingEngineLayer(pulls)))
+  );
+  return { runtime, pulls };
+};
+
 /** Run an effect against the runtime's engine (any engine-carrying runtime). */
 export const run = <A, E, R = never>(
   runtime: ManagedRuntime.ManagedRuntime<ClientEngine.ClientEngine | R, never>,
@@ -159,6 +229,27 @@ export const until = async (predicate: () => boolean, timeoutMs = 25_000): Promi
     flushSync();
     if (predicate()) return;
     if (Date.now() > deadline) throw new Error("until: timed out waiting for condition");
+    // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
+/**
+ * Poll `engine.activeSubscriptions` (the ledger) until its length satisfies
+ * `predicate` — (de)registration runs through a scope release, so it lands
+ * a tick after the effect that triggers it, not synchronously with a click.
+ */
+export const untilSubscriptions = async (
+  runtime: ClientWorldRuntime,
+  predicate: (count: number) => boolean,
+  timeoutMs = 5_000
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+    const subs = await run(runtime, (engine) => engine.activeSubscriptions);
+    if (predicate(subs.length)) return;
+    if (Date.now() > deadline) throw new Error("untilSubscriptions: timed out");
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
