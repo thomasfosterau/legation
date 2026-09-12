@@ -430,6 +430,42 @@ describe("FilterPolicy: authorize", () => {
     })
   );
 
+  it.effect("a declared identity is what the filter policy admits, not the literal id", () =>
+    Effect.gen(function* () {
+      // `profiles` is identified by `username` (#144), so the natural-key read
+      // the graph exists to enable must pass the authorization boundary with
+      // no `filterable` / `sortable` declaration of its own.
+      const Profile = Node.make("profiles", {
+        id: "username",
+        attributes: { username: Schema.String, bio: Schema.String },
+      });
+      const profiles = Authorization.policy(
+        { profiles: Authorization.allowAll },
+        { collections: Node.registry([Profile]).collections }
+      );
+      const byUsername = Subset.make({
+        collection: "profiles",
+        where: Predicate.isIn("username", ["ada"]),
+        orderBy: [{ field: "username", direction: "asc" }],
+      });
+      expect((yield* Authorization.authorize(profiles, context, byUsername)).collection).toBe(
+        "profiles"
+      );
+      // …and the attribute the node does NOT have is closed, rather than
+      // silently privileged by the key defaults.
+      const error = yield* denied(
+        Subset.make({ collection: "profiles", where: Predicate.eq("id", "ada") }),
+        profiles
+      );
+      expect(error.message).toMatch(/field "id" is not filterable \(filterable: username\)/);
+      const unsortable = yield* denied(
+        Subset.make({ collection: "profiles", orderBy: [{ field: "id", direction: "asc" }] }),
+        profiles
+      );
+      expect(unsortable.message).toMatch(/field "id" is not sortable \(sortable: username\)/);
+    })
+  );
+
   it.effect("a policy built without collections keeps the open surface", () =>
     Effect.gen(function* () {
       const open = Authorization.policy({ products: Authorization.allowAll });

@@ -15,9 +15,12 @@
  * the inverse. A screen's join is then part of its **read** — `include: {
  * author: true, favorites: true }` resolves onto each row's `related`.
  *
- * A node's identity field is always `id`, so Conduit's natural keys ride along
- * as ordinary attributes: `users.id === users.username` and
- * `articles.id === articles.slug`, minted together wherever a row is written.
+ * Conduit's keys are natural, so each node **declares** the attribute that is
+ * its identity (`Node.make("users", { id: "username", … })`, issue #144): the
+ * key is stored once, every edge joins against it, and `where: { slug }` is
+ * what a read says. Nothing keeps a second `id` attribute equal to it, because
+ * there is no second attribute. The join collections keep a surrogate `id` —
+ * their key is a pair (`${userId}:${articleSlug}`), which is not one attribute.
  *
  * Reads are public (allow-all auth); writes are *named, schema-validated
  * mutations* run optimistically on the client and authoritatively on the demo
@@ -33,8 +36,7 @@ import { Edge, Mutation, Node, type Query } from "@legation/effect";
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
 export const User = Schema.Struct({
-  /** Row id. Conduit identifies users by username, so `id === username`. */
-  id: Schema.String,
+  /** The row id: Conduit identifies users by username. */
   username: Schema.String,
   email: Schema.String,
   /** Demo-only plaintext password (never do this for real). */
@@ -45,14 +47,13 @@ export const User = Schema.Struct({
 export type User = typeof User.Type;
 
 export const Article = Schema.Struct({
-  /** Row id. Conduit identifies articles by slug, so `id === slug`. */
-  id: Schema.String,
+  /** The row id: Conduit identifies articles by slug. */
   slug: Schema.String,
   title: Schema.String,
   description: Schema.String,
   body: Schema.String,
   tagList: Schema.Array(Schema.String),
-  /** References `users.id`. */
+  /** References `users.username`. */
   authorId: Schema.String,
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
@@ -60,10 +61,11 @@ export const Article = Schema.Struct({
 export type Article = typeof Article.Type;
 
 export const Comment = Schema.Struct({
+  /** Row id: comments have no natural key, so it is minted per comment. */
   id: Schema.String,
-  /** References `articles.id`. */
+  /** References `articles.slug`. */
   articleSlug: Schema.String,
-  /** References `users.id`. */
+  /** References `users.username`. */
   authorId: Schema.String,
   body: Schema.String,
   createdAt: Schema.Number,
@@ -88,11 +90,12 @@ export type Follow = typeof Follow.Type;
 
 // ─── The node graph ──────────────────────────────────────────────────────────
 //
-// `Node.make` supplies `id` and every `Edge.one`'s `via` foreign key, so the
-// attributes are the schema minus those fields.
+// `Node.make` supplies every `Edge.one`'s `via` foreign key (and an `id`
+// attribute for a node that declares no identity of its own), so the
+// attributes are the schema minus those fields. A node naming a natural key
+// keeps it: `users`' identity IS its `username` attribute.
 
-const { id: _userId, ...userAttributes } = User.fields;
-const { id: _articleId, authorId: _articleAuthorId, ...articleAttributes } = Article.fields;
+const { authorId: _articleAuthorId, ...articleAttributes } = Article.fields;
 const {
   id: _commentId,
   articleSlug: _commentArticleSlug,
@@ -101,7 +104,8 @@ const {
 } = Comment.fields;
 
 export const users = Node.make("users", {
-  attributes: userAttributes,
+  id: "username",
+  attributes: User.fields,
   edges: {
     articles: Edge.many("articles", { inverse: "author" }),
     favorites: Edge.many("favorites", { inverse: "user" }),
@@ -111,6 +115,7 @@ export const users = Node.make("users", {
 });
 
 export const articles = Node.make("articles", {
+  id: "slug",
   attributes: articleAttributes,
   edges: {
     author: Edge.one("users", { via: "authorId" }),
@@ -164,7 +169,7 @@ export const allArticles: Query.Read = {
 /** One article by slug, with the same edges as the feed cards. */
 export const articleBySlug = (slug: string): Query.Read => ({
   collection: "articles",
-  where: { id: slug },
+  where: { slug },
   include: { author: true, favorites: true },
 });
 
@@ -179,7 +184,7 @@ export const articleComments = (slug: string): Query.Read => ({
 /** One profile, with the follow rows that decide the viewer's follow state. */
 export const userProfile = (username: string): Query.Read => ({
   collection: "users",
-  where: { id: username },
+  where: { username },
   include: { followers: true },
 });
 
@@ -203,7 +208,8 @@ export const shellReads: ReadonlyArray<Query.Read> = [
 
 // ─── Mutation args ───────────────────────────────────────────────────────────
 //
-// Args keep Conduit's natural keys; the handlers mint the row `id` from them.
+// Args are Conduit's natural keys and nothing else: the key a handler writes a
+// row under is an attribute of the row, so there is no second id to mint.
 
 export const RegisterArgs = Schema.Struct({
   username: Schema.String,
@@ -261,18 +267,16 @@ export const favoriteId = (userId: string, articleSlug: string): string =>
 export const followId = (followerId: string, followeeId: string): string =>
   `${followerId}:${followeeId}`;
 
-/** The row a register/update writes: `id` is the username. */
-export const userRow = (args: UpdateUserArgs | typeof RegisterArgs.Type): User => ({
-  id: args.username,
-  username: args.username,
-  email: args.email,
-  password: args.password,
-  bio: "bio" in args ? args.bio : "",
-  image: "image" in args ? args.image : "",
+/**
+ * The row a register writes: a fresh account starts with an empty profile.
+ * An update's args are already the whole row — `UpdateUserArgs` is `User` —
+ * and an article's are already the whole article, so neither needs a helper.
+ */
+export const registeredUser = (args: typeof RegisterArgs.Type): User => ({
+  ...args,
+  bio: "",
+  image: "",
 });
-
-/** The row an article create/update writes: `id` is the slug. */
-export const articleRow = (args: ArticleInput): Article => ({ id: args.slug, ...args });
 
 export const favoriteRow = (userId: string, articleSlug: string): Favorite => ({
   id: favoriteId(userId, articleSlug),
@@ -291,10 +295,10 @@ export const followRow = (followerId: string, followeeId: string): Follow => ({
  * `put`/`del` keyed by id — idempotent by construction.
  */
 export const mutations = Mutation.registry([
-  { mutator: registerUser, local: (args, w) => w.put("users", args.username, userRow(args)) },
-  { mutator: updateUser, local: (args, w) => w.put("users", args.username, userRow(args)) },
-  { mutator: createArticle, local: (args, w) => w.put("articles", args.slug, articleRow(args)) },
-  { mutator: updateArticle, local: (args, w) => w.put("articles", args.slug, articleRow(args)) },
+  { mutator: registerUser, local: (args, w) => w.put("users", args.username, registeredUser(args)) },
+  { mutator: updateUser, local: (args, w) => w.put("users", args.username, args) },
+  { mutator: createArticle, local: (args, w) => w.put("articles", args.slug, args) },
+  { mutator: updateArticle, local: (args, w) => w.put("articles", args.slug, args) },
   { mutator: deleteArticle, local: (args, w) => w.del("articles", args.slug) },
   {
     mutator: favoriteArticle,
