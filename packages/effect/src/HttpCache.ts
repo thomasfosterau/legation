@@ -6,11 +6,12 @@
  * Request/Response cache with freshness windows, stale-while-revalidate,
  * and tag-based invalidation. The browser package implements the store over
  * the Cache API (fixing the former text-only body limitation) and closes the
- * loop on collection-driven invalidation: `HttpCacheInvalidation` maps an
- * engine's collection changes (the `collection:{name}` tag convention) onto
- * `invalidateTags`, so a synced change evicts the responses tagged for the
- * collections it touched. Implementations for edge runtimes can back the store
- * with their own primitives.
+ * loop on collection- and row-driven invalidation: `HttpCacheInvalidation`
+ * maps an engine's collection and row changes (the `collection:{name}` /
+ * `collection:{name}:{id}` tag convention, #207) onto `invalidateTags`, so a
+ * synced change evicts the responses tagged for what it touched.
+ * Implementations for edge runtimes can back the store with their own
+ * primitives.
  *
  * Phase 3 module: interfaces are final-shape; the fetch-event handler and
  * Cache API store land with the browser host.

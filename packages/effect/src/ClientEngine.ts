@@ -178,12 +178,15 @@ export interface MutationEvent {
  * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
  *   of `mutations` delivered).
  * - `PullStarted` / `PullCompleted` — a pull began / finished (with the number
- *   of patch `ops` applied and the distinct `collections` those ops touched —
- *   a `Clear` stands for every collection the client currently holds, since it
- *   resets the whole view). The touched collections drive collection-scoped
- *   reactions such as HTTP-cache tag invalidation (`@legation/browser`), which
- *   is why they are reported even on a client with an empty journal (the
- *   common case, where a pull emits a `Patch` change and no `ViewRebuilt`).
+ *   of patch `ops` applied, the distinct `collections` those ops touched, and
+ *   the individual `rows` — (collection, id) pairs — a `Put`/`Del` touched; a
+ *   `Clear` stands for every collection the client currently holds, since it
+ *   resets the whole view, and contributes no `rows` (there is no finite row
+ *   list for "everything"). The touched collections and rows drive
+ *   collection- and row-scoped reactions such as HTTP-cache tag invalidation
+ *   (`@legation/browser`'s `HttpCacheInvalidation`, #207), which is why they
+ *   are reported even on a client with an empty journal (the common case,
+ *   where a pull emits a `Patch` change and no `ViewRebuilt`).
  * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
  * - `ViewRebuilt` — the local view was rebuilt (rebase/seed/subscribe), scoped
  *   to the `collections` the shift touched (absent means "any collection").
@@ -216,6 +219,7 @@ export type EngineEvent =
       readonly _tag: "PullCompleted";
       readonly ops: number;
       readonly collections: ReadonlyArray<string>;
+      readonly rows: ReadonlyArray<{ readonly collection: string; readonly id: RowId }>;
     }
   | { readonly _tag: "PokeReceived"; readonly reason?: string }
   | { readonly _tag: "ViewRebuilt"; readonly collections?: ReadonlyArray<string> }
@@ -1481,28 +1485,39 @@ export const make = (
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
-    // The distinct collections a pulled patch touches, computed before the
-    // patch is applied so a `Clear` can stand for every collection the client
-    // currently holds (the patch would otherwise wipe them). Put/Del name their
-    // collection directly. Drives collection-scoped reactions (HTTP-cache tag
-    // invalidation) via the `PullCompleted` event.
+    // The distinct collections and individual rows a pulled patch touches,
+    // computed before the patch is applied so a `Clear` can stand for every
+    // collection the client currently holds (the patch would otherwise wipe
+    // them). Put/Del name their collection and row id directly; a `Clear` has
+    // no finite row list, so it contributes to `collections` only. Drives
+    // collection- and row-scoped reactions (HTTP-cache tag invalidation, #207)
+    // via the `PullCompleted` event.
+    interface PullTouched {
+      readonly collections: ReadonlyArray<string>;
+      readonly rows: ReadonlyArray<{ readonly collection: string; readonly id: RowId }>;
+    }
     const pullTouchedCollections = (
       patch: ReadonlyArray<PatchOp>
-    ): Effect.Effect<ReadonlyArray<string>, StoreError> =>
+    ): Effect.Effect<PullTouched, StoreError> =>
       Effect.gen(function* () {
-        const touched = new Set<string>();
+        const collections = new Set<string>();
+        const rows: Array<{ readonly collection: string; readonly id: RowId }> = [];
         let cleared = false;
         for (const op of patch) {
-          if (op._tag === "Clear") cleared = true;
-          else touched.add(op.collection);
+          if (op._tag === "Clear") {
+            cleared = true;
+            continue;
+          }
+          collections.add(op.collection);
+          rows.push({ collection: op.collection, id: op.id });
         }
         if (cleared) {
-          for (const collection of yield* store.listCollections) touched.add(collection);
+          for (const collection of yield* store.listCollections) collections.add(collection);
         }
-        return [...touched];
+        return { collections: [...collections], rows };
       });
 
-    const applyPull = (response: PullResponse): Effect.Effect<ReadonlyArray<string>, StoreError> =>
+    const applyPull = (response: PullResponse): Effect.Effect<PullTouched, StoreError> =>
       Effect.gen(function* () {
         // With an empty journal the patch ops are exactly the materialized-view
         // deltas, so observers maintain incrementally. With a pending overlay,
@@ -1529,7 +1544,7 @@ export const make = (
           change = rebuildFor(
             mutationCollections === undefined
               ? undefined
-              : new Set([...touched, ...mutationCollections])
+              : new Set([...touched.collections, ...mutationCollections])
           );
         }
         // Atomic reveal: one change event after patch + ack (rebase is
@@ -1555,13 +1570,14 @@ export const make = (
           ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
           ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
         });
-        const collections = yield* applyPull(response);
+        const touched = yield* applyPull(response);
         yield* Metric.update(Telemetry.pullsTotal, 1);
         yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
         yield* emitEngineEvent({
           _tag: "PullCompleted",
           ops: response.patch.length,
-          collections,
+          collections: touched.collections,
+          rows: touched.rows,
         });
       })
     ).pipe(Effect.withSpan(Telemetry.span.clientPull));
