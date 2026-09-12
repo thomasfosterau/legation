@@ -82,15 +82,16 @@ long as the app does.
 
 The `Undo` module (`@legation/effect`) adds undo/redo without touching the
 engine: the caller supplies both directions of a change, and undo/redo replay
-through `ClientEngine.mutate`, so they inherit the overlay, the journal, rebase,
-and offline behaviour for free.
+through the supplied handle's `mutate` — a `Client` (as here) or a
+`ClientEngine` both work (#223) — so they inherit the overlay, the journal,
+rebase, and offline behaviour for free.
 
 ```ts
 import { Undo } from "@legation/effect";
 import { undoControls } from "@legation/svelte";
 
 // One manager per client (in-memory history) — see src/lib/sync.ts.
-const manager = yield * Undo.make(engine);
+const manager = yield * Undo.make(client);
 
 // Svelte stores + handlers — see the route's +page.svelte. (These are the
 // one part of the bindings with no rune equivalent, so they read with `$`.)
