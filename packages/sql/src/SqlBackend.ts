@@ -18,10 +18,28 @@
  * ADR-0014). Writes run app-provided handlers inside one
  * transaction with the per-client `lastMutationId` bump — the contract's
  * exactly-once, in-order, atomic guarantee, delegated to the database.
+ *
+ * A mapping's reads run against `readRelation` when given (issue #204): a
+ * real app's current-state relation is often a view — one that resolves each
+ * node's current version and joins the leaf at exactly that version — never
+ * the table mutator handlers write through. A mapping's `tombstone`
+ * predicate (the engine's own `Predicate` vocabulary, evaluated with
+ * `Predicate.test`) marks a row a soft delete rather than a live one: such a
+ * row is dropped from `evaluate`'s returned entries, so it simply isn't in
+ * the next CVR view and `Cvr.diff` reports it as a delete for that id,
+ * exactly as a row that vanished from the relation outright would (fail-open
+ * would be a bug: a soft-deleted row must never keep syncing as a put).
  */
 
 import { Effect, Schema } from "effect";
-import { Backend, BackendError, MutationRejected, Predicate, type Mutator } from "@legation/effect";
+import {
+  Backend,
+  BackendError,
+  Collection,
+  MutationRejected,
+  Predicate,
+  type Mutator,
+} from "@legation/effect";
 import { Hash, Subset } from "@legation/effect/internal";
 import * as Sql from "./Sql.js";
 
@@ -54,7 +72,16 @@ export interface SqlExecutor {
 
 /** How a collection maps onto a table. */
 export interface TableMapping {
+  /** The write target: what mutator handlers address. Also the read default. */
   readonly table: string;
+  /**
+   * The relation reads evaluate against, when it differs from `table`
+   * (issue #204) — typically a view joining a root version table to a leaf
+   * at its current version. Read-only: `SqlBackend` never writes rows
+   * itself, only the mutation-id ledger, so nothing here needs `table` to be
+   * writable. Defaults to `table`.
+   */
+  readonly readRelation?: string;
   /** Primary-key column. Defaults to `"id"`. */
   readonly idColumn?: string;
   /** Column holding the row version; if absent, a content hash is used. */
@@ -66,13 +93,48 @@ export interface TableMapping {
    * alone never collates), `instant` columns do not, literals bind by the
    * declared kind, and `boolean` columns bind and decode as the dialect
    * stores them (`0`/`1` on SQLite). A column without a kind compiles to a
-   * plain comparison with the literal bound as its JS type (see `Sql`).
-   * Seam: once a `Collection`'s filterable attributes carry kinds (#154), a
-   * mapping can be derived from the collection instead of written by hand
-   * here.
+   * plain comparison with the literal bound as its JS type (see `Sql`). See
+   * {@link fromCollection} to derive this instead of writing it by hand.
    */
   readonly kinds?: Sql.Kinds;
+  /**
+   * A row matching this predicate is a tombstone, not a live row (issue
+   * #204): `evaluate` drops it from the entries it returns, so it is simply
+   * absent from the next CVR view and diffs as a delete, the same as a row
+   * that vanished from the relation outright. Expressed in the engine's own
+   * `Predicate` vocabulary (evaluated with `Predicate.test`) rather than a
+   * bespoke shape, so it composes with everything else that already
+   * understands a `Predicate` (the `Sql` compiler, the differential
+   * harness). Typically an `IsNull`/`eq` test on a soft-delete column
+   * (`Predicate.isNotNull("deletedAt")`'s negation, an `action` enum check).
+   */
+  readonly tombstone?: Predicate.Predicate;
 }
+
+/**
+ * Derive a `TableMapping` from a `Collection`: column kinds come from its
+ * declared filterable set (`Collection.filterDeclarationOf`, #154) instead of
+ * being restated by hand — the common case. `table`, and optionally
+ * `readRelation` / `idColumn` / `versionColumn` / `tombstone`, are still
+ * given explicitly; the hand-written record shape (this function's return
+ * type) remains the override path for a mapping derivation can't cover.
+ */
+export const fromCollection = (
+  collection: Collection.AnyCollection,
+  options: {
+    readonly table: string;
+    readonly readRelation?: string;
+    readonly idColumn?: string;
+    readonly versionColumn?: string;
+    readonly tombstone?: Predicate.Predicate;
+  }
+): TableMapping => {
+  const { filterable } = Collection.filterDeclarationOf(collection);
+  const kinds: Sql.Kinds = Object.fromEntries(
+    Object.entries(filterable).map(([field, declared]) => [field, declared.kind])
+  );
+  return { ...options, kinds };
+};
 
 /**
  * An app-authored write, running its own SQL inside the push transaction. Fail
@@ -112,6 +174,15 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     const column = config.tables[collection]?.versionColumn;
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
+  // What a read queries: the mapping's `readRelation` when it names one
+  // (typically a view), else the write target `table` (#204).
+  const readTableOf = (mapping: TableMapping) => mapping.readRelation ?? mapping.table;
+  // Whether a decoded row is a live row, not a tombstone: no mapping or no
+  // declared predicate means every row is live.
+  const isLive = (collection: string, value: SqlRow): boolean => {
+    const tombstone = config.tables[collection]?.tombstone;
+    return tombstone === undefined || !Predicate.test(tombstone, value);
+  };
 
   // Every mapping's declared kinds, keyed by collection, for the inner
   // `where` of an `Exists` (the compiler picks the foreign collection's).
@@ -149,7 +220,9 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // Resolve a correlated Exists to its allow-set via a DISTINCT subquery.
   // NULL foreign values are left out and the rest decoded by kind, exactly
   // as `Predicate.existsValues` does for MemoryBackend (ADR-0028 rule (b)):
-  // NULL equals nothing, so it must not make `Not(Exists)` unknown.
+  // NULL equals nothing, so it must not make `Not(Exists)` unknown. A
+  // tombstoned foreign row is excluded the same way: a soft-deleted row
+  // never satisfies a correlation.
   const resolveExistsNode = (
     node: Predicate.ExistsNode
   ): Effect.Effect<ReadonlyArray<Predicate.Literal>, BackendError> => {
@@ -158,13 +231,15 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     const where = Sql.compileWhere(node.where, dialect, { kinds: mapping.kinds, foreignKinds });
     return executor
       .query({
-        text: `SELECT DISTINCT ${q(node.foreignField)} FROM ${q(mapping.table)} WHERE ${where.text}`,
+        text: `SELECT DISTINCT ${q(node.foreignField)} FROM ${q(readTableOf(mapping))} WHERE ${where.text}`,
         params: where.params,
       })
       .pipe(
         Effect.map((rows) =>
           rows.flatMap((row) => {
-            const value = decodeRow(node.collection, row)[node.foreignField];
+            const decoded = decodeRow(node.collection, row);
+            if (!isLive(node.collection, decoded)) return [];
+            const value = decoded[node.foreignField];
             return Predicate.isNullish(value) ? [] : [value as Predicate.Literal];
           })
         )
@@ -178,7 +253,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
       const rows = yield* executor.query(
         Sql.compileSelect({
-          table: mapping.table,
+          table: readTableOf(mapping),
           where,
           dialect,
           kinds: mapping.kinds,
@@ -186,10 +261,14 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         })
       );
       const idColumn = idOf(subset.collection);
-      const values = rows.map((row) => ({
-        id: String(row[idColumn]),
-        value: decodeRow(subset.collection, row),
-      }));
+      // A tombstoned row is dropped here, before ordering/limit/cursor: it is
+      // not a live row to page over, and its absence from the returned
+      // entries is exactly what makes `Cvr.diff` report it as a delete
+      // (#204) — the same mechanism a row vanishing from the relation
+      // outright already relies on.
+      const values = rows
+        .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
+        .filter((row) => isLive(subset.collection, row.value));
       return Subset.apply(values, { ...subset, where }).map((row) => ({
         id: row.id,
         version: versionFor(subset.collection, row.value),
@@ -197,7 +276,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     });
 
   // Fetch the raw rows for explicit ids (shared by getRows and hint
-  // enrichment). Reads see the push transaction's own writes.
+  // enrichment). Reads see the push transaction's own writes. A tombstoned
+  // row is omitted, exactly like an id no longer in the relation (#204).
   const queryRowsById = (
     collection: string,
     ids: ReadonlyArray<string>
@@ -207,13 +287,17 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     return executor
       .query(
         Sql.compileSelect({
-          table: mapping.table,
+          table: readTableOf(mapping),
           where: Predicate.isIn(idOf(collection), [...ids]),
           dialect,
           kinds: mapping.kinds,
         })
       )
-      .pipe(Effect.map((rows) => rows.map((row) => decodeRow(collection, row))));
+      .pipe(
+        Effect.map((rows) =>
+          rows.map((row) => decodeRow(collection, row)).filter((row) => isLive(collection, row))
+        )
+      );
   };
 
   const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
