@@ -40,7 +40,12 @@ re-subscribing the previous value stays visible with `waiting: true`
 
 - **`useQuery(() => read)`** / **`useNamedQuery(() => ({ name, args }))`** —
   a declarative `Query.Read`; `include`d edges resolve onto each row's
-  `related`, so a join needs no separate hook.
+  `related`, so a join needs no separate hook. The thunk may return
+  `undefined` to opt out of reading entirely — no window is registered and
+  no request is issued, and `current` stays at its initial state rather than
+  becoming a successful empty result. Every hook below that takes a read
+  thunk (`useConnection`, `useAggregate`, `useAggregateGrouped` included)
+  supports the same opt-out.
 - **`useConnection(() => read, { pageSize })`** — connection-style paging that
   _grows_ one window rather than jumping between detached pages.
 - **`useAggregate(() => read, agg)`** / **`useAggregateGrouped(() => read, agg, groupBy)`**
@@ -74,6 +79,23 @@ renders, and on the client it makes the first render match the server markup
   const rows = $derived(AsyncResult.getOrElse(page.current, () => []));
 </script>
 ```
+
+A read keyed on a selection that starts empty — the common master/detail
+case — opts out by returning `undefined` instead of reaching for a sentinel
+argument that matches nothing:
+
+```svelte
+<script lang="ts">
+  let selectedId = $state<string | undefined>(undefined);
+  const detail = useQuery(() =>
+    selectedId === undefined ? undefined : { collection: "products", where: { id: selectedId } }
+  );
+</script>
+```
+
+While `selectedId` is `undefined`, `detail.current` is `Initial` — no window
+is registered and no request is issued — and selecting a row subscribes just
+as any other reactive input change would.
 
 ### Async Svelte
 
