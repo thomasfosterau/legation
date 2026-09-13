@@ -49,6 +49,13 @@
  * All mismatches are definition-time defects (a thrown
  * {@link ResourceBridgeError}), never runtime failures: a resource graph
  * either bridges completely or not at all.
+ *
+ * **Identity** is always `id` here: a JSON:API resource is identified by the
+ * spec's `id` member, so a bridged node declares no identity attribute of its
+ * own (`Node.make`'s `id` option, #144). The JSON:API surface — `/{type}/{id}`
+ * widening to `filter[id]`, linkage and `included` reading `id` off a row
+ * value — assumes that, so a hand-built node naming a natural key is not yet
+ * servable through these handlers.
  */
 
 import { Resource } from "@thomasfosterau/effect-jsonapi";

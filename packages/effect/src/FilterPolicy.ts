@@ -75,18 +75,30 @@ export type FilterableInput =
   | { readonly operators: ReadonlyArray<FilterOperator>; readonly kind?: LiteralKind };
 
 /**
- * What a key field (`id`, or a `one`-edge's `via` field) is filterable by
- * when nothing else is declared: `eq` / `in` over text — the shape edge
- * windows (`fk = parent`, `id IN (…)`) and allow-set auth filters already
- * depend on.
+ * What a key field (the identity attribute, or a `one`-edge's `via` field) is
+ * filterable by when nothing else is declared: `eq` / `in` over text — the
+ * shape edge windows (`fk = parent`, `identity IN (…)`) and allow-set auth
+ * filters already depend on.
  */
 export const keyDefaults: FilterableField = { kind: "text", operators: ["eq", "in"] };
 
 /**
- * The declaration a collection with no declaration at all is checked
- * against: `id` by `eq` / `in`, sortable by `id` (ADR-0026's tie-break).
+ * The declaration a collection with nothing declared but its identity
+ * attribute is checked against: that attribute by `eq` / `in`, sortable by
+ * it (ADR-0026's tie-break).
  */
-export const bare: FilterDeclaration = { filterable: { id: keyDefaults }, sortable: ["id"] };
+export const bareFor = (identity: string): FilterDeclaration => ({
+  filterable: { [identity]: keyDefaults },
+  sortable: [identity],
+});
+
+/**
+ * The declaration a collection with no declaration at all is checked
+ * against: `id` by `eq` / `in`, sortable by `id`. The floor for a collection
+ * the registry does not know — there is no node to read an identity
+ * attribute off, so the default name is all that can be assumed.
+ */
+export const bare: FilterDeclaration = bareFor("id");
 
 // ─── Kind derivation ─────────────────────────────────────────────────────────
 
@@ -164,7 +176,15 @@ export interface ResolveOptions {
   readonly collection: string;
   /** The scalar attributes, by field name — the kind derivation source. */
   readonly attributes: Readonly<Record<string, { readonly ast: SchemaAST.AST }>>;
-  /** The key fields defaulting to {@link keyDefaults}: `id` plus every `one`-edge `via`. */
+  /**
+   * The attribute supplying the row id — a node's declared identity, or
+   * `"id"` when it declares none. Always sortable (ADR-0026's tie-break).
+   */
+  readonly identity?: string | undefined;
+  /**
+   * The key fields defaulting to {@link keyDefaults}: the identity attribute
+   * plus every `one`-edge `via`.
+   */
   readonly keyFields: ReadonlyArray<string>;
   readonly filterable?: Readonly<Record<string, FilterableInput>> | undefined;
   readonly sortable?: ReadonlyArray<string> | undefined;
@@ -173,9 +193,10 @@ export interface ResolveOptions {
 /**
  * Resolve a node's declaration: the key defaults first, then each declared
  * field with its operators and its explicit or derived kind; `sortable`
- * always includes `id`. A field the row does not carry, or an attribute
- * whose kind cannot be derived and is not given, is a definition-time
- * defect (a thrown {@link FilterDeclarationError}), never a runtime failure.
+ * always includes the identity attribute. A field the row does not carry, or
+ * an attribute whose kind cannot be derived and is not given, is a
+ * definition-time defect (a thrown {@link FilterDeclarationError}), never a
+ * runtime failure.
  */
 export const resolve = (options: ResolveOptions): FilterDeclaration => {
   const known = new Set<string>([...options.keyFields, ...Object.keys(options.attributes)]);
@@ -185,7 +206,12 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
     filterable[field] = resolveField(options, field, normaliseInput(input));
   }
   for (const field of options.sortable ?? []) assertRowField(options, known, field, "sortable");
-  return withKeyDefaults(options.keyFields, filterable, options.sortable ?? []);
+  return withKeyDefaults(
+    options.keyFields,
+    filterable,
+    options.sortable ?? [],
+    options.identity ?? "id"
+  );
 };
 
 /** One field's declaration with the operators-only shorthand expanded. */
@@ -234,17 +260,23 @@ const resolveField = (
 };
 
 /**
- * Overlay a declaration on the key defaults: every key field (`id`, a
- * `one`-edge / relationship key) is filterable by at least `eq` / `in` — a
- * declaration naming one **widens** it, never replaces it, because the
- * engine's own edge windows (`fk = parent`, `id IN (…)`) depend on those
- * operators — and `id` is always sortable (ADR-0026's tie-break). Shared by
- * the Node resolution above and `Collection.filterDeclarationOf`.
+ * Overlay a declaration on the key defaults: every key field (the identity
+ * attribute, a `one`-edge / relationship key) is filterable by at least `eq`
+ * / `in` — a declaration naming one **widens** it, never replaces it,
+ * because the engine's own edge windows (`fk = parent`, `identity IN (…)`)
+ * depend on those operators — and the identity attribute is always sortable
+ * (ADR-0026's tie-break). Shared by the Node resolution above and
+ * `Collection.filterDeclarationOf`.
+ *
+ * `identity` is the attribute supplying the row id, `"id"` when the
+ * definition names none — so a node identified by `username` gets `username`
+ * sortable and no phantom `id`.
  */
 export const withKeyDefaults = (
   keyFields: ReadonlyArray<string>,
   filterable: Readonly<Record<string, FilterableField>>,
-  sortable: ReadonlyArray<string>
+  sortable: ReadonlyArray<string>,
+  identity: string = "id"
 ): FilterDeclaration => {
   const merged: Record<string, FilterableField> = {};
   for (const field of keyFields) merged[field] = keyDefaults;
@@ -258,7 +290,7 @@ export const withKeyDefaults = (
             operators: [...new Set([...base.operators, ...declared.operators])],
           };
   }
-  return { filterable: merged, sortable: [...new Set(["id", ...sortable])] };
+  return { filterable: merged, sortable: [...new Set([identity, ...sortable])] };
 };
 
 // ─── Enforcement (request time) ──────────────────────────────────────────────
