@@ -6,7 +6,15 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema } from "effect";
-import { BackendError, MutationRejected, Mutator, Predicate } from "@legation/effect";
+import {
+  Authorization,
+  BackendError,
+  Collection,
+  MutationRejected,
+  Mutator,
+  Predicate,
+  Server,
+} from "@legation/effect";
 import { Subset } from "@legation/effect/internal";
 import type { Backend } from "@legation/effect";
 import * as Sql from "../Sql.js";
@@ -397,5 +405,184 @@ describe("SqlBackend applyMutations", () => {
         expect(runs.some((text) => text.startsWith("ROLLBACK TO SAVEPOINT "))).toBe(true);
       });
     }
+  );
+});
+
+describe("TableMapping.fromCollection (issue #204)", () => {
+  it.effect("derives kinds from the collection's declared filterable set", () => {
+    const todosCollection = Collection.make({
+      name: "todos",
+      schema: Schema.Unknown,
+      id: (value) => (value as { id: string }).id,
+      filterable: { done: { kind: "boolean", operators: ["eq"] } },
+    });
+    const mapping = SqlBackend.fromCollection(todosCollection, {
+      table: "todos",
+      versionColumn: "version",
+    });
+    // "id" is present from the key defaults every collection carries
+    // (Collection.filterDeclarationOf), with no column list written by hand.
+    expect(mapping).toEqual({
+      table: "todos",
+      versionColumn: "version",
+      kinds: { id: "text", done: "boolean" },
+    });
+
+    const mock = makeMock();
+    mock.seed("todos", [
+      { id: "1", done: 1, version: "a" },
+      { id: "2", done: 0, version: "b" },
+    ]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: { todos: mapping },
+      mutators: new Map(),
+      handlers: {},
+    });
+    return Effect.gen(function* () {
+      // The derived kinds drive the compiler exactly like a hand-written
+      // mapping's: the boolean literal binds per dialect (0) and SQLite's
+      // 0/1 decodes back to a boolean on the way out.
+      const entries = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "todos", where: Predicate.eq("done", false) })
+      );
+      expect(entries).toEqual([{ id: "2", version: "b" }]);
+      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "done" = ?`);
+      expect(mock.queries.at(-1)!.params).toEqual([0]);
+    });
+  });
+});
+
+describe("TableMapping.readRelation (issue #204)", () => {
+  it.effect("evaluate and getRows read the relation, not the write target", () => {
+    const mock = makeMock();
+    // Only "todos_view" is seeded: a query against "todos" would find nothing.
+    mock.seed("todos_view", [{ id: "1", version: "a" }]);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables: {
+        todos: { table: "todos", readRelation: "todos_view", versionColumn: "version" },
+      },
+      mutators: new Map(),
+      handlers: {},
+    });
+    return Effect.gen(function* () {
+      const entries = yield* backend.evaluate(
+        { clientGroupId: "g" },
+        Subset.make({ collection: "todos" })
+      );
+      expect(entries).toEqual([{ id: "1", version: "a" }]);
+      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos_view" WHERE 1 = 1`);
+
+      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      expect(rows).toEqual([{ id: "1", version: "a", value: { id: "1", version: "a" } }]);
+      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos_view" WHERE "id" IN (?)`);
+    });
+  });
+});
+
+describe("tombstones and fail-closed relations across a pull (issue #204)", () => {
+  const allowTodos = Authorization.policy({ todos: Authorization.allowAll });
+  const allTodos = [Subset.make({ collection: "todos" })];
+
+  it.effect("a row matching the tombstone predicate patches as a delete, not a put", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const mock = makeMock();
+        mock.seed("todos", [{ id: "1", version: "a", deletedAt: null }]);
+        const backend = SqlBackend.make({
+          executor: mock.executor,
+          tables: {
+            todos: {
+              table: "todos",
+              versionColumn: "version",
+              // The engine's own predicate vocabulary, not a bespoke shape.
+              tombstone: Predicate.isNotNull("deletedAt"),
+            },
+          },
+          mutators: new Map(),
+          handlers: {},
+        });
+        const server = yield* Server.make({ backend, auth: { policy: allowTodos } });
+
+        const first = yield* server.handler.handlePull({
+          clientGroupId: "g",
+          subscriptions: allTodos,
+        });
+        expect(first.patch).toEqual([
+          {
+            _tag: "Put",
+            collection: "todos",
+            id: "1",
+            version: "a",
+            value: { id: "1", version: "a", deletedAt: null },
+          },
+        ]);
+
+        // Soft-deleted in place: the row still exists in "todos", but now
+        // matches the tombstone predicate.
+        mock.seed("todos", [{ id: "1", version: "b", deletedAt: "2024-01-01T00:00:00.000Z" }]);
+        const second = yield* server.handler.handlePull({
+          clientGroupId: "g",
+          cookie: first.cookie,
+          subscriptions: allTodos,
+        });
+        expect(second.patch).toEqual([{ _tag: "Del", collection: "todos", id: "1" }]);
+      })
+    )
+  );
+
+  it.effect("a row that vanishes from the relation entirely also patches as a delete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const mock = makeMock();
+        mock.seed("todos", [
+          { id: "1", version: "a" },
+          { id: "2", version: "b" },
+        ]);
+        const backend = SqlBackend.make({
+          executor: mock.executor,
+          tables: { todos: { table: "todos", versionColumn: "version" } },
+          mutators: new Map(),
+          handlers: {},
+        });
+        const server = yield* Server.make({ backend, auth: { policy: allowTodos } });
+
+        const first = yield* server.handler.handlePull({
+          clientGroupId: "g",
+          subscriptions: allTodos,
+        });
+        expect(first.patch).toEqual([
+          {
+            _tag: "Put",
+            collection: "todos",
+            id: "1",
+            version: "a",
+            value: { id: "1", version: "a" },
+          },
+          {
+            _tag: "Put",
+            collection: "todos",
+            id: "2",
+            version: "b",
+            value: { id: "2", version: "b" },
+          },
+        ]);
+
+        // "2" is hard-deleted from the relation with no tombstone marker at
+        // all — no workaround, no auth-filter trick, just gone. This is the
+        // fail-closed property the whole model rests on: `evaluate` is "the
+        // set of (id, version) the relation currently returns", so a row
+        // outside that set diffs as a delete exactly like a tombstoned one.
+        mock.seed("todos", [{ id: "1", version: "a" }]);
+        const second = yield* server.handler.handlePull({
+          clientGroupId: "g",
+          cookie: first.cookie,
+          subscriptions: allTodos,
+        });
+        expect(second.patch).toEqual([{ _tag: "Del", collection: "todos", id: "2" }]);
+      })
+    )
   );
 });

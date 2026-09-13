@@ -135,6 +135,34 @@ describe("sync-loop scheduling (#33)", () => {
     })
   );
 
+  it.live(
+    "pins the default: an unconfigured connected client never auto-pushes a journaled mutation (#143)",
+    () =>
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const push = yield* Ref.make(0);
+        const pull = yield* Ref.make(0);
+        // No `syncLoop` options at all — the documented default.
+        const { engine, store } = yield* makeClient(handler, "a", undefined, {
+          counters: { push, pull },
+        });
+        yield* engine.subscribe(allTodos);
+        yield* engine.runSync;
+        // Let the initial connect-triggered push+pull (empty journal) settle;
+        // the transport is connected throughout (in-memory transport default).
+        yield* Effect.sleep(Duration.millis(30));
+
+        yield* engine.mutate("todo/set", { id: "1", title: "a", done: false });
+        yield* engine.mutate("todo/set", { id: "2", title: "b", done: false });
+        // Comfortably longer than any debounce window used elsewhere in this
+        // suite (30-150ms): with no `syncLoop` options, nothing auto-pushes.
+        yield* Effect.sleep(Duration.millis(1000));
+
+        expect(yield* Ref.get(push)).toBe(0);
+        expect(yield* store.pendingMutations).toHaveLength(2);
+      })
+  );
+
   it.live("coalesces a burst of mutations into a single push", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;

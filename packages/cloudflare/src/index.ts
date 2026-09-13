@@ -13,9 +13,13 @@
  *   rooms on publish — ADR-0023's broker, platform-sharded;
  * - {@link D1Executor}: `SqlBackend` over a D1 binding;
  * - {@link RoomTransport}: the browser-side `ClientTransport` for this
- *   topology (HTTP requests + poke socket).
+ *   topology (HTTP requests + poke socket);
+ * - {@link BindingTransport}: the same protocol over a **service binding**
+ *   (`env.API.fetch`) — what an SSR render in a separate Worker uses to take
+ *   a `Hydration.snapshot` against a binding-only API Worker.
  */
 
+export * as BindingTransport from "./BindingTransport.js";
 export * as D1Executor from "./D1Executor.js";
 export * as DurableCvrStore from "./DurableCvrStore.js";
 export * as DurableFanoutBroker from "./DurableFanoutBroker.js";

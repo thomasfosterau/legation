@@ -5,6 +5,10 @@
  * the subscription unit of the protocol (CONTEXT.md): the thing a client
  * registers with the server, the thing auth filters narrow, and the thing a
  * CVR tracks. Live queries reuse the same shape locally.
+ *
+ * This module is the plan-compiler's vocabulary — what a {@link Query}'s
+ * read compiles to. Most callers should use {@link Query} instead; hand-built
+ * subsets are for low-level protocol and backend work.
  */
 
 import { Schema } from "effect";

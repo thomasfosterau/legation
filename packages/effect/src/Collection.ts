@@ -6,6 +6,12 @@
  * collection definition is shared by client and server: the row `Schema` is
  * the single source of truth for validation, wire serialization, and
  * persistence encoding.
+ *
+ * The resource graph ({@link Node}) is the recommended front door: its
+ * `Node.registry` derives collections through this module's constructor. For
+ * domains the graph cannot express, hand-authoring a collection with
+ * {@link make} is a supported lower-level surface. Neither surface is
+ * deprecated; the graph is preferred when it applies.
  */
 
 import type { Schema } from "effect";
