@@ -3,14 +3,18 @@
 "@legation/svelte": minor
 ---
 
-Add `Undo`: an optional, additive undo/redo module layered over `ClientEngine`
-(no engine surgery). It follows the **paired-intents** design (the
-`@rocicorp/undo` shape): the caller supplies both directions of a change — an
-`execute` intent and its reversing `undo` intent — and `Undo.make(engine)`
-returns an `UndoManager` whose `run` / `undo` / `redo` replay through the
-ordinary `ClientEngine.mutate` pipeline. Because undo and redo are just
-mutations, they are optimistic, journaled, rebased, and offline-safe like any
-write; the module only owns the history.
+Add `Undo`: an optional, additive undo/redo module layered over anything that
+can `mutate(name, args)` — no engine surgery. It follows the **paired-intents**
+design (the `@rocicorp/undo` shape): the caller supplies both directions of a
+change — an `execute` intent and its reversing `undo` intent — and
+`Undo.make(handle)` returns an `UndoManager` whose `run` / `undo` / `redo`
+replay through the handle's ordinary `mutate` pipeline. A `ClientEngine` and a
+`Client` both satisfy the accepted `MutateHandle` shape structurally; because
+their `mutate` methods don't share an error channel, both `MutateHandle` and
+`UndoManager` are generic in that error type, so a failed mutation is still
+observable as whatever the supplied handle fails with. Because undo and redo
+are just mutations, they are optimistic, journaled, rebased, and offline-safe
+like any write; the module only owns the history.
 
 History is **in-memory and per-client** (one manager per engine, a pair of
 stacks in a `SubscriptionRef`) — it does not survive a reload, though the

@@ -430,10 +430,11 @@ const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean }
 };
 
 /**
- * Undo/redo over an engine's history as runes. Build one manager per client
- * with `Undo.make(engine)` and call this during component initialisation.
+ * Undo/redo over a manager's history as runes. Build one manager per client
+ * with `Undo.make(handle)` — a `Client` or a `ClientEngine` both work
+ * (issue #223) — and call this during component initialisation.
  */
-export const useUndo = (manager: Undo.UndoManager): UndoControls => {
+export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
   const canUndo = useFlag(manager.canUndoChanges);
   const canRedo = useFlag(manager.canRedoChanges);
   return {
