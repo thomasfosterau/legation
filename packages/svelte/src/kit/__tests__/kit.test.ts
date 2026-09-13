@@ -170,6 +170,66 @@ describe("loadSnapshot + clientRuntime", () => {
     })
   );
 
+  it.effect("renders against a separate backend over a supplied transport", () =>
+    Effect.gen(function* () {
+      // The backend is somewhere else entirely (another Worker): the `load`
+      // holds a carrier to it, not the handler. Nothing is provided to this
+      // effect — `ServerHandler` never enters the load's context.
+      const handler = yield* makeServer;
+      const writerStore = yield* ClientStore.makeMemory;
+      const writerTransport = yield* Transport.makeInMemory(handler, "group-writer");
+      const writer = yield* ClientEngine.make({
+        clientId: "writer",
+        clientGroupId: "group-writer",
+        mutators: mutations,
+      }).pipe(
+        Effect.provideService(ClientStore.ClientStore, writerStore),
+        Effect.provideService(Transport.ClientTransport, writerTransport)
+      );
+      yield* writer.subscribe(allTodosSubset);
+      yield* writer.mutate("todo/set", { id: "1", title: "remote" });
+      yield* writer.push;
+
+      const { cookies } = fakeCookies();
+      const remote: Transport.ClientTransport = yield* Transport.makeInMemory(
+        handler,
+        "group-remote"
+      );
+      const loaded = yield* loadSnapshot(cookies, {
+        nodes,
+        reads: [allTodos],
+        transport: remote,
+        cookie: { generate: () => "group-remote" },
+      });
+
+      expect(loaded.clientGroupId).toBe("group-remote");
+      expect(loaded.snapshot.rows.map((row) => row.id)).toEqual(["1"]);
+      expect(loaded.snapshot.cookie).toBeDefined();
+
+      // The cookie continues the conversation: the browser's first pull over
+      // its own carrier gets a delta, not a `Clear` and a full re-send.
+      const browserStore = yield* ClientStore.makeMemory;
+      const browserTransport = yield* Transport.makeInMemory(handler, loaded.clientGroupId);
+      const browser = yield* ClientEngine.make({
+        clientId: "browser",
+        clientGroupId: loaded.clientGroupId,
+        mutators: mutations,
+      }).pipe(
+        Effect.provideService(ClientStore.ClientStore, browserStore),
+        Effect.provideService(Transport.ClientTransport, browserTransport)
+      );
+      expect(yield* Hydration.hydrateIfEmpty(browserStore, loaded.snapshot)).toBe(true);
+      yield* browser.subscribe(allTodosSubset);
+      const patch = yield* browserTransport.pull({
+        clientGroupId: loaded.clientGroupId,
+        cookie: loaded.snapshot.cookie,
+        subscriptions: [allTodosSubset],
+      });
+      expect(patch.patch.some((op) => op._tag === "Clear")).toBe(false);
+      expect(patch.patch).toEqual([]);
+    })
+  );
+
   it.effect("hydrateIfEmpty leaves a populated durable store untouched", () =>
     Effect.gen(function* () {
       const store = yield* ClientStore.makeMemory;
