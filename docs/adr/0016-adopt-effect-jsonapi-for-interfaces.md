@@ -1,7 +1,7 @@
 # ADR-0016: Adopt `@thomasfosterau/effect-jsonapi` for the JSON:API interfaces
 
 Date: 2026-06-19
-Status: Accepted
+Status: Accepted; amended by issue #218
 
 ## Context
 
@@ -69,3 +69,24 @@ catalog was bumped from `beta.83` to `beta.84` package-wide (ADR-0003).
   `Endpoint` definitions (rather than reflecting an arbitrary `HttpApi` by path
   convention, per `Convention.ts`), the library is already a dependency — that
   is a separate, larger decision left open here.
+
+## Amendment (#218): this ADR never adopted a filter grammar
+
+Recorded because `CONTEXT.md` came to describe `Predicate` as "the engine
+form of the filter grammar" and credited this ADR with a shared language it
+never decided. The record above already says otherwise — "Filtering ...
+stay[s] generic: the spec leaves filter semantics implementation-defined
+... and the library's typed `Include` / `Fieldset` encoders require a
+`Resource` this loader does not have" — but nothing here ruled the point
+out explicitly, so the glossary drifted into over-claiming it.
+
+To be unambiguous: this ADR adopts effect-jsonapi's wire **primitives**
+(`Document`, `Query.Sort`, `Query.Page`) for the resource-agnostic loader.
+It adopts nothing about filtering. `Predicate` — legation's own subset
+language, used in subscriptions, evaluated with Postgres-normative
+semantics (ADR-0028) — is not a form of effect-jsonapi's filter grammar (a
+query-parameter format, decoded from untrusted URLs, canonically encoded
+for `self` links) and was never meant to be one. Where the two meet is
+`@legation/jsonapi`'s façade-boundary bridge (`JsonApiQuery.fromFilterAst` /
+`toFilterAst`, ADR-0029 §6) — a projection for one job, not a claim that
+either language is the other's internal form.

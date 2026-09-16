@@ -33,10 +33,10 @@ import {
   Server,
   Transport,
 } from "@legation/effect";
-// `Undo` is engine-only: the manager is built over a `ClientEngine`, which the
-// public `Client.make` does not hand back. So this app builds the engine
-// itself and wraps it with `Client.fromView` — the same Client either way.
-import { ClientEngine, ClientView, type Protocol, Undo } from "@legation/effect/internal";
+// `Undo.make` takes any mutate-capable handle (issue #223), so this app
+// builds its `Client` the zero-wiring way, through `Client.make` — no
+// hand-built `ClientEngine`, no manual `runSync` fork.
+import { type ClientView, type Protocol, Undo } from "@legation/effect/internal";
 import type { ClientRuntime } from "@legation/svelte";
 
 import {
@@ -64,8 +64,6 @@ export type Connection = Transport.ConnectionStatus;
 export interface Demo {
   /** Flip the transport between online and (failing) offline. */
   readonly setOnline: (online: boolean) => Promise<void>;
-  /** Push the journal then pull a patch, right now. */
-  readonly syncNow: () => Promise<void>;
   /** Apply an authoritative write as a second client, then broadcast. */
   readonly simulateRemote: () => Promise<void>;
   /** Snapshot of the durable journal (pending, unconfirmed mutations). */
@@ -82,8 +80,9 @@ export interface World {
    * The per-client undo manager (#46). Its `run`/`undo`/`redo` replay through
    * the same optimistic `mutate` pipeline, so undo is journaled, rebased, and
    * offline-safe like any write; history is in-memory (a page reload clears it).
+   * Built from the `Client` (issue #223), so it fails with `ClientViewError`.
    */
-  readonly undo: Undo.UndoManager;
+  readonly undo: Undo.UndoManager<ClientView.ClientViewError>;
 }
 
 // ─── The demo backend ────────────────────────────────────────────────────────
@@ -138,19 +137,19 @@ const summarise = (mutation: Protocol.Mutation): string =>
 
 interface Rig {
   readonly client: Client.Client;
-  readonly undo: Undo.UndoManager;
+  readonly undo: Undo.UndoManager<ClientView.ClientViewError>;
   readonly setOffline: (offline: boolean) => Effect.Effect<void>;
   readonly connection: Stream.Stream<Connection>;
   readonly pending: Effect.Effect<ReadonlyArray<PendingEntry>>;
-  readonly syncNow: Effect.Effect<void>;
   readonly remoteEdit: Effect.Effect<void>;
 }
 const Rig = Context.Service<Rig>("todo/Rig");
 
 /**
- * Build the server, the transport, the engine and the Client, in one scoped
- * effect. Every fiber forked here (the sync loop, the server's fan-out) is
- * `forkScoped`, so the runtime's scope owns their lifetime.
+ * Build the server, the transport, and the Client, in one scoped effect.
+ * Every fiber forked here (the server's fan-out) is `forkScoped`, so the
+ * runtime's scope owns their lifetime; `Client.make` forks its own sync
+ * loop the same way.
  */
 const rigLayer = Layer.effect(Rig)(
   Effect.gen(function* () {
@@ -172,24 +171,21 @@ const rigLayer = Layer.effect(Rig)(
     const loopback = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
     const { transport, setOffline } = yield* Transport.simulateOffline(loopback);
 
-    const engine = yield* ClientEngine.make({
+    const client = yield* Client.make({
+      nodes,
+      mutations,
       clientId: CLIENT_ID,
       clientGroupId: CLIENT_GROUP_ID,
-      mutators: mutations,
+      store,
+      transport,
       // Both legs are opt-in: without `pushDebounce` a journaled mutation
       // waits for a reconnect, a poke, or an explicit push, so an online
       // client would sit on "N pending" indefinitely. `pullInterval` is the
-      // correctness backstop for when no poke arrives.
+      // correctness backstop for when no poke arrives. `Client.make` forks
+      // the sync loop itself (pull on poke, push + pull on reconnect),
+      // flushing any journal left over from a previous offline session.
       syncLoop: { pushDebounce: "300 millis", pullInterval: "15 seconds" },
-    }).pipe(
-      Effect.provideService(ClientStore.ClientStore, store),
-      Effect.provideService(Transport.ClientTransport, transport)
-    );
-    // The sync loop: pull on poke, push + pull on (re)connect. Flushes any
-    // journal left over from a previous offline session and hydrates.
-    yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
-
-    const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+    });
     // Pin the list beyond any one observer, so the tab keeps syncing it.
     yield* client.subscribe(allTodos).pipe(Effect.orDie);
 
@@ -199,7 +195,7 @@ const rigLayer = Layer.effect(Rig)(
 
     return {
       client,
-      undo: yield* Undo.make(engine),
+      undo: yield* Undo.make(client),
       setOffline,
       connection: Stream.concat(Stream.fromEffect(transport.status), transport.statusChanges),
       pending: store.pendingMutations.pipe(
@@ -211,7 +207,6 @@ const rigLayer = Layer.effect(Rig)(
         ),
         Effect.orElseSucceed((): ReadonlyArray<PendingEntry> => [])
       ),
-      syncNow: engine.push.pipe(Effect.andThen(engine.pull), Effect.ignore),
       remoteEdit: Effect.gen(function* () {
         remoteSeq += 1;
         const todo: Todo = {
@@ -254,7 +249,6 @@ export const createWorld = async (): Promise<World> => {
     undo: rig.undo,
     demo: {
       setOnline: (next) => runtime.runPromise(rig.setOffline(!next)),
-      syncNow: () => runtime.runPromise(rig.syncNow),
       simulateRemote: () => runtime.runPromise(rig.remoteEdit),
       pending: () => runtime.runPromise(rig.pending),
       connection: rig.connection,

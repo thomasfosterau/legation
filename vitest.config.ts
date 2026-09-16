@@ -42,6 +42,7 @@ export default defineConfig({
             "packages/*/src/**/*.test.ts",
             "tests/**/*.test.ts",
             "examples/commerce/tests/**/*.test.ts",
+            "examples/realworld/tests/**/*.test.ts",
           ],
           // The binding tests mount components and need the `svelte`
           // project below; the /kit tests are plain node.

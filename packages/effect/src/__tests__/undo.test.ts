@@ -1,14 +1,17 @@
 /**
- * Undo/redo (issue #46): paired-intents undo layered over the engine. Every
- * undo/redo replays through `ClientEngine.mutate`, so it is optimistic,
- * journaled, rebased, and offline-safe like any mutation — these tests exercise
- * exactly that through the MemoryBackend + SyncServer + ClientEngine stack from
- * `engine.test.ts`.
+ * Undo/redo (issue #46): paired-intents undo layered over any mutate-capable
+ * handle. Every undo/redo replays through the handle's `mutate`, so it is
+ * optimistic, journaled, rebased, and offline-safe like any mutation — most of
+ * these tests exercise that through the MemoryBackend + SyncServer +
+ * ClientEngine stack from `engine.test.ts`; one drives the same manager
+ * through a `Client` instead, since the two do not share an error channel
+ * (issue #223).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Scope } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
+import * as Client from "../Client.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
@@ -17,6 +20,7 @@ import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
+import * as Node from "../Node.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Undo from "../Undo.js";
@@ -87,8 +91,13 @@ const makeManaged = (transport: CT, name: string) =>
 
 const allTodos = Subset.make({ collection: "todos" });
 
-const titles = (rows: ReadonlyArray<ClientEngineModule.LocalRow>): ReadonlyArray<string> =>
+const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
   rows.map((row) => (row.value as Todo).title);
+
+/** The node graph a `Client.make`-built Client reads against. */
+const nodes = Node.registry([
+  Node.make("todos", { attributes: { title: Schema.String, done: Schema.Boolean } }),
+]);
 
 describe("Undo (#46)", () => {
   it.effect("basic undo/redo tracks stacks and a new run clears redo", () =>
@@ -261,6 +270,44 @@ describe("Undo (#46)", () => {
           .sort()
       ).toEqual(["a", "b", "c"]);
       expect(yield* manager.canUndo).toBe(true);
+    })
+  );
+
+  it.effect("undo/redo built from a Client, not a ClientEngine (#223)", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer;
+      const transport = yield* makeInMemory(handler, "group-client");
+      const store = yield* ClientStoreModule.makeMemory;
+      const client = yield* Client.make({
+        nodes,
+        mutations: setTodo,
+        clientId: "client-client",
+        clientGroupId: "group-client",
+      }).pipe(
+        Effect.provideService(ClientStore, store),
+        Effect.provideService(ClientTransport, transport)
+      );
+      // No `ClientEngine` in scope at all — `Undo.make` accepts the Client
+      // directly, and infers its error type from `Client.mutate`.
+      const manager = yield* Undo.make(client);
+      const allTodosRead = { collection: "todos" };
+      // Pin the read so `query` answers locally instead of falling through
+      // to the (unrelated) server tier — ADR-0025.
+      yield* client.subscribe(allTodosRead);
+
+      yield* manager.run({
+        execute: { mutator: "todo/set", args: { id: "1", title: "a", done: false } },
+        undo: { mutator: "todo/remove", args: { id: "1" } },
+      });
+      expect(titles(yield* client.query(allTodosRead))).toEqual(["a"]);
+      expect(yield* manager.canUndo).toBe(true);
+
+      yield* manager.undo;
+      expect(yield* client.query(allTodosRead)).toHaveLength(0);
+      expect(yield* manager.canRedo).toBe(true);
+
+      yield* manager.redo;
+      expect(titles(yield* client.query(allTodosRead))).toEqual(["a"]);
     })
   );
 });
