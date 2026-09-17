@@ -28,7 +28,9 @@ import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import { TransportError } from "./Errors.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
+import type * as Identity from "./Identity.js";
 import type * as MutationState from "./MutationState.js";
+import type { Mutation } from "./Protocol.js";
 import * as Related from "./Related.js";
 import type { RowChange } from "./RowChange.js";
 import type * as Subset from "./Subset.js";
@@ -133,6 +135,24 @@ export interface ClientView {
   readonly read?: (
     subsets: ReadonlyArray<Subset.Subset>
   ) => Effect.Effect<ReadonlyArray<ClientEngineModule.ReadRow>, ClientViewError>;
+  /**
+   * The identity boundary (#212), present only for an engine-backed view.
+   * A `Mirror` holds no durable state of its own — the replica lives in the
+   * host — so resetting a connected Client is the host's Client's job, not
+   * something a mirror can do on its behalf; `Client.reset` says so rather
+   * than pretending to have succeeded.
+   */
+  readonly identityBoundary?: {
+    readonly reset: (
+      identity: Identity.Fingerprint
+    ) => Effect.Effect<ClientEngineModule.ResetOutcome, StoreError>;
+    readonly current: Effect.Effect<Identity.Fingerprint | undefined, StoreError>;
+    readonly quarantines: Effect.Effect<ReadonlyArray<Identity.Fingerprint>, StoreError>;
+    readonly quarantinedMutations: (
+      identity: Identity.Fingerprint
+    ) => Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
+    readonly discardQuarantine: (identity: Identity.Fingerprint) => Effect.Effect<void, StoreError>;
+  };
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (mutator: string, args: unknown) => Effect.Effect<void, ClientViewError>;
   /** Like {@link ClientView.mutate}, resolving with the backend's authoritative outcome. */
@@ -189,6 +209,13 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
               )
             ),
         }),
+    identityBoundary: {
+      reset: (identity) => engine.reset(identity),
+      current: engine.identity,
+      quarantines: engine.quarantines,
+      quarantinedMutations: (identity) => engine.quarantinedMutations(identity),
+      discardQuarantine: (identity) => engine.discardQuarantine(identity),
+    },
     mutate: (mutator, args) => engine.mutate(mutator, args),
     mutateWithAck: (mutator, args) =>
       engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),

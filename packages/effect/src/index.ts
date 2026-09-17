@@ -24,7 +24,9 @@
  * (deny-by-default per-collection filters, expressed as
  * {@link Predicate}s); {@link Aggregate} projections; {@link ClientStore}
  * and {@link Transport} (the persistence and carrier seams a Client is
- * wired with); and the typed error classes.
+ * wired with); {@link Identity} (the client-side identity boundary: a
+ * durable replica belongs to exactly one resolved identity); and the typed
+ * error classes.
  *
  * Implementation seams — the engine, the mirror machinery, protocol
  * codecs, server assembly — live behind `@legation/effect/internal` for
@@ -46,6 +48,7 @@ export * as Mutator from "./Mutator.js";
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as Client from "./Client.js";
 export * as ClientStore from "./ClientStore.js";
+export * as Identity from "./Identity.js";
 export * as Transport from "./Transport.js";
 export * as Hydration from "./Hydration.js";
 

@@ -47,8 +47,10 @@ import * as RpcTransport from "./RpcTransport.js";
 import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
 import * as Coverage from "./Coverage.js";
-import { QueryError } from "./Errors.js";
+import { QueryError, StoreError } from "./Errors.js";
+import * as Identity from "./Identity.js";
 import type * as Mutator from "./Mutator.js";
+import type { Mutation } from "./Protocol.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
@@ -124,6 +126,68 @@ export interface Client {
    * over an owned engine and a connected host (ADR-0021).
    */
   readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
+  /**
+   * Adopt an identity, scoping the durable replica to it (#212). **The
+   * invariant: a durable replica belongs to exactly one resolved identity,
+   * and an identity change is a reset, not a rebase** (CONTEXT.md, "Identity
+   * boundary").
+   *
+   * Call this whenever the app's session changes — signing in, signing out,
+   * switching accounts — passing the opaque {@link Identity.Fingerprint} of
+   * the new principal (never PII, never a credential; see the type's docs).
+   * The engine applies one rule, the same one the store applies at boot:
+   *
+   * - **Unchanged** — same principal; the replica is untouched.
+   * - **Upgrade** — {@link Identity.anonymous} → signed in: the warm replica
+   *   survives, with its subscriptions and journal. The rows a public
+   *   session synced are a subset of what the new identity may read, so
+   *   discarding here would be a pointless cold start on the commonest
+   *   first-sign-in path.
+   * - **Reset** — every other change, sign-out included: confirmed rows, the
+   *   pull cookie and every subscription this Client holds are dropped, and
+   *   unpushed journal entries are **quarantined** under the superseded
+   *   fingerprint — never discarded (that is the user's data) and never
+   *   inherited by the new session (that is a forged write). They become
+   *   pushable again only if that identity signs back in; until then only
+   *   {@link Client.discardQuarantine} can destroy them.
+   *
+   * A reset does not end live {@link Client.observe} streams that are already
+   * open — it empties what they observe and releases their windows, so such a
+   * stream keeps reading a replica that no longer syncs it. That is the
+   * conservative reading of "a reset, not a rebase": the superseded identity's
+   * windows are not silently re-registered for the new principal. An app
+   * should tear down and re-open its reads across a sign-out, which is what
+   * remounting the signed-in UI does anyway.
+   *
+   * Fails with a `StoreError` on a Client built with {@link connect}: the
+   * durable replica belongs to the engine's host, so reset the host's Client.
+   */
+  readonly reset: (
+    identity: Identity.Fingerprint
+  ) => Effect.Effect<ClientEngine.ResetOutcome, ClientView.ClientViewError>;
+  /** The fingerprint this Client's replica is stamped with, if any. */
+  readonly identity: Effect.Effect<Identity.Fingerprint | undefined, ClientView.ClientViewError>;
+  /**
+   * Fingerprints currently holding quarantined write intents — what an app
+   * lists to offer "you have unsent changes from a previous session".
+   */
+  readonly quarantines: Effect.Effect<
+    ReadonlyArray<Identity.Fingerprint>,
+    ClientView.ClientViewError
+  >;
+  /** The write intents quarantined under a fingerprint, in causal order. */
+  readonly quarantinedMutations: (
+    identity: Identity.Fingerprint
+  ) => Effect.Effect<ReadonlyArray<Mutation>, ClientView.ClientViewError>;
+  /**
+   * Destroy a quarantine. The only path that discards a superseded
+   * identity's unpushed writes, and never a side effect of a reset or a boot
+   * — an engine that silently threw away a user's unsynced work would be
+   * trading one data-loss bug for another.
+   */
+  readonly discardQuarantine: (
+    identity: Identity.Fingerprint
+  ) => Effect.Effect<void, ClientView.ClientViewError>;
   /**
    * The underlying view — the escape hatch while the ADR-0022 program
    * lands (named-query registration, bindings plumbing).
@@ -354,6 +418,60 @@ export const fromView = (
       Effect.flatMap((key) => (key === undefined ? Effect.void : unregister(key, registration)))
     );
 
+  // ─── The identity boundary ───────────────────────────────────────────────
+
+  /**
+   * Drop every registration this Client holds, releasing each through the
+   * view exactly as the last observer or pin would. A reset's subscriptions
+   * are as much the superseded identity's as its rows: a ledger entry left
+   * behind would keep `coverageOf` claiming the new principal's reads are
+   * answerable locally, and would re-pull the old windows on the next sync.
+   * Roots are deduped the way {@link dropRoot} counts them, so the view hears
+   * one release per window however many entries shared it.
+   */
+  const clearLedger: Effect.Effect<void> = Semaphore.withPermit(
+    lock,
+    Effect.gen(function* () {
+      const entries = yield* Ref.getAndSet(ledger, new Map<string, Interest>());
+      yield* Ref.set(roots, new Map<string, number>());
+      const released = new Set<string>();
+      for (const [key, interest] of entries) {
+        yield* closeEdges(key);
+        const root = Subset.hash(interest.root);
+        if (released.has(root)) continue;
+        released.add(root);
+        yield* view.unsubscribe(interest.root).pipe(Effect.ignore);
+      }
+    })
+  );
+
+  const noBoundary = <A>(): Effect.Effect<A, StoreError> =>
+    Effect.fail(
+      new StoreError({
+        message:
+          "Client.reset: this Client is connected to an engine hosted elsewhere " +
+          "(Client.connect), which owns the durable replica. Reset the Client that " +
+          "owns the engine — in the service worker or other host — instead.",
+      })
+    );
+
+  const boundary = view.identityBoundary;
+
+  // The ledger goes first: releasing through the view keeps the counted
+  // subscription facade's holds in step, where clearing the engine's
+  // registrations underneath it would strand them.
+  const reset: Client["reset"] = (identity) =>
+    boundary === undefined
+      ? noBoundary()
+      : Effect.gen(function* () {
+          const transition = Identity.transitionOf(
+            (yield* boundary.current) ?? Identity.unstamped,
+            identity
+          );
+          if (transition === "Reset") yield* clearLedger;
+          return yield* boundary.reset(identity);
+        });
+
   // ─── Reads by value or by URL ────────────────────────────────────────────
 
   const targetOfUrl = (url: string): Effect.Effect<Target, QueryError> =>
@@ -460,6 +578,13 @@ export const fromView = (
       )
     ),
     coverageOf: (read) => verdictOf(Coverage.ofPlan(Query.plan(nodes, read))),
+    reset,
+    identity: boundary === undefined ? noBoundary() : boundary.current,
+    quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,
+    quarantinedMutations: (identity) =>
+      boundary === undefined ? noBoundary() : boundary.quarantinedMutations(identity),
+    discardQuarantine: (identity) =>
+      boundary === undefined ? noBoundary() : boundary.discardQuarantine(identity),
     mutate: (mutation, args) => view.mutate(mutation, args),
     mutateWithAck: (mutation, args) => view.mutateWithAck(mutation, args),
     mutationStates: view.mutationStates,
@@ -524,6 +649,19 @@ export interface MakeOptions extends ViewOptions {
    * does not auto-push journaled mutations — see {@link MakeOptions.syncLoop}.
    */
   readonly sync?: boolean;
+  /**
+   * The identity this replica belongs to (#212). Supplying it turns the
+   * identity boundary on: the Client adopts the fingerprint at construction
+   * — before the sync loop starts — exactly as {@link Client.reset} would, so
+   * a replica left by a different principal is quarantined-and-cleared
+   * before a single query can answer from it.
+   *
+   * This is the one place an app needs to name the fingerprint: setting it
+   * here covers a store configured without one. Setting it in both places is
+   * harmless (the second adoption is `Unchanged`). Unset leaves the boundary
+   * off — today's behaviour.
+   */
+  readonly identity?: Identity.Fingerprint;
 }
 
 /** The view options of a larger option set, absent keys left absent. */
@@ -583,6 +721,12 @@ export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.S
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
     );
+    // Adopt the identity before the sync loop starts: a mismatched replica
+    // must be quarantined and cleared before anything can read from it or
+    // push out of it. A store error here is fatal to construction on purpose
+    // — a Client that reported an identity it never actually scoped its
+    // replica to is the bug this whole boundary exists to prevent.
+    if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
     if (sync) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
     return fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options));
   });
