@@ -390,14 +390,21 @@ export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resou
 /**
  * The root window's page parameters: `page[limit]` is the read's `first`
  * (a positive integer), `page[after]` its `after` cursor (a row id,
- * opaque on the wire). Declared in that order, which the canonical string
- * keeps.
+ * opaque on the wire), `page[offset]` its `offset` (a non-negative
+ * integer, #209 — every audited app's pagination idiom). `page[offset]`
+ * and `page[after]` are different pagination idioms; {@link parseParams}
+ * rejects a request naming both, and {@link decodedOf} emits `limit` then
+ * whichever of `after` / `offset` the read carries — the order the
+ * canonical string keeps.
  */
 export const PageWindow = {
   limit: Schema.optionalKey(
     Schema.FiniteFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)))
   ),
   after: Schema.optionalKey(Schema.String),
+  offset: Schema.optionalKey(
+    Schema.FiniteFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+  ),
 };
 
 /** The decoded shape of a collection's query, as the node-derived codec produces it. */
@@ -405,7 +412,7 @@ export interface DecodedQuery {
   readonly include?: ReadonlyArray<string>;
   readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly sort?: ReadonlyArray<SortTerm>;
-  readonly page?: { readonly limit?: number; readonly after?: string };
+  readonly page?: { readonly limit?: number; readonly after?: string; readonly offset?: number };
   readonly filter?: Filter.Node;
 }
 
@@ -673,6 +680,26 @@ const checkFields = (
   return Effect.void;
 };
 
+/**
+ * `page[offset]` and `page[after]` are different pagination idioms — one
+ * request names one (#209). The schema alone cannot reject the
+ * combination (each key decodes fine on its own), so this runs before
+ * decoding, the way {@link checkInclude} rejects a nested path.
+ */
+const checkPage = (
+  node: Node.AnyNode,
+  record: Readonly<Record<string, unknown>>
+): Effect.Effect<void, QueryError> =>
+  record["page[after]"] !== undefined && record["page[offset]"] !== undefined
+    ? Effect.fail(
+        invalid(
+          node.type,
+          "page[offset]",
+          `"page[offset]" and "page[after]" are different pagination idioms; a request names one`
+        )
+      )
+    : Effect.void;
+
 /** The query-string parameter an issue path names: the flat key itself, or `family[member]` for the nested families. */
 const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | undefined => {
   const [head, second] = (path ?? []).map(keyOf);
@@ -726,6 +753,7 @@ const readOf = (
       : { order: orderOf(decoded.sort) }),
     ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
     ...(decoded.page?.after === undefined ? {} : { after: decoded.page.after }),
+    ...(decoded.page?.offset === undefined ? {} : { offset: decoded.page.offset }),
   }));
 };
 
@@ -747,6 +775,7 @@ export const parseParams = (
     const record = recordOf(params);
     yield* checkInclude(node, record["include"]);
     yield* checkFields(node, record);
+    yield* checkPage(node, record);
     const decoded = yield* Schema.decodeUnknownEffect(codecOf(nodes, node).schema)(record).pipe(
       Effect.mapError(decodeError(collection))
     );
@@ -901,19 +930,29 @@ const filterOf = (
   return astOf(collection, predicate);
 };
 
-/** The decoded query a compiled read denotes. */
+/**
+ * The decoded query a compiled read denotes. The page comes from the
+ * **read**, not the compiled window: an offset read's `root.limit`
+ * absorbs `offset` (`Query.plan`'s `rootLimit`, #209), so reconstructing
+ * `page[limit]`/`page[after]` from `root` would leak the inflated fetch
+ * size into the URL instead of the request the caller actually made.
+ */
 const decodedOf = (
   compiled: Query.Plan,
   declaration: Filter.LiteralCodecs,
-  fields: Projection | undefined
+  fields: Projection | undefined,
+  read: Query.Read
 ): DecodedQuery => {
   const { root } = compiled;
   const include = includeOf(root.collection, compiled.edges);
   const filter = filterOf(root.collection, declaration, root.where);
-  const page = {
-    ...(root.limit === undefined ? {} : { limit: root.limit }),
-    ...(root.cursor === undefined ? {} : { after: root.cursor }),
-  };
+  const page =
+    read.offset === undefined
+      ? {
+          ...(root.limit === undefined ? {} : { limit: root.limit }),
+          ...(root.cursor === undefined ? {} : { after: root.cursor }),
+        }
+      : { ...(read.first === undefined ? {} : { limit: read.first }), offset: read.offset };
   return {
     ...(include.length === 0 ? {} : { include }),
     ...(fields === undefined ? {} : { fields: projectionOf(fields) }),
@@ -960,7 +999,7 @@ export const canonical = (
   let query: string;
   try {
     const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
-    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields));
+    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
   } catch (error) {
     if (error instanceof QueryError) throw error;
     throw new QueryError({

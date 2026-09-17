@@ -260,6 +260,69 @@ describe("DocumentWriter.collection", () => {
     expect(short.links).toEqual({ self: "/products?sort=name&page[limit]=2&page[after]=p-2" });
   });
 
+  it("offset pagination (#209): slices the over-fetched rows to the page and links in the offset idiom", () => {
+    // The root window was compiled with limit = offset + first (Query.plan's
+    // rootLimit), so `rows` here is the over-fetched superset — exactly
+    // what Query.runVia/view.query returns for such a window. The writer
+    // slices it back down to the page the read actually asked for.
+    const middle = DocumentWriter.collection({
+      nodes,
+      read: { collection: "products", order: ["name"], offset: 1, first: 1 },
+      rows: [row(desk, { variants: [v1, v2] }), row(lamp, { variants: [] })],
+    });
+    expect(middle.data.map((resource) => resource.id)).toEqual(["p-2"]);
+    // The skipped row's linkage never leaks into included or the next/prev math.
+    expect(middle.links).toEqual({
+      self: "/products?sort=name&page[limit]=1&page[offset]=1",
+      next: "/products?sort=name&page[limit]=1&page[offset]=2",
+      prev: "/products?sort=name&page[limit]=1&page[offset]=0",
+    });
+
+    const first = DocumentWriter.collection({
+      nodes,
+      read: { collection: "products", order: ["name"], offset: 0, first: 2 },
+      rows: [row(desk), row(lamp)],
+    });
+    // offset 0 has no prev; a full page still gets next in the offset idiom.
+    expect(first.links).toEqual({
+      self: "/products?sort=name&page[limit]=2&page[offset]=0",
+      next: "/products?sort=name&page[limit]=2&page[offset]=2",
+    });
+
+    // A short page (fewer rows than the over-fetch asked for: the
+    // collection ran out) has no next, but still has prev past offset 0.
+    const last = DocumentWriter.collection({
+      nodes,
+      read: { collection: "products", order: ["name"], offset: 1, first: 5 },
+      rows: [row(desk), row(lamp)],
+    });
+    expect(last.data.map((resource) => resource.id)).toEqual(["p-2"]);
+    expect(last.links).toEqual({
+      self: "/products?sort=name&page[limit]=5&page[offset]=1",
+      prev: "/products?sort=name&page[limit]=5&page[offset]=0",
+    });
+
+    // A deep offset past every row slices to an empty page, not an error.
+    const empty = DocumentWriter.collection({
+      nodes,
+      read: { collection: "products", order: ["name"], offset: 10, first: 5 },
+      rows: [row(desk), row(lamp)],
+    });
+    expect(empty.data).toEqual([]);
+    expect(empty.links).toEqual({
+      self: "/products?sort=name&page[limit]=5&page[offset]=10",
+      prev: "/products?sort=name&page[limit]=5&page[offset]=5",
+    });
+  });
+
+  it("offset links round-trip through the parser, never switching the caller to cursors (#209)", () => {
+    const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };
+    const page = DocumentWriter.collection({ nodes, read, rows: [row(desk), row(lamp)] });
+    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, page.links!.next as string));
+    expect(next.read).toEqual({ ...read, offset: 2 });
+    expect(next.read.after).toBeUndefined();
+  });
+
   it("links.next round-trips through the parser to the read advanced past the last row", () => {
     const read: Query.Read = {
       collection: "products",

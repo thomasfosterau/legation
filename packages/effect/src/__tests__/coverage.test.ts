@@ -177,6 +177,59 @@ describe("rule 2: the window", () => {
   });
 });
 
+describe("offset pagination (#209): covered by the ordinary limit-prefix rule", () => {
+  // Option A of #209: an offset read compiles (`Query.plan`'s `rootLimit`)
+  // to a plain limit-only window — `limit = offset + first`, no `cursor` —
+  // so it is judged by exactly `coversWindow`/rule 2 above; no parallel
+  // "offset coverage" path exists. Option B (offset windows as a
+  // subscription's own identity) was rejected: an insert before the window
+  // would shift every row, and ADR-0024 chose cursors for the engine's
+  // sync windows deliberately.
+
+  it("an unwindowed subscription covers any offset, any limit", () => {
+    expect(coversRead(products(), products({ offset: 88, first: 12 }))).toBe(true);
+    expect(coversRead(products(), products({ offset: 10_000, first: 12 }))).toBe(true);
+  });
+
+  it("a windowed subscription covers offset+first at most its own limit", () => {
+    const shell = products({ order: ["id"], first: 100 });
+    expect(coversRead(shell, products({ order: ["id"], offset: 88, first: 12 }))).toBe(true);
+    expect(coversRead(shell, products({ order: ["id"], offset: 90, first: 10 }))).toBe(true);
+  });
+
+  it("an offset beyond the synced window is uncovered — falls through, never fetched deeper", () => {
+    const shell = products({ order: ["id"], first: 100 });
+    expect(coversRead(shell, products({ order: ["id"], offset: 89, first: 12 }))).toBe(false);
+    expect(coversRead(shell, products({ order: ["id"], offset: 500, first: 1 }))).toBe(false);
+  });
+
+  it("the order must still match: an offset page of another sort is not the synced order", () => {
+    const shell = products({ order: ["id"], first: 100 });
+    expect(coversRead(shell, products({ order: ["name"], offset: 0, first: 12 }))).toBe(false);
+  });
+
+  it("a narrower predicate over a windowed subscription is still strict under offset", () => {
+    const shell = products({ order: ["id"], first: 100 });
+    expect(
+      coversRead(
+        shell,
+        products({ where: { categoryId: "c-audio" }, order: ["id"], offset: 0, first: 12 })
+      )
+    ).toBe(false);
+  });
+
+  it("offset without a limit is unwindowed (fetch every row past offset): only an unwindowed subscription covers it", () => {
+    const shell = products({ order: ["id"], first: 100 });
+    expect(coversRead(products(), products({ order: ["id"], offset: 10 }))).toBe(true);
+    expect(coversRead(shell, products({ order: ["id"], offset: 10 }))).toBe(false);
+  });
+
+  it("offset and cursor are different window identities: a cursored subscription never covers an offset request", () => {
+    const cursored = products({ order: ["id"], after: "p-50" });
+    expect(coversRead(cursored, products({ order: ["id"], offset: 0, first: 12 }))).toBe(false);
+  });
+});
+
 describe("rule 3: canonical conjuncts", () => {
   const keys = (predicate: Predicate.Predicate) =>
     Coverage.canonicalConjuncts(predicate).map((conjunct) => conjunct.key);
