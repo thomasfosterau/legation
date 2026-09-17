@@ -20,8 +20,9 @@
   const session = getSession();
 
   const slug = $derived(page.params.slug);
-  // There is no "skip" for a hook, so with no slug the read matches nothing.
-  const rows = useQuery(() => articleBySlug(slug ?? ""));
+  // `undefined` opts the hook out entirely while creating a new article
+  // (#141) — no window registered, no request issued.
+  const rows = useQuery(() => (slug === undefined ? undefined : articleBySlug(slug)));
   const existing = $derived(toArticle(AsyncResult.getOrElse(rows.current, () => []), [], null));
 
   let title = $state("");

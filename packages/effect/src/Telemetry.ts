@@ -124,6 +124,22 @@ export const pushMutations = Metric.histogram("legation_push_mutations", {
   boundaries: [0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
 });
 
+/**
+ * Times a cached response's row count exceeded the HTTP cache's fine-tag
+ * budget (`HttpCacheInvalidation.FINE_TAG_ROW_BUDGET` in `@legation/browser`)
+ * and fell back to tagging that response with its coarse
+ * `collection:{name}` tag alone, skipping the per-row `collection:{name}:{id}`
+ * tags. Correctness is unaffected (the coarse tag still evicts it on any row
+ * change in the collection) — this counts responses that lost fine-grained
+ * eviction to the budget, so the fallback is observable rather than silent.
+ */
+export const cacheTagBudgetExceededTotal = Metric.counter(
+  "legation_cache_tag_budget_exceeded_total",
+  {
+    incremental: true,
+  }
+);
+
 /** Record an integer count against a counter (no-op-safe in any context). */
 export const count = <Input extends number>(
   metric: Metric.Metric<Input, unknown>,

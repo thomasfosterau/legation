@@ -2,22 +2,43 @@
  * JsonApiQuery
  *
  * The bridge between the filter grammar's URL form and the engine's plan
- * (ADR-0028 §5, issue #161). effect-jsonapi owns the grammar — its AST
- * (`Filter.Ast`), the `filter[...]` ⇄ AST codec (`Query.Filter`), the whole
- * query codec (`Query.schema`) and the canonical query string
- * (`Query.canonical`); this module owns the three translations legation
- * needs on top of them:
+ * (ADR-0028 §5, issue #161) — a façade-boundary projection for one job
+ * (ADR-0029 §6: a URL must mean the same thing answered from the replica as
+ * answered by the network), not a general translation between two dialects
+ * of one language. effect-jsonapi owns the grammar — its AST (`Filter.Ast`),
+ * the `filter[...]` ⇄ AST codec (`Query.Filter`), the whole query codec
+ * (`Query.schema`) and the canonical query string (`Query.canonical`); this
+ * module owns the three translations legation needs on top of them:
  *
  * - **Filter AST ⇄ `Predicate`** ({@link fromFilterAst}, {@link toFilterAst}):
- *   total from the grammar to the engine (every grammar node has a
- *   `Predicate` node now that `IsNull` / `NotIn` exist), partial the other
- *   way. `Exists` is server-only and has no URL form; an empty `In` /
- *   `NotIn` list and a `null` literal are not representable either (the
- *   grammar's lists are non-empty and `NULL` is never a literal —
- *   `isnull` names it). Those return `None`, and callers fail closed.
+ *   both directions are partial, and neither is the other's inverse.
+ *   {@link fromFilterAst} rejects a literal that is not a wire scalar
+ *   (`string | number | boolean`) or a `Date` (encoded to its instant text —
+ *   see below) with a typed `QueryError`, since a grammar AST is typed by
+ *   the attribute's **decoded** schema and that type is open-ended (issue
+ *   #218's design note). {@link toFilterAst} returns `None` for `Exists`
+ *   (server-only, no URL form), an empty `In` / `NotIn` list, and a `null`
+ *   literal (the grammar's lists are non-empty and `NULL` is never a
+ *   literal — `isnull` names it); those callers fail closed.
  *   {@link foldConstants} removes the two definite cases before encoding:
  *   an empty `In` is false and an empty `NotIn` is true under ADR-0028's
- *   per-operator table, so they fold away exactly.
+ *   per-operator table, so they fold away exactly. Both functions carry a
+ *   **field-namespace precondition**: a field name is copied verbatim
+ *   between the two ASTs, which is correct only because every caller in
+ *   this module pre-synthesises a resource whose field names are already
+ *   the engine's ({@link resourcesOf} — a to-one edge is named by its FK key
+ *   field, never the relationship name). Neither function checks that a
+ *   field it is given actually names something on the other side; a caller
+ *   bridging an AST built over a resource with its own naming must
+ *   translate field names first. A `Date` literal's conversion to
+ *   `value.toISOString()` is an **encode, not a copy**: ADR-0028 rule (e)
+ *   fixes instant comparison to that exact text, so an instant literal that
+ *   arrives any other way (a differently-formatted string, say) will not
+ *   compare correctly downstream — this is the one step in either direction
+ *   that changes a value's representation rather than re-tagging it, which
+ *   is also why {@link toFilterAst} is a separate partial function rather
+ *   than {@link fromFilterAst}'s inverse: the type erasure `Date → string`
+ *   cannot be undone from the `Predicate` side alone.
  * - **URL → `Query.Read`** ({@link parseRead}, {@link parseParams}): a
  *   request URL is decoded with effect-jsonapi's `Query.schema` for the
  *   collection's node — `include`, `fields`, `sort`, `page` and `filter` —
@@ -56,7 +77,7 @@
  */
 
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Effect, Option, Schema, SchemaIssue, type SchemaError } from "effect";
+import { Effect, Option, Result, Schema, SchemaIssue, type SchemaError } from "effect";
 import {
   type Client,
   FilterPolicy,
@@ -70,56 +91,88 @@ import type { JsonApiRequestOptions, SortTerm } from "./types.js";
 
 // ─── Filter AST ⇄ Predicate ──────────────────────────────────────────────────
 
-/** A grammar literal as a `Predicate` literal: scalars as they are, a `Date` as its instant text (ADR-0028 rule e). */
-const literalOf = (field: string, value: unknown): Predicate.Literal => {
+/**
+ * A grammar literal as a `Predicate` literal: scalars as they are, a `Date`
+ * as its instant text (the load-bearing encode of ADR-0028 rule e), or a
+ * typed `QueryError` for anything else — a grammar AST is typed by the
+ * attribute's decoded schema (issue #218's design note), which is
+ * open-ended, so this is the one place that type meets `Predicate.Literal`'s
+ * closed wire-scalar union and can fail.
+ */
+const literalOf = (field: string, value: unknown): Result.Result<Predicate.Literal, QueryError> => {
   switch (typeof value) {
     case "string":
     case "number":
     case "boolean":
-      return value;
+      return Result.succeed(value);
     default:
-      if (value instanceof Date) return value.toISOString();
-      throw new QueryError({
-        message: `Filter literal ${JSON.stringify(value)} for field "${field}" is not a scalar`,
-        parameter: `filter[${field}]`,
-      });
+      return value instanceof Date
+        ? Result.succeed(value.toISOString())
+        : Result.fail(
+            new QueryError({
+              message: `Filter literal ${JSON.stringify(value)} for field "${field}" is not a scalar`,
+              parameter: `filter[${field}]`,
+            })
+          );
   }
 };
 
 /**
- * The engine form of a filter AST (total): `Compare` / `In` / `NotIn` /
+ * The engine form of a filter AST, or a typed `QueryError` naming the field
+ * whose literal {@link literalOf} rejects: `Compare` / `In` / `NotIn` /
  * `IsNull` map node for node, `And` / `Or` / `Not` recurse, and the empty
  * conjunction (the grammar's "true") is `Predicate.always`. The map is
  * structural — a singleton group, which the grammar's normal form keeps
  * after deduplicating `Or(x, x)`, stays a singleton group rather than
  * collapsing through `Predicate.or` — so {@link canonical} is idempotent.
  * Literals are the codec's decoded scalars; a `Date` (a `DateFromString`
- * attribute) becomes its ISO-8601 UTC text.
+ * attribute) becomes its ISO-8601 UTC text (see the module doc's encode
+ * note). Field names are copied verbatim — the module doc's
+ * field-namespace precondition.
+ *
+ * This module's own callers ({@link readOf}, {@link filterOf}) never see
+ * this fail: their ASTs are decoded through {@link resourcesOf}'s synthetic
+ * resource, whose filterable attributes admit only wire scalars, or are
+ * built by {@link toFilterAst} from a `Predicate.Literal`, which is one
+ * already. The typed failure exists for this function's public contract —
+ * any caller bridging an AST built over a resource with a richer decoded
+ * attribute type (a `Date`-valued one aside, which is handled) — not for
+ * either call site here.
  */
-export const fromFilterAst = (ast: Filter.Node): Predicate.Predicate => {
+export const fromFilterAst = (ast: Filter.Node): Result.Result<Predicate.Predicate, QueryError> => {
   switch (ast._tag) {
     case "Compare":
-      return Predicate.compare(ast.op, ast.field, literalOf(ast.field, ast.value));
+      return Result.map(literalOf(ast.field, ast.value), (value) =>
+        Predicate.compare(ast.op, ast.field, value)
+      );
     case "In":
-      return Predicate.isIn(
-        ast.field,
-        ast.values.map((value) => literalOf(ast.field, value))
+      return Result.map(
+        Result.all(ast.values.map((value) => literalOf(ast.field, value))),
+        (values) => Predicate.isIn(ast.field, values)
       );
     case "NotIn":
-      return Predicate.notIn(
-        ast.field,
-        ast.values.map((value) => literalOf(ast.field, value))
+      return Result.map(
+        Result.all(ast.values.map((value) => literalOf(ast.field, value))),
+        (values) => Predicate.notIn(ast.field, values)
       );
     case "IsNull":
-      return ast.negated ? Predicate.isNotNull(ast.field) : Predicate.isNull(ast.field);
+      return Result.succeed(
+        ast.negated ? Predicate.isNotNull(ast.field) : Predicate.isNull(ast.field)
+      );
     case "And":
       return ast.members.length === 0
-        ? Predicate.always
-        : { _tag: "And", predicates: ast.members.map(fromFilterAst) };
+        ? Result.succeed(Predicate.always)
+        : Result.map(
+            Result.all(ast.members.map(fromFilterAst)),
+            (predicates): Predicate.Predicate => ({ _tag: "And", predicates })
+          );
     case "Or":
-      return { _tag: "Or", predicates: ast.members.map(fromFilterAst) };
+      return Result.map(
+        Result.all(ast.members.map(fromFilterAst)),
+        (predicates): Predicate.Predicate => ({ _tag: "Or", predicates })
+      );
     case "Not":
-      return Predicate.not(fromFilterAst(ast.member));
+      return Result.map(fromFilterAst(ast.member), Predicate.not);
   }
 };
 
@@ -337,14 +390,21 @@ export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resou
 /**
  * The root window's page parameters: `page[limit]` is the read's `first`
  * (a positive integer), `page[after]` its `after` cursor (a row id,
- * opaque on the wire). Declared in that order, which the canonical string
- * keeps.
+ * opaque on the wire), `page[offset]` its `offset` (a non-negative
+ * integer, #209 — every audited app's pagination idiom). `page[offset]`
+ * and `page[after]` are different pagination idioms; {@link parseParams}
+ * rejects a request naming both, and {@link decodedOf} emits `limit` then
+ * whichever of `after` / `offset` the read carries — the order the
+ * canonical string keeps.
  */
 export const PageWindow = {
   limit: Schema.optionalKey(
     Schema.FiniteFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)))
   ),
   after: Schema.optionalKey(Schema.String),
+  offset: Schema.optionalKey(
+    Schema.FiniteFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+  ),
 };
 
 /** The decoded shape of a collection's query, as the node-derived codec produces it. */
@@ -352,7 +412,7 @@ export interface DecodedQuery {
   readonly include?: ReadonlyArray<string>;
   readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly sort?: ReadonlyArray<SortTerm>;
-  readonly page?: { readonly limit?: number; readonly after?: string };
+  readonly page?: { readonly limit?: number; readonly after?: string; readonly offset?: number };
   readonly filter?: Filter.Node;
 }
 
@@ -620,6 +680,26 @@ const checkFields = (
   return Effect.void;
 };
 
+/**
+ * `page[offset]` and `page[after]` are different pagination idioms — one
+ * request names one (#209). The schema alone cannot reject the
+ * combination (each key decodes fine on its own), so this runs before
+ * decoding, the way {@link checkInclude} rejects a nested path.
+ */
+const checkPage = (
+  node: Node.AnyNode,
+  record: Readonly<Record<string, unknown>>
+): Effect.Effect<void, QueryError> =>
+  record["page[after]"] !== undefined && record["page[offset]"] !== undefined
+    ? Effect.fail(
+        invalid(
+          node.type,
+          "page[offset]",
+          `"page[offset]" and "page[after]" are different pagination idioms; a request names one`
+        )
+      )
+    : Effect.void;
+
 /** The query-string parameter an issue path names: the flat key itself, or `family[member]` for the nested families. */
 const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | undefined => {
   const [head, second] = (path ?? []).map(keyOf);
@@ -647,19 +727,35 @@ const decodeError =
 const orderOf = (sort: ReadonlyArray<SortTerm>): ReadonlyArray<string> =>
   sort.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field));
 
-/** The declarative read a decoded query describes. */
-const readOf = (collection: string, decoded: DecodedQuery): Query.Read => ({
-  collection,
-  ...(decoded.filter === undefined ? {} : { where: fromFilterAst(decoded.filter) }),
-  ...(decoded.include === undefined || decoded.include.length === 0
-    ? {}
-    : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
-  ...(decoded.sort === undefined || decoded.sort.length === 0
-    ? {}
-    : { order: orderOf(decoded.sort) }),
-  ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
-  ...(decoded.page?.after === undefined ? {} : { after: decoded.page.after }),
-});
+/**
+ * The declarative read a decoded query describes, or the typed `QueryError`
+ * {@link fromFilterAst} fails with for `decoded.filter` — unreachable in
+ * practice (the module doc's note on this call site), carried as a `Result`
+ * rather than thrown so {@link parseParams}'s `Effect.Effect<_, QueryError>`
+ * contract holds even if that precondition is ever violated.
+ */
+const readOf = (
+  collection: string,
+  decoded: DecodedQuery
+): Result.Result<Query.Read, QueryError> => {
+  const whereResult =
+    decoded.filter === undefined
+      ? Result.succeed<Predicate.Predicate | undefined>(undefined)
+      : fromFilterAst(decoded.filter);
+  return Result.map(whereResult, (where) => ({
+    collection,
+    ...(where === undefined ? {} : { where }),
+    ...(decoded.include === undefined || decoded.include.length === 0
+      ? {}
+      : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
+    ...(decoded.sort === undefined || decoded.sort.length === 0
+      ? {}
+      : { order: orderOf(decoded.sort) }),
+    ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
+    ...(decoded.page?.after === undefined ? {} : { after: decoded.page.after }),
+    ...(decoded.page?.offset === undefined ? {} : { offset: decoded.page.offset }),
+  }));
+};
 
 /**
  * Parse a collection's query parameters into a read. `include`, `fields`,
@@ -679,11 +775,13 @@ export const parseParams = (
     const record = recordOf(params);
     yield* checkInclude(node, record["include"]);
     yield* checkFields(node, record);
+    yield* checkPage(node, record);
     const decoded = yield* Schema.decodeUnknownEffect(codecOf(nodes, node).schema)(record).pipe(
       Effect.mapError(decodeError(collection))
     );
+    const read = yield* Effect.fromResult(readOf(collection, decoded));
     return {
-      read: readOf(collection, decoded),
+      read,
       ...(decoded.fields === undefined ? {} : { fields: decoded.fields }),
     };
   });
@@ -819,26 +917,42 @@ const filterOf = (
   for (let pass = 0; pass < NORMAL_FORM_PASSES; pass++) {
     if (isTrue(predicate)) return undefined;
     const ast = Filter.normalise(astOf(collection, predicate), declaration);
-    const next = foldConstants(fromFilterAst(ast));
+    // Safe by construction, not merely by convention: `ast` was normalised
+    // from `astOf`'s output, whose every literal is copied verbatim from a
+    // `Predicate.Literal` (`toFilterAst`'s `Compare` case) — already a wire
+    // scalar, so `literalOf` cannot reject it. Defect-by-contract for this
+    // one call site; the module doc explains why the exported function
+    // still returns a typed failure for its general contract.
+    const next = foldConstants(Result.getOrThrow(fromFilterAst(ast)));
     if (JSON.stringify(next) === JSON.stringify(predicate)) return ast;
     predicate = next;
   }
   return astOf(collection, predicate);
 };
 
-/** The decoded query a compiled read denotes. */
+/**
+ * The decoded query a compiled read denotes. The page comes from the
+ * **read**, not the compiled window: an offset read's `root.limit`
+ * absorbs `offset` (`Query.plan`'s `rootLimit`, #209), so reconstructing
+ * `page[limit]`/`page[after]` from `root` would leak the inflated fetch
+ * size into the URL instead of the request the caller actually made.
+ */
 const decodedOf = (
   compiled: Query.Plan,
   declaration: Filter.LiteralCodecs,
-  fields: Projection | undefined
+  fields: Projection | undefined,
+  read: Query.Read
 ): DecodedQuery => {
   const { root } = compiled;
   const include = includeOf(root.collection, compiled.edges);
   const filter = filterOf(root.collection, declaration, root.where);
-  const page = {
-    ...(root.limit === undefined ? {} : { limit: root.limit }),
-    ...(root.cursor === undefined ? {} : { after: root.cursor }),
-  };
+  const page =
+    read.offset === undefined
+      ? {
+          ...(root.limit === undefined ? {} : { limit: root.limit }),
+          ...(root.cursor === undefined ? {} : { after: root.cursor }),
+        }
+      : { ...(read.first === undefined ? {} : { limit: read.first }), offset: read.offset };
   return {
     ...(include.length === 0 ? {} : { include }),
     ...(fields === undefined ? {} : { fields: projectionOf(fields) }),
@@ -885,7 +999,7 @@ export const canonical = (
   let query: string;
   try {
     const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
-    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields));
+    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
   } catch (error) {
     if (error instanceof QueryError) throw error;
     throw new QueryError({

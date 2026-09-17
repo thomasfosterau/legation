@@ -6,6 +6,12 @@
  * collection definition is shared by client and server: the row `Schema` is
  * the single source of truth for validation, wire serialization, and
  * persistence encoding.
+ *
+ * The resource graph ({@link Node}) is the recommended front door: its
+ * `Node.registry` derives collections through this module's constructor. For
+ * domains the graph cannot express, hand-authoring a collection with
+ * {@link make} is a supported lower-level surface. Neither surface is
+ * deprecated; the graph is preferred when it applies.
  */
 
 import type { Schema } from "effect";
@@ -36,9 +42,15 @@ export interface Relationship {
   readonly kind: "one" | "many" | "paginated";
   /** The foreign collection this relationship resolves against. */
   readonly collection: string;
-  /** The local row field holding the join value (`"issueId"`, or `"id"` for `"many"`). */
+  /**
+   * The local row field holding the join value (`"issueId"`, or this
+   * collection's identity attribute for `"many"`).
+   */
   readonly localField: string;
-  /** The foreign row field the join matches (`"id"` for `"one"`, the FK for `"many"`). */
+  /**
+   * The foreign row field the join matches (the target's identity attribute
+   * for `"one"`, the FK for `"many"`).
+   */
   readonly foreignField: string;
   /** The declared sort for `"paginated"` — part of the edge's identity (ADR-0022). */
   readonly order?: ReadonlyArray<{ readonly field: string; readonly direction: "asc" | "desc" }>;
@@ -68,6 +80,16 @@ export interface Collection<A, I = unknown> {
   readonly schema: Schema.Codec<A, I>;
   /** Derive the row id from a row value. */
   readonly id: (value: A) => RowId;
+  /**
+   * The row field the id is derived from — the Node's declared identity
+   * attribute (`Node.make`'s `id` option), or `"id"` when it declares none.
+   * Unlike {@link Collection.id} it is introspectable, so the engine's joins
+   * and the filterable set can name the field the way a query must
+   * (`filterDeclarationOf`, `Node.registry`'s edge compilation). Absent on a
+   * hand-built collection: `"id"` is assumed, exactly as before this field
+   * existed.
+   */
+  readonly identity?: string;
   /** Declared relationships to other collections (issue #38). */
   readonly relationships?: ReadonlyArray<Relationship>;
   /**
@@ -82,14 +104,14 @@ export interface Collection<A, I = unknown> {
   /**
    * The **filterable set** (ADR-0028 rule d, #154): the fields a client may
    * filter by, each with its operators and literal kind. Resolved on the
-   * Node (`Node.make`'s `filterable` option plus the `id` / `one`-edge key
-   * defaults) and carried here so the server enforces it in `authorize`
+   * Node (`Node.make`'s `filterable` option plus the identity / `one`-edge
+   * key defaults) and carried here so the server enforces it in `authorize`
    * without Node definitions — exactly how `indexes` travels. Absent on a
    * hand-built collection: see {@link filterDeclarationOf} for what is
    * enforced then.
    */
   readonly filterable?: Readonly<Record<string, FilterPolicy.FilterableField>>;
-  /** The fields a client may order by (#154); always includes `id`. */
+  /** The fields a client may order by (#154); always includes the identity. */
   readonly sortable?: ReadonlyArray<string>;
 }
 
@@ -104,6 +126,7 @@ export const make = <A, I>(options: {
   readonly name: string;
   readonly schema: Schema.Codec<A, I>;
   readonly id: (value: A) => RowId;
+  readonly identity?: string;
   readonly relationships?: ReadonlyArray<Relationship>;
   readonly indexes?: ReadonlyArray<string>;
   readonly filterable?: Readonly<Record<string, FilterPolicy.FilterableField>>;
@@ -113,21 +136,25 @@ export const make = <A, I>(options: {
 /**
  * The filter declaration `authorize` enforces for a collection (#154): the
  * carried `filterable` / `sortable` (every Node-derived collection has
- * them) overlaid on the key defaults — `id` plus every `"one"`
- * relationship's local key field by at least `eq` / `in`, `id` always
- * sortable — so a hand-built collection keeps the same invariants a node
- * does, and one declaring nothing is closed exactly as an undeclared node
- * would be.
+ * them) overlaid on the key defaults — the {@link Collection.identity}
+ * attribute plus every `"one"` relationship's local key field by at least
+ * `eq` / `in`, the identity always sortable — so a hand-built collection
+ * keeps the same invariants a node does, and one declaring nothing is closed
+ * exactly as an undeclared node would be. A collection carrying no
+ * `identity` is keyed on `"id"`, as every collection was before a node could
+ * name its identity attribute.
  */
 export const filterDeclarationOf = (collection: AnyCollection): FilterPolicy.FilterDeclaration => {
-  const keyFields = ["id"];
+  const identity = collection.identity ?? "id";
+  const keyFields = [identity];
   for (const relationship of collection.relationships ?? []) {
     if (relationship.kind === "one") keyFields.push(relationship.localField);
   }
   return FilterPolicy.withKeyDefaults(
     keyFields,
     collection.filterable ?? {},
-    collection.sortable ?? []
+    collection.sortable ?? [],
+    identity
   );
 };
 

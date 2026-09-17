@@ -2,7 +2,7 @@
   import type { Undo } from "@legation/effect/internal";
   import { useUndo } from "../../index.svelte.js";
 
-  const { manager }: { manager: Undo.UndoManager } = $props();
+  const { manager }: { manager: Undo.UndoManager<unknown> } = $props();
 
   // The manager closes over the engine, so `useUndo` needs no runtime context.
   // svelte-ignore state_referenced_locally

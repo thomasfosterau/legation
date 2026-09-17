@@ -68,6 +68,9 @@ export interface LiveOptions<A> {
 export type ResolvedRows = ReadonlyArray<Client.ResolvedRow>;
 const EMPTY_ROWS: ResolvedRows = [];
 
+/** A `promise` that never settles — `.promise` while a read thunk opts out. */
+const NEVER_PROMISE: Promise<never> = new Promise(() => {});
+
 /**
  * Core plumbing — effect-svelte's `useLiveStream` does the work (thunk
  * tracked inside `$effect`, interrupt-and-resubscribe on input change with
@@ -75,22 +78,40 @@ const EMPTY_ROWS: ResolvedRows = [];
  * teardown interruption never surfacing as a failure, `initial` seeding a
  * synchronous `Success`). This adapter resolves the Client from the
  * context runtime and keeps the SSR seam below.
+ *
+ * `makeStream` returning `undefined` is the read thunk's opt-out (#141):
+ * "nothing right now". No window is ever registered and no request is
+ * issued, because the closure that would call `client.observe`/
+ * `view.observeNamed` never runs — `Stream.never` stands in, so
+ * `useLiveStream`'s own subscription does nothing. `optedOut` then forces
+ * `current`/`promise` back to their pre-subscription state regardless of
+ * what that never-emitting subscription leaves behind in `useLiveStream`'s
+ * state (stale-while-revalidate would otherwise keep a prior success
+ * visible, tagged "waiting", forever) — so an opted-out read stays
+ * `Initial`, distinguishable from a `Success` over zero rows, whether the
+ * thunk never ran or ran once and opted back out.
  */
 const live = <A, E>(
   runtime: ClientRuntime,
-  makeStream: () => (client: Client.Client) => Stream.Stream<A, E>,
+  makeStream: () => ((client: Client.Client) => Stream.Stream<A, E>) | undefined,
   options?: LiveOptions<A>
 ): Live<A, E> => {
+  let optedOut = $state(false);
   const result = useLiveStream(
     () => {
       const toStream = makeStream();
+      if (toStream === undefined) {
+        optedOut = true;
+        return Stream.never;
+      }
+      optedOut = false;
       return Stream.unwrap(Effect.map(Client.Client, (client) => toStream(client)));
     },
     { runtime, ...(options?.initial === undefined ? {} : { initial: options.initial }) }
   );
   return {
     get current() {
-      return result.current;
+      return optedOut ? AsyncResult.initial() : result.current;
     },
     get promise() {
       // During SSR (no `$effect`, so no live stream) a seeded hook exposes
@@ -101,7 +122,7 @@ const live = <A, E>(
       if (typeof document === "undefined" && options?.initial !== undefined) {
         return options.initial as unknown as Promise<A>;
       }
-      return result.promise;
+      return optedOut ? NEVER_PROMISE : result.promise;
     },
   };
 };
@@ -112,15 +133,24 @@ const live = <A, E>(
  * `related`, windowed per the edge's declared order (ADR-0024). Observing
  * IS subscribing: the read's windows are registered for the hook's
  * lifetime through the Client's ledger.
+ *
+ * The thunk may return `undefined` to opt out (#141) — "nothing right now",
+ * for a read keyed on a selection that starts empty. No window is
+ * registered and no request is issued; `current` stays `Initial` rather
+ * than becoming a `Success` over zero rows, so an opted-out read stays
+ * distinguishable from one that legitimately matched nothing. The thunk
+ * stays reactive either way: flipping the condition subscribes/unsubscribes
+ * with the same stale-while-revalidate behaviour as any other input change.
  */
 export const useQuery = (
-  read: () => Query.Read,
+  read: () => Query.Read | undefined,
   options?: LiveOptions<ResolvedRows>
 ): Live<ResolvedRows> =>
   live(
     getClientRuntime(),
     () => {
       const value = read();
+      if (value === undefined) return undefined;
       return (client) => client.observe(value);
     },
     options
@@ -181,6 +211,11 @@ const connectionKey = (read: Query.Read): string => {
  * // <button onclick={reviews.loadMore} disabled={!reviews.hasMore}>More</button>
  * ```
  *
+ * The read thunk may return `undefined` to opt out (#141): no window is
+ * registered and no request issued, `current` stays `Initial`, and paging
+ * state (`hasMore`/`loading`) reads as idle until the thunk starts returning
+ * a read again.
+ *
  * **Engine-level retargeting (#133).** When the read has no `include`d edges
  * and the view is engine-backed (`ClientView.observeWindow` present — a
  * `Mirror` has none, see `docs/observing-row-changes.md`), `loadMore`/`reset`
@@ -192,16 +227,21 @@ const connectionKey = (read: Query.Read): string => {
  * A joined read, or a mirror-backed connection, falls back to the original
  * resubscribe-per-page behavior, unchanged.
  */
-export const useConnection = (read: () => Query.Read, options?: ConnectionOptions): Connection => {
+export const useConnection = (
+  read: () => Query.Read | undefined,
+  options?: ConnectionOptions
+): Connection => {
   const pageSize = options?.pageSize ?? 20;
   const runtime = getClientRuntime();
   let pages = $state(1);
   // Non-reactive: tracks the base read so a reused hook re-bases to page 1
   // when its inputs change (a per-parent instance never trips this).
+  // `undefined` also covers the opted-out state (#141).
   let baseKey: string | undefined;
 
   $effect(() => {
-    const key = connectionKey(read());
+    const value = read();
+    const key = value === undefined ? undefined : connectionKey(value);
     if (key !== baseKey) {
       baseKey = key;
       pages = 1;
@@ -224,6 +264,10 @@ export const useConnection = (read: () => Query.Read, options?: ConnectionOption
     runtime,
     () => {
       const value = read();
+      if (value === undefined) {
+        retargetHandle = undefined;
+        return undefined;
+      }
       const { first: _first, after: _after, ...base } = value;
       const key = connectionKey(value);
       return (client) =>
@@ -287,15 +331,20 @@ export const useConnection = (read: () => Query.Read, options?: ConnectionOption
   };
 };
 
-/** Live result of a named query (server-resolved), with reactive name/args. */
+/**
+ * Live result of a named query (server-resolved), with reactive name/args.
+ * The thunk may return `undefined` to opt out (#141): see {@link useQuery}.
+ */
 export const useNamedQuery = (
-  query: () => { readonly name: string; readonly args: unknown },
+  query: () => { readonly name: string; readonly args: unknown } | undefined,
   options?: LiveOptions<ReadonlyArray<ClientEngine.LocalRow>>
 ): Live<ReadonlyArray<ClientEngine.LocalRow>> =>
   live(
     getClientRuntime(),
     () => {
-      const { name, args } = query();
+      const value = query();
+      if (value === undefined) return undefined;
+      const { name, args } = value;
       return (client) => client.view.observeNamed(name, args).pipe(Stream.orDie);
     },
     options
@@ -303,10 +352,11 @@ export const useNamedQuery = (
 
 /**
  * Live aggregate over a read's root window (count/sum/min/max/avg). Local
- * tier only — the aggregate sees the rows this client has synced.
+ * tier only — the aggregate sees the rows this client has synced. The read
+ * thunk may return `undefined` to opt out (#141): see {@link useQuery}.
  */
 export const useAggregate = (
-  read: () => Query.Read,
+  read: () => Query.Read | undefined,
   aggregate: Aggregate.Aggregate,
   options?: LiveOptions<Aggregate.AggregateValue>
 ): Live<Aggregate.AggregateValue> =>
@@ -314,6 +364,7 @@ export const useAggregate = (
     getClientRuntime(),
     () => {
       const value = read();
+      if (value === undefined) return undefined;
       return (client) =>
         Aggregate.observe(
           client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
@@ -323,9 +374,13 @@ export const useAggregate = (
     options
   );
 
-/** Live grouped aggregate over a read's root window, keyed by `String(row.value[groupBy])`. */
+/**
+ * Live grouped aggregate over a read's root window, keyed by
+ * `String(row.value[groupBy])`. The read thunk may return `undefined` to
+ * opt out (#141): see {@link useQuery}.
+ */
 export const useAggregateGrouped = (
-  read: () => Query.Read,
+  read: () => Query.Read | undefined,
   aggregate: Aggregate.Aggregate,
   groupBy: string,
   options?: LiveOptions<Record<string, Aggregate.AggregateValue>>
@@ -334,6 +389,7 @@ export const useAggregateGrouped = (
     getClientRuntime(),
     () => {
       const value = read();
+      if (value === undefined) return undefined;
       return (client) =>
         Aggregate.observeGrouped(
           client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
@@ -430,10 +486,11 @@ const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean }
 };
 
 /**
- * Undo/redo over an engine's history as runes. Build one manager per client
- * with `Undo.make(engine)` and call this during component initialisation.
+ * Undo/redo over a manager's history as runes. Build one manager per client
+ * with `Undo.make(handle)` — a `Client` or a `ClientEngine` both work
+ * (issue #223) — and call this during component initialisation.
  */
-export const useUndo = (manager: Undo.UndoManager): UndoControls => {
+export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
   const canUndo = useFlag(manager.canUndoChanges);
   const canRedo = useFlag(manager.canRedoChanges);
   return {

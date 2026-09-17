@@ -10,7 +10,7 @@
  * ## SSR flow
  *
  * The server renders a page over a *real* engine per request: an in-memory
- * {@link ClientStore} plus an in-process transport to the sync server. It
+ * {@link ClientStore} plus a {@link ClientTransport} to the sync server. It
  * `subscribe`s the subsets the page needs, `pull`s once, then `dehydrate`s the
  * store — capturing the confirmed rows, the pull cookie, and any journalled
  * mutations. That snapshot ships to the browser (JSON-encoded in the document).
@@ -19,6 +19,13 @@
  * loading flash), and because the cookie came across too the client's first
  * pull continues the CVR conversation from where the server left off — no
  * refetch of state the server already sent.
+ *
+ * The transport is the seam that makes this work off-process. Pull is the
+ * correctness path, so subscribe → pull → dehydrate behaves identically
+ * against a remote Server: the renderer need not hold the backend. A
+ * single-process app passes nothing and gets a loop-back transport over the
+ * in-context {@link ServerHandler}; a split deployment (a SvelteKit Worker
+ * rendering against a separate API Worker) passes its own carrier.
  *
  * ## Seeded-versions caveat
  *
@@ -198,32 +205,38 @@ export interface SnapshotOptions {
   readonly reads: ReadonlyArray<Query.Read>;
   /** Mutation registry for the request-scoped engine. Default: none. */
   readonly mutations?: Mutator.MutatorRegistry;
+  /**
+   * The carrier the request-scoped engine pulls over. Omit it for the
+   * in-process default — a loop-back transport to the in-context
+   * {@link ServerHandler} — which is what a single-process app wants.
+   *
+   * Pass one when the renderer is *not* the process holding the backend: a
+   * SvelteKit Worker rendering against a separate API Worker, an SSR tier in
+   * front of a remote sync server. Whatever the carrier, it must preserve the
+   * CVR conversation end to end — the request's `clientGroupId` reaches the
+   * Server unchanged, and the Server's fresh cookie comes back in the pull
+   * response — or the snapshot's cookie belongs to a conversation the client
+   * is not in, and its first pull silently degrades to the reset path.
+   */
+  readonly transport?: ClientTransport;
 }
 
-/**
- * Produce an SSR snapshot over a request-scoped engine: build an in-memory
- * {@link ClientStore} and an in-process transport to the in-context
- * {@link ServerHandler}, subscribe the page's subsets, pull once, and
- * {@link dehydrate}. Everything is scoped to the call — nothing outlives it.
- *
- * This is the server half of the SSR flow described above; run it inside a
- * request handler (a SvelteKit `load`, a Next.js loader) with the app's sync
- * server provided as `ServerHandler`. Framework packages wrap this — they add
- * the framework's own plumbing (a cookie, a `load` signature), never their own
- * hydration logic.
- */
-export const snapshot = (
+/** {@link SnapshotOptions} with the carrier supplied — no `ServerHandler` needed. */
+export interface RemoteSnapshotOptions extends SnapshotOptions {
+  readonly transport: ClientTransport;
+}
+
+/** What a snapshot render can fail with. */
+export type SnapshotError = StoreError | TransportError | MutatorError | VersionNotSupportedError;
+
+/** The snapshot render itself, over an already-built carrier. */
+const renderOver = (
+  transport: ClientTransport,
   options: SnapshotOptions
-): Effect.Effect<
-  Snapshot,
-  StoreError | TransportError | MutatorError | VersionNotSupportedError,
-  ServerHandler
-> =>
+): Effect.Effect<Snapshot, SnapshotError> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const handler = yield* ServerHandler;
       const store = yield* makeMemory;
-      const transport = yield* makeInMemory(handler, options.clientGroupId);
       const engine = yield* ClientEngineModule.make({
         clientId: options.clientId ?? "ssr",
         clientGroupId: options.clientGroupId,
@@ -239,3 +252,36 @@ export const snapshot = (
       return yield* dehydrate(store);
     })
   );
+
+/**
+ * Produce an SSR snapshot over a request-scoped engine: build an in-memory
+ * {@link ClientStore}, subscribe the page's subsets over the given
+ * {@link ClientTransport}, pull once, and {@link dehydrate}. Everything is
+ * scoped to the call — nothing outlives it.
+ *
+ * With `options.transport` the render needs nothing from context; without it
+ * the in-process path applies and the app's sync server is taken from context
+ * as `ServerHandler`, carried by a loop-back transport.
+ *
+ * This is the server half of the SSR flow described above; run it inside a
+ * request handler (a SvelteKit `load`, a Next.js loader). Framework packages
+ * wrap this — they add the framework's own plumbing (a cookie, a `load`
+ * signature), never their own hydration logic.
+ */
+export function snapshot(options: RemoteSnapshotOptions): Effect.Effect<Snapshot, SnapshotError>;
+export function snapshot(
+  options: SnapshotOptions
+): Effect.Effect<Snapshot, SnapshotError, ServerHandler>;
+export function snapshot(
+  options: SnapshotOptions
+): Effect.Effect<Snapshot, SnapshotError, ServerHandler> {
+  const supplied = options.transport;
+  if (supplied !== undefined) return renderOver(supplied, options);
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* ServerHandler;
+      const transport = yield* makeInMemory(handler, options.clientGroupId);
+      return yield* renderOver(transport, options);
+    })
+  );
+}

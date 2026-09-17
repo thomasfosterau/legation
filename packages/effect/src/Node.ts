@@ -3,16 +3,27 @@
  *
  * A typed resource (ADR-0022): scalar attributes plus {@link Edge}s to
  * other nodes. The Node definition is the single source of truth the rest
- * of the system derives from — its row schema (id + attributes + the
- * foreign-key fields its `one` edges declare), the {@link Collection} the
- * engine materializes, the joins and sync windows its edges imply, and the
- * fan-out **derivable set** (ADR-0023: `one`-edge keys + declared
- * `hintKeys`), and the **filterable set** (ADR-0028, #154: the fields a
- * client may filter or sort by, with their operators and literal kinds).
+ * of the system derives from — its row schema (the identity attribute + its
+ * attributes + the foreign-key fields its `one` edges declare), the
+ * {@link Collection} the engine materializes, the joins and sync windows its
+ * edges imply, and the fan-out **derivable set** (ADR-0023: `one`-edge keys
+ * + declared `hintKeys`), and the **filterable set** (ADR-0028, #154: the
+ * fields a client may filter or sort by, with their operators and kinds).
  *
  * Ids are branded per node type, so a `products` id cannot be passed where
  * a `categories` id is expected; `one`-edge fields carry the **target**
  * type's brand.
+ *
+ * A node's **identity attribute** is the attribute supplying its row id. It
+ * defaults to a synthetic branded `id` added to the row, and a domain with
+ * natural keys names one of its own attributes instead (`id: "username"`) —
+ * so the key is stored once, not duplicated into an `id` nothing keeps equal
+ * to it. Everything downstream reads the declared name: the derived
+ * collection's id extractor, both ends of every edge's join (each resolved
+ * from its own node, so the two ends may differ), and the filterable set a
+ * client's `where` / `order` is admitted against. Row ids are strings on the
+ * wire and in CVR bookkeeping either way (ADR-0008) — this names which
+ * attribute supplies the string, nothing more.
  *
  * Edges reference targets by name; {@link registry} closes the graph and
  * validates it (targets exist, inverses resolve to a matching `one` edge),
@@ -42,19 +53,50 @@ type ViaFields<Edges extends Record<string, Edge.Edge>> = {
     : never]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
 };
 
-/** The field names of a node's row: `id`, its attributes, its `one`-edge keys. */
+/**
+ * The field names of a node's row: its identity attribute — the synthetic
+ * `id` unless the definition names one of its own attributes — plus its
+ * attributes and its `one`-edge keys.
+ */
 export type FieldName<
   Fields extends Schema.Struct.Fields,
   Edges extends Record<string, Edge.Edge>,
-> = "id" | (keyof Fields & string) | (keyof ViaFields<Edges> & string);
+  IdField extends string | undefined = undefined,
+> =
+  | (IdField extends string ? never : "id")
+  | (keyof Fields & string)
+  | (keyof ViaFields<Edges> & string);
+
+/**
+ * The row schema of a node: a synthetic branded `id` plus the attributes and
+ * `one`-edge keys, or — when the definition names an attribute as its
+ * identity — the attributes and `one`-edge keys alone, the identity among
+ * them.
+ */
+export type Row<
+  Type extends string,
+  Fields extends Schema.Struct.Fields,
+  Edges extends Record<string, Edge.Edge>,
+  IdField extends string | undefined = undefined,
+> = IdField extends string
+  ? Schema.Struct<Fields & ViaFields<Edges>>
+  : Schema.Struct<{ readonly id: Id<Type> } & Fields & ViaFields<Edges>>;
 
 /** A node definition. */
 export interface Node<
   Type extends string = string,
   Fields extends Schema.Struct.Fields = Schema.Struct.Fields,
   Edges extends Record<string, Edge.Edge> = Record<string, Edge.Edge>,
+  IdField extends string | undefined = string | undefined,
 > {
   readonly type: Type;
+  /**
+   * The attribute supplying the row id: the declared one (`make`'s `id`
+   * option), or `"id"` — the synthetic branded attribute added to the row
+   * when a node names none. Every place the graph joins, filters, sorts or
+   * keys by identity reads this name, never the literal `"id"`.
+   */
+  readonly id: IdField extends string ? IdField : "id";
   readonly attributes: Fields;
   readonly edges: Edges;
   /**
@@ -71,19 +113,25 @@ export interface Node<
   readonly indexes: ReadonlyArray<string>;
   /**
    * The **filterable set** (ADR-0028 rule d, #154): every field a client may
-   * filter by, with its operators and literal kind. `id` and every
-   * `one`-edge `via` field are filterable by `eq` / `in` (kind `text`) by
-   * default; everything else is declared via `make`'s `filterable` option.
-   * Carried to the derived {@link Collection} and enforced by
-   * `Authorization.authorize` before evaluation.
+   * filter by, with its operators and literal kind. The identity attribute
+   * and every `one`-edge `via` field are filterable by `eq` / `in` (kind
+   * `text`) by default; everything else is declared via `make`'s
+   * `filterable` option. Carried to the derived {@link Collection} and
+   * enforced by `Authorization.authorize` before evaluation.
    */
   readonly filterable: Readonly<Record<string, FilterPolicy.FilterableField>>;
-  /** The fields a client may order by (#154); always includes `id` (ADR-0026's tie-break). */
+  /**
+   * The fields a client may order by (#154); always includes the identity
+   * attribute (ADR-0026's tie-break).
+   */
   readonly sortable: ReadonlyArray<string>;
   /** The branded id schema for this node type. */
   readonly Id: Id<Type>;
-  /** The row schema: `{ id } & attributes & one-edge key fields`. */
-  readonly row: Schema.Struct<{ readonly id: Id<Type> } & Fields & ViaFields<Edges>>;
+  /**
+   * The row schema: `attributes & one-edge key fields`, with a branded `id`
+   * added in front unless an attribute is declared as the identity.
+   */
+  readonly row: Row<Type, Fields, Edges, IdField>;
 }
 
 /** A node definition with its type parameters erased. */
@@ -97,29 +145,43 @@ export const make = <
   const Type extends string,
   const Fields extends Schema.Struct.Fields,
   const Edges extends Record<string, Edge.Edge> = {},
+  const IdField extends (keyof Fields & string) | undefined = undefined,
 >(
   type: Type,
   options: {
+    /**
+     * The attribute supplying the row id — a **natural key**
+     * (`id: "username"`), which must be one of this node's own string
+     * attributes. Omitted, the row gets a synthetic branded `id` attribute
+     * and everything behaves exactly as it did before a node could name its
+     * identity, so a domain with surrogate keys declares nothing.
+     *
+     * Row ids stay strings on the wire and in CVR bookkeeping either way
+     * (ADR-0008); this only names which attribute supplies the string.
+     */
+    readonly id?: IdField;
     readonly attributes: Fields;
     readonly edges?: Edges;
     readonly hintKeys?: ReadonlyArray<string>;
     readonly indexes?: ReadonlyArray<string>;
     /**
-     * The fields a client may filter by, beyond the `id` / `one`-edge key
+     * The fields a client may filter by, beyond the identity / `one`-edge key
      * defaults: the operators alone (the literal kind is derived from the
      * attribute's schema — `FilterPolicy.kindOf`), or `{ operators, kind }`
      * where derivation cannot tell (an `instant` stored as text). A key
      * field may be listed to widen its default operators.
      */
     readonly filterable?: {
-      readonly [K in FieldName<Fields, Edges>]?: FilterPolicy.FilterableInput;
+      readonly [K in FieldName<Fields, Edges, IdField>]?: FilterPolicy.FilterableInput;
     };
-    /** The fields a client may order by, beyond `id`. */
-    readonly sortable?: ReadonlyArray<FieldName<Fields, Edges>>;
+    /** The fields a client may order by, beyond the identity attribute. */
+    readonly sortable?: ReadonlyArray<FieldName<Fields, Edges, IdField>>;
   }
-): Node<Type, Fields, Edges> => {
+): Node<Type, Fields, Edges, IdField> => {
   const edges = options.edges ?? ({} as Edges);
   const id = Id(type);
+  const identity = options.id ?? "id";
+  if (options.id !== undefined) assertTextIdentity(type, options.id, options.attributes);
   const viaFields: Record<string, Schema.Top> = {};
   for (const edge of Object.values(edges)) {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
@@ -127,17 +189,21 @@ export const make = <
   const declaration = FilterPolicy.resolve({
     collection: type,
     attributes: options.attributes,
-    keyFields: ["id", ...Object.keys(viaFields)],
+    identity,
+    keyFields: [identity, ...Object.keys(viaFields)],
     filterable: options.filterable as Readonly<Record<string, FilterPolicy.FilterableInput>>,
     sortable: options.sortable,
   });
   const row = Schema.Struct({
-    id,
+    // A declared identity is already one of the attributes; only a node
+    // without one gets the synthetic branded `id`.
+    ...(options.id === undefined ? { id } : {}),
     ...options.attributes,
     ...viaFields,
-  }) as unknown as Node<Type, Fields, Edges>["row"];
+  }) as unknown as Node<Type, Fields, Edges, IdField>["row"];
   return {
     type,
+    id: identity as Node<Type, Fields, Edges, IdField>["id"],
     attributes: options.attributes,
     edges,
     hintKeys: options.hintKeys ?? [],
@@ -147,6 +213,28 @@ export const make = <
     Id: id,
     row,
   };
+};
+
+/**
+ * A declared identity attribute must carry the row id, and a row id is a
+ * string on the wire (ADR-0008) — so an attribute whose literal kind is
+ * derivably something else is a definition defect, not a runtime surprise at
+ * the filter boundary. A kind that cannot be derived at all passes: the
+ * declaration is taken at its word, exactly as `filterable` does.
+ */
+const assertTextIdentity = (
+  type: string,
+  identity: string,
+  attributes: Schema.Struct.Fields
+): void => {
+  const attribute = attributes[identity];
+  const kind = attribute === undefined ? undefined : FilterPolicy.kindOf(attribute);
+  if (kind === undefined || kind === "text") return;
+  throw new FilterDeclarationError({
+    collection: type,
+    field: identity,
+    message: `Node "${type}" declares "${identity}" as its identity attribute, but its literal kind is "${kind}"; a row id is a string`,
+  });
 };
 
 /**
@@ -195,6 +283,24 @@ const inverseVia = (
   return inverse.via;
 };
 
+/**
+ * The identity attribute of an edge's target — resolved per-node, because
+ * the two ends of one edge may name different identities (`comments.author →
+ * users.username` while `comments.article → articles.slug`).
+ */
+const identityOf = (
+  node: AnyNode,
+  name: string,
+  target: string,
+  nodes: ReadonlyMap<string, AnyNode>
+): string => {
+  const resolved = nodes.get(target);
+  if (resolved === undefined) {
+    throw new UnknownCollectionError({ from: node.type, relationship: name, collection: target });
+  }
+  return resolved.id;
+};
+
 /** Derive the engine collection for one node (registry context required). */
 const toCollection = (
   node: AnyNode,
@@ -208,14 +314,16 @@ const toCollection = (
         kind: "one",
         collection: edge.target,
         localField: edge.via,
-        foreignField: "id",
+        // The join matches the TARGET's identity attribute.
+        foreignField: identityOf(node, name, edge.target, nodes),
       });
     } else {
       relationships.push({
         name,
         kind: edge.kind,
         collection: edge.target,
-        localField: "id",
+        // The parent side of a dependent collection is this node's identity.
+        localField: node.id,
         foreignField: inverseVia(node, name, edge, nodes),
         ...(edge.kind === "paginated" ? { order: Subset.parseOrder(edge.order) } : {}),
       });
@@ -224,7 +332,8 @@ const toCollection = (
   return Collection.make({
     name: node.type,
     schema: node.row as unknown as Schema.Codec<unknown, unknown>,
-    id: (value) => (value as { id: string }).id,
+    id: (value) => (value as Record<string, string>)[node.id]!,
+    identity: node.id,
     relationships,
     ...(node.indexes.length > 0 ? { indexes: node.indexes } : {}),
     // The filterable set travels like `indexes` (#154): the server enforces
@@ -234,9 +343,13 @@ const toCollection = (
   });
 };
 
-/** Every field of a node's row: `id`, its attributes, its `one`-edge keys. */
+/**
+ * Every field of a node's row: its identity attribute, its attributes, its
+ * `one`-edge keys. A declared identity is one of the attributes already; an
+ * undeclared one is the synthetic `id`.
+ */
 const rowFields = (node: AnyNode): ReadonlySet<string> => {
-  const fields = new Set<string>(["id", ...Object.keys(node.attributes)]);
+  const fields = new Set<string>([node.id, ...Object.keys(node.attributes)]);
   for (const edge of Object.values(node.edges)) {
     if (edge.kind === "one") fields.add(edge.via);
   }

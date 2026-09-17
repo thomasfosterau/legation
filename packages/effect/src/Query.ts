@@ -71,7 +71,10 @@ export interface IncludeOptions {
  * A declarative read: what to read, shaped like the data. `where` is an
  * equality map over row fields (a full `Predicate` is the escape hatch);
  * `include` names edges on the node; `order` tokens are field names,
- * `-` prefixed for descending; `first`/`after` page the root window.
+ * `-` prefixed for descending; `first`/`after` page the root window by
+ * cursor, `offset` by position (issue #209 — mutually exclusive with
+ * `after`; a caller compiling from a URL keeps them so, `JsonApiQuery`
+ * rejects a request naming both).
  */
 export interface Read {
   readonly collection: string;
@@ -80,6 +83,19 @@ export interface Read {
   readonly order?: ReadonlyArray<string>;
   readonly first?: number;
   readonly after?: string;
+  /**
+   * Offset pagination (#209): skip this many rows of the window before
+   * `first`. The root window's compiled `limit` absorbs it
+   * (`offset + first`, see {@link plan}) so the same `Subset` both answers
+   * the read and lets `Coverage.covers` judge it by the ordinary
+   * limit-prefix rule — a subscription covers an offset read iff its own
+   * limit is at least `offset + first`, or it is unwindowed. `offset`
+   * itself never reaches `Subset`: it is a read-time slice, applied where
+   * the read resolves (`DocumentWriter`), never a subscription's identity —
+   * the engine keeps cursors as the only windowed subscription shape
+   * (ADR-0024).
+   */
+  readonly offset?: number;
 }
 
 /** Define a read ({@link Read}), or a named contract via `(name, args)`. */
@@ -109,6 +125,21 @@ export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =
     name: edge.edge,
     ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
   }));
+
+/**
+ * The root window's compiled `limit`: `first` alone for cursor pagination,
+ * or `offset + first` for offset pagination (#209) — the window
+ * over-fetches by `offset` rows so a covering subscription is judged by
+ * the ordinary limit-prefix rule and the read can slice its own page back
+ * out of what it fetched. `offset` alone (no `first`) compiles to no
+ * limit: the read wants every row past `offset`.
+ */
+const rootLimit = (read: Read): number | undefined =>
+  read.offset === undefined
+    ? read.first
+    : read.first === undefined
+      ? undefined
+      : read.offset + read.first;
 
 /** Compile a `where` to the plan's predicate representation. */
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
@@ -143,11 +174,12 @@ export interface Plan {
  * declared order) plus the read's per-edge window.
  */
 export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
+  const limit = rootLimit(read);
   const root = Subset.make({
     collection: read.collection,
     where: compileWhere(read.where),
     orderBy: orderBy(read.order),
-    ...(read.first === undefined ? {} : { limit: read.first }),
+    ...(limit === undefined ? {} : { limit }),
     ...(read.after === undefined ? {} : { cursor: read.after }),
   });
   const node = nodes.nodes.get(read.collection);

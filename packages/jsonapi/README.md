@@ -52,11 +52,17 @@ const sync = JsonApiSync.layer(api, {
   baseUrl: "https://api.example.com",
   clientId: "device-1",
   clientGroupId: "user-42",
+  // Both legs are opt-in: without `pushDebounce` a journaled mutation waits
+  // for a reconnect, a poke-driven pull, or an explicit `push` — an
+  // already-connected client would sit on unflushed writes. `pullInterval`
+  // is the correctness backstop for when pokes don't arrive.
+  pullInterval: Duration.seconds(5),
+  pushDebounce: Duration.millis(300),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 const program = Effect.gen(function* () {
-  // Run the sync loop + background polling (lives until the scope closes).
-  yield* JsonApiSync.start({ pollInterval: Duration.seconds(5) });
+  // Run the sync loop (push-on-mutate + periodic pull; lives until the scope closes).
+  yield* JsonApiSync.start;
 
   const engine = yield* ClientEngine.ClientEngine;
   const open = Subset.make({
@@ -207,16 +213,25 @@ const program = Effect.gen(function* () {
 
 ## Query encoding, URL parsing, and canonical strings
 
-`JsonApiQuery` is the bridge between the **filter grammar** (ADR-0028 — the
-one filter language shared by REST URLs, sync predicates and the façade,
-owned by effect-jsonapi) and the engine's plan:
+`JsonApiQuery` is the façade-boundary bridge (ADR-0029 §6) between
+effect-jsonapi's **filter grammar** — a query-parameter format, decoded from
+untrusted URLs, its literals typed by a resource's declared attributes — and
+`Predicate`, legation's own subset language (ADR-0028). They are two
+different things, not two dialects of one language; this bridge is a
+projection for one job, not a general translation:
 
-- **Filter AST ⇄ `Predicate`** — `fromFilterAst(ast)` is total: every
-  grammar node has an engine node. `toFilterAst(predicate)` is partial and
-  returns `None` where the grammar has no form: `Exists` (server-only), an
-  empty `In` / `NotIn` list, a `null` literal. `foldConstants` folds the two
-  definite cases away exactly (an empty `In` is false, an empty `NotIn` true)
-  before anything is encoded.
+- **Filter AST ⇄ `Predicate`** — both directions are partial, and neither is
+  the other's inverse. `fromFilterAst(ast)` fails with a typed `QueryError`
+  for a literal that is not a wire scalar or a `Date` (a `Date` becomes its
+  ISO-8601 instant text — a load-bearing **encode**, not a copy, since
+  ADR-0028 rule (e) fixes instant comparison to that exact format).
+  `toFilterAst(predicate)` returns `None` where the grammar has no form:
+  `Exists` (server-only), an empty `In` / `NotIn` list, a `null` literal.
+  `foldConstants` folds the two definite cases away exactly (an empty `In`
+  is false, an empty `NotIn` true) before anything is encoded. Both
+  functions assume a **field-namespace precondition**: field names are
+  copied verbatim, correct only because every caller here pre-synthesises a
+  resource whose field names are already the engine's (`resourcesOf`).
 - **URL → `Query.Read`** — `parseRead(nodes, url)` / `parseParams(nodes,
 collection, params)` decode `include`, `fields`, `sort`, `page` and `filter`
   with effect-jsonapi's `Query.schema` derived from the node graph (each
@@ -438,6 +453,19 @@ self.addEventListener("fetch", (event) => {
 - **The overlay.** A covered response sees pending optimistic mutations as
   `Client.query` does; an uncovered network response is the server's
   authoritative answer and does not (ADR-0029 §4).
+- **Offset pagination is covered by slicing, not by an offset window**
+  (#209). `page[offset]` parses beside `page[after]` — the two are different
+  pagination idioms, and a request naming both is a `400`. An offset read
+  compiles to a plain limit-only window (`limit = offset + first`, no
+  `cursor`), so it is covered by the ordinary rule: the subsuming
+  subscription is unwindowed, or its own limit is at least `offset +
+first`. A deep offset past what is covered falls through exactly like any
+  other uncovered window — the façade never fetches more rows to satisfy
+  it, online or off. `links.next` / `links.prev` come back in the offset
+  idiom when the request used it, never switching a caller to cursors
+  mid-collection. See ADR-0029's amendment for the full rule and why an
+  offset _window_ (as opposed to an offset _read_, translated at read time)
+  was rejected.
 
 ## Types, schemas, and errors
 

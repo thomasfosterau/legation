@@ -286,35 +286,75 @@ const selfLink = (input: Input): string =>
   `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, input.read, input.fields)}`;
 
 /**
- * `links.next` for a full window: the canonical query continued after the
- * last row (`page[after]`), the cursor `Subset.apply` resumes from. A short
- * page — fewer rows than `first`, or no window at all — has no next.
+ * The read's resolved rows sliced to the page it actually asked for
+ * (#209). An offset read's root window was compiled with
+ * `limit = offset + first` (`Query.plan`'s `rootLimit`) so a covering
+ * subscription could be judged by the ordinary limit-prefix rule and the
+ * window fetched in one shot; `input.rows` therefore holds up to
+ * `offset + first` rows in window order, and this is where they are
+ * sliced back down to the `first` rows starting at `offset` — the one
+ * place both the derived REST handler and the replica-side writer apply
+ * the slice, since both call this module. A cursor-paginated read has no
+ * `offset`, so its rows are its page already.
  */
-const nextLink = (input: Input): string | undefined => {
-  const last = input.rows.at(-1);
-  if (
-    input.read.first === undefined ||
-    last === undefined ||
-    input.rows.length < input.read.first
-  ) {
-    return undefined;
-  }
-  return `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, { ...input.read, after: last.id }, input.fields)}`;
+const pageOf = (input: Input): ReadonlyArray<Related.RelatedRow> => {
+  const { offset, first } = input.read;
+  if (offset === undefined) return input.rows;
+  return input.rows.slice(offset, first === undefined ? undefined : offset + first);
 };
 
 /**
- * The collection document of a read: every row as primary data, the
- * included edges compounded, `links.self` canonical and `links.next` when
- * the window is full. Throws for a read the canonical encoder refuses (a
- * per-edge window, an `Exists`) — such a read has no URL, so it is never
- * one a URL produced.
+ * `links.next` for a full page: an offset read continues at `offset +
+ * first` in the same idiom it was asked in; a cursor read continues after
+ * the page's last row (`page[after]`), the cursor `Subset.apply` resumes
+ * from. A short page — fewer rows than `first`, or no window at all — has
+ * no next; switching a cursor request to `page[after]`-of-offset (or vice
+ * versa) is never done — pagination links stay in the idiom the request
+ * used (#209).
+ */
+const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): string | undefined => {
+  const { first, offset } = input.read;
+  if (first === undefined || page.length < first) return undefined;
+  const read: Query.Read =
+    offset === undefined
+      ? { ...input.read, after: page.at(-1)!.id }
+      : { ...input.read, offset: offset + first };
+  return `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
+};
+
+/**
+ * `links.prev` for an offset page past the first: the same query at
+ * `max(0, offset - first)`. Cursor pagination has no `prev` — a forward
+ * cursor names no way back, and ADR-0029's model is unbounded-forward only
+ * (#209 adds `prev` for the offset idiom alone).
+ */
+const prevLink = (input: Input): string | undefined => {
+  const { first, offset } = input.read;
+  if (offset === undefined || offset <= 0 || first === undefined) return undefined;
+  const read: Query.Read = { ...input.read, offset: Math.max(0, offset - first) };
+  return `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
+};
+
+/**
+ * The collection document of a read: every row of its page as primary
+ * data, the included edges compounded, `links.self` canonical and
+ * `links.next` (and, for an offset read past the first page, `links.prev`)
+ * when the page is full. Throws for a read the canonical encoder refuses
+ * (a per-edge window, an `Exists`) — such a read has no URL, so it is
+ * never one a URL produced.
  */
 export const collection = (input: Input): CollectionDocument => {
-  const { data, included } = assemble(input, nodeOf(input.nodes, input.read));
-  const next = nextLink(input);
+  const page = pageOf(input);
+  const { data, included } = assemble({ ...input, rows: page }, nodeOf(input.nodes, input.read));
+  const next = nextLink(input, page);
+  const prev = prevLink(input);
   return Handlers.collection(data, {
     included,
-    links: { self: selfLink(input), ...(next === undefined ? {} : { next }) },
+    links: {
+      self: selfLink(input),
+      ...(next === undefined ? {} : { next }),
+      ...(prev === undefined ? {} : { prev }),
+    },
   });
 };
 

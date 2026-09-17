@@ -438,3 +438,81 @@ Recorded when the handler shipped; the decisions above stand.
   wire errors, no handlers, no SQL — lives in `server/api.ts`, loaded by
   both the server and the worker, so the façade reflects the routes the
   server serves by construction.
+
+## Amendment (#209): offset pagination is covered by slicing a subsumption
+
+Recorded when offset support shipped; the decisions above stand, including
+that coverage's window rule (section 3, rule 2) is unchanged code.
+
+**The gap.** Section 3 lists what the coverage rule covers as of #162:
+cursor pagination (`page[limit]` / `page[after]`) only, because "cursor
+pagination requires a stable order, and it is part of the edge's identity"
+(ADR-0022/0024). All three audited apps page by **offset** end to end —
+`page[offset]` / `page[limit]` on the wire, `?offset=` as the UI search
+param, `offset` a required part of every list-load call, never optional.
+Under the rule as shipped, `page[offset]` did not even parse, so _every
+listing read in all three apps_ was uncovered: the façade always fell
+through, and offline it always answered the 503 document. Not a false
+negative costing one round trip (section 3's accepted cost) — total.
+
+**Two options, one decided.** Two ways to close the gap were on the table.
+
+- **A. Translate at the façade.** Answer an offset request from a covering
+  subscription by slicing locally: the subscription's rows are already
+  materialised in one shared total order (ADR-0026), so `offset`/`limit`
+  is a slice over that order. Coverage becomes "the subsuming subscription
+  is unwindowed, or its limit is at least `offset + limit`" — the
+  _existing_ rule 2 (`coversWindow`/`limitPrefix`), unchanged, applied to a
+  window whose `limit` already absorbs the offset. No protocol change, no
+  new CVR concept, `Subset` untouched.
+- **B. Offset windows in the engine.** Make `offset` part of a
+  _subscription's_ window identity, alongside `limit`/`cursor` — a
+  registered, incrementally-maintained offset window. **Rejected.** An
+  insert before such a window shifts every row's position, which the
+  incremental-maintenance machinery (ADR-0024's per-edge CVR windows, the
+  client's `LiveView`) would have to re-derive on every write instead of
+  patching the boundary a cursor window patches today. ADR-0024 chose
+  cursors for the engine's sync windows for exactly this reason, and
+  ADR-0026 built `Subset.comparator` as the one shared total order on the
+  strength of that choice; reopening it for one wire idiom would undo both.
+  This option is not built, and — per the reasoning above — should not be
+  reopened without a concrete incremental-maintenance design answering the
+  insert-shifts-every-row problem, not just a wire-compatibility complaint.
+
+Option A is what shipped, exactly as stated: no change to `Coverage.ts`
+itself. `Query.plan` compiles an offset read's root window with
+`limit = offset + first` (`rootLimit`, `packages/effect/src/Query.ts`) and
+no `cursor`; `Coverage.covers`/`coversWindow` then judge it as the plain
+limit-prefix case rule 2 already handles. The offset itself never reaches
+`Subset` — it rides on `Query.Read.offset`, a read-time field the engine's
+subscription/CVR machinery never sees — so a subscription's identity, and
+everything ADR-0024/0026 built on top of it, is untouched. The one
+over-fetch this buys (a covering subscription fetches `offset + first`
+rows, of which the read keeps the last `first`) is intentional: it is what
+lets a plain array slice (`DocumentWriter`'s `pageOf`, `packages/jsonapi`)
+stand in for a purpose-built offset primitive.
+
+**The honest limitation, preserved.** Section 3's "why rule 2 is strict"
+argument applies verbatim: a windowed subscription holds a bounded prefix
+of its order, and nothing past that prefix is promised to be in the
+replica. An offset request whose `offset + first` exceeds the subsuming
+subscription's `limit` is therefore **uncovered**, not answered with
+whatever happens to be synced — the façade never fetches more rows to
+satisfy a deep offset, online or off, because doing so would turn a
+coverage miss into a silent network read inside what the caller believes
+is a purely local answer. This is the same trade every other uncovered
+read makes (section 4): a false negative costs one round trip online, and
+offline it is the spec 503 document, never a partial page.
+
+**Pagination links stay in the request's idiom.** `DocumentWriter`'s
+`links.next` (and, new for offset reads, `links.prev`) are built from the
+request's own read, not a fixed idiom: a cursor-paginated read continues
+with `page[after]` as before; an offset-paginated read continues with
+`page[offset]` at `offset + first` (and `page[offset]` at
+`max(0, offset - first)` for `prev`, past the first page). Switching a
+caller from one idiom to the other mid-collection was explicitly ruled
+out: an app that round-trips its own `links.next`/`links.prev` would break
+if a page it fetched by offset came back with a cursor instead. `meta` (a
+total count, hence `links.first`/`links.last`) is out of scope here — #210
+— so an offset document says only what it can today: whether a further
+page (`next`) or a prior one (`prev`) exists, never how many there are.

@@ -5,13 +5,13 @@
  * parameter, and the canonical string round trip over generated reads.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer, Option, Random, Schema } from "effect";
+import { Effect, Exit, Layer, Option, Random, Result, Schema } from "effect";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { Filter } from "@thomasfosterau/effect-jsonapi";
+import { Filter, Query as UrlQuery, Resource } from "@thomasfosterau/effect-jsonapi";
 import {
   Client,
   Edge,
@@ -98,7 +98,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
       Filter.isNull("createdAt", true),
       Filter.or(Filter.lte("priceCents", 5), Filter.not(Filter.ne("name", "x")))
     );
-    const predicate = JsonApiQuery.fromFilterAst(ast);
+    const predicate = Result.getOrThrow(JsonApiQuery.fromFilterAst(ast));
     expect(predicate).toEqual(
       Predicate.and(
         Predicate.eq("name", "Desk"),
@@ -113,13 +113,18 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
     expect(Option.getOrThrow(JsonApiQuery.toFilterAst(predicate))).toEqual(ast);
   });
 
-  it("the empty conjunction is True; a Date literal is its instant text", () => {
-    expect(JsonApiQuery.fromFilterAst(Filter.and())).toEqual(Predicate.always);
+  it("the empty conjunction is True; a Date literal is its instant text (an encode, ADR-0028 rule e)", () => {
+    expect(Result.getOrThrow(JsonApiQuery.fromFilterAst(Filter.and()))).toEqual(Predicate.always);
     expect(JsonApiQuery.toFilterAst(Predicate.always)).toEqual(Option.some(Filter.and()));
-    expect(JsonApiQuery.fromFilterAst(Filter.gt("createdAt", new Date(0)))).toEqual(
-      Predicate.gt("createdAt", "1970-01-01T00:00:00.000Z")
-    );
-    expect(() => JsonApiQuery.fromFilterAst(Filter.eq("x", { nested: true }))).toThrow(QueryError);
+    expect(
+      Result.getOrThrow(JsonApiQuery.fromFilterAst(Filter.gt("createdAt", new Date(0))))
+    ).toEqual(Predicate.gt("createdAt", "1970-01-01T00:00:00.000Z"));
+    // A literal outside string/number/boolean/Date is a typed failure, not a
+    // thrown defect: any caller bridging an AST over a resource with a
+    // richer decoded attribute type can hit this (the module doc).
+    const rejected = JsonApiQuery.fromFilterAst(Filter.eq("x", { nested: true }));
+    expect(Result.isFailure(rejected)).toBe(true);
+    expect(Result.merge(rejected)).toBeInstanceOf(QueryError);
   });
 
   it("returns None where the grammar has no form: Exists, empty lists, null literals", () => {
@@ -159,9 +164,66 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
         continue;
       }
       representable++;
-      expect(JsonApiQuery.fromFilterAst(ast.value)).toEqual(predicate);
+      expect(Result.getOrThrow(JsonApiQuery.fromFilterAst(ast.value))).toEqual(predicate);
     }
     expect(representable).toBeGreaterThan(200);
+  });
+
+  /**
+   * The trap issue #218 names: `FilterCorpus.generatePredicate` (the corpus
+   * above) generates from `Predicate.Literal`'s closed wire-scalar union, so
+   * it can never produce a `Date` and the round trip above never exercises
+   * `literalOf`'s `Date → value.toISOString()` encode. A resource that
+   * genuinely declares a `Date`-decoded attribute — `Schema.DateFromString`,
+   * legitimate effect-jsonapi usage this package's own `resourcesOf` never
+   * needs, since its synthetic resource keeps every filterable attribute at
+   * the wire scalar its kind names (`"instant"` decodes as a checked
+   * string, never a `Date`; see `literalSchema`) — is the one place that
+   * step is live, and it is exactly the resource a real `Product`/`Review`
+   * app resource looks like for a timestamp attribute. This test builds one
+   * and checks the encode step is exact over many generated dates, then
+   * closes the façade-vs-REST loop: whichever of the two resources a
+   * `filter[createdAt][gt]=…` URL is decoded against, the `Predicate` it
+   * produces — and therefore the rows the façade or a derived REST handler
+   * would select — is the same.
+   */
+  it("the Date encode step is exact over a generated corpus, and agrees with the wire text a Date-declaring resource would send (#218)", () => {
+    // `reviews` (declared above) filters `createdAt` at kind "instant":
+    // `resourcesOf`'s synthetic resource decodes that filter literal as a
+    // checked string, never a `Date` (`literalSchema("instant")`). This
+    // second resource is what an app would actually write for the same
+    // column — the attribute's true, richer decoded type.
+    const ReviewsWithDate = Resource.make("reviews", {
+      attributes: {
+        createdAt: Resource.attribute(Schema.DateFromString, { filter: ["gt", "lt", "isnull"] }),
+      },
+    });
+    const dateFilterCodec = UrlQuery.Filter(ReviewsWithDate);
+
+    const randomDate = Random.nextIntBetween(0, 4_102_444_800_000).pipe(
+      Effect.map((ms) => new Date(ms))
+    );
+    const dates = Effect.runSync(
+      randomDate.pipe(Effect.replicateEffect(200), Random.withSeed(218))
+    );
+
+    for (const date of dates) {
+      const ast = Filter.gt("createdAt", date);
+
+      // The encode step itself: exact, not merely "does not throw".
+      const predicate = Result.getOrThrow(JsonApiQuery.fromFilterAst(ast));
+      expect(predicate).toEqual(Predicate.gt("createdAt", date.toISOString()));
+
+      // What a resource that actually declares `createdAt` as a `Date`
+      // would put on the wire for this filter …
+      const wire = Schema.encodeSync(dateFilterCodec)(ast);
+      // … decoded back through the façade's own query codec (the
+      // node-derived, string-typed one `parseRead` always uses). If the
+      // encode step ever diverged from ADR-0028 rule (e)'s fixed format,
+      // this is where a façade read and a REST read would part ways.
+      const url = `/reviews?${new URLSearchParams(wire).toString()}`;
+      expect(parse(url).read.where).toEqual(predicate);
+    }
   });
 });
 
@@ -492,6 +554,41 @@ describe("JsonApiQuery.parseRead", () => {
     });
   });
 
+  it("parses page[offset] alongside page[limit] (#209): every listing in the audited apps pages by it", () => {
+    expect(parse("/products?page[offset]=20&page[limit]=5").read).toEqual({
+      collection: "products",
+      offset: 20,
+      first: 5,
+    });
+    // offset: 0 is a real, distinct value from "no offset" — the first
+    // page of the offset idiom, not the cursor idiom's absence of a page.
+    expect(parse("/products?page[offset]=0&page[limit]=5").read).toEqual({
+      collection: "products",
+      offset: 0,
+      first: 5,
+    });
+    // offset alone (no limit) reads as "every row past offset".
+    expect(parse("/products?page[offset]=20").read).toEqual({ collection: "products", offset: 20 });
+    expect(
+      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.limit
+    ).toBe(25);
+    expect(
+      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.cursor
+    ).toBeUndefined();
+  });
+
+  it("rejects page[offset] and page[after] together: different pagination idioms, one per request", () => {
+    const failure = parseFailure("/products?page[offset]=10&page[after]=p-9");
+    expect(failure).toBeInstanceOf(QueryError);
+    expect(failure.parameter).toBe("page[offset]");
+    expect(failure.message).toMatch(/different pagination idioms/);
+  });
+
+  it("rejects a negative page[offset], naming the parameter", () => {
+    expect(parseFailure("/products?page[offset]=-1")).toMatchObject({ parameter: "page[offset]" });
+    expect(parseFailure("/products?page[offset]=abc")).toMatchObject({ parameter: "page[offset]" });
+  });
+
   it("rejects nested include paths (D1) and undeclared edges, naming the parameter", () => {
     const nested = parseFailure("/products?include=variants.product");
     expect(nested).toBeInstanceOf(QueryError);
@@ -577,6 +674,20 @@ describe("JsonApiQuery.canonical", () => {
     expect(
       JsonApiQuery.canonical(nodes, { collection: "products", where: Predicate.isIn("id", []) })
     ).toBe("/products?filter[g0][group][conjunction]=OR");
+  });
+
+  it("emits page[offset] from the read, not the inflated fetch window (#209)", () => {
+    const read: Query.Read = { collection: "products", order: ["id"], offset: 20, first: 5 };
+    const url = JsonApiQuery.canonical(nodes, read);
+    // The compiled window over-fetches (limit 25) to slice locally; the
+    // canonical URL must still say what the caller asked for, offset 20
+    // limit 5 — never the inflated limit.
+    expect(url).toBe("/products?sort=id&page[limit]=5&page[offset]=20");
+    expect(parse(url).read).toEqual(read);
+    // offset alone (no first) round-trips with no page[limit].
+    const offsetOnly: Query.Read = { collection: "products", offset: 20 };
+    expect(JsonApiQuery.canonical(nodes, offsetOnly)).toBe("/products?page[offset]=20");
+    expect(parse(JsonApiQuery.canonical(nodes, offsetOnly)).read).toEqual(offsetOnly);
   });
 
   it("applies the projection rule parseRead applies, so fields[] round-trips or fails on both sides", () => {

@@ -21,9 +21,10 @@
 
   let open = $state<string | null>(null);
 
-  // The read is rebuilt whenever `open` changes. There is no "skip" for a
-  // hook, so a closed panel reads an id that matches nothing.
-  const lineRows = useQuery(() => orderLines(open ?? ""));
+  // The read is rebuilt whenever `open` changes; `undefined` opts the hook
+  // out entirely while no panel is expanded (#141) — no window registered,
+  // no request issued.
+  const lineRows = useQuery(() => (open === null ? undefined : orderLines(open)));
 
   const views = $derived(toOrderViews(AsyncResult.getOrElse(orderRows.current, () => [])));
   const lines = $derived(toOrderLines(AsyncResult.getOrElse(lineRows.current, () => [])));

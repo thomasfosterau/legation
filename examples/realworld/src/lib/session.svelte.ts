@@ -29,7 +29,7 @@ export interface Session {
   readonly user: User | null;
   readonly login: (username: string, password: string) => string | null;
   readonly register: (username: string, email: string, password: string) => Promise<string | null>;
-  readonly updateSettings: (next: Omit<User, "id">) => Promise<void>;
+  readonly updateSettings: (next: User) => Promise<void>;
   readonly logout: () => void;
 }
 

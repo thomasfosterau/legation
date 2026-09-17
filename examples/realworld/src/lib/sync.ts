@@ -47,7 +47,6 @@ import {
   CLIENT_ID,
   type Comment,
   addComment,
-  articleRow,
   createArticle,
   deleteArticle,
   deleteComment,
@@ -60,12 +59,12 @@ import {
   mutations,
   nodes,
   registerUser,
+  registeredUser,
   shellReads,
   unfavoriteArticle,
   unfollowUser,
   updateArticle,
   updateUser,
-  userRow,
 } from "./domain";
 
 /** What `createWorld` resolves to. */
@@ -99,21 +98,17 @@ const backendHandlers = MemoryBackend.validatedHandlers([
     Effect.flatMap(w.get("users", a.username), (existing) =>
       existing !== undefined
         ? Effect.fail(new BackendError({ message: `Username "${a.username}" is taken` }))
-        : w.put("users", a.username, userRow(a))
+        : w.put("users", a.username, registeredUser(a))
     )
   ),
   MemoryBackend.handler(updateUser, (a, w, ctx) =>
-    requireIdentity(ctx, a.username).pipe(Effect.andThen(w.put("users", a.username, userRow(a))))
+    requireIdentity(ctx, a.username).pipe(Effect.andThen(w.put("users", a.username, a)))
   ),
   MemoryBackend.handler(createArticle, (a, w, ctx) =>
-    requireIdentity(ctx, a.authorId).pipe(
-      Effect.andThen(w.put("articles", a.slug, articleRow(a)))
-    )
+    requireIdentity(ctx, a.authorId).pipe(Effect.andThen(w.put("articles", a.slug, a)))
   ),
   MemoryBackend.handler(updateArticle, (a, w, ctx) =>
-    requireIdentity(ctx, a.authorId).pipe(
-      Effect.andThen(w.put("articles", a.slug, articleRow(a)))
-    )
+    requireIdentity(ctx, a.authorId).pipe(Effect.andThen(w.put("articles", a.slug, a)))
   ),
   MemoryBackend.handler(deleteArticle, (a, w, ctx) =>
     // Only the author may delete; look the row up to find the owner.

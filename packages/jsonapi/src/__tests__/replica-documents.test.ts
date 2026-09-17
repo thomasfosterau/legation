@@ -173,6 +173,11 @@ describe("ReplicaDocuments over the replica", () => {
           "/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents",
           "/products?sort=name&page[limit]=2",
           "/products?sort=name&page[limit]=2&page[after]=p-1",
+          // Offset pagination (#209): the same "same URL, same result"
+          // obligation, for the idiom every audited app actually pages by.
+          "/products?sort=name&page[offset]=0&page[limit]=2",
+          "/products?sort=name&page[offset]=1&page[limit]=2",
+          "/products?sort=name&page[offset]=10&page[limit]=2",
           "/products?fields[products]=name&include=variants&fields[variants]=",
           "/variants?include=offers",
         ]) {

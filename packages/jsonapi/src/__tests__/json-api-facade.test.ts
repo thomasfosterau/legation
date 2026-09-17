@@ -288,6 +288,99 @@ describe("JsonApiFacade", () => {
     )
   );
 
+  it.effect(
+    "covers an offset-paginated read by slicing a subsuming subscription (#209), byte-equal to the writer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler, client, docs } = yield* makeFacade([
+            "/jsonapi/products?sort=name&page[limit]=2",
+            "/jsonapi/variants",
+          ]);
+          const url = "/jsonapi/products?sort=name&page[offset]=0&page[limit]=2";
+          const response = yield* handler.handle(jsonApi(url));
+          expect(response!.status).toBe(200);
+          const local = yield* docs.fromUrl(client.view, url);
+          // The byte-equal comparison above is honest about what it checks:
+          // the document writer emits no `meta` yet (a total count is #210),
+          // so "same URL, same result" here compares the members the writer
+          // emits today (data, included, links) — not a total this document
+          // does not carry. Once #210 lands, this gap closes on both sides
+          // at once, since both call the one writer.
+          const document = local as { data: ReadonlyArray<{ id: string }>; meta?: unknown };
+          expect(document.meta).toBeUndefined();
+          expect(bytes(yield* body(response!))).toBe(bytes(local));
+          expect(document.data.map((row) => row.id)).toEqual(["p-3", "p-1"]);
+        })
+      )
+  );
+
+  it.effect(
+    "an offset beyond the synced window falls through — never a deeper fetch to satisfy it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler } = yield* makeFacade([
+            "/jsonapi/products?sort=name&page[limit]=2",
+            "/jsonapi/variants",
+          ]);
+          // The pinned window holds 2 rows; offset 2 + limit 2 needs 4, which
+          // it does not satisfy — the coverage rule reads an offset read as
+          // the ordinary limit-prefix check on offset + first.
+          const deep = jsonApi("/jsonapi/products?sort=name&page[offset]=2&page[limit]=2");
+          expect(yield* handler.handle(deep)).toBeUndefined();
+          // Offline, the same uncovered read is the spec 503 document, never
+          // a partial page synthesised from what happens to be synced.
+          const { handler: offlineHandler, online } = yield* makeFacade([
+            "/jsonapi/products?sort=name&page[limit]=2",
+            "/jsonapi/variants",
+          ]);
+          online.current = false;
+          const response = yield* offlineHandler.handle(deep);
+          expect(response!.status).toBe(503);
+          expect(yield* body(response!)).toEqual(JsonApiFacade.offlineDocument);
+        })
+      )
+  );
+
+  it.effect(
+    "an unwindowed subscription covers any offset — the limit-prefix rule needs no upper bound",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler, client, docs } = yield* makeFacade([
+            "/jsonapi/products?include=variants",
+            "/jsonapi/variants",
+          ]);
+          const url = "/jsonapi/products?sort=name&page[offset]=1&page[limit]=1";
+          const response = yield* handler.handle(jsonApi(url));
+          expect(response!.status).toBe(200);
+          const local = yield* docs.fromUrl(client.view, url);
+          expect(bytes(yield* body(response!))).toBe(bytes(local));
+          const document = local as { data: ReadonlyArray<{ id: string }> };
+          expect(document.data.map((row) => row.id)).toEqual(["p-1"]);
+        })
+      )
+  );
+
+  it.effect(
+    "rejects page[offset] and page[after] together with the codec's 400, same as the server",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
+          const response = yield* handler.handle(
+            jsonApi("/jsonapi/products?page[offset]=1&page[after]=p-1")
+          );
+          expect(response!.status).toBe(400);
+          const document = (yield* body(response!)) as {
+            errors: ReadonlyArray<{ source?: unknown }>;
+          };
+          expect(document.errors[0]!.source).toEqual({ parameter: "page[offset]" });
+        })
+      )
+  );
+
   it.effect("requires every read the linkage needs, not only the URL's own", () =>
     Effect.scoped(
       Effect.gen(function* () {

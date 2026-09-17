@@ -52,9 +52,12 @@ src/routes/       +layout.ts (builds the world once) + one folder per screen
 ```
 
 - `src/lib/domain.ts` — the five nodes and their edges, the mutation contracts
-  with their optimistic handlers, and the reads each screen uses. A node's
-  identity field is always `id`, so Conduit's natural keys ride along as
-  attributes: `users.id === users.username`, `articles.id === articles.slug`.
+  with their optimistic handlers, and the reads each screen uses. Conduit's keys
+  are natural, so a node **declares** which attribute is its identity
+  (`Node.make("users", { id: "username", … })`, `articles` by `slug`): the key
+  is stored once, the edges join against it, and a read says `where: { slug }`.
+  The join collections (`favorites`, `follows`) keep a surrogate `id` — their
+  key is a pair, not one attribute.
 - `src/lib/sync.ts` — `createWorld()`: the app `Layer` and the `ManagedRuntime`
   over it, exposing the `Client` runtime plus the demo side-channel (offline
   toggle, identity).

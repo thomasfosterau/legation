@@ -46,7 +46,6 @@
 
   let draft = $state("");
   let remoteAgent = $state(false);
-  let lastSyncAt = $state<number | null>(null);
 
   // `value` is `unknown` on a resolved row: the node graph types the schema,
   // but not what a read hands back, so the row value is cast at the edge.
@@ -125,8 +124,6 @@
     );
   };
 
-  const syncNow = (): void => void demo.syncNow().then(() => (lastSyncAt = Date.now()));
-
   // Keyboard shortcuts: ⌘Z / ⌃Z to undo, add Shift to redo.
   const onKeydown = (event: KeyboardEvent): void => {
     if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
@@ -148,16 +145,12 @@
       <span class={pending.current.length > 0 ? "pill pill-pending" : "pill pill-clean"}>
         {pending.current.length > 0 ? `${pending.current.length} pending` : "all synced"}
       </span>
-      <span class="muted">
-        {lastSyncAt === null ? "" : `last sync ${new Date(lastSyncAt).toLocaleTimeString()}`}
-      </span>
     </div>
 
     <div class="controls">
       <button class={offline ? "btn btn-warn" : "btn"} onclick={() => void demo.setOnline(offline)}>
         {offline ? "Go online" : "Go offline"}
       </button>
-      <button class="btn" onclick={syncNow}>Sync now</button>
       <button class="btn" onclick={() => void demo.simulateRemote()}>Remote edit</button>
       <button class={remoteAgent ? "btn btn-active" : "btn"} onclick={() => (remoteAgent = !remoteAgent)}>
         {remoteAgent ? "Remote agent: on" : "Remote agent: off"}
