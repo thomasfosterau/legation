@@ -107,26 +107,52 @@ it exists so beta bumps are informed decisions (see ADR-0003).
 
 ## Releases
 
-Merges to `main` run the release workflow (`.github/workflows/release.yml`). It
-verifies the build, then runs `changesets/action@v1`: if unreleased changesets
+Merges to `trunk` run the release workflow (`.github/workflows/release.yml`).
+It verifies the build, then runs `changesets/action`: if unreleased changesets
 exist it opens or updates a **Version Packages** PR (running `changeset
-version`); when that PR is merged it publishes (`changeset publish`). Publishing
-requires the `NPM_TOKEN` repository secret — a granular or automation token from
-npm with publish rights to the `@legation` scope. Provenance is enabled
-(`id-token: write` + `NPM_CONFIG_PROVENANCE`), so the workflow must stay on a
-public repository.
+version`); when that PR is merged it publishes (`changeset publish`, which
+runs `npm publish` per package) and tags the release.
+
+Publishing uses npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers):
+there is no `NPM_TOKEN` secret. The workflow proves its identity to npm with a
+short-lived, workflow-bound token (`id-token: write`), and provenance is
+attached automatically, so the repository must stay public. The publish job
+runs in a protected `release` GitHub Environment so it pauses for manual
+approval, and never runs on forks.
+
+### Maintainer setup (one-time)
+
+1. **Allow Actions to open the Version Packages PR.** **Settings → Actions →
+   General → Workflow permissions** → enable **"Allow GitHub Actions to create
+   and approve pull requests"**. Without it the built-in `GITHUB_TOKEN` cannot
+   open pull requests even though the job grants `pull-requests: write`.
+2. **Configure the trusted publisher on every package.** A trusted publisher
+   can only be attached to a package that already exists on npm (see the first
+   release below). For each `@legation/*` package on npmjs.com, open
+   **Settings → Trusted Publisher** and add:
+   - Provider: **GitHub Actions**
+   - Repository: `thomasfosterau/legation`
+   - Workflow: `release.yml`
+   - Environment: `release`
+
+   Then remove any classic automation tokens for the package.
+
+3. **Protect the `release` environment.** **Settings → Environments →
+   `release`** → enable **Required reviewers** (yourself) and restrict
+   deployment to the `trunk` branch.
+4. **Protect `trunk`.** Require pull requests and passing CI before merge and
+   disallow direct pushes, so a release can only be triggered by merging the
+   reviewed Version Packages PR.
 
 ### First release (manual, once per package)
 
-`changeset publish` can only version-bump packages that already exist on the
-registry, and the `@legation` scope must be provisioned before automation can
-use it. The initial publish is therefore done by hand:
+The `@legation` scope must be provisioned, and each package must exist on the
+registry before a trusted publisher can be attached to it. The initial publish
+is therefore done by hand, with your own npm login:
 
 1. Create the `@legation` organisation/scope on npm and confirm you have
    publish rights.
-2. Create the `NPM_TOKEN` repository secret so the workflow can publish
-   thereafter.
-3. From a clean checkout of `main`:
+2. From a clean checkout of `trunk`:
 
    ```sh
    npm login
@@ -138,8 +164,12 @@ use it. The initial publish is therefore done by hand:
    `--access public` matches `.changeset/config.json` (`access: "public"`); it
    is required because the packages are scoped.
 
-Once every package has a published `0.1.0`, the workflow above takes over:
-land changesets on `main`, merge the Version Packages PR, and releases publish
+3. Attach the trusted publisher to each published package (maintainer setup
+   step 2 above).
+
+Once every package has a published `0.1.0` and a trusted publisher, the
+workflow above takes over: land changesets on `trunk`, merge the Version
+Packages PR, approve the `release` environment, and releases publish
 automatically.
 
 ## Reporting Issues
