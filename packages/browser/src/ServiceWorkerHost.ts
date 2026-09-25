@@ -8,8 +8,15 @@
  *
  * The engine stays host-agnostic: the same `run` works on the main thread
  * (the documented degraded mode) since it only needs BroadcastChannel.
- * Background Sync / Periodic Background Sync registration stays app code —
- * wire those events to `ClientEngine.push` / `ClientEngine.pull`.
+ *
+ * Background Sync is composed in, opt-in (#213): install
+ * `BackgroundSync.listen()` at the top level of the worker script and pass
+ * the listener as `backgroundSync`, and the host answers the library's `sync`
+ * tag by flushing the journal through `ClientEngine.push` — so a write
+ * journaled offline lands after its tab has closed — and registers the tag
+ * whenever a mutation is journaled. Periodic Background Sync stays app code
+ * (a `periodicsync` listener calling `ClientEngine.pull`); see
+ * `BackgroundSync` for why.
  *
  * To evict HTTP-cache entries as collection changes land, fork
  * `HttpCacheInvalidation.invalidateOnChanges` alongside `run` in the same
@@ -34,6 +41,7 @@
 import type { Client, Collection, Node } from "@legation/effect";
 import { ClientEngine, type Coverage, EngineHost } from "@legation/effect/internal";
 import { Effect, Scope } from "effect";
+import type * as BackgroundSync from "./BackgroundSync.js";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 
 export interface ServiceWorkerHostOptions {
@@ -54,6 +62,15 @@ export interface ServiceWorkerHostOptions {
    */
   readonly nodes?: Node.NodeRegistry;
   readonly urls?: Client.UrlReads;
+  /**
+   * The worker's Background Sync listener (#213), from
+   * `BackgroundSync.listen()` at the top level of the worker script. The host
+   * attaches its engine for as long as it serves: the listener's `sync`
+   * events — including one that woke the worker before the host had booted —
+   * flush the journal through `push`, and a journaled mutation registers the
+   * tag. Unset, no listener is served and `sync` events are not flushed.
+   */
+  readonly backgroundSync?: BackgroundSync.Listener;
 }
 
 /** The default channel name; Mirror setups should use the same one. */
@@ -83,7 +100,7 @@ export const start = (
   options: ServiceWorkerHostOptions = {}
 ): Effect.Effect<Host, never, ClientEngine.ClientEngine | Scope.Scope> =>
   Effect.gen(function* () {
-    const { channelName = defaultChannelName, registry, nodes, urls } = options;
+    const { channelName = defaultChannelName, registry, nodes, urls, backgroundSync } = options;
     const engine = yield* ClientEngine.ClientEngine;
     const channel = yield* BroadcastMirrorChannel.make(channelName);
     const host = yield* EngineHost.run({
@@ -94,6 +111,7 @@ export const start = (
       ...(urls === undefined ? {} : { urls }),
     });
     yield* engine.runSync.pipe(Effect.ignore);
+    if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);
     return { engine, registrations: host.registrations };
   });
 

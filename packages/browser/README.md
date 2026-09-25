@@ -92,6 +92,63 @@ const coverageOf = Coverage.coverageOf(nodes, host.registrations);
 
 `EngineHost.run` itself now returns the same `Host`.
 
+## `BackgroundSync`: a closed tab's writes still land
+
+`BrowserConnectivity` flushes the journal on reconnect and on a return to the
+tab — but only while a page is open. `BackgroundSync` covers the rest: the
+browser wakes the service worker with a `sync` event once connectivity is
+back, tab or no tab, and the host flushes the journal through the ordinary
+`ClientEngine.push`.
+
+```ts
+// service-worker.ts — at the TOP LEVEL of the script, not inside an Effect:
+// a worker woken for `sync` dispatches the event straight after evaluating
+// the script, before any engine layer could have been built.
+const backgroundSync = BackgroundSync.listen({
+  // Optional: who is signed in now, as the app knows it inside the worker.
+  identity: currentFingerprint,
+});
+
+// ... once the engine's layers are built:
+yield * ServiceWorkerHost.start({ backgroundSync, registry, nodes, urls });
+```
+
+- **Only the library's tag** (`BackgroundSync.defaultTag`, or `tag`) is
+  answered. A worker receives every Background Sync registration on the
+  origin, and a foreign tag's event is left untouched.
+- **Registration** happens in the worker whenever a mutation is journaled
+  (where a mirror's write lands). A page can also call
+  `BackgroundSync.register()` itself after a mutation.
+- **Absence is a working state.** Background Sync is Chromium-only; on Safari
+  and Firefox `register` returns `"Unsupported"`, logs only at debug level,
+  and the journal flushes on the next connectivity signal instead.
+- **No retry ladder.** A transport failure rejects the event, which is the
+  browser's cue to reschedule it; the journal is untouched either way.
+- **The identity boundary holds** (#212). Quarantined entries are unreachable
+  from `push`, so a `sync` event never sends a superseded identity's writes;
+  with `identity` set, a flush also skips (`"IdentityChanged"`) whenever the
+  store is not stamped for whoever is signed in now.
+- **The host must be able to boot without a tab.** The listener holds a `sync`
+  event open for `readyTimeout` (30 seconds) waiting for a host; a worker that
+  only starts its host on a page's handshake never attaches on a tab-less wake.
+
+### Why delete a hand-rolled outbox for this
+
+An outbox that replays raw HTTP requests has two defects that are properties
+of the approach, not bugs in it. A send that succeeds but whose response is
+lost is indistinguishable from a failure and gets retried, duplicating the
+write — hence client-generated ids plus a re-fetch to prove a 409 was one's own
+retry. And a 4xx has to be discarded, because retrying it forever would wedge
+the queue, so the user's write silently vanishes. The journal has neither
+problem: per-client mutation ids give exactly-once application from the
+backend's ledger, and a refused write is a permanent rejection — acknowledged
+and skipped so nothing behind it wedges, its optimistic effect dropped, and
+the refusal kept in `mutationStates` with its reason.
+
+Periodic Background Sync is not wrapped: it has its own permission story and
+battery cost. A worker that wants a periodic pull can call `ClientEngine.pull`
+from its own `periodicsync` listener.
+
 ## `ElectedHost`: leader election for the no-service-worker topology
 
 `ServiceWorkerHost.run` is the recommended deployment (the engine lives in

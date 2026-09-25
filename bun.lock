@@ -121,6 +121,7 @@
       },
       "devDependencies": {
         "@effect/platform-browser": "catalog:",
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
         "fake-indexeddb": "^6.0.0",
       },

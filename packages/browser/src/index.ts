@@ -21,6 +21,9 @@
  *   engine's collection changes (the `collection:{name}` tag convention)
  * - `BrowserConnectivity`: layers `navigator.onLine` + focus signals onto a
  *   `ClientTransport` so the sync loop's reconnect/focus triggers fire
+ * - `BackgroundSync`: the worker's `sync` listener and the registration
+ *   helper, so a journal written offline flushes after its tab has closed
+ *   (#213) — composed into `ServiceWorkerHost` via `backgroundSync`
  */
 
 export * as IndexedDbClientStore from "./IndexedDbClientStore.js";
@@ -33,3 +36,4 @@ export { EngineHost, MirrorChannel, MirrorProtocol, Mirror } from "@legation/eff
 export * as CacheApiHttpCache from "./CacheApiHttpCache.js";
 export * as HttpCacheInvalidation from "./HttpCacheInvalidation.js";
 export * as BrowserConnectivity from "./BrowserConnectivity.js";
+export * as BackgroundSync from "./BackgroundSync.js";
