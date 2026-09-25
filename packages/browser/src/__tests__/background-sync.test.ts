@@ -111,6 +111,9 @@ const fakeScope = (options: { readonly firesOnRegister?: boolean } = {}) => {
       tag,
       lastChance,
       waitUntil: (promise) => {
+        // The browser consumes a held promise; so does this fake, so a
+        // rejection nobody has awaited yet is not an unhandled one.
+        promise.catch(() => undefined);
         held.push(promise);
       },
     };
@@ -553,6 +556,77 @@ describe("BackgroundSync (#213)", () => {
           engine
             .mutate("todo/set", { id: "1", title: "stuck" })
             .pipe(Effect.andThen(Effect.sync(() => self.tags))),
+          (tags) => tags.includes(BackgroundSync.defaultTag)
+        );
+      }).pipe(Effect.scoped)
+    );
+
+    it.live(
+      "a terminal push failure with an immediately-firing SyncManager registers once and fires once: no loop",
+      () =>
+        Effect.gen(function* () {
+          // Online, the registration fires `sync` at once; its flush pushes
+          // directly (not through the sync loop), so its own failure rejects
+          // the event for the browser to reschedule and never re-registers.
+          const self = fakeScope({ firesOnRegister: true });
+          const listener = listenOn(self, { offline: Effect.succeed(false) });
+          const { engine, store, pushes, failure } = yield* makeEngine(
+            yield* ClientStore.makeMemory,
+            { syncLoop: { pushDebounce: "50 millis" }, retry: { push: Schedule.recurs(0) } }
+          );
+          yield* listener.serve(engine);
+          yield* engine.runSync;
+          // Warm up: a write the loop drains proves its trigger is subscribed.
+          yield* eventually(
+            engine
+              .mutate("todo/set", { id: "0", title: "warm-up" })
+              .pipe(Effect.andThen(Effect.sleep("200 millis")), Effect.andThen(Ref.get(pushes))),
+            (sent) => sent.length > 0
+          );
+          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+          expect(self.tags).toEqual([]);
+
+          // One write; the backend is unreachable.
+          yield* Ref.set(failure, "transport");
+          yield* engine.mutate("todo/set", { id: "1", title: "stuck" });
+          yield* eventually(
+            Effect.sync(() => self.fired.length),
+            (fired) => fired > 0
+          );
+          const flushed = yield* settle(self.fired[0]);
+          expect(flushed.ok).toBe(false);
+          // Give any loop time to show itself.
+          yield* Effect.sleep("300 millis");
+          expect(self.tags).toEqual([BackgroundSync.defaultTag]);
+          expect(self.fired).toHaveLength(1);
+          expect(yield* store.pendingMutations).toHaveLength(1);
+        }).pipe(Effect.scoped),
+      30_000
+    );
+
+    it.live("by default, a mutation journaled while navigator.onLine is false registers", () =>
+      Effect.gen(function* () {
+        // No `offline` option: the default reads `navigator.onLine`, which
+        // the worker's `WorkerNavigator` carries. Stubbed for the test.
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Object.defineProperty(globalThis.navigator, "onLine", {
+              configurable: true,
+              get: () => false,
+            })
+          ),
+          () =>
+            Effect.sync(() => {
+              delete (globalThis.navigator as { onLine?: boolean }).onLine;
+            })
+        );
+        const self = fakeScope();
+        const listener = listenOn(self);
+        const { engine } = yield* makeEngine(yield* ClientStore.makeMemory);
+        yield* listener.serve(engine);
+        yield* engine.mutate("todo/set", { id: "1", title: "offline" });
+        yield* eventually(
+          Effect.sync(() => self.tags),
           (tags) => tags.includes(BackgroundSync.defaultTag)
         );
       }).pipe(Effect.scoped)

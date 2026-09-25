@@ -125,6 +125,15 @@ yield * ServiceWorkerHost.start({ backgroundSync, registry, nodes, urls });
   so registering every mutation would push each one on its own and bypass
   `pushDebounce` and paced compaction (#246). A page can also call
   `BackgroundSync.register()` itself when a write could not be sent.
+- **Two limits of registration from the worker.** Chromium refuses a
+  registration made from a worker while no window of the origin is open, so a
+  push that fails terminally _after the last tab has closed_ registers
+  nothing; the journal then waits for the next page. A page that wants to
+  cover that case can call `BackgroundSync.register()` on `pagehide` (or
+  `visibilitychange` to hidden) while it knows writes are pending. And on
+  reconnect with a page open, both the sync loop and the `sync` flush push:
+  the backend's ledger skips the duplicate, so the cost is one extra round
+  trip, not a double write.
 - **Absence is a working state.** Background Sync is Chromium-only; on Safari
   and Firefox `register` returns `"Unsupported"`, logs only at debug level,
   and the journal flushes on the next connectivity signal instead.
