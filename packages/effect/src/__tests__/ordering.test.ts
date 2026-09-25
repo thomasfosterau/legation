@@ -94,6 +94,7 @@ describe("Predicate.compareText (ADR-0028 rule (c))", () => {
 
   it("orders the known boundary cases", () => {
     expect(Predicate.compareText("￿", "😀")).toBe(-1); // U+FFFF < U+1F600
+    // oxlint-disable-next-line no-constant-binary-expression -- the literal comparison is the point: code units say the opposite
     expect("￿" < "😀").toBe(false); // code units say the opposite
     expect(Predicate.compareText("", "\u{10000}")).toBe(-1);
     expect(Predicate.compareText("a", "a😀")).toBe(-1);

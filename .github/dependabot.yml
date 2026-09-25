@@ -1,0 +1,43 @@
+# Dependabot version updates. Security updates are enabled separately in the
+# repository settings and are not affected by the `ignore` rules below.
+#
+# The workspace is on bun (`bun.lock`), so the npm manifests are updated
+# through the `bun` ecosystem: the `npm` ecosystem would edit package.json
+# without touching `bun.lock`, and `bun ci` would then fail on the drifted
+# lockfile.
+#
+# Effect is deliberately excluded from version updates: the exact prerelease
+# lives once in the root Bun catalog and is mirrored as a concrete string in
+# every package's `peerDependencies`, which Dependabot cannot keep in step
+# (see CONTRIBUTING.md "Effect version upgrades"). The weekly
+# `effect-beta-compat.yml` canary reports when a bump needs attention.
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+    ignore:
+      - dependency-name: "effect"
+      - dependency-name: "@effect/*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "ci"

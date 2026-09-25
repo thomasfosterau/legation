@@ -354,6 +354,7 @@ const makeBackend = Effect.gen(function* () {
   const store: Store = new Map();
   const { client, requests } = yield* makeInProcessClient(store);
   const atomic = Convention.reflectAtomic(api);
+  // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
   expect(atomic).toEqual({
     groupId: "operations",
     name: "operations",

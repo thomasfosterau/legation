@@ -15,7 +15,12 @@
     "es2022": true
   },
   "rules": {
-    "no-underscore-dangle": ["warn", { "allow": ["_tag"] }]
+    "no-underscore-dangle": [
+      "warn",
+      {
+        "allow": ["_tag"]
+      }
+    ]
   },
   "ignorePatterns": [
     "dist/**",
@@ -27,9 +32,37 @@
   ],
   "overrides": [
     {
-      "files": ["packages/*/src/__tests__/**/*.ts"],
+      "files": ["packages/*/src/**/__tests__/**/*.ts"],
       "env": {
         "vitest": true
+      },
+      "rules": {
+        "vitest/no-standalone-expect": [
+          "error",
+          {
+            "additionalTestBlockFunctions": [
+              "it.effect",
+              "it.live",
+              "it.scoped",
+              "it.scopedLive",
+              "it.layer"
+            ]
+          }
+        ],
+        "vitest/expect-expect": [
+          "error",
+          {
+            "assertFunctionNames": ["expect", "expect*", "check*"]
+          }
+        ],
+        "vitest/valid-expect": [
+          "error",
+          {
+            "maxArgs": 2
+          }
+        ],
+        "vitest/no-conditional-expect": "off",
+        "vitest/require-to-throw-message": "off"
       }
     }
   ]
