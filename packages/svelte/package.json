@@ -49,12 +49,12 @@
   "peerDependencies": {
     "effect": "4.0.0-beta.107",
     "svelte": ">=5.40",
-    "@sveltejs/kit": "^2.0.0"
+    "@sveltejs/kit": "^2.70.3"
   },
   "devDependencies": {
     "effect": "catalog:",
     "svelte": "^5",
-    "@sveltejs/kit": "^2.0.0"
+    "@sveltejs/kit": "^2.70.3"
   },
   "repository": {
     "type": "git",
