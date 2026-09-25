@@ -105,7 +105,9 @@ back, tab or no tab, and the host flushes the journal through the ordinary
 // a worker woken for `sync` dispatches the event straight after evaluating
 // the script, before any engine layer could have been built.
 const backgroundSync = BackgroundSync.listen({
-  // Optional: who is signed in now, as the app knows it inside the worker.
+  // Required: who is signed in now, as the app knows it inside the worker
+  // (an Effect resolving a fingerprint, or `undefined` for "cannot tell").
+  // An app with no sign-in at all passes `BackgroundSync.identityUnchecked`.
   identity: currentFingerprint,
 });
 
@@ -116,18 +118,26 @@ yield * ServiceWorkerHost.start({ backgroundSync, registry, nodes, urls });
 - **Only the library's tag** (`BackgroundSync.defaultTag`, or `tag`) is
   answered. A worker receives every Background Sync registration on the
   origin, and a foreign tag's event is left untouched.
-- **Registration** happens in the worker whenever a mutation is journaled
-  (where a mirror's write lands). A page can also call
-  `BackgroundSync.register()` itself after a mutation.
+- **Registration happens only when the journal cannot drain now**: a mutation
+  journaled while the worker is offline (`navigator.onLine === false`, or the
+  `offline` option), or a push that failed terminally. Never on an online
+  write: online, Chromium fires a fresh registration's `sync` almost at once,
+  so registering every mutation would push each one on its own and bypass
+  `pushDebounce` and paced compaction (#246). A page can also call
+  `BackgroundSync.register()` itself when a write could not be sent.
 - **Absence is a working state.** Background Sync is Chromium-only; on Safari
   and Firefox `register` returns `"Unsupported"`, logs only at debug level,
   and the journal flushes on the next connectivity signal instead.
 - **No retry ladder.** A transport failure rejects the event, which is the
   browser's cue to reschedule it; the journal is untouched either way.
 - **The identity boundary holds** (#212). Quarantined entries are unreachable
-  from `push`, so a `sync` event never sends a superseded identity's writes;
-  with `identity` set, a flush also skips (`"IdentityChanged"`) whenever the
-  store is not stamped for whoever is signed in now.
+  from `push`, so a `sync` event never sends a superseded identity's writes.
+  That only covers a reset that ran, so `identity` is **required**: a flush
+  skips (`"IdentityChanged"`) whenever the store is not stamped for whoever
+  is signed in now — which catches a tab that closed before `Client.reset`.
+  `BackgroundSync.identityUnchecked` opts out explicitly, and accepts that a
+  store still stamped for a signed-out user would be pushed; it is only for
+  apps with no sign-in.
 - **The host must be able to boot without a tab.** The listener holds a `sync`
   event open for `readyTimeout` (30 seconds) waiting for a host; a worker that
   only starts its host on a page's handshake never attaches on a tab-less wake.

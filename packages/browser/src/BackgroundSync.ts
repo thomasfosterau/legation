@@ -40,9 +40,21 @@
  *   holds the event open until a host attaches, then flushes.
  * - `ServiceWorkerHost.start({ backgroundSync: listener })` — attaches the
  *   host's engine to the listener for the host's lifetime, and registers the
- *   tag whenever a mutation is journaled while a page is open.
+ *   tag when the journal cannot drain now (see below).
  * - {@link register} — the page-side registration, for an app that wants to
- *   ask from the page after a journaled mutation. Best-effort by design.
+ *   ask from the page when a write could not be sent. Best-effort by design.
+ *
+ * ## Register only when the journal cannot drain
+ *
+ * Online, Chromium fires a fresh registration's `sync` event almost at once,
+ * and the flush is a direct `push`. Registering after every mutation would
+ * therefore give every online write its own push — bypassing the sync loop's
+ * `pushDebounce`, and defeating paced compaction (#117), since
+ * `dropIfPending` never touches an entry a push has claimed (#246). So the
+ * host registers only in the two cases the sync loop cannot cover by itself:
+ * a mutation journaled while the worker is **offline**, and a push that
+ * **failed terminally** (the engine's retry policy exhausted). Online, the
+ * sync loop drains the journal as it always has.
  *
  * ## Only the library's tag
  *
@@ -71,12 +83,14 @@
  *   unpushed entries into a keyspace `push` cannot read, so a sync event never
  *   pushes them, whoever is signed in.
  * - **The worker may not know a reset happened.** A tab that closed before the
- *   app called `Client.reset` leaves the store stamped for the old identity.
- *   Give {@link ListenOptions.identity} an Effect that resolves the
- *   fingerprint of whoever is signed in now, and the flush compares it with
- *   the stamp first: anything but an exact match skips the flush
- *   (`"IdentityChanged"`) and leaves the journal for the next page boot to
- *   reset or upgrade. Skipping is the only safe move from a context with no UI.
+ *   app called `Client.reset` leaves the store stamped for the old identity,
+ *   and quarantine cannot help: nothing moved. So {@link ListenOptions.identity}
+ *   is **required** — an Effect that resolves the fingerprint of whoever is
+ *   signed in now, which the flush compares with the stamp first: anything but
+ *   an exact match skips the flush (`"IdentityChanged"`) and leaves the
+ *   journal for the next page boot to reset or upgrade. Skipping is the only
+ *   safe move from a context with no UI. An app with no signed-in identity at
+ *   all passes {@link identityUnchecked} to say so explicitly.
  *
  * ## Periodic Background Sync
  *
@@ -218,27 +232,61 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
     );
   });
 
+/** Whether the worker's own view says the network is down. */
+const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
+  () => typeof navigator !== "undefined" && navigator.onLine === false
+);
+
+export interface RegisterOnJournalOptions extends RegisterOptions {
+  /**
+   * Whether the journal cannot drain right now. Defaults to
+   * `navigator.onLine === false` in the worker (`WorkerNavigator.onLine`).
+   */
+  readonly offline?: Effect.Effect<boolean>;
+}
+
 /**
- * Register the tag every time `engine` journals a mutation, for the scope's
- * lifetime. The host's side of {@link register}: in the service-worker
- * topology a page's mutation is journaled in the worker, so the worker is the
- * one that knows. Chromium only accepts a registration from a worker while a
- * window of the origin is open — which is exactly when a mutation arrives
- * from a mirror — and a refusal is still only a debug line.
+ * Register the tag for the scope's lifetime whenever `engine`'s journal
+ * cannot drain now — the host's side of {@link register}, since in the
+ * service-worker topology a page's mutation is journaled in the worker:
+ *
+ * - a mutation is journaled while {@link RegisterOnJournalOptions.offline}
+ *   holds; and
+ * - a push fails terminally (`ClientEngine.syncFailures`, after the retry
+ *   policy is exhausted) — reachable network, unreachable backend.
+ *
+ * Never on an online mutation: the sync loop drains those, debounced and
+ * compacted, and an online registration would fire `sync` at once and push
+ * each write on its own (#246). Chromium only accepts a registration from a
+ * worker while a window of the origin is open; a refusal is a debug line.
  */
 export const registerOnJournal = (
   engine: ClientEngine.ClientEngine,
-  options: RegisterOptions = {}
+  options: RegisterOnJournalOptions = {}
 ): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.forkScoped(
-    engine.engineEvents.pipe(
-      Stream.filter((event) => event._tag === "MutationJournaled"),
-      Stream.runForEach(() => register(options))
-    ),
-    // Subscribe before returning, so a mutation journaled straight after
-    // the host starts is not missed.
-    { startImmediately: true }
-  ).pipe(Effect.asVoid);
+  Effect.gen(function* () {
+    const offline = options.offline ?? navigatorOffline;
+    // Two forks rather than one merged stream: each subscribes synchronously
+    // (`startImmediately`) before this returns, so a mutation journaled
+    // straight after the host starts is not missed. (`Stream.merge` would
+    // subscribe on fibers of its own, later.)
+    const registerOn = <A>(stream: Stream.Stream<A>) =>
+      Effect.forkScoped(
+        Stream.runForEach(stream, () => register(options)),
+        {
+          startImmediately: true,
+        }
+      );
+    yield* registerOn(
+      engine.engineEvents.pipe(
+        Stream.filter((event) => event._tag === "MutationJournaled"),
+        Stream.filterEffect(() => offline)
+      )
+    );
+    yield* registerOn(
+      engine.syncFailures.pipe(Stream.filter((failure) => failure.operation === "push"))
+    );
+  });
 
 // ─── The flush ───────────────────────────────────────────────────────────────
 
@@ -246,9 +294,10 @@ export const registerOnJournal = (
  * What a flush did. Each is a settled outcome — the `sync` event resolves and
  * the browser does not retry:
  *
- * - `Flushed` — the journal was pushed. Acknowledged entries are trimmed and
- *   their optimistic effects dropped; a permanently rejected one settles as
- *   `rejected` in `mutationStates`, with its reason.
+ * - `Flushed` — the push completed (possibly with nothing pending).
+ *   Acknowledged entries are trimmed and their optimistic effects dropped; a
+ *   permanently rejected one settles as `rejected` in `mutationStates`, with
+ *   its reason.
  * - `IdentityChanged` — the store is not stamped for whoever is signed in now
  *   (see {@link ListenOptions.identity}); nothing was pushed, and the journal
  *   waits for the next page boot to apply the boundary's transition.
@@ -258,9 +307,27 @@ export const registerOnJournal = (
  */
 export type FlushOutcome = "Flushed" | "IdentityChanged" | "UpdateNeeded";
 
+/**
+ * The explicit opt-out from the flush's identity check, for an app with **no
+ * signed-in identity at all** (every session is the same public principal).
+ * The flush then relies on the store's boundary alone: quarantined entries
+ * are still unreachable from push, but a store still stamped for a user who
+ * signed out in a tab that closed before `Client.reset` ran **would be
+ * pushed**. Never pass this in an app that has sign-in.
+ */
+export const identityUnchecked: unique symbol = Symbol.for("@legation/browser/identityUnchecked");
+
+/**
+ * Who is signed in now, as the app resolves it inside the worker — or
+ * {@link identityUnchecked}. See {@link ListenOptions.identity}.
+ */
+export type IdentitySource =
+  | Effect.Effect<Identity.Fingerprint | undefined>
+  | typeof identityUnchecked;
+
 export interface FlushOptions {
   /** See {@link ListenOptions.identity}. */
-  readonly identity?: Effect.Effect<Identity.Fingerprint | undefined>;
+  readonly identity: IdentitySource;
 }
 
 /**
@@ -271,10 +338,10 @@ export interface FlushOptions {
  */
 export const flush = (
   engine: ClientEngine.ClientEngine,
-  options: FlushOptions = {}
+  options: FlushOptions
 ): Effect.Effect<FlushOutcome, TransportError | StoreError> =>
   Effect.gen(function* () {
-    if (options.identity !== undefined) {
+    if (options.identity !== identityUnchecked) {
       const current = yield* options.identity;
       const stamped = yield* engine.identity;
       // Exact match only. `undefined` (the app cannot say who is signed in),
@@ -315,20 +382,30 @@ export interface ListenOptions {
    */
   readonly readyTimeout?: Duration.Input;
   /**
-   * The fingerprint of whoever is signed in **now**, as the app resolves it
-   * from inside the worker (e.g. a session-subject hash it keeps beside its
-   * session). When set, a flush pushes only if the store's stamp equals it;
-   * `undefined` means "cannot tell" and skips. Unset, the flush relies on the
-   * store's own boundary alone: quarantined entries are unreachable from push
-   * either way.
+   * **Required.** The fingerprint of whoever is signed in **now**, as the app
+   * resolves it from inside the worker (e.g. a session-subject hash it keeps
+   * beside its session). A flush pushes only if the store's stamp equals it
+   * exactly; `undefined` means "cannot tell" and skips.
+   *
+   * Required rather than optional because the store's own boundary covers
+   * only a reset that ran: a tab closed before `Client.reset` leaves the old
+   * identity's journal in the pushable keyspace, and a background flush would
+   * send it under whoever's cookies the worker now carries. An app with no
+   * sign-in passes {@link identityUnchecked}, which accepts that risk
+   * explicitly.
    */
-  readonly identity?: Effect.Effect<Identity.Fingerprint | undefined>;
+  readonly identity: IdentitySource;
   /**
-   * Register the tag from the worker whenever the attached engine journals a
-   * mutation (see {@link registerOnJournal}). Defaults to `true`; turn it off
-   * when the page registers with {@link register} itself.
+   * Register the tag from the worker when the attached engine's journal
+   * cannot drain now (see {@link registerOnJournal}). Defaults to `true`;
+   * turn it off when the page registers with {@link register} itself.
    */
   readonly registerOnJournal?: boolean;
+  /**
+   * Whether the journal cannot drain now, for {@link registerOnJournal}.
+   * Defaults to `navigator.onLine === false`.
+   */
+  readonly offline?: Effect.Effect<boolean>;
 }
 
 /**
@@ -367,7 +444,7 @@ interface Attached {
  * yield* ServiceWorkerHost.start({ backgroundSync, registry, nodes, urls });
  * ```
  */
-export const listen = (options: ListenOptions = {}): Listener => {
+export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
   const scope = options.scope ?? (globalThis as unknown as Partial<SyncScope>);
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
@@ -398,7 +475,13 @@ export const listen = (options: ListenOptions = {}): Listener => {
   const handle = (event: SyncEvent): Promise<FlushOutcome> =>
     Effect.runPromise(
       whenAttached.pipe(
-        Effect.tapError((error) => Effect.logDebug(error.message)),
+        Effect.tapError((error) =>
+          Effect.logDebug(
+            event.lastChance === true
+              ? `${error.message} (the browser's last chance; the journal flushes on the next connectivity signal)`
+              : error.message
+          )
+        ),
         Effect.flatMap(({ flush: run, services }) =>
           run.pipe(
             Effect.tapError((error) =>
@@ -428,7 +511,7 @@ export const listen = (options: ListenOptions = {}): Listener => {
   const serve: Listener["serve"] = (engine) =>
     Effect.gen(function* () {
       const entry: Attached = {
-        flush: flush(engine, options.identity === undefined ? {} : { identity: options.identity }),
+        flush: flush(engine, { identity: options.identity }),
         services: yield* Effect.context<never>(),
       };
       yield* Effect.acquireRelease(SubscriptionRef.set(attached, Option.some(entry)), () =>
@@ -438,7 +521,11 @@ export const listen = (options: ListenOptions = {}): Listener => {
         )
       );
       if (options.registerOnJournal !== false) {
-        yield* registerOnJournal(engine, { tag, registration });
+        yield* registerOnJournal(engine, {
+          tag,
+          registration,
+          ...(options.offline === undefined ? {} : { offline: options.offline }),
+        });
       }
     });
 

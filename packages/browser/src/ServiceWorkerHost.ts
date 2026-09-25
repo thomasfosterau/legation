@@ -10,11 +10,12 @@
  * (the documented degraded mode) since it only needs BroadcastChannel.
  *
  * Background Sync is composed in, opt-in (#213): install
- * `BackgroundSync.listen()` at the top level of the worker script and pass
+ * `BackgroundSync.listen({ identity })` at the top level of the worker script and pass
  * the listener as `backgroundSync`, and the host answers the library's `sync`
  * tag by flushing the journal through `ClientEngine.push` — so a write
  * journaled offline lands after its tab has closed — and registers the tag
- * whenever a mutation is journaled. Periodic Background Sync stays app code
+ * when the journal cannot drain now (a mutation journaled offline, or a push
+ * that failed terminally; never an online write, #246). Periodic Background Sync stays app code
  * (a `periodicsync` listener calling `ClientEngine.pull`); see
  * `BackgroundSync` for why.
  *
@@ -64,11 +65,11 @@ export interface ServiceWorkerHostOptions {
   readonly urls?: Client.UrlReads;
   /**
    * The worker's Background Sync listener (#213), from
-   * `BackgroundSync.listen()` at the top level of the worker script. The host
+   * `BackgroundSync.listen({ identity })` at the top level of the worker script. The host
    * attaches its engine for as long as it serves: the listener's `sync`
    * events — including one that woke the worker before the host had booted —
-   * flush the journal through `push`, and a journaled mutation registers the
-   * tag. Unset, no listener is served and `sync` events are not flushed.
+   * flush the journal through `push`, and the tag is registered when the
+   * journal cannot drain now (offline, or a terminally failed push). Unset, no listener is served and `sync` events are not flushed.
    */
   readonly backgroundSync?: BackgroundSync.Listener;
 }

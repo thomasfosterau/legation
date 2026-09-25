@@ -9,27 +9,53 @@
  * The transport starts `disconnected`, so the sync loop's own reconnect push
  * never fires and only a `sync` event can move the journal.
  *
- * Behavioural spec: Gardeneria's `apps/service-worker` outbox (its `onSync`
+ * Behavioural spec: a hand-rolled HTTP-replay outbox (its `sync` handler
  * answers one tag; its page-side registration is best-effort). Two of its
  * behaviours are deliberately *not* matched: a refused write is surfaced as
  * `rejected` rather than discarded, and a transport failure rejects the
  * event so the browser reschedules it rather than resolving it silently.
+ *
+ * Registration is gated (#246): only a mutation journaled offline, or a
+ * terminally failed push, registers the tag. The coalescing test uses a
+ * `SyncManager` that fires `sync` the moment a tag is registered — what
+ * Chromium does online — to show online writes still coalesce.
  */
 import {
   Authorization,
   Backend,
   ClientStore,
-  type Identity,
+  Identity,
   MemoryBackend,
   MutationRejected,
   Mutator,
+  StoreError,
   Transport,
   TransportError,
+  VersionNotSupportedError,
 } from "@legation/effect";
-import { ClientEngine, Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
+import {
+  ClientEngine,
+  Cvr,
+  InvalidationBus,
+  Paced,
+  Subset,
+  SyncServer,
+} from "@legation/effect/internal";
 import type { Protocol } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, HashMap, Option, Ref, Schema, Stream } from "effect";
+import {
+  Effect,
+  HashMap,
+  Layer,
+  Logger,
+  LogLevel,
+  Option,
+  Ref,
+  References,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
@@ -68,15 +94,16 @@ interface Dispatched {
   readonly held: Array<Promise<unknown>>;
 }
 
-/** A stand-in for `self`: one `sync` listener slot and a registration. */
-const fakeScope = (registration: BackgroundSync.SyncRegistration = {}) => {
+/**
+ * A stand-in for `self`: `sync` listener slots and a registration whose
+ * `SyncManager` records every tag registered. With `firesOnRegister` it also
+ * dispatches that tag's `sync` event straight away, as Chromium does online,
+ * and keeps what the listeners held in `fired`.
+ */
+const fakeScope = (options: { readonly firesOnRegister?: boolean } = {}) => {
   const listeners: Array<(event: BackgroundSync.SyncEvent) => void> = [];
-  const scope: BackgroundSync.SyncScope = {
-    addEventListener: (_type, listener) => {
-      listeners.push(listener);
-    },
-    registration,
-  };
+  const tags: Array<string> = [];
+  const fired: Array<Promise<unknown>> = [];
   /** Fire a `sync` event for `tag`, as the browser would on a wake. */
   const dispatch = (tag: string, lastChance = false): Dispatched => {
     const held: Array<Promise<unknown>> = [];
@@ -90,20 +117,34 @@ const fakeScope = (registration: BackgroundSync.SyncRegistration = {}) => {
     for (const listener of listeners) listener(event);
     return { held };
   };
-  return { scope, dispatch, listeners };
-};
-
-/** A `SyncManager` that records the tags registered with it. */
-const recordingSyncManager = () => {
-  const tags: Array<string> = [];
   const sync: BackgroundSync.SyncManager = {
     register: (tag) => {
       tags.push(tag);
+      if (options.firesOnRegister === true) fired.push(...dispatch(tag).held);
       return Promise.resolve();
     },
   };
-  return { sync, tags };
+  const scope: BackgroundSync.SyncScope = {
+    addEventListener: (_type, listener) => {
+      listeners.push(listener);
+    },
+    registration: { sync },
+  };
+  return { scope, dispatch, tags, fired };
 };
+
+/** `listen` over a fake scope, with the identity check off unless given. */
+const listenOn = (
+  self: ReturnType<typeof fakeScope>,
+  options: Omit<BackgroundSync.ListenOptions, "scope" | "identity"> & {
+    readonly identity?: BackgroundSync.IdentitySource;
+  } = {}
+) =>
+  BackgroundSync.listen({
+    identity: BackgroundSync.identityUnchecked,
+    ...options,
+    scope: self.scope,
+  });
 
 /** Await a held `waitUntil` promise, as its outcome or its rejection. */
 const settle = (promise: Promise<unknown> | undefined) =>
@@ -129,28 +170,35 @@ const makeServer = Effect.gen(function* () {
   );
 });
 
+type Failure = "none" | "transport" | "version";
+
 /**
  * An engine over `store` and an in-memory transport that records every push
- * and can be made to fail one. The transport reports `disconnected`, so no
- * push happens unless something asks for one.
+ * and can be made to fail one (`failure`). The transport reports
+ * `disconnected`, so no push happens unless something asks for one.
  */
-const makeEngine = (store: ClientStore.ClientStore) =>
+const makeEngine = (
+  store: ClientStore.ClientStore,
+  options: Partial<Pick<ClientEngine.ClientEngineOptions, "syncLoop" | "retry">> = {}
+) =>
   Effect.gen(function* () {
     const handler = yield* makeServer;
     const inner = yield* Transport.makeInMemory(handler, "group-bg");
     yield* inner.setStatus("disconnected");
     const pushes = yield* Ref.make<ReadonlyArray<Protocol.PushRequest>>([]);
-    const offline = yield* Ref.make(false);
+    const failure = yield* Ref.make<Failure>("none");
     const transport: Transport.ClientTransport = {
       ...inner,
       push: (request) =>
-        Ref.get(offline).pipe(
-          Effect.flatMap((down) =>
-            down
+        Ref.get(failure).pipe(
+          Effect.flatMap((mode) =>
+            mode === "transport"
               ? Effect.fail(new TransportError({ message: "offline" }))
-              : Ref.update(pushes, (seen) => [...seen, request]).pipe(
-                  Effect.andThen(inner.push(request))
-                )
+              : mode === "version"
+                ? Effect.fail(new VersionNotSupportedError({ message: "update needed" }))
+                : Ref.update(pushes, (seen) => [...seen, request]).pipe(
+                    Effect.andThen(inner.push(request))
+                  )
           )
         ),
     };
@@ -158,13 +206,29 @@ const makeEngine = (store: ClientStore.ClientStore) =>
       clientId: "client-bg",
       clientGroupId: "group-bg",
       mutators,
+      ...options,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
     );
     yield* engine.subscribe(allTodos);
-    return { engine, store, pushes, offline };
+    return { engine, store, pushes, failure };
   });
+
+/** Every log line at `Warn` or above, with the minimum level lowered to `All`. */
+const recordLogs = () => {
+  const loud: Array<string> = [];
+  const logger = Logger.make((options) => {
+    if (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn")) {
+      loud.push(`${options.logLevel}: ${String(options.message)}`);
+    }
+  });
+  const layer = Layer.merge(
+    Logger.layer([logger]),
+    Layer.succeed(References.MinimumLogLevel)("All")
+  );
+  return { loud, layer };
+};
 
 const phases = (engine: ClientEngine.ClientEngine) =>
   Stream.runHead(engine.mutationStates).pipe(
@@ -204,11 +268,10 @@ describe("BackgroundSync (#213)", () => {
     "journal → sync event → push → acknowledgement → overlay drop, composed into ServiceWorkerHost",
     () =>
       Effect.gen(function* () {
-        const { sync, tags } = recordingSyncManager();
-        const self = fakeScope({ sync });
+        const self = fakeScope();
         // Top-level installation, before any engine exists: the order a
         // worker woken by the browser for a `sync` event actually runs in.
-        const listener = BackgroundSync.listen({ scope: self.scope });
+        const listener = listenOn(self);
 
         const { engine, store, pushes } = yield* makeEngine(yield* ClientStore.makeMemory);
         yield* engine.mutate("todo/set", { id: "1", title: "written offline" });
@@ -248,14 +311,6 @@ describe("BackgroundSync (#213)", () => {
           { mutator: "todo/refused", phase: "rejected", reason: "not allowed" },
           { mutator: "todo/set", phase: "acknowledged" },
         ]);
-
-        // While the host serves, a journaled mutation registers the tag
-        // (the worker is where a mirror's write is journaled).
-        yield* engine.mutate("todo/set", { id: "3", title: "later" });
-        yield* eventually(
-          Effect.sync(() => tags),
-          (seen) => seen.includes(BackgroundSync.defaultTag)
-        );
       }).pipe(Effect.scoped),
     20_000
   );
@@ -263,7 +318,7 @@ describe("BackgroundSync (#213)", () => {
   it.live("answers only its own tag: a foreign tag is left alone and pushes nothing", () =>
     Effect.gen(function* () {
       const self = fakeScope();
-      const listener = BackgroundSync.listen({ scope: self.scope });
+      const listener = listenOn(self);
       const { engine, store, pushes } = yield* makeEngine(yield* ClientStore.makeMemory);
       yield* listener.serve(engine);
       yield* engine.mutate("todo/set", { id: "1", title: "pending" });
@@ -274,39 +329,92 @@ describe("BackgroundSync (#213)", () => {
       yield* Effect.sleep("50 millis");
       expect(yield* Ref.get(pushes)).toEqual([]);
       expect(yield* store.pendingMutations).toHaveLength(1);
+    }).pipe(Effect.scoped)
+  );
 
-      // A custom tag is answered instead of the default, never as well as.
-      const custom = BackgroundSync.listen({ scope: self.scope, tag: "my-app-flush" });
+  it.live("a custom tag is answered instead of the default, never as well as", () =>
+    Effect.gen(function* () {
+      const self = fakeScope();
+      const custom = listenOn(self, { tag: "my-app-flush" });
+      const { engine } = yield* makeEngine(yield* ClientStore.makeMemory);
       yield* custom.serve(engine);
-      expect(self.dispatch("my-app-flush").held).toHaveLength(1);
+      expect(self.dispatch(BackgroundSync.defaultTag).held).toEqual([]);
+      const answered = self.dispatch("my-app-flush");
+      expect(answered.held).toHaveLength(1);
+      expect(yield* settle(answered.held[0])).toEqual({ ok: true, value: "Flushed" });
     }).pipe(Effect.scoped)
   );
 
   it.live("a transport failure rejects the event so the browser reschedules, journal intact", () =>
     Effect.gen(function* () {
       const self = fakeScope();
-      const listener = BackgroundSync.listen({ scope: self.scope });
-      const { engine, store, offline } = yield* makeEngine(yield* ClientStore.makeMemory);
+      const listener = listenOn(self);
+      const { engine, store, failure } = yield* makeEngine(yield* ClientStore.makeMemory);
       yield* listener.serve(engine);
       yield* engine.mutate("todo/set", { id: "1", title: "pending" });
 
-      yield* Ref.set(offline, true);
+      yield* Ref.set(failure, "transport");
       const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag, true).held[0]);
       expect(failed.ok).toBe(false);
       expect(yield* store.pendingMutations).toHaveLength(1);
 
       // The browser's retry (or any later connectivity signal) succeeds.
-      yield* Ref.set(offline, false);
+      yield* Ref.set(failure, "none");
       const retried = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(retried).toEqual({ ok: true, value: "Flushed" });
       expect(yield* store.pendingMutations).toEqual([]);
     }).pipe(Effect.scoped)
   );
 
+  it.live("a schema-version rejection settles as UpdateNeeded and keeps the journal", () =>
+    Effect.gen(function* () {
+      const self = fakeScope();
+      const listener = listenOn(self);
+      const { engine, store, failure } = yield* makeEngine(yield* ClientStore.makeMemory);
+      yield* listener.serve(engine);
+      yield* engine.mutate("todo/set", { id: "1", title: "pending" });
+
+      yield* Ref.set(failure, "version");
+      const settled = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+      // Resolved, not rejected: retrying cannot help until the app updates.
+      expect(settled).toEqual({ ok: true, value: "UpdateNeeded" });
+      expect(yield* store.pendingMutations).toHaveLength(1);
+    }).pipe(Effect.scoped)
+  );
+
+  it.live("a store failure rejects the event and is logged at Warn", () =>
+    Effect.gen(function* () {
+      const logs = recordLogs();
+      const self = fakeScope();
+      const listener = listenOn(self);
+      const inner = yield* ClientStore.makeMemory;
+      const broken = yield* Ref.make(false);
+      const store: ClientStore.ClientStore = {
+        ...inner,
+        pendingMutations: Ref.get(broken).pipe(
+          Effect.flatMap((down) =>
+            down ? Effect.fail(new StoreError({ message: "disk gone" })) : inner.pendingMutations
+          )
+        ),
+      };
+      const { engine } = yield* makeEngine(store);
+      // The flush runs under the services of whoever attached it.
+      yield* listener.serve(engine).pipe(Effect.provide(logs.layer));
+      yield* engine.mutate("todo/set", { id: "1", title: "pending" });
+
+      yield* Ref.set(broken, true);
+      const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+      expect(failed.ok).toBe(false);
+      expect(failed.ok === false && (failed.error as { _tag?: string })._tag).toBe("StoreError");
+      expect(logs.loud).toHaveLength(1);
+      expect(logs.loud[0]).toMatch(/^Warn: .*store/);
+    }).pipe(Effect.scoped)
+  );
+
   it.live("with no host attached in time, the event rejects rather than hanging the worker", () =>
     Effect.gen(function* () {
       const self = fakeScope();
-      BackgroundSync.listen({ scope: self.scope, readyTimeout: "50 millis" });
+      listenOn(self, { readyTimeout: "50 millis" });
       const result = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(result.ok).toBe(false);
       expect(result.ok === false && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
@@ -316,19 +424,162 @@ describe("BackgroundSync (#213)", () => {
   it.live("a closed host detaches: a later event waits for the next host", () =>
     Effect.gen(function* () {
       const self = fakeScope();
-      const listener = BackgroundSync.listen({ scope: self.scope, readyTimeout: "100 millis" });
+      const listener = listenOn(self, { readyTimeout: "100 millis" });
       const { engine } = yield* makeEngine(yield* ClientStore.makeMemory);
-      yield* Effect.scoped(listener.serve(engine));
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* listener.serve(engine);
+          // Attached: the event flushes.
+          const attached = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(attached).toEqual({ ok: true, value: "Flushed" });
+        })
+      );
+      // Detached with the scope: the next event finds no host.
       const result = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(result.ok).toBe(false);
     }).pipe(Effect.scoped)
   );
 
+  describe("registration is gated on the journal being unable to drain (#246)", () => {
+    it.live(
+      "online writes coalesce into one debounced push; an immediately-firing SyncManager is never asked",
+      () =>
+        Effect.gen(function* () {
+          // Chromium online: a registered tag's `sync` fires at once. Before
+          // #246 every journaled mutation registered, so each of these five
+          // writes got its own push.
+          const self = fakeScope({ firesOnRegister: true });
+          const listener = listenOn(self, { offline: Effect.succeed(false) });
+          const { engine, store, pushes } = yield* makeEngine(yield* ClientStore.makeMemory, {
+            syncLoop: { pushDebounce: "150 millis" },
+          });
+          yield* listener.serve(engine);
+          yield* engine.runSync;
+          // Warm up: one write, drained by the loop, proves its debounced
+          // trigger is subscribed before the burst (under load a fixed sleep
+          // is not enough).
+          yield* eventually(
+            engine
+              .mutate("todo/set", { id: "0", title: "warm-up" })
+              // Longer than the debounce window, so a retry never resets it.
+              .pipe(Effect.andThen(Effect.sleep("400 millis")), Effect.andThen(Ref.get(pushes))),
+            (sent) => sent.length > 0
+          );
+          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+          yield* Ref.set(pushes, []);
+
+          for (let n = 1; n <= 5; n++) {
+            yield* engine.mutate("todo/set", { id: "1", title: `edit ${n}` });
+          }
+          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+
+          expect(self.tags).toEqual([]);
+          expect(self.fired).toEqual([]);
+          const sent = yield* Ref.get(pushes);
+          expect(sent).toHaveLength(1);
+          expect(sent[0]!.mutations).toHaveLength(5);
+        }).pipe(Effect.scoped),
+      30_000
+    );
+
+    it.live("online paced compaction is not raced by a sync-triggered push", () =>
+      Effect.gen(function* () {
+        // `dropIfPending` refuses while a push is in flight, so a push fired
+        // by every registration would leave every superseded entry in place.
+        const self = fakeScope({ firesOnRegister: true });
+        const listener = listenOn(self, { offline: Effect.succeed(false) });
+        const { engine, store, pushes } = yield* makeEngine(yield* ClientStore.makeMemory);
+        yield* listener.serve(engine);
+        const paced = yield* Paced.coalesce(engine, "todo/set");
+
+        for (let n = 1; n <= 5; n++) {
+          yield* paced.call("1", { id: "1", title: `edit ${n}` });
+        }
+        yield* Effect.sleep("50 millis");
+
+        expect(self.tags).toEqual([]);
+        expect(self.fired).toEqual([]);
+        expect(yield* Ref.get(pushes)).toEqual([]);
+        // Compacted to the last edit.
+        const pending = yield* store.pendingMutations;
+        expect(pending.map((m) => (m.args as Todo).title)).toEqual(["edit 5"]);
+      }).pipe(Effect.scoped)
+    );
+
+    it.live("a mutation journaled offline registers the tag", () =>
+      Effect.gen(function* () {
+        const network = yield* Ref.make<"online" | "offline">("online");
+        const self = fakeScope();
+        const listener = listenOn(self, {
+          offline: Ref.get(network).pipe(Effect.map((state) => state === "offline")),
+        });
+        const { engine } = yield* makeEngine(yield* ClientStore.makeMemory);
+        yield* listener.serve(engine);
+
+        yield* engine.mutate("todo/set", { id: "1", title: "online" });
+        yield* Effect.sleep("50 millis");
+        expect(self.tags).toEqual([]);
+
+        yield* Ref.set(network, "offline");
+        yield* engine.mutate("todo/set", { id: "2", title: "offline" });
+        yield* eventually(
+          Effect.sync(() => self.tags),
+          (tags) => tags.includes(BackgroundSync.defaultTag)
+        );
+      }).pipe(Effect.scoped)
+    );
+
+    it.live("a push that fails terminally registers the tag", () =>
+      Effect.gen(function* () {
+        const self = fakeScope();
+        const listener = listenOn(self, { offline: Effect.succeed(false) });
+        const { engine, failure } = yield* makeEngine(yield* ClientStore.makeMemory, {
+          // The sync loop's own debounced push, with no retries: the first
+          // failure is terminal and surfaces on `syncFailures`.
+          syncLoop: { pushDebounce: "10 millis" },
+          retry: { push: Schedule.recurs(0) },
+        });
+        yield* listener.serve(engine);
+        yield* engine.runSync;
+        // Let the loop's forked triggers subscribe before the first write.
+        yield* Effect.sleep("30 millis");
+
+        // The network looks up, but the backend is unreachable.
+        yield* Ref.set(failure, "transport");
+        // Keep writing until the debounced push has run and failed (the
+        // loop's trigger subscribes on a fiber of its own). Every write is
+        // online, so only the failure can register.
+        yield* eventually(
+          engine
+            .mutate("todo/set", { id: "1", title: "stuck" })
+            .pipe(Effect.andThen(Effect.sync(() => self.tags))),
+          (tags) => tags.includes(BackgroundSync.defaultTag)
+        );
+      }).pipe(Effect.scoped)
+    );
+
+    it.live("registerOnJournal: false never registers, even offline", () =>
+      Effect.gen(function* () {
+        const self = fakeScope();
+        const listener = listenOn(self, {
+          offline: Effect.succeed(true),
+          registerOnJournal: false,
+        });
+        const { engine } = yield* makeEngine(yield* ClientStore.makeMemory);
+        yield* listener.serve(engine);
+        yield* engine.mutate("todo/set", { id: "1", title: "offline" });
+        yield* Effect.sleep("50 millis");
+        expect(self.tags).toEqual([]);
+      }).pipe(Effect.scoped)
+    );
+  });
+
   describe("the identity boundary (#212)", () => {
     it.live("a sync event does not push a quarantined journal", () =>
       Effect.gen(function* () {
         const self = fakeScope();
-        const listener = BackgroundSync.listen({ scope: self.scope });
+        // Bob is who the app says is signed in now.
+        const listener = listenOn(self, { identity: Effect.succeed(BOB) });
         const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
         const { engine, pushes } = yield* makeEngine(store);
         yield* listener.serve(engine);
@@ -353,7 +604,7 @@ describe("BackgroundSync (#213)", () => {
         // stamped for Alice, but Bob is who the app now says is signed in.
         const current = yield* Ref.make<Identity.Fingerprint | undefined>(BOB);
         const self = fakeScope();
-        const listener = BackgroundSync.listen({ scope: self.scope, identity: Ref.get(current) });
+        const listener = listenOn(self, { identity: Ref.get(current) });
         const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
         const { engine, pushes } = yield* makeEngine(store);
         yield* listener.serve(engine);
@@ -376,6 +627,30 @@ describe("BackgroundSync (#213)", () => {
         expect(flushed).toEqual({ ok: true, value: "Flushed" });
         expect(yield* Ref.get(pushes)).toHaveLength(1);
         expect(yield* store.pendingMutations).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.live("an anonymous replica is not flushed under a sign-in, and is under anonymous", () =>
+      Effect.gen(function* () {
+        // Anonymous → signed in is the one benign transition, but a
+        // context with no UI does not apply it: the page boot does.
+        const current = yield* Ref.make<Identity.Fingerprint | undefined>(ALICE);
+        const self = fakeScope();
+        const listener = listenOn(self, { identity: Ref.get(current) });
+        const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+        const { engine, pushes } = yield* makeEngine(store);
+        yield* listener.serve(engine);
+        yield* engine.mutate("todo/set", { id: "1", title: "an anonymous write" });
+
+        const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+        expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
+        expect(yield* Ref.get(pushes)).toEqual([]);
+        expect(yield* store.pendingMutations).toHaveLength(1);
+
+        yield* Ref.set(current, Identity.anonymous);
+        const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+        expect(flushed).toEqual({ ok: true, value: "Flushed" });
+        expect(yield* Ref.get(pushes)).toHaveLength(1);
       }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
     );
   });
