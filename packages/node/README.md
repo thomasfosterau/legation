@@ -14,6 +14,19 @@ bun add @legation/node @legation/effect effect
 
 `ws` is bundled as a dependency; `effect` is a peer dependency.
 
+**Install `redis` too.** `@effect/platform-node` (a peer of this package)
+declares a **non-optional** peer on `redis` (`>=5.0.0 <7.0.0`), and it means
+it: its root entry re-exports `NodeRedis`, which imports `redis` at module
+load, and this package imports that root entry. Under Node's ESM loader a
+missing `redis` therefore fails at import (`ERR_MODULE_NOT_FOUND: Cannot find
+package 'redis'`) even though nothing here uses Redis. npm, bun and pnpm
+(with its default `auto-install-peers`) install the peer for you; a setup that
+skips peers (`--legacy-peer-deps`, `auto-install-peers=false`) must add it:
+
+```sh
+bun add redis
+```
+
 ## Effect version
 
 Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).

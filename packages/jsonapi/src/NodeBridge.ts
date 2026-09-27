@@ -34,7 +34,7 @@
  * naming an inverse by hand.
  *
  * **The filterable set** (ADR-0028 rule d, #154) is read off the resource's
- * own declaration (effect-jsonapi 0.13: `Filter.able` / `Sort.able` piped
+ * own declaration (effect-jsonapi, since 0.13: `Filter.able` / `Sort.able` piped
  * onto an attribute schema, `Resource.attribute(schema, { filter, sort })`,
  * `Relationship.one(ref, { filter })`) through `Resource.filterable` /
  * `Resource.sortable`. An attribute keeps its name and derives its literal

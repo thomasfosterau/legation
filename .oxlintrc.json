@@ -52,7 +52,7 @@
         "vitest/expect-expect": [
           "error",
           {
-            "assertFunctionNames": ["expect", "expect*", "check*", "bench"]
+            "assertFunctionNames": ["expect", "expect*", "check*"]
           }
         ],
         "vitest/valid-expect": [
@@ -63,6 +63,17 @@
         ],
         "vitest/no-conditional-expect": "off",
         "vitest/require-to-throw-message": "off"
+      }
+    },
+    {
+      "files": ["packages/*/src/**/__tests__/**/*.bench.ts"],
+      "rules": {
+        "vitest/expect-expect": [
+          "error",
+          {
+            "assertFunctionNames": ["expect", "expect*", "check*", "bench", "bench.*"]
+          }
+        ]
       }
     }
   ]

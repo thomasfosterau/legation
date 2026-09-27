@@ -112,7 +112,9 @@ To bump the **dev pin**:
    `overrides` entry, then `bun install`, and check that `bun.lock` lists a
    single version of `effect` and of each `@effect/*` package.
 2. Run all quality gates; fix any API breakage in the same PR.
-3. Add a changeset (patch for all packages unless the bump changes our own API).
+3. No changeset: the dev pin is not part of any published manifest (the peer
+   range is), so moving it releases nothing. Add a changeset only when the bump
+   changes our own API or behaviour, and then for the packages it changes.
 
 Raise the **floor** only when the code needs an API newer than it: re-run the
 gates with the catalog temporarily at the new floor, update the peer ranges and

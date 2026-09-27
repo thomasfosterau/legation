@@ -20,6 +20,14 @@
  * Deterministic (mulberry32, fixed seed). Named `*.bench.ts` so `vitest run`
  * ignores it; run with `bun run bench`. Heap deltas are only meaningful when
  * node exposes `gc` (`NODE_OPTIONS=--expose-gc bun run bench …`).
+ *
+ * vitest 5 prints a "Benchmark Warning … accessed module export getters too
+ * many times" for the `CollectionIndex` benches: the hot loop calls
+ * `Predicate.test` / `isNullish` / `compareLiterals` through the module
+ * runner's export getters (vitest resolves `@legation/effect` to source), so
+ * every call pays a getter. The overhead is the same for the scan and the
+ * index, so the comparison stands; absolute numbers read slightly high. See
+ * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
 import { describe, test } from "vitest";
 import { Duration, Effect, Layer } from "effect";
@@ -634,16 +642,14 @@ describe(`KV ClientStore over a ${ROWS}-row collection (in-memory KVS)`, () => {
 });
 
 describe(`CollectionIndex over ${ROWS} rows: eq qty=42`, () => {
-  test("full scan (Predicate.test)", async ({ bench }) => {
-    await bench("full scan (Predicate.test)", () => void fullScan(pointWhere)).run({ time: 500 });
-  });
-  test("indexed evaluate", async ({ bench }) => {
-    await bench(
-      "indexed evaluate",
-      () => void CollectionIndex.evaluate(index, rowsById, pointWhere)
-    ).run({
-      time: 500,
-    });
+  // One test, both cases: `bench.compare` runs the scan and the index under
+  // the same budget and prints them side by side.
+  test("full scan (Predicate.test) vs indexed evaluate", async ({ bench }) => {
+    await bench.compare(
+      bench("full scan (Predicate.test)", () => void fullScan(pointWhere)),
+      bench("indexed evaluate", () => void CollectionIndex.evaluate(index, rowsById, pointWhere)),
+      { time: 500 }
+    );
   });
   test("Subset.applyIndexed with orderBy name (in-memory sort of hits)", async ({ bench }) => {
     await bench(
