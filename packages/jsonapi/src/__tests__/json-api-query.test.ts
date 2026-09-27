@@ -642,6 +642,33 @@ describe("JsonApiQuery.parseRead", () => {
     expect(repeated).toEqual(read("/products?filter[name]=a,b"));
     expect(repeated.read.where).toMatchObject({ _tag: "In", field: "name", values: ["a", "b"] });
   });
+
+  it("reads a repeated sort key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
+    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
+    const repeated = read("/products?sort=-name&sort=id");
+    expect(repeated).toEqual(read("/products?sort=-name,id"));
+    expect(repeated.read.order).toEqual(["-name", "id"]);
+    // The mixed spelling decodes to the same plan too.
+    expect(read("/products?sort=-name&sort=id,priceCents")).toEqual(
+      read("/products?sort=-name,id,priceCents")
+    );
+  });
+
+  it("reads a repeated fields[products] key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
+    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
+    const repeated = read("/products?fields[products]=name&fields[products]=description");
+    expect(repeated).toEqual(read("/products?fields[products]=name,description"));
+    expect(repeated.fields).toEqual({ products: ["name", "description"] });
+  });
+
+  it("still rejects a repeated key at a single-valued position, naming the parameter", () => {
+    expect(parseFailure("/products?page[limit]=1&page[limit]=2")).toMatchObject({
+      parameter: "page[limit]",
+    });
+    expect(
+      parseFailure("/products?filter[priceCents][gt]=1&filter[priceCents][gt]=2")
+    ).toMatchObject({ parameter: "filter[priceCents][gt]" });
+  });
 });
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────

@@ -6,6 +6,14 @@
  *
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
+ *
+ * vitest 5 prints a "Benchmark Warning … accessed module export getters too
+ * many times" here: the residual test calls `Predicate.test` /
+ * `Predicate.compareText` through the module runner's export getters (the
+ * bench imports source, not a bundle), so every call pays a getter. Both
+ * cases pay it, so the indexed-vs-unindexed comparison stands; absolute
+ * numbers read slightly high. See
+ * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
 import { describe, test } from "vitest";
 import { Effect, Schema, Scope, Stream } from "effect";
@@ -163,15 +171,17 @@ const indexedEngine = await buildEngine(true);
 const pointPredicate = Subset.make({ collection: "items", where: Predicate.eq("priority", 42) });
 
 describe(`point-predicate query over ${ROWS} rows`, () => {
-  test("unindexed (full scan)", async ({ bench }) => {
-    await bench("unindexed (full scan)", async () => {
-      await Effect.runPromise(unindexedEngine.query(pointPredicate));
-    }).run({ time: 1000 });
-  });
-
-  test("indexed (hash lookup)", async ({ bench }) => {
-    await bench("indexed (hash lookup)", async () => {
-      await Effect.runPromise(indexedEngine.query(pointPredicate));
-    }).run({ time: 1000 });
+  // One test, both cases: `bench.compare` runs them under the same budget and
+  // prints them side by side, which is the point of this benchmark.
+  test("unindexed (full scan) vs indexed (hash lookup)", async ({ bench }) => {
+    await bench.compare(
+      bench("unindexed (full scan)", async () => {
+        await Effect.runPromise(unindexedEngine.query(pointPredicate));
+      }),
+      bench("indexed (hash lookup)", async () => {
+        await Effect.runPromise(indexedEngine.query(pointPredicate));
+      }),
+      { time: 1000 }
+    );
   });
 });

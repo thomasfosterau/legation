@@ -1,12 +1,19 @@
 name: Effect rc compatibility
 
-# Weekly canary: install the latest effect@rc (instead of the pinned
-# version) and run the full quality gates. The published peer range is open
-# (`>=4.0.0-rc.113`), so consumers can resolve an rc newer than the pin; this
-# job exercises that upper end. Failures here do NOT block anything — they
-# signal that the next bump needs attention. (The file keeps its historical
-# `beta` name; the `beta` dist-tag stopped moving at 4.0.0-beta.107.)
-# See ADR-0003 and CONTRIBUTING.md "Effect version upgrades".
+# Weekly canary over both ends of the published peer range, instead of the
+# pinned version. Failures here do NOT block anything — they signal that the
+# next bump (or the README's tested-floor claim) needs attention.
+#
+# - `latest`: the newest effect@rc. The published range is open
+#   (`>=4.0.0-rc.113`), so consumers can resolve an rc newer than the pin;
+#   this leg exercises that upper end.
+# - `floor`: the lowest version the published range admits, read from
+#   `@legation/effect`'s `peerDependencies.effect`. Every package README says
+#   the packages are tested against it; this leg keeps that true.
+#
+# (The file keeps its historical `beta` name; the `beta` dist-tag stopped
+# moving at 4.0.0-beta.107.) See ADR-0003 and CONTRIBUTING.md "Effect version
+# upgrades".
 
 on:
   schedule:
@@ -15,9 +22,13 @@ on:
 
 jobs:
   canary:
-    name: Latest effect@rc canary
+    name: effect@rc canary (${{ matrix.target }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [latest, floor]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,24 +36,39 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      # The same Node line CI runs (and `@legation/node` declares).
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+
       - name: Install dependencies
         run: bun install
 
-      - name: Resolve latest effect rc
-        id: beta
-        run: |
-          LATEST=$(bun pm view effect dist-tags.rc 2>/dev/null || npm view effect dist-tags.rc)
-          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest effect rc: $LATEST"
-
-      - name: Point the catalog at the latest effect rc
+      - name: Resolve the effect version to test
+        id: rc
         env:
-          VERSION: ${{ steps.beta.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          PINNED=$(node -p "require('./package.json').workspaces.catalog.effect")
+          if [ "$TARGET" = "floor" ]; then
+            # The floor is the published range's lower bound: `>=X` -> `X`.
+            VERSION=$(node -p "require('./packages/effect/package.json').peerDependencies.effect.replace(/^>=\s*/, '')")
+          else
+            VERSION=$(bun pm view effect dist-tags.rc 2>/dev/null || npm view effect dist-tags.rc)
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+          echo "effect under test ($TARGET): $VERSION (pinned: $PINNED)"
+
+      - name: Point the catalog at that version
+        env:
+          VERSION: ${{ steps.rc.outputs.version }}
         run: |
           # Every package's devDependencies reference `effect: "catalog:"`, so
           # overriding the catalog entries (and the `overrides` entry that
           # holds @effect/platform-node-shared in lockstep) rebuilds the whole
-          # workspace against the latest rc.
+          # workspace against that version.
           node -e '
             const fs = require("fs");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -62,13 +88,25 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # `test:run` includes the commerce façade's browser test, which fails
+      # (rather than skips) without Chromium — the same step CI runs.
+      - name: Install Chromium (the commerce façade's browser test)
+        run: bunx playwright-core install --with-deps chromium
+
       - name: Test
         run: bun run test:run
 
       - name: Report
         if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.rc.outputs.version }}
+          PINNED: ${{ steps.rc.outputs.pinned }}
+          STATUS: ${{ job.status }}
         run: |
-          echo "## Effect rc canary: ${{ steps.beta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pinned version in repo: $(node -p "require('./package.json').workspaces.catalog.effect")" >> "$GITHUB_STEP_SUMMARY"
-          echo "Job status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Effect rc canary ($TARGET): $VERSION"
+            echo ""
+            echo "Pinned version in repo: $PINNED"
+            echo "Job status: $STATUS"
+          } >> "$GITHUB_STEP_SUMMARY"
