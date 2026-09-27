@@ -103,7 +103,11 @@ const makeFakeRedis = Effect.gen(function* () {
     );
   }) as Redis.Redis["Service"]["send"];
 
-  return yield* Redis.make({ send });
+  // `Redis.make` requires pub/sub too; the Streams broker only ever sends
+  // commands, so a subscribe here is a test bug, not a code path.
+  const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
+
+  return yield* Redis.make({ send, subscribe });
 });
 
 describe("makeRedisBroker (Redis Streams)", () => {

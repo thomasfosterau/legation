@@ -8,7 +8,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { Effect } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
@@ -87,9 +87,8 @@ console.table(table);
 const patchOnLarge = putOps(0, 20);
 
 describe("per-row store I/O scaling", () => {
-  bench(
-    "20-op patch over a 10k-row collection (value I/O ∝ patch size)",
-    () => {
+  test("20-op patch over a 10k-row collection (value I/O ∝ patch size)", async ({ bench }) => {
+    await bench("20-op patch over a 10k-row collection (value I/O ∝ patch size)", () => {
       const { store } = countingStore();
       Effect.runSync(
         Effect.gen(function* () {
@@ -98,7 +97,6 @@ describe("per-row store I/O scaling", () => {
           yield* s.applyRowOps(patchOnLarge);
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store))
       );
-    },
-    { time: 500 }
-  );
+    }).run({ time: 500 });
+  });
 });

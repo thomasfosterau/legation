@@ -77,7 +77,7 @@
  */
 
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Effect, Option, Result, Schema, SchemaIssue, type SchemaError } from "effect";
+import { Effect, Option, Result, Schema, SchemaIssue } from "effect";
 import {
   type Client,
   FilterPolicy,
@@ -712,7 +712,7 @@ const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | und
 /** A codec rejection as a `QueryError` naming the parameter (the issue's path is the flat key). */
 const decodeError =
   (collection: string) =>
-  (error: SchemaError.SchemaError): QueryError => {
+  (error: Schema.SchemaError): QueryError => {
     const issue = SchemaIssue.makeFormatterStandardSchemaV1()(error.issue).issues[0];
     const parameter = parameterOf(issue?.path);
     return new QueryError({
@@ -1127,11 +1127,18 @@ export const flatFilter = (ast: Filter.Node): Readonly<Record<string, string>> =
  * Serialize sort terms into the JSON:API `sort` value (`-field,field`) through
  * the library's `Query.Sort` codec, so the wire encoding matches the spec's
  * descending-prefix convention by construction.
+ *
+ * Since effect-jsonapi 0.15 the codec's encoded side is `Repeatable`
+ * (`string | ReadonlyArray<string>`) because it also decodes the repeated-key
+ * spelling; its encoder emits the comma form, and an array is joined into
+ * that same form rather than trusted to never appear.
  */
-const encodeSort = (terms: ReadonlyArray<SortTerm>): string =>
-  Schema.encodeSync(UrlQuery.Sort(terms.map((term) => term.field)))(
+const encodeSort = (terms: ReadonlyArray<SortTerm>): string => {
+  const encoded = Schema.encodeSync(UrlQuery.Sort(terms.map((term) => term.field)))(
     terms.map((term) => ({ field: term.field, direction: term.direction }))
   );
+  return typeof encoded === "string" ? encoded : encoded.join(",");
+};
 
 /**
  * Build the JSON:API query string (with its leading `?`, or `` when empty)

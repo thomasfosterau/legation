@@ -13,13 +13,17 @@ Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../..
 
 ## Status
 
-Targets Effect v4 beta and ESM-only consumers.
+Targets the Effect v4 release-candidate line and ESM-only consumers.
 
 ## Installation
 
 ```bash
-bun add @legation/effect effect@4.0.0-beta.107
+bun add @legation/effect effect
 ```
+
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## Module map
 

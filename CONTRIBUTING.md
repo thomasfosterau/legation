@@ -1,6 +1,6 @@
 # Contributing to legation
 
-Thank you for contributing. This repository is a bun-workspaces monorepo using TypeScript, Effect v4 beta, Vitest, Oxlint, Prettier, Fallow, and Changesets.
+Thank you for contributing. This repository is a bun-workspaces monorepo using TypeScript, Effect v4 (release-candidate line), Vitest, Oxlint, Prettier, Fallow, and Changesets.
 
 ## Setup
 
@@ -52,7 +52,7 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 - Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `core`; protocol/framework-specific code gets its own package.
 - Packages import each other by published name (`@legation/effect`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
-- `effect` is a **peer dependency** of every package, pinned to the exact beta version. Never add it as a regular dependency.
+- `effect` is a **peer dependency** of every package, declared as an open floor (`>=4.0.0-rc.113`); the exact version lives only in the root catalog and `bun.lock`. Never add it as a regular dependency.
 
 ## Development Workflow
 
@@ -89,21 +89,42 @@ Conventions:
 
 ## Effect version upgrades
 
-The exact beta version lives once in the root **Bun catalog**
-(`package.json` → `workspaces.catalog`). Every package references it as
-`effect: "catalog:"` in `devDependencies`; `peerDependencies` (the published
-contract) carry the same version as a concrete string, because `changeset
-publish` does not rewrite the `catalog:` protocol. To bump it:
+Two different numbers describe the Effect version, and they move separately
+(ADR-0003, update of 2026-09-27):
 
-1. In one PR, set the new version in the catalog (root `package.json`
-   `workspaces.catalog`) and update the concrete `peerDependencies` in every
-   `packages/*/package.json` to match, then `bun install`.
+- **The exact dev pin** lives once in the root **Bun catalog**
+  (`package.json` → `workspaces.catalog`), together with every companion
+  `@effect/*` package at the same version, and is locked in `bun.lock`. Every
+  package references it as `effect: "catalog:"` in `devDependencies`. The root
+  `overrides` entry holds `@effect/platform-node-shared` (a transitive
+  dependency of `@effect/platform-node`, which it ranges with a caret) at the
+  same version, so the lockfile carries exactly one Effect line.
+- **The published floor** is the open range in each package's
+  `peerDependencies` (`"effect": ">=4.0.0-rc.113"`, and the same range on the
+  `@effect/platform-*` peers). It is written as a concrete string because
+  `changeset publish` does not rewrite the `catalog:` protocol. It is never an
+  exact version: an exact published peer makes the package impossible to
+  install beside a library that needs a different release.
+
+To bump the **dev pin**:
+
+1. In one PR, set the new version on every catalog entry and on the
+   `overrides` entry, then `bun install`, and check that `bun.lock` lists a
+   single version of `effect` and of each `@effect/*` package.
 2. Run all quality gates; fix any API breakage in the same PR.
 3. Add a changeset (patch for all packages unless the bump changes our own API).
 
-A scheduled GitHub Actions workflow (`effect-beta-compat.yml`) runs weekly against the
-latest `effect@beta` and reports incompatibilities ahead of time. It never blocks CI —
-it exists so beta bumps are informed decisions (see ADR-0003).
+Raise the **floor** only when the code needs an API newer than it: re-run the
+gates with the catalog temporarily at the new floor, update the peer ranges and
+each package README's "Effect version" section, and agree the number with the
+sibling libraries first (effect-jsonapi, then effect-auth, then legation
+publish in that order). Moving the floor is a `minor` changeset for every
+package.
+
+A scheduled GitHub Actions workflow (`effect-beta-compat.yml`) runs weekly
+against the latest `effect@rc` (the dist-tag the release-candidate line
+publishes under) and reports incompatibilities ahead of time. It never blocks
+CI — it exists so bumps are informed decisions (see ADR-0003).
 
 ## Releases
 

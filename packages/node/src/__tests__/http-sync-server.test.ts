@@ -49,7 +49,7 @@ const clientSide = Layer.unwrap(
   Effect.gen(function* () {
     const server = yield* HttpServer.HttpServer;
     const address = server.address;
-    if (address._tag !== "TcpAddress") {
+    if (address._tag === "UnixPathAddress") {
       return yield* Effect.die(new Error("expected a TCP address"));
     }
     return RpcTransport.layer({ clientGroupId: "group-a" }).pipe(

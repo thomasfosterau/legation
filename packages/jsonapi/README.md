@@ -29,9 +29,12 @@ resource-agnostic loaders on top (ADR-0016).
 npm install @legation/jsonapi @legation/effect effect
 ```
 
-`effect`, `@legation/effect`, and
-`@thomasfosterau/effect-jsonapi` are required alongside this package. It
-targets Effect v4 beta (`effect@>=4.0.0-beta.107`).
+`effect` and `@legation/effect` are required alongside this package;
+`@thomasfosterau/effect-jsonapi` (`^0.15.1`) is a regular dependency.
+
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## The happy path: sync an existing JSON:API
 

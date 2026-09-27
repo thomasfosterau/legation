@@ -157,7 +157,7 @@ export const serveApp = async (): Promise<App> => {
     Layer.build(syncServer(dbPath, calls)).pipe(Scope.provide(scope))
   );
   const address = Context.get(context, HttpServer.HttpServer).address;
-  if (address._tag !== "TcpAddress") throw new Error("expected the sync server on a TCP port");
+  if (address._tag === "UnixPathAddress") throw new Error("expected the sync server on a TCP port");
   const syncPort = address.port;
 
   // The front: the app's handler once loaded, the carriers proxied.

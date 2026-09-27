@@ -68,6 +68,10 @@ export default {
 npm install @legation/cloudflare @legation/effect @legation/sql effect
 ```
 
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
 ## SSR from a separate Worker
 
 A binding-only API Worker (`workersDev: false`, no custom domain) is reachable

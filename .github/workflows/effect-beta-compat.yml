@@ -1,8 +1,11 @@
-name: Effect beta compatibility
+name: Effect rc compatibility
 
-# Weekly canary: install the latest effect@beta (instead of the pinned
-# version) and run the full quality gates. Failures here do NOT block
-# anything — they signal that the next beta bump needs attention.
+# Weekly canary: install the latest effect@rc (instead of the pinned
+# version) and run the full quality gates. The published peer range is open
+# (`>=4.0.0-rc.113`), so consumers can resolve an rc newer than the pin; this
+# job exercises that upper end. Failures here do NOT block anything — they
+# signal that the next bump needs attention. (The file keeps its historical
+# `beta` name; the `beta` dist-tag stopped moving at 4.0.0-beta.107.)
 # See ADR-0003 and CONTRIBUTING.md "Effect version upgrades".
 
 on:
@@ -12,7 +15,7 @@ on:
 
 jobs:
   canary:
-    name: Latest effect@beta canary
+    name: Latest effect@rc canary
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -25,25 +28,29 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Resolve latest effect beta
+      - name: Resolve latest effect rc
         id: beta
         run: |
-          LATEST=$(bun pm view effect dist-tags.beta 2>/dev/null || npm view effect dist-tags.beta)
+          LATEST=$(bun pm view effect dist-tags.rc 2>/dev/null || npm view effect dist-tags.rc)
           echo "version=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest effect beta: $LATEST"
+          echo "Latest effect rc: $LATEST"
 
-      - name: Point the catalog at the latest effect beta
+      - name: Point the catalog at the latest effect rc
         env:
           VERSION: ${{ steps.beta.outputs.version }}
         run: |
           # Every package's devDependencies reference `effect: "catalog:"`, so
-          # overriding the single catalog entry rebuilds the whole workspace
-          # against the latest beta.
+          # overriding the catalog entries (and the `overrides` entry that
+          # holds @effect/platform-node-shared in lockstep) rebuilds the whole
+          # workspace against the latest rc.
           node -e '
             const fs = require("fs");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
             for (const name of Object.keys(pkg.workspaces.catalog)) {
               pkg.workspaces.catalog[name] = process.env.VERSION;
+            }
+            for (const name of Object.keys(pkg.overrides ?? {})) {
+              if (name.startsWith("@effect/")) pkg.overrides[name] = process.env.VERSION;
             }
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
@@ -61,7 +68,7 @@ jobs:
       - name: Report
         if: always()
         run: |
-          echo "## Effect beta canary: ${{ steps.beta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Effect rc canary: ${{ steps.beta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Pinned version in repo: $(node -p "require('./package.json').workspaces.catalog.effect")" >> "$GITHUB_STEP_SUMMARY"
           echo "Job status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
