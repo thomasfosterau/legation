@@ -13,7 +13,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
 
@@ -58,25 +58,21 @@ console.table(table);
 describe("LiveView churn (100k rows, single-row updates)", () => {
   const view = LiveView.make(subset, seedRows(100_000));
 
-  bench(
-    "200 single-row updates over a 100k-row maintained set",
-    () => {
+  test("200 single-row updates over a 100k-row maintained set", async ({ bench }) => {
+    await bench("200 single-row updates over a 100k-row maintained set", () => {
       let current = view;
       for (let i = 0; i < UPDATES; i++) {
         const target = Math.floor((i * 500) % 100_000);
         current = LiveView.put(current, { id: `r${target}`, value: { rank: 100_000 + i } });
       }
-    },
-    { time: 1000 }
-  );
+    }).run({ time: 1000 });
+  });
 
-  bench(
-    "single delete + reinsert (window-boundary churn) over 100k rows",
-    () => {
+  test("single delete + reinsert (window-boundary churn) over 100k rows", async ({ bench }) => {
+    await bench("single delete + reinsert (window-boundary churn) over 100k rows", () => {
       let current = view;
       current = LiveView.del(current, "r10");
       current = LiveView.put(current, { id: "r10", value: { rank: 5 } });
-    },
-    { time: 1000 }
-  );
+    }).run({ time: 1000 });
+  });
 });

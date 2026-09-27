@@ -16,6 +16,10 @@ it has no data-acquisition path of its own.
 This is a **functional first cut**: plain, legible, correct. Visual polish is
 out of scope — a human design pass comes later.
 
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
 ## Scope
 
 The owned-engine case only: an app that constructs its own `ClientEngine` +

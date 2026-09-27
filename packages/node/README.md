@@ -14,6 +14,12 @@ bun add @legation/node @legation/effect effect
 
 `ws` is bundled as a dependency; `effect` is a peer dependency.
 
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
+Requires Node.js 22 or newer (`engines.node: ">=22"`), the Node line CI runs.
+
 ## Quick start
 
 Compose the in-memory `ServerStore` and `SessionRegistry` into a `SyncHub`, then `serve` a WebSocket server that feeds every incoming connection into the hub:

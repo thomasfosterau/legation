@@ -72,7 +72,7 @@
  * handler needs from the host.
  */
 
-import { Effect, SchemaError } from "effect";
+import { Effect, Schema } from "effect";
 import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
@@ -292,7 +292,7 @@ const respond = (response: Response): Outcome => ({ _tag: "Respond", response })
  */
 const queryFailure = (error: QueryError, cookie: string | undefined): Outcome =>
   error.parameter === "include" ||
-  (error.parameter === undefined && !SchemaError.isSchemaError(error.cause))
+  (error.parameter === undefined && !Schema.isSchemaError(error.cause))
     ? forward
     : respond(respondWith(400, RestHandlers.queryErrorDocument(error), cookie));
 

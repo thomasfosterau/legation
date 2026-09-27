@@ -18,7 +18,7 @@ Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-
 
 Never guess at Effect patterns - check the guide first.
 
-**If `effect-solutions` is unavailable** (e.g. in CI or remote containers): this repo targets **Effect v4 beta**, whose APIs differ from v3 and from most online docs. Verify any uncertain API against the installed type definitions in `node_modules/effect/dist/*.d.ts` before using it.
+**If `effect-solutions` is unavailable** (e.g. in CI or remote containers): this repo targets the **Effect v4 release-candidate line**, whose APIs differ from v3 and from most online docs. Verify any uncertain API against the installed type definitions in `node_modules/effect/dist/*.d.ts` before using it.
 
 <!-- effect-solutions:end -->
 

@@ -21,6 +21,10 @@ core, which must run identically in browsers, workers, edge runtimes, and Node.
 bun add @legation/browser @legation/effect effect
 ```
 
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-browser` is peered with the same floor. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
 ## WebSocket transport
 
 `WebSocketTransport.layer` provides core's `ClientTransport` service, which the sync client

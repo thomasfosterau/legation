@@ -21,7 +21,7 @@
  * ignores it; run with `bun run bench`. Heap deltas are only meaningful when
  * node exposes `gc` (`NODE_OPTIONS=--expose-gc bun run bench …`).
  */
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { Duration, Effect, Layer } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import { IndexedDb } from "@effect/platform-browser";
@@ -616,46 +616,48 @@ const hundredPuts = putOps(rows.slice(0, 100));
 const pointWhere = predicates["eq qty=42 (~1/1000)"];
 
 describe(`KV ClientStore over a ${ROWS}-row collection (in-memory KVS)`, () => {
-  bench(
-    "1-op pull (id-index rewrite dominates)",
-    async () => {
+  test("1-op pull (id-index rewrite dominates)", async ({ bench }) => {
+    await bench("1-op pull (id-index rewrite dominates)", async () => {
       await withCounting(counting, kv.applyRowOps(onePut));
-    },
-    { time: 500 }
-  );
-  bench(
-    "100-op pull",
-    async () => {
+    }).run({ time: 500 });
+  });
+  test("100-op pull", async ({ bench }) => {
+    await bench("100-op pull", async () => {
       await withCounting(counting, kv.applyRowOps(hundredPuts));
-    },
-    { time: 500 }
-  );
-  bench(
-    "cold load listRows",
-    async () => {
+    }).run({ time: 500 });
+  });
+  test("cold load listRows", async ({ bench }) => {
+    await bench("cold load listRows", async () => {
       await withCounting(counting, kv.listRows(COLLECTION));
-    },
-    { time: 1000 }
-  );
+    }).run({ time: 1000 });
+  });
 });
 
 describe(`CollectionIndex over ${ROWS} rows: eq qty=42`, () => {
-  bench("full scan (Predicate.test)", () => void fullScan(pointWhere), { time: 500 });
-  bench("indexed evaluate", () => void CollectionIndex.evaluate(index, rowsById, pointWhere), {
-    time: 500,
+  test("full scan (Predicate.test)", async ({ bench }) => {
+    await bench("full scan (Predicate.test)", () => void fullScan(pointWhere)).run({ time: 500 });
   });
-  bench(
-    "Subset.applyIndexed with orderBy name (in-memory sort of hits)",
-    () =>
-      void Subset.applyIndexed(
-        rowsById,
-        Subset.make({
-          collection: COLLECTION,
-          where: pointWhere,
-          orderBy: [{ field: "name", direction: "asc" }],
-        }),
-        index
-      ),
-    { time: 500 }
-  );
+  test("indexed evaluate", async ({ bench }) => {
+    await bench(
+      "indexed evaluate",
+      () => void CollectionIndex.evaluate(index, rowsById, pointWhere)
+    ).run({
+      time: 500,
+    });
+  });
+  test("Subset.applyIndexed with orderBy name (in-memory sort of hits)", async ({ bench }) => {
+    await bench(
+      "Subset.applyIndexed with orderBy name (in-memory sort of hits)",
+      () =>
+        void Subset.applyIndexed(
+          rowsById,
+          Subset.make({
+            collection: COLLECTION,
+            where: pointWhere,
+            orderBy: [{ field: "name", direction: "asc" }],
+          }),
+          index
+        )
+    ).run({ time: 500 });
+  });
 });

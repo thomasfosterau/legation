@@ -26,6 +26,10 @@ npm install @legation/svelte @legation/effect effect svelte
 `@sveltejs/kit` is an **optional** peer dependency — only `@legation/svelte/kit`
 needs it, and only as a `Cookies` type, so a non-Kit Svelte app pulls nothing.
 
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
 ## The hooks
 
 The package root is the whole read/write surface — the hooks are the API, so

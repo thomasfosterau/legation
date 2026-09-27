@@ -607,7 +607,6 @@ describe("JsonApiQuery.parseRead", () => {
       "/variants?filter[stock]=1.5",
       "/variants?filter[stock][gt]=99999999999",
       "/reviews?filter[createdAt][gt]=2026-01-01",
-      "/products?filter[name]=a&filter[name]=b",
       "/products?filter=x",
       "/products?fields[products]=nope",
       "/products?fields[orders]=id",
@@ -622,7 +621,6 @@ describe("JsonApiQuery.parseRead", () => {
       "filter[stock]",
       "filter[stock][gt]",
       "filter[createdAt][gt]",
-      "filter[name]",
       "filter",
       "fields[products]",
       "fields[orders]",
@@ -633,6 +631,16 @@ describe("JsonApiQuery.parseRead", () => {
     expect(parseFailure("/products?filter[name][gt]=x").message).toMatch(
       /products.*filter\[name\]\[gt\]/
     );
+  });
+
+  it("reads a repeated shorthand filter key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
+    // effect-jsonapi#102 made every list-valued position accept the
+    // repeated-key spelling, so `filter[name]=a&filter[name]=b` is no longer
+    // a 400: it decodes exactly as `filter[name]=a,b` does.
+    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
+    const repeated = read("/products?filter[name]=a&filter[name]=b");
+    expect(repeated).toEqual(read("/products?filter[name]=a,b"));
+    expect(repeated.read.where).toMatchObject({ _tag: "In", field: "name", values: ["a", "b"] });
   });
 });
 

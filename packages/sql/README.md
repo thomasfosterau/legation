@@ -30,3 +30,7 @@ handlers inside one transaction with the per-client `lastMutationId` bump.
 ```bash
 npm install @legation/sql @legation/effect effect
 ```
+
+## Effect version
+
+Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).

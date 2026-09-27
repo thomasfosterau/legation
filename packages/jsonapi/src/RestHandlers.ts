@@ -50,7 +50,7 @@
  * beside hand-written handlers on the same api.
  */
 
-import { Effect, SchemaError } from "effect";
+import { Effect, Schema } from "effect";
 import type { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import {
@@ -172,7 +172,7 @@ export type ErrorDocument = typeof ApiError.WireDocument.Type;
  * with this document too (ADR-0029 §1).
  */
 export const queryErrorDocument = (error: QueryError): ErrorDocument => {
-  if (SchemaError.isSchemaError(error.cause)) {
+  if (Schema.isSchemaError(error.cause)) {
     return Middleware.schemaErrorDocument("Query", error.cause);
   }
   return {

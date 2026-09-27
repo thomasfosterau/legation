@@ -7,7 +7,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { Effect, Schema, Scope, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore, type StoredRow } from "../ClientStore.js";
@@ -163,19 +163,15 @@ const indexedEngine = await buildEngine(true);
 const pointPredicate = Subset.make({ collection: "items", where: Predicate.eq("priority", 42) });
 
 describe(`point-predicate query over ${ROWS} rows`, () => {
-  bench(
-    "unindexed (full scan)",
-    async () => {
+  test("unindexed (full scan)", async ({ bench }) => {
+    await bench("unindexed (full scan)", async () => {
       await Effect.runPromise(unindexedEngine.query(pointPredicate));
-    },
-    { time: 1000 }
-  );
+    }).run({ time: 1000 });
+  });
 
-  bench(
-    "indexed (hash lookup)",
-    async () => {
+  test("indexed (hash lookup)", async ({ bench }) => {
+    await bench("indexed (hash lookup)", async () => {
       await Effect.runPromise(indexedEngine.query(pointPredicate));
-    },
-    { time: 1000 }
-  );
+    }).run({ time: 1000 });
+  });
 });
