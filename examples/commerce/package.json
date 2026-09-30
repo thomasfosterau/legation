@@ -23,7 +23,7 @@
     "@legation/sql": "workspace:*",
     "@legation/svelte": "workspace:*",
     "@thomasfosterau/effect-jsonapi": "^0.15.1",
-    "better-auth": "^1.7.5",
+    "better-auth": "^1.7.6",
     "better-sqlite3": "^13",
     "effect": "catalog:",
     "svelte": "^5"
