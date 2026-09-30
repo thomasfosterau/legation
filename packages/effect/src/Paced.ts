@@ -46,6 +46,19 @@
  * the opposite one: momentarily more journal entries (until the next call's
  * compaction catches up), never a lost edit.
  *
+ * ## Compaction renumbers (#249)
+ *
+ * The backends reject a gap in a client's mutation ids (ADR-0008), so dropping
+ * a superseded entry is not enough: `dropIfPending` also renumbers the
+ * surviving unpushed entries, in order, so the journal stays contiguous and a
+ * push can drain it. That means an id this module remembered for a key can
+ * move — and not only when *its own* instance compacts: any other paced
+ * mutation on the same engine shifts every unpushed entry behind the one it
+ * drops. Acting on a stale id could drop an unrelated entry that has since
+ * taken that number, so every instance's bookkeeping lives in one registry per
+ * engine and each compaction's moves are applied to all of it (see
+ * {@link Tracker}).
+ *
  * ## Undo pairing
  *
  * A caller combining this with {@link Undo}: wrap the whole burst (every
@@ -71,6 +84,59 @@ export interface PacedMutation {
   readonly call: (key: string, args: unknown) => Effect.Effect<void, MutatorError | StoreError>;
 }
 
+/**
+ * One paced instance's memory of the last entry it journaled for each key.
+ * `Map<key, mutationId>`; the ids are kept current by {@link compact}.
+ */
+type Tracker = Map<string, number>;
+
+/**
+ * Every live {@link Tracker} for one engine. Weakly held, so an instance that
+ * is dropped (a `coalesce` has no scope to release it from) does not pin its
+ * map for the engine's lifetime.
+ */
+const trackersByEngine = new WeakMap<object, Set<WeakRef<Tracker>>>();
+
+/** Trackers already registered, so each is added once. */
+const registered = new WeakSet<Tracker>();
+
+/** Register `tracker` so compactions by any instance on `engine` keep it current. */
+const track = (engine: ClientEngine, tracker: Tracker): void => {
+  if (registered.has(tracker)) return;
+  registered.add(tracker);
+  let all = trackersByEngine.get(engine);
+  if (all === undefined) {
+    all = new Set();
+    trackersByEngine.set(engine, all);
+  }
+  all.add(new WeakRef(tracker));
+};
+
+/**
+ * Drop `previous` (if still compactable) and apply the renumbering it caused
+ * to every tracker on the engine, so no instance is left holding an id that
+ * now names a different entry.
+ */
+const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, StoreError> =>
+  Effect.gen(function* () {
+    const { renumbered } = yield* engine.dropIfPending([previous]);
+    if (renumbered.length === 0) return;
+    const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
+    const all = trackersByEngine.get(engine);
+    if (all === undefined) return;
+    for (const ref of all) {
+      const tracker = ref.deref();
+      if (tracker === undefined) {
+        all.delete(ref);
+        continue;
+      }
+      for (const [key, id] of tracker) {
+        const moved = moves.get(id);
+        if (moved !== undefined) tracker.set(key, moved);
+      }
+    }
+  });
+
 /** Per-key buffered state shared by `debounce`/`throttle`'s timer loops. */
 interface Entry {
   latestArgs: unknown;
@@ -89,15 +155,16 @@ interface Entry {
 const flush = (
   engine: ClientEngine,
   mutator: string,
-  lastIdByKey: Map<string, number>,
+  lastIdByKey: Tracker,
   key: string,
   args: unknown
 ): Effect.Effect<void, MutatorError | StoreError> =>
   Effect.gen(function* () {
+    track(engine, lastIdByKey);
     const handle = yield* engine.mutateWithAck(mutator, args);
     const previous = lastIdByKey.get(key);
     lastIdByKey.set(key, handle.mutationId);
-    if (previous !== undefined) yield* engine.dropIfPending([previous]);
+    if (previous !== undefined) yield* compact(engine, previous);
   });
 
 /**
@@ -110,7 +177,7 @@ const flush = (
 const flushBackground = (
   engine: ClientEngine,
   mutator: string,
-  lastIdByKey: Map<string, number>,
+  lastIdByKey: Tracker,
   key: string,
   args: unknown
 ): Effect.Effect<void> =>

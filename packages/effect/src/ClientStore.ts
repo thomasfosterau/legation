@@ -39,6 +39,83 @@ export const StoredRowSchema = Schema.Struct({
 /** {@inheritDoc StoredRowSchema} */
 export type StoredRow = typeof StoredRowSchema.Type;
 
+/**
+ * What a {@link ClientStore.compactPending} call did: the ids dropped, and the
+ * surviving entries it moved (`from` is the id before, `to` the id after).
+ * Both empty when nothing was eligible.
+ */
+export interface CompactionResult {
+  readonly dropped: ReadonlyArray<number>;
+  readonly renumbered: ReadonlyArray<{ readonly from: number; readonly to: number }>;
+}
+
+/** The empty {@link CompactionResult}: nothing was dropped or moved. */
+export const NO_COMPACTION: CompactionResult = { dropped: [], renumbered: [] };
+
+/** A computed compaction: its result plus the journal and counter it leaves behind. */
+interface CompactionPlan {
+  readonly result: CompactionResult;
+  /** The whole journal after the compaction, in order (other clients untouched). */
+  readonly journal: ReadonlyArray<Mutation>;
+  /** The renumbered bodies only (their new ids). */
+  readonly moved: ReadonlyArray<Mutation>;
+  /** The id `clientId`'s counter must hold afterwards, so the next id continues the run. */
+  readonly counter: number;
+}
+
+/**
+ * Plan a compaction over the whole `journal` for `clientId`. Pure: shared by
+ * the memory store (applies it in one `Ref` update) and the durable store
+ * (persists it through a write-ahead intent), so both agree on the rule.
+ *
+ * Eligible ids: pending, `clientId`'s own, above `sentUpTo`. Survivors above
+ * `sentUpTo` take consecutive ids after the anchor, in journal order; the
+ * anchor is the highest frozen id still pending, or the lowest pending id
+ * minus one when nothing is frozen (the journal is contiguous from the last
+ * acknowledged id, so that is `lastAcknowledged`). Frozen entries are never
+ * touched.
+ */
+const planCompaction = (
+  journal: ReadonlyArray<Mutation>,
+  clientId: string,
+  mutationIds: ReadonlyArray<number>,
+  sentUpTo: number
+): CompactionPlan | undefined => {
+  const wanted = new Set(mutationIds);
+  const mine = journal.filter((m) => m.clientId === clientId);
+  const dropped = mine
+    .filter((m) => m.mutationId > sentUpTo && wanted.has(m.mutationId))
+    .map((m) => m.mutationId);
+  if (dropped.length === 0) return undefined;
+  const droppedSet = new Set(dropped);
+  const frozen = mine.filter((m) => m.mutationId <= sentUpTo);
+  const anchor =
+    frozen.length > 0
+      ? Math.max(...frozen.map((m) => m.mutationId))
+      : Math.min(...mine.map((m) => m.mutationId)) - 1;
+  const renumbered: Array<{ from: number; to: number }> = [];
+  const moved: Array<Mutation> = [];
+  const after: Array<Mutation> = [];
+  let next = anchor;
+  for (const m of journal) {
+    if (m.clientId !== clientId || m.mutationId <= sentUpTo) {
+      after.push(m);
+      continue;
+    }
+    if (droppedSet.has(m.mutationId)) continue;
+    next += 1;
+    if (next === m.mutationId) {
+      after.push(m);
+      continue;
+    }
+    const relabelled: Mutation = { ...m, mutationId: next };
+    renumbered.push({ from: m.mutationId, to: next });
+    moved.push(relabelled);
+    after.push(relabelled);
+  }
+  return { result: { dropped, renumbered }, journal: after, moved, counter: next };
+};
+
 export interface ClientStore {
   // Confirmed rows
   readonly getRow: (
@@ -66,18 +143,46 @@ export interface ClientStore {
   /** Drop journal entries with `mutationId <= upTo` for the client. */
   readonly acknowledge: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
   /**
-   * Drop specific still-pending journal entries by id (#117's pacing
-   * strategies: debounce/throttle/coalesce compact a superseded entry out of
-   * the unpushed tail). Unlike {@link acknowledge}, the caller names exact
-   * ids rather than a `<= upTo` prefix — the mutations dropped here were
-   * never sent to the backend, so no acknowledgement is implied. Ids not
-   * currently pending (already acknowledged, rejected, or unknown) are
-   * silently skipped.
+   * Compact the unpushed tail of `clientId`'s journal (#117's pacing
+   * strategies: debounce/throttle/coalesce drop a superseded entry) **and
+   * renumber the survivors** (#249), as one atomic step.
+   *
+   * The backend's exactly-once ledger (ADR-0008) requires a client's mutation
+   * ids to arrive gap-free: `id <= lastMutationId` is skipped, `id ===
+   * lastMutationId + 1` is applied, anything above is rejected. Dropping an
+   * entry and leaving the rest alone therefore strands the journal behind a
+   * gap no backend will accept. So after dropping, the client's unpushed
+   * survivors are renumbered contiguously — in journal order, continuing on
+   * from the last entry that is frozen (or from the first pending id when
+   * nothing is) — and the id counter is rewound so the next
+   * {@link ClientStore.nextMutationId} continues the run.
+   *
+   * Only entries **above the {@link ClientStore.markSent} watermark** are
+   * ever dropped or renumbered: anything a push attempt may have put on the
+   * wire keeps its id forever (a renumbered, already-applied write would be
+   * applied twice). Ids in `mutationIds` that are not pending, are frozen, or
+   * belong to another client are silently skipped.
+   *
+   * Atomic and restartable: a durable implementation must finish or roll
+   * forward an interrupted compaction on the next open, so a crash never
+   * leaves a gap, a duplicate id, or a counter that disagrees with the
+   * journal. The mutations dropped here were never sent, so no
+   * acknowledgement is implied.
    */
-  readonly dropPending: (
+  readonly compactPending: (
     clientId: string,
     mutationIds: ReadonlyArray<number>
-  ) => Effect.Effect<void, StoreError>;
+  ) => Effect.Effect<CompactionResult, StoreError>;
+  /**
+   * Record that a push attempt may have sent `clientId`'s entries with
+   * `mutationId <= upTo` (monotonic: a lower value is ignored). Written
+   * *before* the request leaves, because a failed round trip does not prove
+   * the backend did not apply it. The watermark is what
+   * {@link ClientStore.compactPending} treats as frozen, and it is persisted
+   * so the boundary survives a restart and is shared by every engine
+   * instance over the same store.
+   */
+  readonly markSent: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
   readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
 
   // Sync bookkeeping
@@ -155,6 +260,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const rows = yield* Ref.make(new Map<string, Map<RowId, StoredRow>>());
   const journal = yield* Ref.make<ReadonlyArray<Mutation>>([]);
   const counters = yield* Ref.make(new Map<string, number>());
+  const sentUpTo = yield* Ref.make(new Map<string, number>());
   const cookie = yield* Ref.make<string | undefined>(undefined);
   const identity = yield* Ref.make<Identity.Fingerprint | undefined>(undefined);
   const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
@@ -208,11 +314,23 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.update(journal, (entries) =>
         entries.filter((m) => m.clientId !== clientId || m.mutationId > upTo)
       ),
-    dropPending: (clientId, mutationIds) =>
-      Ref.update(journal, (entries) => {
-        const ids = new Set(mutationIds);
-        return entries.filter((m) => m.clientId !== clientId || !ids.has(m.mutationId));
+    compactPending: (clientId, mutationIds) =>
+      Effect.gen(function* () {
+        const watermark = (yield* Ref.get(sentUpTo)).get(clientId) ?? 0;
+        // Journal and plan move together in one `Ref.modify`, so a concurrent
+        // append cannot slip between the read and the write.
+        const plan = yield* Ref.modify(journal, (entries) => {
+          const planned = planCompaction(entries, clientId, mutationIds, watermark);
+          return planned === undefined ? [undefined, entries] : [planned, planned.journal];
+        });
+        if (plan === undefined) return NO_COMPACTION;
+        yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.counter));
+        return plan.result;
       }),
+    markSent: (clientId, upTo) =>
+      Ref.update(sentUpTo, (m) =>
+        (m.get(clientId) ?? 0) >= upTo ? m : new Map(m).set(clientId, upTo)
+      ),
     nextMutationId: (clientId) =>
       Ref.modify(counters, (m) => {
         const next = (m.get(clientId) ?? 0) + 1;
@@ -300,7 +418,8 @@ const sealed = (cause: StoreError): ClientStore => {
     appendMutation: () => refuse(),
     pendingMutations: refuse(),
     acknowledge: () => refuse(),
-    dropPending: () => refuse(),
+    compactPending: () => refuse(),
+    markSent: () => refuse(),
     nextMutationId: () => refuse(),
     getCookie: refuse(),
     setCookie: () => refuse(),
@@ -382,6 +501,10 @@ const STORE_VERSION_KEY = "__storeVersion";
 const IDENTITY_KEY = "__identity";
 /** The index of fingerprints currently holding a quarantine. */
 const QUARANTINE_INDEX_KEY = "quarantineIndex";
+/** The in-progress compaction's write-ahead intent (#249); present only mid-compaction. */
+const COMPACTION_KEY = "compactionIntent";
+/** Per-client highest mutation id a push attempt may have sent (#249). */
+const SENT_KEY = "sentUpTo";
 
 /** Per-row / per-mutation key builders (layout 2). */
 const rowKey = (collection: string, id: string) => `row/${collection}/${id}`;
@@ -415,6 +538,23 @@ const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const MutationFromJson = Schema.fromJsonString(MutationSchema);
 const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntrySchema));
 const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
+/**
+ * The write-ahead record of an in-progress compaction (#249): everything
+ * needed to finish it from scratch, so replaying it is idempotent.
+ */
+const CompactionIntentFromJson = Schema.fromJsonString(
+  Schema.Struct({
+    clientId: Schema.String,
+    /** Body keys to clear first: every dropped id and every old id of a moved entry. */
+    staleIds: Schema.Array(Schema.Number),
+    /** The renumbered bodies, at their new ids. */
+    moved: Schema.Array(MutationSchema),
+    /** The complete journal index once the compaction has applied. */
+    index: Schema.Array(JournalIndexEntrySchema),
+    /** The value `clientId`'s counter takes once it has applied. */
+    counter: Schema.Number,
+  })
+);
 /** A quarantine body, and the index of fingerprints holding one. */
 const MutationsFromJson = Schema.fromJsonString(Schema.Array(MutationSchema));
 const FingerprintsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
@@ -542,6 +682,45 @@ export const makeKeyValue = (
       );
     const journalIndex = readDecoded("journalIndex", JournalIndexFromJson).pipe(
       Effect.map((entries) => entries ?? [])
+    );
+
+    // ─── Compaction (unlocked inner forms; #249) ───────────────────────────
+    //
+    // Dropping superseded entries and renumbering the survivors rewrites
+    // several keys, and the KVS has no transactions. So the whole outcome is
+    // first written as ONE record (`compactionIntent`) — the commit point —
+    // and then applied by steps that are each idempotent: clear the stale
+    // bodies, write the renumbered bodies, write the index, rewind the
+    // counter, delete the intent. A crash anywhere before the intent lands
+    // leaves the old, contiguous journal untouched; a crash after it is
+    // rolled forward by `recoverCompaction` on the next open. Either way the
+    // journal, the index and the counter agree and the ids stay gap-free.
+    // (Writing new bodies in place without the intent could overwrite a live
+    // entry's body before the index moved, which is the corruption this
+    // avoids.)
+    const applyCompaction = (intent: typeof CompactionIntentFromJson.Type) =>
+      Effect.gen(function* () {
+        for (const id of intent.staleIds) yield* remove(journalBodyKey(intent.clientId, id));
+        for (const m of intent.moved) yield* writeJson(journalBodyKey(m.clientId, m.mutationId), m);
+        yield* writeJson("journalIndex", intent.index);
+        const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+        yield* writeJson("counters", { ...counters, [intent.clientId]: intent.counter });
+        yield* remove(COMPACTION_KEY);
+      });
+    // Set while an intent may still be on disk, so any journal operation
+    // finishes it first (an earlier apply can fail without a crash, and an
+    // append landing before the replay would be clobbered by it).
+    let compactionPending = false;
+    const recoverCompaction = Effect.gen(function* () {
+      const intent = yield* readDecoded(COMPACTION_KEY, CompactionIntentFromJson);
+      if (intent !== undefined) yield* applyCompaction(intent);
+      compactionPending = false;
+    });
+    const settleCompaction: Effect.Effect<void, StoreError> = Effect.suspend(() =>
+      compactionPending ? recoverCompaction : Effect.void
+    );
+    const sentMarks = readDecoded(SENT_KEY, CountersFromJson).pipe(
+      Effect.map((marks) => marks ?? {})
     );
 
     // Read a collection's rows through the per-row index; a corrupt row value
@@ -763,6 +942,17 @@ export const makeKeyValue = (
     });
     yield* openMigration.pipe(Effect.catch(() => Effect.void));
 
+    // Finish a compaction a previous run was interrupted in (#249). Kept
+    // infallible at construction like the opens around it: if recovery fails
+    // here the flag stays set, and the first journal operation retries it.
+    yield* locked(recoverCompaction).pipe(
+      Effect.catch(() =>
+        Effect.sync(() => {
+          compactionPending = true;
+        })
+      )
+    );
+
     // Local store-version buster (#48): a mismatch clears confirmed rows + the
     // cookie (so the next pull rehydrates fully) but preserves the journal, then
     // stamps the new version. Kept infallible at construction, like the
@@ -864,6 +1054,7 @@ export const makeKeyValue = (
       appendMutation: (mutation) =>
         locked(
           Effect.gen(function* () {
+            yield* settleCompaction;
             const index = yield* journalIndex;
             if (highWater !== undefined && index.length >= highWater) {
               return yield* new StoreError({
@@ -877,10 +1068,11 @@ export const makeKeyValue = (
             ]);
           })
         ),
-      pendingMutations: pendingMutationsOf,
+      pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
       acknowledge: (clientId, upTo) =>
         locked(
           Effect.gen(function* () {
+            yield* settleCompaction;
             const kept: Array<JournalIndexEntry> = [];
             for (const entry of yield* journalIndex) {
               if (entry.clientId === clientId && entry.mutationId <= upTo) {
@@ -892,24 +1084,48 @@ export const makeKeyValue = (
             yield* writeJson("journalIndex", kept);
           })
         ),
-      dropPending: (clientId, mutationIds) =>
+      compactPending: (clientId, mutationIds) =>
         locked(
           Effect.gen(function* () {
-            const ids = new Set(mutationIds);
-            const kept: Array<JournalIndexEntry> = [];
-            for (const entry of yield* journalIndex) {
-              if (entry.clientId === clientId && ids.has(entry.mutationId)) {
-                yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
-              } else {
-                kept.push(entry);
-              }
+            yield* settleCompaction;
+            // An un-migrated legacy blob has no index to rewrite; leave it be.
+            if ((yield* readDecoded("journalIndex", JournalIndexFromJson)) === undefined) {
+              return NO_COMPACTION;
             }
-            yield* writeJson("journalIndex", kept);
+            const watermark = (yield* sentMarks)[clientId] ?? 0;
+            const plan = planCompaction(
+              yield* pendingMutationsOf,
+              clientId,
+              mutationIds,
+              watermark
+            );
+            if (plan === undefined) return NO_COMPACTION;
+            const intent = {
+              clientId,
+              staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
+              moved: plan.moved,
+              index: plan.journal.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId })),
+              counter: plan.counter,
+            };
+            yield* writeJson(COMPACTION_KEY, intent);
+            compactionPending = true;
+            yield* applyCompaction(intent);
+            compactionPending = false;
+            return plan.result;
+          })
+        ),
+      markSent: (clientId, upTo) =>
+        locked(
+          Effect.gen(function* () {
+            const marks = yield* sentMarks;
+            if ((marks[clientId] ?? 0) >= upTo) return;
+            yield* writeJson(SENT_KEY, { ...marks, [clientId]: upTo });
           })
         ),
       nextMutationId: (clientId) =>
         locked(
           Effect.gen(function* () {
+            yield* settleCompaction;
             const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
             const next = (counters[clientId] ?? 0) + 1;
             yield* writeJson("counters", { ...counters, [clientId]: next });
@@ -930,10 +1146,12 @@ export const makeKeyValue = (
           .set(IDENTITY_KEY, fingerprint)
           .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`))),
 
-      quarantinePending: (fingerprint) => locked(quarantinePendingInner(fingerprint)),
+      quarantinePending: (fingerprint) =>
+        locked(settleCompaction.pipe(Effect.andThen(quarantinePendingInner(fingerprint)))),
       quarantinedMutations: quarantinedOf,
       quarantines: quarantineIndexOf,
-      releaseQuarantine: (fingerprint) => locked(releaseQuarantineInner(fingerprint)),
+      releaseQuarantine: (fingerprint) =>
+        locked(settleCompaction.pipe(Effect.andThen(releaseQuarantineInner(fingerprint)))),
       discardQuarantine: (fingerprint) => locked(discardQuarantineInner(fingerprint)),
     });
   });

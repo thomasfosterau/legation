@@ -150,7 +150,7 @@ describe("ClientStore per-row layout (#47)", () => {
     })
   );
 
-  it.effect("dropPending (#117) never rewrites surviving mutation bodies", () =>
+  it.effect("compactPending (#117) rewrites only the bodies it renumbers (#249)", () =>
     Effect.gen(function* () {
       const { store, sets } = countingStore();
       yield* Effect.gen(function* () {
@@ -159,12 +159,20 @@ describe("ClientStore per-row layout (#47)", () => {
         yield* s.appendMutation(mutation(2));
         yield* s.appendMutation(mutation(3));
 
-        // Dropping the superseded #1 (paced coalescing) removes only its body
-        // and rewrites the tiny index — #2 and #3's bodies are untouched.
-        yield* s.dropPending("c1", [1]);
+        // Dropping the superseded tail entry (the usual paced-coalescing shape:
+        // the newest call supersedes nothing behind it) renumbers nothing, so
+        // no surviving body is rewritten — only the tiny index.
+        yield* s.compactPending("c1", [3]);
+        expect(sets.get("legation/journal/c1/1")).toBe(1);
         expect(sets.get("legation/journal/c1/2")).toBe(1);
-        expect(sets.get("legation/journal/c1/3")).toBe(1);
-        expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([2, 3]);
+        expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([1, 2]);
+
+        // Dropping #1 keeps the ids contiguous: #2 becomes #1. Exactly that one
+        // survivor body is rewritten (at its new id), never the whole journal.
+        yield* s.compactPending("c1", [1]);
+        expect(sets.get("legation/journal/c1/1")).toBe(2);
+        expect(sets.get("legation/journal/c1/2")).toBe(1);
+        expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([1]);
       }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
     })
   );
