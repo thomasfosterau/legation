@@ -212,6 +212,39 @@ describe("observeAggregate over a synced collection", () => {
       expect(yield* Ref.get(latest)).toEqual({ false: 1, true: 2 });
     }).pipe(Effect.scoped)
   );
+
+  it.live(
+    "observeAggregateGrouped folds later writes in incrementally, including a group move",
+    () =>
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const client = yield* makeClient(handler, "gincremental");
+
+        yield* client.mutate("todo/set", { id: "t1", title: "a", done: false });
+        yield* client.mutate("todo/set", { id: "t2", title: "b", done: true });
+        yield* client.subscribe(allTodos);
+
+        const latest = yield* Ref.make<Record<string, Aggregate.AggregateValue>>({});
+        yield* Effect.forkScoped(
+          Stream.runForEach(
+            client.observeAggregateGrouped(allTodos, Aggregate.count, "done"),
+            (value) => Ref.set(latest, value)
+          )
+        );
+        yield* settle;
+        expect(yield* Ref.get(latest)).toEqual({ false: 1, true: 1 });
+
+        // A new row joins a group, then an existing row moves between groups:
+        // each arrives as a row-level delta the grouped state folds in place.
+        yield* client.mutate("todo/set", { id: "t3", title: "c", done: true });
+        yield* settle;
+        expect(yield* Ref.get(latest)).toEqual({ false: 1, true: 2 });
+
+        yield* client.mutate("todo/set", { id: "t2", title: "b", done: false });
+        yield* settle;
+        expect(yield* Ref.get(latest)).toEqual({ false: 2, true: 1 });
+      }).pipe(Effect.scoped)
+  );
 });
 
 // ─── Incremental maintenance (#110) ───────────────────────────────────────────
