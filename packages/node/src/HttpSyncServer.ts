@@ -16,9 +16,9 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Transport } from "@legation/effect";
 import { RpcTransport } from "@legation/effect/internal";
 import { Layer } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import type { ServeError } from "effect/unstable/http/HttpServerError";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter } from "effect/http";
+import type { ServeError } from "effect/http/HttpServerError";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 
 export interface HttpSyncServerOptions {
   /** Route the sync RPCs are served on, e.g. `"/sync"`. */

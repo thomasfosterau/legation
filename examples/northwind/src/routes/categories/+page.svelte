@@ -5,7 +5,7 @@
    * The count is the read's `products` edge, resolved onto each row by the
    * engine — no grouping pipeline and no join in the component.
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { allCategories } from "$lib/domain";

@@ -6,7 +6,7 @@
    * customer's `orders` edge, so each row arrives with its orders resolved and
    * the count is `.length` of what the engine already maintains.
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { allCustomers } from "$lib/domain";
   import { toCustomerCounts } from "$lib/data";

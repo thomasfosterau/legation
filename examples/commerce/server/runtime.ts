@@ -18,7 +18,7 @@
  * out-of-band writers (the fulfilment worker).
  */
 import { Context, Effect, Layer, Scope } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { Authorization, type Backend, Predicate, Server, Transport } from "@legation/effect";
 import { InvalidationBus } from "@legation/effect/internal";
 import { SqlBackend } from "@legation/sql";

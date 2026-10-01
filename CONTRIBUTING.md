@@ -52,7 +52,7 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 - Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `core`; protocol/framework-specific code gets its own package.
 - Packages import each other by published name (`@legation/effect`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
-- `effect` is a **peer dependency** of every package, declared as an open floor (`>=4.0.0-rc.113`); the exact version lives only in the root catalog and `bun.lock`. Never add it as a regular dependency.
+- `effect` is a **peer dependency** of every package, declared as an open floor (`>=4.0.0-rc.118`); the exact version lives only in the root catalog and `bun.lock`. Never add it as a regular dependency.
 
 ## Development Workflow
 
@@ -100,7 +100,7 @@ Two different numbers describe the Effect version, and they move separately
   dependency of `@effect/platform-node`, which it ranges with a caret) at the
   same version, so the lockfile carries exactly one Effect line.
 - **The published floor** is the open range in each package's
-  `peerDependencies` (`"effect": ">=4.0.0-rc.113"`, and the same range on the
+  `peerDependencies` (`"effect": ">=4.0.0-rc.118"`, and the same range on the
   `@effect/platform-*` peers). It is written as a concrete string because
   `changeset publish` does not rewrite the `catalog:` protocol. It is never an
   exact version: an exact published peer makes the package impossible to

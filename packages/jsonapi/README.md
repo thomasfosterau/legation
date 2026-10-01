@@ -34,7 +34,7 @@ npm install @legation/jsonapi @legation/effect effect
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## The happy path: sync an existing JSON:API
 
@@ -46,7 +46,7 @@ over the existing REST API.
 
 ```ts
 import { Duration, Effect, Layer } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { ClientEngine, Predicate, Subset } from "@legation/effect";
 import { JsonApiSync } from "@legation/jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
@@ -150,7 +150,7 @@ an `Effect` requiring an `HttpClient` and a `JsonApiSource`.
 
 ```ts
 import { Effect } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import { CollectionLoader } from "@legation/jsonapi";
 
@@ -272,7 +272,7 @@ the same deny-by-default auth filters and the same `Backend.evaluate` +
 
 ```ts
 import { Effect } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { RestHandlers } from "@legation/jsonapi";
 import { api, NotFound, Product } from "./my-json-api";
 import { backend, nodes, policy } from "./my-server";

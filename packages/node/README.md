@@ -29,7 +29,7 @@ bun add redis
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 Requires Node.js 22 or newer (`engines.node: ">=22"`), the Node line CI runs.
 

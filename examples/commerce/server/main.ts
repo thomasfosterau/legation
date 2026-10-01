@@ -14,8 +14,8 @@
  *   by design, advancing placed orders to shipped/delivered on a timer.
  */
 import { Duration, Effect, Layer, Schedule } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { HttpRouter } from "effect/unstable/http";
+import { SqlClient } from "effect/sql/SqlClient";
+import { HttpRouter } from "effect/http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { createServer } from "node:http";
 import { HintSource } from "@legation/effect/internal";

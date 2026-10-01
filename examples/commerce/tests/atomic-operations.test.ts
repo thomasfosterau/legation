@@ -20,12 +20,12 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Layer } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import { SqlClient } from "effect/sql/SqlClient";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@legation/effect";
 import { JsonApiBackend, JsonApiSync } from "@legation/jsonapi";

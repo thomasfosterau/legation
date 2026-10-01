@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
-import { RpcTest } from "effect/unstable/rpc";
+import { RpcTest } from "effect/rpc";
 import * as Authorization from "../Authorization.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";

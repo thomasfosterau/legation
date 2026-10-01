@@ -12,7 +12,7 @@
  */
 
 import { Context, Effect, Layer, Ref, Schema } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 
@@ -124,7 +124,7 @@ export interface KeyValueCvrOptions {
 }
 
 /**
- * A CVR store over `effect/unstable/persistence` KeyValueStore (ADR-0009):
+ * A CVR store over `effect/persistence` KeyValueStore (ADR-0009):
  * back it with a *shared* KVS — Redis, SQL, a Durable Object's storage — and
  * every server instance reads the same client view records, so a client can
  * present a cookie minted by one instance and pull a minimal patch from

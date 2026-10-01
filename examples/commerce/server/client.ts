@@ -26,8 +26,8 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
+} from "effect/http";
+import { HttpApiClient } from "effect/http-api";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@legation/effect";
 import { readPath } from "../src/lib/reads.js";

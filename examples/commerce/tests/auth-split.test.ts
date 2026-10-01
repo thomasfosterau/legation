@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Fiber, Layer } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Client, ClientStore, Transport } from "@legation/effect";
 import { ClientEngine, ClientView } from "@legation/effect/internal";

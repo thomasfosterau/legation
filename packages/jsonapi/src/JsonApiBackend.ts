@@ -55,8 +55,8 @@
  */
 
 import { Effect, Option, Ref, Schema } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import { Backend, BackendError, MutationRejected, Predicate } from "@legation/effect";
 import { Hash, Protocol } from "@legation/effect/internal";

@@ -7,7 +7,7 @@
    * set operations over the follow/favourite collections, which is why those
    * two reads are here too.
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { allArticles, allFavorites, allFollows, type Favorite, type Follow } from "$lib/domain";
   import { toArticlePage, toTags, values } from "$lib/joins";

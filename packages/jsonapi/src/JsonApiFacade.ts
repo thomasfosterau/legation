@@ -73,8 +73,8 @@
  */
 
 import { Effect, Schema } from "effect";
-import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import type * as HttpApi from "effect/http-api/HttpApi";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
 import type { Node, Query, QueryError } from "@legation/effect";
 import type { ClientView, Coverage } from "@legation/effect/internal";

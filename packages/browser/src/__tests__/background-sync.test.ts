@@ -56,7 +56,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 

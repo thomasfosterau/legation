@@ -2,7 +2,7 @@
   /**
    * Suppliers — read-only directory table.
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { allSuppliers, type Supplier } from "$lib/domain";
   import { values } from "$lib/data";

@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Exit, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   Authorization,

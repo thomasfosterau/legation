@@ -2,7 +2,7 @@
  * RpcTransport
  *
  * The default sync transport (ADR-0007): the protocol's push/pull/pokes
- * exposed as a typed `RpcGroup` over `effect/unstable/rpc`. The carrier is
+ * exposed as a typed `RpcGroup` over `effect/rpc`. The carrier is
  * whichever RPC protocol layer is provided — HTTP, WebSocket, worker, or
  * the in-memory test transport — so the customisable seam (ADR-0008) costs
  * nothing: bind `layerHandlers` to a ServerHandler server-side, provide an
@@ -11,9 +11,9 @@
  */
 
 import { Effect, Layer, Schema, Scope, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { Rpc, RpcClient, RpcGroup, RpcSerialization } from "effect/unstable/rpc";
-import * as Socket from "effect/unstable/socket/Socket";
+import { FetchHttpClient } from "effect/http";
+import { Rpc, RpcClient, RpcGroup, RpcSerialization } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
 import { TransportError } from "./Errors.js";
 import {
   PokeSchema,

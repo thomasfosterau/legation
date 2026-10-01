@@ -9,8 +9,8 @@ import { Authorization, ClientStore, MemoryBackend, Mutator } from "@legation/ef
 import { ClientEngine, RpcTransport, Subset, SyncRoom } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
 import * as HttpSyncServer from "../HttpSyncServer.js";
 
 const TodoArgs = Schema.Struct({

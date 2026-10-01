@@ -8,7 +8,7 @@ A driver-agnostic SQL reference backend for the
   dialects.
 - **`SqlBackend`** — an implementation of the core `Backend` contract over a
   tiny `SqlExecutor` seam (`query` / `run` / `transaction`). Bring your own
-  driver (`bun:sqlite`, `effect/unstable/sql`, `pg`, …); the backend supplies
+  driver (`bun:sqlite`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.
 - **`PollingHintSource`** — a tier-2 change-data-capture hint source over the
@@ -33,4 +33,4 @@ npm install @legation/sql @legation/effect effect
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).

@@ -47,7 +47,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.113"
+    "effect": ">=4.0.0-rc.118"
   },
   "devDependencies": {
     "effect": "catalog:"

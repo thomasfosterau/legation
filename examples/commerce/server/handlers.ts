@@ -10,8 +10,8 @@
  * `SqlExecutor.transaction` is `sql.withTransaction` on the same client.
  */
 import { Effect, Schema } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import type { SqlClient } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 import { Backend, BackendError, MutationRejected } from "@legation/effect";
 import type { SqlBackend } from "@legation/sql";
 import {

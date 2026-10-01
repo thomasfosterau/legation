@@ -1,7 +1,7 @@
 /**
  * EngineAtoms
  *
- * The engine's `effect/unstable/reactivity` Atom surface (ADR-0007): live
+ * The engine's `effect/reactivity` Atom surface (ADR-0007): live
  * query and named-query atoms whose value re-emits on every local change,
  * plus a mutation atom for optimistic writes. Built over an `Atom.runtime`
  * from the engine layer, so the registry owns the engine's scope.
@@ -18,8 +18,8 @@
 
 import type { Cause, Layer } from "effect";
 import { Effect, HashMap, Stream } from "effect";
-import { Atom } from "effect/unstable/reactivity";
-import type { AsyncResult, AtomRegistry, Reactivity } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
+import type { AsyncResult, AtomRegistry, Reactivity } from "effect/reactivity";
 import {
   ClientEngine,
   type LocalRow,

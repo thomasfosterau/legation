@@ -8,7 +8,7 @@
  * structural), so they live in core per ADR-0006.
  *
  * - `makeRedisBroker`: over Redis **Streams** (`XADD` / `XREAD BLOCK`) using
- *   `effect/unstable/persistence` Redis. Streams give durable, replayable
+ *   `effect/persistence` Redis. Streams give durable, replayable
  *   fan-out; point every instance's subscriber at the same stream key.
  * - `makeWebSocketBroker`: over any `WebSocketLike` whose far end broadcasts
  *   every frame to all peers — the shape of a Cloudflare Durable Object
@@ -16,7 +16,7 @@
  */
 
 import { Duration, Effect, Queue, Scope } from "effect";
-import { Redis } from "effect/unstable/persistence";
+import { Redis } from "effect/persistence";
 import type { BusBroker } from "./InvalidationBus.js";
 
 // ─── Redis Streams broker ────────────────────────────────────────────────────

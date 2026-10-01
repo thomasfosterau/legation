@@ -44,7 +44,7 @@
  * output) carries no such tag and falls back to page-diffing, unchanged.
  *
  * **Observability.** A derived pipeline is an Effect `Stream` and, via
- * {@link atom}, an Atom on the standard `effect/unstable/reactivity` surface —
+ * {@link atom}, an Atom on the standard `effect/reactivity` surface —
  * so framework bindings need nothing new: `@legation/svelte`'s `query` store
  * and `@legation/svelte`'s `useQuery` bind a derived stream exactly as they bind
  * a raw `observe`.
@@ -57,7 +57,7 @@
 
 import type { Cause, Scope } from "effect";
 import { Effect, Stream } from "effect";
-import { Atom, type AsyncResult } from "effect/unstable/reactivity";
+import { Atom, type AsyncResult } from "effect/reactivity";
 import type * as ClientView from "./ClientView.js";
 import * as Hash from "./Hash.js";
 import * as Incremental from "./Incremental.js";

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

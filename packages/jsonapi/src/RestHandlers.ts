@@ -51,8 +51,8 @@
  */
 
 import { Effect, Schema } from "effect";
-import type { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import type { HttpServerRequest } from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import {
   ApiError,
   type Document,

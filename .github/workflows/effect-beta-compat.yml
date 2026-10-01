@@ -5,7 +5,7 @@ name: Effect rc compatibility
 # next bump (or the README's tested-floor claim) needs attention.
 #
 # - `latest`: the newest effect@rc. The published range is open
-#   (`>=4.0.0-rc.113`), so consumers can resolve an rc newer than the pin;
+#   (`>=4.0.0-rc.118`), so consumers can resolve an rc newer than the pin;
 #   this leg exercises that upper end.
 # - `floor`: the lowest version the published range admits, read from
 #   `@legation/effect`'s `peerDependencies.effect`. Every package README says

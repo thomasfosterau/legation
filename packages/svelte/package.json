@@ -44,10 +44,10 @@
   },
   "dependencies": {
     "@legation/effect": "workspace:^",
-    "@thomasfosterau/effect-svelte": "^0.3.2"
+    "@thomasfosterau/effect-svelte": "^0.4.0"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.113",
+    "effect": ">=4.0.0-rc.118",
     "svelte": ">=5.40",
     "@sveltejs/kit": "^2.0.0"
   },
