@@ -9,20 +9,17 @@
 "@legation/devtools": minor
 ---
 
-**Breaking: requires `effect@>=4.0.0-rc.118`.** Move onto Effect `4.0.0-rc.118`
-and raise the published peer floor from `>=4.0.0-rc.113` to
-`>=4.0.0-rc.118` (#261), on `effect` and on the `@effect/platform-browser` /
-`@effect/platform-node` peers.
+Target Effect `4.0.0-rc.118`: every package peers `effect >=4.0.0-rc.118`
+(#261), and the `@effect/platform-browser` / `@effect/platform-node` peers use
+the same floor. Install `effect` and every `@effect/*` companion at
+`4.0.0-rc.118` or later together.
 
-rc.118 removed every `effect/unstable/*` export path; the modules now live at
-`effect/<module>` (`effect/unstable/rpc` is `effect/rpc`, `effect/unstable/http`
-is `effect/http`, `effect/unstable/httpapi` is `effect/http-api`, and so on). The
-source and the built `dist/*.d.ts` import the new paths, so the packages no longer
-resolve beside an earlier `effect`. Upgrade `effect` and every `@effect/*`
-companion in your app to `4.0.0-rc.118` together.
+The packages import Effect's modules at their rc.118 paths (`effect/rpc`,
+`effect/http`, `effect/http-api`, …); rc.118 removed the `effect/unstable/*`
+export paths, so the packages don't resolve beside an earlier `effect`.
 
-**`@legation/jsonapi`** depends on `@thomasfosterau/effect-jsonapi@^0.16.1`
-(was `^0.15.1`), the first release that peers `effect >=4.0.0-rc.118`.
+**`@legation/jsonapi`** depends on `@thomasfosterau/effect-jsonapi@^0.16.1`,
+the first release that peers `effect >=4.0.0-rc.118`.
 
-**`@legation/svelte`** depends on `@thomasfosterau/effect-svelte@^0.4.0` (was
-`^0.3.2`), for the same reason.
+**`@legation/svelte`** depends on `@thomasfosterau/effect-svelte@^0.4.0`, for
+the same reason.
