@@ -1,8 +1,10 @@
 #!/bin/bash
 # SessionStart hook: install the workspace so the quality gates
 # (`bun run lint`, `bun run typecheck`, `bun run test:run`, ...) work in a
-# Claude Code on the web session. Local sessions are left alone; run
-# `bun install` yourself there.
+# Claude Code on the web session, except the commerce façade's browser test,
+# which needs Chromium (`bunx playwright-core install chromium`; see CLAUDE.md
+# "Agent sessions"). Local sessions are left alone; run `bun install` yourself
+# there.
 set -euo pipefail
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
