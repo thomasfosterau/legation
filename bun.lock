@@ -167,6 +167,7 @@
       "name": "@legation/effect",
       "version": "0.1.0",
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
       },
       "peerDependencies": {
