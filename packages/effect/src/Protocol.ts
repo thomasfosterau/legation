@@ -179,9 +179,21 @@ const decodeWith =
       Effect.mapError((cause) => new ProtocolError({ message: `Invalid ${what}`, cause }))
     );
 
+/**
+ * Decode an untrusted push request; fails with `ProtocolError` when it doesn't match the schema.
+ */
 export const decodePushRequest = decodeWith(PushRequestSchema, "push request");
+/**
+ * Decode an untrusted pull request; fails with `ProtocolError` when it doesn't match the schema.
+ */
 export const decodePullRequest = decodeWith(PullRequestSchema, "pull request");
+/**
+ * Decode an untrusted read request; fails with `ProtocolError` when it doesn't match the schema.
+ */
 export const decodeReadRequest = decodeWith(ReadRequestSchema, "read request");
+/** Decode a push response; fails with `ProtocolError` when it doesn't match the schema. */
 export const decodePushResponse = decodeWith(PushResponseSchema, "push response");
+/** Decode a pull response; fails with `ProtocolError` when it doesn't match the schema. */
 export const decodePullResponse = decodeWith(PullResponseSchema, "pull response");
+/** Decode one patch operation; fails with `ProtocolError` when it doesn't match the schema. */
 export const decodePatchOp = decodeWith(PatchOpSchema, "patch op");

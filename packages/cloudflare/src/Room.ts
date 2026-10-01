@@ -43,6 +43,7 @@ import {
   routes,
 } from "./RoomProtocol.js";
 
+/** Configuration for {@link makeRoomClass}: the node graph, the backend and the auth policy. */
 export interface RoomConfig<Env> {
   readonly nodes: Node.NodeRegistry;
   /** The authoritative storage contract (e.g. `SqlBackend` over D1). */

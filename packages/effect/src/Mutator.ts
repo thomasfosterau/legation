@@ -21,6 +21,7 @@ export interface Mutator<Name extends string, Args, ArgsEncoded = unknown> {
   readonly args: Schema.Codec<Args, ArgsEncoded>;
 }
 
+/** Any {@link Mutator} definition, whatever its name and args. */
 export type AnyMutator = Mutator<string, any, any>;
 
 /** Define a mutator contract. */

@@ -23,6 +23,10 @@ export interface TopicPokes {
   readonly take: Effect.Effect<ReadonlyArray<Topic>>;
 }
 
+/**
+ * Topic pub/sub with leased registrations: rooms lease the topics their windows compile to, and
+ * `publish` pokes every room whose live lease intersects a write's topics.
+ */
 export interface FanoutBroker {
   /**
    * Lease (or replace) a room's topic registrations. The lease expires
@@ -40,6 +44,10 @@ export interface FanoutBroker {
   readonly pokes: (roomId: string) => Effect.Effect<TopicPokes, never, Scope.Scope>;
 }
 
+/**
+ * The {@link FanoutBroker} service tag, for apps that provide a broker by layer;
+ * `FanoutBus.make` takes it as an option.
+ */
 export const FanoutBroker = Context.Service<FanoutBroker>("@legation/effect/FanoutBroker");
 
 interface Lease {

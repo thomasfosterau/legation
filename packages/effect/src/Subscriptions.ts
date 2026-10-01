@@ -41,6 +41,10 @@ export interface WindowHandle extends WindowObservation {
   readonly release: Effect.Effect<void>;
 }
 
+/**
+ * Subscription lifecycle over a `ClientEngine`: refcounted acquire/release, a grace period
+ * before an unused subscription is dropped, and preload.
+ */
 export interface Subscriptions {
   /** Acquire a raw-subset subscription (refcounted). */
   readonly acquire: (subset: Subset.Subset) => Effect.Effect<SubscriptionHandle>;
@@ -119,6 +123,7 @@ interface Entry {
   expiry: Fiber.Fiber<void> | undefined;
 }
 
+/** Options for {@link make}. */
 export interface SubscriptionsOptions {
   /** Grace period a released subscription is kept before being dropped. */
   readonly ttl?: Duration.Duration;

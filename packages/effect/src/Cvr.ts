@@ -21,6 +21,7 @@ export interface Cvr {
   readonly rows: ReadonlyMap<string, ReadonlyMap<RowId, RowVersion>>;
 }
 
+/** The CVR of a group that holds nothing yet. */
 export const empty: Cvr = { rows: new Map() };
 
 /** The desired next view, computed from evaluated subsets + fetched rows. */
@@ -64,6 +65,7 @@ export interface CvrStore {
   readonly remove: (cookie: string) => Effect.Effect<void, StoreError>;
 }
 
+/** The {@link CvrStore} service the sync server keeps CVRs in. */
 export const CvrStore = Context.Service<CvrStore>("@legation/effect/CvrStore");
 
 /** In-memory CVR store (tests, single-instance servers, sync rooms). */
@@ -86,6 +88,7 @@ export const makeMemoryStore: Effect.Effect<CvrStore> = Effect.gen(function* () 
   });
 });
 
+/** A layer providing {@link makeMemoryStore}. */
 export const layerMemoryStore: Layer.Layer<CvrStore> = Layer.effect(CvrStore)(makeMemoryStore);
 
 // ─── Shared-storage CVR store (distributed) ──────────────────────────────────
@@ -118,6 +121,9 @@ const fromWire = (wire: WireCvr): Cvr => ({
   rows: new Map(wire.rows.map(([collection, versions]) => [collection, new Map(versions)])),
 });
 
+/**
+ * Options for a {@link CvrStore} over an Effect `KeyValueStore` (a store shared across instances).
+ */
 export interface KeyValueCvrOptions {
   /** Key namespace inside the store. Defaults to `"legation/cvr/"`. */
   readonly prefix?: string;

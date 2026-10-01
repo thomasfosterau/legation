@@ -139,6 +139,7 @@ export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
 
 // ─── Constructors ────────────────────────────────────────────────────────────
 
+/** The predicate every row matches. */
 export const always: Predicate = { _tag: "True" };
 
 /**
@@ -165,11 +166,16 @@ export const eq = (field: string, value: Literal): Predicate =>
 /** `field <> value`; `ne(field, null)` desugars to {@link isNotNull} (ADR-0028). */
 export const ne = (field: string, value: Literal): Predicate =>
   value === null ? isNotNull(field) : compare("ne", field, value);
+/** `field > value`; unknown when the field is null or absent (three-valued, ADR-0028). */
 export const gt = (field: string, value: Literal): Predicate => compare("gt", field, value);
+/** `field >= value`; unknown when the field is null or absent (three-valued, ADR-0028). */
 export const gte = (field: string, value: Literal): Predicate => compare("gte", field, value);
+/** `field < value`; unknown when the field is null or absent (three-valued, ADR-0028). */
 export const lt = (field: string, value: Literal): Predicate => compare("lt", field, value);
+/** `field <= value`; unknown when the field is null or absent (three-valued, ADR-0028). */
 export const lte = (field: string, value: Literal): Predicate => compare("lte", field, value);
 
+/** `field IN (values)`: unknown on a NULL or absent field; an empty list matches no row. */
 export const isIn = (field: string, values: ReadonlyArray<Literal>): Predicate => ({
   _tag: "In",
   field,
@@ -183,12 +189,15 @@ export const notIn = (field: string, values: ReadonlyArray<Literal>): Predicate 
   values,
 });
 
+/** Conjunction (three-valued); a single predicate is returned unchanged. */
 export const and = (...predicates: ReadonlyArray<Predicate>): Predicate =>
   predicates.length === 1 ? predicates[0]! : { _tag: "And", predicates };
 
+/** Disjunction (three-valued); a single predicate is returned unchanged. */
 export const or = (...predicates: ReadonlyArray<Predicate>): Predicate =>
   predicates.length === 1 ? predicates[0]! : { _tag: "Or", predicates };
 
+/** Negation (three-valued: `not` of unknown stays unknown). */
 export const not = (predicate: Predicate): Predicate => ({ _tag: "Not", predicate });
 
 /**

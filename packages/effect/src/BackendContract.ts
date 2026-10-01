@@ -82,6 +82,7 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
 
 // ─── Verification harness ────────────────────────────────────────────────────
 
+/** Options for {@link verifyBackendContract}. */
 export interface VerifyOptions {
   /** Base name for the collections written during verification. */
   readonly collection?: string;

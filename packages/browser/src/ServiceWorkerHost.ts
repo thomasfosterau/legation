@@ -45,6 +45,7 @@ import { Effect, Scope } from "effect";
 import type * as BackgroundSync from "./BackgroundSync.js";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 
+/** Options for {@link start} and {@link run}. */
 export interface ServiceWorkerHostOptions {
   /** BroadcastChannel name shared with the mirrors it serves. */
   readonly channelName?: string;

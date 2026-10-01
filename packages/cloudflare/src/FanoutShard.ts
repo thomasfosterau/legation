@@ -48,6 +48,7 @@ export const leases = {
   },
 };
 
+/** Configuration for {@link makeShardClass}. */
 export interface ShardConfig<Env> {
   /** The room namespace binding — rooms are addressed by their room id. */
   readonly rooms: (env: Env) => DurableObjectNamespace;

@@ -381,6 +381,7 @@ export interface JoinOperator {
   readonly stepRight: (delta: Delta) => Delta;
 }
 
+/** Build a {@link JoinOperator} for the given join keys and kind (inner or left). */
 export const makeJoin = (options: JoinOptions): JoinOperator => {
   const combine = options.combine ?? defaultCombine;
   const leftById = new Map<string, Row>();

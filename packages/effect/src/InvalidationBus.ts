@@ -76,6 +76,10 @@ export interface HintSubscription {
   readonly take: Effect.Effect<ReadonlyArray<ChangeHint>>;
 }
 
+/**
+ * The channel carrying committed-write hints from the backend to sync sessions; a missed hint
+ * only delays the next pull.
+ */
 export interface InvalidationBus {
   readonly publish: (hints: ReadonlyArray<ChangeHint>) => Effect.Effect<void>;
   /**
@@ -86,6 +90,7 @@ export interface InvalidationBus {
   readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
 }
 
+/** The {@link InvalidationBus} service the sync server and hint sources use. */
 export const InvalidationBus = Context.Service<InvalidationBus>("@legation/effect/InvalidationBus");
 
 /**
@@ -114,6 +119,7 @@ export const makeInProcessWith = (
 export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> =
   makeInProcessWith();
 
+/** A layer providing the in-process bus with the default capacity ({@link makeInProcess}). */
 export const layerInProcess: Layer.Layer<InvalidationBus> =
   Layer.effect(InvalidationBus)(makeInProcess);
 

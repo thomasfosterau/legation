@@ -69,6 +69,7 @@ import { Clock, Duration, Effect, Exit, Fiber, HashMap, Option, Ref, Scope, Stre
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
+/** Options for {@link run}: the channel mirrors connect over and the engine they share. */
 export interface EngineHostOptions {
   readonly channel: MirrorChannel;
   readonly engine: ClientEngine.ClientEngine;

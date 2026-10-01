@@ -52,6 +52,7 @@ export type Query<Name extends string, Args, ArgsEncoded = unknown> = Named<
   ArgsEncoded
 >;
 
+/** Any {@link Named} query definition, whatever its name and args. */
 export type AnyQuery = Named<string, any, any>;
 
 /** Define a named query contract (the same concept as {@link Read}, with a name). */
@@ -100,6 +101,7 @@ export interface Read {
 
 /** Define a read ({@link Read}), or a named contract via `(name, args)`. */
 export function make(read: Read): Read;
+/** Define a named query contract (the same as {@link named}). */
 export function make<const Name extends string, Args, ArgsEncoded>(
   name: Name,
   args: Schema.Codec<Args, ArgsEncoded>
@@ -394,6 +396,7 @@ export interface QueryResolver {
   ) => Effect.Effect<Subset.Subset, AuthorizationError | QueryError>;
 }
 
+/** The {@link QueryResolver} service the sync server resolves named subscriptions with. */
 export const QueryResolver = Context.Service<QueryResolver>("@legation/effect/QueryResolver");
 
 /**

@@ -49,6 +49,9 @@ export interface Paginated<Target extends string = string> {
   readonly order: ReadonlyArray<string>;
 }
 
+/**
+ * An edge on a node: a {@link One} reference, a {@link Many} collection or a {@link Paginated} one.
+ */
 export type Edge = One | Many | Paginated;
 
 /** Declare a reference to a single `target` node, stored in field `via`. */

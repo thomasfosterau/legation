@@ -272,6 +272,7 @@ const renderOver = (
  * signature), never their own hydration logic.
  */
 export function snapshot(options: RemoteSnapshotOptions): Effect.Effect<Snapshot, SnapshotError>;
+/** The in-process form: renders against the app's sync server, the `ServerHandler` in context. */
 export function snapshot(
   options: SnapshotOptions
 ): Effect.Effect<Snapshot, SnapshotError, ServerHandler>;

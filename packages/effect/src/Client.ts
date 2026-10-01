@@ -64,6 +64,10 @@ import * as MirrorProtocol from "./MirrorProtocol.js";
 /** The rows a read resolves to: node values with their included edges. */
 export type ResolvedRow = Related.RelatedRow;
 
+/**
+ * The one-per-thread object an app reads and writes through (ADR-0022): queries, observed reads,
+ * pins, mutations and the identity boundary, whether the engine is owned or hosted elsewhere.
+ */
 export interface Client {
   /** The node graph this Client reads (bindings compile plans against it). */
   readonly nodes: Node.NodeRegistry;

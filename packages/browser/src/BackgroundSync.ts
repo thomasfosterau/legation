@@ -179,6 +179,7 @@ export interface SyncScope {
  */
 export type RegisterOutcome = "Registered" | "Unsupported" | "Refused";
 
+/** Options for {@link register}. */
 export interface RegisterOptions {
   /** Defaults to {@link defaultTag}; must match the listener's. */
   readonly tag?: string;
@@ -237,6 +238,7 @@ const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
   () => typeof navigator !== "undefined" && navigator.onLine === false
 );
 
+/** Options for {@link registerOnJournal}. */
 export interface RegisterOnJournalOptions extends RegisterOptions {
   /**
    * Whether the journal cannot drain right now. Defaults to
@@ -325,6 +327,7 @@ export type IdentitySource =
   | Effect.Effect<Identity.Fingerprint | undefined>
   | typeof identityUnchecked;
 
+/** Options for {@link flush}. */
 export interface FlushOptions {
   /** See {@link ListenOptions.identity}. */
   readonly identity: IdentitySource;
@@ -369,6 +372,7 @@ export class HostNotReady extends Data.TaggedError("HostNotReady")<{
   readonly message: string;
 }> {}
 
+/** Options for {@link listen}. */
 export interface ListenOptions {
   /** The tag to answer, and to register from the host. Defaults to {@link defaultTag}. */
   readonly tag?: string;

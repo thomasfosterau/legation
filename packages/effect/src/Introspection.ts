@@ -46,6 +46,7 @@ export interface EngineIntrospection {
   readonly events: Stream.Stream<EngineEvent>;
 }
 
+/** The {@link EngineIntrospection} service devtools read through. */
 export const EngineIntrospection = Context.Service<EngineIntrospection>(
   "@legation/effect/EngineIntrospection"
 );

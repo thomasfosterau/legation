@@ -41,6 +41,7 @@ import * as ServiceWorkerHost from "./ServiceWorkerHost.js";
 /** Whether this tab is currently serving the engine or mirroring another tab's. */
 export type Role = "host" | "mirror";
 
+/** Options for {@link run}. */
 export interface ElectedHostOptions {
   /** The Web Lock name AND the sync-protocol client group — one election per group. */
   readonly clientGroupId: string;
@@ -79,6 +80,7 @@ export interface ElectedHostOptions {
   readonly locks?: LockManager;
 }
 
+/** What {@link run} returns: one stable Client for the tab, and a stream of its host/mirror role. */
 export interface ElectedHost {
   /**
    * One stable Client for the tab's whole lifetime: reads and writes go

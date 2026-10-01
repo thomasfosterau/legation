@@ -1,7 +1,8 @@
 /**
  * @legation/effect
  *
- * An offline-first sync engine around six concepts (ADR-0022):
+ * An offline-first sync engine around seven concepts (ADR-0022, plus Hydration
+ * from ADR-0020):
  *
  * - {@link Node} / {@link Edge} — the resource graph: typed attributes plus
  *   `one`/`many`/`paginated` edges, each foreign key declared exactly once.

@@ -171,6 +171,7 @@ export interface ClientView {
 /** The read half of a {@link ClientView} — what a local join needs. */
 export type Reader = Pick<ClientView, "query" | "observe">;
 
+/** The {@link ClientView} service: where a Client's reads and writes go, owned engine or mirror. */
 export const ClientView = Context.Service<ClientView>("@legation/effect/ClientView");
 
 /**

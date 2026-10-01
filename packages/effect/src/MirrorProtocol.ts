@@ -83,6 +83,7 @@ export const relatedKey = (
 
 // ─── Mirror → host ────────────────────────────────────────────────────────────
 
+/** A message a mirror sends to the host. */
 export type MirrorMessage =
   | {
       readonly _tag: "Mutate";
@@ -144,6 +145,7 @@ export type MirrorMessage =
   /** Liveness ping: lets the host reclaim subsets from mirrors that crash. */
   | { readonly _tag: "Heartbeat"; readonly mirrorId: string };
 
+/** Wire codec for {@link MirrorMessage}. */
 export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Mutate"),
@@ -206,6 +208,7 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
 
 // ─── Host → mirrors ───────────────────────────────────────────────────────────
 
+/** A row as the host sends it to a mirror. */
 export interface MirrorRow {
   readonly id: string;
   readonly value: unknown;
@@ -218,6 +221,7 @@ export interface MirrorRelatedRow {
   readonly related: Readonly<Record<string, unknown>>;
 }
 
+/** A message the host sends to its mirrors. */
 export type HostMessage =
   /**
    * Broadcast once when a host starts serving. Mirrors answer by re-posting
@@ -269,6 +273,7 @@ export type HostMessage =
       readonly states: ReadonlyArray<MutationState.MutationState>;
     };
 
+/** Wire codec for {@link HostMessage}. */
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("HostReady") }),
   Schema.Struct({ _tag: Schema.tag("MutateAck"), requestId: Schema.Number }),

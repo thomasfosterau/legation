@@ -30,6 +30,7 @@
  */
 import type { RowId } from "./Collection.js";
 
+/** One change in an observed window: a row entered, updated, moved or exited, or a `reset`. */
 export type RowChange<Row> =
   | { readonly _tag: "enter"; readonly row: Row; readonly position?: string }
   | {

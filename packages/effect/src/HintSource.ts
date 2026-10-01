@@ -19,6 +19,9 @@ import { Effect, Scope, Stream } from "effect";
 import type { ChangeHint } from "./Backend.js";
 import * as InvalidationBus from "./InvalidationBus.js";
 
+/**
+ * A producer of change hints for writes that bypass mutations; fork its `run` beside the server.
+ */
 export interface HintSource {
   /** Run until the scope closes; publishes to the in-context InvalidationBus. */
   readonly run: Effect.Effect<void, never, InvalidationBus.InvalidationBus | Scope.Scope>;

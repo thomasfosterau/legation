@@ -75,6 +75,9 @@ export interface RejectedMutation {
   readonly reason: string;
 }
 
+/**
+ * What {@link Backend.applyMutations} reports: the new per-client mutation ids and change hints.
+ */
 export interface ApplyResult {
   /** Highest applied (or permanently rejected) mutation id per client. */
   readonly lastMutationIds: Readonly<Record<string, number>>;
@@ -86,6 +89,10 @@ export interface ApplyResult {
   readonly rejected?: ReadonlyArray<RejectedMutation>;
 }
 
+/**
+ * The BYO server storage contract: apply mutations transactionally, evaluate an authorized
+ * subset, fetch rows by id. The guarantees are in the module header.
+ */
 export interface Backend {
   readonly applyMutations: (
     context: SyncContext,
@@ -118,6 +125,7 @@ export interface Backend {
   >;
 }
 
+/** The {@link Backend} service the sync server reads and writes through. */
 export const Backend = Context.Service<Backend>("@legation/effect/Backend");
 
 /**

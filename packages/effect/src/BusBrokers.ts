@@ -21,6 +21,7 @@ import type { BusBroker } from "./InvalidationBus.js";
 
 // ─── Redis Streams broker ────────────────────────────────────────────────────
 
+/** Options for {@link makeRedisBroker}. */
 export interface RedisBrokerOptions {
   /** Stream key all instances share. Defaults to `"legation:hints"`. */
   readonly stream?: string;
