@@ -54,9 +54,11 @@ jobs:
 
       # `changeset publish` shells out to `npm publish` in a bun workspace, and
       # npm OIDC trusted publishing requires npm >= 11.5.1, which is newer than
-      # the npm bundled with Node 22.
+      # the npm bundled with Node 22. Pinned to a major, never `@latest`: this
+      # job holds `id-token: write`, so a new npm major should arrive through a
+      # reviewed change (#265).
       - name: Upgrade npm (OIDC trusted publishing)
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       # bun does not run dependency lifecycle scripts unless they are listed
       # in `trustedDependencies`, so a compromised (transitive) dependency
