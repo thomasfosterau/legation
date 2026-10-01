@@ -6,7 +6,6 @@ node_modules
 .vscode
 fallow-baselines
 bun.lock
-.agents/skills
 .claude/skills
 skills-lock.json
 packages/swift

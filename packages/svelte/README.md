@@ -19,7 +19,9 @@ Two entry points:
 | `@legation/svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
 | `@legation/svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
-```bash
+## Install
+
+```sh
 npm install @legation/svelte @legation/effect effect svelte
 ```
 
@@ -242,3 +244,7 @@ Writes without JavaScript are ordinary SvelteKit form actions hitting the
 app's own API — out-of-band writers in engine terms (ADR-0019): commit the
 write, then `server.broadcast({ collection })` for the touched collections so
 live subscribers pull. The next full-page render re-snapshots.
+
+## License
+
+MIT

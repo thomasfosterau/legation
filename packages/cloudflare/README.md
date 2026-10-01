@@ -32,6 +32,14 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
   and origin, so the bound Worker resolves the same caller — and therefore the
   same room — that the browser will reach on its own first pull.
 
+## Install
+
+```sh
+npm install @legation/cloudflare @legation/effect @legation/sql effect
+```
+
+## Usage
+
 ```ts
 // worker.ts
 import { Authorization, Node } from "@legation/effect";
@@ -62,10 +70,6 @@ export default {
     return (await route(request, env)) ?? app.fetch(request, env);
   },
 };
-```
-
-```bash
-npm install @legation/cloudflare @legation/effect @legation/sql effect
 ```
 
 ## Effect version
@@ -101,3 +105,7 @@ pull is a delta rather than a reset. That only holds while the hop preserves
 the caller's identity — drop the cookie and the snapshot still carries the
 right rows while its cookie belongs to another room's CVR, which is a silent
 reset on every first paint. `binding-snapshot.test.ts` pins both sides of that.
+
+## License
+
+MIT

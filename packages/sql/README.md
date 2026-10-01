@@ -1,7 +1,7 @@
 # @legation/sql
 
 A driver-agnostic SQL reference backend for the
-[`@legation/effect`](../core) engine.
+[`@legation/effect`](../effect) engine.
 
 - **`Sql`** — a pure translator from a `Subset` predicate to a parameterized
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
@@ -27,10 +27,16 @@ comparison, literals bind by the declared kind, and booleans are stored as
 `0`/`1` on SQLite and decoded back by the backend. Writes run app-authored
 handlers inside one transaction with the per-client `lastMutationId` bump.
 
-```bash
+## Install
+
+```sh
 npm install @legation/sql @legation/effect effect
 ```
 
 ## Effect version
 
 Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
+
+## License
+
+MIT

@@ -1,8 +1,70 @@
-# Project Instructions
+# CLAUDE.md
 
-## Repository layout
+`AGENTS.md` is a symlink to this file. legation publishes the `@legation/*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **bun** workspace, not the programme's pnpm + Vite+: every command is a `bun run` script, and versions live in the root Bun catalog (`package.json` → `workspaces.catalog`) plus `overrides` (which pins the transitive `@effect/platform-node-shared` to the same version). Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it.
 
-This is a bun-workspaces monorepo of Effect-based sync-engine packages under `packages/` (`effect`, `browser`, `node`, `jsonapi`, `sql`, `react`, `svelte`). Package boundaries are dependency-based: everything that needs only `effect` lives in `effect` (the engine core); protocol/runtime/framework adapters get their own packages (ADR-0006). Read `CONTEXT.md` for the domain glossary and `docs/adr/` for architecture decisions before making changes. Quality gates: `bun run build`, `bun run typecheck`, `bun run test:run`, `bun run lint`, `bun run format:check`.
+| Package                | Directory             | Purpose / boundary                                                                                                 |
+| ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `@legation/effect`     | `packages/effect`     | Engine core. App surface on `.`, engine seams for adapter authors on `./internal` (ADR-0022). Peer: `effect` only. |
+| `@legation/browser`    | `packages/browser`    | Service-worker / elected host, IndexedDB client store, tab mirrors, Cache API HTTP cache.                          |
+| `@legation/node`       | `packages/node`       | `HttpSyncServer`: the RPC sync transport on Node HTTP/WebSocket.                                                   |
+| `@legation/jsonapi`    | `packages/jsonapi`    | JSON:API loaders, derived sync, façade (over `@thomasfosterau/effect-jsonapi`).                                    |
+| `@legation/sql`        | `packages/sql`        | SQL reference `Backend` over a `SqlExecutor` seam.                                                                 |
+| `@legation/cloudflare` | `packages/cloudflare` | Durable Object rooms, fan-out shards, D1 executor.                                                                 |
+| `@legation/svelte`     | `packages/svelte`     | Rune hooks; SvelteKit surface on `./kit`.                                                                          |
+| `@legation/devtools`   | `packages/devtools`   | Headless devtools core; Svelte panel on `./svelte` (ships raw `.svelte` source).                                   |
+
+## Common pitfalls
+
+- **Code that needs only `effect` goes in `packages/effect`**; runtime-, protocol- or framework-specific code gets its own package (ADR-0006), so the core runs identically in browsers, workers, edge runtimes and Node.
+- **App-facing names go on `@legation/effect`, engine seams on `@legation/effect/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
+- **`effect` is a peer, never a dependency**: two copies break `Context` identity. The dev pin lives once in the root catalog; the published floor is the open range in each package's `peerDependencies`. To move either, follow CONTRIBUTING.md "Effect version upgrades".
+- **Never publish by hand with `npm publish --workspaces` or `changeset publish`**: neither appears to rewrite `workspace:^`, so the dependent packages would probably ship uninstallable manifests (unverified until a `bun pm pack` check) ([#267](https://github.com/thomasfosterau/legation/issues/267)).
+
+## Conventions
+
+- **Relative imports carry the `.js` extension** (`NodeNext` resolution); each package's `src/index.ts` re-exports its modules as namespaces (`export * as Node from "./Node.js"`).
+- **`exactOptionalPropertyTypes` is on**: an optional field a caller may forward `undefined` to is spelled `?: T | undefined`.
+- **Every export a consumer sees starts its doc comment with a one-sentence summary**, before any tag: hover shows only that text. Write ``@throws `X` when …``, never `@throws {@link X}`, which TypeScript misparses.
+- Service, error and test conventions are in CONTRIBUTING.md ("Effect Code", "Tests").
+
+## Commands
+
+- `bun install --frozen-lockfile` (`bun ci`): install from the lockfile.
+- `bun run build`: build every package (tsc project references). `bun run typecheck:examples` resolves the packages through `dist/`, so build first.
+- `bun run typecheck`: packages and tests. `bun run typecheck:examples`: each example app's own `tsc` / `svelte-check`.
+- `bun run test:run`: every Vitest suite (needs Chromium; see Agent sessions). `bunx vitest run packages/<name>` runs one package's tests without a build (Vitest aliases to source).
+- `bun run lint` (Oxlint) and `bun run format:check` (Prettier). Fix with `bun run lint:fix` / `bun run format`.
+- `bun run analyze:audit:ci`: the fallow audit against `origin/trunk`, using the coverage map `bun run test:coverage` writes. Fetch `origin/trunk` first.
+- `bun run changeset`: add a changeset.
+
+## Verification
+
+Before you report work as done, run these in CI's order (`.github/workflows/ci.yml`) and quote each command with its final pass/fail:
+
+1. `bun run format:check`
+2. `bun run lint`
+3. `bun run build`
+4. `bun run typecheck`
+5. `bun run typecheck:examples`
+6. `bun run test:coverage` (the suite plus the coverage map the audit reads)
+7. `bun run analyze:audit:ci`
+
+If a gate can't run here, say which and why in the PR body; never imply it ran.
+
+## Branches and pull requests
+
+- Branch off `trunk` as `issue-<n>-<slug>`; PR against `trunk`; squash-merge. Rebase onto `origin/trunk` before opening or updating a PR; never merge `trunk` into your branch (GitHub's Update-branch button merges).
+- Add a changeset (`bun run changeset`) for every user-facing or package-impacting change, naming each package it touches; docs-, CI- and tooling-only changes need none. Never publish or version by hand: the Release workflow opens the "Version Packages" PR and the owner merges it.
+- Standing approvals: once a branch has a pushed commit, open its PR without being asked; watch it to merge or close, investigating CI failures and review comments as they arrive; keep its body current with what the branch does.
+- GitHub writes go to `thomasfosterau/legation` only; pass `-R thomasfosterau/legation` whenever the cwd might be another checkout. Use the `gh` CLI for GitHub operations, even when GitHub MCP tools are available.
+
+## Work tracker
+
+GitHub Issues are the backlog: when you find work you can't do now, file an issue rather than leaving a TODO. The issue is the spec: read it with `gh issue view <n> --comments`; later comments override the body. Record decisions and findings as issue comments. Stop-and-report is a valid outcome: on a blocker outside the issue's scope, comment the evidence on the issue and stop. Scope cut mid-PR becomes a linked issue before merge.
+
+The vendored skills in `.claude/skills/` read their repo config from `docs/agents/`: `issue-tracker.md` (gh conventions), `triage-labels.md` (the label strings) and `domain.md` (which docs to read).
+
+## Effect
 
 <!-- effect-solutions:start -->
 
@@ -18,20 +80,18 @@ Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-
 
 Never guess at Effect patterns - check the guide first.
 
-**If `effect-solutions` is unavailable** (e.g. in CI or remote containers): this repo targets the **Effect v4 release-candidate line**, whose APIs differ from v3 and from most online docs. Verify any uncertain API against the installed type definitions in `node_modules/effect/dist/*.d.ts` before using it.
-
 <!-- effect-solutions:end -->
 
-## Agent skills
+If `effect-solutions` is unavailable (the SessionStart hook doesn't install it), verify any uncertain API against `node_modules/effect/dist/*.d.ts`: this repo is on the Effect v4 release-candidate line (the pin in the root `package.json` catalog), whose APIs differ from v3 and from most online docs. On that line HTTP lives at `effect/http/*` and RPC at `effect/rpc`; there are no `effect/unstable/*` paths.
 
-### Issue tracker
+## Agent sessions
 
-Issues are tracked in this repository's GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+- `.claude/hooks/session-start.sh` (the SessionStart hook) runs `bun install --frozen-lockfile` in Claude Code on the web sessions only (`CLAUDE_CODE_REMOTE=true`); run it yourself locally. It hydrates no secrets, and none are needed.
+- `bun run test:run` and `bun run test:coverage` need Chromium for the commerce façade's browser test, which fails rather than skips without it. Run `bunx playwright-core install chromium` first; if the download is blocked, run `bunx vitest run packages` and say in the PR body that the commerce browser test didn't run.
 
-### Triage labels
+## Documentation surfaces
 
-Triage uses the default five-label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This repo uses a single-context domain-docs layout (root `CONTEXT.md` plus `docs/adr/`). See `docs/agents/domain.md`.
+- `CONTEXT.md`: the domain glossary. `docs/adr/`: architecture decisions (historical records; fix only a wrong status or path).
+- Package `README.md`: the npm-facing API reference. Links into the repo stay relative (npm rewrites them against `repository`), but a consumer must not need them: everything they need is in the README.
+- `CONTRIBUTING.md`: setup, commands, conventions, Effect upgrades, the release pipeline and the owner's one-time setup.
+- `docs/agents/`: config the vendored skills read. Decisions and findings go in issue comments.

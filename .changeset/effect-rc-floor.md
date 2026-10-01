@@ -9,29 +9,19 @@
 "@legation/devtools": minor
 ---
 
-Move onto the Effect v4 release-candidate line and publish an open peer floor
-instead of an exact pin (#222). The `rc.113` floor and `rc.115` pin named
-below are superseded in this release by the `>=4.0.0-rc.118` floor in
-`effect-rc118-floor.md`; the published peer range is `>=4.0.0-rc.118`.
+Peer the Effect v4 release-candidate line through an open floor rather than
+an exact pin (#222), so an app can install `@legation/*` beside
+`@thomasfosterau/effect-auth` and `@thomasfosterau/effect-jsonapi` and resolve
+a single copy of `effect`. The published floor is `>=4.0.0-rc.118` (see
+`effect-rc118-floor.md`), on `effect` and on the `@effect/platform-browser` /
+`@effect/platform-node` peers.
 
-**Peer ranges.** Every package now peers `effect: ">=4.0.0-rc.113"` (and the
-same range on the `@effect/platform-browser` / `@effect/platform-node` peers)
-instead of the exact `4.0.0-beta.107`. An app can now install `@legation/*`
-beside `@thomasfosterau/effect-auth` and `@thomasfosterau/effect-jsonapi` and
-resolve a single copy of `effect`. `rc.113` is the floor the sibling libraries
-publish; the gates pass on it and on `4.0.0-rc.115`, the exact version this
-repository pins for development.
-
-**`@legation/jsonapi`** depends on `@thomasfosterau/effect-jsonapi@^0.15.1`
-(was `^0.13.0`). One visible consequence: a repeated shorthand filter key
-(`?filter[name]=a&filter[name]=b`) is now read as the comma list it spells
-(`filter[name]=a,b`, an `In` predicate) instead of being rejected with a 400,
-because effect-jsonapi accepts the repeated-key spelling at every list-valued
-position.
+**`@legation/jsonapi`**: a repeated shorthand filter key
+(`?filter[name]=a&filter[name]=b`) is read as the comma list it spells
+(`filter[name]=a,b`, an `In` predicate) rather than rejected with a 400,
+because `@thomasfosterau/effect-jsonapi` accepts the repeated-key spelling at
+every list-valued position.
 
 **`@legation/node`** declares `engines.node: ">=22"`, the Node line CI runs.
 The other packages run in browsers and workers too and deliberately declare no
 `engines` (ADR-0003).
-
-The bump is `minor` rather than `patch` because every consumer's `effect` must
-move from the beta line to the rc line in the same change.

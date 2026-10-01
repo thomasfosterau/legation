@@ -29,19 +29,21 @@ lines are the body of an `Effect.gen(function* () { … })`, and `atoms` /
 import { Duration, Effect, Schedule, Schema, Stream } from "effect";
 import {
   Aggregate,
-  ClientEngine,
-  EngineAtoms,
+  Authorization,
   Hydration,
-  Introspection,
-  InvalidationBus,
   Mutator,
   Predicate,
+  Transport,
+} from "@legation/effect";
+import {
+  ClientEngine,
+  EngineAtoms,
+  Introspection,
+  InvalidationBus,
   Related,
   Subscriptions,
   Subset,
-  Transport,
-  Authorization,
-} from "@legation/effect";
+} from "@legation/effect/internal";
 ```
 
 ## The mapping

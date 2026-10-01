@@ -1,7 +1,7 @@
 # ADR-0005: Per-key monotonic versions with push-time conflict detection
 
 Date: 2026-06-03
-Status: Accepted
+Status: Superseded by [ADR-0008](0008-mutation-log-rebase-with-cvr-patches.md)
 
 ## Context
 

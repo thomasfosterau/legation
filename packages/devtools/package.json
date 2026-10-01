@@ -1,7 +1,7 @@
 {
   "name": "@legation/devtools",
   "version": "0.1.0",
-  "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with thin React and Svelte panels over it",
+  "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with a Svelte panel on /svelte",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
