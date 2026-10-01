@@ -86,7 +86,7 @@ const makeEngine = (transport: CT, store: ClientStore) =>
   );
 
 /**
- * Wrap a store to count `appendMutation` calls. Since #249 a compaction
+ * Wrap a store to count `appendMutation` / `appendNext` calls. Since #249 a compaction
  * renumbers survivors and rewinds the id counter, so ids consumed no longer
  * count journal writes; appends do.
  */
@@ -97,6 +97,11 @@ const counting = (store: ClientStore) => {
     appendMutation: (mutation) => {
       counter.appends += 1;
       return store.appendMutation(mutation);
+    },
+    // The engine journals through `appendNext` (#258): count those too.
+    appendNext: (draft) => {
+      counter.appends += 1;
+      return store.appendNext(draft);
     },
   };
   return { wrapped, counter };
@@ -908,8 +913,7 @@ describe("entries from before this session are never renumbered (#249 review N3)
       const store = yield* ClientStoreModule.makeMemory;
       yield* store.appendMutation(stale(1));
       yield* store.appendMutation(stale(2));
-      yield* store.nextMutationId("client-a");
-      yield* store.nextMutationId("client-a");
+      // No counter bump needed: ids continue from the journal's highest (#258).
       const engine = yield* makeEngine(transport, store);
 
       yield* engine.mutate("todo/set", todo("n", "new"));

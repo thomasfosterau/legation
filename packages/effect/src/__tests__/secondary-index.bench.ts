@@ -85,6 +85,14 @@ const makeBulkSeededStore = (
       // Paced compaction plays no part in a query-path benchmark.
       compactPending: () => Effect.succeed({ dropped: [], renumbered: [] }),
       markSent: () => Effect.void,
+      appendNext: (draft) =>
+        Effect.sync(() => {
+          const mutationId = (counters.get(draft.clientId) ?? 0) + 1;
+          counters.set(draft.clientId, mutationId);
+          const mutation = { ...draft, mutationId };
+          journal = journal.concat(mutation);
+          return mutation;
+        }),
       nextMutationId: (clientId) =>
         Effect.sync(() => {
           const next = (counters.get(clientId) ?? 0) + 1;

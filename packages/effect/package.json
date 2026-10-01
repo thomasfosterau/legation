@@ -50,6 +50,7 @@
     "effect": ">=4.0.0-rc.118"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "effect": "catalog:"
   },
   "repository": {
