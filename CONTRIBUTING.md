@@ -1,6 +1,6 @@
 # Contributing to legation
 
-legation is a bun-workspaces monorepo (bun, not the programme's pnpm + Vite+); every command below is a `bun run` script.
+legation is a bun-workspaces monorepo (bun, not the programme's pnpm + Vite+); every command below runs through bun.
 
 ## Setup
 
@@ -10,33 +10,17 @@ cd legation
 bun ci
 ```
 
-## Common Commands
+## Commands and repository rules
 
-```bash
-bun run build           # Build all packages (tsc project references)
-bun run typecheck       # Typecheck all packages including tests
-bun run test:run        # Run all tests once
-bun run test:coverage   # Run tests with coverage
-bun run lint            # Oxlint
-bun run lint:fix        # Oxlint safe fixes
-bun run format:check    # Check Prettier formatting
-bun run format          # Apply Prettier formatting
-bun run analyze:audit   # Fallow CI audit
-```
+The command reference, the pre-push gate list, the package boundaries and the
+conventions live in [CLAUDE.md](CLAUDE.md) (the agent guidance, which applies to
+everyone): see [Commands](CLAUDE.md#commands),
+[Verification](CLAUDE.md#verification), [Common pitfalls](CLAUDE.md#common-pitfalls)
+and [Conventions](CLAUDE.md#conventions). Two workspace mechanics it doesn't
+repeat:
 
-Run a single package's tests:
-
-```bash
-bunx vitest run packages/effect
-```
-
-## Cross-package development
-
-- Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `packages/effect`; protocol/framework-specific code gets its own package.
-- Each package's `src/index.ts` exports its modules as namespaces (`export * as Node from "./Node.js"`); tests live in `src/__tests__/*.test.ts`.
 - Packages import each other by published name (`@legation/effect`); bun workspaces link them.
-- `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
-- `effect` is a **peer dependency** of every package, declared as an open floor (`>=4.0.0-rc.118`); the exact version lives only in the root catalog and `bun.lock`. Never add it as a regular dependency.
+- `tsc --build` (project references) handles build order; Vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never need a prior build.
 
 ## Development Workflow
 
@@ -44,7 +28,7 @@ bunx vitest run packages/effect
 2. Make focused changes.
 3. Run the gates in [CLAUDE.md → Verification](CLAUDE.md#verification), in that order.
 4. Add or update tests for behavior changes.
-5. Add a changeset for user-facing or package-impacting changes: `bun run changeset`.
+5. Add a changeset where [CLAUDE.md → Branches and pull requests](CLAUDE.md#branches-and-pull-requests) says one is needed (`bun run changeset`).
 6. Open a pull request.
 
 ## Tests
@@ -165,10 +149,11 @@ is therefore done by hand, with your own npm login:
 1. Create the `@legation` organisation/scope on npm and confirm you have
    publish rights.
 2. Build from a clean checkout of `trunk` (`bun ci`, then `bun run build`)
-   and publish each package. Don't use `npm publish --workspaces` or `bun run release` (`changeset
-publish`) for this yet: neither rewrites the `workspace:^` dependencies on
-   `@legation/effect` and `@legation/sql`, so the dependent packages would
-   publish uninstallable manifests. The fix, and the command to use instead,
+   and publish each package. Don't use `npm publish --workspaces` or
+   `bun run release` (`changeset publish`) for this yet: neither appears to
+   rewrite the `workspace:^` dependencies on `@legation/effect` and
+   `@legation/sql`, so the dependent packages would probably publish
+   uninstallable manifests. The fix, and the command to use instead,
    is tracked in [#267](https://github.com/thomasfosterau/legation/issues/267).
    Whatever publishes must pass `--access public`, matching
    `.changeset/config.json` (`access: "public"`), because the packages are

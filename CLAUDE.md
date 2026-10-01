@@ -1,6 +1,6 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file is `CLAUDE.md`; `AGENTS.md` is a symlink to it. legation publishes the `@legation/*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **bun** workspace, not the programme's pnpm + Vite+: every command is a `bun run` script, and versions live in the root Bun catalog (`package.json` → `workspaces.catalog`) plus `overrides`. Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it.
+`AGENTS.md` is a symlink to this file. legation publishes the `@legation/*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **bun** workspace, not the programme's pnpm + Vite+: every command is a `bun run` script, and versions live in the root Bun catalog (`package.json` → `workspaces.catalog`) plus `overrides` (which pins the transitive `@effect/platform-node-shared` to the same version). Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it.
 
 | Package                | Directory             | Purpose / boundary                                                                                                 |
 | ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -18,7 +18,7 @@ This file is `CLAUDE.md`; `AGENTS.md` is a symlink to it. legation publishes the
 - **Code that needs only `effect` goes in `packages/effect`**; runtime-, protocol- or framework-specific code gets its own package (ADR-0006), so the core runs identically in browsers, workers, edge runtimes and Node.
 - **App-facing names go on `@legation/effect`, engine seams on `@legation/effect/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
 - **`effect` is a peer, never a dependency**: two copies break `Context` identity. The dev pin lives once in the root catalog; the published floor is the open range in each package's `peerDependencies`. To move either, follow CONTRIBUTING.md "Effect version upgrades".
-- **Never publish by hand with `npm publish --workspaces` or `changeset publish`**: neither rewrites `workspace:^`, so the dependent packages would ship uninstallable manifests ([#267](https://github.com/thomasfosterau/legation/issues/267)).
+- **Never publish by hand with `npm publish --workspaces` or `changeset publish`**: neither appears to rewrite `workspace:^`, so the dependent packages would probably ship uninstallable manifests (unverified until a `bun pm pack` check) ([#267](https://github.com/thomasfosterau/legation/issues/267)).
 
 ## Conventions
 

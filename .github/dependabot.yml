@@ -7,11 +7,12 @@
 # lockfile.
 #
 # Effect is deliberately excluded from version updates: the exact dev pin
-# lives once in the root Bun catalog (plus the `overrides` entry), and the
-# published floor is a hand-set open range in every package's
-# `peerDependencies`; Dependabot can keep neither in step (see CONTRIBUTING.md
-# "Effect version upgrades"). The weekly
-# `effect-beta-compat.yml` canary reports when a bump needs attention.
+# lives once in the root Bun catalog (`overrides` pins the transitive
+# `@effect/platform-node-shared` to the same version), and the published
+# floor is a hand-set open range in every package's `peerDependencies`;
+# Dependabot can keep neither in step (see CONTRIBUTING.md "Effect version
+# upgrades"). The weekly `effect-beta-compat.yml` canary reports when a bump
+# needs attention.
 version: 2
 updates:
   - package-ecosystem: "bun"
