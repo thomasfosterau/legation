@@ -807,7 +807,14 @@ export const make = (
     // a store written before the sent watermark existed has no record of it),
     // so freeze them: paced compaction (#249) only ever renumbers entries this
     // session journaled itself.
-    yield* freezePending(store).pipe(Effect.catch(() => Effect.void));
+    yield* freezePending(store).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "ClientEngine: could not freeze the persisted journal at boot; paced compaction may renumber entries an earlier session pushed",
+          { error }
+        )
+      )
+    );
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
     // #212: with the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client

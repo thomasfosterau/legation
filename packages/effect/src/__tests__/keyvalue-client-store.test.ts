@@ -201,6 +201,9 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
     const data = new Map<string, string>();
     const reads: Array<string> = [];
     const budget = { writes: Number.POSITIVE_INFINITY };
+    // When set, the write of the compaction intent lands but reports failure
+    // (an ambiguous IndexedDB abort), once.
+    const flaky = { landButFail: false };
     const spend = (method: string, key: string) =>
       budget.writes <= 0
         ? Effect.fail(
@@ -214,13 +217,28 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
           return data.get(key);
         }),
       set: (key, value) =>
-        spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
+        key.endsWith("compactionIntent") && flaky.landButFail
+          ? Effect.sync(() => {
+              data.set(key, value);
+              flaky.landButFail = false;
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new KeyValueStore.KeyValueStoreError({
+                    message: "write landed but reported failure",
+                    method: "set",
+                    key,
+                  })
+                )
+              )
+            )
+          : spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
       remove: (key) =>
         spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
       clear: Effect.sync(() => data.clear()),
       size: Effect.sync(() => data.size),
     });
-    return { store, data, budget, reads };
+    return { store, data, budget, reads, flaky };
   };
   type Faulty = ReturnType<typeof faultyStore>;
 
@@ -354,6 +372,41 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
       yield* first.compactPending("c1", [197]);
       expect(bodyReads()).toBe(2);
       expect(idsOf(yield* first.pendingMutations)).toHaveLength(198);
+    })
+  );
+
+  it.effect("an intent write that lands but reports failure counts as committed (N-b)", () =>
+    Effect.gen(function* () {
+      const { kv, first } = yield* seeded(5);
+      kv.flaky.landButFail = true;
+      const result = yield* first.compactPending("c1", [2, 4]);
+      expect(result).toEqual(EXPECTED);
+      const restarted = structuredCloneOf(kv);
+      expect(yield* expectWhole(first, "live")).toBe(true);
+      expect(yield* expectWhole(yield* reopen(restarted), "restart")).toBe(true);
+    })
+  );
+
+  it.effect("an intent write that fails and did not land is a clean failure", () =>
+    Effect.gen(function* () {
+      const { kv, first } = yield* seeded(5);
+      kv.budget.writes = 0;
+      expect(Exit.isFailure(yield* Effect.exit(first.compactPending("c1", [2, 4])))).toBe(true);
+      kv.budget.writes = Number.POSITIVE_INFINITY;
+      expect(yield* expectWhole(first, "live")).toBe(false);
+    })
+  );
+
+  it.effect("refuses, uncommitted, to renumber an entry whose body is missing (N-d)", () =>
+    Effect.gen(function* () {
+      const { kv, first } = yield* seeded(5);
+      kv.data.delete("legation/journal/c1/3");
+      const exit = yield* Effect.exit(first.compactPending("c1", [2]));
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(kv.data.has("legation/compactionIntent")).toBe(false);
+      // The index is untouched: still the full run, nothing half-renumbered.
+      expect(idsOf(yield* first.pendingMutations)).toEqual([1, 2, 4, 5]);
+      expect(JSON.parse(kv.data.get("legation/journalIndex")!)).toHaveLength(5);
     })
   );
 

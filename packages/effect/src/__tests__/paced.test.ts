@@ -703,6 +703,14 @@ describe("paced compaction renumbers the journal (#249)", () => {
   );
 });
 
+const stale = (mutationId: number): Mutation => ({
+  clientId: "client-a",
+  mutationId,
+  mutator: "todo/set",
+  args: todo(`t${mutationId}`, `old${mutationId}`),
+  createdAt: 0,
+});
+
 describe("a committed compaction is never lost to a failure or an interrupt (#249 review B1)", () => {
   /**
    * A durable (KeyValueStore-backed) client store whose backing KVS can be
@@ -803,6 +811,62 @@ describe("a committed compaction is never lost to a failure or an interrupt (#24
     }).pipe(Effect.scoped)
   );
 
+  it.effect(
+    "dropIfPending itself survives an interrupt between the store commit and the re-key",
+    () =>
+      Effect.gen(function* () {
+        const { engine, store, fault, applied } = yield* durableSetup;
+        const a = yield* engine.mutateWithAck("todo/set", todo("a", "a1"));
+        const b = yield* engine.mutateWithAck("todo/set", todo("b", "b1"));
+
+        const durable = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        fault.afterIntent = Deferred.succeed(durable, undefined).pipe(
+          Effect.andThen(Deferred.await(interrupted))
+        );
+        // Called directly, so no Paced wrapper can mask the engine's own window.
+        const caller = yield* Effect.forkChild(engine.dropIfPending([a.mutationId]));
+        yield* Deferred.await(durable);
+        yield* Effect.forkChild(Fiber.interrupt(caller));
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(interrupted, undefined);
+        yield* Fiber.await(caller);
+        fault.afterIntent = Effect.void;
+
+        // The store renumbered b to id 1, and the engine followed regardless:
+        // b's handle and state are keyed by the new id, not left on 2.
+        expect(idsOf(yield* store.pendingMutations)).toEqual([1]);
+        const states = yield* Stream.runHead(engine.mutationStates);
+        const map = states._tag === "Some" ? states.value : HashMap.empty();
+        expect(Option.getOrUndefined(HashMap.get(map, 1))).toMatchObject({
+          phase: "pending",
+          args: { title: "b1" },
+        });
+        yield* engine.push;
+        expect(applied).toEqual(["b1"]);
+        expect(yield* b.acknowledged).toEqual({ _tag: "applied" });
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect("the memory store's compaction cannot be interrupted between journal and counter", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      for (let n = 1; n <= 3; n++) {
+        const id = yield* store.nextMutationId("client-a");
+        yield* store.appendMutation({ ...stale(id), mutator: "todo/set" });
+      }
+      const caller = yield* Effect.forkChild(store.compactPending("client-a", [1]));
+      // The fork runs the compaction up to its internal yield point (journal
+      // renumbered, counter not yet); interrupt it right there.
+      yield* Effect.forkChild(Fiber.interrupt(caller));
+      yield* Fiber.await(caller);
+
+      // Journal and counter agree: the next id continues the journal.
+      expect(idsOf(yield* store.pendingMutations)).toEqual([1, 2]);
+      expect(yield* store.nextMutationId("client-a")).toBe(3);
+    })
+  );
+
   it.effect("an interrupt between the store commit and the re-key loses nothing", () =>
     Effect.gen(function* () {
       const { engine, store, fault, applied } = yield* durableSetup;
@@ -835,14 +899,6 @@ describe("a committed compaction is never lost to a failure or an interrupt (#24
 });
 
 describe("entries from before this session are never renumbered (#249 review N3)", () => {
-  const stale = (mutationId: number): Mutation => ({
-    clientId: "client-a",
-    mutationId,
-    mutator: "todo/set",
-    args: todo(`t${mutationId}`, `old${mutationId}`),
-    createdAt: 0,
-  });
-
   it.effect("an engine booted over a persisted journal freezes it", () =>
     Effect.gen(function* () {
       const { handler } = yield* makeLoggingServer;

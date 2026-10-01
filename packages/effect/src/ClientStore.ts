@@ -352,6 +352,10 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
             return planned === undefined ? [undefined, entries] : [planned, planned.journal];
           });
           if (plan === undefined) return NO_COMPACTION;
+          // A yield point between the two writes: harmless here, and what lets
+          // a test (and a real preemption) interrupt exactly in the window the
+          // uninterruptible wrapper exists to close.
+          yield* Effect.yieldNow;
           yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.counter));
           return plan.result;
         })
@@ -1136,7 +1140,15 @@ export const makeKeyValue = (
               const moved: Array<Mutation> = [];
               for (const { from, to } of plan.result.renumbered) {
                 const body = yield* readDecoded(journalBodyKey(clientId, from), MutationFromJson);
-                if (body !== undefined) moved.push({ ...body, mutationId: to });
+                // A missing body cannot be moved, and leaving its index entry
+                // behind would strand an id with nothing to push. Refuse, before
+                // anything is committed, rather than corrupt the run.
+                if (body === undefined) {
+                  return yield* new StoreError({
+                    message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
+                  });
+                }
+                moved.push({ ...body, mutationId: to });
               }
               const intent = {
                 clientId,
@@ -1148,14 +1160,34 @@ export const makeKeyValue = (
               // Armed before the write: if the write lands but reports failure,
               // the next operation still looks for (and finishes) the intent.
               compactionPending = true;
-              yield* writeJson(COMPACTION_KEY, intent);
+              // A write that errors may still have landed (an ambiguous IndexedDB
+              // abort): look for the intent before calling the compaction failed.
+              // Present means committed, so proceed as if the write had succeeded.
+              yield* writeJson(COMPACTION_KEY, intent).pipe(
+                Effect.catch((error) =>
+                  readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
+                    Effect.catch(() => Effect.succeed(undefined)),
+                    Effect.flatMap((found) =>
+                      found === undefined ? Effect.fail(error) : Effect.void
+                    )
+                  )
+                )
+              );
               yield* applyCompaction(intent).pipe(
                 Effect.tap(() =>
                   Effect.sync(() => {
                     compactionPending = false;
                   })
                 ),
-                Effect.catch(() => Effect.void)
+                // The compaction is committed; the roll-forward finishes it.
+                // Not silent: a store that keeps failing here will keep failing
+                // the next journal operation, and this is the first sign.
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "ClientStore: compaction committed but not yet applied; will roll forward",
+                    { error }
+                  )
+                )
               );
               return plan.result;
             })
