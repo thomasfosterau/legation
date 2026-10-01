@@ -30,7 +30,7 @@ import {
 } from "effect";
 import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
-import { ClientStore, NO_COMPACTION, type CompactionResult } from "./ClientStore.js";
+import { ClientStore, NO_COMPACTION, freezePending, type CompactionResult } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
 import * as Identity from "./Identity.js";
 import * as Index from "./CollectionIndex.js";
@@ -161,6 +161,12 @@ export interface MutationHandle {
  * `dropIfPending` in favour of a newer entry for the same key. Every
  * journaled mutation emits `journaled`, whether it came from `mutate`,
  * `mutateEncoded`, or `mutateWithAck`.
+ *
+ * A paced compaction's `MutationRenumbered` (#249) is **not** projected onto
+ * this stream: its `phase` union describes one mutation's lifecycle, and a
+ * renumber is not a phase. Consumers that correlate by id read it from
+ * {@link ClientEngine.engineEvents}, or just follow `mutationStates` (which
+ * moves the state to the new id).
  */
 export interface MutationEvent {
   readonly clientId: string;
@@ -797,6 +803,11 @@ export const make = (
     const initialPending = yield* store.pendingMutations.pipe(
       Effect.catch(() => Effect.succeed<ReadonlyArray<Mutation>>([]))
     );
+    // Entries journaled by an earlier session may already have been pushed (and
+    // a store written before the sent watermark existed has no record of it),
+    // so freeze them: paced compaction (#249) only ever renumbers entries this
+    // session journaled itself.
+    yield* freezePending(store).pipe(Effect.catch(() => Effect.void));
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
     // #212: with the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
@@ -1521,67 +1532,74 @@ export const make = (
       Effect.gen(function* () {
         if (mutationIds.length === 0) return NO_COMPACTION;
         const clientId = yield* currentClientId;
-        const { result, orphaned } = yield* Semaphore.withPermit(
+        // Uninterruptible from the store's commit to the last re-key (#249
+        // review B1): the store has renumbered the journal by the time
+        // `compactPending` returns, so an interrupt before the acks, states and
+        // events catch up would leave this engine, Paced and every handle on
+        // ids that no longer exist. Events and the cache invalidation run
+        // inside the lock too, so no `mutate` can interleave a new id between
+        // the renumbering and its announcement.
+        return yield* Semaphore.withPermit(
           overlayLock,
-          Effect.gen(function* () {
-            const none = {
-              result: NO_COMPACTION,
-              orphaned: [] as ReadonlyArray<Deferred.Deferred<MutationOutcome>>,
-            };
-            if ((yield* Ref.get(pushInFlight)) > 0) return none;
-            const compaction = yield* store.compactPending(clientId, mutationIds);
-            if (compaction.dropped.length === 0) return none;
-            // Move the `mutateWithAck` deferreds: detach every old key first, so
-            // a survivor landing on a slot a dropped entry vacated cannot clash.
-            const orphans = yield* Ref.modify(acks, (map) => {
-              const next = new Map(map);
-              const dropped: Array<Deferred.Deferred<MutationOutcome>> = [];
-              for (const id of compaction.dropped) {
-                const deferred = next.get(id);
-                if (deferred !== undefined) dropped.push(deferred);
-                next.delete(id);
-              }
-              const moved: Array<readonly [number, Deferred.Deferred<MutationOutcome>]> = [];
-              for (const { from, to } of compaction.renumbered) {
-                const deferred = next.get(from);
-                if (deferred === undefined) continue;
-                moved.push([to, deferred]);
-                next.delete(from);
-              }
-              for (const [to, deferred] of moved) next.set(to, deferred);
-              return [dropped, next] as const;
-            });
-            // Fold the drop and the moves into `mutationStates` (#116) — without
-            // the drop, a compacted entry's state would never leave `"pending"`,
-            // leaving a devtools journal panel showing a phantom in-flight
-            // mutation forever.
-            const settledAt = yield* Clock.currentTimeMillis;
-            yield* SubscriptionRef.update(mutationStates, (map) =>
-              MutationState.compacted(map, compaction, settledAt, options.mutationStateRetention)
-            );
-            return { result: compaction, orphaned: orphans };
-          })
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if ((yield* Ref.get(pushInFlight)) > 0) return NO_COMPACTION;
+              const compaction = yield* store.compactPending(clientId, mutationIds);
+              if (compaction.dropped.length === 0) return NO_COMPACTION;
+              // Move the `mutateWithAck` deferreds: detach every old key first, so
+              // a survivor landing on a slot a dropped entry vacated cannot clash.
+              const orphans = yield* Ref.modify(acks, (map) => {
+                const next = new Map(map);
+                const dropped: Array<Deferred.Deferred<MutationOutcome>> = [];
+                for (const id of compaction.dropped) {
+                  const deferred = next.get(id);
+                  if (deferred !== undefined) dropped.push(deferred);
+                  next.delete(id);
+                }
+                const moved: Array<readonly [number, Deferred.Deferred<MutationOutcome>]> = [];
+                for (const { from, to } of compaction.renumbered) {
+                  const deferred = next.get(from);
+                  if (deferred === undefined) continue;
+                  moved.push([to, deferred]);
+                  next.delete(from);
+                }
+                for (const [to, deferred] of moved) next.set(to, deferred);
+                return [dropped, next] as const;
+              });
+              // Fold the drop and the moves into `mutationStates` (#116) — without
+              // the drop, a compacted entry's state would never leave `"pending"`,
+              // leaving a devtools journal panel showing a phantom in-flight
+              // mutation forever.
+              const settledAt = yield* Clock.currentTimeMillis;
+              yield* SubscriptionRef.update(mutationStates, (map) =>
+                MutationState.compacted(map, compaction, settledAt, options.mutationStateRetention)
+              );
+              yield* Effect.forEach(orphans, (deferred) => Deferred.interrupt(deferred), {
+                discard: true,
+              });
+              yield* Effect.forEach(compaction.dropped, (id) => emitEvent(id, "dropped"), {
+                discard: true,
+              });
+              yield* Effect.forEach(
+                compaction.renumbered,
+                ({ from, to }) =>
+                  emitEngineEvent({
+                    _tag: "MutationRenumbered",
+                    clientId,
+                    previousMutationId: from,
+                    mutationId: to,
+                  }),
+                { discard: true }
+              );
+              // Inside the lock `invalidateOverlay` would deadlock on it; the
+              // cache is only ever cleared by setting it empty.
+              yield* Ref.set(overlayCache, undefined);
+              yield* sampleJournalDepth;
+              yield* publishChange(REBUILD);
+              return compaction;
+            })
+          )
         );
-        if (result.dropped.length === 0) return result;
-        yield* Effect.forEach(orphaned, (deferred) => Deferred.interrupt(deferred), {
-          discard: true,
-        });
-        yield* Effect.forEach(result.dropped, (id) => emitEvent(id, "dropped"), { discard: true });
-        yield* Effect.forEach(
-          result.renumbered,
-          ({ from, to }) =>
-            emitEngineEvent({
-              _tag: "MutationRenumbered",
-              clientId,
-              previousMutationId: from,
-              mutationId: to,
-            }),
-          { discard: true }
-        );
-        yield* invalidateOverlay;
-        yield* sampleJournalDepth;
-        yield* publishChange(REBUILD);
-        return result;
       });
 
     // #212: the identity boundary at runtime. The transition rule itself

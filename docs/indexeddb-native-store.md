@@ -277,6 +277,24 @@ current design survives them:
 | `applyRowOps`, before `acknowledge`          | Rows confirmed; acknowledged mutations still in the journal  | They are re-pushed; the backend's `lastMutationId` makes re-application a no-op (ADR-0008), and the next ack trims them. |
 | `acknowledge`, before `setCookie`            | Journal trimmed; cookie stale                                | The next pull re-sends the patch. Idempotent again.                                                                      |
 | Mid-`Clear` (`clearRowsInner`)               | Some collections wiped, others not                           | The cookie is unchanged, so the reset patch is re-sent in full.                                                          |
+| Mid-`compactPending` (#249)                  | Journal bodies, index and counter partly rewritten           | A write-ahead `compactionIntent` is the commit point; it is rolled forward on the next open (see below).                 |
+
+Paced compaction (#117, #249) is the one journal write that is neither a
+prefix trim nor idempotent by construction: it drops superseded unpushed
+entries and renumbers the survivors, rewriting several bodies, the
+`journalIndex` and `counters`. The KV store makes it crash-safe with a
+write-ahead record, `compactionIntent`, holding the complete outcome (stale
+body ids, the renumbered bodies, the new index, the new counter): the intent
+write is the commit point, applying it is a sequence of idempotent steps, and
+`makeKeyValue` (and any journal operation on a live store that finds one
+pending) rolls it forward before doing anything else. A crash or an error
+before the commit leaves the old contiguous journal; after it, the new one,
+and `compactPending` reports the committed renumbering to its caller even if
+applying it failed. The native schema replaces the intent with one readwrite
+transaction over `journal` and `meta`, and `compactPending` keeps its
+contract. A per-client `sentUpTo` watermark (`markSent`, a `meta` entry in the
+native schema) marks the entries a push attempt may have sent; compaction
+never drops or renumbers at or below it.
 
 Idempotent patches paper over every window as long as the server re-sends
 the same patch for the same cookie. What they cannot give is **snapshot

@@ -28,6 +28,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
+import * as Hydration from "../Hydration.js";
 import { TransportError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
@@ -35,6 +36,7 @@ import * as Mutator from "../Mutator.js";
 import * as Paced from "../Paced.js";
 import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
+import { KeyValueStore } from "effect/unstable/persistence";
 import * as SyncServer from "../SyncServer.js";
 import {
   ClientTransport,
@@ -698,5 +700,178 @@ describe("paced compaction renumbers the journal (#249)", () => {
         expect(new Set(applied).size).toBe(applied.length);
       }).pipe(Effect.scoped),
     30_000
+  );
+});
+
+describe("a committed compaction is never lost to a failure or an interrupt (#249 review B1)", () => {
+  /**
+   * A durable (KeyValueStore-backed) client store whose backing KVS can be
+   * made to fail every write once the compaction intent has landed (an
+   * IndexedDB quota error or aborted transaction mid-apply), and to run a hook
+   * right after the intent lands (to interrupt the caller there).
+   */
+  const faultyDurable = Effect.gen(function* () {
+    const data = new Map<string, string>();
+    const fault = {
+      failAfterIntent: false,
+      failing: false,
+      afterIntent: Effect.void as Effect.Effect<void>,
+    };
+    const broken = (method: string, key: string) =>
+      Effect.fail(new KeyValueStore.KeyValueStoreError({ message: "injected", method, key }));
+    const kvs = KeyValueStore.makeStringOnly({
+      get: (key) => Effect.sync(() => data.get(key)),
+      set: (key, value) =>
+        fault.failing
+          ? broken("set", key)
+          : Effect.sync(() => void data.set(key, value)).pipe(
+              Effect.andThen(
+                key.endsWith("compactionIntent")
+                  ? Effect.sync(() => {
+                      if (fault.failAfterIntent) fault.failing = true;
+                    }).pipe(Effect.andThen(fault.afterIntent))
+                  : Effect.void
+              )
+            ),
+      remove: (key) =>
+        fault.failing ? broken("remove", key) : Effect.sync(() => void data.delete(key)),
+      clear: Effect.sync(() => data.clear()),
+      size: Effect.sync(() => data.size),
+    });
+    const store = yield* ClientStoreModule.makeKeyValue().pipe(
+      Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+    );
+    return { store, fault };
+  });
+
+  const durableSetup = Effect.gen(function* () {
+    const { handler, applied } = yield* makeLoggingServer;
+    const transport = yield* makeInMemory(handler, "group-a");
+    const { store, fault } = yield* faultyDurable;
+    const engine = yield* makeEngine(transport, store);
+    yield* engine.subscribe(allTodos);
+    return { engine, store, fault, applied };
+  });
+
+  it.effect("an apply failure after the commit point does not lose the newest paced write", () =>
+    Effect.gen(function* () {
+      const { engine, store, fault, applied } = yield* durableSetup;
+      const paced = yield* Paced.coalesce(engine, "todo/set");
+      yield* paced.call("k", todo("k", "e1"));
+
+      // The intent lands, then every write fails: applying it errors.
+      fault.failAfterIntent = true;
+      yield* paced.call("k", todo("k", "e2")); // commits e1 -> dropped, e2 -> id 1
+      expect(fault.failing).toBe(true);
+      fault.failAfterIntent = false;
+      fault.failing = false;
+
+      // The engine and the Paced tracker saw the renumbering even though the
+      // store had not finished writing it; this call must supersede e2, not
+      // be mistaken for it.
+      yield* paced.call("k", todo("k", "e3"));
+      const pending = yield* store.pendingMutations;
+      expect(titlesOf(pending)).toEqual(["e3"]);
+      expect(idsOf(pending)).toEqual([1]);
+
+      yield* engine.push;
+      expect(yield* store.pendingMutations).toEqual([]);
+      expect(applied).toEqual(["e3"]);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("handles follow a renumbering the store had not finished applying", () =>
+    Effect.gen(function* () {
+      const { engine, store, fault, applied } = yield* durableSetup;
+      const a = yield* engine.mutateWithAck("todo/set", todo("a", "a1"));
+      const b = yield* engine.mutateWithAck("todo/set", todo("b", "b1"));
+      const aOutcome = yield* Effect.forkChild(Effect.exit(a.acknowledged));
+
+      fault.failAfterIntent = true;
+      const result = yield* engine.dropIfPending([a.mutationId]);
+      expect(result).toEqual({ dropped: [1], renumbered: [{ from: 2, to: 1 }] });
+      fault.failAfterIntent = false;
+      fault.failing = false;
+
+      yield* engine.push;
+      expect(yield* store.pendingMutations).toEqual([]);
+      expect(applied).toEqual(["b1"]);
+      // The applied entry's handle settles as applied; the dropped one does not
+      // masquerade as applied.
+      expect(yield* b.acknowledged).toEqual({ _tag: "applied" });
+      expect(Exit.isFailure(yield* Fiber.join(aOutcome))).toBe(true);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("an interrupt between the store commit and the re-key loses nothing", () =>
+    Effect.gen(function* () {
+      const { engine, store, fault, applied } = yield* durableSetup;
+      const paced = yield* Paced.coalesce(engine, "todo/set");
+      yield* paced.call("k", todo("k", "e1"));
+
+      const durable = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      fault.afterIntent = Deferred.succeed(durable, undefined).pipe(
+        Effect.andThen(Deferred.await(interrupted))
+      );
+      const caller = yield* Effect.forkChild(paced.call("k", todo("k", "e2")));
+      yield* Deferred.await(durable);
+      // The interrupt arrives while the store has committed but the engine
+      // and trackers have not yet caught up.
+      yield* Effect.forkChild(Fiber.interrupt(caller));
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(interrupted, undefined);
+      yield* Fiber.await(caller);
+      fault.afterIntent = Effect.void;
+
+      yield* paced.call("k", todo("k", "e3"));
+      const pending = yield* store.pendingMutations;
+      expect(titlesOf(pending)).toEqual(["e3"]);
+      expect(idsOf(pending)).toEqual([1]);
+      yield* engine.push;
+      expect(applied).toEqual(["e3"]);
+    }).pipe(Effect.scoped)
+  );
+});
+
+describe("entries from before this session are never renumbered (#249 review N3)", () => {
+  const stale = (mutationId: number): Mutation => ({
+    clientId: "client-a",
+    mutationId,
+    mutator: "todo/set",
+    args: todo(`t${mutationId}`, `old${mutationId}`),
+    createdAt: 0,
+  });
+
+  it.effect("an engine booted over a persisted journal freezes it", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeLoggingServer;
+      const transport = yield* makeInMemory(handler, "group-a");
+      // A journal left by an earlier session or a release with no sent
+      // watermark: its entries may well have been pushed already.
+      const store = yield* ClientStoreModule.makeMemory;
+      yield* store.appendMutation(stale(1));
+      yield* store.appendMutation(stale(2));
+      yield* store.nextMutationId("client-a");
+      yield* store.nextMutationId("client-a");
+      const engine = yield* makeEngine(transport, store);
+
+      yield* engine.mutate("todo/set", todo("n", "new"));
+      expect(yield* engine.dropIfPending([1, 2])).toEqual({ dropped: [], renumbered: [] });
+      // This session's own entry is still compactable.
+      expect((yield* engine.dropIfPending([3])).dropped).toEqual([3]);
+      expect(idsOf(yield* store.pendingMutations)).toEqual([1, 2]);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("hydrating a snapshot's journal freezes it", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      yield* Hydration.hydrate(store, { rows: [], journal: [stale(1), stale(2)] });
+      expect(yield* store.compactPending("client-a", [1, 2])).toEqual({
+        dropped: [],
+        renumbered: [],
+      });
+    })
   );
 });

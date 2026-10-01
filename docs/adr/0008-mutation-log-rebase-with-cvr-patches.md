@@ -25,3 +25,7 @@ ADR-0004's mark-stale invalidation semantics survive only in the HTTP cache modu
 - True partial sync, per-subscription read authorization, and large backing datasets become possible; the price is real server machinery (CVR storage, diffing) — contained by ADR-0009's contract split.
 - Offline-first falls out: the journal is durable, pulls are resumable from a cookie, and rebase handles whatever happened while offline.
 - An unrecognized or lost cookie degrades safely to a reset patch (clear + full puts), so CVR storage may be ephemeral.
+
+## Addendum: compacting the unpushed tail (#117, #249)
+
+"Pushed journal entries never change" is the boundary; the unpushed tail is local and may be compacted (paced mutations drop superseded entries). The backend's ledger still requires a client's ids to arrive without gaps, so the client **renumbers** the surviving unpushed entries contiguously, in order, and rewinds its id counter; the backend is not asked to accept gaps. An entry a push has been attempted for, successful or not, is frozen: a lost response does not prove the backend did not apply it, and renumbering an applied entry would get a later write skipped as a duplicate. Clients therefore record, durably and before a request leaves, the highest id each push may have sent (`ClientStore.markSent`), and treat a journal found at boot, or hydrated from a snapshot, as already sent.

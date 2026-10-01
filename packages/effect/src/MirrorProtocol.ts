@@ -46,7 +46,7 @@ export const MutationStateSchema = Schema.Struct({
   mutationId: Schema.Number,
   mutator: Schema.String,
   args: Schema.Unknown,
-  phase: Schema.Literals(["pending", "acknowledged", "rejected"]),
+  phase: Schema.Literals(["pending", "acknowledged", "rejected", "dropped"]),
   reason: Schema.optional(Schema.String),
   journaledAt: Schema.Number,
   settledAt: Schema.optional(Schema.Number),
