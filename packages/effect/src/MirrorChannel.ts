@@ -22,6 +22,7 @@ export interface MirrorInbox {
   readonly take: Effect.Effect<unknown>;
 }
 
+/** The message channel between an engine host and its mirrors, with BroadcastChannel semantics. */
 export interface MirrorChannel {
   readonly post: (message: unknown) => Effect.Effect<void, TransportError>;
   /**

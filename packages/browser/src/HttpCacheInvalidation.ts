@@ -104,6 +104,7 @@ export const collectionChanges = (
     Stream.filter((touched) => touched.collections.length > 0 || touched.rows.length > 0)
   );
 
+/** Options for {@link invalidateOnChanges}. */
 export interface InvalidateOnChangesOptions {
   readonly store: HttpCache.ResponseCacheStore;
   /** Touched collections/rows per change (e.g. from {@link collectionChanges}). */
@@ -157,6 +158,7 @@ export const invalidateOnChanges = (
 
 // ─── Response tagging ────────────────────────────────────────────────────────
 
+/** Options for {@link tagsFor}. */
 export interface TagsForOptions {
   /** Map a collection name to its coarse cache tag; defaults to {@link defaultTagFor}. */
   readonly tagFor?: (collection: string) => string;
@@ -164,6 +166,7 @@ export interface TagsForOptions {
   readonly fineTagFor?: (collection: string, id: string) => string;
 }
 
+/** What {@link tagsFor} returns. */
 export interface TagsForResult {
   /** The tags to attach to the response (`HttpCachePolicy.tags`). */
   readonly tags: ReadonlyArray<string>;

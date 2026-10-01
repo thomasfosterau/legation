@@ -49,6 +49,7 @@ export interface ResponseCacheStore {
   readonly invalidateTags: (tags: ReadonlyArray<string>) => Effect.Effect<void, StoreError>;
 }
 
+/** The {@link ResponseCacheStore} service. */
 export const ResponseCacheStore = Context.Service<ResponseCacheStore>(
   "@legation/effect/ResponseCacheStore"
 );

@@ -44,6 +44,7 @@ import * as OrderedTree from "./OrderedTree.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
 
+/** A materialized `(id, value)` row, as a subset produces it. */
 export type Row = Subset.Row;
 
 /** A {@link Row} carrying its stable in-window position (see the module doc). */
@@ -51,6 +52,10 @@ export interface PositionedRow extends Row {
   readonly position: string;
 }
 
+/**
+ * One subset's incrementally maintained window: the matching rows in subset order, plus an id
+ * index over the same rows.
+ */
 export interface LiveView {
   readonly subset: Subset.Subset;
   /** The full filtered + sorted matching set, maintained as an ordered tree. */

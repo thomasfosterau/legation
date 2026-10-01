@@ -18,6 +18,7 @@ import { TransportError, type Transport, type VersionNotSupportedError } from "@
 import type { Protocol } from "@legation/effect/internal";
 import { routes } from "./RoomProtocol.js";
 
+/** Options for {@link make}. */
 export interface MakeOptions {
   /** The sync base URL, e.g. `https://app.example.com/sync`. */
   readonly url: string;

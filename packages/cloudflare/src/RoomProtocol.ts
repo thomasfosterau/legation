@@ -30,6 +30,7 @@ export interface PokeFrame {
   readonly type: "poke";
 }
 
+/** The {@link PokeFrame} value. */
 export const pokeFrame: PokeFrame = { type: "poke" };
 
 /** Shard → room poke body: the matched topics. */
@@ -37,6 +38,7 @@ export const ShardPokeSchema = Schema.Struct({
   topics: Schema.Array(Schema.String),
 });
 
+/** Decode a shard-to-room poke body; fails with `ProtocolError` when it doesn't match. */
 export const decodeShardPoke = (input: unknown) =>
   Schema.decodeUnknownEffect(ShardPokeSchema)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard poke", cause }))
@@ -49,6 +51,7 @@ export const RegisterSchema = Schema.Struct({
   ttlMillis: Schema.Number,
 });
 
+/** Decode a room-to-shard register body; fails with `ProtocolError` when it doesn't match. */
 export const decodeRegister = (input: unknown) =>
   Schema.decodeUnknownEffect(RegisterSchema)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard register", cause }))
@@ -59,6 +62,7 @@ export const PublishSchema = Schema.Struct({
   topics: Schema.Array(Schema.String),
 });
 
+/** Decode a room-to-shard publish body; fails with `ProtocolError` when it doesn't match. */
 export const decodePublish = (input: unknown) =>
   Schema.decodeUnknownEffect(PublishSchema)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard publish", cause }))
@@ -66,5 +70,7 @@ export const decodePublish = (input: unknown) =>
 
 /** Re-exported request decoders — the room's HTTP bodies are the protocol's. */
 export const decodePushRequest: Decoder<Protocol.PushRequest> = Protocol.decodePushRequest;
+/** The protocol's pull-request decoder. */
 export const decodePullRequest: Decoder<Protocol.PullRequest> = Protocol.decodePullRequest;
+/** The protocol's read-request decoder. */
 export const decodeReadRequest: Decoder<Protocol.ReadRequest> = Protocol.decodeReadRequest;

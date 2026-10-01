@@ -58,6 +58,7 @@ export function loadSnapshot(
   cookies: Cookies,
   options: RemoteLoadSnapshotOptions
 ): Effect.Effect<LoadedSnapshot, LoadSnapshotError>;
+/** The in-process form: renders against the app's sync server, the `ServerHandler` in context. */
 export function loadSnapshot(
   cookies: Cookies,
   options: LoadSnapshotOptions

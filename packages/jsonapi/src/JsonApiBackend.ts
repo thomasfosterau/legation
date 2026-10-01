@@ -81,6 +81,7 @@ export interface Write {
   readonly relationships?: Record<string, unknown>;
 }
 
+/** Configuration for {@link make}. */
 export interface JsonApiBackendConfig {
   /** Base URL the resource paths are resolved against (no trailing slash). */
   readonly baseUrl: string;

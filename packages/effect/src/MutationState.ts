@@ -25,6 +25,7 @@
 import { HashMap, Option } from "effect";
 import type { Mutation } from "./Protocol.js";
 
+/** Where a journaled mutation is in its lifecycle. */
 export type MutationPhase = "pending" | "acknowledged" | "rejected" | "dropped";
 
 /**
@@ -45,8 +46,10 @@ export interface MutationState {
   readonly settledAt?: number;
 }
 
+/** Every tracked mutation's {@link MutationState}, keyed by `mutationId`. */
 export type MutationStateMap = HashMap.HashMap<number, MutationState>;
 
+/** How many settled entries a {@link MutationStateMap} keeps. */
 export interface RetentionOptions {
   /**
    * Maximum terminal (acknowledged/rejected) entries retained; the

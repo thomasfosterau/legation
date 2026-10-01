@@ -85,6 +85,9 @@ export interface OperationInfo {
   readonly type: string;
 }
 
+/**
+ * What {@link derive} produces from a resource map: collections, mutators and their CRUD mapping.
+ */
 export interface Derived {
   readonly collections: ReadonlyArray<Collection.AnyCollection>;
   /** Mutator definitions + client (optimistic) handlers. */

@@ -38,10 +38,15 @@ export const AggregateSchema: Schema.Codec<Aggregate> = Schema.Union([
 
 // ─── Constructors ────────────────────────────────────────────────────────────
 
+/** Count the rows. */
 export const count: Aggregate = { _tag: "Count" };
+/** Sum a numeric field; non-numeric values are skipped. */
 export const sum = (field: string): Aggregate => ({ _tag: "Sum", field });
+/** The smallest value of a numeric field; non-numeric values are skipped. */
 export const min = (field: string): Aggregate => ({ _tag: "Min", field });
+/** The largest value of a numeric field; non-numeric values are skipped. */
 export const max = (field: string): Aggregate => ({ _tag: "Max", field });
+/** The mean of a numeric field; non-numeric values are skipped. */
 export const avg = (field: string): Aggregate => ({ _tag: "Avg", field });
 
 // ─── Evaluation ──────────────────────────────────────────────────────────────

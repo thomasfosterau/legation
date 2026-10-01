@@ -20,6 +20,7 @@ import { HttpRouter } from "effect/http";
 import type { ServeError } from "effect/http/HttpServerError";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 
+/** Options for {@link layerHttp} and {@link layerWebSocket}. */
 export interface HttpSyncServerOptions {
   /** Route the sync RPCs are served on, e.g. `"/sync"`. */
   readonly path: HttpRouter.PathInput;
@@ -53,6 +54,7 @@ export const layerWebSocket = (
 ): Layer.Layer<never, never, Transport.ServerHandler | HttpRouter.HttpRouter> =>
   make(options, RpcServer.layerProtocolWebsocket({ path: options.path }));
 
+/** Options for {@link layerServe}: the route options plus where to listen. */
 export interface ListenOptions extends HttpSyncServerOptions {
   readonly port: number;
   readonly host?: string;

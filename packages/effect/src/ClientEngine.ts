@@ -380,6 +380,9 @@ export interface SyncFailure {
   readonly error: TransportError | StoreError | MutatorError;
 }
 
+/**
+ * Options for {@link make}: the client and group ids, the mutator registry, and sync-loop tuning.
+ */
 export interface ClientEngineOptions {
   readonly clientId: string;
   readonly clientGroupId: string;
@@ -460,6 +463,10 @@ interface SeqChange {
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
 
+/**
+ * The client-side engine: the journal, the materialized view (confirmed rows plus the optimistic
+ * overlay), subscriptions and the push/pull sync loop. Apps reach it through a {@link Client}.
+ */
 export interface ClientEngine {
   /**
    * Run a mutator optimistically and journal it for push. Args are
@@ -787,8 +794,13 @@ export interface ClientEngine {
   readonly syncFailures: Stream.Stream<SyncFailure>;
 }
 
+/** The {@link ClientEngine} service. */
 export const ClientEngine = Context.Service<ClientEngine>("@legation/effect/ClientEngine");
 
+/**
+ * Build a {@link ClientEngine} over the `ClientStore` and `ClientTransport` in context; the engine
+ * lives as long as the scope.
+ */
 export const make = (
   options: ClientEngineOptions
 ): Effect.Effect<ClientEngine, never, ClientStore | ClientTransport | Scope.Scope> =>

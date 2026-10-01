@@ -36,6 +36,7 @@ import {
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
+/** Options for {@link make}: the channel to the host and the shared mutator registry. */
 export interface MirrorOptions {
   readonly channel: MirrorChannel;
   /** The shared mutator registry (same definitions the host engine runs). */
@@ -107,6 +108,10 @@ const failPending = <A>(
     )
   );
 
+/**
+ * A tab-side view over a host's engine: reads are served from the host's rows and
+ * writes are forwarded to the host's journal.
+ */
 export interface Mirror {
   /** Validate args locally, forward to the host journal, await the ack. */
   readonly mutate: (
@@ -197,6 +202,10 @@ export interface Mirror {
   readonly pinEdges: ClientView.ClientView["pinEdges"];
 }
 
+/**
+ * Connect a {@link Mirror} to the host on `options.channel`; its subscriptions are released when
+ * the scope closes.
+ */
 export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { channel, mutators } = options;

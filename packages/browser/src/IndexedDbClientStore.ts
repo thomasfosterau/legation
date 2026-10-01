@@ -32,6 +32,7 @@ import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Identity } from "@legation/effect";
 import { Layer } from "effect";
 
+/** Options for the IndexedDB-backed `ClientStore` layers. */
 export interface IndexedDbClientStoreOptions {
   /** IndexedDB database name. Defaults to platform-browser's default. */
   readonly database?: string;

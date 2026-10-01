@@ -34,6 +34,7 @@ export type LiveQueryResult<E> = AsyncResult.AsyncResult<
   E | Cause.NoSuchElementError
 >;
 
+/** Shared live-query Atoms over a {@link LiveQuerySource}, one per subset identity. */
 export interface LiveQueries<E> {
   /**
    * The Atom for a subset's live results. Stable per subset identity

@@ -33,6 +33,7 @@ import { HintSource, InvalidationBus } from "@legation/effect/internal";
 import * as Sql from "./Sql.js";
 import type * as SqlBackend from "./SqlBackend.js";
 
+/** Configuration for {@link make}. */
 export interface PollingHintSourceConfig {
   readonly executor: SqlBackend.SqlExecutor;
   /** Collection → table mapping (the `SqlBackend` mapping, reused). */
@@ -68,6 +69,10 @@ const signatureOf = (rows: ReadonlyArray<SqlBackend.SqlRow>): string => {
   return `${String(row.n ?? 0)}|${version}`;
 };
 
+/**
+ * A `HintSource` that polls each mapped table for a cheap change detector and publishes a hint
+ * when a collection changes out of band.
+ */
 export const make = (config: PollingHintSourceConfig): HintSource.HintSource => {
   const collections = config.collections ?? Object.keys(config.tables);
 

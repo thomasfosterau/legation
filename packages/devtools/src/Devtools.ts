@@ -52,6 +52,7 @@ export interface OfflineControl {
   readonly isOffline: Effect.Effect<boolean>;
 }
 
+/** Options for {@link make}. */
 export interface DevtoolsOptions {
   readonly offline?: OfflineControl;
 }

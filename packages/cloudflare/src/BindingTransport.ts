@@ -60,6 +60,7 @@ export interface InboundRequest {
   readonly headers: { readonly get: (name: string) => string | null };
 }
 
+/** Options for {@link make}. */
 export interface MakeOptions {
   /** The service binding to the Worker running the sync server. */
   readonly binding: ServiceBinding;

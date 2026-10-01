@@ -26,6 +26,10 @@ import type { InvalidationBus } from "./InvalidationBus.js";
 import type * as Node from "./Node.js";
 import type * as Subset from "./Subset.js";
 
+/**
+ * Options for {@link make}: this room's id at the broker, the broker, and the node graph topics
+ * are derived from.
+ */
 export interface MakeOptions {
   /** This room's identity at the broker (typically the user id). */
   readonly roomId: string;

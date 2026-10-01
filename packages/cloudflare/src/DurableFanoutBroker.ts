@@ -18,6 +18,7 @@ import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { Duration, Effect, PubSub, Scope } from "effect";
 import type { FanoutBroker, FanoutTopics } from "@legation/effect/internal";
 
+/** Options for {@link make}. */
 export interface MakeOptions {
   /** The shard namespace binding (`env.SHARDS`). */
   readonly shards: DurableObjectNamespace;
@@ -49,6 +50,10 @@ const post = (
       .catch(() => undefined)
   );
 
+/**
+ * Build the room's {@link DurableBroker} over the shard namespace; its poke feed lives as long as
+ * the scope.
+ */
 export const make = (options: MakeOptions): Effect.Effect<DurableBroker, never, Scope.Scope> =>
   Effect.gen(function* () {
     const hub = yield* Effect.acquireRelease(

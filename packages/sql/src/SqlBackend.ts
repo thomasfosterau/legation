@@ -148,6 +148,7 @@ export type SqlHandler = (
   context: Backend.SyncContext
 ) => Effect.Effect<ReadonlyArray<Backend.ChangeHint>, BackendError | MutationRejected>;
 
+/** Configuration for {@link make}. */
 export interface SqlBackendConfig {
   readonly executor: SqlExecutor;
   readonly tables: Readonly<Record<string, TableMapping>>;
@@ -162,6 +163,10 @@ export interface SqlBackendConfig {
 /** Content-hash fallback version when no version column is mapped. */
 export const versionOf = Hash.contentHash;
 
+/**
+ * A {@link Backend.Backend} over a {@link SqlExecutor}: subset evaluation, row fetch and the
+ * transactional, idempotent mutation-id ledger.
+ */
 export const make = (config: SqlBackendConfig): Backend.Backend => {
   const dialect = config.dialect ?? Sql.sqlite;
   const executor = config.executor;

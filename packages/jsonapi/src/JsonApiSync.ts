@@ -42,6 +42,7 @@ import type { QueryEncoder } from "./JsonApiQuery.js";
  */
 export type JsonApi = HttpApi.Constraint;
 
+/** Options for {@link layer}. */
 export interface JsonApiSyncOptions {
   /** Base URL the resource paths resolve against (no trailing slash). */
   readonly baseUrl: string;

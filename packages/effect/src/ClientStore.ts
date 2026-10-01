@@ -119,6 +119,7 @@ const planCompaction = <T extends Numbered>(
   return { result: { dropped, renumbered }, journal: after, counter: next };
 };
 
+/** A client's durable state: confirmed rows, the pending-mutation journal and the sync cookie. */
 export interface ClientStore {
   // Confirmed rows
   readonly getRow: (
@@ -256,6 +257,7 @@ export interface ClientStore {
   ) => Effect.Effect<void, StoreError>;
 }
 
+/** The {@link ClientStore} service a Client or engine persists through. */
 export const ClientStore = Context.Service<ClientStore>("@legation/effect/ClientStore");
 
 /**
@@ -469,6 +471,7 @@ const sealed = (cause: StoreError): ClientStore => {
 
 // ─── KeyValueStore-backed implementation ─────────────────────────────────────
 
+/** Options for a {@link ClientStore} over an Effect `KeyValueStore`. */
 export interface KeyValueOptions {
   /** Key namespace inside the KeyValueStore. Defaults to `"legation/"`. */
   readonly prefix?: string;

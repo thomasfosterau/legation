@@ -37,6 +37,7 @@ export interface Broadcast {
   readonly ids?: ReadonlyArray<string>;
 }
 
+/** One per backend: the protocol `handler` plus `broadcast` for out-of-band changes. */
 export interface Server {
   /** The sync protocol handler — mount it on any router or carrier. */
   readonly handler: Transport.ServerHandler;
@@ -48,6 +49,10 @@ export interface Server {
   readonly broadcast: (change: Broadcast) => Effect.Effect<void>;
 }
 
+/**
+ * Options for {@link make}: the backend and auth are required; CVR storage and the bus default
+ * to in-memory / in-process.
+ */
 export interface MakeOptions {
   /** The storage contract (ADR-0009). */
   readonly backend: BackendService;

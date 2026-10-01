@@ -51,6 +51,7 @@ export interface AuthPolicy {
   readonly declarations?: ReadonlyMap<string, FilterPolicy.FilterDeclaration>;
 }
 
+/** The {@link AuthPolicy} service the sync server authorizes every request against. */
 export const AuthPolicy = Context.Service<AuthPolicy>("@legation/effect/AuthPolicy");
 
 /** Options for {@link policy}. */
@@ -63,6 +64,10 @@ export interface PolicyOptions {
   readonly collections?: Collection.CollectionRegistry;
 }
 
+/**
+ * Build an {@link AuthPolicy} from per-collection filters; unlisted collections are denied.
+ * Pass `options.collections` so the collections' filterable sets are enforced too.
+ */
 export const policy = (
   filters: Readonly<Record<string, AuthFilter>>,
   options?: PolicyOptions
@@ -148,6 +153,7 @@ export interface SyncMiddleware {
   ) => Effect.Effect<ReadRequest, AuthorizationError>;
 }
 
+/** The {@link SyncMiddleware} service; absent means {@link passthroughMiddleware}. */
 export const SyncMiddleware = Context.Service<SyncMiddleware>("@legation/effect/SyncMiddleware");
 
 /** The identity middleware (no interception). */
@@ -168,6 +174,7 @@ export interface IdentityResolver {
   readonly resolve: (clientGroupId: string) => Effect.Effect<unknown, AuthorizationError>;
 }
 
+/** The {@link IdentityResolver} service; absent leaves `SyncContext.identity` undefined. */
 export const IdentityResolver = Context.Service<IdentityResolver>(
   "@legation/effect/IdentityResolver"
 );

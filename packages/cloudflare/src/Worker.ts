@@ -20,6 +20,7 @@
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { routes } from "./RoomProtocol.js";
 
+/** Configuration for {@link routeSync}. */
 export interface RouterConfig<Env> {
   /** The room namespace binding (`env.ROOMS`). */
   readonly rooms: (env: Env) => DurableObjectNamespace;

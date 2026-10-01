@@ -107,6 +107,7 @@ export interface JsonApiSource {
   readonly baseUrl: string;
 }
 
+/** The {@link JsonApiSource} service loaders read from. */
 export const JsonApiSource = Context.Service<JsonApiSource>("@legation/jsonapi/JsonApiSource");
 
 const jsonApiHeaders = {

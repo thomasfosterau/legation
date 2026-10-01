@@ -60,6 +60,7 @@ export interface ClientTransport {
   readonly statusChanges: Stream.Stream<ConnectionStatus>;
 }
 
+/** The {@link ClientTransport} service a Client syncs over. */
 export const ClientTransport = Context.Service<ClientTransport>("@legation/effect/ClientTransport");
 
 /**
@@ -82,6 +83,7 @@ export interface ServerHandler {
   readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
 }
 
+/** The {@link ServerHandler} service a carrier answers clients with. */
 export const ServerHandler = Context.Service<ServerHandler>("@legation/effect/ServerHandler");
 
 /**

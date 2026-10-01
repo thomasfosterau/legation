@@ -24,6 +24,7 @@ export interface CacheLike {
   readonly keys: () => Promise<ReadonlyArray<Request>>;
 }
 
+/** The slice of the Cache API's `CacheStorage` that {@link open} uses (`caches` in a browser). */
 export interface CacheStorageLike {
   readonly open: (name: string) => Promise<CacheLike>;
 }
@@ -96,6 +97,7 @@ export const open = (
 
 // ─── Fetch handler ───────────────────────────────────────────────────────────
 
+/** Options for {@link fetchHandler}. */
 export interface FetchHandlerOptions {
   readonly store: HttpCache.ResponseCacheStore;
   /** Per-request policy; `undefined` bypasses the cache entirely. */
@@ -104,6 +106,7 @@ export interface FetchHandlerOptions {
   readonly fetch?: (request: Request) => Promise<Response>;
 }
 
+/** What {@link fetchHandler} answers a request with. */
 export interface FetchHandlerResult {
   readonly response: Response;
   /**

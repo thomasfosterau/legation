@@ -59,6 +59,7 @@ export const SyncRpcs = RpcGroup.make(
   })
 );
 
+/** The sync RPCs ({@link SyncRpcs}) as a union of their definitions. */
 export type SyncRpc = RpcGroup.Rpcs<typeof SyncRpcs>;
 
 // The RPC carrier's wire error schema carries only a message (SyncRpcError), so
@@ -92,6 +93,7 @@ export const layerHandlers: Layer.Layer<
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
 
+/** Options for the RPC client transport. */
 export interface RpcTransportOptions {
   readonly clientGroupId: string;
 }
