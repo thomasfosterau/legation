@@ -37,11 +37,11 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-jsonapi": "^0.15.1",
+    "@thomasfosterau/effect-jsonapi": "^0.16.1",
     "@legation/effect": "workspace:^"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.113"
+    "effect": ">=4.0.0-rc.118"
   },
   "devDependencies": {
     "effect": "catalog:"

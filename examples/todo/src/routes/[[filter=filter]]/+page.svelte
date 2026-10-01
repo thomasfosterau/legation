@@ -12,7 +12,7 @@
    * `data.filter` — not component state — decides what is on screen.
    */
   import { Effect } from "effect";
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useAggregate, useQuery, useUndo } from "@legation/svelte";
   import { Aggregate } from "@legation/effect";
   import { type Todo, allTodos, activeTodos } from "$lib/domain";

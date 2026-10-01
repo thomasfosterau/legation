@@ -47,7 +47,7 @@
     "@legation/effect": "workspace:^"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.113",
+    "effect": ">=4.0.0-rc.118",
     "svelte": ">=5.40"
   },
   "peerDependenciesMeta": {

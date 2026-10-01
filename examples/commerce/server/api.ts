@@ -14,7 +14,7 @@
  * parse and the façade parses — the parity the façade presumes.
  */
 import { Schema } from "effect";
-import { HttpApi, HttpApiSchema } from "effect/unstable/httpapi";
+import { HttpApi, HttpApiSchema } from "effect/http-api";
 import { ApiError, Document, Endpoint, Group } from "@thomasfosterau/effect-jsonapi";
 import { JsonApiQuery } from "@legation/jsonapi";
 import { nodes } from "../src/lib/domain.js";

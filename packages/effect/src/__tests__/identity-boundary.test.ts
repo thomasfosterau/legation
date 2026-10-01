@@ -20,7 +20,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Ref, Schema, Stream } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import {
   Authorization,
   Backend,

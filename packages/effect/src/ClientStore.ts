@@ -18,7 +18,7 @@
  */
 
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
@@ -644,7 +644,7 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
 
 /**
  * The durable implementation (ADR-0007): ClientStore over
- * `effect/unstable/persistence` KeyValueStore, so any platform KVS —
+ * `effect/persistence` KeyValueStore, so any platform KVS —
  * browser IndexedDB/localStorage, Node file system, SQL — persists the
  * engine.
  *

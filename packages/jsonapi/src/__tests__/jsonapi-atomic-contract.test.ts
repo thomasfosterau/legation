@@ -11,14 +11,14 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Schema } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 import {
   ApiError,
   Atomic,

@@ -14,7 +14,7 @@
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import { Effect, Fiber, Stream } from "effect";
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime } from "@legation/svelte";
   import { useMutation, useQuery } from "@legation/svelte";
   import type { Transport } from "@legation/effect";

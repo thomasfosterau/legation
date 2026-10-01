@@ -31,7 +31,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Predicate } from "@legation/effect";
 import { FilterCorpus, type Subset } from "@legation/effect/internal";
 import { Context, Effect, Layer, type Scope } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import * as Sql from "../../Sql.js";
 
 /** A three-valued verdict: `T` true, `F` false, `U` unknown (SQL NULL). */

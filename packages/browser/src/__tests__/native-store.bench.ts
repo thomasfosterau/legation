@@ -31,7 +31,7 @@
  */
 import { describe, test } from "vitest";
 import { Duration, Effect, Layer } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Predicate } from "@legation/effect";
 import { CollectionIndex, Subset } from "@legation/effect/internal";

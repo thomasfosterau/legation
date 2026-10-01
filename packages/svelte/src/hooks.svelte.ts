@@ -25,7 +25,7 @@
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Fiber, HashMap, Stream } from "effect";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { Aggregate, Client, Query } from "@legation/effect";
 import { ClientEngine, type MutationState, type Undo } from "@legation/effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";

@@ -10,7 +10,7 @@
    * to that order's lines — with each line's `product` edge resolved — and the
    * previous rows stay on screen while it resolves.
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { lineTotal, toOrderLines, toOrderViews } from "$lib/data";

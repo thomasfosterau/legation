@@ -4,7 +4,7 @@
  * A reference implementation of the core `Backend` contract (ADR-0009) over a
  * SQL database, addressing the audit's "turnkey backend" gap with a
  * driver-agnostic adapter: the app provides a tiny `SqlExecutor` (wrapping
- * `bun:sqlite`, `effect/unstable/sql`, `pg`, …) and per-collection table
+ * `bun:sqlite`, `effect/sql`, `pg`, …) and per-collection table
  * mappings, and this backend supplies subset evaluation, row fetching, and the
  * transactional mutation-id ledger.
  *

@@ -9,7 +9,7 @@
    * Each row's price / stock / discontinued is editable; saving issues the
    * read-merge `product/update` mutation (optimistic, then authoritative).
    */
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
   import { getActions } from "$lib/actions";
   import { toProductViews, values } from "$lib/data";

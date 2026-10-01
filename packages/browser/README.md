@@ -5,7 +5,7 @@ Browser-runtime adapters for the [Effect](https://effect.website)-native sync en
 `ClientTransport` and `CacheStore` interfaces against browser platform globals:
 
 - **`WebSocketTransport`** — a `ClientTransport` over the platform `WebSocket`, built on
-  Effect's own `Socket` abstraction (`effect/unstable/socket`), with transparent
+  Effect's own `Socket` abstraction (`effect/socket`), with transparent
   auto-reconnect and exponential backoff. It also runs in Node 22+, which ships a global
   `WebSocket` client.
 - **`IndexedDbCacheStore`** — a persistent `CacheStore` over `indexedDB`, so cached data
@@ -23,7 +23,7 @@ bun add @legation/browser @legation/effect effect
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. `@effect/platform-browser` is peered with the same floor. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. `@effect/platform-browser` is peered with the same floor. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## WebSocket transport
 

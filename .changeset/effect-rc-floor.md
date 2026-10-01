@@ -10,7 +10,9 @@
 ---
 
 Move onto the Effect v4 release-candidate line and publish an open peer floor
-instead of an exact pin (#222).
+instead of an exact pin (#222). The `rc.113` floor and `rc.115` pin named
+below are superseded in this release by the `>=4.0.0-rc.118` floor in
+`effect-rc118-floor.md`; the published peer range is `>=4.0.0-rc.118`.
 
 **Peer ranges.** Every package now peers `effect: ">=4.0.0-rc.113"` (and the
 same range on the `@effect/platform-browser` / `@effect/platform-node` peers)

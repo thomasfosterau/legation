@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Scope } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as Cvr from "../Cvr.js";

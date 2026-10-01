@@ -8,8 +8,8 @@
  * run as an idempotent migration effect.
  */
 import { Effect, Layer } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
-import { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient";
+import type { SqlClient } from "effect/sql/SqlClient";
+import { SqlClient as SqlClientService } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError } from "@legation/effect";
 import type { SqlBackend } from "@legation/sql";

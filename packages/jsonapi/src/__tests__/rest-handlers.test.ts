@@ -13,10 +13,10 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import {
   ApiError,
   Endpoint,

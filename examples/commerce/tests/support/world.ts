@@ -7,9 +7,9 @@
  * backend call" is a fact the derived-read tests can assert.
  */
 import { Context, Effect, Layer } from "effect";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServer from "effect/unstable/http/HttpServer";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";

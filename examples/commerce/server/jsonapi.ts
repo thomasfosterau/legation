@@ -45,11 +45,11 @@
  * which sets this header from the session and drops the client's).
  */
 import { Context, Data, Effect, Layer } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
-import type { HttpServerRequest } from "effect/unstable/http";
-import { HttpServerRequest as Request } from "effect/unstable/http";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { HttpApiBuilder } from "effect/http-api";
+import type { HttpServerRequest } from "effect/http";
+import { HttpServerRequest as Request } from "effect/http";
+import { SqlClient } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 import { ApiError, Atomic, Handlers, Lid, Middleware } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@legation/effect";
 import { RestHandlers } from "@legation/jsonapi";

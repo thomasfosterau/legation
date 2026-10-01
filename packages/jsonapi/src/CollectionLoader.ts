@@ -15,10 +15,10 @@
  */
 
 import { Context, Effect } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { ApiError, ParseError } from "./errors.js";
 import { buildQueryString } from "./JsonApiQuery.js";
 import { decodeDocument } from "./schema.js";

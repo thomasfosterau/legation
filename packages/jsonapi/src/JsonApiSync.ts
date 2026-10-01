@@ -19,9 +19,9 @@
  */
 
 import { Duration, Effect, Layer, Scope } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpApi from "effect/http-api/HttpApi";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { Authorization, Backend, ClientStore, Transport } from "@legation/effect";
 import { ClientEngine, SyncRoom } from "@legation/effect/internal";
 import {

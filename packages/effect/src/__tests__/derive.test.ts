@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Schema, Stream } from "effect";
-import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

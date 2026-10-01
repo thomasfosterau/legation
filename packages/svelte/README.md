@@ -28,7 +28,7 @@ needs it, and only as a `Cookies` type, so a non-Kit Svelte app pulls nothing.
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.113`, the floor shared with `@thomasfosterau/effect-jsonapi` and `@thomasfosterau/effect-auth`. Tested against `4.0.0-rc.113` (the floor) and `4.0.0-rc.115` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## The hooks
 
@@ -70,7 +70,7 @@ renders, and on the client it makes the first render match the server markup
 
 ```svelte
 <script lang="ts">
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@legation/svelte";
 
   let cursor = $state<string | undefined>(undefined);

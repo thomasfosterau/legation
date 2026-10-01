@@ -1,7 +1,7 @@
 /**
  * LiveQuery
  *
- * Read-side integration with `effect/unstable/reactivity` (ADR-0007): turn
+ * Read-side integration with `effect/reactivity` (ADR-0007): turn
  * a live query — a subset observed against the local view — into an Atom
  * whose value re-emits on every local change (patch applied, overlay
  * changed). Atoms are the UI surface; the engine's own change stream is the
@@ -14,7 +14,7 @@
  */
 
 import type { Cause, Stream } from "effect";
-import { Atom, type AsyncResult } from "effect/unstable/reactivity";
+import { Atom, type AsyncResult } from "effect/reactivity";
 import type { LocalRow } from "./ClientEngine.js";
 import * as Subset from "./Subset.js";
 

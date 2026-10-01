@@ -36,7 +36,7 @@ import * as Mutator from "../Mutator.js";
 import * as Paced from "../Paced.js";
 import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import * as SyncServer from "../SyncServer.js";
 import {
   ClientTransport,

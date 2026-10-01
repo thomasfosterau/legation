@@ -4,9 +4,9 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
 

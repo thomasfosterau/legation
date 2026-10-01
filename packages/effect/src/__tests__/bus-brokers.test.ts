@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, PubSub, Ref } from "effect";
-import { Redis } from "effect/unstable/persistence";
+import { Redis } from "effect/persistence";
 import type { ChangeHint } from "../Backend.js";
 import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";

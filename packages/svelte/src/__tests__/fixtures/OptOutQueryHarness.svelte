@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useQuery } from "../../index.svelte.js";
 

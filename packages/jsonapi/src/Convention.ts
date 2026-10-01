@@ -31,9 +31,9 @@
  */
 
 import type * as SchemaAST from "effect/SchemaAST";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
-import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApi from "effect/http-api/HttpApi";
+import type * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
 /** A JSON:API role a CRUD endpoint plays for one resource type. */
 export type Operation = "list" | "getOne" | "create" | "update" | "delete";

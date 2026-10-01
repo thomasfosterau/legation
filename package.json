@@ -10,15 +10,15 @@
       "examples/*"
     ],
     "catalog": {
-      "effect": "4.0.0-rc.115",
-      "@effect/platform-browser": "4.0.0-rc.115",
-      "@effect/platform-node": "4.0.0-rc.115",
-      "@effect/vitest": "4.0.0-rc.115",
-      "@effect/sql-sqlite-node": "4.0.0-rc.115"
+      "effect": "4.0.0-rc.118",
+      "@effect/platform-browser": "4.0.0-rc.118",
+      "@effect/platform-node": "4.0.0-rc.118",
+      "@effect/vitest": "4.0.0-rc.118",
+      "@effect/sql-sqlite-node": "4.0.0-rc.118"
     }
   },
   "overrides": {
-    "@effect/platform-node-shared": "4.0.0-rc.115"
+    "@effect/platform-node-shared": "4.0.0-rc.118"
   },
   "scripts": {
     "build": "tsc --build tsconfig.json",
@@ -47,7 +47,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
-    "@effect/language-service": "^0.85.1",
+    "@effect/language-service": "^0.87.3",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@electric-sql/pglite": "^0.5.8",

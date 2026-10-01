@@ -10,7 +10,7 @@
  */
 import { describe, test } from "vitest";
 import { Effect } from "effect";
-import { KeyValueStore } from "effect/unstable/persistence";
+import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
 import type { PatchOp } from "../Protocol.js";
 

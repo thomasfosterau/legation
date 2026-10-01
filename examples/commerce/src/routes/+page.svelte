@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
   import { useAggregateGrouped, useQuery } from "@legation/svelte";
-  import { AsyncResult } from "effect/unstable/reactivity";
+  import { AsyncResult } from "effect/reactivity";
   import { Aggregate } from "@legation/effect";
   import {
     allCategories,
