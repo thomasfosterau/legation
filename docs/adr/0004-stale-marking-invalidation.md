@@ -1,7 +1,7 @@
 # ADR-0004: Invalidation marks entries stale instead of deleting them
 
 Date: 2026-06-03
-Status: Accepted
+Status: Accepted — narrowed to the HTTP cache module by [ADR-0008](0008-mutation-log-rebase-with-cvr-patches.md)
 
 ## Context
 

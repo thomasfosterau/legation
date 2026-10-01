@@ -1,6 +1,6 @@
 # Contributing to legation
 
-Thank you for contributing. This repository is a bun-workspaces monorepo using TypeScript, Effect v4 (release-candidate line), Vitest, Oxlint, Prettier, Fallow, and Changesets.
+legation is a bun-workspaces monorepo (bun, not the programme's pnpm + Vite+); every command below is a `bun run` script.
 
 ## Setup
 
@@ -30,26 +30,10 @@ Run a single package's tests:
 bunx vitest run packages/effect
 ```
 
-## Project Structure
-
-```text
-packages/
-  core/      @legation/effect      The sync engine (primitives, client, SW/edge cache, server hub)
-  browser/   @legation/browser   Browser runtime: WebSocket client transport, IndexedDB store
-  node/      @legation/node      Node runtime: ws-based WebSocket server transport
-  jsonapi/   @legation/jsonapi   JSON:API protocol adapter
-docs/
-  adr/       Architecture decision records
-  audit/     Production-readiness audits
-  agents/    Agent workflow docs
-CONTEXT.md   Domain glossary — use its vocabulary in code and issues
-```
-
-Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__tests__/*.test.ts` vitest tests, `src/index.ts` exporting modules as namespaces (`export * as SyncKey from "./SyncKey.js"`).
-
 ## Cross-package development
 
-- Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `core`; protocol/framework-specific code gets its own package.
+- Package boundaries are dependency-based (ADR-0006): code that needs only `effect` goes in `packages/effect`; protocol/framework-specific code gets its own package.
+- Each package's `src/index.ts` exports its modules as namespaces (`export * as Node from "./Node.js"`); tests live in `src/__tests__/*.test.ts`.
 - Packages import each other by published name (`@legation/effect`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never require a prior build.
 - `effect` is a **peer dependency** of every package, declared as an open floor (`>=4.0.0-rc.118`); the exact version lives only in the root catalog and `bun.lock`. Never add it as a regular dependency.
@@ -58,7 +42,7 @@ Each package follows the same layout: `src/*.ts` modules with JSDoc, `src/__test
 
 1. Create a feature branch.
 2. Make focused changes.
-3. Run the quality gates locally (build, typecheck, test, lint, format).
+3. Run the gates in [CLAUDE.md → Verification](CLAUDE.md#verification), in that order.
 4. Add or update tests for behavior changes.
 5. Add a changeset for user-facing or package-impacting changes: `bun run changeset`.
 6. Open a pull request.
@@ -78,7 +62,7 @@ Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest):
 
 ## Effect Code
 
-Use Effect for side effects, dependency injection, and typed failures. Repository instructions require consulting `effect-solutions` before writing Effect code; if the local tool is unavailable, **verify APIs against the installed type definitions** (`node_modules/effect/dist/*.d.ts`) — this codebase targets Effect v4 beta, whose APIs differ from v3 (and from most online documentation).
+Use Effect for side effects, dependency injection, and typed failures.
 
 Conventions:
 
@@ -134,7 +118,10 @@ Merges to `trunk` run the release workflow (`.github/workflows/release.yml`).
 It verifies the build, then runs `changesets/action`: if unreleased changesets
 exist it opens or updates a **Version Packages** PR (running `changeset
 version`); when that PR is merged it publishes (`changeset publish`, which
-runs `npm publish` per package) and tags the release.
+runs `npm publish` per package) and tags the release. That publish step does
+not yet rewrite `workspace:^` dependencies; see
+[#267](https://github.com/thomasfosterau/legation/issues/267) before the first
+release.
 
 Publishing uses npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers):
 there is no `NPM_TOKEN` secret. The workflow proves its identity to npm with a
@@ -177,17 +164,15 @@ is therefore done by hand, with your own npm login:
 
 1. Create the `@legation` organisation/scope on npm and confirm you have
    publish rights.
-2. From a clean checkout of `trunk`:
-
-   ```sh
-   npm login
-   bun ci
-   bun run build
-   npm publish --workspaces --access public   # or `bun run release`
-   ```
-
-   `--access public` matches `.changeset/config.json` (`access: "public"`); it
-   is required because the packages are scoped.
+2. Build from a clean checkout of `trunk` (`bun ci`, then `bun run build`)
+   and publish each package. Don't use `npm publish --workspaces` or `bun run release` (`changeset
+publish`) for this yet: neither rewrites the `workspace:^` dependencies on
+   `@legation/effect` and `@legation/sql`, so the dependent packages would
+   publish uninstallable manifests. The fix, and the command to use instead,
+   is tracked in [#267](https://github.com/thomasfosterau/legation/issues/267).
+   Whatever publishes must pass `--access public`, matching
+   `.changeset/config.json` (`access: "public"`), because the packages are
+   scoped.
 
 3. Attach the trusted publisher to each published package (maintainer setup
    step 2 above).
@@ -196,10 +181,6 @@ Once every package has a published `0.1.0` and a trusted publisher, the
 workflow above takes over: land changesets on `trunk`, merge the Version
 Packages PR, approve the `release` environment, and releases publish
 automatically.
-
-## Reporting Issues
-
-Please include a clear description, reproduction steps, expected behavior, actual behavior, environment details, and a small code sample when possible.
 
 ## License
 
