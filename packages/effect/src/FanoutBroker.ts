@@ -44,7 +44,10 @@ export interface FanoutBroker {
   readonly pokes: (roomId: string) => Effect.Effect<TopicPokes, never, Scope.Scope>;
 }
 
-/** The {@link FanoutBroker} service. */
+/**
+ * The {@link FanoutBroker} service tag, for apps that provide a broker by layer;
+ * `FanoutBus.make` takes it as an option.
+ */
 export const FanoutBroker = Context.Service<FanoutBroker>("@legation/effect/FanoutBroker");
 
 interface Lease {

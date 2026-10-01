@@ -30,7 +30,7 @@ export interface PokeFrame {
   readonly type: "poke";
 }
 
-/** The {@link PokeFrame} value. */
+/** The single poke frame a room socket sends, as a value to serialize. */
 export const pokeFrame: PokeFrame = { type: "poke" };
 
 /** Shard → room poke body: the matched topics. */

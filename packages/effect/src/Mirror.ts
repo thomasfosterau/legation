@@ -109,8 +109,8 @@ const failPending = <A>(
   );
 
 /**
- * A tab-side view over a host's engine: reads are served from the host's rows and
- * writes are forwarded to the host's journal.
+ * A client context's in-memory copy of a host engine's subscribed subsets: queries are answered
+ * synchronously from it, and writes are forwarded to the host's journal.
  */
 export interface Mirror {
   /** Validate args locally, forward to the host journal, await the ack. */

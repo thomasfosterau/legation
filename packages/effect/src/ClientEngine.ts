@@ -465,7 +465,7 @@ export type ReadRow = ReadResponse["rows"][number];
 
 /**
  * The client-side engine: the journal, the materialized view (confirmed rows plus the optimistic
- * overlay), subscriptions and the push/pull sync loop. Apps reach it through a {@link Client}.
+ * overlay), subscriptions and the push/pull sync loop. Apps reach it through a `Client`.
  */
 export interface ClientEngine {
   /**
@@ -794,7 +794,10 @@ export interface ClientEngine {
   readonly syncFailures: Stream.Stream<SyncFailure>;
 }
 
-/** The {@link ClientEngine} service. */
+/**
+ * The {@link ClientEngine} service, for integrations that take the engine from context
+ * (`JsonApiSync.start`).
+ */
 export const ClientEngine = Context.Service<ClientEngine>("@legation/effect/ClientEngine");
 
 /**

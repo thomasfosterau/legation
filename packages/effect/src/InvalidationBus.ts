@@ -90,7 +90,7 @@ export interface InvalidationBus {
   readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
 }
 
-/** The {@link InvalidationBus} service. */
+/** The {@link InvalidationBus} service the sync server and hint sources use. */
 export const InvalidationBus = Context.Service<InvalidationBus>("@legation/effect/InvalidationBus");
 
 /**
