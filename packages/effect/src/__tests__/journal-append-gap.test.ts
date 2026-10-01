@@ -8,7 +8,7 @@
  * push through `MemoryBackend`, which enforces that rule.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, References, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -419,6 +419,113 @@ describe("an id that has left the journal is never reissued (#258 review)", () =
         expect(after).toEqual(after.map((_, i) => i + 1));
         expect((yield* store.appendNext(draft)).mutationId).toBe(after.length + 1);
       }
+    })
+  );
+});
+
+/**
+ * Every memory-store operation that writes the journal, the quarantine or the
+ * counters holds the same permit (#258 review). `acknowledge` and
+ * `quarantinePending` read then write back, so a writer outside the permit
+ * landing between the two was overwritten. `MaxOpsBeforeYield` of 5 makes the
+ * fibers yield between the read and the write, so the race fires on nearly
+ * every round on the unlocked code.
+ */
+describe("memory store: journal writers exclude one another (#258 review)", () => {
+  const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
+  const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
+  const rounds = 50;
+  /** Fork both, then join: each runs as its own fiber so they interleave at yields. */
+  const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
+    Effect.gen(function* () {
+      const fa = yield* Effect.forkChild(a);
+      const fb = yield* Effect.forkChild(b);
+      yield* Fiber.join(fa);
+      yield* Fiber.join(fb);
+    });
+  const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
+
+  it.live("acknowledge never loses a concurrent releaseQuarantine", () =>
+    Effect.gen(function* () {
+      let lost = 0;
+      for (let round = 0; round < rounds; round++) {
+        const store = yield* ClientStoreModule.makeMemory;
+        yield* store.appendMutation(m(1, "x"));
+        yield* store.quarantinePending("A" as Identity.Fingerprint);
+        yield* store.appendMutation(m(1));
+        yield* race(
+          store.acknowledge("c", 1),
+          store.releaseQuarantine("A" as Identity.Fingerprint)
+        );
+        if (!(yield* store.pendingMutations).map(key).includes("x:1")) lost++;
+      }
+      expect(lost).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
+  it.live("acknowledge never loses a concurrent appendMutation", () =>
+    Effect.gen(function* () {
+      let lost = 0;
+      for (let round = 0; round < rounds; round++) {
+        const store = yield* ClientStoreModule.makeMemory;
+        yield* store.appendMutation(m(1));
+        yield* store.appendMutation(m(2));
+        yield* race(store.acknowledge("c", 1), store.appendMutation(m(1, "other")));
+        if (!(yield* store.pendingMutations).map(key).includes("other:1")) lost++;
+      }
+      expect(lost).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
+  it.live("quarantinePending never loses a concurrent appendMutation", () =>
+    Effect.gen(function* () {
+      let lost = 0;
+      for (let round = 0; round < rounds; round++) {
+        const store = yield* ClientStoreModule.makeMemory;
+        yield* store.appendMutation(m(1));
+        yield* race(
+          store.quarantinePending("A" as Identity.Fingerprint),
+          store.appendMutation(m(2))
+        );
+        // The new entry is either still pending or was quarantined with the
+        // rest; it must exist in one of the two.
+        const held = (yield* store.quarantinedMutations("A" as Identity.Fingerprint)).map(key);
+        const pending = (yield* store.pendingMutations).map(key);
+        if (![...held, ...pending].includes("c:2")) lost++;
+      }
+      expect(lost).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
+  it.effect("nextMutationId heals from the journal on both stores", () =>
+    Effect.gen(function* () {
+      const memory = yield* ClientStoreModule.makeMemory;
+      yield* memory.appendMutation(m(1));
+      yield* memory.appendMutation(m(2));
+      expect(yield* memory.nextMutationId("c")).toBe(3);
+
+      const data = new Map<string, string>();
+      let failCounters = true;
+      const kvs = KeyValueStore.makeStringOnly({
+        get: (k) => Effect.sync(() => data.get(k)),
+        set: (k, v) =>
+          failCounters && k.endsWith("counters")
+            ? Effect.fail(
+                new KeyValueStore.KeyValueStoreError({ message: "inj", method: "set", key: k })
+              )
+            : Effect.sync(() => void data.set(k, v)),
+        remove: (k) => Effect.sync(() => void data.delete(k)),
+        clear: Effect.sync(() => data.clear()),
+        size: Effect.sync(() => data.size),
+      });
+      const kv = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+      );
+      // The counter write is swallowed, so the counter stays behind the journal.
+      yield* kv.appendNext(d());
+      yield* kv.appendNext(d());
+      failCounters = false;
+      expect(yield* kv.nextMutationId("c")).toBe(3);
     })
   );
 });

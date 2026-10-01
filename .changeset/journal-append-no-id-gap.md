@@ -19,6 +19,10 @@ the key-value store, before deleting anything), and the key-value `appendNext`
 is uninterruptible. Previously a lost counter write (or an interrupt between the
 index and counter writes) let the next append reissue an acknowledged id, which
 the backend skipped as an idempotent duplicate, silently losing the write. The
-in-memory store's `appendNext` is now atomic with respect to `compactPending`
-and the other journal operations, and heals its counter from the journal exactly
-as the key-value store does.
+in-memory store's journal writers are now mutually exclusive: `appendMutation`,
+`appendNext`, `acknowledge`, `compactPending`, `nextMutationId`,
+`quarantinePending`, `releaseQuarantine` and `discardQuarantine` all hold one
+permit, so a read-then-write operation can no longer overwrite a concurrent
+append or a released quarantine. `appendNext` heals its counter from the journal
+exactly as the key-value store does, and so does `nextMutationId` on both
+stores.

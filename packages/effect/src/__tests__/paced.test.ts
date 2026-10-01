@@ -913,8 +913,7 @@ describe("entries from before this session are never renumbered (#249 review N3)
       const store = yield* ClientStoreModule.makeMemory;
       yield* store.appendMutation(stale(1));
       yield* store.appendMutation(stale(2));
-      yield* store.nextMutationId("client-a");
-      yield* store.nextMutationId("client-a");
+      // No counter bump needed: ids continue from the journal's highest (#258).
       const engine = yield* makeEngine(transport, store);
 
       yield* engine.mutate("todo/set", todo("n", "new"));

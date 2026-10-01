@@ -155,8 +155,13 @@ export interface ClientStore {
    * leaves the counter exactly where it was: no id is consumed unless the
    * entry is journaled.
    *
-   * Atomic with respect to every other operation on the store, so concurrent
-   * callers get distinct, consecutive ids in the order they are served.
+   * Atomic with respect to every operation that writes the journal, the
+   * quarantine or the counters (`appendMutation`, `acknowledge`,
+   * `compactPending`, `nextMutationId`, `quarantinePending`,
+   * `releaseQuarantine`, `discardQuarantine`): none can land between this
+   * call's read and its write, so concurrent callers get distinct,
+   * consecutive ids in the order they are served and no concurrent write is
+   * lost.
    */
   readonly appendNext: (draft: Omit<Mutation, "mutationId">) => Effect.Effect<Mutation, StoreError>;
   readonly pendingMutations: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
@@ -310,11 +315,19 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const cookie = yield* Ref.make<string | undefined>(undefined);
   const identity = yield* Ref.make<Identity.Fingerprint | undefined>(undefined);
   const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
-  // The journal and the counters are separate Refs, so the operations that
-  // touch both are serialised: `appendNext`, `compactPending`, `acknowledge`,
-  // `quarantinePending` and `nextMutationId` each hold this permit for their
-  // whole body, which is what makes them atomic with respect to one another
-  // (the `appendNext` contract) instead of merely individually atomic.
+  // The journal, the quarantine and the counters are separate Refs, and several
+  // operations read one and then write it back. Every operation that WRITES
+  // any of the three therefore holds this permit for its whole body:
+  // `appendMutation`, `appendNext`, `acknowledge`, `compactPending`,
+  // `nextMutationId`, `quarantinePending`, `releaseQuarantine` and
+  // `discardQuarantine`. A read-then-write holder is only safe if every other
+  // writer is also excluded; a writer that skipped the permit could land
+  // between the read and the set and be overwritten (the lost-append and
+  // lost-release races). Pure reads stay unlocked: each is one `Ref.get`.
+  // Chosen over folding all three into one Ref because the existing
+  // operations stay readable and `compactPending`'s two-step commit keeps its
+  // shape. No permit holder calls another, so the (non-reentrant) permit
+  // cannot deadlock; keep it that way.
   const lock = yield* Semaphore.make(1);
   const locked = <A, E>(effect: Effect.Effect<A, E>) => Semaphore.withPermit(lock, effect);
 
@@ -375,7 +388,8 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         return next;
       }),
 
-    appendMutation: (mutation) => Ref.update(journal, (entries) => entries.concat(mutation)),
+    appendMutation: (mutation) =>
+      locked(Ref.update(journal, (entries) => entries.concat(mutation))),
     // Uninterruptible and under the store lock: the counter and the journal
     // change together, and no other operation interleaves (#258). The id is
     // the larger of the counter and the highest id the journal already holds
@@ -442,13 +456,19 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.update(sentUpTo, (m) =>
         (m.get(clientId) ?? 0) >= upTo ? m : new Map(m).set(clientId, upTo)
       ),
+    // Heals from the journal like `appendNext`, so it can never return an id a
+    // live entry already holds (for example after a counter that lagged).
     nextMutationId: (clientId) =>
       locked(
-        Ref.modify(counters, (m) => {
-          const next = (m.get(clientId) ?? 0) + 1;
-          const updated = new Map(m);
-          updated.set(clientId, next);
-          return [next, updated];
+        Effect.gen(function* () {
+          const entries = yield* Ref.get(journal);
+          let last = (yield* Ref.get(counters)).get(clientId) ?? 0;
+          for (const entry of entries) {
+            if (entry.clientId === clientId && entry.mutationId > last) last = entry.mutationId;
+          }
+          const next = last + 1;
+          yield* raiseCounter(clientId, next);
+          return next;
         })
       ),
 
@@ -477,24 +497,28 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.get(quarantine).pipe(Effect.map((held) => held.get(fingerprint) ?? [])),
     quarantines: Ref.get(quarantine).pipe(Effect.map((held) => [...held.keys()])),
     releaseQuarantine: (fingerprint) =>
-      Effect.gen(function* () {
-        const held = yield* Ref.get(quarantine);
-        const entries = held.get(fingerprint) ?? [];
-        if (entries.length === 0) return 0;
-        yield* Ref.update(journal, (pending) => [...pending, ...entries]);
-        yield* Ref.update(quarantine, (map) => {
+      locked(
+        Effect.gen(function* () {
+          const held = yield* Ref.get(quarantine);
+          const entries = held.get(fingerprint) ?? [];
+          if (entries.length === 0) return 0;
+          yield* Ref.update(journal, (pending) => [...pending, ...entries]);
+          yield* Ref.update(quarantine, (map) => {
+            const next = new Map(map);
+            next.delete(fingerprint);
+            return next;
+          });
+          return entries.length;
+        })
+      ),
+    discardQuarantine: (fingerprint) =>
+      locked(
+        Ref.update(quarantine, (map) => {
           const next = new Map(map);
           next.delete(fingerprint);
           return next;
-        });
-        return entries.length;
-      }),
-    discardQuarantine: (fingerprint) =>
-      Ref.update(quarantine, (map) => {
-        const next = new Map(map);
-        next.delete(fingerprint);
-        return next;
-      }),
+        })
+      ),
   });
 });
 
@@ -1381,7 +1405,13 @@ export const makeKeyValue = (
           Effect.gen(function* () {
             yield* settleCompaction;
             const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-            const next = (counters[clientId] ?? 0) + 1;
+            // Heal from the live journal, as `appendNext` does, so a counter
+            // write that was swallowed cannot hand out an id a live entry holds.
+            let last = counters[clientId] ?? 0;
+            for (const entry of yield* journalIndex) {
+              if (entry.clientId === clientId && entry.mutationId > last) last = entry.mutationId;
+            }
+            const next = last + 1;
             yield* writeJson("counters", { ...counters, [clientId]: next });
             return next;
           })
