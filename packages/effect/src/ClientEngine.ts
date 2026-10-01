@@ -2509,16 +2509,16 @@ export const make = (
           // `trackedWriter`).
           const pendingBefore = yield* store.pendingMutations;
           const clientId = yield* currentClientId;
-          const mutationId = yield* store.nextMutationId(clientId);
           const journaledAt = yield* Clock.currentTimeMillis;
-          const mutation: Mutation = {
+          // Allocate the id and append as one store step (#258): a refused or
+          // failed append must not consume an id, or the next push hits a gap
+          // the backends reject.
+          const { mutationId } = yield* store.appendNext({
             clientId,
-            mutationId,
             mutator,
             args: encoded,
             createdAt: journaledAt,
-          };
-          yield* store.appendMutation(mutation);
+          });
           // Register the `mutateWithAck` deferred before the lock is released:
           // a compaction (#249) also takes it, so the id cannot be renumbered
           // between being allocated and being keyed here.

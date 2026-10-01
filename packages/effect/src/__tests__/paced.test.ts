@@ -86,7 +86,7 @@ const makeEngine = (transport: CT, store: ClientStore) =>
   );
 
 /**
- * Wrap a store to count `appendMutation` calls. Since #249 a compaction
+ * Wrap a store to count `appendMutation` / `appendNext` calls. Since #249 a compaction
  * renumbers survivors and rewinds the id counter, so ids consumed no longer
  * count journal writes; appends do.
  */
@@ -97,6 +97,11 @@ const counting = (store: ClientStore) => {
     appendMutation: (mutation) => {
       counter.appends += 1;
       return store.appendMutation(mutation);
+    },
+    // The engine journals through `appendNext` (#258): count those too.
+    appendNext: (draft) => {
+      counter.appends += 1;
+      return store.appendNext(draft);
     },
   };
   return { wrapped, counter };

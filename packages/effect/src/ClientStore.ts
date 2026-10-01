@@ -142,6 +142,23 @@ export interface ClientStore {
 
   // Journal
   readonly appendMutation: (mutation: Mutation) => Effect.Effect<void, StoreError>;
+  /**
+   * Allocate the client's next mutation id **and** append the entry as one
+   * store step (#258), returning the journaled mutation (id included).
+   *
+   * This is how the engine journals. Allocating with
+   * {@link ClientStore.nextMutationId} and then calling
+   * {@link ClientStore.appendMutation} burns the id whenever the append is
+   * refused (`journalHighWater`) or fails (quota, an aborted transaction), and
+   * the next mutation then carries `lastId + 2`, a gap every backend rejects
+   * (ADR-0008) so the journal never drains. Here a refused or failed append
+   * leaves the counter exactly where it was: no id is consumed unless the
+   * entry is journaled.
+   *
+   * Atomic with respect to every other operation on the store, so concurrent
+   * callers get distinct, consecutive ids in the order they are served.
+   */
+  readonly appendNext: (draft: Omit<Mutation, "mutationId">) => Effect.Effect<Mutation, StoreError>;
   readonly pendingMutations: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
   /** Drop journal entries with `mutationId <= upTo` for the client. */
   readonly acknowledge: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
@@ -186,6 +203,11 @@ export interface ClientStore {
    * instance over the same store.
    */
   readonly markSent: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
+  /**
+   * Reserve the next mutation id without journaling anything. Low-level:
+   * prefer {@link ClientStore.appendNext}, since an id reserved here and never
+   * appended is a gap (#258).
+   */
   readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
 
   // Sync bookkeeping
@@ -333,6 +355,20 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       }),
 
     appendMutation: (mutation) => Ref.update(journal, (entries) => entries.concat(mutation)),
+    // Uninterruptible: the counter and the journal change together, and the
+    // append cannot fail, so no id is ever consumed without an entry (#258).
+    appendNext: (draft) =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const mutationId = yield* Ref.modify(counters, (m) => {
+            const next = (m.get(draft.clientId) ?? 0) + 1;
+            return [next, new Map(m).set(draft.clientId, next)];
+          });
+          const mutation: Mutation = { ...draft, mutationId };
+          yield* Ref.update(journal, (entries) => entries.concat(mutation));
+          return mutation;
+        })
+      ),
     pendingMutations: Ref.get(journal),
     acknowledge: (clientId, upTo) =>
       Ref.update(journal, (entries) =>
@@ -449,6 +485,7 @@ const sealed = (cause: StoreError): ClientStore => {
     clearRows: refuse(),
     applyRowOps: () => refuse(),
     appendMutation: () => refuse(),
+    appendNext: () => refuse(),
     pendingMutations: refuse(),
     acknowledge: () => refuse(),
     compactPending: () => refuse(),
@@ -1099,6 +1136,50 @@ export const makeKeyValue = (
               ...index,
               { clientId: mutation.clientId, mutationId: mutation.mutationId },
             ]);
+          })
+        ),
+      // Allocate and append under one lock hold (#258). The high-water check
+      // runs first and the counter is written *last*: a refused or failed
+      // append never advances it, and a crash between the index write and the
+      // counter write is healed by taking the larger of the counter and the
+      // highest id the journal already holds for the client, so an id is
+      // neither skipped nor reissued over a live entry.
+      appendNext: (draft) =>
+        locked(
+          Effect.gen(function* () {
+            yield* settleCompaction;
+            const index = yield* journalIndex;
+            if (highWater !== undefined && index.length >= highWater) {
+              return yield* new StoreError({
+                message: `Journal high-water exceeded (${highWater} pending mutations); refusing to drop the intent`,
+              });
+            }
+            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+            let last = counters[draft.clientId] ?? 0;
+            for (const entry of index) {
+              if (entry.clientId === draft.clientId && entry.mutationId > last) {
+                last = entry.mutationId;
+              }
+            }
+            const mutation: Mutation = { ...draft, mutationId: last + 1 };
+            yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
+            yield* writeJson("journalIndex", [
+              ...index,
+              { clientId: mutation.clientId, mutationId: mutation.mutationId },
+            ]);
+            // The entry is journaled; a failure to persist the counter must not
+            // report the append as failed (the journal heals the counter above).
+            yield* writeJson("counters", {
+              ...counters,
+              [draft.clientId]: mutation.mutationId,
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("ClientStore: journaled but could not persist the id counter", {
+                  error,
+                })
+              )
+            );
+            return mutation;
           })
         ),
       pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
