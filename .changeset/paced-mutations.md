@@ -21,8 +21,8 @@ call is durable, at the cost of short-lived extra entries before the next
 call's compaction).
 
 `dropIfPending` never touches an entry a `push` may already have sent:
-`ClientStore.dropPending` (a new store primitive, symmetric to `acknowledge`
-but by explicit id set) only ever removes ids the engine has confirmed are
+`ClientStore.compactPending` (a new store primitive, symmetric to
+`acknowledge` but by explicit id set) only ever removes ids the engine has confirmed are
 still in its pending set with no push currently in flight — the ADR-0008 hard
 boundary (never mutate or reorder a pushed journal entry) is enforced inside
 the engine, not trusted to callers.

@@ -30,7 +30,7 @@ import {
 } from "effect";
 import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
-import { ClientStore } from "./ClientStore.js";
+import { ClientStore, NO_COMPACTION, type CompactionResult } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
 import * as Identity from "./Identity.js";
 import * as Index from "./CollectionIndex.js";
@@ -139,6 +139,14 @@ export type MutationOutcome =
  * `acknowledged` effect resolves once the backend settles the mutation (via a
  * push or pull acknowledgement); it is interrupted if the engine scope closes
  * first, so it never hangs.
+ *
+ * `mutationId` is the id the mutation was journaled under. While the entry is
+ * still unpushed a paced compaction (#249) may renumber it to keep the
+ * journal gap-free (the backend rejects gaps), so treat the id as a label for
+ * *now*: `acknowledged` follows the entry through any renumbering, and
+ * `MutationRenumbered` on {@link ClientEngine.engineEvents} reports each move.
+ * Once a push has claimed the entry its id never changes again. If a
+ * compaction supersedes the entry instead, `acknowledged` is interrupted.
  */
 export interface MutationHandle {
   readonly mutationId: number;
@@ -176,6 +184,10 @@ export interface MutationEvent {
  * - `MutationDropped` — a paced strategy (#117) compacted a still-unpushed
  *   entry out of the journal in favour of a newer one for the same key; the
  *   entry never reached the backend.
+ * - `MutationRenumbered` — the same compaction moved a surviving, still-
+ *   unpushed entry from `previousMutationId` to `mutationId` so the client's
+ *   ids stay contiguous (#249). Emitted after the compaction's `MutationDropped`
+ *   events; an id seen in either may now name a different entry.
  * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
  *   of `mutations` delivered).
  * - `PullStarted` / `PullCompleted` — a pull began / finished (with the number
@@ -211,6 +223,12 @@ export type EngineEvent =
   | {
       readonly _tag: "MutationDropped";
       readonly clientId: string;
+      readonly mutationId: number;
+    }
+  | {
+      readonly _tag: "MutationRenumbered";
+      readonly clientId: string;
+      readonly previousMutationId: number;
       readonly mutationId: number;
     }
   | { readonly _tag: "PushStarted" }
@@ -667,20 +685,34 @@ export interface ClientEngine {
    */
   readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
   /**
-   * Drop `mutationIds` from the journal if — and only if — they are still
-   * pending *and* no push is currently in flight (#117's pacing strategies:
-   * debounce/throttle/coalesce compact a superseded, still-unpushed entry out
-   * of the journal tail before a newer one supersedes it). A push claims every
-   * currently-pending id for the duration of its round trip, so this never
-   * touches an entry that may already be in flight to the backend — the hard
-   * boundary of ADR-0008's exactly-once contract. Returns exactly the ids it
-   * dropped; a caller whose id is missing from the result (push in flight, or
-   * the id already settled) should treat that entry as no longer theirs to
-   * compact and let it resolve normally.
+   * Compact the unpushed tail of the journal (#117's pacing strategies:
+   * debounce/throttle/coalesce drop a superseded entry) and **renumber the
+   * survivors so the client's mutation ids stay contiguous** (#249): the
+   * backends reject an id gap (ADR-0008), so a bare drop would leave the
+   * journal undrainable. The survivors take consecutive ids, in order,
+   * continuing from the last entry that may already have been sent (or from
+   * the first pending id), and the id counter is rewound to match.
+   *
+   * Only ever touches entries no push has claimed: it does nothing while a
+   * push is in flight, and never drops or renumbers an entry at or below the
+   * store's sent watermark (every id any push attempt, successful or not,
+   * has included). An entry a push may have sent keeps its id forever — the
+   * hard boundary of ADR-0008's exactly-once contract. It is skipped rather
+   * than waited for: a caller that cannot compact just leaves one extra,
+   * still-contiguous entry that the push delivers.
+   *
+   * Runs under the journal lock, so it is atomic with respect to `mutate`
+   * (an id being allocated is never renumbered under it) and to a push's
+   * claim of the pending set. Returns what it did: the `dropped` ids and the
+   * `renumbered` `{ from, to }` moves. A caller holding ids for entries it
+   * did not drop must apply the moves (`Paced` does) — an id it kept may now
+   * name a different entry. `mutateWithAck` deferreds and `mutationStates`
+   * follow the moves automatically; a dropped entry's deferred is
+   * interrupted.
    */
   readonly dropIfPending: (
     mutationIds: ReadonlyArray<number>
-  ) => Effect.Effect<ReadonlyArray<number>, StoreError>;
+  ) => Effect.Effect<CompactionResult, StoreError>;
   /**
    * Adopt an identity, applying the boundary's transition rule (#212,
    * CONTEXT.md "Identity boundary") — the same rule the store applies on
@@ -1464,39 +1496,92 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
-    // #117: compact superseded, still-pending journal entries for pacing
-    // strategies. Refuses outright while a push is in flight (see
-    // `pushInFlight`) and further narrows to ids this client's own pending
-    // set still contains, so it can only ever drop an entry no push has
-    // claimed — the hard boundary is enforced here, once, rather than trusted
-    // to callers. A global rebuild is the safe fallback (mirrors `acknowledge`
-    // and `journal`'s own use of it) since the dropped mutations' collections
-    // aren't known without re-decoding args already gone from the journal.
+    // #117 / #249: compact superseded, still-pending journal entries for
+    // pacing strategies, then renumber the survivors so the ids the backend
+    // sees stay contiguous (it rejects a gap, ADR-0008).
+    //
+    // Safety, in three layers. (1) Everything below runs under `overlayLock`,
+    // the same lock `journal` holds while it allocates and appends an id and
+    // `push` holds while it claims the pending set, so no id is ever
+    // renumbered between being allocated and being appended, and a push can
+    // never read a snapshot this call is about to renumber. (2) It refuses
+    // outright while a push is in flight (`pushInFlight`). (3) The store only
+    // drops or renumbers entries above its sent watermark, which `push` raises
+    // (durably) before a request leaves — so an entry any attempt may have
+    // put on the wire, even one that failed, keeps its id. The hard boundary
+    // is enforced here and in the store, once, rather than trusted to callers.
+    //
+    // Everything keyed by an old id is moved in step, inside the lock: the
+    // `mutateWithAck` deferreds (`acks`) and the `mutationStates` map. The
+    // dropped entries' deferreds are interrupted (nothing will ever settle
+    // them, and their ids may be reused). A global rebuild is the safe
+    // fallback since the dropped mutations' collections aren't known without
+    // re-decoding args already gone from the journal.
     const dropIfPending: ClientEngine["dropIfPending"] = (mutationIds) =>
       Effect.gen(function* () {
-        if (mutationIds.length === 0) return [];
-        if ((yield* Ref.get(pushInFlight)) > 0) return [];
-        const pending = yield* store.pendingMutations;
+        if (mutationIds.length === 0) return NO_COMPACTION;
         const clientId = yield* currentClientId;
-        const stillPending = new Set(
-          pending.filter((m) => m.clientId === clientId).map((m) => m.mutationId)
+        const { result, orphaned } = yield* Semaphore.withPermit(
+          overlayLock,
+          Effect.gen(function* () {
+            const none = {
+              result: NO_COMPACTION,
+              orphaned: [] as ReadonlyArray<Deferred.Deferred<MutationOutcome>>,
+            };
+            if ((yield* Ref.get(pushInFlight)) > 0) return none;
+            const compaction = yield* store.compactPending(clientId, mutationIds);
+            if (compaction.dropped.length === 0) return none;
+            // Move the `mutateWithAck` deferreds: detach every old key first, so
+            // a survivor landing on a slot a dropped entry vacated cannot clash.
+            const orphans = yield* Ref.modify(acks, (map) => {
+              const next = new Map(map);
+              const dropped: Array<Deferred.Deferred<MutationOutcome>> = [];
+              for (const id of compaction.dropped) {
+                const deferred = next.get(id);
+                if (deferred !== undefined) dropped.push(deferred);
+                next.delete(id);
+              }
+              const moved: Array<readonly [number, Deferred.Deferred<MutationOutcome>]> = [];
+              for (const { from, to } of compaction.renumbered) {
+                const deferred = next.get(from);
+                if (deferred === undefined) continue;
+                moved.push([to, deferred]);
+                next.delete(from);
+              }
+              for (const [to, deferred] of moved) next.set(to, deferred);
+              return [dropped, next] as const;
+            });
+            // Fold the drop and the moves into `mutationStates` (#116) — without
+            // the drop, a compacted entry's state would never leave `"pending"`,
+            // leaving a devtools journal panel showing a phantom in-flight
+            // mutation forever.
+            const settledAt = yield* Clock.currentTimeMillis;
+            yield* SubscriptionRef.update(mutationStates, (map) =>
+              MutationState.compacted(map, compaction, settledAt, options.mutationStateRetention)
+            );
+            return { result: compaction, orphaned: orphans };
+          })
         );
-        const droppable = mutationIds.filter((id) => stillPending.has(id));
-        if (droppable.length === 0) return [];
-        yield* store.dropPending(clientId, droppable);
-        // Fold the drop into `mutationStates` (#116) — without this, a
-        // compacted entry's state would never transition off `"pending"`
-        // even though the journal no longer has it, leaving a devtools
-        // journal panel showing a phantom in-flight mutation forever.
-        const droppedAt = yield* Clock.currentTimeMillis;
-        yield* SubscriptionRef.update(mutationStates, (map) =>
-          MutationState.droppedMany(map, droppable, droppedAt, options.mutationStateRetention)
+        if (result.dropped.length === 0) return result;
+        yield* Effect.forEach(orphaned, (deferred) => Deferred.interrupt(deferred), {
+          discard: true,
+        });
+        yield* Effect.forEach(result.dropped, (id) => emitEvent(id, "dropped"), { discard: true });
+        yield* Effect.forEach(
+          result.renumbered,
+          ({ from, to }) =>
+            emitEngineEvent({
+              _tag: "MutationRenumbered",
+              clientId,
+              previousMutationId: from,
+              mutationId: to,
+            }),
+          { discard: true }
         );
-        yield* Effect.forEach(droppable, (id) => emitEvent(id, "dropped"), { discard: true });
         yield* invalidateOverlay;
         yield* sampleJournalDepth;
         yield* publishChange(REBUILD);
-        return droppable;
+        return result;
       });
 
     // #212: the identity boundary at runtime. The transition rule itself
@@ -1601,41 +1686,64 @@ export const make = (
         )
       );
 
-    const push: ClientEngine["push"] = withVersionLatch(
+    // Claim the pending set for one push (#249), atomically with respect to
+    // `dropIfPending` and `journal` (all three hold `overlayLock`): read the
+    // snapshot, count the push in flight, and durably raise the sent watermark
+    // to the highest id per client in it — *before* the request can leave. A
+    // failed or interrupted round trip does not prove the backend never
+    // applied it, so from here on those ids are frozen: compaction may not
+    // drop or renumber them. The counter is released on every path that does
+    // not hand the claim to the push body.
+    const claimPending: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Semaphore.withPermit(
+      overlayLock,
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
-        if (pending.length === 0) return;
-        // Claimed for the whole round trip (through the ack sweep below), so
-        // `dropIfPending` cannot compact an entry this push may have already
-        // sent before its outcome is known locally. Released on every exit
-        // path, including failure, so a transient push error never wedges the
-        // counter.
+        if (pending.length === 0) return pending;
+        const highest = new Map<string, number>();
+        for (const m of pending) {
+          if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
+        }
         yield* Ref.update(pushInFlight, (n) => n + 1);
-        yield* Effect.gen(function* () {
-          yield* emitEngineEvent({ _tag: "PushStarted" });
-          const response = yield* transport.push({
-            clientGroupId: options.clientGroupId,
-            mutations: pending,
-            ...(options.schemaVersion !== undefined
-              ? { schemaVersion: options.schemaVersion }
-              : {}),
-          });
-          // Trimming these pending mutations drops their optimistic effects, so
-          // only their collections can shift — scope the rebuild to that union so
-          // observers of untouched collections don't re-materialize.
-          const touched = yield* collectionsTouchedByMutations(pending);
-          // Settle permanently-rejected mutations before the ack sweep, so a
-          // rejected id reports `rejected` rather than `applied`.
-          yield* settleRejected(response);
-          // Effects arrive via the next pull; the ack only trims the journal.
-          yield* acknowledge(response.lastMutationIds);
-          yield* publishChange(rebuildFor(touched));
-          yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
-          yield* Metric.update(Telemetry.pushesTotal, 1);
-          yield* Metric.update(Telemetry.pushMutations, pending.length);
-          yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
-        }).pipe(Effect.ensuring(Ref.update(pushInFlight, (n) => n - 1)));
+        yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
+          discard: true,
+        }).pipe(Effect.onError(() => Ref.update(pushInFlight, (n) => n - 1)));
+        return pending;
       })
+    );
+
+    const pushClaimed = (pending: ReadonlyArray<Mutation>) =>
+      Effect.gen(function* () {
+        yield* emitEngineEvent({ _tag: "PushStarted" });
+        const response = yield* transport.push({
+          clientGroupId: options.clientGroupId,
+          mutations: pending,
+          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
+        });
+        // Trimming these pending mutations drops their optimistic effects, so
+        // only their collections can shift — scope the rebuild to that union so
+        // observers of untouched collections don't re-materialize.
+        const touched = yield* collectionsTouchedByMutations(pending);
+        // Settle permanently-rejected mutations before the ack sweep, so a
+        // rejected id reports `rejected` rather than `applied`.
+        yield* settleRejected(response);
+        // Effects arrive via the next pull; the ack only trims the journal.
+        yield* acknowledge(response.lastMutationIds);
+        yield* publishChange(rebuildFor(touched));
+        yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+        yield* Metric.update(Telemetry.pushesTotal, 1);
+        yield* Metric.update(Telemetry.pushMutations, pending.length);
+        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+      });
+
+    // The claim is held for the whole round trip (through the ack sweep) and
+    // released on every exit path, including failure and interruption, so a
+    // transient push error never wedges the counter.
+    const push: ClientEngine["push"] = withVersionLatch(
+      Effect.acquireUseRelease(
+        claimPending,
+        (pending) => (pending.length === 0 ? Effect.void : pushClaimed(pending)),
+        (pending) => (pending.length === 0 ? Effect.void : Ref.update(pushInFlight, (n) => n - 1))
+      )
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
     // The distinct collections and individual rows a pulled patch touches,
@@ -2360,7 +2468,12 @@ export const make = (
     // respect to `materialize`'s fill and any other mutation's tracked write,
     // or a concurrent invalidation (push ack, pull, seed) could be clobbered
     // by this call's stale `Ref.set` once it finishes (see `invalidateOverlay`).
-    const journal = (mutator: string, encoded: unknown, decodedArgs: unknown) =>
+    const journal = (
+      mutator: string,
+      encoded: unknown,
+      decodedArgs: unknown,
+      outcome?: Deferred.Deferred<MutationOutcome>
+    ) =>
       Semaphore.withPermit(
         overlayLock,
         Effect.gen(function* () {
@@ -2381,6 +2494,12 @@ export const make = (
             createdAt: journaledAt,
           };
           yield* store.appendMutation(mutation);
+          // Register the `mutateWithAck` deferred before the lock is released:
+          // a compaction (#249) also takes it, so the id cannot be renumbered
+          // between being allocated and being keyed here.
+          if (outcome !== undefined) {
+            yield* Ref.update(acks, (map) => new Map(map).set(mutationId, outcome));
+          }
           yield* sampleJournalDepth; // the append changed journal depth
           yield* SubscriptionRef.update(mutationStates, (map) =>
             MutationState.journaled(map, { mutationId, mutator, args: encoded, journaledAt })
@@ -2456,9 +2575,8 @@ export const make = (
       mutateWithAck: (mutator, args) =>
         Effect.gen(function* () {
           const encoded = yield* encodeFor(mutator, args);
-          const mutationId = yield* journal(mutator, encoded, args);
           const deferred = yield* Deferred.make<MutationOutcome>();
-          yield* Ref.update(acks, (map) => new Map(map).set(mutationId, deferred));
+          const mutationId = yield* journal(mutator, encoded, args, deferred);
           return { mutationId, acknowledged: Deferred.await(deferred) };
         }),
       subscribe: subscribeSubset,

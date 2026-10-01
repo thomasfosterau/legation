@@ -82,11 +82,9 @@ const makeBulkSeededStore = (
           () =>
             void (journal = journal.filter((m) => m.clientId !== clientId || m.mutationId > upTo))
         ),
-      dropPending: (clientId, mutationIds) =>
-        Effect.sync(() => {
-          const ids = new Set(mutationIds);
-          journal = journal.filter((m) => m.clientId !== clientId || !ids.has(m.mutationId));
-        }),
+      // Paced compaction plays no part in a query-path benchmark.
+      compactPending: () => Effect.succeed({ dropped: [], renumbered: [] }),
+      markSent: () => Effect.void,
       nextMutationId: (clientId) =>
         Effect.sync(() => {
           const next = (counters.get(clientId) ?? 0) + 1;

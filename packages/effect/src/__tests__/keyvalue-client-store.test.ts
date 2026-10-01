@@ -4,7 +4,7 @@
  * engine end to end like the memory store.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Exit, Schema } from "effect";
 import { KeyValueStore } from "effect/unstable/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -90,7 +90,7 @@ describe("ClientStore.makeKeyValue", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
-  it.effect("dropPending removes specific unpushed entries, unlike acknowledge's <= upTo", () =>
+  it.effect("compactPending removes specific unpushed entries, unlike acknowledge's <= upTo", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeKeyValue();
       yield* store.appendMutation(mutation(1));
@@ -98,24 +98,27 @@ describe("ClientStore.makeKeyValue", () => {
       yield* store.appendMutation(mutation(3));
       yield* store.appendMutation({ ...mutation(1), clientId: "c2" });
 
-      // Drop the middle entry only — a non-prefix id set `acknowledge` can't express.
-      yield* store.dropPending("c1", [2]);
+      // Drop the middle entry only — a non-prefix id set `acknowledge` can't
+      // express. The survivor behind it is renumbered so the ids stay gap-free
+      // (#249), and the other client's entries are untouched.
+      const result = yield* store.compactPending("c1", [2]);
+      expect(result).toEqual({ dropped: [2], renumbered: [{ from: 3, to: 2 }] });
       const pending = yield* store.pendingMutations;
       expect(pending.map((m) => [m.clientId, m.mutationId])).toEqual([
         ["c1", 1],
-        ["c1", 3],
+        ["c1", 2],
         ["c2", 1],
       ]);
 
-      // Ids already gone (or never pending) are silently skipped, not an error.
-      yield* store.dropPending("c1", [2, 999]);
+      // Ids not pending (or never were) are silently skipped, not an error.
+      expect(yield* store.compactPending("c1", [999])).toEqual({ dropped: [], renumbered: [] });
       expect(yield* store.pendingMutations).toHaveLength(3);
 
       // A fresh store over the same KVS sees the drop persisted, not just the
       // in-memory index — same rehydration guarantee as `acknowledge`.
       const rehydrated = yield* ClientStoreModule.makeKeyValue();
       expect((yield* rehydrated.pendingMutations).map((m) => m.mutationId).toSorted()).toEqual([
-        1, 1, 3,
+        1, 1, 2,
       ]);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
@@ -180,5 +183,122 @@ describe("ClientStore.makeKeyValue", () => {
       const confirmed = yield* store.listRows("todos");
       expect(confirmed.map((row) => (row.value as { title: string }).title)).toEqual(["durable"]);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+const idsOf = (mutations: ReadonlyArray<{ readonly mutationId: number }>) =>
+  mutations.map((m) => m.mutationId);
+
+describe("KeyValue journal compaction is crash-safe (#249)", () => {
+  const numbered = (mutationId: number, clientId = "c1"): Mutation => ({
+    ...mutation(mutationId),
+    clientId,
+    args: { n: mutationId },
+  });
+
+  /** A KVS that can be made to fail after a number of further writes. */
+  const faultyStore = () => {
+    const data = new Map<string, string>();
+    const budget = { writes: Number.POSITIVE_INFINITY };
+    const spend = (method: string, key: string) =>
+      budget.writes <= 0
+        ? Effect.fail(
+            new KeyValueStore.KeyValueStoreError({ message: "injected fault", method, key })
+          )
+        : Effect.sync(() => void (budget.writes -= 1));
+    const store = KeyValueStore.makeStringOnly({
+      get: (key) => Effect.sync(() => data.get(key)),
+      set: (key, value) =>
+        spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
+      remove: (key) =>
+        spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
+      clear: Effect.sync(() => data.clear()),
+      size: Effect.sync(() => data.size),
+    });
+    return { store, data, budget };
+  };
+
+  const seeded = (size: number) =>
+    Effect.gen(function* () {
+      const kv = faultyStore();
+      const first = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
+      );
+      for (let n = 1; n <= size; n++) {
+        yield* first.appendMutation(numbered(yield* first.nextMutationId("c1")));
+      }
+      return { kv, first };
+    });
+
+  const reopen = (kv: ReturnType<typeof faultyStore>) =>
+    ClientStoreModule.makeKeyValue().pipe(
+      Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
+    );
+
+  it.effect(
+    "a crash at any write leaves the old or the new journal whole, never a gap or a duplicate",
+    () =>
+      Effect.gen(function* () {
+        let completedAt: number | undefined;
+        for (let writes = 0; writes < 40 && completedAt === undefined; writes++) {
+          const { kv, first } = yield* seeded(5);
+          kv.budget.writes = writes;
+          const exit = yield* Effect.exit(first.compactPending("c1", [2, 4]));
+          kv.budget.writes = Number.POSITIVE_INFINITY;
+          if (Exit.isSuccess(exit)) completedAt = writes;
+
+          // "Restart": a fresh store over the same persisted bytes.
+          const restarted = yield* reopen(kv);
+          const pending = yield* restarted.pendingMutations;
+          const ids = idsOf(pending);
+          const ns = pending.map((m) => (m.args as { n: number }).n);
+
+          // Whole journal, old or new, never a blend of the two.
+          const isOld = ids.join() === "1,2,3,4,5" && ns.join() === "1,2,3,4,5";
+          const isNew = ids.join() === "1,2,3" && ns.join() === "1,3,5";
+          expect(isOld || isNew, `writes=${writes}: ${ids} / ${ns}`).toBe(true);
+
+          // The counter agrees with the journal: the next id continues the run.
+          const nextId = yield* restarted.nextMutationId("c1");
+          expect(nextId).toBe(isOld ? 6 : 4);
+          yield* restarted.appendMutation(numbered(nextId));
+          const after = idsOf(yield* restarted.pendingMutations);
+          expect(after).toEqual(after.map((_, i) => i + 1));
+        }
+        // The sweep covered both outcomes and ended on a completed compaction.
+        expect(completedAt).toBeDefined();
+        expect(completedAt).toBeGreaterThan(0);
+      })
+  );
+
+  it.effect("a failed compaction is finished before the same store appends again", () =>
+    Effect.gen(function* () {
+      const { kv, first } = yield* seeded(4);
+      // Enough budget to commit the intent and begin applying it, then fail.
+      kv.budget.writes = 3;
+      expect(Exit.isFailure(yield* Effect.exit(first.compactPending("c1", [1])))).toBe(true);
+      kv.budget.writes = Number.POSITIVE_INFINITY;
+
+      // No restart: the very next operation rolls the compaction forward, so
+      // this append cannot be clobbered by a later replay of the intent.
+      const id = yield* first.nextMutationId("c1");
+      expect(id).toBe(4); // 2,3,4 renumbered to 1,2,3; the counter rewound to 3
+      yield* first.appendMutation(numbered(id));
+      expect(idsOf(yield* first.pendingMutations)).toEqual([1, 2, 3, 4]);
+      expect(idsOf(yield* (yield* reopen(kv)).pendingMutations)).toEqual([1, 2, 3, 4]);
+    })
+  );
+
+  it.effect("the sent watermark is durable: a restart still refuses to touch sent entries", () =>
+    Effect.gen(function* () {
+      const { kv, first } = yield* seeded(5);
+      yield* first.markSent("c1", 2);
+      yield* first.markSent("c1", 1); // monotonic: ignored
+
+      const restarted = yield* reopen(kv);
+      const result = yield* restarted.compactPending("c1", [1, 2, 4]);
+      expect(result).toEqual({ dropped: [4], renumbered: [{ from: 5, to: 4 }] });
+      expect(idsOf(yield* restarted.pendingMutations)).toEqual([1, 2, 3, 4]);
+    })
   );
 });

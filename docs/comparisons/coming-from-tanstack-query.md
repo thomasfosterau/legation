@@ -458,6 +458,15 @@ identical tradeoff TanStack DB's own debounce/throttle strategies make.
 `coalesce` never loses an edit (everything journals immediately) at the cost
 of those short-lived extra entries.
 
+**Mutation ids move (#249):** the backend requires a client's mutation ids to
+arrive without gaps, so compaction renumbers the surviving unpushed entries to
+keep them contiguous. An id from `mutateWithAck` is therefore only a label for
+"now" while the entry is unpushed: its `acknowledged` effect follows it through
+the move, and `engineEvents` reports each one (`MutationRenumbered`). Entries a
+push has been attempted for — even one that failed — are never dropped or
+renumbered (the server may already have applied them), so a call made after a
+push is sent simply leaves one extra entry instead of compacting.
+
 **Undo pairing:** wrap a burst of `Paced` calls in `Undo.group` and the whole
 burst becomes one undo step, the same way `Undo.group` already coalesces any
 run of `manager.run` calls — a debounced text edit undoes in one step, not one

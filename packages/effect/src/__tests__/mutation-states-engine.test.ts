@@ -225,7 +225,7 @@ describe("ClientEngine.mutationStates (#116)", () => {
         yield* engine.subscribe(allTodos);
 
         yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
-        const dropped = yield* engine.dropIfPending([1]);
+        const { dropped } = yield* engine.dropIfPending([1]);
         expect(dropped).toEqual([1]);
 
         // The journal no longer has it...

@@ -9,11 +9,27 @@
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendError, MutationRejected, Mutator } from "@legation/effect";
-import { BackendContract } from "@legation/effect/internal";
+import {
+  Authorization,
+  Backend,
+  BackendError,
+  ClientStore,
+  MutationRejected,
+  Mutator,
+  Transport,
+} from "@legation/effect";
+import {
+  BackendContract,
+  ClientEngine,
+  Cvr,
+  InvalidationBus,
+  Paced,
+  Subset,
+  SyncServer,
+} from "@legation/effect/internal";
 import * as SqlBackend from "../SqlBackend.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
@@ -135,6 +151,109 @@ describe("SqlBackend", () => {
         });
         yield* BackendContract.verifyBackendContract(backend);
         expect(true).toBe(true);
+      })
+    )
+  );
+});
+
+interface Todo {
+  readonly id: string;
+  readonly title: string;
+  readonly done: boolean;
+}
+
+const todoSet = Mutator.make("todo/set", Schema.Unknown);
+const todoMutators = Mutator.registry([
+  {
+    mutator: todoSet,
+    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+  },
+]);
+
+const todoHandlers: Record<string, SqlBackend.SqlHandler> = {
+  "todo/set": (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as Todo;
+      yield* tx.run({
+        text: `INSERT OR REPLACE INTO todos (id, title, done) VALUES (?, ?, ?)`,
+        params: [args.id, args.title, args.done ? 1 : 0],
+      });
+      return [{ collection: "todos", ids: [args.id] }];
+    }),
+};
+
+const allTodos = Subset.make({ collection: "todos" });
+
+describe("paced compaction against SqlBackend (#249)", () => {
+  it.effect("pushes a compacted journal through the SQL ledger and drains it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
+        const sql = Context.get(context, SqlClient);
+        yield* sql.unsafe(`CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT, done INTEGER)`)
+          .unprepared;
+        yield* sql.unsafe(
+          `CREATE TABLE sync_mutations (
+            client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+            PRIMARY KEY (client_group_id, client_id)
+          )`
+        ).unprepared;
+
+        const backend = SqlBackend.make({
+          executor: makeExecutor(sql),
+          tables: { todos: { table: "todos" } },
+          mutators: new Map([[todoSet.name, todoSet]]),
+          handlers: todoHandlers,
+        });
+        const handler = yield* SyncServer.make.pipe(
+          Effect.provideService(Backend.Backend, backend),
+          Effect.provideService(
+            Authorization.AuthPolicy,
+            Authorization.policy({ todos: Authorization.allowAll })
+          ),
+          Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+          Effect.provideService(
+            InvalidationBus.InvalidationBus,
+            yield* InvalidationBus.makeInProcess
+          )
+        );
+        const transport = yield* Transport.makeInMemory(handler, "group-sql");
+        const store = yield* ClientStore.makeMemory;
+        const engine = yield* ClientEngine.make({
+          clientId: "client-sql",
+          clientGroupId: "group-sql",
+          mutators: todoMutators,
+        }).pipe(
+          Effect.provideService(ClientStore.ClientStore, store),
+          Effect.provideService(Transport.ClientTransport, transport)
+        );
+        yield* engine.subscribe(allTodos);
+
+        const paced = yield* Paced.coalesce(engine, "todo/set");
+        for (let n = 1; n <= 3; n++)
+          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+        yield* paced.call("2", { id: "2", title: "other", done: true });
+        for (let n = 4; n <= 5; n++)
+          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+
+        // Two survivors, contiguous from 1, in journal order (todo 2, then todo 1).
+        const pending = yield* store.pendingMutations;
+        expect(pending.map((m) => m.mutationId)).toEqual([1, 2]);
+
+        const exit = yield* Effect.exit(engine.push);
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(yield* store.pendingMutations).toEqual([]);
+
+        const rows = yield* sql.unsafe<{ id: string; title: string }>(
+          `SELECT id, title FROM todos ORDER BY id`
+        );
+        expect(rows).toEqual([
+          { id: "1", title: "e5" },
+          { id: "2", title: "other" },
+        ]);
+        expect(yield* backend.lastMutationIds({ clientGroupId: "group-sql" })).toEqual({
+          "client-sql": 2,
+        });
       })
     )
   );

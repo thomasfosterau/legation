@@ -197,6 +197,39 @@ export const droppedMany = (
 };
 
 /**
+ * Fold a paced compaction in (#117, #249): the `dropped` ids settle as
+ * `"dropped"`, and each `renumbered` survivor's still-`"pending"` state moves
+ * from its old id to its new one (the `mutationId` field follows the key).
+ * The map is keyed by id and a survivor may take an id a dropped entry just
+ * vacated, so the survivor wins the slot — the dropped record for that id is
+ * overwritten (the `dropped` lifecycle event is still emitted). Retention is
+ * applied once, after everything has moved.
+ */
+export const compacted = (
+  map: MutationStateMap,
+  compaction: {
+    readonly dropped: ReadonlyArray<number>;
+    readonly renumbered: ReadonlyArray<{ readonly from: number; readonly to: number }>;
+  },
+  settledAt: number,
+  options?: RetentionOptions
+): MutationStateMap => {
+  let next = map;
+  for (const mutationId of compaction.dropped) {
+    next = transition(next, mutationId, "dropped", settledAt, undefined);
+  }
+  const moved: Array<MutationState> = [];
+  for (const { from, to } of compaction.renumbered) {
+    const current = HashMap.get(next, from);
+    if (Option.isNone(current)) continue;
+    moved.push({ ...current.value, mutationId: to });
+    next = HashMap.remove(next, from);
+  }
+  for (const state of moved) next = HashMap.set(next, state.mutationId, state);
+  return evictTerminal(next, options);
+};
+
+/**
  * Fold a push ack sweep's whole batch of newly-applied mutation ids in, then
  * apply terminal retention exactly once — not once per id. `settleApplied`
  * (ClientEngine.ts) can settle every still-pending id at or below a push's
