@@ -92,6 +92,6 @@ If `effect-solutions` is unavailable (the SessionStart hook doesn't install it),
 ## Documentation surfaces
 
 - `CONTEXT.md`: the domain glossary. `docs/adr/`: architecture decisions (historical records; fix only a wrong status or path).
-- Package `README.md`: the npm-facing API reference. Use absolute GitHub URLs there, because npm can't resolve relative links.
+- Package `README.md`: the npm-facing API reference. Links into the repo stay relative (npm rewrites them against `repository`), but a consumer must not need them: everything they need is in the README.
 - `CONTRIBUTING.md`: setup, commands, conventions, Effect upgrades, the release pipeline and the owner's one-time setup.
 - `docs/agents/`: config the vendored skills read. Decisions and findings go in issue comments.

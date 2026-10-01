@@ -1,7 +1,7 @@
 # @legation/sql
 
 A driver-agnostic SQL reference backend for the
-[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/trunk/packages/effect) engine.
+[`@legation/effect`](../effect) engine.
 
 - **`Sql`** — a pure translator from a `Subset` predicate to a parameterized
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
@@ -15,7 +15,7 @@ A driver-agnostic SQL reference backend for the
   same `SqlExecutor` seam: it polls each table on an interval for a cheap
   change-detector (`COUNT(*)` plus `MAX(versionColumn)`) and pokes subscribers
   when a collection changes out of band (cron, admin tools, `psql`). See the
-  [change-data-capture guide](https://github.com/thomasfosterau/legation/blob/trunk/docs/change-data-capture.md).
+  [change-data-capture guide](../../docs/change-data-capture.md).
 
 Reads push the predicate to the database via `WHERE` and finalise
 order/limit/cursor locally with `Subset.apply`. The `WHERE` is exact on both

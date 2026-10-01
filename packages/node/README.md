@@ -2,7 +2,7 @@
 
 Node-runtime adapters for the legation engine: serving the default RPC sync transport over HTTP and WebSocket.
 
-> This README is a stub while the API settles before 1.0; the full reference is being rewritten ([#266](https://github.com/thomasfosterau/legation/issues/266)). The package exports `HttpSyncServer`, which registers the sync RPCs on an `HttpRouter` over HTTP POST or WebSockets. See the [root README](https://github.com/thomasfosterau/legation#readme) and the [`commerce` example](https://github.com/thomasfosterau/legation/tree/trunk/examples/commerce), which runs a real sync server.
+> This README is a stub while the API settles before 1.0; the full reference is being rewritten ([#266](https://github.com/thomasfosterau/legation/issues/266)). The package exports `HttpSyncServer`, which registers the sync RPCs on an `HttpRouter` over HTTP POST or WebSockets. See the [root README](../../README.md) and the [`commerce` example](../../examples/commerce), which runs a real sync server.
 
 ## Install
 
