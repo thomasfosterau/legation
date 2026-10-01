@@ -4,7 +4,7 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 
 ## Status
 
-**v2 rebuild in progress** (see [ADRs 0007–0011](docs/adr/)). The engine core, the default RPC transport, the runtime adapters, and multi-instance deployment work today: optimistic mutations → journal → push → authoritative backend → CVR diff → pull patch → rebase, with schema-validated mutator args end to end, pokes streamed over `effect/rpc`, an executable backend contract (`BackendContract.verifyBackendContract`), an IndexedDB client store, tab mirrors (refcounted per tab, with a liveness heartbeat) served by a (service-worker) engine host over BroadcastChannel, a Cache API HTTP cache, Node HTTP/WebSocket serving of the sync RPCs, live queries bound to `effect/reactivity` Atoms, JSON:API collection loaders, and a distributed story — a serialized invalidation bus over a broker (Redis Streams or a Durable-Object-style WebSocket relay) plus a shared-storage CVR store. All packages target the **Effect v4 release-candidate line** (published peer range `effect >=4.0.0-rc.118`, pinned to `4.0.0-rc.118` for development; ADR-0003) and ESM-only consumers. APIs are pre-1.0 and will change.
+Pre-1.0: APIs will change. Targets the Effect v4 release-candidate line (peer `effect >=4.0.0-rc.118`; ADR-0003), ESM only.
 
 ## Architecture
 
@@ -65,76 +65,74 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`@legation/effect`](packages/effect)         | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
 | [`@legation/browser`](packages/browser)       | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                         |
-| [`@legation/node`](packages/node)             | Node adapters: serving the default RPC sync transport over HTTP/WebSocket; distributed bus adapters planned                                                                                                                                                            |
+| [`@legation/node`](packages/node)             | Node adapters: serving the default RPC sync transport over HTTP/WebSocket (`HttpSyncServer`)                                                                                                                                                                           |
 | [`@legation/jsonapi`](packages/jsonapi)       | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
 | [`@legation/sql`](packages/sql)               | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
 | [`@legation/cloudflare`](packages/cloudflare) | Cloudflare adapters: Durable-Object-hosted rooms and the edge transport                                                                                                                                                                                                |
 | [`@legation/svelte`](packages/svelte)         | Svelte bindings: `setClientRuntime` + the hooks (`useQuery` / `useConnection` / `useAggregate` / `useMutation` / `useUndo`) on one entry point, with the SvelteKit surface — client-group cookie, SSR snapshot `load`, snapshot-hydrated boot — on `/kit`              |
 | [`@legation/devtools`](packages/devtools)     | Headless devtools core (journal, subsets, forced push/pull, simulated offline) plus a Svelte panel on `/svelte`                                                                                                                                                        |
 
-## Quick start (in-process, today)
+## Quick start (in-process)
+
+The whole pipeline in one process, on the app-facing surface only: a `Server` over the reference in-memory backend, and a `Client` connected to it by a loopback transport. The [examples](examples) are the full-size versions.
 
 ```ts
 import { Effect, Schema } from "effect";
 import {
   Authorization,
-  Backend,
-  ClientEngine,
-  ClientStore,
-  Cvr,
-  InvalidationBus,
+  Client,
   MemoryBackend,
-  Mutator,
-  Predicate,
-  Subset,
-  SyncServer,
+  Mutation,
+  Node,
+  Server,
   Transport,
+  type Query,
 } from "@legation/effect";
 
-// 1. Shared mutator contract (client runs it optimistically; your backend
-//    runs its own authoritative version). Args are schema-validated on
-//    both sides and journaled in encoded form.
-const TodoArgs = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  done: Schema.Boolean,
-});
-const todoSet = Mutator.make("todo/set", TodoArgs);
-const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args: any, writer) => writer.put("todos", args.id, args) },
+// 1. The shared vocabulary: a one-node graph, a named mutation, a read.
+const Todo = Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean });
+const { id: _id, ...attributes } = Todo.fields;
+const nodes = Node.registry([Node.make("todos", { attributes, filterable: { done: ["eq"] } })]);
+
+const setTodo = Mutation.make("todo/set", Todo);
+const mutations = Mutation.registry([
+  // Runs optimistically on the client, and again on every rebase.
+  { mutator: setTodo, local: (todo, writer) => writer.put("todos", todo.id, todo) },
 ]);
 
-// 2. Server: reference in-memory backend + deny-by-default auth.
-const server = Effect.gen(function* () {
+const open: Query.Read = { collection: "todos", where: { done: false } };
+
+const program = Effect.gen(function* () {
+  // 2. Server: one per backend. The reference in-memory backend runs the
+  //    authoritative handler; read auth is deny-by-default per collection.
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(setTodo, (todo, writer) => writer.put("todos", todo.id, todo)),
     ])
   );
-  return yield* SyncServer.make.pipe(
-    Effect.provideService(Backend.Backend, backend),
-    Effect.provideService(
-      Authorization.AuthPolicy,
-      Authorization.policy({ todos: Authorization.allowAll })
-    ),
-    Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
-    Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
-  );
+  const server = yield* Server.make({
+    backend,
+    auth: {
+      policy: Authorization.policy(
+        { todos: Authorization.allowAll },
+        { collections: nodes.collections }
+      ),
+    },
+  });
+
+  // 3. Client: one per thread, here over an in-process loopback transport.
+  const client = yield* Client.make({
+    nodes,
+    mutations,
+    clientGroupId: "g1",
+    transport: yield* Transport.makeInMemory(server.handler, "g1"),
+  });
+  yield* client.subscribe(open); // pin the read so the replica holds it
+  yield* client.mutate("todo/set", { id: "1", title: "ship it", done: false });
+  return yield* client.query(open);
 });
 
-// 3. Client: optimistic mutate → push → pull → rebase.
-const program = Effect.gen(function* () {
-  const handler = yield* server;
-  const engine = yield* ClientEngine.make({ clientId: "c1", clientGroupId: "g1", mutators }).pipe(
-    Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),
-    Effect.provideService(Transport.ClientTransport, yield* Transport.makeInMemory(handler, "g1"))
-  );
-  yield* engine.subscribe(Subset.make({ collection: "todos", where: Predicate.eq("done", false) }));
-  yield* engine.mutate("todo/set", { id: "1", title: "ship it", done: false });
-  yield* engine.push;
-  yield* engine.pull;
-  return yield* engine.query(Subset.make({ collection: "todos" }));
-});
+Effect.runPromise(Effect.scoped(program)).then(console.log);
 ```
 
 ## Examples
@@ -164,16 +162,7 @@ without it).
 
 ## Development
 
-```bash
-bun ci                  # install
-bun run build           # build all packages (tsc project references)
-bun run typecheck       # typecheck all packages + tests
-bun run test:run        # run all tests
-bun run lint            # oxlint
-bun run format:check    # prettier
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, commands and the release process.
 
 ## License
 

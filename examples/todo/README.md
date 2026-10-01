@@ -80,22 +80,23 @@ long as the app does.
 
 ## Recipe: paired-intents undo
 
-The `Undo` module (`@legation/effect`) adds undo/redo without touching the
+The `Undo` module (`@legation/effect/internal`) adds undo/redo without touching the
 engine: the caller supplies both directions of a change, and undo/redo replay
 through the supplied handle's `mutate` — a `Client` (as here) or a
 `ClientEngine` both work (#223) — so they inherit the overlay, the journal,
 rebase, and offline behaviour for free.
 
 ```ts
-import { Undo } from "@legation/effect";
-import { undoControls } from "@legation/svelte";
+import { Undo } from "@legation/effect/internal";
+import { useUndo } from "@legation/svelte";
 
 // One manager per client (in-memory history) — see src/lib/sync.ts.
 const manager = yield * Undo.make(client);
 
-// Svelte stores + handlers — see the route's +page.svelte. (These are the
-// one part of the bindings with no rune equivalent, so they read with `$`.)
-const { canUndo, canRedo, undo, redo } = undoControls(manager);
+// Rune-backed controls — see the route's +page.svelte. Read
+// `history.canUndo` / `history.canRedo` in place; destructuring them would
+// capture one value instead of tracking it.
+const history = useUndo(manager);
 
 // A create: undo is a delete of the same id.
 manager.run({

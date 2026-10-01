@@ -16,6 +16,14 @@ it has no data-acquisition path of its own.
 This is a **functional first cut**: plain, legible, correct. Visual polish is
 out of scope — a human design pass comes later.
 
+## Install
+
+```sh
+npm install @legation/devtools @legation/effect effect
+```
+
+Add `svelte` (an optional peer, `>=5.40`) for the `@legation/devtools/svelte` panel.
+
 ## Effect version
 
 Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
@@ -59,3 +67,7 @@ same `DevtoolsCore`.
 Note: `@legation/devtools/svelte` ships raw `.svelte`/`.ts` source (not a
 pre-compiled bundle) — any Svelte 5 app already has a bundler that compiles
 `.svelte` files, so this composes directly with your app's own build.
+
+## License
+
+MIT

@@ -1,9 +1,9 @@
 # @legation/svelte
 
 Idiomatic Svelte bindings for the
-[`@legation/effect`](../effect) engine.
+[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/trunk/packages/effect) engine.
 
-Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
+Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](https://github.com/thomasfosterau/legation/blob/trunk/docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 The package is deliberately thin. Everything the engine can do on its own —
 reads, mutations, hydration — is `@legation/effect`; what lives here is the
@@ -19,7 +19,9 @@ Two entry points:
 | `@legation/svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
 | `@legation/svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
-```bash
+## Install
+
+```sh
 npm install @legation/svelte @legation/effect effect svelte
 ```
 
@@ -242,3 +244,7 @@ Writes without JavaScript are ordinary SvelteKit form actions hitting the
 app's own API — out-of-band writers in engine terms (ADR-0019): commit the
 write, then `server.broadcast({ collection })` for the touched collections so
 live subscribers pull. The next full-page render re-snapshots.
+
+## License
+
+MIT

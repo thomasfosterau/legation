@@ -1,6 +1,6 @@
 # @legation/cloudflare
 
-The reference deployment of the [`@legation/effect`](../effect) sync engine on
+The reference deployment of the [`@legation/effect`](https://github.com/thomasfosterau/legation/tree/trunk/packages/effect) sync engine on
 Cloudflare — per-user Durable Object rooms, topic-sharded fan-out, and a D1
 backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 
@@ -64,7 +64,9 @@ export default {
 };
 ```
 
-```bash
+## Install
+
+```sh
 npm install @legation/cloudflare @legation/effect @legation/sql effect
 ```
 
@@ -101,3 +103,7 @@ pull is a delta rather than a reset. That only holds while the hop preserves
 the caller's identity — drop the cookie and the snapshot still carries the
 right rows while its cookie belongs to another room's CVR, which is a silent
 reset on every first paint. `binding-snapshot.test.ts` pins both sides of that.
+
+## License
+
+MIT

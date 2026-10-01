@@ -13,7 +13,7 @@ pokes affected clients. Every tier below feeds the one seam,
 `HintSource` (`@legation/effect`), and forks alongside the SyncServer:
 
 ```ts
-import { HintSource } from "@legation/effect";
+import { HintSource } from "@legation/effect/internal";
 
 // Fork a source onto the caller's scope; it stops when the scope closes.
 yield * HintSource.run(source);
@@ -33,7 +33,7 @@ to pay (ADR-0019).
 If the writer is your code, publish the hint directly. This needs nothing new:
 
 ```ts
-import { InvalidationBus } from "@legation/effect";
+import { InvalidationBus } from "@legation/effect/internal";
 
 // After an out-of-band write to the todos collection:
 yield * InvalidationBus.publish([{ collection: "todos", ids: ["1"] }]);
@@ -52,7 +52,7 @@ collection whose detector moved. It uses only the `SqlExecutor` seam you already
 provide to `SqlBackend` — no extra dependency.
 
 ```ts
-import { HintSource } from "@legation/effect";
+import { HintSource } from "@legation/effect/internal";
 import { PollingHintSource } from "@legation/sql";
 
 const source = PollingHintSource.make({
@@ -111,7 +111,7 @@ needs.
 
 ```ts
 import { Effect, Schema, Stream } from "effect";
-import { HintSource } from "@legation/effect";
+import { HintSource } from "@legation/effect/internal";
 
 const HintPayload = Schema.fromJsonString(
   Schema.Struct({ collection: Schema.String, id: Schema.String })

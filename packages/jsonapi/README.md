@@ -1,7 +1,7 @@
 # @legation/jsonapi
 
 JSON:API v1.1 collection loaders for the
-[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/main/packages/effect)
+[`@legation/effect`](https://github.com/thomasfosterau/legation/tree/trunk/packages/effect)
 sync engine, built on [Effect](https://effect.website).
 
 In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
@@ -30,7 +30,7 @@ npm install @legation/jsonapi @legation/effect effect
 ```
 
 `effect` and `@legation/effect` are required alongside this package;
-`@thomasfosterau/effect-jsonapi` (`^0.15.1`) is a regular dependency.
+`@thomasfosterau/effect-jsonapi` is a regular dependency.
 
 ## Effect version
 
@@ -47,7 +47,8 @@ over the existing REST API.
 ```ts
 import { Duration, Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import { ClientEngine, Predicate, Subset } from "@legation/effect";
+import { Predicate } from "@legation/effect";
+import { ClientEngine, Subset } from "@legation/effect/internal";
 import { JsonApiSync } from "@legation/jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
 
@@ -191,7 +192,7 @@ already-synced data, no extra request.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { ClientEngine, Subset } from "@legation/effect";
+import { ClientEngine, Subset } from "@legation/effect/internal";
 import { Relationships } from "@legation/jsonapi";
 
 const program = Effect.gen(function* () {
