@@ -139,7 +139,9 @@ runs `npm publish` per package) and tags the release.
 Publishing uses npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers):
 there is no `NPM_TOKEN` secret. The workflow proves its identity to npm with a
 short-lived, workflow-bound token (`id-token: write`), and provenance is
-attached automatically, so the repository must stay public. The publish job
+left to npm, which attaches it only when allowed (a public source repository);
+it is never forced, because an explicit request fails from a private
+repository. The publish job
 runs in a protected `release` GitHub Environment so it pauses for manual
 approval, and never runs on forks.
 

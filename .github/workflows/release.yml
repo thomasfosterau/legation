@@ -7,7 +7,7 @@ name: Release
 #
 # Publishing uses npm OIDC trusted publishing: there is no NPM_TOKEN. The
 # workflow proves its identity to npm with a short-lived, workflow-bound
-# OIDC token, and provenance is attached automatically.
+# OIDC token. Provenance is left to npm (never forced).
 
 on:
   push:
@@ -83,7 +83,7 @@ jobs:
       # (via `bun run version`). Once that PR is merged (no changesets remain),
       # it runs `bun run release`, which builds and runs `changeset publish`
       # (`npm publish` per package under OIDC trusted publishing — there is no
-      # NPM_TOKEN to steal; provenance is attached automatically). The action
+      # NPM_TOKEN to steal; provenance is left to npm). The action
       # then pushes the tags and creates the GitHub releases.
       #
       # v2 of the action pairs with Changesets CLI v3 (`@changesets/cli` in
@@ -98,4 +98,5 @@ jobs:
           pr-title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
+          # Don't force provenance; npm attaches it itself when allowed, and an
+          # explicit request fails from a private repository.
