@@ -118,24 +118,28 @@ const track = (engine: ClientEngine, tracker: Tracker): void => {
  * now names a different entry.
  */
 const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, StoreError> =>
-  Effect.gen(function* () {
-    const { renumbered } = yield* engine.dropIfPending([previous]);
-    if (renumbered.length === 0) return;
-    const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
-    const all = trackersByEngine.get(engine);
-    if (all === undefined) return;
-    for (const ref of all) {
-      const tracker = ref.deref();
-      if (tracker === undefined) {
-        all.delete(ref);
-        continue;
+  // Uninterruptible: once the engine has renumbered the journal, every tracker
+  // must hear about it, or a later call would drop an unrelated entry (#249).
+  Effect.uninterruptible(
+    Effect.gen(function* () {
+      const { renumbered } = yield* engine.dropIfPending([previous]);
+      if (renumbered.length === 0) return;
+      const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
+      const all = trackersByEngine.get(engine);
+      if (all === undefined) return;
+      for (const ref of all) {
+        const tracker = ref.deref();
+        if (tracker === undefined) {
+          all.delete(ref);
+          continue;
+        }
+        for (const [key, id] of tracker) {
+          const moved = moves.get(id);
+          if (moved !== undefined) tracker.set(key, moved);
+        }
       }
-      for (const [key, id] of tracker) {
-        const moved = moves.get(id);
-        if (moved !== undefined) tracker.set(key, moved);
-      }
-    }
-  });
+    })
+  );
 
 /** Per-key buffered state shared by `debounce`/`throttle`'s timer loops. */
 interface Entry {
@@ -161,9 +165,17 @@ const flush = (
 ): Effect.Effect<void, MutatorError | StoreError> =>
   Effect.gen(function* () {
     track(engine, lastIdByKey);
-    const handle = yield* engine.mutateWithAck(mutator, args);
-    const previous = lastIdByKey.get(key);
-    lastIdByKey.set(key, handle.mutationId);
+    // Journaling and remembering the id are one uninterruptible step (#249
+    // review N1): an interrupt between them would leave an entry no tracker
+    // knows, which a later compaction could renumber without anyone noticing.
+    const previous = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const handle = yield* engine.mutateWithAck(mutator, args);
+        const before = lastIdByKey.get(key);
+        lastIdByKey.set(key, handle.mutationId);
+        return before;
+      })
+    );
     if (previous !== undefined) yield* compact(engine, previous);
   });
 

@@ -52,21 +52,27 @@ export interface CompactionResult {
 /** The empty {@link CompactionResult}: nothing was dropped or moved. */
 export const NO_COMPACTION: CompactionResult = { dropped: [], renumbered: [] };
 
+/** What a journal entry must expose for {@link planCompaction}: its owner and id. */
+interface Numbered {
+  readonly clientId: string;
+  readonly mutationId: number;
+}
+
 /** A computed compaction: its result plus the journal and counter it leaves behind. */
-interface CompactionPlan {
+interface CompactionPlan<T extends Numbered> {
   readonly result: CompactionResult;
   /** The whole journal after the compaction, in order (other clients untouched). */
-  readonly journal: ReadonlyArray<Mutation>;
-  /** The renumbered bodies only (their new ids). */
-  readonly moved: ReadonlyArray<Mutation>;
+  readonly journal: ReadonlyArray<T>;
   /** The id `clientId`'s counter must hold afterwards, so the next id continues the run. */
   readonly counter: number;
 }
 
 /**
- * Plan a compaction over the whole `journal` for `clientId`. Pure: shared by
- * the memory store (applies it in one `Ref` update) and the durable store
- * (persists it through a write-ahead intent), so both agree on the rule.
+ * Plan a compaction over the whole `journal` for `clientId`. Pure and generic
+ * over the entry shape, so the memory store plans over full mutations while
+ * the durable store plans over its compact index (ids only, #249 review S3:
+ * a paced flush must not read every body in the journal). Shared so both
+ * agree on the rule.
  *
  * Eligible ids: pending, `clientId`'s own, above `sentUpTo`. Survivors above
  * `sentUpTo` take consecutive ids after the anchor, in journal order; the
@@ -75,12 +81,12 @@ interface CompactionPlan {
  * acknowledged id, so that is `lastAcknowledged`). Frozen entries are never
  * touched.
  */
-const planCompaction = (
-  journal: ReadonlyArray<Mutation>,
+const planCompaction = <T extends Numbered>(
+  journal: ReadonlyArray<T>,
   clientId: string,
   mutationIds: ReadonlyArray<number>,
   sentUpTo: number
-): CompactionPlan | undefined => {
+): CompactionPlan<T> | undefined => {
   const wanted = new Set(mutationIds);
   const mine = journal.filter((m) => m.clientId === clientId);
   const dropped = mine
@@ -94,8 +100,7 @@ const planCompaction = (
       ? Math.max(...frozen.map((m) => m.mutationId))
       : Math.min(...mine.map((m) => m.mutationId)) - 1;
   const renumbered: Array<{ from: number; to: number }> = [];
-  const moved: Array<Mutation> = [];
-  const after: Array<Mutation> = [];
+  const after: Array<T> = [];
   let next = anchor;
   for (const m of journal) {
     if (m.clientId !== clientId || m.mutationId <= sentUpTo) {
@@ -108,12 +113,10 @@ const planCompaction = (
       after.push(m);
       continue;
     }
-    const relabelled: Mutation = { ...m, mutationId: next };
     renumbered.push({ from: m.mutationId, to: next });
-    moved.push(relabelled);
-    after.push(relabelled);
+    after.push({ ...m, mutationId: next });
   }
-  return { result: { dropped, renumbered }, journal: after, moved, counter: next };
+  return { result: { dropped, renumbered }, journal: after, counter: next };
 };
 
 export interface ClientStore {
@@ -255,6 +258,27 @@ export interface ClientStore {
 
 export const ClientStore = Context.Service<ClientStore>("@legation/effect/ClientStore");
 
+/**
+ * Freeze everything currently pending: raise each client's sent watermark to
+ * its highest pending id, so {@link ClientStore.compactPending} treats it as
+ * possibly-sent and leaves it alone (#249). Used wherever entries arrive whose
+ * push history this process cannot see: engine boot (a journal persisted by an
+ * earlier session, or by a release that predates the watermark, may have been
+ * pushed) and snapshot hydration (the entries came from another context). The
+ * cost is only that such entries are never compacted, which is what a paced
+ * caller, tracking ids in memory, would not have attempted anyway.
+ */
+export const freezePending = (store: ClientStore): Effect.Effect<void, StoreError> =>
+  Effect.gen(function* () {
+    const highest = new Map<string, number>();
+    for (const m of yield* store.pendingMutations) {
+      if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
+    }
+    yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
+      discard: true,
+    });
+  });
+
 /** In-memory implementation (tests, SSR, ephemeral clients). */
 export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const rows = yield* Ref.make(new Map<string, Map<RowId, StoredRow>>());
@@ -314,19 +338,28 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.update(journal, (entries) =>
         entries.filter((m) => m.clientId !== clientId || m.mutationId > upTo)
       ),
+    // Uninterruptible: the journal and the counter must change together. An
+    // interrupt between the two writes would leave a renumbered journal with a
+    // counter that still hands out the old numbering, i.e. a gap (#249).
     compactPending: (clientId, mutationIds) =>
-      Effect.gen(function* () {
-        const watermark = (yield* Ref.get(sentUpTo)).get(clientId) ?? 0;
-        // Journal and plan move together in one `Ref.modify`, so a concurrent
-        // append cannot slip between the read and the write.
-        const plan = yield* Ref.modify(journal, (entries) => {
-          const planned = planCompaction(entries, clientId, mutationIds, watermark);
-          return planned === undefined ? [undefined, entries] : [planned, planned.journal];
-        });
-        if (plan === undefined) return NO_COMPACTION;
-        yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.counter));
-        return plan.result;
-      }),
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const watermark = (yield* Ref.get(sentUpTo)).get(clientId) ?? 0;
+          // Journal and plan move together in one `Ref.modify`, so a concurrent
+          // append cannot slip between the read and the write.
+          const plan = yield* Ref.modify(journal, (entries) => {
+            const planned = planCompaction(entries, clientId, mutationIds, watermark);
+            return planned === undefined ? [undefined, entries] : [planned, planned.journal];
+          });
+          if (plan === undefined) return NO_COMPACTION;
+          // A yield point between the two writes: harmless here, and what lets
+          // a test (and a real preemption) interrupt exactly in the window the
+          // uninterruptible wrapper exists to close.
+          yield* Effect.yieldNow;
+          yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.counter));
+          return plan.result;
+        })
+      ),
     markSent: (clientId, upTo) =>
       Ref.update(sentUpTo, (m) =>
         (m.get(clientId) ?? 0) >= upTo ? m : new Map(m).set(clientId, upTo)
@@ -1084,35 +1117,81 @@ export const makeKeyValue = (
             yield* writeJson("journalIndex", kept);
           })
         ),
+      // The commit point is the durable intent. Everything from there is
+      // uninterruptible, and a failure to *apply* the intent is not a failure
+      // of the compaction: it is committed, `settleCompaction` rolls it
+      // forward before the next journal operation, and the caller must learn
+      // the renumbering now (returning the error instead would leave the
+      // engine, Paced trackers and ack handles on ids the store has already
+      // left behind: the newest paced write would be dropped, #249 review B1).
       compactPending: (clientId, mutationIds) =>
-        locked(
-          Effect.gen(function* () {
-            yield* settleCompaction;
-            // An un-migrated legacy blob has no index to rewrite; leave it be.
-            if ((yield* readDecoded("journalIndex", JournalIndexFromJson)) === undefined) {
-              return NO_COMPACTION;
-            }
-            const watermark = (yield* sentMarks)[clientId] ?? 0;
-            const plan = planCompaction(
-              yield* pendingMutationsOf,
-              clientId,
-              mutationIds,
-              watermark
-            );
-            if (plan === undefined) return NO_COMPACTION;
-            const intent = {
-              clientId,
-              staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
-              moved: plan.moved,
-              index: plan.journal.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId })),
-              counter: plan.counter,
-            };
-            yield* writeJson(COMPACTION_KEY, intent);
-            compactionPending = true;
-            yield* applyCompaction(intent);
-            compactionPending = false;
-            return plan.result;
-          })
+        Semaphore.withPermit(
+          lock,
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* settleCompaction;
+              // An un-migrated legacy blob has no index to rewrite; leave it be.
+              const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+              if (index === undefined) return NO_COMPACTION;
+              const watermark = (yield* sentMarks)[clientId] ?? 0;
+              // Plan over the index alone; read only the bodies that move.
+              const plan = planCompaction(index, clientId, mutationIds, watermark);
+              if (plan === undefined) return NO_COMPACTION;
+              const moved: Array<Mutation> = [];
+              for (const { from, to } of plan.result.renumbered) {
+                const body = yield* readDecoded(journalBodyKey(clientId, from), MutationFromJson);
+                // A missing body cannot be moved, and leaving its index entry
+                // behind would strand an id with nothing to push. Refuse, before
+                // anything is committed, rather than corrupt the run.
+                if (body === undefined) {
+                  return yield* new StoreError({
+                    message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
+                  });
+                }
+                moved.push({ ...body, mutationId: to });
+              }
+              const intent = {
+                clientId,
+                staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
+                moved,
+                index: plan.journal,
+                counter: plan.counter,
+              };
+              // Armed before the write: if the write lands but reports failure,
+              // the next operation still looks for (and finishes) the intent.
+              compactionPending = true;
+              // A write that errors may still have landed (an ambiguous IndexedDB
+              // abort): look for the intent before calling the compaction failed.
+              // Present means committed, so proceed as if the write had succeeded.
+              yield* writeJson(COMPACTION_KEY, intent).pipe(
+                Effect.catch((error) =>
+                  readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
+                    Effect.catch(() => Effect.succeed(undefined)),
+                    Effect.flatMap((found) =>
+                      found === undefined ? Effect.fail(error) : Effect.void
+                    )
+                  )
+                )
+              );
+              yield* applyCompaction(intent).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    compactionPending = false;
+                  })
+                ),
+                // The compaction is committed; the roll-forward finishes it.
+                // Not silent: a store that keeps failing here will keep failing
+                // the next journal operation, and this is the first sign.
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "ClientStore: compaction committed but not yet applied; will roll forward",
+                    { error }
+                  )
+                )
+              );
+              return plan.result;
+            })
+          )
         ),
       markSent: (clientId, upTo) =>
         locked(

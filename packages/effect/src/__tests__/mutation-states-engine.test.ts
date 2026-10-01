@@ -19,7 +19,8 @@ import { MutationRejected } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
-import type * as MutationState from "../MutationState.js";
+import * as MirrorProtocol from "../MirrorProtocol.js";
+import * as MutationState from "../MutationState.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
@@ -240,6 +241,28 @@ describe("ClientEngine.mutationStates (#116)", () => {
         expect(get(states, 1)?.phase).toBe("dropped");
         expect(get(states, 1)?.settledAt).toBeDefined();
       })
+  );
+
+  it.effect("a 'dropped' state survives the mirror wire (#249 review N2)", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer;
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* makeEngine(handler, store);
+      yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
+      yield* engine.mutate("todo/set", { id: "2", title: "kept", done: false });
+      yield* engine.dropIfPending([1]);
+      const states = yield* snapshot(engine);
+      expect(get(states, 1)?.phase).toBe("pending"); // the survivor moved into slot 1
+
+      // A map holding a dropped record must still decode on the tab side;
+      // before, the unknown phase made the whole update undecodable and the
+      // mirror silently ignored it.
+      const message = MirrorProtocol.mutationStatesUpdate(
+        MutationState.droppedMany(states, [1], 0)
+      );
+      const decoded = yield* MirrorProtocol.decodeHostMessage(JSON.parse(JSON.stringify(message)));
+      expect(decoded?._tag).toBe("MutationStatesUpdate");
+    })
   );
 
   // Real clock: the collector subscribes to the underlying PubSub on a

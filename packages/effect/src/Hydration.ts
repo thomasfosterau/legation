@@ -50,7 +50,7 @@
 
 import { Effect, Schema } from "effect";
 import * as ClientEngineModule from "./ClientEngine.js";
-import { ClientStore, makeMemory, StoredRowSchema } from "./ClientStore.js";
+import { ClientStore, freezePending, makeMemory, StoredRowSchema } from "./ClientStore.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
@@ -130,6 +130,9 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
     for (const mutation of decoded.journal) {
       yield* store.appendMutation(mutation);
     }
+    // These entries came from another context: whether they were pushed there
+    // is unknowable here, so paced compaction must not renumber them (#249).
+    yield* freezePending(store);
   });
 
 /**
