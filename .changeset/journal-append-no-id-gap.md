@@ -12,3 +12,13 @@ persists the counter last, healing it from the journal's highest id after a
 crash); the engine journals through it. Custom `ClientStore` implementations
 must provide `appendNext`; `nextMutationId` stays for low-level use but an id
 reserved without an append is a gap.
+
+An id that has left the journal is never issued again: `acknowledge` and
+`quarantinePending` raise the client's counter to the highest id they remove (in
+the key-value store, before deleting anything), and the key-value `appendNext`
+is uninterruptible. Previously a lost counter write (or an interrupt between the
+index and counter writes) let the next append reissue an acknowledged id, which
+the backend skipped as an idempotent duplicate, silently losing the write. The
+in-memory store's `appendNext` is now atomic with respect to `compactPending`
+and the other journal operations, and heals its counter from the journal exactly
+as the key-value store does.
