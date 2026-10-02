@@ -92,9 +92,13 @@ publish in that order). Moving the floor is a `minor` changeset for every
 package.
 
 A scheduled GitHub Actions workflow (`effect-beta-compat.yml`) runs weekly
-against the latest `effect@rc` (the dist-tag the release-candidate line
-publishes under) and reports incompatibilities ahead of time. It never blocks
-CI — it exists so bumps are informed decisions (see ADR-0003).
+against the newest `effect` release (the highest of the `latest`, `next`,
+`beta` and `rc` dist-tags) and against the published floor, and reports
+incompatibilities ahead of time. It moves only the catalog entries versioned
+with effect, never `typescript`, `@typescript/native` or `@effect/tsgo`. It
+never blocks CI (a failed leg shows as a warning in the run summary, while the
+run itself stays green) — it exists so bumps are informed decisions (see
+ADR-0003).
 
 ## Releases
 
