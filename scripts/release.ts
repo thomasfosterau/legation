@@ -126,14 +126,15 @@ const bunPack = (name: string, tarball: string): void => {
   }
   run(["bun", "pm", "pack", "--ignore-scripts", "--quiet", "--filename", tarball], pkg.dir);
   const packed = JSON.parse(run(["tar", "-xzOf", tarball, "package/package.json"], pkg.dir));
-  const problems = [
-    ...leftoverSpecifiers(packed, ""),
-    ...staleInternalRanges(pkg.manifest, packed),
-  ];
+  const stale = staleInternalRanges(pkg.manifest, packed);
+  const problems = [...leftoverSpecifiers(packed, ""), ...stale];
   if (problems.length > 0) {
+    const hint =
+      stale.length > 0
+        ? "\nbun.lock missed a version bump: run `bun install --lockfile-only` (`bun run version` does)."
+        : "";
     throw new ReleaseError(
-      `${name}: the packed package.json has\n  ${problems.join("\n  ")}\n` +
-        "A stale internal range means bun.lock missed a version bump: run `bun install --lockfile-only` (`bun run version` does)."
+      `${name}: the packed package.json has\n  ${problems.join("\n  ")}${hint}`
     );
   }
   console.log(
