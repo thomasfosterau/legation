@@ -32,7 +32,7 @@
  * while later ADR-0022 program steps move onto them directly.
  */
 
-import { Schema } from "effect";
+import { type Brand, Schema } from "effect";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
 import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
@@ -142,9 +142,16 @@ export interface Node<
   readonly row: Row<Type, Fields, Edges, IdField>;
 }
 
-/** A node definition with its type parameters erased. */
+/**
+ * A node definition with its type parameters erased.
+ *
+ * `Id` is bounded rather than erased to `Id<string>`: in Effect 4.0.0 brands
+ * are type-only, so a concrete `brand<String, "todos/id">` no longer assigns
+ * to a template-literal brand. The bound keeps it a string-encoded branded id
+ * schema, whose decoded type is `string & Brand<string>`.
+ */
 export type AnyNode = Omit<Node<string, Schema.Struct.Fields, Record<string, Edge.Edge>>, "Id"> & {
-  readonly Id: Schema.Top;
+  readonly Id: Schema.Codec<string & Brand.Brand<string>, string>;
 };
 
 /** The decoded row type of a node. */

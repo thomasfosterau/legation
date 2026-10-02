@@ -4,7 +4,7 @@
  * closure/validation, the derivable set (ADR-0023), and the bridge — the
  * derived CollectionRegistry driving the EXISTING engine's Related joins.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
 import {
   Authorization,
@@ -68,6 +68,14 @@ describe("Node model", () => {
     });
     const target: typeof Product.Id.Type = row.productId;
     expect(target).toBe("p-1");
+  });
+
+  it("keeps AnyNode's Id a string-encoded branded id schema", () => {
+    const decoded: string = Schema.decodeUnknownSync(Product.Id)("p-1");
+    expectTypeOf<Node.AnyNode["Id"]["Type"]>().toExtend<string>();
+    expectTypeOf<Node.AnyNode["Id"]["Encoded"]>().toEqualTypeOf<string>();
+    expectTypeOf(Product).toExtend<Node.AnyNode>();
+    expect(decoded).toBe("p-1");
   });
 
   it("computes the derivable set: one-edge keys + hintKeys", () => {
