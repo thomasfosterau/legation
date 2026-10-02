@@ -6,7 +6,7 @@
  * `Predicate.exists` rendering.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Ref, Schema, Scope, Stream } from "effect";
+import { Effect, Exit, Option, Schema, Scope, Stream, SubscriptionRef } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -212,7 +212,6 @@ describe("Related.query / observe", () => {
   // (not base) row is edited — proving the join re-hydrates incrementally and
   // the base issue row is reused (same reference), never re-resolved.
   it("re-hydrates on a related-row write without re-resolving the base", async () => {
-    const settle = Effect.sleep(Duration.millis(50));
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -221,21 +220,34 @@ describe("Related.query / observe", () => {
           yield* seed(engine);
           yield* syncAll(engine);
 
-          const seen = yield* Ref.make<Array<ReadonlyArray<Related.RelatedRow>>>([]);
+          const seen = yield* SubscriptionRef.make<
+            ReadonlyArray<ReadonlyArray<Related.RelatedRow>>
+          >([]);
+          // Wait on the observer's emissions, not on wall-clock time.
+          const emitted = (
+            until: (emissions: ReadonlyArray<ReadonlyArray<Related.RelatedRow>>) => boolean
+          ) => SubscriptionRef.changes(seen).pipe(Stream.filter(until), Stream.runHead);
           yield* Effect.forkScoped(
             Stream.runForEach(
               Related.observe(engine, registry, "issues", issues, ["author", "comments"]),
-              (rows) => Ref.update(seen, (acc) => [...acc, rows])
+              (rows) => SubscriptionRef.update(seen, (acc) => [...acc, rows])
             )
           );
-          yield* settle;
+          // The first emission is recorded before the write, so it holds the
+          // pre-write rows.
+          yield* emitted((emissions) => emissions.length > 0);
 
           yield* engine.mutate("comment/set", { id: "c1", issueId: "i1", body: "edited" });
           yield* engine.push;
           yield* engine.pull;
-          yield* settle;
 
-          const emissions = yield* Ref.get(seen);
+          // The push ack can briefly re-emit the pre-edit join until the pull
+          // lands (#286), so wait for the latest emission to show the edit.
+          const emissions = Option.getOrThrow(
+            yield* emitted((acc) =>
+              commentBodies(acc[acc.length - 1]!.find((r) => r.id === "i1")!).includes("edited")
+            )
+          );
           const firstI1 = emissions[0]!.find((r) => r.id === "i1")!;
           const lastI1 = emissions[emissions.length - 1]!.find((r) => r.id === "i1")!;
           // `many` order follows the foreign collection's row order (a write can
@@ -257,7 +269,6 @@ describe("Related.query / observe", () => {
   // observers — which an initial-emission drop would swallow, leaving the
   // join stale until the next foreign write.
   it("does not lose a foreign write racing the observer subscription", async () => {
-    const settle = Effect.sleep(Duration.millis(100));
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -266,7 +277,7 @@ describe("Related.query / observe", () => {
           yield* seed(engine);
           yield* syncAll(engine);
 
-          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          const seen = yield* SubscriptionRef.make<ReadonlyArray<string>>([]);
           yield* Effect.forkScoped(
             Stream.runForEach(
               Related.observe(engine, registry, "issues", issues, ["author"]),
@@ -275,16 +286,24 @@ describe("Related.query / observe", () => {
                   const names = rows
                     .map((row) => (row.related.author as Person | null)?.name ?? "nobody")
                     .join(",");
-                  const priors = yield* Ref.getAndUpdate(seen, (acc) => [...acc, names]);
+                  const priors = yield* SubscriptionRef.getAndUpdate(seen, (acc) => [
+                    ...acc,
+                    names,
+                  ]);
                   if (priors.length === 0) {
                     yield* engine.mutate("person/set", { id: "p1", name: "Grace" });
                   }
                 })
             )
           );
-          yield* settle;
-
-          const emissions = yield* Ref.get(seen);
+          // Wait for the join to show the racing write (a lost write never
+          // arrives, and the test times out), not for wall-clock time.
+          const emissions = Option.getOrThrow(
+            yield* SubscriptionRef.changes(seen).pipe(
+              Stream.filter((acc) => acc[acc.length - 1] === "Grace,Grace"),
+              Stream.runHead
+            )
+          );
           expect(emissions[0]).toBe("Ada,Ada");
           expect(emissions[emissions.length - 1]).toBe("Grace,Grace");
         })
