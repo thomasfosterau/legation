@@ -25,8 +25,9 @@ Two entry points:
 npm install @legation/svelte @legation/effect effect svelte
 ```
 
-`@sveltejs/kit` is an **optional** peer dependency — only `@legation/svelte/kit`
-needs it, and only as a `Cookies` type, so a non-Kit Svelte app pulls nothing.
+`@sveltejs/kit` is an **optional** peer dependency (`^2.0.0 || ^3.0.0`) — only
+`@legation/svelte/kit` needs it, and only as a `Cookies` type, so a non-Kit
+Svelte app pulls nothing.
 
 ## Effect version
 
@@ -137,6 +138,9 @@ importing it pulls none of this in.
 SSR snapshot for a server `load`, and the snapshot-hydrated Client boot. The
 hydration itself is core (`Hydration` in `@legation/effect`) and the wiring is
 `Client.make` — this subpath is the framework's share of it, nothing more.
+It works with SvelteKit 2 and 3. The samples below import app modules through
+Kit 2's `$lib` alias; on Kit 3, which replaces it with `#lib`, write
+`#lib/domain.js` instead.
 
 The SSR model (see `Hydration` in `@legation/effect`): each server render runs
 a **request-scoped engine** against the app's sync server, under the
