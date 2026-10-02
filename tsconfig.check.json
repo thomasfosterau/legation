@@ -21,6 +21,6 @@
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["./packages/*/src/**/*", "packages/*/examples/**/*", "tests/**/*"],
+  "include": ["./packages/*/src/**/*", "./packages/*/examples/**/*", "./tests/**/*"],
   "exclude": ["node_modules", "packages/*/dist"]
 }
