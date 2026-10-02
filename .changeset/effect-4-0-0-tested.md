@@ -19,7 +19,7 @@ peer floor is unchanged at `effect >=4.0.0-rc.118`.
 - `Node.AnyNode`'s `Id` property is now
   `Schema.Codec<string & Brand.Brand<string>, string>` instead of `Id<string>`.
   4.0.0's `brand<String, B>` is type-only and no longer assignable to a wider
-  `brand<String, `${string}/id`>`, so no concrete `Node<"todos", …>` was
+  ``brand<String, `${string}/id`>``, so no concrete `Node<"todos", …>` was
   assignable to `AnyNode`. Every concrete node is assignable again, and `Id`
   is still a string-encoded branded id schema; only code that reads `.Id` off
   an `AnyNode`-typed value sees the wider brand.
