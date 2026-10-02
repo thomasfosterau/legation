@@ -59,11 +59,21 @@ describe("@legation/node without redis", () => {
   // The child loads `dist/`, so build it (and `@legation/effect`, which it
   // references) first; a no-op when `bun run build` already ran, as in CI.
   beforeAll(() => {
-    execFileSync(
-      process.execPath,
-      ["node_modules/@typescript/native/bin/tsc", "--build", "packages/node/tsconfig.json"],
-      { cwd: root, stdio: "pipe" }
-    );
+    try {
+      execFileSync(
+        process.execPath,
+        ["node_modules/@typescript/native/bin/tsc", "--build", "packages/node/tsconfig.json"],
+        { cwd: root, stdio: "pipe" }
+      );
+    } catch (error) {
+      // tsc prints its diagnostics on stdout, which the thrown error omits.
+      const failure = error as { stdout?: Buffer; stderr?: Buffer; message: string };
+      throw new Error(
+        `tsc --build of packages/node failed:\n${failure.stdout?.toString() ?? ""}${
+          failure.stderr?.toString() ?? ""
+        }${failure.message}`
+      );
+    }
   }, 120_000);
 
   it("loads the built package when redis cannot be resolved", () => {
