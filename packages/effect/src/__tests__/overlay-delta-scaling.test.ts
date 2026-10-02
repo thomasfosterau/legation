@@ -10,7 +10,7 @@
  * warm, which `bun run test:run` (unlike `bun run bench`) actually checks.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Ref, Schema, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
@@ -76,10 +76,19 @@ describe("overlay delta-maintenance scaling (#109)", () => {
           (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),
           { discard: true }
         );
-        yield* Effect.forEach(Array.from({ length: LIVE_QUERIES }), () =>
-          Effect.forkScoped(Stream.runForEach(engine.observe(top), () => Effect.void))
+        // Each observer completes its latch on its first emission, which it
+        // can only make once it has materialized; awaiting them all means the
+        // warm-up scans are done before the count is reset.
+        const materialized = yield* Effect.forEach(Array.from({ length: LIVE_QUERIES }), () =>
+          Effect.gen(function* () {
+            const first = yield* Deferred.make<void>();
+            yield* Effect.forkScoped(
+              Stream.runForEach(engine.observe(top), () => Deferred.succeed(first, undefined))
+            );
+            return first;
+          })
         );
-        yield* Effect.sleep(Duration.millis(50)); // let observers materialize once
+        yield* Effect.forEach(materialized, Deferred.await, { discard: true });
 
         yield* Ref.set(listRowsCount, 0); // measure only the burst below
 
@@ -93,6 +102,11 @@ describe("overlay delta-maintenance scaling (#109)", () => {
         // mutate re-scanned the 10k-row collection, regardless of the
         // growing journal or how many live queries were watching.
         expect(yield* Ref.get(listRowsCount)).toBe(0);
-      })
+      }),
+    // The seed is a fixed 10k mutates of CPU-bound work: about 2 s on the
+    // 4-core host it was measured on, but 12-25 s with six busy loops added
+    // to compete for the cores (#277). The assertion counts scans, which
+    // wall-clock time cannot change, so the timeout only has to bound a hang.
+    60_000
   );
 });

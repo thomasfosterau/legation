@@ -3,7 +3,7 @@
  * (to-one and to-many), and that resolution reads live synced state.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Layer, Ref, Schema, Scope, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Scope, Stream, SubscriptionRef } from "effect";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -238,7 +238,6 @@ describe("Relationships", () => {
   // incrementally without the base subset changing.
   it("re-emits the join incrementally when a referenced row changes", async () => {
     const server = makeServer(seed);
-    const settle = Effect.sleep(Duration.millis(50));
     await Effect.runPromise(
       provide(
         Effect.gen(function* () {
@@ -247,13 +246,16 @@ describe("Relationships", () => {
 
           const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
             (rows[0]!.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"));
-          const seen = yield* Ref.make<Array<ReadonlyArray<unknown>>>([]);
+          const seen = yield* SubscriptionRef.make<ReadonlyArray<ReadonlyArray<unknown>>>([]);
+          // Wait on the observer's emissions, not on wall-clock time.
+          const emitted = (until: (emissions: ReadonlyArray<ReadonlyArray<unknown>>) => boolean) =>
+            SubscriptionRef.changes(seen).pipe(Stream.filter(until), Stream.runHead);
           yield* Effect.forkScoped(
             Stream.runForEach(Relationships.observe(engine, issues, ["comments"]), (rows) =>
-              Ref.update(seen, (acc) => [...acc, bodiesOf(rows)])
+              SubscriptionRef.update(seen, (acc) => [...acc, bodiesOf(rows)])
             )
           );
-          yield* settle;
+          yield* emitted((emissions) => emissions.length > 0);
 
           // Edit a referenced comment only — the base `issues` row is untouched.
           yield* engine.mutate("comments/update", {
@@ -263,9 +265,17 @@ describe("Relationships", () => {
           });
           yield* engine.push;
           yield* engine.pull;
-          yield* settle;
-
-          const emissions = yield* Ref.get(seen);
+          // The pulled (authoritative) join carries the edit...
+          const settled = bodiesOf(yield* Relationships.query(engine, issues, ["comments"]));
+          expect(settled).toEqual(["edited", "second"]);
+          // ...and the observer re-emits it. Its emissions can lag the pull
+          // (and a push ack briefly re-emits the pre-edit join, #286), so wait
+          // for the latest one to match rather than reading a snapshot.
+          const emissions = Option.getOrThrow(
+            yield* emitted(
+              (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)
+            )
+          );
           expect(emissions[0]).toEqual(["first", "second"]);
           expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);
           expect(emissions.length).toBeGreaterThanOrEqual(2);
