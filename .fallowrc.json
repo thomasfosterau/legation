@@ -3,7 +3,7 @@
   "entry": ["packages/*/src/index.ts", "packages/*/examples/*.ts"],
   "publicPackages": ["@legation/*"],
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", "scripts/**", "**/*.bench.ts"],
-  "ignoreDependencies": ["@legation/effect", "@legation/sql"],
+  "ignoreDependencies": ["@legation/effect", "@legation/sql", "publint", "@arethetypeswrong/cli"],
   "rules": {
     "duplicate-exports": "off"
   },

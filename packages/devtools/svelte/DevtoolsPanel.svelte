@@ -9,7 +9,7 @@
    */
   import { untrack } from "svelte";
   import { Effect, Fiber, HashMap } from "effect";
-  import type { DevtoolsCore } from "../src/Devtools.js";
+  import type { DevtoolsCore } from "@legation/devtools";
   import { makeStores } from "./store.js";
 
   const props: { core: DevtoolsCore } = $props();

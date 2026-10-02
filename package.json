@@ -51,10 +51,11 @@
     "prepare": "effect-tsgo patch --typescript && effect-language-service patch"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.3",
     "@effect/language-service": "^0.87.3",
-    "@effect/tsgo": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
+    "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
     "@electric-sql/pglite": "^0.5.8",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -67,6 +68,7 @@
     "oxlint": "^1.83.0",
     "playwright-core": "1.56.1",
     "prettier": "^3.0.0",
+    "publint": "^0.3.25",
     "svelte": "^5",
     "typescript": "catalog:",
     "vite": "^8.0.0",

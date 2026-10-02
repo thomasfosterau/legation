@@ -15,7 +15,7 @@
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, HashMap, Stream } from "effect";
 import type { ClientEngine, MutationState, Subset } from "@legation/effect/internal";
-import type * as Devtools from "../src/Devtools.js";
+import type * as Devtools from "@legation/devtools";
 
 /** Subscribe to a `Stream` as a store; `initial` until the first emission. */
 export const toStreamStore = <A>(stream: Stream.Stream<A>, initial: A): Readable<A> =>
