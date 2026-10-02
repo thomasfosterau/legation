@@ -139,8 +139,10 @@ SSR snapshot for a server `load`, and the snapshot-hydrated Client boot. The
 hydration itself is core (`Hydration` in `@legation/effect`) and the wiring is
 `Client.make` — this subpath is the framework's share of it, nothing more.
 It works with SvelteKit 2 and 3. The samples below import app modules through
-Kit 2's `$lib` alias; on Kit 3, which replaces it with `#lib`, write
-`#lib/domain.js` instead.
+Kit 2's `$lib` alias. Kit 3 removes `$lib` in favour of a Node subpath import
+declared in the app's `package.json` (`"imports": { "#lib/*": "./src/lib/*" }`),
+so there write `#lib/domain.js` instead; or keep `$lib` with the (deprecated)
+`alias: { $lib: "src/lib" }` option in the SvelteKit config.
 
 The SSR model (see `Hydration` in `@legation/effect`): each server render runs
 a **request-scoped engine** against the app's sync server, under the
