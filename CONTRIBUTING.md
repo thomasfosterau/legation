@@ -125,14 +125,23 @@ pack` takes those ranges from `bun.lock`, not from `package.json`, so the
    and a hand-edited version needs `bun install --lockfile-only`. The run
    stops if a packed `package.json` still has either protocol, or if an
    internal range doesn't match that package's current version (a stale
-   `bun.lock`).
+   `bun.lock`). It also stops on an exact `effect` / `@effect/*` peer (the
+   published floor is an open range, see "Effect version upgrades"), on a
+   `svelte` export condition naming a file that isn't in the tarball, and on
+   any finding from [publint](https://publint.dev) (strict, so warnings
+   count) or [arethetypeswrong](https://arethetypeswrong.github.io) on the
+   tarball. The attw check ignores the `node10` and `node16-cjs` resolution modes, the
+   ones its `esm-only` profile ignores: the packages are ESM-only by design.
+   A finding that isn't a real problem is suppressed in `attwSuppressions` in
+   `scripts/release.ts`, with its reason
+   ([#250](https://github.com/thomasfosterau/legation/issues/250)).
 3. `changeset publish --from-pack-dir` uploads each tarball with
    `npm publish <tarball>` and creates the git tags. npm does the upload, not
    `bun publish`, because `bun publish` has no OIDC trusted publishing.
 
-CI runs `bun run release:check` on every pull request: it packs every
-publishable package the same way and runs the same manifest checks, without
-touching the registry. `bun run release:dry-run` does steps 1 and 2 against
+CI runs `bun run release:check` on every pull request, after the build: it
+packs every publishable package the same way and runs the same checks,
+without touching the registry. `bun run release:dry-run` does steps 1 and 2 against
 the real registry state and prints where it left the tarballs, without
 publishing.
 

@@ -43,8 +43,10 @@ jobs:
 
       # Packs every publishable package the way `bun run release` does and
       # fails on a `workspace:` / `catalog:` specifier left in a packed
-      # package.json (#267). No registry access.
-      - name: Check publish manifests
+      # package.json (#267), an exact `effect` peer, or a publint or
+      # arethetypeswrong (ESM-only) finding on the tarball (#250). No
+      # registry access.
+      - name: Check and lint publish tarballs
         run: bun run release:check
 
       - name: Typecheck (packages and tests)
