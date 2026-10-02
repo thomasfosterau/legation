@@ -14,16 +14,19 @@
       "@effect/platform-browser": "4.0.0-rc.118",
       "@effect/platform-node": "4.0.0-rc.118",
       "@effect/vitest": "4.0.0-rc.118",
-      "@effect/sql-sqlite-node": "4.0.0-rc.118"
+      "@effect/sql-sqlite-node": "4.0.0-rc.118",
+      "typescript": "6.0.2",
+      "@effect/tsgo": "0.47.2",
+      "@typescript/native": "npm:typescript@7.0.2"
     }
   },
   "overrides": {
     "@effect/platform-node-shared": "4.0.0-rc.118"
   },
   "scripts": {
-    "build": "tsc --build tsconfig.json",
-    "build:clean": "tsc --build tsconfig.json --clean",
-    "typecheck": "tsc -p tsconfig.check.json",
+    "build": "node node_modules/@typescript/native/bin/tsc --build tsconfig.json",
+    "build:clean": "node node_modules/@typescript/native/bin/tsc --build tsconfig.json --clean",
+    "typecheck": "node node_modules/@typescript/native/bin/tsc -p tsconfig.check.json",
     "typecheck:examples": "bun run scripts/typecheck-examples.ts",
     "test": "vitest",
     "test:run": "vitest run",
@@ -43,16 +46,18 @@
     "changeset": "changeset",
     "version": "changeset version",
     "release": "bun run build && changeset publish",
-    "prepare": "effect-language-service patch"
+    "prepare": "effect-tsgo patch --typescript && effect-language-service patch"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
     "@effect/language-service": "^0.87.3",
+    "@effect/tsgo": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@electric-sql/pglite": "^0.5.8",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/node": "^26.6.1",
+    "@typescript/native": "catalog:",
     "@vitest/coverage-v8": "^5.0.2",
     "effect": "catalog:",
     "fallow": "^3.27.0",
@@ -61,7 +66,7 @@
     "playwright-core": "1.56.1",
     "prettier": "^3.0.0",
     "svelte": "^5",
-    "typescript": "^5.9.3",
+    "typescript": "catalog:",
     "vite": "^8.0.0",
     "vitest": "^5.0.2"
   },

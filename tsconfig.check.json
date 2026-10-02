@@ -7,21 +7,20 @@
     "declarationMap": false,
     "sourceMap": false,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
-      "@legation/effect": ["packages/effect/src/index.ts"],
-      "@legation/effect/internal": ["packages/effect/src/internal.ts"],
-      "@legation/browser": ["packages/browser/src/index.ts"],
-      "@legation/cloudflare": ["packages/cloudflare/src/index.ts"],
-      "@legation/node": ["packages/node/src/index.ts"],
-      "@legation/jsonapi": ["packages/jsonapi/src/index.ts"],
-      "@legation/sql": ["packages/sql/src/index.ts"],
-      "@legation/svelte": ["packages/svelte/src/index.svelte.ts"],
-      "@legation/svelte/kit": ["packages/svelte/src/kit/index.ts"],
-      "@legation/devtools": ["packages/devtools/src/index.ts"]
+      "@legation/effect": ["./packages/effect/src/index.ts"],
+      "@legation/effect/internal": ["./packages/effect/src/internal.ts"],
+      "@legation/browser": ["./packages/browser/src/index.ts"],
+      "@legation/cloudflare": ["./packages/cloudflare/src/index.ts"],
+      "@legation/node": ["./packages/node/src/index.ts"],
+      "@legation/jsonapi": ["./packages/jsonapi/src/index.ts"],
+      "@legation/sql": ["./packages/sql/src/index.ts"],
+      "@legation/svelte": ["./packages/svelte/src/index.svelte.ts"],
+      "@legation/svelte/kit": ["./packages/svelte/src/kit/index.ts"],
+      "@legation/devtools": ["./packages/devtools/src/index.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["packages/*/src/**/*", "packages/*/examples/**/*", "tests/**/*"],
+  "include": ["./packages/*/src/**/*", "./packages/*/examples/**/*", "./tests/**/*"],
   "exclude": ["node_modules", "packages/*/dist"]
 }
