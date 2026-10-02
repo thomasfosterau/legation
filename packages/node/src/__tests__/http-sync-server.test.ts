@@ -4,7 +4,7 @@
  * serialization, SyncRoom + MemoryBackend behind the route.
  */
 import { createServer } from "node:http";
-import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Authorization, ClientStore, MemoryBackend, Mutator } from "@legation/effect";
 import { ClientEngine, RpcTransport, Subset, SyncRoom } from "@legation/effect/internal";
 import { describe, expect, it } from "@effect/vitest";

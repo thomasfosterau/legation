@@ -36,7 +36,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
-import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpSyncServer } from "@legation/node";
 import { clientLayer, migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";

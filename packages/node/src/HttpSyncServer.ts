@@ -12,7 +12,10 @@
  */
 
 import { createServer } from "node:http";
-import { NodeHttpServer } from "@effect/platform-node";
+// By subpath, not the package root: the root re-exports NodeRedis, which
+// imports the `redis` peer at load, so a consumer without `redis` could not
+// import this module (#254).
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Transport } from "@legation/effect";
 import { RpcTransport } from "@legation/effect/internal";
 import { Layer } from "effect";
