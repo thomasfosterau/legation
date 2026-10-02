@@ -18,7 +18,7 @@
 - **Code that needs only `effect` goes in `packages/effect`**; runtime-, protocol- or framework-specific code gets its own package (ADR-0006), so the core runs identically in browsers, workers, edge runtimes and Node.
 - **App-facing names go on `@legation/effect`, engine seams on `@legation/effect/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
 - **`effect` is a peer, never a dependency**: two copies break `Context` identity. The dev pin lives once in the root catalog; the published floor is the open range in each package's `peerDependencies`. To move either, follow CONTRIBUTING.md "Effect version upgrades".
-- **Never publish by hand with `npm publish --workspaces` or `changeset publish`**: neither appears to rewrite `workspace:^`, so the dependent packages would probably ship uninstallable manifests (unverified until a `bun pm pack` check) ([#267](https://github.com/thomasfosterau/legation/issues/267)).
+- **Publish only through `bun run release` (`scripts/release.ts`)**, never with `npm publish`, `npm publish --workspaces` or a bare `changeset publish`: npm copies `workspace:^` and `catalog:` into the packed `package.json` verbatim, so the dependent packages would ship uninstallable manifests. The script packs with `bun pm pack` (which rewrites both) and uploads with `npm publish <tarball>`, because `bun publish` has no npm OIDC trusted publishing ([#267](https://github.com/thomasfosterau/legation/issues/267)).
 
 ## Conventions
 
@@ -32,6 +32,7 @@
 - `bun install --frozen-lockfile` (`bun ci`): install from the lockfile.
 - **TypeScript is split 6/7.** `typescript` (catalog, exact 6.0.2) is the JS-API compiler that svelte-check, the Effect language service and Vite load; `@typescript/native` (TS 7) runs `build` and `typecheck`, invoked as `node node_modules/@typescript/native/bin/tsc` because both packages ship a `tsc` bin and bun's `.bin/tsc` choice is not a contract. The root `prepare` script runs `effect-tsgo patch --typescript`, which patches that native compiler so Effect diagnostics (e.g. `floatingEffect`) fail `build` and `typecheck`; `@effect/tsgo` and `@typescript/native` must move together (read the `components` table in `node_modules/@effect/tsgo/dist/effect-tsgo.cjs`). The `@typescript/typescript6` alias used by the pnpm repos does not install under bun (its nested `@typescript/old` alias collapses into the root `typescript` entry), so TS 6 is the plain package.
 - `bun run build`: build every package (tsc project references). `bun run typecheck:examples` resolves the packages through `dist/`, so build first.
+- `bun run release:check`: pack every publishable package with `bun pm pack` and fail on a `workspace:` / `catalog:` specifier left in a packed `package.json`. No registry access.
 - `bun run typecheck`: packages and tests. `bun run typecheck:examples`: each example app's own `tsc` / `svelte-check`.
 - `bun run test:run`: every Vitest suite (needs Chromium; see Agent sessions). `bunx vitest run packages/<name>` runs one package's tests without a build (Vitest aliases to source).
 - `bun run lint` (Oxlint) and `bun run format:check` (Prettier). Fix with `bun run lint:fix` / `bun run format`.
@@ -45,10 +46,11 @@ Before you report work as done, run these in CI's order (`.github/workflows/ci.y
 1. `bun run format:check`
 2. `bun run lint`
 3. `bun run build`
-4. `bun run typecheck`
-5. `bun run typecheck:examples`
-6. `bun run test:coverage` (the suite plus the coverage map the audit reads)
-7. `bun run analyze:audit:ci`
+4. `bun run release:check`
+5. `bun run typecheck`
+6. `bun run typecheck:examples`
+7. `bun run test:coverage` (the suite plus the coverage map the audit reads)
+8. `bun run analyze:audit:ci`
 
 If a gate can't run here, say which and why in the PR body; never imply it ran.
 

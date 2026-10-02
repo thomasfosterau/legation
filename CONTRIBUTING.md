@@ -70,9 +70,10 @@ Two different numbers describe the Effect version, and they move separately
 - **The published floor** is the open range in each package's
   `peerDependencies` (`"effect": ">=4.0.0-rc.118"`, and the same range on the
   `@effect/platform-*` peers). It is written as a concrete string because
-  `changeset publish` does not rewrite the `catalog:` protocol. It is never an
-  exact version: an exact published peer makes the package impossible to
-  install beside a library that needs a different release.
+  the release packs with `bun pm pack`, which would rewrite `catalog:` to the
+  exact dev pin. It is never an exact version: an exact published peer makes
+  the package impossible to install beside a library that needs a different
+  release.
 
 To bump the **dev pin**:
 
@@ -105,11 +106,27 @@ ADR-0003).
 Merges to `trunk` run the release workflow (`.github/workflows/release.yml`).
 It verifies the build, then runs `changesets/action`: if unreleased changesets
 exist it opens or updates a **Version Packages** PR (running `changeset
-version`); when that PR is merged it publishes (`changeset publish`, which
-runs `npm publish` per package) and tags the release. That publish step does
-not yet rewrite `workspace:^` dependencies; see
-[#267](https://github.com/thomasfosterau/legation/issues/267) before the first
-release.
+version`); when that PR is merged it runs `bun run release`
+(`scripts/release.ts`), which publishes and tags the release:
+
+1. `changeset pack` works out which packages have a version that isn't on npm
+   yet, in dependency order. Versions already on npm are skipped, so a re-run
+   after a partial failure publishes only what is missing.
+2. Each of those packages is packed with `bun pm pack`, which rewrites the
+   `workspace:^` dependencies on `@legation/effect` and `@legation/sql` and any
+   `catalog:` specifier to real ranges; `npm pack` copies both verbatim and
+   would ship uninstallable manifests
+   ([#267](https://github.com/thomasfosterau/legation/issues/267)). The run
+   stops if a packed `package.json` still has either protocol.
+3. `changeset publish --from-pack-dir` uploads each tarball with
+   `npm publish <tarball>` and creates the git tags. npm does the upload, not
+   `bun publish`, because `bun publish` has no OIDC trusted publishing.
+
+CI runs `bun run release:check` on every pull request: it packs every
+publishable package the same way and runs the same manifest check, without
+touching the registry. `bun run release:dry-run` does steps 1 and 2 against
+the real registry state and prints where it left the tarballs, without
+publishing.
 
 Publishing uses npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers):
 there is no `NPM_TOKEN` secret. The workflow proves its identity to npm with a
@@ -152,16 +169,17 @@ is therefore done by hand, with your own npm login:
 
 1. Create the `@legation` organisation/scope on npm and confirm you have
    publish rights.
-2. Build from a clean checkout of `trunk` (`bun ci`, then `bun run build`)
-   and publish each package. Don't use `npm publish --workspaces` or
-   `bun run release` (`changeset publish`) for this yet: neither appears to
-   rewrite the `workspace:^` dependencies on `@legation/effect` and
-   `@legation/sql`, so the dependent packages would probably publish
-   uninstallable manifests. The fix, and the command to use instead,
-   is tracked in [#267](https://github.com/thomasfosterau/legation/issues/267).
-   Whatever publishes must pass `--access public`, matching
-   `.changeset/config.json` (`access: "public"`), because the packages are
-   scoped.
+2. From a clean checkout of `trunk`, logged in to npm (`npm login`), run
+   `bun ci`, then `bun run release:dry-run` and inspect the tarballs in the
+   directory it prints, then `bun run release`. It builds, packs and publishes every
+   package as the workflow does (see "Releases" above), with your login in
+   place of OIDC; npm's 2FA prompt appears in the terminal. It publishes with
+   `--access public` (`.changeset/config.json` → `access: "public"`), which
+   the scoped packages need, and creates a local git tag per package
+   (`@legation/effect@0.1.0`, …); push them with `git push origin --tags`.
+   Never use `npm publish` or `npm publish --workspaces` directly: npm copies
+   `workspace:^` and `catalog:` into the published `package.json` verbatim
+   ([#267](https://github.com/thomasfosterau/legation/issues/267)).
 
 3. Attach the trusted publisher to each published package (maintainer setup
    step 2 above).

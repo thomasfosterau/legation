@@ -52,7 +52,7 @@ jobs:
           node-version: 22.x
           registry-url: https://registry.npmjs.org
 
-      # `changeset publish` shells out to `npm publish` in a bun workspace, and
+      # `bun run release` uploads each tarball with `npm publish <tarball>`, and
       # npm OIDC trusted publishing requires npm >= 11.5.1, which is newer than
       # the npm bundled with Node 22. Pinned to a major, never `@latest`: this
       # job holds `id-token: write`, so a new npm major should arrive through a
@@ -83,10 +83,13 @@ jobs:
 
       # When changesets are pending, this opens/updates a "Version Packages" PR
       # (via `bun run version`). Once that PR is merged (no changesets remain),
-      # it runs `bun run release`, which builds and runs `changeset publish`
-      # (`npm publish` per package under OIDC trusted publishing — there is no
-      # NPM_TOKEN to steal; provenance is left to npm). The action
-      # then pushes the tags and creates the GitHub releases.
+      # it runs `bun run release` (scripts/release.ts): it builds, packs every
+      # unpublished package with `bun pm pack` (which rewrites `workspace:^`
+      # and `catalog:`; #267) and runs `changeset publish --from-pack-dir`,
+      # i.e. `npm publish <tarball>` per package under OIDC trusted publishing
+      # (`bun publish` can't do OIDC). There is no NPM_TOKEN to steal, and
+      # provenance is left to npm. The action then pushes the tags and creates
+      # the GitHub releases.
       #
       # v2 of the action pairs with Changesets CLI v3 (`@changesets/cli` in
       # devDependencies) and renamed its inputs from v1's `version` / `publish`

@@ -45,7 +45,9 @@
     "analyze:audit:ci": "fallow audit --ci --coverage coverage/coverage-final.json --base origin/trunk",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "bun run build && changeset publish",
+    "release": "bun run build && bun run scripts/release.ts",
+    "release:dry-run": "bun run build && bun run scripts/release.ts --dry-run",
+    "release:check": "bun run scripts/release.ts --check",
     "prepare": "effect-tsgo patch --typescript && effect-language-service patch"
   },
   "devDependencies": {
