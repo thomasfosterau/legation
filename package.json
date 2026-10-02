@@ -14,7 +14,9 @@
       "@effect/platform-browser": "4.0.0-rc.118",
       "@effect/platform-node": "4.0.0-rc.118",
       "@effect/vitest": "4.0.0-rc.118",
-      "@effect/sql-sqlite-node": "4.0.0-rc.118"
+      "@effect/sql-sqlite-node": "4.0.0-rc.118",
+      "typescript": "6.0.2",
+      "@typescript/native": "npm:typescript@7.0.2"
     }
   },
   "overrides": {
@@ -53,6 +55,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/node": "^26.6.1",
+    "@typescript/native": "catalog:",
     "@vitest/coverage-v8": "^5.0.2",
     "effect": "catalog:",
     "fallow": "^3.27.0",
@@ -61,7 +64,7 @@
     "playwright-core": "1.56.1",
     "prettier": "^3.0.0",
     "svelte": "^5",
-    "typescript": "^5.9.3",
+    "typescript": "catalog:",
     "vite": "^8.0.0",
     "vitest": "^5.0.2"
   },

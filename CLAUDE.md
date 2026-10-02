@@ -30,6 +30,7 @@
 ## Commands
 
 - `bun install --frozen-lockfile` (`bun ci`): install from the lockfile.
+- **TypeScript is split 6/7.** `typescript` (catalog, exact 6.0.2) is the JS-API compiler that svelte-check, the Effect language service and Vite load; `@typescript/native` (TS 7, bin `tsc`) is what `build` and `typecheck` run. TS 7 ships no JS API. The `@typescript/typescript6` alias used by the pnpm repos does not install under bun (its nested `@typescript/old` alias collapses into the root `typescript` entry), so TS 6 is the plain package; keep both pins in the catalog and move them deliberately.
 - `bun run build`: build every package (tsc project references). `bun run typecheck:examples` resolves the packages through `dist/`, so build first.
 - `bun run typecheck`: packages and tests. `bun run typecheck:examples`: each example app's own `tsc` / `svelte-check`.
 - `bun run test:run`: every Vitest suite (needs Chromium; see Agent sessions). `bunx vitest run packages/<name>` runs one package's tests without a build (Vitest aliases to source).

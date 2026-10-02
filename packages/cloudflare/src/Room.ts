@@ -133,8 +133,24 @@ const answer = (handle: Effect.Effect<unknown, { readonly message: string }>): P
     )
   );
 
-/** Build the room's Durable Object class. */
-export const makeRoomClass = <Env>(config: RoomConfig<Env>) =>
+/**
+ * Build the room's Durable Object class.
+ *
+ * The constructor type is written out because declaration emit cannot
+ * describe an exported anonymous class that has `#private` members.
+ */
+export const makeRoomClass = <Env>(
+  config: RoomConfig<Env>
+): new (
+  state: DurableObjectState,
+  env: Env
+) => {
+  readonly state: DurableObjectState;
+  readonly env: Env;
+  fetch(request: Request): Promise<Response>;
+  webSocketMessage(): Promise<void>;
+  webSocketClose(): Promise<void>;
+} =>
   class LegationRoom {
     #runtime: Promise<RoomRuntime> | undefined;
 
