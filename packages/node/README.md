@@ -25,7 +25,7 @@ npm install redis
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0-rc.118` (both the floor and the version CI pins); install one copy of `effect` in your app (ADR-0003).
+Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. `@effect/platform-node` is peered with the same floor. Tested against `4.0.0` (the version CI pins) and `4.0.0-rc.118` (the floor, in the weekly canary); install one copy of `effect` in your app (ADR-0003).
 
 Requires Node.js 22 or newer (`engines.node: ">=22"`), the Node line CI runs.
 

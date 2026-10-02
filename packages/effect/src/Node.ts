@@ -44,7 +44,15 @@ export interface Id<Type extends string> extends Schema.brand<Schema.String, `${
 
 /** Create the branded id schema for a node type. */
 export const Id = <const Type extends string>(type: Type): Id<Type> =>
-  Schema.String.pipe(Schema.brand(`${type}/id` as `${Type}/id`));
+  // SAFETY: effect 4.0.0 types `Schema.brand`'s parameter as
+  // `B & EnsureSingleBrandKey<B>`, which TypeScript cannot resolve while `Type`
+  // is generic. The guard only checks that the identifier is one concrete
+  // (non-union, non-wide) string and is `unknown` for the literal ids callers
+  // pass; the cast only satisfies it, the value is the same template string,
+  // and the public `Id<Type>` signature is untouched.
+  Schema.String.pipe(
+    Schema.brand<`${Type}/id`>(`${type}/id` as Parameters<typeof Schema.brand<`${Type}/id`>>[0])
+  );
 
 /** The foreign-key fields a node's `one` edges add to its row schema. */
 type ViaFields<Edges extends Record<string, Edge.Edge>> = {
@@ -135,7 +143,9 @@ export interface Node<
 }
 
 /** A node definition with its type parameters erased. */
-export type AnyNode = Node<string, Schema.Struct.Fields, Record<string, Edge.Edge>>;
+export type AnyNode = Omit<Node<string, Schema.Struct.Fields, Record<string, Edge.Edge>>, "Id"> & {
+  readonly Id: Schema.Top;
+};
 
 /** The decoded row type of a node. */
 export type RowOf<N extends AnyNode> = N["row"]["Type"];
