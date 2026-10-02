@@ -1,19 +1,32 @@
-name: Effect rc compatibility
+name: Effect canary
 
 # Weekly canary over both ends of the published peer range, instead of the
 # pinned version. Failures here do NOT block anything — they signal that the
 # next bump (or the README's tested-floor claim) needs attention.
 #
-# - `latest`: the newest effect@rc. The published range is open
-#   (`>=4.0.0-rc.118`), so consumers can resolve an rc newer than the pin;
-#   this leg exercises that upper end.
+# - `latest`: the newest effect release, i.e. the highest version among the
+#   `latest`, `next`, `beta` and `rc` dist-tags (never `snapshot`), so a
+#   future prerelease line (a 4.1 `next` or `beta`, say) is picked up without
+#   another edit. The published range is open (`>=4.0.0-rc.118`), so
+#   consumers can resolve a release newer than the pin; this leg exercises
+#   that upper end.
 # - `floor`: the lowest version the published range admits, read from
 #   `@legation/effect`'s `peerDependencies.effect`. Every package README says
 #   the packages are tested against it; this leg keeps that true.
 #
+# Both legs move only the catalog entries that are versioned in lockstep with
+# effect (`effect` and the `@effect/*` runtime packages); `typescript`,
+# `@typescript/native` and `@effect/tsgo` keep their pins (`@effect/tsgo` is
+# on its own 0.x line and patches `@typescript/native`, so the three move
+# together by hand).
+#
+# The job is `continue-on-error`, so the run concludes `success` even when a
+# leg fails: read the run summary (a failed leg adds a warning annotation and
+# says FAILED in its summary heading), not the run's colour.
+#
 # (The file keeps its historical `beta` name; the `beta` dist-tag stopped
-# moving at 4.0.0-beta.107.) See ADR-0003 and CONTRIBUTING.md "Effect version
-# upgrades".
+# moving at 4.0.0-beta.107 and the `rc` tag at 4.0.0-rc.118.) See ADR-0003 and
+# CONTRIBUTING.md "Effect version upgrades".
 
 on:
   schedule:
@@ -22,7 +35,7 @@ on:
 
 jobs:
   canary:
-    name: effect@rc canary (${{ matrix.target }})
+    name: effect canary (${{ matrix.target }})
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
@@ -46,7 +59,7 @@ jobs:
         run: bun install
 
       - name: Resolve the effect version to test
-        id: rc
+        id: target
         env:
           TARGET: ${{ matrix.target }}
         run: |
@@ -55,7 +68,17 @@ jobs:
             # The floor is the published range's lower bound: `>=X` -> `X`.
             VERSION=$(node -p "require('./packages/effect/package.json').peerDependencies.effect.replace(/^>=\s*/, '')")
           else
-            VERSION=$(bun pm view effect dist-tags.rc 2>/dev/null || npm view effect dist-tags.rc)
+            # The highest of the release dist-tags (`snapshot` is excluded).
+            TAGS=$(npm view effect dist-tags --json)
+            VERSION=$(TAGS="$TAGS" bun -e '
+              const tags = JSON.parse(process.env.TAGS);
+              const versions = ["latest", "next", "beta", "rc"].map((tag) => tags[tag]).filter(Boolean);
+              console.log(versions.sort(Bun.semver.order).at(-1) ?? "");
+            ')
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve the effect version for the $TARGET leg"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
@@ -63,20 +86,26 @@ jobs:
 
       - name: Point the catalog at that version
         env:
-          VERSION: ${{ steps.rc.outputs.version }}
+          VERSION: ${{ steps.target.outputs.version }}
         run: |
           # Every package's devDependencies reference `effect: "catalog:"`, so
-          # overriding the catalog entries (and the `overrides` entry that
-          # holds @effect/platform-node-shared in lockstep) rebuilds the whole
-          # workspace against that version.
+          # overriding the effect catalog entries (and the `overrides` entry
+          # that holds @effect/platform-node-shared in lockstep) rebuilds the
+          # whole workspace against that version. Only the entries versioned
+          # with effect move: `typescript`, `@typescript/native` and
+          # `@effect/tsgo` (its own 0.x line, so excluded by name despite the
+          # `@effect/` scope) keep their pins.
           node -e '
             const fs = require("fs");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const notLockstep = new Set(["@effect/tsgo", "@effect/language-service"]);
+            const movesWithEffect = (name) =>
+              name === "effect" || (name.startsWith("@effect/") && !notLockstep.has(name));
             for (const name of Object.keys(pkg.workspaces.catalog)) {
-              pkg.workspaces.catalog[name] = process.env.VERSION;
+              if (movesWithEffect(name)) pkg.workspaces.catalog[name] = process.env.VERSION;
             }
             for (const name of Object.keys(pkg.overrides ?? {})) {
-              if (name.startsWith("@effect/")) pkg.overrides[name] = process.env.VERSION;
+              if (movesWithEffect(name)) pkg.overrides[name] = process.env.VERSION;
             }
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
@@ -100,12 +129,20 @@ jobs:
         if: always()
         env:
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ steps.rc.outputs.version }}
-          PINNED: ${{ steps.rc.outputs.pinned }}
+          VERSION: ${{ steps.target.outputs.version }}
+          PINNED: ${{ steps.target.outputs.pinned }}
           STATUS: ${{ job.status }}
         run: |
+          # `continue-on-error` turns the run green either way, so surface a
+          # failed leg as a warning annotation and in the summary heading.
+          if [ "$STATUS" = "success" ]; then
+            RESULT="passed"
+          else
+            RESULT="FAILED"
+            echo "::warning title=Effect canary ($TARGET)::effect $VERSION $RESULT (job status: $STATUS); see this job's log"
+          fi
           {
-            echo "## Effect rc canary ($TARGET): $VERSION"
+            echo "## Effect canary ($TARGET): $VERSION $RESULT"
             echo ""
             echo "Pinned version in repo: $PINNED"
             echo "Job status: $STATUS"

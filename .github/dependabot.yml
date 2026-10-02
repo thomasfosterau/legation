@@ -1,10 +1,15 @@
 # Dependabot version updates. Security updates are enabled separately in the
-# repository settings and are not affected by the `ignore` rules below.
+# repository settings; the `ignore` rules below name only the three
+# `version-update:semver-*` update types, so they hold back version updates
+# and leave security updates enabled.
 #
 # The workspace is on bun (`bun.lock`), so the npm manifests are updated
 # through the `bun` ecosystem: the `npm` ecosystem would edit package.json
 # without touching `bun.lock`, and `bun ci` would then fail on the drifted
-# lockfile.
+# lockfile. Dependabot's bun support skips `catalog:` requirements (checked
+# against dependabot-core's `bun` file parser, 2026-10-02), so it does not
+# propose bumps of the root `workspaces.catalog` entries today. The catalog
+# rules below keep those pins held if it learns to read the catalog.
 #
 # Effect is deliberately excluded from version updates: the exact dev pin
 # lives once in the root Bun catalog (`overrides` pins the transitive
@@ -13,6 +18,12 @@
 # Dependabot can keep neither in step (see CONTRIBUTING.md "Effect version
 # upgrades"). The weekly `effect-beta-compat.yml` canary reports when a bump
 # needs attention.
+#
+# `typescript` (TS 6, the JS-API compiler) and `@typescript/native` (TS 7,
+# which `build` and `typecheck` run) move by hand, together with
+# `@effect/tsgo`, which patches the native compiler by its gitHead: read the
+# `components` table in `node_modules/@effect/tsgo/dist/effect-tsgo.cjs`
+# before moving any of the three; a bump of one alone can break the patch.
 version: 2
 updates:
   - package-ecosystem: "bun"
@@ -31,7 +42,33 @@ updates:
         dependency-type: "development"
     ignore:
       - dependency-name: "effect"
+        update-types:
+          [
+            "version-update:semver-major",
+            "version-update:semver-minor",
+            "version-update:semver-patch",
+          ]
       - dependency-name: "@effect/*"
+        update-types:
+          [
+            "version-update:semver-major",
+            "version-update:semver-minor",
+            "version-update:semver-patch",
+          ]
+      - dependency-name: "typescript"
+        update-types:
+          [
+            "version-update:semver-major",
+            "version-update:semver-minor",
+            "version-update:semver-patch",
+          ]
+      - dependency-name: "@typescript/native"
+        update-types:
+          [
+            "version-update:semver-major",
+            "version-update:semver-minor",
+            "version-update:semver-patch",
+          ]
 
   - package-ecosystem: "github-actions"
     directory: "/"
