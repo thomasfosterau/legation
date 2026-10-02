@@ -105,25 +105,33 @@ ADR-0003).
 
 Merges to `trunk` run the release workflow (`.github/workflows/release.yml`).
 It verifies the build, then runs `changesets/action`: if unreleased changesets
-exist it opens or updates a **Version Packages** PR (running `changeset
-version`); when that PR is merged it runs `bun run release`
+exist it opens or updates a **Version Packages** PR (running `bun run
+version`: `changeset version`, then `bun install --lockfile-only` so `bun.lock`
+carries the bumped versions); when that PR is merged it runs `bun run release`
 (`scripts/release.ts`), which publishes and tags the release:
 
 1. `changeset pack` works out which packages have a version that isn't on npm
    yet, in dependency order. Versions already on npm are skipped, so a re-run
-   after a partial failure publishes only what is missing.
+   after a partial failure publishes only what is missing. A re-run doesn't
+   tag the packages the failed run had already published, nor create their
+   GitHub releases: create those by hand.
 2. Each of those packages is packed with `bun pm pack`, which rewrites the
    `workspace:^` dependencies on `@legation/effect` and `@legation/sql` and any
    `catalog:` specifier to real ranges; `npm pack` copies both verbatim and
    would ship uninstallable manifests
-   ([#267](https://github.com/thomasfosterau/legation/issues/267)). The run
-   stops if a packed `package.json` still has either protocol.
+   ([#267](https://github.com/thomasfosterau/legation/issues/267)). `bun pm
+pack` takes those ranges from `bun.lock`, not from `package.json`, so the
+   lockfile must carry the bumped versions; `bun run version` refreshes it,
+   and a hand-edited version needs `bun install --lockfile-only`. The run
+   stops if a packed `package.json` still has either protocol, or if an
+   internal range doesn't match that package's current version (a stale
+   `bun.lock`).
 3. `changeset publish --from-pack-dir` uploads each tarball with
    `npm publish <tarball>` and creates the git tags. npm does the upload, not
    `bun publish`, because `bun publish` has no OIDC trusted publishing.
 
 CI runs `bun run release:check` on every pull request: it packs every
-publishable package the same way and runs the same manifest check, without
+publishable package the same way and runs the same manifest checks, without
 touching the registry. `bun run release:dry-run` does steps 1 and 2 against
 the real registry state and prints where it left the tarballs, without
 publishing.
