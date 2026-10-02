@@ -164,6 +164,31 @@ const syncAll = (engine: ClientEngineModule.ClientEngine) =>
 const commentBodies = (row: Related.RelatedRow): ReadonlyArray<string> =>
   (row.related.comments as ReadonlyArray<CommentRow>).map((c) => c.body);
 
+/**
+ * Waits on an observer's recorded emissions (not on wall-clock time) until
+ * `until` holds, and returns that snapshot. The wait is bounded: past 5 s the
+ * test dies with `failure` and what the observer had recorded, rather than
+ * running into the test timeout with no diagnostics.
+ */
+const waitForEmissions = <A>(
+  seen: SubscriptionRef.SubscriptionRef<A>,
+  until: (emissions: A) => boolean,
+  failure: string,
+  show: (emissions: A) => unknown = (emissions) => emissions
+): Effect.Effect<A> =>
+  SubscriptionRef.changes(seen).pipe(
+    Stream.filter(until),
+    Stream.runHead,
+    Effect.map(Option.getOrThrow),
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () =>
+        Effect.flatMap(SubscriptionRef.get(seen), (emissions) =>
+          Effect.die(new Error(`${failure}; saw ${JSON.stringify(show(emissions))}`))
+        ),
+    })
+  );
+
 describe("Collection.registry relationship validation", () => {
   it("throws on a duplicate relationship name within a collection", () => {
     const bad = Collection.make({
@@ -223,10 +248,12 @@ describe("Related.query / observe", () => {
           const seen = yield* SubscriptionRef.make<
             ReadonlyArray<ReadonlyArray<Related.RelatedRow>>
           >([]);
-          // Wait on the observer's emissions, not on wall-clock time.
+          const i1Bodies = (rows: ReadonlyArray<Related.RelatedRow>) =>
+            commentBodies(rows.find((r) => r.id === "i1")!).toSorted();
           const emitted = (
-            until: (emissions: ReadonlyArray<ReadonlyArray<Related.RelatedRow>>) => boolean
-          ) => SubscriptionRef.changes(seen).pipe(Stream.filter(until), Stream.runHead);
+            until: (emissions: ReadonlyArray<ReadonlyArray<Related.RelatedRow>>) => boolean,
+            failure: string
+          ) => waitForEmissions(seen, until, failure, (emissions) => emissions.map(i1Bodies));
           yield* Effect.forkScoped(
             Stream.runForEach(
               Related.observe(engine, registry, "issues", issues, ["author", "comments"]),
@@ -235,18 +262,25 @@ describe("Related.query / observe", () => {
           );
           // The first emission is recorded before the write, so it holds the
           // pre-write rows.
-          yield* emitted((emissions) => emissions.length > 0);
+          yield* emitted((emissions) => emissions.length > 0, "the join never emitted");
 
           yield* engine.mutate("comment/set", { id: "c1", issueId: "i1", body: "edited" });
           yield* engine.push;
           yield* engine.pull;
 
-          // The push ack can briefly re-emit the pre-edit join until the pull
-          // lands (#286), so wait for the latest emission to show the edit.
-          const emissions = Option.getOrThrow(
-            yield* emitted((acc) =>
-              commentBodies(acc[acc.length - 1]!.find((r) => r.id === "i1")!).includes("edited")
-            )
+          // The pulled (authoritative) join carries the edit...
+          const settled = i1Bodies(
+            yield* Related.query(engine, registry, "issues", issues, ["author", "comments"])
+          );
+          expect(settled).toEqual(["edited", "second"]);
+          // ...and the observer re-emits it. Its emissions can lag the pull
+          // (and a push ack briefly re-emits the pre-edit join, #286), so wait
+          // for the latest one to match rather than reading a snapshot.
+          const emissions = yield* emitted(
+            (acc) =>
+              acc.length >= 2 &&
+              JSON.stringify(i1Bodies(acc[acc.length - 1]!)) === JSON.stringify(settled),
+            "the join never re-emitted the pulled edit"
           );
           const firstI1 = emissions[0]!.find((r) => r.id === "i1")!;
           const lastI1 = emissions[emissions.length - 1]!.find((r) => r.id === "i1")!;
@@ -296,13 +330,12 @@ describe("Related.query / observe", () => {
                 })
             )
           );
-          // Wait for the join to show the racing write (a lost write never
-          // arrives, and the test times out), not for wall-clock time.
-          const emissions = Option.getOrThrow(
-            yield* SubscriptionRef.changes(seen).pipe(
-              Stream.filter((acc) => acc[acc.length - 1] === "Grace,Grace"),
-              Stream.runHead
-            )
+          // Wait for the join to show the racing write; a lost write never
+          // arrives, so the bounded wait fails with what the join emitted.
+          const emissions = yield* waitForEmissions(
+            seen,
+            (acc) => acc[acc.length - 1] === "Grace,Grace",
+            "the racing write never reached the join"
           );
           expect(emissions[0]).toBe("Ada,Ada");
           expect(emissions[emissions.length - 1]).toBe("Grace,Grace");
