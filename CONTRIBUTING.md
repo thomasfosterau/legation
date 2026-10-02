@@ -92,14 +92,16 @@ sibling libraries first (effect-jsonapi, then effect-auth, then legation
 publish in that order). Moving the floor is a `minor` changeset for every
 package.
 
-A scheduled GitHub Actions workflow (`effect-beta-compat.yml`) runs weekly
-against the newest `effect` release (the highest of the `latest`, `next`,
-`beta` and `rc` dist-tags) and against the published floor, and reports
-incompatibilities ahead of time. It moves only the catalog entries versioned
-with effect, never `typescript`, `@typescript/native` or `@effect/tsgo`. It
-never blocks CI (a failed leg shows as a warning in the run summary, while the
-run itself stays green) — it exists so bumps are informed decisions (see
-ADR-0003).
+CI's **Tests (effect floor)** job (`ci.yml`) runs the test suite on every PR
+against the published floor as well as the pin: it reads the floor from
+`@legation/effect`'s `peerDependencies.effect`, points the catalog entries
+versioned with effect (`effect`, the `@effect/*` runtime packages and the
+`@effect/platform-node-shared` override) at it in its own checkout, then
+installs, builds and runs `bun run test:run`. It never moves `typescript`,
+`@typescript/native` or `@effect/tsgo`, and runs only the tests (the other
+gates run at the pin in Quality Gates). It blocks the PR like any other job,
+so a change that breaks the floor has to raise it deliberately (above) rather
+than land silently.
 
 ## Releases
 

@@ -63,3 +63,91 @@ jobs:
 
       - name: Fallow audit
         run: bun run analyze:audit:ci
+
+  # The test suite against the lowest `effect` the published peer range admits
+  # (`@legation/effect`'s `peerDependencies.effect`, `>=X` -> `X`), so each
+  # package README's "tested against … the floor" claim holds on every PR.
+  # Tests only: the full gate set runs once, at the pinned version, in Quality
+  # Gates. Only the catalog entries versioned in lockstep with effect (`effect`
+  # and the `@effect/*` runtime packages, plus the `overrides` entry that holds
+  # `@effect/platform-node-shared`) move; `typescript`, `@typescript/native`
+  # and `@effect/tsgo` keep their pins (`@effect/tsgo` is on its own 0.x line
+  # and patches `@typescript/native`, so the three move together by hand). The
+  # rewrite exists only in this job's checkout; nothing is committed. See
+  # CONTRIBUTING.md "Effect version upgrades".
+  effect-floor:
+    name: Tests (effect floor)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # The same Node line as Quality Gates.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+
+      - name: Point the catalog at the published floor
+        id: floor
+        run: |
+          FLOOR=$(node -p "require('./packages/effect/package.json').peerDependencies.effect.replace(/^>=\s*/, '')")
+          if [ -z "$FLOOR" ]; then
+            echo "::error::could not read the effect floor from packages/effect/package.json"
+            exit 1
+          fi
+          echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
+          FLOOR="$FLOOR" node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const notLockstep = new Set(["@effect/tsgo", "@effect/language-service"]);
+            const movesWithEffect = (name) =>
+              name === "effect" || (name.startsWith("@effect/") && !notLockstep.has(name));
+            for (const name of Object.keys(pkg.workspaces.catalog)) {
+              if (movesWithEffect(name)) pkg.workspaces.catalog[name] = process.env.FLOOR;
+            }
+            for (const name of Object.keys(pkg.overrides ?? {})) {
+              if (movesWithEffect(name)) pkg.overrides[name] = process.env.FLOOR;
+            }
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+          echo "effect under test: $FLOOR (pinned: $(git show HEAD:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).workspaces.catalog.effect'))"
+
+      # Not `bun ci`: the catalog no longer matches `bun.lock`, so this
+      # re-resolves the effect entries (and rewrites the lockfile in this
+      # checkout only).
+      - name: Install dependencies (at the floor)
+        run: bun install
+
+      - name: Check that only the floor is installed
+        env:
+          FLOOR: ${{ steps.floor.outputs.version }}
+        run: |
+          node -e '
+            const lock = require("fs").readFileSync("bun.lock", "utf8");
+            const pinnedByHand = (name) =>
+              name.startsWith("@effect/tsgo") || name === "@effect/language-service";
+            const resolved = [...lock.matchAll(/\["((?:@effect\/[a-z0-9-]+)|effect)@([^"]+)"/g)]
+              .filter(([, name]) => !pinnedByHand(name));
+            const wrong = resolved.filter(([, , version]) => version !== process.env.FLOOR);
+            for (const [, name, version] of resolved) console.log(`${name}@${version}`);
+            if (resolved.length === 0 || wrong.length > 0) {
+              console.error(`::error::expected every effect package at ${process.env.FLOOR}`);
+              process.exit(1);
+            }
+          '
+
+      # The one gate the tests need: the commerce façade's browser test
+      # `vite build`s the example app, which resolves `@legation/*` through
+      # each package's `exports` (`dist/`), not Vitest's source aliases.
+      - name: Build
+        run: bun run build
+
+      - name: Install Chromium (the commerce façade's browser test)
+        run: bunx playwright-core install --with-deps chromium
+
+      - name: Test
+        run: bun run test:run
