@@ -288,6 +288,14 @@ type ViewChange =
 /** The global rebuild: `collections` undefined, so every observer re-materializes. */
 const REBUILD: ViewChange = { _tag: "Rebuild" };
 
+// What a journaled mutation's local effects are applied onto (#260): the warm
+// overlay cache, or the pending journal from before the append to replay into
+// a cold one. Read under `overlayLock`, so the journal is only read when the
+// cache is cold.
+type OverlayBase =
+  | { readonly _tag: "Warm"; readonly view: Map<string, Map<RowId, LocalRow>> }
+  | { readonly _tag: "Cold"; readonly pendingBefore: ReadonlyArray<Mutation> };
+
 /** A rebuild scoped to `collections`, or the global {@link REBUILD} when undefined. */
 const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
   collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
@@ -994,9 +1002,11 @@ export const make = (
       }
     };
     // Sample the journal-depth gauge from the current pending count. Called on
-    // every append (a new pending mutation) and acknowledge (a trim).
-    const sampleJournalDepth: Effect.Effect<void> = store.pendingMutations.pipe(
-      Effect.flatMap((pending) => Metric.update(Telemetry.journalDepth, pending.length)),
+    // every append (a new pending mutation), acknowledge (a trim) and paced
+    // compaction, so it uses the store's count, which reads no pending bodies
+    // (#260), rather than loading the whole journal to take its length.
+    const sampleJournalDepth: Effect.Effect<void> = store.pendingCount.pipe(
+      Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
       Effect.catch(() => Effect.void)
     );
     // Time an effect and record its wall-clock duration (ms) as the rebase
@@ -1373,10 +1383,16 @@ export const make = (
     // `invalidateOverlay`, which would deadlock re-acquiring this same
     // permit), so the next `materialize` recomputes from scratch, which
     // already includes this mutation since it is appended before this call.
+    //
+    // `base` is what the caller found under the lock it holds throughout
+    // (#260): the warm cache itself, or, only when the cache was cold, the
+    // journal snapshot to rebuild it from. Every write of the cache holds
+    // `overlayLock`, so the cache the caller saw is the cache this runs on,
+    // and a warm cache costs no journal read at all.
     const applyMutationToOverlayLocked = (
       mutator: string,
       decodedArgs: unknown,
-      pendingBefore: ReadonlyArray<Mutation>
+      base: OverlayBase
     ): Effect.Effect<ViewChange> =>
       Effect.gen(function* () {
         const handler = options.mutators.handlers.get(mutator);
@@ -1384,11 +1400,11 @@ export const make = (
           yield* Ref.set(overlayCache, undefined);
           return REBUILD;
         }
-        const cached = yield* Ref.get(overlayCache);
         let view: Map<string, Map<RowId, LocalRow>>;
-        if (cached !== undefined) {
-          view = cached;
+        if (base._tag === "Warm") {
+          view = base.view;
         } else {
+          const pendingBefore = base.pendingBefore;
           const filled = yield* Effect.exit(
             timedRebase(
               Effect.gen(function* () {
@@ -2521,8 +2537,16 @@ export const make = (
           // fallback below replays exactly the mutations already pending —
           // not this one too (it is appended next, so `store.pendingMutations`
           // would otherwise double-count it: once from the replay, once from
-          // `trackedWriter`).
-          const pendingBefore = yield* store.pendingMutations;
+          // `trackedWriter`). Only a cold overlay cache needs that replay: a
+          // warm one already holds the pending set's effects, so the journal
+          // (every pending body, on a durable store) is read only when the
+          // cache is cold (#260). The lock held here keeps the cache as found
+          // until `applyMutationToOverlayLocked` writes it.
+          const cachedBefore = yield* Ref.get(overlayCache);
+          const base: OverlayBase =
+            cachedBefore === undefined
+              ? { _tag: "Cold", pendingBefore: yield* store.pendingMutations }
+              : { _tag: "Warm", view: cachedBefore };
           const clientId = yield* currentClientId;
           const journaledAt = yield* Clock.currentTimeMillis;
           // Allocate the id and append as one store step (#258): a refused or
@@ -2548,7 +2572,7 @@ export const make = (
           // Apply the handler's effects onto the cached overlay in place and
           // publish exactly what it did as a Patch, rather than invalidating
           // the cache and forcing every observer to re-materialize (#109).
-          const change = yield* applyMutationToOverlayLocked(mutator, decodedArgs, pendingBefore);
+          const change = yield* applyMutationToOverlayLocked(mutator, decodedArgs, base);
           yield* publishChange(change);
           yield* signalPush; // the sync loop may auto-push this (debounced)
           return mutationId;

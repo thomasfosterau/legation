@@ -166,6 +166,18 @@ export interface ClientStore {
    */
   readonly appendNext: (draft: Omit<Mutation, "mutationId">) => Effect.Effect<Mutation, StoreError>;
   readonly pendingMutations: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
+  /**
+   * How many entries the journal holds, without reading them (#260).
+   *
+   * What the engine samples the journal-depth gauge from, on every append,
+   * acknowledgement and paced compaction, so it must stay cheap on a long
+   * journal: an implementation counts from whatever it already keeps (the
+   * memory store's array, the key-value store's journal index), never by
+   * loading each pending body. Equal to `pendingMutations`' length, except
+   * that the key-value store counts an index entry whose body is missing
+   * (a corrupt store), which `pendingMutations` skips.
+   */
+  readonly pendingCount: Effect.Effect<number, StoreError>;
   /** Drop journal entries with `mutationId <= upTo` for the client. */
   readonly acknowledge: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
   /**
@@ -416,6 +428,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         )
       ),
     pendingMutations: Ref.get(journal),
+    pendingCount: Ref.get(journal).pipe(Effect.map((entries) => entries.length)),
     // Raises the counter to the highest id it removes first, so an id that has
     // been acknowledged is never issued again once its entry is gone.
     acknowledge: (clientId, upTo) =>
@@ -562,6 +575,7 @@ const sealed = (cause: StoreError): ClientStore => {
     appendMutation: () => refuse(),
     appendNext: () => refuse(),
     pendingMutations: refuse(),
+    pendingCount: refuse(),
     acknowledge: () => refuse(),
     compactPending: () => refuse(),
     markSent: () => refuse(),
@@ -934,6 +948,15 @@ export const makeKeyValue = (
       }
     );
 
+    // `pendingMutationsOf`'s count from the index alone: one read, no bodies
+    // (#260). A store not yet migrated holds the legacy blob instead.
+    const pendingCountOf: Effect.Effect<number, StoreError> = Effect.gen(function* () {
+      const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+      if (index !== undefined) return index.length;
+      const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
+      return legacy?.length ?? 0;
+    });
+
     // ─── Quarantine (unlocked inner forms; #212) ───────────────────────────
     //
     // A quarantine lives in its own keyspace, not in the journal — that is
@@ -1299,6 +1322,9 @@ export const makeKeyValue = (
           )
         ),
       pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
+      // The index alone, no bodies (#260). Settling a compaction first matters:
+      // a committed but unapplied intent's index is the one that counts.
+      pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf))),
       acknowledge: (clientId, upTo) =>
         locked(
           Effect.gen(function* () {

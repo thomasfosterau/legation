@@ -219,6 +219,7 @@ One IndexedDB database per client store (versioned), with:
 - **`journal`** object store, `keyPath: ["clientId", "mutationId"]`, one
   record per pending mutation. `acknowledge(clientId, upTo)` is one
   `delete(IDBKeyRange.bound([clientId, 0], [clientId, upTo]))`.
+  `pendingCount` (#260) is one `journal.count()`, reading no records.
 - **`meta`** object store keyed by name: `cookie`, `counters`, `layout`,
   `storeVersion`.
 
