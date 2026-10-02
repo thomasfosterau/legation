@@ -265,10 +265,16 @@ describe("Relationships", () => {
           });
           yield* engine.push;
           yield* engine.pull;
-          // The push ack can briefly re-emit the pre-edit join until the pull
-          // lands (#286), so wait for the latest emission to show the edit again.
+          // The pulled (authoritative) join carries the edit...
+          const settled = bodiesOf(yield* Relationships.query(engine, issues, ["comments"]));
+          expect(settled).toEqual(["edited", "second"]);
+          // ...and the observer re-emits it. Its emissions can lag the pull
+          // (and a push ack briefly re-emits the pre-edit join, #286), so wait
+          // for the latest one to match rather than reading a snapshot.
           const emissions = Option.getOrThrow(
-            yield* emitted((acc) => acc[acc.length - 1]!.includes("edited"))
+            yield* emitted(
+              (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)
+            )
           );
           expect(emissions[0]).toEqual(["first", "second"]);
           expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);

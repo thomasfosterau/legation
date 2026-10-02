@@ -89,7 +89,15 @@ describe("Server", () => {
         // poke or a (re)connect makes it pull. It starts disconnected so its
         // one connect pull runs after the subscription is registered.
         const store = yield* ClientStore.makeMemory;
-        const transport = yield* Transport.makeInMemory(server.handler, "group-oob");
+        const inMemory = yield* Transport.makeInMemory(server.handler, "group-oob");
+        // Counts the pulls that reach the server, so the test can check the
+        // Client pulled only when it was told to.
+        const pulls = yield* Ref.make(0);
+        const transport: typeof inMemory = {
+          ...inMemory,
+          pull: (request) =>
+            Ref.update(pulls, (n) => n + 1).pipe(Effect.andThen(inMemory.pull(request))),
+        };
         yield* transport.setStatus("disconnected");
         const client = yield* Client.make({
           nodes,
@@ -131,6 +139,9 @@ describe("Server", () => {
           "Dropped by cron",
           "Seed",
         ]);
+        // Exactly the connect pull and the one broadcast caused: nothing else
+        // could have pulled the bypassed write in early.
+        expect(yield* Ref.get(pulls)).toBe(2);
       })
     )
   );
