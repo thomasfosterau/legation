@@ -77,6 +77,7 @@ const makeBulkSeededStore = (
         }),
       appendMutation: (mutation) => Effect.sync(() => void (journal = journal.concat(mutation))),
       pendingMutations: Effect.sync(() => journal),
+      pendingCount: Effect.sync(() => journal.length),
       acknowledge: (clientId, upTo) =>
         Effect.sync(
           () =>
