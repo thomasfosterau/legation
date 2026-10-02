@@ -16,7 +16,8 @@
 import { Duration, Effect, Layer, Schedule } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { HttpRouter } from "effect/http";
-import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
 import { HintSource } from "@legation/effect/internal";
 import { HttpSyncServer } from "@legation/node";

@@ -10,18 +10,14 @@ Node-runtime adapters for the legation engine: serving the default RPC sync tran
 npm install @legation/node @legation/effect effect @effect/platform-node
 ```
 
-**Install `redis` too.** `@effect/platform-node` (a peer of this package)
-declares a **non-optional** peer on `redis` (`>=5.0.0 <7.0.0`), and it means
-it: its root entry re-exports `NodeRedis`, which imports `redis` at module
-load, and this package imports that root entry. Under Node's ESM loader a
-missing `redis` therefore fails at import (`ERR_MODULE_NOT_FOUND: Cannot find
-package 'redis'`) even though nothing here uses Redis. npm, bun and pnpm
-(with its default `auto-install-peers`) install the peer for you; a setup that
-skips peers (`--legacy-peer-deps`, `auto-install-peers=false`) must add it:
-
-```sh
-npm install redis
-```
+`@effect/platform-node` declares a peer on `redis` (`>=5.0.0 <7.0.0`), so a
+package manager that checks peers may warn when it is missing. This package
+doesn't need it: it imports `@effect/platform-node/NodeHttpServer` by subpath,
+never the package root (whose `NodeRedis` re-export imports `redis` at module
+load), so it loads without `redis` installed. If your app skips peers
+(`--legacy-peer-deps`, `auto-install-peers=false`), import by subpath in your
+own code too (`@effect/platform-node/NodeRuntime`, …): without `redis`, the
+root fails with `ERR_MODULE_NOT_FOUND: Cannot find package 'redis'`.
 
 ## Effect version
 
