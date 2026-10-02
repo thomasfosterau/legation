@@ -16,8 +16,8 @@
 # `@effect/platform-node-shared` to the same version), and the published
 # floor is a hand-set open range in every package's `peerDependencies`;
 # Dependabot can keep neither in step (see CONTRIBUTING.md "Effect version
-# upgrades"). The weekly `effect-beta-compat.yml` canary reports when a bump
-# needs attention.
+# upgrades"). CI tests every PR at both the pin and the published floor
+# (`ci.yml`, "Tests (effect floor)").
 #
 # `typescript` (TS 6, the JS-API compiler) and `@typescript/native` (TS 7,
 # which `build` and `typecheck` run) move by hand, together with
