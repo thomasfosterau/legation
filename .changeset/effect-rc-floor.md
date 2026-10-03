@@ -22,6 +22,6 @@ a single copy of `effect`. The published floor is `>=4.0.0-rc.118` (see
 because `@thomasfosterau/effect-jsonapi` accepts the repeated-key spelling at
 every list-valued position.
 
-**`@legation/node`** declares `engines.node: ">=22"`, the Node line CI runs.
-The other packages run in browsers and workers too and deliberately declare no
-`engines` (ADR-0003).
+**`@legation/node`** declares `engines.node: ">=22"`, the published floor; CI
+tests on the latest stable Node. The other packages run in browsers and
+workers too and deliberately declare no `engines` (ADR-0003).

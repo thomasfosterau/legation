@@ -77,9 +77,9 @@ Two different numbers describe the Effect version, and they move separately
 
 To bump the **dev pin**:
 
-1. In one PR, set the new version on every catalog entry and on the
-   `overrides` entry, then `bun install`, and check that `bun.lock` lists a
-   single version of `effect` and of each `@effect/*` package.
+1. In one PR, set the new version on every `effect` / `@effect/*` catalog
+   entry and on the `overrides` entry, then `bun install`, and check that
+   `bun.lock` lists a single version of `effect` and of each `@effect/*` package.
 2. Run all quality gates; fix any API breakage in the same PR.
 3. No changeset: the dev pin is not part of any published manifest (the peer
    range is), so moving it releases nothing. Add a changeset only when the bump
