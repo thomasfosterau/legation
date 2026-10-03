@@ -10,6 +10,7 @@
 # against dependabot-core's `bun` file parser, 2026-10-02), so it does not
 # propose bumps of the root `workspaces.catalog` entries today. The catalog
 # rules below keep those pins held if it learns to read the catalog.
+# `playwright-core` is a catalog entry too, so it is a manual bump.
 #
 # Effect is deliberately excluded from version updates: the exact dev pin
 # lives once in the root Bun catalog (`overrides` pins the transitive
