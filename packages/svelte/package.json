@@ -64,7 +64,7 @@
   "bugs": {
     "url": "https://github.com/thomasfosterau/legation/issues"
   },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/main/packages/svelte#readme",
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/svelte#readme",
   "peerDependenciesMeta": {
     "@sveltejs/kit": {
       "optional": true
