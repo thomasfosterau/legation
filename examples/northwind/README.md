@@ -1,8 +1,8 @@
 # legation · SvelteKit · Northwind
 
 A relational admin dashboard over the classic Northwind dataset, driving
-[`@legation/effect`](../../packages/effect) through the
-[`@legation/svelte`](../../packages/svelte) **rune hooks** on SvelteKit. Like the
+[`@thomasfosterau/legation-effect`](../../packages/effect) through the
+[`@thomasfosterau/legation-svelte`](../../packages/svelte) **rune hooks** on SvelteKit. Like the
 other client-only examples it runs the **real library server pipeline in the
 page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`) over a
 durable `localStorage` client store.
@@ -32,7 +32,7 @@ app is a SvelteKit **SPA**: `ssr = false` in the root layout and
   issues a mutator that merges into the existing row, so concurrent edits to
   other fields survive rebase.
 - **Search, filter, pagination** over the products grid, all client-local.
-- **The devtools panel** (`@legation/devtools`) — this is the owned-engine case
+- **The devtools panel** (`@thomasfosterau/legation-devtools`) — this is the owned-engine case
   the panel supports: the app constructs its own `ClientEngine` + `ClientStore`
   in-process.
 - **True offline** — the banner's toggle makes the transport *fail* push/pull,

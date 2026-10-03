@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 The Node/Edge resource model lands (ADR-0022, program step 2): `Node.make`

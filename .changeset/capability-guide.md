@@ -1,6 +1,6 @@
 ---
-"@legation/effect": patch
-"@legation/svelte": patch
+"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation-svelte": patch
 ---
 
 Docs: add the "Coming from TanStack Query / SwiftData / SWR" capability guide

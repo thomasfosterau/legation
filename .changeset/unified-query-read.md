@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 The unified Query read (ADR-0022, program step 3): `Query.make({

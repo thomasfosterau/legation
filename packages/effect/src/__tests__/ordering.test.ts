@@ -3,7 +3,7 @@
  * (property-tested against a reference that compares `Array.from(s)` code
  * points), and `Subset.comparator` places NULL/absent last ascending and
  * first descending with a code-point id tie-break. The differential harness
- * in `@legation/sql` checks the same against Postgres `ORDER BY … COLLATE
+ * in `@thomasfosterau/legation-sql` checks the same against Postgres `ORDER BY … COLLATE
  * "C"`; this file pins the JS side on its own. Random strings come from
  * Effect's seeded `Random` service (`Random.withSeed`), the repo's idiom.
  */

@@ -108,7 +108,9 @@ export interface JsonApiSource {
 }
 
 /** The {@link JsonApiSource} service loaders read from. */
-export const JsonApiSource = Context.Service<JsonApiSource>("@legation/jsonapi/JsonApiSource");
+export const JsonApiSource = Context.Service<JsonApiSource>(
+  "@thomasfosterau/legation-jsonapi/JsonApiSource"
+);
 
 const jsonApiHeaders = {
   "Content-Type": "application/vnd.api+json",

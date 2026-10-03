@@ -58,10 +58,15 @@ import { Effect, Option, Ref, Schema } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
-import { Backend, BackendError, MutationRejected, Predicate } from "@legation/effect";
-import { Hash, Protocol } from "@legation/effect/internal";
-import { Subset } from "@legation/effect/internal";
-import type { Mutator } from "@legation/effect";
+import {
+  Backend,
+  BackendError,
+  MutationRejected,
+  Predicate,
+} from "@thomasfosterau/legation-effect";
+import { Hash, Protocol } from "@thomasfosterau/legation-effect/internal";
+import { Subset } from "@thomasfosterau/legation-effect/internal";
+import type { Mutator } from "@thomasfosterau/legation-effect";
 import { documentToRows, parseResponse, resourceToRow } from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";

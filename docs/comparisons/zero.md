@@ -41,7 +41,7 @@ legation's sync unit is deliberately simpler: a **subscription** is a
 (collection, **predicate**, order, limit/cursor) subset — a serializable
 expression tree, not a query language (ADR-0008 records why: subsets keep
 the **auth filter** AND-ing, CVR evaluation, and the SQL translation in
-`@legation/sql` analyzable). Richer reads are client-side composition:
+`@thomasfosterau/legation-sql` analyzable). Richer reads are client-side composition:
 `Related` walks declared relationships (with the narrowed
 `foreignField IN (...)` subsets auto-subscribed, so the foreign rows sync
 too), `Aggregate` folds, and **named queries** cover parameterized subsets
@@ -63,7 +63,7 @@ service you run, with Postgres as a hard requirement.
 legation is a library (ADR-0009): `SyncServer.make` mounts on the router of
 the server you already have, the **backend contract** is store-agnostic
 (the reference implementations are in-memory and SQL — SQLite and Postgres
-via `@legation/sql`; the [commerce example](../../examples/commerce)
+via `@thomasfosterau/legation-sql`; the [commerce example](../../examples/commerce)
 runs SQLite), CVR storage is pluggable (in-memory or any
 `KeyValueStore`), and scale-out is the serialized **invalidation bus**
 (Redis Streams / WebSocket broker, ADR-0011) rather than a dedicated tier.
@@ -88,7 +88,7 @@ framework-agnostic with first-class React/Solid/Svelte/Vue hooks. legation
 is **Effect-native**: nodes, mutations, and protocol messages are Effect
 Schemas (single source of truth for validation, wire format, and
 persistence), the engine is layers and streams, and the bindings
-(`@legation/svelte` today; the seam is framework-agnostic) sit over a
+(`@thomasfosterau/legation-svelte` today; the seam is framework-agnostic) sit over a
 reactivity core. If your
 team is not using Effect, this is real friction — schema definitions,
 error handling, and composition all assume it. If it is, everything

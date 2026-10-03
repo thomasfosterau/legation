@@ -6,7 +6,7 @@
    * hooks read it from there, ADR-0022) and hands the demo controls down the
    * same way.
    */
-  import { setClientRuntime } from "@legation/svelte";
+  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import { setDemo } from "$lib/demo.svelte";
   import "../app.css";
 

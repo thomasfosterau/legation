@@ -28,7 +28,7 @@ import {
   Mutation,
   Node,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -36,7 +36,7 @@ import {
   type Protocol,
   Subset,
   SyncServer,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import * as BindingTransport from "../BindingTransport.js";
 import { routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";

@@ -16,7 +16,7 @@
 
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { Duration, Effect, PubSub, Scope } from "effect";
-import type { FanoutBroker, FanoutTopics } from "@legation/effect/internal";
+import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation-effect/internal";
 
 /** Options for {@link make}. */
 export interface MakeOptions {

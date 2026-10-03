@@ -1,5 +1,5 @@
 {
-  "name": "@legation/effect",
+  "name": "@thomasfosterau/legation-effect",
   "version": "0.1.0",
   "description": "An Effect-native sync engine: write-through caching, TanStack-Query-style client queries/mutations/subscriptions, offline outbox, HTTP caching for service workers and edge runtimes, and a server-side sync hub with client fan-out",
   "type": "module",

@@ -11,7 +11,7 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -20,8 +20,8 @@ import {
   MirrorChannel,
   SyncServer,
   Mirror,
-} from "@legation/effect/internal";
-import type { MutationState } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
+import type { MutationState } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, HashMap, Option, Ref, Schema, Stream } from "effect";
 

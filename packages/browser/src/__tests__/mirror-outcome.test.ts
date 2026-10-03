@@ -12,7 +12,7 @@ import {
   MutationRejected,
   Mutator,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -21,7 +21,7 @@ import {
   MirrorChannel,
   SyncServer,
   Mirror,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema } from "effect";
 

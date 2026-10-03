@@ -64,7 +64,7 @@
  * kinds through.
  */
 
-import type { Predicate } from "@legation/effect";
+import type { Predicate } from "@thomasfosterau/legation-effect";
 
 /** A SQL fragment plus its ordered bind parameters. */
 export interface SqlFragment {

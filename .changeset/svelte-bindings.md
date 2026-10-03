@@ -1,8 +1,8 @@
 ---
-"@legation/svelte": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
-New package `@legation/svelte`: idiomatic Svelte bindings. `setClientRuntime`
+New package `@thomasfosterau/legation-svelte`: idiomatic Svelte bindings. `setClientRuntime`
 supplies the `ManagedRuntime` carrying the `Client`; the rune hooks
 (`useQuery` / `useConnection` / `useNamedQuery` / `useAggregate` /
 `useAggregateGrouped` / `useMutation` / `useMutationWithAck` /

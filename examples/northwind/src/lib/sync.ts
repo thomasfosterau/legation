@@ -29,13 +29,13 @@ import {
   Mutation,
   Server,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 // The engine is built explicitly rather than through `Client.make`: the
 // devtools core (#120) is an engine-level capability, and `Client.make` does
 // not hand the engine back. `Client.fromView` wraps it — the same Client.
-import { ClientEngine, ClientView } from "@legation/effect/internal";
-import type { ClientRuntime } from "@legation/svelte";
-import * as Devtools from "@legation/devtools";
+import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
+import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
+import * as Devtools from "@thomasfosterau/legation-devtools";
 
 import {
   CLIENT_GROUP_ID,
@@ -65,7 +65,7 @@ import * as seed from "./seed";
 
 export interface World {
   readonly runtime: ClientRuntime;
-  /** The `@legation/devtools` headless core (#120) over this engine + store. */
+  /** The `@thomasfosterau/legation-devtools` headless core (#120) over this engine + store. */
   readonly devtools: Devtools.DevtoolsCore;
   readonly setOnline: (online: boolean) => Promise<void>;
   /** Connection status: the current value now, then every change. */

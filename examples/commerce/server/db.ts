@@ -3,7 +3,7 @@
  *
  * Built on Effect's SQL packages: `@effect/sql-sqlite-node` provides the
  * `SqlClient` (WAL on by default, so the SvelteKit server process and the
- * sync server process share the file), and `@legation/sql`'s `SqlExecutor`
+ * sync server process share the file), and `@thomasfosterau/legation-sql`'s `SqlExecutor`
  * seam is a thin adapter over that client. Schema DDL and the catalog seed
  * run as an idempotent migration effect.
  */
@@ -11,8 +11,8 @@ import { Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import { SqlClient as SqlClientService } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendError } from "@legation/effect";
-import type { SqlBackend } from "@legation/sql";
+import { BackendError } from "@thomasfosterau/legation-effect";
+import type { SqlBackend } from "@thomasfosterau/legation-sql";
 
 /** The SQLite client layer both server processes build their stack on. */
 export const clientLayer = (

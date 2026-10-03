@@ -1,5 +1,5 @@
 {
-  "name": "@legation/sql",
+  "name": "@thomasfosterau/legation-sql",
   "version": "0.1.0",
   "description": "Driver-agnostic SQL reference backend for the legation engine: Subset->WHERE translation and a Backend over a SqlExecutor seam",
   "type": "module",
@@ -38,7 +38,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@legation/effect": "workspace:^"
+    "@thomasfosterau/legation-effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.118"

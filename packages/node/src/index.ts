@@ -1,5 +1,5 @@
 /**
- * @legation/node
+ * @thomasfosterau/legation-node
  *
  * Node-runtime adapters for the legation engine: serving the default
  * RPC sync transport over Node HTTP/WebSocket (`HttpSyncServer`).

@@ -29,9 +29,9 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Client, ClientStore, MemoryBackend, type Query, Server, Transport } from "@legation/effect";
-import { ClientEngine, ClientView } from "@legation/effect/internal";
-import { JsonApiQuery, ReplicaDocuments, RestHandlers } from "@legation/jsonapi";
+import { Client, ClientStore, MemoryBackend, type Query, Server, Transport } from "@thomasfosterau/legation-effect";
+import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
+import { JsonApiQuery, ReplicaDocuments, RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import {
   allCategories,
   mutators,

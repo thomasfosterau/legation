@@ -2,7 +2,7 @@
  * The engine host, host-agnostically: the same composition serves mirrors
  * from the service worker (production — see src/service-worker.ts). It only
  * needs a `BroadcastChannel`, so the identical composition also works
- * un-elected on a main thread — that's `@legation/browser`'s `ElectedHost`
+ * un-elected on a main thread — that's `@thomasfosterau/legation-browser`'s `ElectedHost`
  * (the shipped no-service-worker fallback, ADR-0010), which wraps this same
  * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election
  * (#119). This app runs the service worker by default (dev included), but
@@ -36,15 +36,15 @@
  */
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type { IndexedDb } from "@effect/platform-browser";
-import { Client, ClientStore, type StoreError, Transport } from "@legation/effect";
-import { ClientEngine, Paced, RpcTransport } from "@legation/effect/internal";
+import { Client, ClientStore, type StoreError, Transport } from "@thomasfosterau/legation-effect";
+import { ClientEngine, Paced, RpcTransport } from "@thomasfosterau/legation-effect/internal";
 import {
   BrowserConnectivity,
   ElectedHost,
   IndexedDbClientStore,
   ServiceWorkerHost,
-} from "@legation/browser";
-import { JsonApiQuery } from "@legation/jsonapi";
+} from "@thomasfosterau/legation-browser";
+import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
 import { mutators, nodes, registry, shellReads } from "./domain.js";
 import type { CartSetQty } from "./domain.js";
 

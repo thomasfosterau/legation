@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/svelte": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-svelte": patch
 ---
 
 Engine-level reactive window retargeting (#133 item 3): `ClientEngine.
@@ -16,7 +16,7 @@ window of its own to retarget). `Subscriptions.acquireWindow` composes the
 usual refcounted subscribe/release with it for callers that want lifecycle
 management alongside retargeting.
 
-`@legation/svelte`'s `useConnection` (`hooks.svelte.ts`) now retargets
+`@thomasfosterau/legation-svelte`'s `useConnection` (`hooks.svelte.ts`) now retargets
 through this seam for the common case (no `include`d edges, an engine-backed
 view): `loadMore`/`reset` widen/shrink the same open observation instead of
 letting `pages` force a resubscribe. A joined read, or a mirror-backed

@@ -59,7 +59,7 @@
  */
 
 import { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Edge, type FilterPolicy, Node } from "@legation/effect";
+import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
 import { Data, type Schema } from "effect";
 
 /** A definition-time mismatch between a resource graph and the node model. */

@@ -16,8 +16,8 @@ import {
   Node,
   Query,
   Transport,
-} from "@legation/effect";
-import { Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope, Stream } from "effect";
 import * as ElectedHost from "../ElectedHost.js";

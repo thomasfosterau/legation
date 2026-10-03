@@ -1,12 +1,12 @@
 ---
-"@legation/effect": patch
-"@legation/browser": patch
-"@legation/node": patch
-"@legation/jsonapi": patch
-"@legation/sql": patch
-"@legation/cloudflare": patch
-"@legation/svelte": patch
-"@legation/devtools": patch
+"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation-browser": patch
+"@thomasfosterau/legation-node": patch
+"@thomasfosterau/legation-jsonapi": patch
+"@thomasfosterau/legation-sql": patch
+"@thomasfosterau/legation-cloudflare": patch
+"@thomasfosterau/legation-svelte": patch
+"@thomasfosterau/legation-devtools": patch
 ---
 
 README: the `effect` floor (`4.0.0-rc.118`) is now tested on every pull

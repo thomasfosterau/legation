@@ -20,7 +20,7 @@ import {
   MutationRejected,
   Mutator,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   BackendContract,
   ClientEngine,
@@ -29,7 +29,7 @@ import {
   Paced,
   Subset,
   SyncServer,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import * as SqlBackend from "../SqlBackend.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */

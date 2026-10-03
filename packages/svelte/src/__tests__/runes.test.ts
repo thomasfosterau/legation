@@ -1,5 +1,5 @@
 /**
- * The rune hooks (`@legation/svelte`) in mounted Svelte 5
+ * The rune hooks (`@thomasfosterau/legation-svelte`) in mounted Svelte 5
  * components, speaking Query over the Client (ADR-0022): `useQuery`
  * re-subscribes when its read thunk's reactive inputs change (keeping the
  * previous value as a waiting result), `useAggregate` tracks counts, and

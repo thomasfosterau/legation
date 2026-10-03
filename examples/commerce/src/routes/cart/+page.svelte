@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useMutation, useQuery } from "@legation/svelte";
+  import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
   import { myCartItems, type CartItem, type Variant } from "../../lib/domain.js";
   import { cartItemRows, variantRows } from "../../lib/rows.js";
 

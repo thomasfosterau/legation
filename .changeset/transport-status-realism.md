@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 Connection-status realism at the transport seam: `Transport.withInferredStatus`

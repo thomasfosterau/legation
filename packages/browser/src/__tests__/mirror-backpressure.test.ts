@@ -13,7 +13,7 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -24,7 +24,7 @@ import {
   SyncServer,
   Mirror,
   Telemetry,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Metric, Ref, Schema, Stream } from "effect";
 

@@ -29,8 +29,8 @@ import {
   Middleware,
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
-import type { Mutator } from "@legation/effect";
-import { BackendContract } from "@legation/effect/internal";
+import type { Mutator } from "@thomasfosterau/legation-effect";
+import { BackendContract } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 

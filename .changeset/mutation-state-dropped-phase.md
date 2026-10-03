@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Fix a gap in `ClientEngine.mutationStates` (#116): a mutation compacted out of

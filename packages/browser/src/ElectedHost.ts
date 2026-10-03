@@ -23,8 +23,8 @@
  * becomes the host immediately, which is only correct for a single tab —
  * see the package README's topology section.
  */
-import type { Collection, Mutation, Node, Query, Transport } from "@legation/effect";
-import { Client, ClientStore, TransportError } from "@legation/effect";
+import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation-effect";
+import { Client, ClientStore, TransportError } from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   ClientView,
@@ -33,7 +33,7 @@ import {
   MirrorProtocol,
   Subscriptions,
   Subset,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import { Effect, Exit, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "./ServiceWorkerHost.js";

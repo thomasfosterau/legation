@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 `LiveView` (the incrementally-maintained live-query result behind paginated
@@ -24,8 +24,8 @@ re-registers on "load more" is flagged as future work in `LiveView.ts`.
 `Subset.comparator` now tie-breaks on row id, making it a genuine total order
 even with an empty `orderBy` (previously every row tied, and `LiveView`'s
 delta-location degraded to a full scan). Because every backend
-(`MemoryBackend`, `@legation/sql`'s `SqlBackend`,
-`@legation/jsonapi`'s `JsonApiBackend`) already finalizes order/limit/cursor
+(`MemoryBackend`, `@thomasfosterau/legation-sql`'s `SqlBackend`,
+`@thomasfosterau/legation-jsonapi`'s `JsonApiBackend`) already finalizes order/limit/cursor
 locally via `Subset.apply`, this same comparator is the sole ordering
 authority for both client and server — a subset with no declared `orderBy`
 now sorts by id ascending everywhere instead of an unspecified order. The

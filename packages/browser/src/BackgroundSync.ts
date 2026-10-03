@@ -101,8 +101,8 @@
  * listener.
  */
 
-import type { Identity, StoreError, TransportError } from "@legation/effect";
-import type { ClientEngine } from "@legation/effect/internal";
+import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation-effect";
+import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
 import { Data, Duration, Effect, Option, Scope, Stream, SubscriptionRef } from "effect";
 import type { Context } from "effect";
 
@@ -317,7 +317,9 @@ export type FlushOutcome = "Flushed" | "IdentityChanged" | "UpdateNeeded";
  * signed out in a tab that closed before `Client.reset` ran **would be
  * pushed**. Never pass this in an app that has sign-in.
  */
-export const identityUnchecked: unique symbol = Symbol.for("@legation/browser/identityUnchecked");
+export const identityUnchecked: unique symbol = Symbol.for(
+  "@thomasfosterau/legation-browser/identityUnchecked"
+);
 
 /**
  * Who is signed in now, as the app resolves it inside the worker — or

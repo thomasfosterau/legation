@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add `LiveView`: a modular, incrementally-maintained materialized view — a

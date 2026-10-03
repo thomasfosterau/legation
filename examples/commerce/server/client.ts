@@ -29,7 +29,7 @@ import {
 } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
-import type { Query } from "@legation/effect";
+import type { Query } from "@thomasfosterau/legation-effect";
 import { readPath } from "../src/lib/reads.js";
 import { api } from "./jsonapi.js";
 

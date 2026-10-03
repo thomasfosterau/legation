@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Make relationship live queries incremental. `Relationships.observe` (and the

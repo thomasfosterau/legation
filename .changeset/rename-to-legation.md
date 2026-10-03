@@ -1,10 +1,10 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/node": minor
-"@legation/jsonapi": minor
-"@legation/sql": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-node": minor
+"@thomasfosterau/legation-jsonapi": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Rename the project to **Legation**. Every package moves to the `@legation`

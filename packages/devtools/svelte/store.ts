@@ -1,8 +1,8 @@
 /**
- * @legation/devtools/svelte — store adapters
+ * @thomasfosterau/legation-devtools/svelte — store adapters
  *
  * Bridges the headless {@link Devtools.DevtoolsCore} (#120) to Svelte
- * `Readable` stores, the same shape `@legation/svelte`'s own `Query.ts`
+ * `Readable` stores, the same shape `@thomasfosterau/legation-svelte`'s own `Query.ts`
  * bridges live queries with: a store's `start` callback forks the source in
  * a fiber and pushes each value through `set`; `stop` interrupts that fiber
  * when the last subscriber unsubscribes. No data acquisition of its own —
@@ -14,8 +14,8 @@
  */
 import { readable, type Readable } from "svelte/store";
 import { Effect, Fiber, HashMap, Stream } from "effect";
-import type { ClientEngine, MutationState, Subset } from "@legation/effect/internal";
-import type * as Devtools from "@legation/devtools";
+import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation-effect/internal";
+import type * as Devtools from "@thomasfosterau/legation-devtools";
 
 /** Subscribe to a `Stream` as a store; `initial` until the first emission. */
 export const toStreamStore = <A>(stream: Stream.Stream<A>, initial: A): Readable<A> =>

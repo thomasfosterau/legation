@@ -1,12 +1,12 @@
 /**
- * `@legation/svelte/kit` — the SvelteKit-shaped surface.
+ * `@thomasfosterau/legation-svelte/kit` — the SvelteKit-shaped surface.
  *
  * Server: {@link clientGroupId} (the client-group cookie) and
  * {@link loadSnapshot} (the page's SSR snapshot, for any Effect-based `load`).
  * Client: {@link clientRuntime} (snapshot-hydrated Client boot).
  *
  * All three are thin: the hydration itself is `Hydration` in
- * `@legation/effect` and the wiring is `Client.make`. What lives here is only
+ * `@thomasfosterau/legation-effect` and the wiring is `Client.make`. What lives here is only
  * what SvelteKit adds — a cookie, a `load`'s shape, and the `ManagedRuntime` a
  * root layout puts in context.
  *

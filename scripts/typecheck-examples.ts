@@ -7,7 +7,7 @@
  * run typecheck` (packages + tests only, via tsconfig.check.json): examples
  * aren't on that project's `include`, so binding-API changes in `packages/*`
  * can silently rot every example (#80). Requires `bun run build` first so the
- * `@legation/*` packages resolve through their built `dist/`, matching what
+ * `@thomasfosterau/legation-*` packages resolve through their built `dist/`, matching what
  * the examples import at runtime.
  */
 import { readdirSync, existsSync } from "node:fs";

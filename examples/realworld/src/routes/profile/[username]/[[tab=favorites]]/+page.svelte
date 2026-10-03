@@ -11,7 +11,7 @@
   import { page as kitPage } from "$app/state";
   import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/reactivity";
-  import { useQuery } from "@legation/svelte";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
   import {
     allArticles,
     allFavorites,

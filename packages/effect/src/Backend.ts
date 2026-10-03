@@ -126,7 +126,7 @@ export interface Backend {
 }
 
 /** The {@link Backend} service the sync server reads and writes through. */
-export const Backend = Context.Service<Backend>("@legation/effect/Backend");
+export const Backend = Context.Service<Backend>("@thomasfosterau/legation-effect/Backend");
 
 /**
  * Build change hints from a push's touched ids and the values of its PUTs:

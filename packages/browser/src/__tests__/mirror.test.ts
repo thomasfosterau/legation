@@ -16,7 +16,7 @@ import {
   Predicate,
   QueryError,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Coverage,
@@ -27,7 +27,7 @@ import {
   Subset,
   SyncServer,
   Mirror,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Ref, Schema } from "effect";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
@@ -385,7 +385,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
 // ─── URL-keyed subscriptions (#159, ADR-0029 section 2) ──────────────────────
 
 /**
- * A stand-in for `@legation/jsonapi`'s `JsonApiQuery.urlReads` (this package
+ * A stand-in for `@thomasfosterau/legation-jsonapi`'s `JsonApiQuery.urlReads` (this package
  * cannot depend on it, ADR-0006): `/{collection}` with an optional
  * `include=a,b`, canonicalised with the include set sorted.
  */

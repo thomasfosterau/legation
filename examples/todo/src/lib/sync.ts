@@ -32,12 +32,12 @@ import {
   MemoryBackend,
   Server,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 // `Undo.make` takes any mutate-capable handle (issue #223), so this app
 // builds its `Client` the zero-wiring way, through `Client.make` — no
 // hand-built `ClientEngine`, no manual `runSync` fork.
-import { type ClientView, type Protocol, Undo } from "@legation/effect/internal";
-import type { ClientRuntime } from "@legation/svelte";
+import { type ClientView, type Protocol, Undo } from "@thomasfosterau/legation-effect/internal";
+import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
 
 import {
   CLIENT_GROUP_ID,

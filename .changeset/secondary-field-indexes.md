@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add secondary field-value indexes over the local store (#113): `eq`/`In`

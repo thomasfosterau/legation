@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/jsonapi": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-jsonapi": patch
 ---
 
 Close the sync tier's filter surface with a per-node **filterable set** (ADR-0028

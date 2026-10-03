@@ -35,13 +35,13 @@
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
-        "@legation/browser": "workspace:*",
-        "@legation/effect": "workspace:*",
-        "@legation/jsonapi": "workspace:*",
-        "@legation/node": "workspace:*",
-        "@legation/sql": "workspace:*",
-        "@legation/svelte": "workspace:*",
         "@thomasfosterau/effect-jsonapi": "^0.16.1",
+        "@thomasfosterau/legation-browser": "workspace:*",
+        "@thomasfosterau/legation-effect": "workspace:*",
+        "@thomasfosterau/legation-jsonapi": "workspace:*",
+        "@thomasfosterau/legation-node": "workspace:*",
+        "@thomasfosterau/legation-sql": "workspace:*",
+        "@thomasfosterau/legation-svelte": "workspace:*",
         "better-auth": "^1.7.6",
         "better-sqlite3": "^13",
         "effect": "catalog:",
@@ -65,9 +65,9 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@legation/devtools": "workspace:*",
-        "@legation/effect": "workspace:*",
-        "@legation/svelte": "workspace:*",
+        "@thomasfosterau/legation-devtools": "workspace:*",
+        "@thomasfosterau/legation-effect": "workspace:*",
+        "@thomasfosterau/legation-svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -86,8 +86,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@legation/effect": "workspace:*",
-        "@legation/svelte": "workspace:*",
+        "@thomasfosterau/legation-effect": "workspace:*",
+        "@thomasfosterau/legation-svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -106,8 +106,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
-        "@legation/effect": "workspace:*",
-        "@legation/svelte": "workspace:*",
+        "@thomasfosterau/legation-effect": "workspace:*",
+        "@thomasfosterau/legation-svelte": "workspace:*",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -122,10 +122,10 @@
       },
     },
     "packages/browser": {
-      "name": "@legation/browser",
+      "name": "@thomasfosterau/legation-browser",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "@effect/platform-browser": "catalog:",
@@ -139,11 +139,11 @@
       },
     },
     "packages/cloudflare": {
-      "name": "@legation/cloudflare",
+      "name": "@thomasfosterau/legation-cloudflare",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
-        "@legation/sql": "workspace:^",
+        "@thomasfosterau/legation-effect": "workspace:^",
+        "@thomasfosterau/legation-sql": "workspace:^",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^5.20260704.1",
@@ -154,10 +154,10 @@
       },
     },
     "packages/devtools": {
-      "name": "@legation/devtools",
+      "name": "@thomasfosterau/legation-devtools",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -172,7 +172,7 @@
       ],
     },
     "packages/effect": {
-      "name": "@legation/effect",
+      "name": "@thomasfosterau/legation-effect",
       "version": "0.1.0",
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -183,11 +183,11 @@
       },
     },
     "packages/jsonapi": {
-      "name": "@legation/jsonapi",
+      "name": "@thomasfosterau/legation-jsonapi",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
         "@thomasfosterau/effect-jsonapi": "^0.16.1",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -197,10 +197,10 @@
       },
     },
     "packages/node": {
-      "name": "@legation/node",
+      "name": "@thomasfosterau/legation-node",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -213,10 +213,10 @@
       },
     },
     "packages/sql": {
-      "name": "@legation/sql",
+      "name": "@thomasfosterau/legation-sql",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "effect": "catalog:",
@@ -226,11 +226,11 @@
       },
     },
     "packages/svelte": {
-      "name": "@legation/svelte",
+      "name": "@thomasfosterau/legation-svelte",
       "version": "0.1.0",
       "dependencies": {
-        "@legation/effect": "workspace:^",
         "@thomasfosterau/effect-svelte": "^0.4.0",
+        "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
         "@sveltejs/kit": "^3.0.0",
@@ -474,22 +474,6 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@legation/browser": ["@legation/browser@workspace:packages/browser"],
-
-    "@legation/cloudflare": ["@legation/cloudflare@workspace:packages/cloudflare"],
-
-    "@legation/devtools": ["@legation/devtools@workspace:packages/devtools"],
-
-    "@legation/effect": ["@legation/effect@workspace:packages/effect"],
-
-    "@legation/jsonapi": ["@legation/jsonapi@workspace:packages/jsonapi"],
-
-    "@legation/node": ["@legation/node@workspace:packages/node"],
-
-    "@legation/sql": ["@legation/sql@workspace:packages/sql"],
-
-    "@legation/svelte": ["@legation/svelte@workspace:packages/svelte"],
-
     "@loaderkit/resolve": ["@loaderkit/resolve@1.0.6", "", { "dependencies": { "@braidai/lang": "^1.0.0" } }, "sha512-G8FdIoF5CypfwmD9rl8BXod5HDn8JqB0CCNBXDTaRZ+yRYhARrrSToX1zg1zy9jX3zLqigsELwhT4gNtkdQAUg=="],
 
     "@manypkg/find-root": ["@manypkg/find-root@3.1.0", "", { "dependencies": { "@manypkg/tools": "^2.1.0" } }, "sha512-BcSqCyKhBVZ5YkSzOiheMCV41kqAFptW6xGqYSTjkVTl9XQpr+pqHhwgGCOHQtjDCv7Is6EFyA14Sm5GVbVABA=="],
@@ -675,6 +659,22 @@
     "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.16.1", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118" } }, "sha512-BA9Ax9b3Ii5s7K7nmkY/tLZCieYTBkuYdgCXeDHxojp4Wo9H/Q45t/+Ru0vUPuUiRflB/xiHgl5ro4f96qBoWw=="],
 
     "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.4.0", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118", "svelte": "^5.40.0" } }, "sha512-L1zmeWlWL9eYLK9spyvD3YxWrmf7Q2Qjylsxev2WZuvOduY/7ayAg5mhXhNLM51IvxCx3UryOQLr8itbSssh8g=="],
+
+    "@thomasfosterau/legation-browser": ["@thomasfosterau/legation-browser@workspace:packages/browser"],
+
+    "@thomasfosterau/legation-cloudflare": ["@thomasfosterau/legation-cloudflare@workspace:packages/cloudflare"],
+
+    "@thomasfosterau/legation-devtools": ["@thomasfosterau/legation-devtools@workspace:packages/devtools"],
+
+    "@thomasfosterau/legation-effect": ["@thomasfosterau/legation-effect@workspace:packages/effect"],
+
+    "@thomasfosterau/legation-jsonapi": ["@thomasfosterau/legation-jsonapi@workspace:packages/jsonapi"],
+
+    "@thomasfosterau/legation-node": ["@thomasfosterau/legation-node@workspace:packages/node"],
+
+    "@thomasfosterau/legation-sql": ["@thomasfosterau/legation-sql@workspace:packages/sql"],
+
+    "@thomasfosterau/legation-svelte": ["@thomasfosterau/legation-svelte@workspace:packages/svelte"],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 

@@ -1,5 +1,5 @@
 /**
- * @legation/sql
+ * @thomasfosterau/legation-sql
  *
  * A driver-agnostic SQL reference backend for the legation engine: a pure
  * `Subset` predicate → `WHERE` translator (`Sql`) and a `Backend`

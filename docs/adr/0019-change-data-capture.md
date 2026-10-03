@@ -33,7 +33,7 @@ infrastructure:
 Ship tiers 1–3; reject tier 4. Introduce a small formal `HintSource` seam in
 core so every tier feeds the same `InvalidationBus` the same way.
 
-- **`HintSource` seam (core, `@legation/effect`).** A `HintSource` is an effect
+- **`HintSource` seam (core, `@thomasfosterau/legation-effect`).** A `HintSource` is an effect
   (`run`) that publishes `ChangeHint`s to the in-context `InvalidationBus` until
   its scope closes; `HintSource.fromStream` lifts a stream of hint batches, and
   `HintSource.run` forks a source onto a scoped fibre alongside the SyncServer.
@@ -46,12 +46,12 @@ core so every tier feeds the same `InvalidationBus` the same way.
   (`BusBrokers`) the hint reaches every instance. This already works; it is now
   documented as the official baseline for out-of-band writes the app controls.
 
-- **Tier 2 — polling (shipped in `@legation/sql`).**
+- **Tier 2 — polling (shipped in `@thomasfosterau/legation-sql`).**
   `PollingHintSource.make({ executor, tables, interval })` polls each table on
   an interval for a cheap change-detector — `COUNT(*)` plus `MAX(versionColumn)`
   when a version column is mapped — and publishes a value-less hint for a
   collection whose detector moved. It uses only the existing `SqlExecutor` seam,
-  so it adds no dependency and lives in `@legation/sql` (ADR-0006), not core.
+  so it adds no dependency and lives in `@thomasfosterau/legation-sql` (ADR-0006), not core.
   Bounded staleness equals the poll interval; the cost is the extra read load.
   Coverage is honest: without a monotonic version column the detector sees only
   row-count changes, so an in-place update that keeps the count is missed —
@@ -61,10 +61,10 @@ core so every tier feeds the same `InvalidationBus` the same way.
   function calls `pg_notify` with the changed collection and id; the app opens a
   `LISTEN` on its own pg client, decodes payloads into `ChangeHint`s, and feeds
   `HintSource.fromStream`. The trigger DDL and the client are the app's to own
-  (bring your own pg client). We do **not** create a `@legation/pg` package or
+  (bring your own pg client). We do **not** create a `@thomasfosterau/legation-pg` package or
   add a `pg` dependency now; if this recipe ever becomes shipped code, a
-  `@legation/pg` package is its future home (ADR-0006), exactly as polling stays
-  in `@legation/sql`.
+  `@thomasfosterau/legation-pg` package is its future home (ADR-0006), exactly as polling stays
+  in `@thomasfosterau/legation-sql`.
 
 - **Tier 4 — logical replication (rejected).** Decoding the WAL with a
   replication slot is precisely the operational pipeline ADR-0009 declined to
@@ -82,15 +82,15 @@ core so every tier feeds the same `InvalidationBus` the same way.
   ids), the #42 fan-out matcher falls back to a collection-level match for them:
   every group subscribed to a changed collection is poked and reconciles on the
   next pull. Sound by construction — over-matching is safe.
-- Dependency boundaries hold: polling ships in `@legation/sql` on the existing
+- Dependency boundaries hold: polling ships in `@thomasfosterau/legation-sql` on the existing
   executor seam, and Postgres-specific code stays out of core as a recipe, its
-  future home a `@legation/pg` package if it is ever built (ADR-0006).
+  future home a `@thomasfosterau/legation-pg` package if it is ever built (ADR-0006).
 - The engine still owns no replication pipeline (ADR-0009); tier 4 is declined,
   with an escape hatch (`HintSource.fromStream`) for apps that run their own.
 
 ## References
 
 - ADR-0006 — dependency-based package boundaries (why polling stays in
-  `@legation/sql` and pg would be its own package).
+  `@thomasfosterau/legation-sql` and pg would be its own package).
 - ADR-0009 — BYO backend contract; no operational pipeline (the tier-4
   rejection basis and the poke-then-pull fan-out this feeds).

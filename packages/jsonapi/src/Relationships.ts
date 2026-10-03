@@ -19,7 +19,7 @@
  */
 
 import { Effect, Scope, Stream } from "effect";
-import { ClientEngine, Related, Subset } from "@legation/effect/internal";
+import { ClientEngine, Related, Subset } from "@thomasfosterau/legation-effect/internal";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 

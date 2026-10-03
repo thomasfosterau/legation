@@ -1,8 +1,8 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { Effect, Fiber, Stream } from "effect";
-  import { setClientRuntime } from "@legation/svelte";
-  import type { ElectedHost } from "@legation/browser";
+  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
+  import type { ElectedHost } from "@thomasfosterau/legation-browser";
   import { boot, bootMainThread, ssrStub, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();

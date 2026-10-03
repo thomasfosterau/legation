@@ -1,8 +1,8 @@
 ---
-"@legation/cloudflare": minor
+"@thomasfosterau/legation-cloudflare": minor
 ---
 
-New package `@legation/cloudflare` — the reference deployment of ADR-0022's topology on Cloudflare, over the `FanoutBroker` seam (ADR-0023).
+New package `@thomasfosterau/legation-cloudflare` — the reference deployment of ADR-0022's topology on Cloudflare, over the `FanoutBroker` seam (ADR-0023).
 
 - **`makeRoomClass`** — the per-user Durable Object. It runs the sync `Server` for one user: push/pull/read over stateless HTTP (each request wakes the object, is answered, and lets it hibernate), CVRs in the object's transactional storage (`DurableCvrStore`, co-located with the user), a `FanoutBus` over the topic shards for cross-room fan-out, and WebSockets that carry exactly one thing — contentless poke frames — so hibernated sockets cost nothing between writes.
 - **`makeShardClass`** — one Durable Object per topic (`idFromName(topic)` is the shard function). Rooms lease their topics on a heartbeat; a publish pokes every live room and ages out expired leases lazily, so crashed rooms need no distributed cleanup.

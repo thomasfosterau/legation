@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 Scope the durable replica to a resolved identity (#212), closing the gap where
@@ -16,7 +16,7 @@ rows because they are the freshest thing on the device and nothing recorded
 which identity authorised them. A's unpushed journal made it worse: durable,
 causally ordered, and about to go out under B's cookies.
 
-- **`Identity` (`@legation/effect`, new)**: `Fingerprint`, the opaque
+- **`Identity` (`@thomasfosterau/legation-effect`, new)**: `Fingerprint`, the opaque
   app-supplied token a replica is stamped with — a session-subject hash, **never
   PII and never a credential**, as the type's own docs say. `anonymous` is the
   signed-out principal; `unstamped` is a replica that has never been scoped, and
@@ -58,7 +58,7 @@ causally ordered, and about to go out under B's cookies.
   would collide with ids already applied; scoping gives each principal its own
   sequence, and gives a returning one back exactly the sequence they left.
 
-- **`IndexedDbClientStore` (`@legation/browser`)** takes an `identity`, and
+- **`IndexedDbClientStore` (`@thomasfosterau/legation-browser`)** takes an `identity`, and
   `layerNamespaced` offers the per-identity replica as the alternative to
   resetting — namespace for a device with a few regular users who switch back
   and forth, reset where sign-ins are one-off or unbounded.

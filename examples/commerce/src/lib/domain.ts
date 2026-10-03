@@ -32,7 +32,7 @@
  * from a client.
  */
 import { Effect, Schema } from "effect";
-import { Edge, Mutation, Node, type Query } from "@legation/effect";
+import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 

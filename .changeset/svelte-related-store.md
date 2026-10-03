@@ -1,5 +1,5 @@
 ---
-"@legation/svelte": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Add a `related` store: a live join over a subset's declared relationships

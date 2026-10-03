@@ -87,6 +87,6 @@ language, used in subscriptions, evaluated with Postgres-normative
 semantics (ADR-0028) — is not a form of effect-jsonapi's filter grammar (a
 query-parameter format, decoded from untrusted URLs, canonically encoded
 for `self` links) and was never meant to be one. Where the two meet is
-`@legation/jsonapi`'s façade-boundary bridge (`JsonApiQuery.fromFilterAst` /
+`@thomasfosterau/legation-jsonapi`'s façade-boundary bridge (`JsonApiQuery.fromFilterAst` /
 `toFilterAst`, ADR-0029 §6) — a projection for one job, not a claim that
 either language is the other's internal form.

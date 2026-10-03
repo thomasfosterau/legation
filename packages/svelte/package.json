@@ -1,5 +1,5 @@
 {
-  "name": "@legation/svelte",
+  "name": "@thomasfosterau/legation-svelte",
   "version": "0.1.0",
   "description": "Svelte bindings for the legation engine: rune hooks over the Client, plus the SvelteKit integration on /kit",
   "type": "module",
@@ -43,7 +43,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@legation/effect": "workspace:^",
+    "@thomasfosterau/legation-effect": "workspace:^",
     "@thomasfosterau/effect-svelte": "^0.4.0"
   },
   "peerDependencies": {

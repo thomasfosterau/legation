@@ -202,9 +202,9 @@ export interface Client {
 /**
  * URL-keyed reads (ADR-0029 section 2): the bridge between a JSON:API URL
  * and a {@link Query.Read}, and the canonical URL that is a subscription's
- * identity. `@legation/effect` does not know the URL grammar — effect-jsonapi
- * owns it, behind `@legation/jsonapi` (ADR-0006) — so a Client takes this
- * as an option: `JsonApiQuery.urlReads(nodes)` from `@legation/jsonapi`
+ * identity. `@thomasfosterau/legation-effect` does not know the URL grammar — effect-jsonapi
+ * owns it, behind `@thomasfosterau/legation-jsonapi` (ADR-0006) — so a Client takes this
+ * as an option: `JsonApiQuery.urlReads(nodes)` from `@thomasfosterau/legation-jsonapi`
  * builds it from the node graph. A Client built without it fails a URL
  * call with a `QueryError`, never a defect.
  */
@@ -289,7 +289,7 @@ const noUrlReads = (url: string): QueryError =>
   new QueryError({
     message:
       "Client.subscribe(url): this Client has no URL reads; build it with `urls` " +
-      "(`JsonApiQuery.urlReads(nodes)` from @legation/jsonapi) to subscribe by URL",
+      "(`JsonApiQuery.urlReads(nodes)` from @thomasfosterau/legation-jsonapi) to subscribe by URL",
     query: url,
   });
 
@@ -600,7 +600,7 @@ export const fromView = (
  * The Client as a service — for runtimes and bindings that carry "the one
  * per-thread object" in context (ADR-0022).
  */
-export const Client = Context.Service<Client>("@legation/effect/Client");
+export const Client = Context.Service<Client>("@thomasfosterau/legation-effect/Client");
 
 /** Options for a Client that owns its engine ({@link make}). */
 export interface MakeOptions extends ViewOptions {
@@ -620,7 +620,7 @@ export interface MakeOptions extends ViewOptions {
   /**
    * Row persistence. Resolution order: this option → a `ClientStore` in
    * context (layer-composed apps) → in-memory (the default; pair
-   * `@legation/browser`'s IndexedDB store for durability).
+   * `@thomasfosterau/legation-browser`'s IndexedDB store for durability).
    */
   readonly store?: ClientStore.ClientStore;
   /**

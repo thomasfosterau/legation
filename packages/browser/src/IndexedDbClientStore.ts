@@ -29,7 +29,7 @@
  */
 
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Identity } from "@legation/effect";
+import { ClientStore, Identity } from "@thomasfosterau/legation-effect";
 import { Layer } from "effect";
 
 /** Options for the IndexedDB-backed `ClientStore` layers. */

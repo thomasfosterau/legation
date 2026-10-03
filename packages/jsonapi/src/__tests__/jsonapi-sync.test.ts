@@ -14,8 +14,8 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { ClientStore } from "@legation/effect";
-import { ClientEngine, Subset } from "@legation/effect/internal";
+import { ClientStore } from "@thomasfosterau/legation-effect";
+import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 

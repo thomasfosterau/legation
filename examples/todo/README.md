@@ -1,7 +1,7 @@
 # legation · SvelteKit todo
 
-A SvelteKit todo app that drives [`@legation/effect`](../../packages/effect)
-through the [`@legation/svelte`](../../packages/svelte) **rune hooks**
+A SvelteKit todo app that drives [`@thomasfosterau/legation-effect`](../../packages/effect)
+through the [`@thomasfosterau/legation-svelte`](../../packages/svelte) **rune hooks**
 (`useQuery` / `useAggregate`). It runs the **real library server pipeline in the
 page**, so every concept in `CONTEXT.md` is exercised by code you can click on.
 
@@ -80,15 +80,15 @@ long as the app does.
 
 ## Recipe: paired-intents undo
 
-The `Undo` module (`@legation/effect/internal`) adds undo/redo without touching the
+The `Undo` module (`@thomasfosterau/legation-effect/internal`) adds undo/redo without touching the
 engine: the caller supplies both directions of a change, and undo/redo replay
 through the supplied handle's `mutate` — a `Client` (as here) or a
 `ClientEngine` both work (#223) — so they inherit the overlay, the journal,
 rebase, and offline behaviour for free.
 
 ```ts
-import { Undo } from "@legation/effect/internal";
-import { useUndo } from "@legation/svelte";
+import { Undo } from "@thomasfosterau/legation-effect/internal";
+import { useUndo } from "@thomasfosterau/legation-svelte";
 
 // One manager per client (in-memory history) — see src/lib/sync.ts.
 const manager = yield * Undo.make(client);

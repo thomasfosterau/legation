@@ -1,7 +1,7 @@
-# @legation/jsonapi
+# @thomasfosterau/legation-jsonapi
 
 JSON:API v1.1 collection loaders for the
-[`@legation/effect`](../effect)
+[`@thomasfosterau/legation-effect`](../effect)
 sync engine, built on [Effect](https://effect.website).
 
 In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
@@ -26,10 +26,10 @@ resource-agnostic loaders on top (ADR-0016).
 ## Install
 
 ```sh
-npm install @legation/jsonapi @legation/effect effect
+npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation-effect effect
 ```
 
-`effect` and `@legation/effect` are required alongside this package;
+`effect` and `@thomasfosterau/legation-effect` are required alongside this package;
 `@thomasfosterau/effect-jsonapi` is a regular dependency.
 
 ## Effect version
@@ -47,9 +47,9 @@ over the existing REST API.
 ```ts
 import { Duration, Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import { Predicate } from "@legation/effect";
-import { ClientEngine, Subset } from "@legation/effect/internal";
-import { JsonApiSync } from "@legation/jsonapi";
+import { Predicate } from "@thomasfosterau/legation-effect";
+import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
+import { JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
 
 const sync = JsonApiSync.layer(api, {
@@ -153,7 +153,7 @@ an `Effect` requiring an `HttpClient` and a `JsonApiSource`.
 import { Effect } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
-import { CollectionLoader } from "@legation/jsonapi";
+import { CollectionLoader } from "@thomasfosterau/legation-jsonapi";
 
 const program = CollectionLoader.load("articles", {
   include: ["author"],
@@ -192,8 +192,8 @@ already-synced data, no extra request.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { ClientEngine, Subset } from "@legation/effect/internal";
-import { Relationships } from "@legation/jsonapi";
+import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Relationships } from "@thomasfosterau/legation-jsonapi";
 
 const program = Effect.gen(function* () {
   const engine = yield* ClientEngine.ClientEngine;
@@ -274,7 +274,7 @@ the same deny-by-default auth filters and the same `Backend.evaluate` +
 ```ts
 import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
-import { RestHandlers } from "@legation/jsonapi";
+import { RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import { api, NotFound, Product } from "./my-json-api";
 import { backend, nodes, policy } from "./my-server";
 
@@ -336,7 +336,7 @@ worker included; the façade (ADR-0029) is built on it.
 
 ```ts
 import { Effect } from "effect";
-import { JsonApiQuery, ReplicaDocuments } from "@legation/jsonapi";
+import { JsonApiQuery, ReplicaDocuments } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "./my-domain";
 import { CartItem, Product, Variant } from "./my-json-api";
 
@@ -389,15 +389,15 @@ service worker composes **first** — before its HTTP cache and the network —
 that answers a JSON:API `GET` from the replica when an explicit subscription
 covers it, and stays out of the way otherwise. It is built from the app's
 `HttpApi` (route reflection, as `JsonApiSync` does), the graph, the replica's
-view and a coverage source; it lives here rather than in `@legation/browser`
+view and a coverage source; it lives here rather than in `@thomasfosterau/legation-browser`
 because everything it needs is this package's plus the standard `Request` /
 `Response` globals (ADR-0006).
 
 ```ts
 import { Effect } from "effect";
-import { ClientView, Coverage } from "@legation/effect/internal";
-import { ServiceWorkerHost } from "@legation/browser";
-import { JsonApiFacade, JsonApiQuery } from "@legation/jsonapi";
+import { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import { ServiceWorkerHost } from "@thomasfosterau/legation-browser";
+import { JsonApiFacade, JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
 import { api, resources } from "./my-json-api"; // the HttpApi and its Resource declarations
 import { nodes } from "./my-domain";
 
@@ -485,7 +485,7 @@ carries the JSON:API error objects returned by the server.
 
 ```ts
 import { Effect } from "effect";
-import { CollectionLoader, ApiError, ParseError } from "@legation/jsonapi";
+import { CollectionLoader, ApiError, ParseError } from "@thomasfosterau/legation-jsonapi";
 
 CollectionLoader.load("articles").pipe(
   Effect.catchTag("ApiError", (error) => Effect.logError(error.errors)),

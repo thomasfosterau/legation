@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/sql": minor
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Permanent mutation rejection semantics (#35). A mutator handler can now fail

@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/cloudflare": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-cloudflare": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 SSR snapshots over a `ClientTransport`, and a Cloudflare service-binding
@@ -11,11 +11,11 @@ carrier to take them (#211).
 the correctness path, so subscribe → pull → dehydrate works identically
 against a remote Server. Pass `transport` and the render needs nothing from
 context; omit it and the in-process path is unchanged — a loop-back transport
-over the in-context handler. `loadSnapshot` in `@legation/svelte/kit` takes
+over the in-context handler. `loadSnapshot` in `@thomasfosterau/legation-svelte/kit` takes
 the same option, so an Effect-based `load` can render against a backend in
 another Worker.
 
-`@legation/cloudflare` adds `BindingTransport`: the sync protocol over a
+`@thomasfosterau/legation-cloudflare` adds `BindingTransport`: the sync protocol over a
 service binding (`env.API.fetch`), for the ordinary two-Worker shape where the
 Worker rendering the page is not the Worker holding the database. It forwards
 the inbound cookie and origin so the bound Worker resolves the same caller —

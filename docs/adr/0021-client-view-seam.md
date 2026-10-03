@@ -12,7 +12,7 @@ core — the party need not be a browser tab) deliberately mirrors the shape
 of `ClientEngine`
 (`query`/`observe`/`subscribe`/`mutate`), but it was a distinct type — and
 the framework bindings were hard-wired to `ManagedRuntime<ClientEngine>`, so
-a tab in the recommended deployment could not drive `@legation/svelte` (or
+a tab in the recommended deployment could not drive `@thomasfosterau/legation-svelte` (or
 React) components at all. Every app either ran the engine on the main thread
 or hand-rolled its own binding layer.
 
@@ -73,7 +73,7 @@ survive service-worker restarts and mirrors that raced the worker's boot.
 - The same components run over a main-thread engine and a SW-hosted mirror
   with zero component changes — verified by a binding test whose runtime
   holds only a `Mirror`.
-- Breaking for `@legation/svelte` (0.x): engine-backed apps compose
+- Breaking for `@thomasfosterau/legation-svelte` (0.x): engine-backed apps compose
   `ClientView.layer.pipe(Layer.provideMerge(engineLayer))` when building the
   runtime.
 - The named-query and auto-subscribe gaps over mirrors are closed: the

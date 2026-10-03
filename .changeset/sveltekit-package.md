@@ -1,8 +1,8 @@
 ---
-"@legation/svelte": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
-SvelteKit integration (ADR-0020), on the `@legation/svelte/kit` subpath.
+SvelteKit integration (ADR-0020), on the `@thomasfosterau/legation-svelte/kit` subpath.
 `clientGroupId` reads-or-mints the browser's client-group cookie;
 `loadSnapshot` resolves it and produces the page's SSR snapshot over a
 request-scoped engine inside any Effect-based `load`; `clientRuntime` boots the

@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
-import type { Query } from "@legation/effect";
+import type { Query } from "@thomasfosterau/legation-effect";
 import AsyncQueryHarness from "./fixtures/AsyncQueryHarness.svelte";
 import { makeClientRuntime, run, until } from "./world.js";
 

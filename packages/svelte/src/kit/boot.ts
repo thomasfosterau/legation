@@ -13,7 +13,7 @@
  * hand it straight to context.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { Client, ClientStore, Hydration, type Transport } from "@legation/effect";
+import { Client, ClientStore, Hydration, type Transport } from "@thomasfosterau/legation-effect";
 import type { ClientRuntime } from "../Runtime.js";
 
 /** Options for {@link clientRuntime}. */

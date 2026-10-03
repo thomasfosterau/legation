@@ -1,18 +1,18 @@
 ---
-"@legation/effect": minor
-"@legation/browser": patch
-"@legation/node": patch
-"@legation/jsonapi": patch
-"@legation/sql": patch
-"@legation/cloudflare": patch
-"@legation/svelte": patch
-"@legation/devtools": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": patch
+"@thomasfosterau/legation-node": patch
+"@thomasfosterau/legation-jsonapi": patch
+"@thomasfosterau/legation-sql": patch
+"@thomasfosterau/legation-cloudflare": patch
+"@thomasfosterau/legation-svelte": patch
+"@thomasfosterau/legation-devtools": patch
 ---
 
 Tested against `effect` 4.0.0 (and the matching `@effect/*` companions); the
 peer floor is unchanged at `effect >=4.0.0-rc.118`.
 
-`@legation/effect` adapts to 4.0.0's stricter, type-only `Schema.brand`:
+`@thomasfosterau/legation-effect` adapts to 4.0.0's stricter, type-only `Schema.brand`:
 
 - `Node.Id` keeps its signature and runtime behaviour; its internal brand
   identifier is cast to satisfy the new concrete-identifier check.

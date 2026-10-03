@@ -16,7 +16,7 @@
 import { Schema } from "effect";
 import { HttpApi, HttpApiSchema } from "effect/http-api";
 import { ApiError, Document, Endpoint, Group } from "@thomasfosterau/effect-jsonapi";
-import { JsonApiQuery } from "@legation/jsonapi";
+import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "../src/lib/domain.js";
 import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "./resources.js";
 

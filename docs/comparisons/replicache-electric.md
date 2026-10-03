@@ -30,7 +30,7 @@ What differs is everything around the model:
   legation ships that server half as a library (ADR-0009): `SyncServer.make`
   does CVR diffing, subscription evaluation, and fan-out against a narrow
   **backend contract** (transactional mutator execution + subset
-  evaluation), with `@legation/sql` as the SQL reference implementation and
+  evaluation), with `@thomasfosterau/legation-sql` as the SQL reference implementation and
   a shared contract test suite (`BackendContract`) you run over your own.
 - **Subscriptions vs key space.** Replicache syncs a per-client key-value
   space; which keys a client gets is decided inside your pull endpoint.

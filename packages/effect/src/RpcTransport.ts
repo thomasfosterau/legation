@@ -156,7 +156,7 @@ export interface FromOriginOptions {
  * path, pokes included) with plain HTTP POST as the fallback carrier —
  * `Client.make`'s `transport: { url }` shorthand builds exactly this.
  * Wrap with `BrowserConnectivity.withBrowserConnectivity`
- * (`@legation/browser`) for navigator-aware status in browsers.
+ * (`@thomasfosterau/legation-browser`) for navigator-aware status in browsers.
  */
 export const fromOrigin = (
   options: FromOriginOptions

@@ -1,7 +1,7 @@
 /**
  * release
  *
- * Publishes the `@legation/*` packages with manifests a consumer can install
+ * Publishes the `@thomasfosterau/legation-*` packages with manifests a consumer can install
  * (#267). The packages depend on each other as `workspace:^` and reference the
  * root Bun catalog as `catalog:`; `npm pack` / `npm publish` (and so a plain
  * `changeset publish`) copy both verbatim, while `bun pm pack` rewrites them to
@@ -16,7 +16,7 @@
  *    tarball is checked (the run stops on the first package with a problem):
  *    - no `workspace:` / `catalog:` specifier is left anywhere in its
  *      `package.json`;
- *    - every `workspace:` dependency on another `@legation/*` package was
+ *    - every `workspace:` dependency on another `@thomasfosterau/legation-*` package was
  *      rewritten against that package's current `package.json` version.
  *      `bun pm pack` takes workspace versions from `bun.lock`, not from
  *      `package.json`, so a lockfile that missed a version bump would publish
@@ -113,7 +113,7 @@ const expectedRange = (specifier: string, version: string): string => {
 };
 
 /**
- * Every internal (`@legation/*`) dependency whose packed range doesn't match
+ * Every internal (`@thomasfosterau/legation-*`) dependency whose packed range doesn't match
  * the dependency's current `package.json` version, e.g. because `bun.lock`
  * still carries the version from before a bump.
  */
@@ -163,7 +163,7 @@ const svelteTargets = (
 
 /**
  * publint reads a JavaScript target under a custom condition such as `svelte`,
- * but skips the file check for any other target under one (`@legation/devtools`
+ * but skips the file check for any other target under one (`@thomasfosterau/legation-devtools`
  * ships `./svelte` as raw `.ts` and `.svelte` source), so a Svelte-aware
  * bundler could resolve a file that isn't in the tarball without publint
  * noticing. Checks that every target under a `svelte` condition is packed,
@@ -218,7 +218,7 @@ const attwSuppressions: ReadonlyArray<{
   readonly reason: string;
 }> = [
   {
-    packageName: "@legation/devtools",
+    packageName: "@thomasfosterau/legation-devtools",
     kind: "InternalResolutionError",
     moduleSpecifier: "./DevtoolsPanel.svelte",
     reason:

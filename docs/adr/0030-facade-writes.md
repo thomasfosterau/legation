@@ -481,10 +481,10 @@ Args schemas are permissive (`attributes: Record<String, Unknown>`), as
 `mutateWithAck` can journal it as decoded without a transforming codec
 (open point 3 covers mappings that need one). The arg schemas and local
 handlers depend only on the graph, so by ADR-0006 they belong in
-`@legation/effect`; the JSON:API halves — `Write` → graph args, and the
+`@thomasfosterau/legation-effect`; the JSON:API halves — `Write` → graph args, and the
 inverse, graph args → `Write` (relationships rebuilt from `via` keys), which
 a `JsonApiBackend` over a graph app passes as `writes` — are one codec in
-`@legation/jsonapi`. An app whose intents differ (commerce's `cart/add`
+`@thomasfosterau/legation-jsonapi`. An app whose intents differ (commerce's `cart/add`
 with its `userId` and stock rule) may pass its own `intentOf`; the default
 is what a plain-fetch write means when nobody said otherwise.
 
@@ -606,8 +606,8 @@ offline is answered `503` `offline` and never journaled.
   mutations) and `writes` (which types/methods may be intercepted; default
   every reflected write route). The read path is untouched.
 - **Graph-derived CRUD mutations become a first-class derivation** in
-  `@legation/effect`, beside `Derive.ts`'s resource-derived ones in
-  `@legation/jsonapi`; the two share names and differ in row shape, which
+  `@thomasfosterau/legation-effect`, beside `Derive.ts`'s resource-derived ones in
+  `@thomasfosterau/legation-jsonapi`; the two share names and differ in row shape, which
   the module docs must say plainly. The `update` no-op-on-absent rule is
   the one semantic difference and is deliberate.
 - **The server side of every intercepted route is the app's.** Handlers

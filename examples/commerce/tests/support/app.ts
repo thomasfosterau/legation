@@ -37,7 +37,7 @@ import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { HttpSyncServer } from "@legation/node";
+import { HttpSyncServer } from "@thomasfosterau/legation-node";
 import { clientLayer, migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";
 import { CommerceSync, syncLayer } from "../../server/runtime.js";

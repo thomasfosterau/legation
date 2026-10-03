@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/sql": minor
-"@legation/jsonapi": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-jsonapi": patch
 ---
 
 Add the relational `Predicate.exists` node: a correlated relationship test

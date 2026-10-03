@@ -1,6 +1,6 @@
 ---
-"@legation/effect": patch
-"@legation/sql": patch
+"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation-sql": patch
 ---
 
 Two fixes surfaced by running `verifyBackendContract` over a real SQLite

@@ -28,8 +28,8 @@
 
 import { Effect, Ref, Schedule } from "effect";
 import type { Duration } from "effect";
-import { Backend, BackendError } from "@legation/effect";
-import { HintSource, InvalidationBus } from "@legation/effect/internal";
+import { Backend, BackendError } from "@thomasfosterau/legation-effect";
+import { HintSource, InvalidationBus } from "@thomasfosterau/legation-effect/internal";
 import * as Sql from "./Sql.js";
 import type * as SqlBackend from "./SqlBackend.js";
 

@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add Effect-native observability (`Telemetry`): `legation_*` metrics and

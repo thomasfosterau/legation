@@ -61,7 +61,9 @@ export interface ClientTransport {
 }
 
 /** The {@link ClientTransport} service a Client syncs over. */
-export const ClientTransport = Context.Service<ClientTransport>("@legation/effect/ClientTransport");
+export const ClientTransport = Context.Service<ClientTransport>(
+  "@thomasfosterau/legation-effect/ClientTransport"
+);
 
 /**
  * The server side: what a carrier needs from the sync server to answer
@@ -84,7 +86,9 @@ export interface ServerHandler {
 }
 
 /** The {@link ServerHandler} service a carrier answers clients with. */
-export const ServerHandler = Context.Service<ServerHandler>("@legation/effect/ServerHandler");
+export const ServerHandler = Context.Service<ServerHandler>(
+  "@thomasfosterau/legation-effect/ServerHandler"
+);
 
 /**
  * An in-memory client transport bound directly to a ServerHandler — the

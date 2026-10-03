@@ -19,8 +19,8 @@
  * are augmented. All listeners are unregistered when the scope closes.
  */
 
-import { Transport } from "@legation/effect";
-import type { Protocol } from "@legation/effect/internal";
+import { Transport } from "@thomasfosterau/legation-effect";
+import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Queue, Scope, Stream, SubscriptionRef } from "effect";
 
 /** Current `navigator.onLine`, treating a missing navigator as online. */

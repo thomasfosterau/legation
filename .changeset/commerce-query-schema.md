@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": patch
+"@thomasfosterau/legation-jsonapi": patch
 ---
 
 Add `JsonApiQuery.querySchema(nodes, collection)` and

@@ -32,15 +32,15 @@
  * ```
  *
  * A worker that also answers JSON:API `GET`s from the replica (the façade,
- * ADR-0029 — `JsonApiFacade` in `@legation/jsonapi`) needs what the host
+ * ADR-0029 — `JsonApiFacade` in `@thomasfosterau/legation-jsonapi`) needs what the host
  * knows: {@link start} serves exactly as {@link run} does and returns the
  * {@link Host} — the engine and the registrations the host holds on the
  * mirrors' behalf, the ledger the façade's coverage check scans — then
  * leaves the caller to keep the scope open.
  */
 
-import type { Client, Collection, Node } from "@legation/effect";
-import { ClientEngine, type Coverage, EngineHost } from "@legation/effect/internal";
+import type { Client, Collection, Node } from "@thomasfosterau/legation-effect";
+import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Scope } from "effect";
 import type * as BackgroundSync from "./BackgroundSync.js";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
@@ -60,7 +60,7 @@ export interface ServiceWorkerHostOptions {
    * (#159): a page with no `Client` posts `{ _tag: "SubscribeUrl",
    * mirrorId, url }` on the channel and the host pins the URL's windows
    * under that id — forwarded to {@link EngineHost.run}. Build `urls` with
-   * `JsonApiQuery.urlReads(nodes)` from `@legation/jsonapi`.
+   * `JsonApiQuery.urlReads(nodes)` from `@thomasfosterau/legation-jsonapi`.
    */
   readonly nodes?: Node.NodeRegistry;
   readonly urls?: Client.UrlReads;

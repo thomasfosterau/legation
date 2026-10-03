@@ -19,9 +19,9 @@
  */
 import { Context, Effect, Layer, Scope } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
-import { Authorization, type Backend, Predicate, Server, Transport } from "@legation/effect";
-import { InvalidationBus } from "@legation/effect/internal";
-import { SqlBackend } from "@legation/sql";
+import { Authorization, type Backend, Predicate, Server, Transport } from "@thomasfosterau/legation-effect";
+import { InvalidationBus } from "@thomasfosterau/legation-effect/internal";
+import { SqlBackend } from "@thomasfosterau/legation-sql";
 import { mutators, privateCollections, publicCollections, registry } from "../src/lib/domain.js";
 import { makeExecutor } from "./db.js";
 import { makeHandlers, tables } from "./handlers.js";

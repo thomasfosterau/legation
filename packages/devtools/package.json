@@ -1,5 +1,5 @@
 {
-  "name": "@legation/devtools",
+  "name": "@thomasfosterau/legation-devtools",
   "version": "0.1.0",
   "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with a Svelte panel on /svelte",
   "type": "module",
@@ -44,7 +44,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@legation/effect": "workspace:^"
+    "@thomasfosterau/legation-effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.118",

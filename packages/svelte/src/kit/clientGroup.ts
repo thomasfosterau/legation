@@ -3,7 +3,7 @@
  *
  * The SSR flow renders under the *browser's* client group id so the snapshot
  * cookie continues that group's CVR conversation (see `Hydration.snapshot` in
- * `@legation/effect`). The group id therefore has to be stable per browser and
+ * `@thomasfosterau/legation-effect`). The group id therefore has to be stable per browser and
  * visible to both the server (each `load`) and the client (the engine's
  * `clientGroupId` option) — an ordinary, non-`httpOnly` HTTP cookie.
  *

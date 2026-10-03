@@ -8,7 +8,7 @@
    * two reads are here too.
    */
   import { AsyncResult } from "effect/reactivity";
-  import { useQuery } from "@legation/svelte";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
   import { allArticles, allFavorites, allFollows, type Favorite, type Follow } from "$lib/domain";
   import { toArticlePage, toTags, values } from "$lib/joins";
   import { getSession } from "$lib/session.svelte";

@@ -516,7 +516,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
 });
 
 /**
- * A stand-in for `@legation/jsonapi`'s `JsonApiQuery.urlReads` — this package
+ * A stand-in for `@thomasfosterau/legation-jsonapi`'s `JsonApiQuery.urlReads` — this package
  * cannot depend on it (ADR-0006). Understands `/{collection}?filter[f]=v&
  * include=a,b`, canonicalises to sorted parameters, and refuses what the
  * real bridge refuses: an unknown collection, an unknown parameter, a read

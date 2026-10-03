@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add `Derive`: client-local **derived live queries** as bare, composable
@@ -29,6 +29,6 @@ release on scope close, tearing the whole chain down together.
 **The boundary rule (ADR-0027): derived combinators never widen what syncs.**
 They see only the rows a client already holds; the serializable Query/Subset
 tier alone decides what the server ships. Both `Incremental` and `Derive` live
-behind `@legation/effect/internal` (read-layer machinery, no new public noun).
+behind `@thomasfosterau/legation-effect/internal` (read-layer machinery, no new public noun).
 ADR-0027 (client-local IVM delta model) records the two-tier read model and the
 never-widens-sync rule these consume.

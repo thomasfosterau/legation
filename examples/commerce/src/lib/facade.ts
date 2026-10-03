@@ -18,9 +18,9 @@
  */
 import type { Effect } from "effect";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
-import type { Query } from "@legation/effect";
-import type { ClientView, Coverage } from "@legation/effect/internal";
-import { JsonApiFacade } from "@legation/jsonapi";
+import type { Query } from "@thomasfosterau/legation-effect";
+import type { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { api } from "../../server/api.js";
 import { resources as declared } from "../../server/resources.js";
 import { nodes } from "./domain.js";

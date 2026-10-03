@@ -1,7 +1,7 @@
 /**
  * `Predicate.evaluate` under ADR-0028: the worked NULL example, the Kleene
  * tables, and the per-operator table, checked node by node. The
- * differential harness in `@legation/sql` proves the same against a real
+ * differential harness in `@thomasfosterau/legation-sql` proves the same against a real
  * Postgres over a generated corpus; this file pins the specification's own
  * examples so a regression names the rule it broke.
  */

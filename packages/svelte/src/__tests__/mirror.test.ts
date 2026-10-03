@@ -9,9 +9,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount } from "svelte";
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { Client } from "@legation/effect";
-import { ClientEngine } from "@legation/effect/internal";
-import { EngineHost, MirrorChannel, Mirror } from "@legation/effect/internal";
+import { Client } from "@thomasfosterau/legation-effect";
+import { ClientEngine } from "@thomasfosterau/legation-effect/internal";
+import { EngineHost, MirrorChannel, Mirror } from "@thomasfosterau/legation-effect/internal";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";

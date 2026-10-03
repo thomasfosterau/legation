@@ -14,8 +14,12 @@
  */
 
 import { Effect, Queue, Stream } from "effect";
-import { TransportError, type Transport, type VersionNotSupportedError } from "@legation/effect";
-import type { Protocol } from "@legation/effect/internal";
+import {
+  TransportError,
+  type Transport,
+  type VersionNotSupportedError,
+} from "@thomasfosterau/legation-effect";
+import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { routes } from "./RoomProtocol.js";
 
 /** Options for {@link make}. */

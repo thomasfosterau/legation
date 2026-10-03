@@ -6,7 +6,7 @@
  * `Predicate.evaluate`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Predicate } from "@legation/effect";
+import { Predicate } from "@thomasfosterau/legation-effect";
 import * as Sql from "../Sql.js";
 
 const kinds: Sql.Kinds = {

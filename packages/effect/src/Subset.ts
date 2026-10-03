@@ -224,9 +224,9 @@ const compareValues = (left: unknown, right: unknown): number => {
  * code point, the order of `COLLATE "C"` and SQLite `BINARY`; NULL and
  * absent sort after every value ascending and before every value descending
  * (`NULLS LAST` / `NULLS FIRST`, Postgres's default); booleans order
- * `false < true`. The differential harness in `@legation/sql` proves this
+ * `false < true`. The differential harness in `@thomasfosterau/legation-sql` proves this
  * comparator agrees with `ORDER BY … COLLATE "C"`. Every backend
- * (`MemoryBackend`, `@legation/sql`'s `SqlBackend`, `@legation/jsonapi`'s
+ * (`MemoryBackend`, `@thomasfosterau/legation-sql`'s `SqlBackend`, `@thomasfosterau/legation-jsonapi`'s
  * `JsonApiBackend`) and the client (`LiveView`) call this one comparator, so
  * client and server agree on cursor windows by construction. There is no
  * locale-aware or case-insensitive collation, and none can be a client-local

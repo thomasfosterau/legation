@@ -1,11 +1,11 @@
 /**
- * @legation/effect/internal
+ * @thomasfosterau/legation-effect/internal
  *
  * The implementation seams behind the public surface (ADR-0022): the
  * engine, the mirror machinery, the plan vocabulary, protocol codecs,
  * reactivity plumbing, and server assembly parts. Everything here is
  * tested and documented for contributors and adapter authors — the sibling
- * `@legation/*` packages compose from this entrypoint — but it is not the
+ * `@thomasfosterau/legation-*` packages compose from this entrypoint — but it is not the
  * app-facing API and moves faster than the root surface.
  */
 
@@ -21,7 +21,7 @@ export * as Protocol from "./Protocol.js";
 export * as RpcTransport from "./RpcTransport.js";
 export * as SpecExport from "./SpecExport.js";
 
-// `Hydration` is public (`@legation/effect`) — the SSR snapshot is app-facing.
+// `Hydration` is public (`@thomasfosterau/legation-effect`) — the SSR snapshot is app-facing.
 
 // ─── Engine ──────────────────────────────────────────────────────────────────
 export * as ClientEngine from "./ClientEngine.js";

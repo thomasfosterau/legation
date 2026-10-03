@@ -6,22 +6,22 @@ const pkg = (name: string) =>
   fileURLToPath(new URL(`packages/${name}/src/index.ts`, import.meta.url));
 
 const alias = {
-  "@legation/effect/internal": fileURLToPath(
+  "@thomasfosterau/legation-effect/internal": fileURLToPath(
     new URL("packages/effect/src/internal.ts", import.meta.url)
   ),
-  "@legation/effect": pkg("effect"),
-  "@legation/browser": pkg("browser"),
-  "@legation/cloudflare": pkg("cloudflare"),
-  "@legation/node": pkg("node"),
-  "@legation/jsonapi": pkg("jsonapi"),
-  "@legation/sql": pkg("sql"),
-  "@legation/svelte/kit": fileURLToPath(
+  "@thomasfosterau/legation-effect": pkg("effect"),
+  "@thomasfosterau/legation-browser": pkg("browser"),
+  "@thomasfosterau/legation-cloudflare": pkg("cloudflare"),
+  "@thomasfosterau/legation-node": pkg("node"),
+  "@thomasfosterau/legation-jsonapi": pkg("jsonapi"),
+  "@thomasfosterau/legation-sql": pkg("sql"),
+  "@thomasfosterau/legation-svelte/kit": fileURLToPath(
     new URL("packages/svelte/src/kit/index.ts", import.meta.url)
   ),
-  "@legation/svelte": fileURLToPath(
+  "@thomasfosterau/legation-svelte": fileURLToPath(
     new URL("packages/svelte/src/index.svelte.ts", import.meta.url)
   ),
-  "@legation/devtools": pkg("devtools"),
+  "@thomasfosterau/legation-devtools": pkg("devtools"),
 };
 
 export default defineConfig({

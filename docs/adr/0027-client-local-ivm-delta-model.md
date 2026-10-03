@@ -229,7 +229,7 @@ delta input for #114; it does **not** design, build, or modify `observeChanges`
 
 - **The IVM programme is complete without a literal operator core.** #108's
   step-2 acceptance criterion ("operator core exists behind
-  `@legation/effect/internal` with property tests") is resolved as
+  `@thomasfosterau/legation-effect/internal` with property tests") is resolved as
   _superseded_: the machinery shipped per-module, each with its own property
   tests and benchmarks, and the shared substrate that warranted extraction
   (`OrderedTree`) is already a module.

@@ -33,9 +33,9 @@
 import { build, files, version } from "$service-worker";
 import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientView, Coverage, type HttpCache } from "@legation/effect/internal";
-import { CacheApiHttpCache } from "@legation/browser";
-import type { JsonApiFacade } from "@legation/jsonapi";
+import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation-effect/internal";
+import { CacheApiHttpCache } from "@thomasfosterau/legation-browser";
+import type { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "./lib/domain.js";
 import { makeFacade } from "./lib/facade.js";
 import { runHost } from "./lib/host.js";

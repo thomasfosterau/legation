@@ -90,7 +90,7 @@ authoritative cart. Relationship operations are not supported.
   session.
 - **Ids and lids.** effect-jsonapi's typed `add` operation has no `id`
   member, so a client-generated id is recovered from the raw request document
-  (as `@legation/jsonapi`'s atomic push always sends one). An `add` without an
+  (as `@thomasfosterau/legation-jsonapi`'s atomic push always sends one). An `add` without an
   id gets a server id; give it a `lid` and later operations in the same batch
   can reference it (`{ "op": "update", "data": { "type": "reviews", "lid": "…" } }`,
   or through the operation's `ref`). A lid stands only for the type its `add`
@@ -109,7 +109,7 @@ authoritative cart. Relationship operations are not supported.
   (the resource for `add` / `update`, empty for `remove`), and every touched
   collection is `broadcast` once so live sync clients are poked.
 
-`@legation/jsonapi`'s `JsonApiSync.inspect` detects the endpoint from the api,
+`@thomasfosterau/legation-jsonapi`'s `JsonApiSync.inspect` detects the endpoint from the api,
 so a `JsonApiBackend` over this server pushes each journal batch as one
 all-or-nothing request, drops a pointer-named rejection as a permanent
 rejection of that mutation, and resends the rest.
@@ -191,10 +191,10 @@ the workspace runner:
 
 - Host the engine in the service worker with tab mirrors over `ClientView`
   (ADR-0010/0021) — the binding-level proof already exists in
-  `@legation/svelte`'s mirror test.
+  `@thomasfosterau/legation-svelte`'s mirror test.
 - Convert the remaining page loads to universal loads over the read proxy,
   so client navigation to the product, cart and orders pages also reads
   through the façade (the catalog is the one that does today).
 - Swap the demo sign-in for Better Auth behind the same `client_groups` +
   `IdentityResolver` seam.
-- An SSR-stub runtime helper for `@legation/svelte/kit` (see `lib/engine.ts`).
+- An SSR-stub runtime helper for `@thomasfosterau/legation-svelte/kit` (see `lib/engine.ts`).

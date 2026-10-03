@@ -1,12 +1,12 @@
-# @legation/svelte
+# @thomasfosterau/legation-svelte
 
 Idiomatic Svelte bindings for the
-[`@legation/effect`](../effect) engine.
+[`@thomasfosterau/legation-effect`](../effect) engine.
 
 Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 The package is deliberately thin. Everything the engine can do on its own —
-reads, mutations, hydration — is `@legation/effect`; what lives here is the
+reads, mutations, hydration — is `@thomasfosterau/legation-effect`; what lives here is the
 Svelte shape of it, plus the two integrations a framework can do that the core
 cannot: **reactive re-subscription** (a read re-runs when the `$state` its
 thunk touches changes) and **SSR hydration** (a server-rendered page's rows
@@ -14,19 +14,19 @@ seeding the first client render).
 
 Two entry points:
 
-| Import                 | What it is                                                                              |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| `@legation/svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
-| `@legation/svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
+| Import                                | What it is                                                                              |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `@thomasfosterau/legation-svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
+| `@thomasfosterau/legation-svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
 ## Install
 
 ```sh
-npm install @legation/svelte @legation/effect effect svelte
+npm install @thomasfosterau/legation-svelte @thomasfosterau/legation-effect effect svelte
 ```
 
 `@sveltejs/kit` is an **optional** peer dependency (`^2.0.0 || ^3.0.0`) — only
-`@legation/svelte/kit` needs it, and only as a `Cookies` type, so a non-Kit
+`@thomasfosterau/legation-svelte/kit` needs it, and only as a `Cookies` type, so a non-Kit
 Svelte app pulls nothing.
 
 ## Effect version
@@ -74,7 +74,7 @@ renders, and on the client it makes the first render match the server markup
 ```svelte
 <script lang="ts">
   import { AsyncResult } from "effect/reactivity";
-  import { useQuery } from "@legation/svelte";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
 
   let cursor = $state<string | undefined>(undefined);
   const page = useQuery(() => ({
@@ -129,14 +129,14 @@ The root entry ships as an uncompiled `.svelte.js` module (compiled by your
 bundler's Svelte plugin, the standard Svelte-library convention — the package
 carries a `svelte` export condition so the plugin picks it up). It requires
 Svelte 5.40+: the hooks are runes, and the runtime context rides Svelte's
-`createContext`. `@legation/svelte/kit` is rune-free and server-side, so
+`createContext`. `@thomasfosterau/legation-svelte/kit` is rune-free and server-side, so
 importing it pulls none of this in.
 
 ## SvelteKit
 
-`@legation/svelte/kit` adds what SvelteKit shapes: the client-group cookie, an
+`@thomasfosterau/legation-svelte/kit` adds what SvelteKit shapes: the client-group cookie, an
 SSR snapshot for a server `load`, and the snapshot-hydrated Client boot. The
-hydration itself is core (`Hydration` in `@legation/effect`) and the wiring is
+hydration itself is core (`Hydration` in `@thomasfosterau/legation-effect`) and the wiring is
 `Client.make` — this subpath is the framework's share of it, nothing more.
 It works with SvelteKit 2 and 3. The samples below import app modules through
 Kit 2's `$lib` alias. Kit 3 removes `$lib` in favour of a Node subpath import
@@ -144,7 +144,7 @@ declared in the app's `package.json` (`"imports": { "#lib/*": "./src/lib/*" }`),
 so there write `#lib/domain.js` instead; or keep `$lib` with the (deprecated)
 `alias: { $lib: "src/lib" }` option in the SvelteKit config.
 
-The SSR model (see `Hydration` in `@legation/effect`): each server render runs
+The SSR model (see `Hydration` in `@thomasfosterau/legation-effect`): each server render runs
 a **request-scoped engine** against the app's sync server, under the
 **browser's client group id**, and ships the dehydrated snapshot (rows +
 CVR cookie) in the page data. The client hydrates the snapshot into its
@@ -159,7 +159,7 @@ refetch, no reset.
 // +page.server.ts — with @thomasfosterau/effect-sveltekit's serverLoad (or any
 // Effect-based load), the app's sync server provided as ServerHandler.
 import { Effect } from "effect";
-import { loadSnapshot } from "@legation/svelte/kit";
+import { loadSnapshot } from "@thomasfosterau/legation-svelte/kit";
 import { allProducts, nodes } from "$lib/domain";
 
 export const load = serverLoad((event) =>
@@ -184,9 +184,9 @@ export const load = serverLoad((event) =>
 
 ```ts
 // $lib/engine.ts — boot once, hand the runtime to the hooks.
-import { clientRuntime } from "@legation/svelte/kit";
-import { IndexedDbClientStore } from "@legation/browser";
-import { Identity } from "@legation/effect";
+import { clientRuntime } from "@thomasfosterau/legation-svelte/kit";
+import { IndexedDbClientStore } from "@thomasfosterau/legation-browser";
+import { Identity } from "@thomasfosterau/legation-effect";
 import { mutations, nodes, shellReads } from "$lib/domain";
 
 export const boot = (data: {
@@ -223,7 +223,7 @@ export const boot = (data: {
 ```svelte
 <!-- +layout.svelte -->
 <script lang="ts">
-  import { setClientRuntime } from "@legation/svelte";
+  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   const { data, children } = $props();
   setClientRuntime(boot(data));
 </script>
@@ -234,8 +234,8 @@ seeding the rune hooks:
 
 ```svelte
 <script lang="ts">
-  import { Hydration } from "@legation/effect";
-  import { useQuery } from "@legation/svelte";
+  import { Hydration } from "@thomasfosterau/legation-effect";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
   import { allProducts, nodes } from "$lib/domain";
   const { data } = $props();
   const products = useQuery(() => allProducts, {

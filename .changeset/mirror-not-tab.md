@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 The mirror seam sheds its browser-tab coupling: the party served by
@@ -11,4 +11,4 @@ contract means. `TabMirror` is `Mirror` (module, namespace, and type),
 `MirrorMessage` (`decodeTabMessage` → `decodeMirrorMessage`), the host's
 liveness option `tabTimeout` is `mirrorTimeout`, and
 `MirrorChannel.makeLoopbackPair` returns `{ host, mirror }`. Clean
-break, no aliases; `@legation/browser` re-exports the new names.
+break, no aliases; `@thomasfosterau/legation-browser` re-exports the new names.

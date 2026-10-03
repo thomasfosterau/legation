@@ -19,8 +19,14 @@ import {
   Node,
   type Query,
   Transport,
-} from "@legation/effect";
-import { ClientEngine, Cvr, InvalidationBus, Subset, SyncServer } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import {
+  ClientEngine,
+  Cvr,
+  InvalidationBus,
+  Subset,
+  SyncServer,
+} from "@thomasfosterau/legation-effect/internal";
 import { clientGroupId, clientRuntime, loadSnapshot } from "../index.js";
 
 interface Todo {

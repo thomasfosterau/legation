@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 SSR hydration, engine seeding, and subset prefetch (#41). A client's durable

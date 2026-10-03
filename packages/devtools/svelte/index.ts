@@ -1,5 +1,5 @@
 /**
- * @legation/devtools/svelte
+ * @thomasfosterau/legation-devtools/svelte
  *
  * The Svelte panel entry point (#120): `DevtoolsPanel.svelte` is the thin
  * UI, `store.ts` bridges the headless core's Effects/Streams to Svelte

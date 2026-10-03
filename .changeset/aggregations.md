@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add `Aggregate`: serialisable aggregate descriptors (`Count`, `Sum`, `Min`,
@@ -13,7 +13,7 @@ The `ClientEngine` grows `queryAggregate` / `queryAggregateGrouped` (one-shot
 over the current local view) and `observeAggregate` / `observeAggregateGrouped`
 (live, re-emitting only when the value changes), with a matching `aggregate` /
 `aggregateGrouped` atom surface in `EngineAtoms` and an `aggregate` /
-`aggregateGrouped` store in `@legation/svelte`.
+`aggregateGrouped` store in `@thomasfosterau/legation-svelte`.
 
 These are local-tier aggregates: they fold the rows a client has already
 synced. A server-evaluated tier that folds the whole collection is explicit

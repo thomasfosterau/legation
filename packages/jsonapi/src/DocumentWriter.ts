@@ -56,8 +56,8 @@
  */
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
-import { type Node, Predicate, type Query } from "@legation/effect";
-import type { Related } from "@legation/effect/internal";
+import { type Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
+import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 
 /** A resource identifier: `{ type, id }`. */

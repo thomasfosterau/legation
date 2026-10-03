@@ -26,8 +26,8 @@ import {
   QueryError,
   Server,
   Transport,
-} from "@legation/effect";
-import { ClientEngine, ClientView } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";

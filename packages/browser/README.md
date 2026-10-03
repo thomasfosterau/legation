@@ -1,4 +1,4 @@
-# @legation/browser
+# @thomasfosterau/legation-browser
 
 Browser-runtime adapters for the legation engine: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, and a Cache API HTTP cache.
 
@@ -7,7 +7,7 @@ Browser-runtime adapters for the legation engine: service-worker engine host, In
 ## Install
 
 ```sh
-npm install @legation/browser @legation/effect effect @effect/platform-browser
+npm install @thomasfosterau/legation-browser @thomasfosterau/legation-effect effect @effect/platform-browser
 ```
 
 ## Effect version

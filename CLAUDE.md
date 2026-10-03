@@ -1,22 +1,22 @@
 # CLAUDE.md
 
-`AGENTS.md` is a symlink to this file. legation publishes the `@legation/*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **bun** workspace, not the programme's pnpm + Vite+: every command is a `bun run` script, and versions live in the root Bun catalog (`package.json` → `workspaces.catalog`) plus `overrides` (which pins the transitive `@effect/platform-node-shared` to the same version). Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it.
+`AGENTS.md` is a symlink to this file. legation publishes the `@thomasfosterau/legation-*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **bun** workspace, not the programme's pnpm + Vite+: every command is a `bun run` script, and versions live in the root Bun catalog (`package.json` → `workspaces.catalog`) plus `overrides` (which pins the transitive `@effect/platform-node-shared` to the same version). Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it.
 
-| Package                | Directory             | Purpose / boundary                                                                                                 |
-| ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `@legation/effect`     | `packages/effect`     | Engine core. App surface on `.`, engine seams for adapter authors on `./internal` (ADR-0022). Peer: `effect` only. |
-| `@legation/browser`    | `packages/browser`    | Service-worker / elected host, IndexedDB client store, tab mirrors, Cache API HTTP cache.                          |
-| `@legation/node`       | `packages/node`       | `HttpSyncServer`: the RPC sync transport on Node HTTP/WebSocket.                                                   |
-| `@legation/jsonapi`    | `packages/jsonapi`    | JSON:API loaders, derived sync, façade (over `@thomasfosterau/effect-jsonapi`).                                    |
-| `@legation/sql`        | `packages/sql`        | SQL reference `Backend` over a `SqlExecutor` seam.                                                                 |
-| `@legation/cloudflare` | `packages/cloudflare` | Durable Object rooms, fan-out shards, D1 executor.                                                                 |
-| `@legation/svelte`     | `packages/svelte`     | Rune hooks; SvelteKit surface on `./kit`.                                                                          |
-| `@legation/devtools`   | `packages/devtools`   | Headless devtools core; Svelte panel on `./svelte` (ships raw `.svelte` source).                                   |
+| Package                               | Directory             | Purpose / boundary                                                                                                 |
+| ------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `@thomasfosterau/legation-effect`     | `packages/effect`     | Engine core. App surface on `.`, engine seams for adapter authors on `./internal` (ADR-0022). Peer: `effect` only. |
+| `@thomasfosterau/legation-browser`    | `packages/browser`    | Service-worker / elected host, IndexedDB client store, tab mirrors, Cache API HTTP cache.                          |
+| `@thomasfosterau/legation-node`       | `packages/node`       | `HttpSyncServer`: the RPC sync transport on Node HTTP/WebSocket.                                                   |
+| `@thomasfosterau/legation-jsonapi`    | `packages/jsonapi`    | JSON:API loaders, derived sync, façade (over `@thomasfosterau/effect-jsonapi`).                                    |
+| `@thomasfosterau/legation-sql`        | `packages/sql`        | SQL reference `Backend` over a `SqlExecutor` seam.                                                                 |
+| `@thomasfosterau/legation-cloudflare` | `packages/cloudflare` | Durable Object rooms, fan-out shards, D1 executor.                                                                 |
+| `@thomasfosterau/legation-svelte`     | `packages/svelte`     | Rune hooks; SvelteKit surface on `./kit`.                                                                          |
+| `@thomasfosterau/legation-devtools`   | `packages/devtools`   | Headless devtools core; Svelte panel on `./svelte` (ships raw `.svelte` source).                                   |
 
 ## Common pitfalls
 
 - **Code that needs only `effect` goes in `packages/effect`**; runtime-, protocol- or framework-specific code gets its own package (ADR-0006), so the core runs identically in browsers, workers, edge runtimes and Node.
-- **App-facing names go on `@legation/effect`, engine seams on `@legation/effect/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
+- **App-facing names go on `@thomasfosterau/legation-effect`, engine seams on `@thomasfosterau/legation-effect/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
 - **`effect` is a peer, never a dependency**: two copies break `Context` identity. The dev pin lives once in the root catalog; the published floor is the open range in each package's `peerDependencies`. To move either, follow CONTRIBUTING.md "Effect version upgrades".
 - **Publish only through `bun run release` (`scripts/release.ts`)**, never with `npm publish`, `npm publish --workspaces` or a bare `changeset publish`: npm copies `workspace:^` and `catalog:` into the packed `package.json` verbatim, so the dependent packages would ship uninstallable manifests. The script packs with `bun pm pack` (which rewrites both) and uploads with `npm publish <tarball>`, because `bun publish` has no npm OIDC trusted publishing ([#267](https://github.com/thomasfosterau/legation/issues/267)). `bun pm pack` takes internal ranges from `bun.lock`, not `package.json`, so `bun.lock` must carry the bumped versions: `bun run version` runs `bun install --lockfile-only` after `changeset version`, and `release:check` fails on a stale lock.
 

@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/node": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-node": minor
 ---
 
 Effect-idiomatic API refactor:

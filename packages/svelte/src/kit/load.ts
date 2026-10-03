@@ -12,18 +12,18 @@
  * provide the app's sync server as `ServerHandler` and pass no transport.
  * Separate Worker (the usual Cloudflare shape — a SvelteKit Worker in front
  * of a binding-only API Worker): pass a `transport` built from the request's
- * service binding (`BindingTransport` in `@legation/cloudflare`), and nothing
+ * service binding (`BindingTransport` in `@thomasfosterau/legation-cloudflare`), and nothing
  * is required from context.
  */
 import type { Cookies } from "@sveltejs/kit";
 import { Effect } from "effect";
-import { Hydration, type Transport } from "@legation/effect";
+import { Hydration, type Transport } from "@thomasfosterau/legation-effect";
 import type {
   MutatorError,
   StoreError,
   TransportError,
   VersionNotSupportedError,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import { clientGroupId, type ClientGroupOptions } from "./clientGroup.js";
 
 /** Options for {@link loadSnapshot}. */

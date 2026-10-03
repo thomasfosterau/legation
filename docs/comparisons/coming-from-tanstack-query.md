@@ -23,7 +23,7 @@ The snippets assume a `ClientEngine` in scope as `engine` and its `ClientStore`
 as `store`, both obtained from `ClientEngine.make(...)` (see the top-level
 [README](../README.md) quick start). They are illustrative fragments: effectful
 lines are the body of an `Effect.gen(function* () { … })`, and `atoms` /
-`engineLayer` refer to the reactivity bindings from `@legation/svelte`. Import surface:
+`engineLayer` refer to the reactivity bindings from `@thomasfosterau/legation-svelte`. Import surface:
 
 ```ts
 import { Duration, Effect, Schedule, Schema, Stream } from "effect";
@@ -34,7 +34,7 @@ import {
   Mutator,
   Predicate,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   EngineAtoms,
@@ -43,7 +43,7 @@ import {
   Related,
   Subscriptions,
   Subset,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 ```
 
 ## The mapping
@@ -249,7 +249,7 @@ over the mirror channel — never live objects. Each tab holds a read-only
 against that mirror.
 
 ```ts
-// In @legation/browser: a tab forwards an encoded mutation to the host over the
+// In @thomasfosterau/legation-browser: a tab forwards an encoded mutation to the host over the
 // mirror channel; the host is the only writer. See TabMirror / MirrorChannel.
 ```
 
@@ -279,7 +279,7 @@ queries](https://tanstack.com/query/latest/docs/framework/react/guides/paginated
 
 A changed subset (a paging cursor, a filter) selects a different atom whose
 `AsyncResult` starts at `Initial` — nothing carries the old rows across by
-default, so the UI flashes a loading state between pages. `@legation/svelte`'s
+default, so the UI flashes a loading state between pages. `@thomasfosterau/legation-svelte`'s
 `useQuery`/`useConnection` do this automatically: re-subscribing on an input
 change keeps the previous result on screen as a `waiting` `Success`
 (`useLiveStream`'s stale-while-revalidate). The bindings' atoms are
@@ -373,7 +373,7 @@ is an Effect `Stream` and, via `Derive.atom`, an atom on the standard surface,
 so `useQuery` / the Svelte `query` store bind it with no new machinery.
 
 ```ts
-import { Derive } from "@legation/effect/internal";
+import { Derive } from "@thomasfosterau/legation-effect/internal";
 
 const teamOpenCounts$ = Derive.map(
   Derive.groupBy(

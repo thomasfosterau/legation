@@ -1,8 +1,8 @@
 # legation · SvelteKit · RealWorld (Conduit)
 
 The [RealWorld](https://codebase.show/projects/realworld) spec — Conduit —
-driving [`@legation/effect`](../../packages/effect) through the
-[`@legation/svelte`](../../packages/svelte) **rune hooks** on SvelteKit. Like the
+driving [`@thomasfosterau/legation-effect`](../../packages/effect) through the
+[`@thomasfosterau/legation-svelte`](../../packages/svelte) **rune hooks** on SvelteKit. Like the
 other client-only examples it runs the **real library server pipeline in the
 page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`) over a
 durable `localStorage` client store.

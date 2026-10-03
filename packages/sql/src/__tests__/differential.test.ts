@@ -24,8 +24,8 @@
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
-import { Predicate } from "@legation/effect";
-import { FilterCorpus, Subset } from "@legation/effect/internal";
+import { Predicate } from "@thomasfosterau/legation-effect";
+import { FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Exit, Option, Scope } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";

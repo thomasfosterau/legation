@@ -91,7 +91,9 @@ export interface InvalidationBus {
 }
 
 /** The {@link InvalidationBus} service the sync server and hint sources use. */
-export const InvalidationBus = Context.Service<InvalidationBus>("@legation/effect/InvalidationBus");
+export const InvalidationBus = Context.Service<InvalidationBus>(
+  "@thomasfosterau/legation-effect/InvalidationBus"
+);
 
 /**
  * In-process bus over a bounded, dropping PubSub (#44).

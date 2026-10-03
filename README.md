@@ -44,7 +44,7 @@ the service worker's journal ([ADR-0010](docs/adr/0010-service-worker-hosted-cli
 
 Apps that can't run a service worker (some embedded webviews, or a dev
 environment where it's inconvenient) run the same host composition on a
-tab's main thread instead, with `@legation/browser`'s `ElectedHost.run`
+tab's main thread instead, with `@thomasfosterau/legation-browser`'s `ElectedHost.run`
 electing exactly one tab per browser profile via the Web Locks API
 (`navigator.locks`) — held for that tab's whole lifetime, no voluntary
 step-down. Every other tab mirrors it over the same `BroadcastChannel`; when
@@ -61,16 +61,16 @@ for a single tab only), not a polyfill.
 
 Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md)).
 
-| Package                                       | Description                                                                                                                                                                                                                                                            |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@legation/effect`](packages/effect)         | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
-| [`@legation/browser`](packages/browser)       | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                         |
-| [`@legation/node`](packages/node)             | Node adapters: serving the default RPC sync transport over HTTP/WebSocket (`HttpSyncServer`)                                                                                                                                                                           |
-| [`@legation/jsonapi`](packages/jsonapi)       | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
-| [`@legation/sql`](packages/sql)               | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
-| [`@legation/cloudflare`](packages/cloudflare) | Cloudflare adapters: Durable-Object-hosted rooms and the edge transport                                                                                                                                                                                                |
-| [`@legation/svelte`](packages/svelte)         | Svelte bindings: `setClientRuntime` + the hooks (`useQuery` / `useConnection` / `useAggregate` / `useMutation` / `useUndo`) on one entry point, with the SvelteKit surface — client-group cookie, SSR snapshot `load`, snapshot-hydrated boot — on `/kit`              |
-| [`@legation/devtools`](packages/devtools)     | Headless devtools core (journal, subsets, forced push/pull, simulated offline) plus a Svelte panel on `/svelte`                                                                                                                                                        |
+| Package                                                      | Description                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/legation-effect`](packages/effect)         | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
+| [`@thomasfosterau/legation-browser`](packages/browser)       | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                         |
+| [`@thomasfosterau/legation-node`](packages/node)             | Node adapters: serving the default RPC sync transport over HTTP/WebSocket (`HttpSyncServer`)                                                                                                                                                                           |
+| [`@thomasfosterau/legation-jsonapi`](packages/jsonapi)       | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
+| [`@thomasfosterau/legation-sql`](packages/sql)               | Driver-agnostic SQL reference backend: `Subset`→`WHERE` translation (SQLite/Postgres) + a `SqlBackend` over a minimal executor seam (subset evaluation, row fetch, transactional idempotent mutation-id ledger)                                                        |
+| [`@thomasfosterau/legation-cloudflare`](packages/cloudflare) | Cloudflare adapters: Durable-Object-hosted rooms and the edge transport                                                                                                                                                                                                |
+| [`@thomasfosterau/legation-svelte`](packages/svelte)         | Svelte bindings: `setClientRuntime` + the hooks (`useQuery` / `useConnection` / `useAggregate` / `useMutation` / `useUndo`) on one entry point, with the SvelteKit surface — client-group cookie, SSR snapshot `load`, snapshot-hydrated boot — on `/kit`              |
+| [`@thomasfosterau/legation-devtools`](packages/devtools)     | Headless devtools core (journal, subsets, forced push/pull, simulated offline) plus a Svelte panel on `/svelte`                                                                                                                                                        |
 
 ## Quick start (in-process)
 
@@ -87,7 +87,7 @@ import {
   Server,
   Transport,
   type Query,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 
 // 1. The shared vocabulary: a one-node graph, a named mutation, a read.
 const Todo = Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean });
@@ -139,18 +139,18 @@ Effect.runPromise(Effect.scoped(program)).then(console.log);
 
 Every example is a **SvelteKit** app on ADR-0022's vocabulary — a `Node`/`Edge`
 graph, declarative `Query.Read`s, `Mutation`s, one `Client` per thread, one
-`Server` per backend — read through the [`@legation/svelte`](packages/svelte)
+`Server` per backend — read through the [`@thomasfosterau/legation-svelte`](packages/svelte)
 rune hooks. Three are client-only demos that run the **real library server
 pipeline in the page** (`Server.make` over a `MemoryBackend`) against a durable
 `localStorage` client store; the fourth is the full-stack deployment, with a
 real server process and the engine in a service worker.
 
-| App                     | Example                           | Exercises                                                                                                                                                                                                                                                                                                                                                                |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                                                                                                                                                              |
-| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                                                                                                                                                                         |
-| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                                                                                                                                                                                |
-| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@legation/svelte/kit`](packages/svelte), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, a no-JS baseline, and the JSON:API **façade** (ADR-0029): plain `fetch()` of a catalog URL answered from the worker's replica, proven in a Chromium test that goes offline |
+| App                     | Example                           | Exercises                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                                                                                                                                                                             |
+| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                                                                                                                                                                                        |
+| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                                                                                                                                                                                               |
+| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@thomasfosterau/legation-svelte/kit`](packages/svelte), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, a no-JS baseline, and the JSON:API **façade** (ADR-0029): plain `fetch()` of a catalog URL answered from the worker's replica, proven in a Chromium test that goes offline |
 
 The first three are SvelteKit **SPAs** — the engine, its store, and the demo
 backend are browser-only, so they turn SSR off in the root layout and build

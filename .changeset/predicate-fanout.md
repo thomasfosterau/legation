@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/sql": minor
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Predicate-aware fan-out matching. A committed write now pokes a client group

@@ -9,8 +9,8 @@
  */
 
 import { Effect, Schema } from "effect";
-import { ProtocolError } from "@legation/effect";
-import { Protocol } from "@legation/effect/internal";
+import { ProtocolError } from "@thomasfosterau/legation-effect";
+import { Protocol } from "@thomasfosterau/legation-effect/internal";
 
 type Decoder<A> = (input: unknown) => Effect.Effect<A, ProtocolError>;
 

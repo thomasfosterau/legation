@@ -13,8 +13,8 @@
    */
   import { Effect } from "effect";
   import { AsyncResult } from "effect/reactivity";
-  import { useAggregate, useQuery, useUndo } from "@legation/svelte";
-  import { Aggregate } from "@legation/effect";
+  import { useAggregate, useQuery, useUndo } from "@thomasfosterau/legation-svelte";
+  import { Aggregate } from "@thomasfosterau/legation-effect";
   import { type Todo, allTodos, activeTodos } from "$lib/domain";
   import { connectionState, getDemo, pendingState } from "$lib/demo.svelte";
 
