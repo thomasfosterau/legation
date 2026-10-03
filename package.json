@@ -73,7 +73,7 @@
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",
-    "@vitest/coverage-v8": "^5.0.2",
+    "@vitest/coverage-v8": "^5.0.3",
     "effect": "catalog:",
     "fallow": "catalog:",
     "jsdom": "catalog:",
@@ -84,7 +84,7 @@
     "svelte": "^5",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.3"
   },
   "repository": {
     "type": "git",
