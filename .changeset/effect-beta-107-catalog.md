@@ -1,17 +1,17 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/node": minor
-"@legation/jsonapi": minor
-"@legation/sql": minor
-"@legation/cloudflare": minor
-"@legation/svelte": minor
-"@legation/devtools": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-node": minor
+"@thomasfosterau/legation-jsonapi": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-cloudflare": minor
+"@thomasfosterau/legation-svelte": minor
+"@thomasfosterau/legation-devtools": minor
 ---
 
 Bump the pinned Effect version from `4.0.0-beta.84` to `4.0.0-beta.107` across
 all packages (catalog and exact `peerDependencies`), and move
-`@legation/jsonapi` and the commerce example from
+`@thomasfosterau/legation-jsonapi` and the commerce example from
 `@thomasfosterau/effect-jsonapi@^0.6.0` to `^0.12.0` (#152).
 
 **Why beta.107.** effect-jsonapi 0.12 requires `effect >= 4.0.0-beta.104` and
@@ -52,4 +52,4 @@ The commerce example narrows this with a small `run` helper in
 
 The bump is `minor` rather than `patch` because the exact `effect` peer pin
 means every consumer must move `effect` in the same change, and the
-`@legation/jsonapi` type signatures above changed shape.
+`@thomasfosterau/legation-jsonapi` type signatures above changed shape.

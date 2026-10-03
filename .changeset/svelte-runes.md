@@ -1,8 +1,8 @@
 ---
-"@legation/svelte": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
-Add a rune-based API for Svelte 5 at `@legation/svelte/runes`: `useQuery`,
+Add a rune-based API for Svelte 5 at `@thomasfosterau/legation-svelte/runes`: `useQuery`,
 `useNamedQuery`, `useAggregate`, `useAggregateGrouped`, `useRelated` (with an
 auto-subscribing `subscribe: true` variant) and `useMutation` /
 `useMutationWithAck`. Hooks take their inputs as thunks tracked by `$effect`,

@@ -21,8 +21,8 @@ import {
   Predicate,
   Query,
   QueryError,
-} from "@legation/effect";
-import { ClientEngine, FilterCorpus, Subset } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import { ClientEngine, FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 

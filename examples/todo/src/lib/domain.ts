@@ -14,7 +14,7 @@
  */
 
 import { Schema } from "effect";
-import { Mutation, Node, type Query } from "@legation/effect";
+import { Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
 
 /** A todo row. Same schema drives the node, the mutation args, and the UI. */
 export const Todo = Schema.Struct({

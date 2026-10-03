@@ -1,5 +1,5 @@
 ---
-"@legation/browser": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 Flush the journal after the tab has closed (#213, #246). `BrowserConnectivity`

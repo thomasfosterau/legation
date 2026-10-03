@@ -2,11 +2,11 @@
 
 Date: 2026-07-03
 Status: Accepted — amended 2026-09-01 (placement 2: the Kit package became the
-`@legation/svelte/kit` subpath; `Hydration` is public and speaks `Query.Read`)
+`@thomasfosterau/legation-svelte/kit` subpath; `Hydration` is public and speaks `Query.Read`)
 
 ## Context
 
-The engine had no SvelteKit story: `@legation/svelte` shipped stores and rune
+The engine had no SvelteKit story: `@thomasfosterau/legation-svelte` shipped stores and rune
 hooks but no SSR handling, and the only SSR primitive was the
 framework-agnostic `Hydration` module (dehydrate → JSON → hydrate, with the
 CVR cookie carried across so the first client pull continues the
@@ -24,7 +24,7 @@ ADR-0016 question again: adopt or reimplement?
 
 Three placements, following ADR-0006's dependency test:
 
-1. **SSR primitives live in core** (`Hydration` in `@legation/effect`): they
+1. **SSR primitives live in core** (`Hydration` in `@thomasfosterau/legation-effect`): they
    need only `effect`. `Hydration.snapshot` produces a page snapshot over a
    request-scoped engine (in-memory store + in-process transport to the
    in-context `ServerHandler`, subscribe → pull → dehydrate) under the
@@ -43,27 +43,27 @@ Three placements, following ADR-0006's dependency test:
    `loadSnapshot` returns a plain Effect that runs inside any Effect-based
    `load`, so the integration composes rather than nests.
 
-**`@legation/svelte`'s rune hooks remain native** rather than layering on
+**`@thomasfosterau/legation-svelte`'s rune hooks remain native** rather than layering on
 `@thomasfosterau/effect-svelte`: that library's runtime context is
 deliberately type-erased (`RuntimeLike<never>`), while the binding's value is
 the engine-typed context, and its stream hooks take static streams where the
 engine hooks need reactive thunks (re-subscribe on `$state` change). The two
 compose side by side in an app — effect-svelte for generic Effect concerns,
-`@legation/svelte` for engine reads/writes.
+`@thomasfosterau/legation-svelte` for engine reads/writes.
 
 ## Amendment (2026-09-01)
 
 Placement 2 shipped as a separate package, `@legation/sveltekit`. It is now the
-**`@legation/svelte/kit` subpath** of the bindings package instead. ADR-0006's
+**`@thomasfosterau/legation-svelte/kit` subpath** of the bindings package instead. ADR-0006's
 dependency test drew the original line, but the footprint turned out not to
 justify it: the package contained no Svelte code and its entire `@sveltejs/kit`
 coupling was two `import type { Cookies }` statements, erased at build — so
 there was no runtime dependency to isolate. `@sveltejs/kit` is an **optional**
-peer of `@legation/svelte`; a non-Kit Svelte app pulls nothing, and subpath
+peer of `@thomasfosterau/legation-svelte`; a non-Kit Svelte app pulls nothing, and subpath
 exports keep the server helpers out of a client bundle that never imports them.
 
 Two consequences of that move sharpen placement 1. `Hydration` was described
-here as living in core but shipped behind `@legation/effect/internal`; it is
+here as living in core but shipped behind `@thomasfosterau/legation-effect/internal`; it is
 now exported from the package root, because an SSR snapshot is an app-facing
 concept, not an implementation seam. And it speaks ADR-0022's vocabulary:
 `snapshot({ nodes, reads })` and `rowsFor(snapshot, nodes, read)` rather than

@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 Bound every in-process message hub so a stalled or slow consumer can no longer

@@ -11,7 +11,7 @@
  */
 import { createRuntimeContext } from "@thomasfosterau/effect-svelte";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
-import type { Client } from "@legation/effect";
+import type { Client } from "@thomasfosterau/legation-effect";
 
 /**
  * A runtime carrying the {@link Client.Client} — ADR-0022's one-per-thread
@@ -22,7 +22,7 @@ import type { Client } from "@legation/effect";
 export type ClientRuntime = ManagedRuntime.ManagedRuntime<Client.Client, never>;
 
 const clientContext = createRuntimeContext<Client.Client>(
-  "@legation/svelte — call setClientRuntime(runtime) higher in the component tree"
+  "@thomasfosterau/legation-svelte — call setClientRuntime(runtime) higher in the component tree"
 );
 
 /**

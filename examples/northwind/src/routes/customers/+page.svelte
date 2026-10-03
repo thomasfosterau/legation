@@ -7,7 +7,7 @@
    * the count is `.length` of what the engine already maintains.
    */
   import { AsyncResult } from "effect/reactivity";
-  import { useQuery } from "@legation/svelte";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
   import { allCustomers } from "$lib/domain";
   import { toCustomerCounts } from "$lib/data";
 

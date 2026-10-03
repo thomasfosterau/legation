@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Compound documents from the replica (#164): the worker-side caller of the one

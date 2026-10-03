@@ -1,5 +1,5 @@
 /**
- * Loading the BUILT `@legation/node` where `redis` cannot be resolved (#254).
+ * Loading the BUILT `@thomasfosterau/legation-node` where `redis` cannot be resolved (#254).
  *
  * `@effect/platform-node` declares a non-optional peer on `redis`, and its
  * root entry re-exports `NodeRedis`, which imports `redis` at module load.
@@ -7,7 +7,7 @@
  * it has to reach `NodeHttpServer` by subpath rather than through that root
  * entry.
  *
- * The check runs in a child Node process (Vitest aliases `@legation/node` to
+ * The check runs in a child Node process (Vitest aliases `@thomasfosterau/legation-node` to
  * source and runs its own loader, so only a plain `node` exercises the
  * published `dist/` the way an app does). `redis` stays installed in this
  * workspace; the child instead registers a module `resolve` hook that rejects
@@ -42,10 +42,10 @@ register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hooks)}`)})
 /** Imports each specifier in order and reports `"ok"` or the error code. */
 const probe = `
 const results = {};
-for (const specifier of ["redis", "@legation/node", "@effect/platform-node"]) {
+for (const specifier of ["redis", "@thomasfosterau/legation-node", "@effect/platform-node"]) {
   try {
     const module = await import(specifier);
-    results[specifier] = specifier === "@legation/node"
+    results[specifier] = specifier === "@thomasfosterau/legation-node"
       ? typeof module.HttpSyncServer?.layerHttp
       : "ok";
   } catch (error) {
@@ -55,8 +55,8 @@ for (const specifier of ["redis", "@legation/node", "@effect/platform-node"]) {
 process.stdout.write(JSON.stringify(results));
 `;
 
-describe("@legation/node without redis", () => {
-  // The child loads `dist/`, so build it (and `@legation/effect`, which it
+describe("@thomasfosterau/legation-node without redis", () => {
+  // The child loads `dist/`, so build it (and `@thomasfosterau/legation-effect`, which it
   // references) first; a no-op when `bun run build` already ran, as in CI.
   beforeAll(() => {
     try {
@@ -95,7 +95,7 @@ describe("@legation/node without redis", () => {
       redis: "ERR_MODULE_NOT_FOUND",
       "@effect/platform-node": "ERR_MODULE_NOT_FOUND",
       // The package loads and exposes its API.
-      "@legation/node": "function",
+      "@thomasfosterau/legation-node": "function",
     });
   }, 60_000);
 });

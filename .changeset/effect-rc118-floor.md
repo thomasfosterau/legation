@@ -1,12 +1,12 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/node": minor
-"@legation/jsonapi": minor
-"@legation/sql": minor
-"@legation/cloudflare": minor
-"@legation/svelte": minor
-"@legation/devtools": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-node": minor
+"@thomasfosterau/legation-jsonapi": minor
+"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation-cloudflare": minor
+"@thomasfosterau/legation-svelte": minor
+"@thomasfosterau/legation-devtools": minor
 ---
 
 Target Effect `4.0.0-rc.118`: every package peers `effect >=4.0.0-rc.118`
@@ -18,8 +18,8 @@ The packages import Effect's modules at their rc.118 paths (`effect/rpc`,
 `effect/http`, `effect/http-api`, …); rc.118 removed the `effect/unstable/*`
 export paths, so the packages don't resolve beside an earlier `effect`.
 
-**`@legation/jsonapi`** depends on `@thomasfosterau/effect-jsonapi@^0.16.1`,
+**`@thomasfosterau/legation-jsonapi`** depends on `@thomasfosterau/effect-jsonapi@^0.16.1`,
 the first release that peers `effect >=4.0.0-rc.118`.
 
-**`@legation/svelte`** depends on `@thomasfosterau/effect-svelte@^0.4.0`, for
+**`@thomasfosterau/legation-svelte`** depends on `@thomasfosterau/effect-svelte@^0.4.0`, for
 the same reason.

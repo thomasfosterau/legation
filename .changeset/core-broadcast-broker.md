@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Add `BusBrokers.makeBroadcastChannelBroker`: a concrete `BusBroker` over a

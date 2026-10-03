@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Northwind Traders admin dashboard driving the legation engine through @legation/svelte on SvelteKit: a route per screen, seven collections joined live over the mirror, optimistic edits.",
+  "description": "Northwind Traders admin dashboard driving the legation engine through @thomasfosterau/legation-svelte on SvelteKit: a route per screen, seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
-    "@legation/devtools": "workspace:*",
-    "@legation/effect": "workspace:*",
-    "@legation/svelte": "workspace:*",
+    "@thomasfosterau/legation-devtools": "workspace:*",
+    "@thomasfosterau/legation-effect": "workspace:*",
+    "@thomasfosterau/legation-svelte": "workspace:*",
     "effect": "catalog:",
     "svelte": "^5"
   },

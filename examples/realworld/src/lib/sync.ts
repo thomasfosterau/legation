@@ -37,8 +37,8 @@ import {
   MemoryBackend,
   Server,
   Transport,
-} from "@legation/effect";
-import type { ClientRuntime } from "@legation/svelte";
+} from "@thomasfosterau/legation-effect";
+import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
 
 import {
   type Article,

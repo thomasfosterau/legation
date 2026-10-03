@@ -1,15 +1,15 @@
-# @legation/devtools
+# @thomasfosterau/legation-devtools
 
 A devtools panel over the introspection substrate (#120): the journal &
 mutation timeline, subscriptions & collections, sync activity log, and
 actions (force pull/push, a simulated-offline toggle, drop a subscription,
 and a destructive clear-store behind a confirm).
 
-Architecture: a framework-agnostic headless core (`@legation/devtools`) that
+Architecture: a framework-agnostic headless core (`@thomasfosterau/legation-devtools`) that
 owns all data acquisition — built entirely over already-public substrate
-(`@legation/effect/internal`'s `Introspection`, `ClientEngine.mutationStates`,
+(`@thomasfosterau/legation-effect/internal`'s `Introspection`, `ClientEngine.mutationStates`,
 `ClientEngine.engineEvents`/`syncFailures`, `ClientStore`) — plus thin,
-idiomatic panels per framework — today `@legation/devtools/svelte`. A panel
+idiomatic panels per framework — today `@thomasfosterau/legation-devtools/svelte`. A panel
 just runs the core's Effects/Streams through its own framework's reactivity;
 it has no data-acquisition path of its own.
 
@@ -19,10 +19,10 @@ out of scope — a human design pass comes later.
 ## Install
 
 ```sh
-npm install @legation/devtools @legation/effect effect
+npm install @thomasfosterau/legation-devtools @thomasfosterau/legation-effect effect
 ```
 
-Add `svelte` (an optional peer, `>=5.40`) for the `@legation/devtools/svelte` panel.
+Add `svelte` (an optional peer, `>=5.40`) for the `@thomasfosterau/legation-devtools/svelte` panel.
 
 ## Effect version
 
@@ -39,7 +39,7 @@ follow-up substrate issue (#136).
 ## Usage
 
 ```ts
-import * as Devtools from "@legation/devtools";
+import * as Devtools from "@thomasfosterau/legation-devtools";
 
 // `engine`/`store` are the same values you provided to `ClientEngine.make`.
 const devtools = Devtools.make(engine, store, {
@@ -53,7 +53,7 @@ Svelte:
 
 ```svelte
 <script lang="ts">
-  import { DevtoolsPanel } from "@legation/devtools/svelte";
+  import { DevtoolsPanel } from "@thomasfosterau/legation-devtools/svelte";
 </script>
 
 <DevtoolsPanel core={devtools} />
@@ -64,7 +64,7 @@ it pays nothing for the panel in its production bundle. The headless core is
 framework-agnostic — a binding for another framework is a component over the
 same `DevtoolsCore`.
 
-Note: `@legation/devtools/svelte` ships raw `.svelte`/`.ts` source (not a
+Note: `@thomasfosterau/legation-devtools/svelte` ships raw `.svelte`/`.ts` source (not a
 pre-compiled bundle) — any Svelte 5 app already has a bundler that compiles
 `.svelte` files, so this composes directly with your app's own build.
 

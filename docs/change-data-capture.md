@@ -10,10 +10,10 @@ is not realtime.
 A **hint source** closes that gap: it produces `ChangeHint`s for out-of-band
 writes and publishes them to the `InvalidationBus`, so the same fan-out loop
 pokes affected clients. Every tier below feeds the one seam,
-`HintSource` (`@legation/effect`), and forks alongside the SyncServer:
+`HintSource` (`@thomasfosterau/legation-effect`), and forks alongside the SyncServer:
 
 ```ts
-import { HintSource } from "@legation/effect/internal";
+import { HintSource } from "@thomasfosterau/legation-effect/internal";
 
 // Fork a source onto the caller's scope; it stops when the scope closes.
 yield * HintSource.run(source);
@@ -33,7 +33,7 @@ to pay (ADR-0019).
 If the writer is your code, publish the hint directly. This needs nothing new:
 
 ```ts
-import { InvalidationBus } from "@legation/effect/internal";
+import { InvalidationBus } from "@thomasfosterau/legation-effect/internal";
 
 // After an out-of-band write to the todos collection:
 yield * InvalidationBus.publish([{ collection: "todos", ids: ["1"] }]);
@@ -44,7 +44,7 @@ pub/sub, …) the hint reaches every instance, so a write on one node pokes
 subscribers on all of them. Carry `ids` (and, if cheap, row `values`) to let the
 fan-out matcher poke by predicate instead of by collection.
 
-## Tier 2 — polling (`@legation/sql`)
+## Tier 2 — polling (`@thomasfosterau/legation-sql`)
 
 When you cannot make every writer publish a hint, poll the database. The polling
 hint source reads a cheap change-detector per table on an interval and pokes a
@@ -52,8 +52,8 @@ collection whose detector moved. It uses only the `SqlExecutor` seam you already
 provide to `SqlBackend` — no extra dependency.
 
 ```ts
-import { HintSource } from "@legation/effect/internal";
-import { PollingHintSource } from "@legation/sql";
+import { HintSource } from "@thomasfosterau/legation-effect/internal";
+import { PollingHintSource } from "@thomasfosterau/legation-sql";
 
 const source = PollingHintSource.make({
   executor, // the same SqlExecutor your SqlBackend uses
@@ -111,7 +111,7 @@ needs.
 
 ```ts
 import { Effect, Schema, Stream } from "effect";
-import { HintSource } from "@legation/effect/internal";
+import { HintSource } from "@thomasfosterau/legation-effect/internal";
 
 const HintPayload = Schema.fromJsonString(
   Schema.Struct({ collection: Schema.String, id: Schema.String })
@@ -135,7 +135,7 @@ const hints = notifications.pipe(
 yield * HintSource.run(HintSource.fromStream(hints));
 ```
 
-If this recipe ever becomes shipped code, its home is a future `@legation/pg`
+If this recipe ever becomes shipped code, its home is a future `@thomasfosterau/legation-pg`
 package, not core (ADR-0006).
 
 ## Not shipped — tier 4 (logical replication)

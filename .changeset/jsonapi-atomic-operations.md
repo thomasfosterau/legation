@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Push the journal as one `atomic:operations` request when the server advertises

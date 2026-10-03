@@ -104,5 +104,5 @@ topic key:
 - The `FanoutBroker` seam (topic pub/sub + leases) replaces the current
   flat `InvalidationBus` channel inside `Server`; in-process, Redis, and
   Durable Object implementations satisfy the same contract, and the
-  `@legation/cloudflare` adapter ships the DO shard class alongside the
+  `@thomasfosterau/legation-cloudflare` adapter ships the DO shard class alongside the
   user-room class.

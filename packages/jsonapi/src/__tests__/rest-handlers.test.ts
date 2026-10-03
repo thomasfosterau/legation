@@ -32,7 +32,7 @@ import {
   MemoryBackend,
   Node,
   Predicate,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as RestHandlers from "../RestHandlers.js";
 

@@ -1,14 +1,14 @@
 ---
-"@legation/jsonapi": minor
-"@legation/browser": minor
-"@legation/effect": minor
+"@thomasfosterau/legation-jsonapi": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 The JSON:API façade (ADR-0029, issue #166): a fetch handler that answers a
 covered JSON:API `GET` from the replica and stays out of the way otherwise.
 
 - `JsonApiFacade.fetchHandler({ nodes, api, view, coverageOf, cookie?, resources?, baseUrl?, prefix?, online? })`
-  in `@legation/jsonapi` builds the façade from the app's `HttpApi`
+  in `@thomasfosterau/legation-jsonapi` builds the façade from the app's `HttpApi`
   (`Convention.reflectResources` gives the `list` / `getOne` routes it
   recognises; those whose type is no node are left to the server), the
   node graph, the replica's view and a coverage source. It presumes the
@@ -33,10 +33,10 @@ covered JSON:API `GET` from the replica and stays out of the way otherwise.
   whose row the replica does not hold (the 404 is the endpoint's own).
   Coverage is every read `ReplicaDocuments.toCover` names, each judged by
   `coverageOf` — `client.coverageOf`, or the host's registrations below.
-  The module lives in `@legation/jsonapi` by ADR-0006: it needs this
+  The module lives in `@thomasfosterau/legation-jsonapi` by ADR-0006: it needs this
   package's codec, writer and route reflection plus the standard
   `Request` / `Response` globals, and `navigator.onLine` is an option with a
-  guarded default, so `@legation/browser` stays free of effect-jsonapi.
+  guarded default, so `@thomasfosterau/legation-browser` stays free of effect-jsonapi.
 - `EngineHost.run` returns a `Host` whose `registrations` lists what the
   host holds on its mirrors' behalf — root windows, relational registrations
   with their edge selects, both halves of a `SubscribeUrl` with its canonical

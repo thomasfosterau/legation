@@ -28,8 +28,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { JsonApiQuery, NodeBridge } from "@legation/jsonapi";
-import type { Node, Query } from "@legation/effect";
+import { JsonApiQuery, NodeBridge } from "@thomasfosterau/legation-jsonapi";
+import type { Node, Query } from "@thomasfosterau/legation-effect";
 import {
   allCategories,
   allVariants,

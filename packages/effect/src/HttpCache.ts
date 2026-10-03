@@ -54,7 +54,7 @@ export interface ResponseCacheStore {
  * the fetch handlers take it as an option.
  */
 export const ResponseCacheStore = Context.Service<ResponseCacheStore>(
-  "@legation/effect/ResponseCacheStore"
+  "@thomasfosterau/legation-effect/ResponseCacheStore"
 );
 
 /** Per-route caching policy. */

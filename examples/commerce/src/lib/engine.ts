@@ -20,9 +20,9 @@
  * `bootElected`).
  */
 import { Effect, Layer, ManagedRuntime, type Stream } from "effect";
-import { Client } from "@legation/effect";
-import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@legation/browser";
-import type { ClientRuntime } from "@legation/svelte";
+import { Client } from "@thomasfosterau/legation-effect";
+import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
+import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
 import { mutators, nodes, shellReads } from "./domain.js";
 import { bootElected } from "./host.js";
 

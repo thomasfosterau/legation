@@ -13,9 +13,9 @@
    */
   import { page } from "$app/state";
   import { Effect, Fiber, Stream } from "effect";
-  import { setClientRuntime } from "@legation/svelte";
-  import { DevtoolsPanel } from "@legation/devtools/svelte";
-  import type { Transport } from "@legation/effect";
+  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
+  import { DevtoolsPanel } from "@thomasfosterau/legation-devtools/svelte";
+  import type { Transport } from "@thomasfosterau/legation-effect";
   import "../app.css";
 
   const TABS = [

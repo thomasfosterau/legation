@@ -73,7 +73,7 @@ mirror stays.
 The façade is a **third front over the same `ClientEngine`**, beside the
 mirror (`Client.connect`) and the owned engine (`Client.make`). It adds no
 engine, no store and no sync loop. It is a fetch handler in
-`@legation/browser` (#166) that the app's service worker composes into its
+`@thomasfosterau/legation-browser` (#166) that the app's service worker composes into its
 `fetch` listener.
 
 ```
@@ -97,7 +97,7 @@ routes. A request is a candidate iff its method is `GET`, its `Accept`
 includes `application/vnd.api+json`, and its path matches one of those route
 templates. Everything else is not the façade's business and passes through
 untouched. No per-endpoint annotation is required, matching the convention
-`@legation/jsonapi` already uses for loaders.
+`@thomasfosterau/legation-jsonapi` already uses for loaders.
 
 **Composition order.** In the worker the façade runs **first**, then the
 HTTP cache, then the network. The cache must not see a covered request: a
@@ -146,7 +146,7 @@ pays for. Subscriptions are an app decision and stay one.
 
 This section supersedes "Coverage is the Client's own ledger" in ADR-0025.
 The rule is implemented as `Coverage.covers(subscribed, requested)` in
-`@legation/effect` (#162), and `Client.query` uses it for the mirror and
+`@thomasfosterau/legation-effect` (#162), and `Client.query` uses it for the mirror and
 the owned engine as well as for the façade. The statement here and the
 implementation must match exactly.
 
@@ -388,12 +388,12 @@ design (W1, #169). Nothing in this ADR presumes a shape for them beyond
 
 Recorded when the handler shipped; the decisions above stand.
 
-- **Placement.** Section 1 says "a fetch handler in `@legation/browser`".
-  It shipped as `JsonApiFacade.fetchHandler` in **`@legation/jsonapi`**, by
+- **Placement.** Section 1 says "a fetch handler in `@thomasfosterau/legation-browser`".
+  It shipped as `JsonApiFacade.fetchHandler` in **`@thomasfosterau/legation-jsonapi`**, by
   ADR-0006's rule: every dependency it has is that package's (route
   reflection, the codec, the writer) plus the standard `Request` /
   `Response` globals, and its one browser-only reading, `navigator.onLine`,
-  is an option with a guarded default. `@legation/browser` stays free of
+  is an option with a guarded default. `@thomasfosterau/legation-browser` stays free of
   effect-jsonapi; it contributes `ServiceWorkerHost.start`, which returns
   what the worker's façade needs from the host.
 - **The ledger it consults.** In the service-worker topology no `Client`

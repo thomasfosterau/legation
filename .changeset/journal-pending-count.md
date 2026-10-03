@@ -1,11 +1,11 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Sampling the journal-depth gauge no longer reads the whole journal (#260).
 `ClientStore` gains `pendingCount`, the number of pending journal entries
 without reading them: the memory store takes its journal's length, and the
-key-value store (and so `@legation/browser`'s IndexedDB store) counts its
+key-value store (and so `@thomasfosterau/legation-browser`'s IndexedDB store) counts its
 journal index, reading no mutation bodies. The engine samples
 `legation_journal_depth` from it on every append, acknowledgement and paced
 compaction, where it used to load every pending body to take

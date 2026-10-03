@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Add relationship declarations to collections and a protocol-agnostic `Related`

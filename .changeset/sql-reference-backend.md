@@ -1,8 +1,8 @@
 ---
-"@legation/sql": minor
+"@thomasfosterau/legation-sql": minor
 ---
 
-New package `@legation/sql`: a driver-agnostic SQL reference
+New package `@thomasfosterau/legation-sql`: a driver-agnostic SQL reference
 backend. `Sql` translates a `Subset` predicate to a parameterized `WHERE`
 (SQLite `?` and PostgreSQL `$n` dialects); `SqlBackend` implements the core
 `Backend` contract over a minimal `SqlExecutor` seam (`query`/`run`/

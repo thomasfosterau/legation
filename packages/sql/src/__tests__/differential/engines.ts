@@ -28,8 +28,8 @@
  */
 import { PGlite } from "@electric-sql/pglite";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import type { Predicate } from "@legation/effect";
-import { FilterCorpus, type Subset } from "@legation/effect/internal";
+import type { Predicate } from "@thomasfosterau/legation-effect";
+import { FilterCorpus, type Subset } from "@thomasfosterau/legation-effect/internal";
 import { Context, Effect, Layer, type Scope } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as Sql from "../../Sql.js";

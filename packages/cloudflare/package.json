@@ -1,5 +1,5 @@
 {
-  "name": "@legation/cloudflare",
+  "name": "@thomasfosterau/legation-cloudflare",
   "version": "0.1.0",
   "description": "Cloudflare Workers reference topology for the legation sync engine: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
   "type": "module",
@@ -37,8 +37,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@legation/effect": "workspace:^",
-    "@legation/sql": "workspace:^"
+    "@thomasfosterau/legation-effect": "workspace:^",
+    "@thomasfosterau/legation-sql": "workspace:^"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.118"

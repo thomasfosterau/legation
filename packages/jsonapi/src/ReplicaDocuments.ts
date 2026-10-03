@@ -66,8 +66,8 @@
 
 import { Effect } from "effect";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { type Node, type Query, QueryError } from "@legation/effect";
-import type { ClientView, Subset } from "@legation/effect/internal";
+import { type Node, type Query, QueryError } from "@thomasfosterau/legation-effect";
+import type { ClientView, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Linkage from "./Linkage.js";

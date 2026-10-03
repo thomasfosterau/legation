@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Add a typed query surface over the existing untyped `Subset`/`LocalRow` (purely

@@ -9,7 +9,7 @@
  * `useMutation` reads the Client runtime from context, so `getActions()` — like
  * any hook — must be called during component initialisation.
  */
-import { useMutation } from "@legation/svelte";
+import { useMutation } from "@thomasfosterau/legation-svelte";
 import type { Product, ProductPatchType } from "./domain";
 
 export interface Actions {

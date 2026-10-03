@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Keyed reactive mutation-state surface (#116) — TanStack Query's
@@ -29,7 +29,7 @@ Exposed at every layer:
   (a derived per-mutator selector).
 - React `useMutationState(mutator?)` — always a plain array, oldest-journaled
   first, no `AsyncResult` handling needed.
-- Svelte `useMutationState(mutator?)` rune (`@legation/svelte`), reactive
+- Svelte `useMutationState(mutator?)` rune (`@thomasfosterau/legation-svelte`), reactive
   to a `mutator` thunk like `useQuery`'s `read`.
 
 The todo example's journal panel is written over this surface,

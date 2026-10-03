@@ -15,7 +15,7 @@
  * `foreignField` values to pin) and a `resolveRow` function (how a base row's
  * relationships resolve against the per-collection index). Core supplies the
  * field-mapping strategy ({@link fieldMappingStrategy}); an adapter such as
- * `@legation/jsonapi` supplies its own linkage-based strategy and reuses the
+ * `@thomasfosterau/legation-jsonapi` supplies its own linkage-based strategy and reuses the
  * same machinery via {@link queryWith}/{@link observeWith}/{@link relatedWith}.
  */
 

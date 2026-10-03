@@ -22,8 +22,8 @@ import { Duration, Effect, Layer, Scope } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { Authorization, Backend, ClientStore, Transport } from "@legation/effect";
-import { ClientEngine, SyncRoom } from "@legation/effect/internal";
+import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation-effect";
+import { ClientEngine, SyncRoom } from "@thomasfosterau/legation-effect/internal";
 import {
   reflectAtomic,
   reflectResources,
@@ -81,7 +81,7 @@ export interface JsonApiSyncOptions {
   /**
    * The client store backing the engine. Defaults to the in-memory store —
    * supply a durable one (e.g. `IndexedDbClientStore.layerWindow()` from
-   * `@legation/browser`, or `ClientStore.layerKeyValue` over localStorage) so
+   * `@thomasfosterau/legation-browser`, or `ClientStore.layerKeyValue` over localStorage) so
    * the journal and confirmed rows survive reloads (offline-first).
    */
   readonly store?: Layer.Layer<ClientStore.ClientStore>;

@@ -15,9 +15,9 @@
   import { resolve } from "$app/paths";
   import { Effect, Fiber, Stream } from "effect";
   import { AsyncResult } from "effect/reactivity";
-  import { setClientRuntime } from "@legation/svelte";
-  import { useMutation, useQuery } from "@legation/svelte";
-  import type { Transport } from "@legation/effect";
+  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
+  import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
+  import type { Transport } from "@thomasfosterau/legation-effect";
   import { allUsers, type User } from "$lib/domain";
   import { values } from "$lib/joins";
   import { createSession, setSession } from "$lib/session.svelte";

@@ -10,7 +10,7 @@
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/reactivity";
-  import { useQuery } from "@legation/svelte";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
   import { getActions } from "$lib/actions.svelte";
   import { getSession } from "$lib/session.svelte";
   import { articleBySlug } from "$lib/domain";

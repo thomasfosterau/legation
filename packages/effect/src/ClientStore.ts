@@ -297,7 +297,9 @@ export interface ClientStore {
 }
 
 /** The {@link ClientStore} service a Client or engine persists through. */
-export const ClientStore = Context.Service<ClientStore>("@legation/effect/ClientStore");
+export const ClientStore = Context.Service<ClientStore>(
+  "@thomasfosterau/legation-effect/ClientStore"
+);
 
 /**
  * Freeze everything currently pending: raise each client's sent watermark to

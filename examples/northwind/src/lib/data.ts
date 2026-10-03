@@ -10,7 +10,7 @@
  * a screen renders. No stores, no context, no subscriptions — each screen calls
  * `useQuery` for what it needs and maps the result through these.
  */
-import type { Client } from "@legation/effect";
+import type { Client } from "@thomasfosterau/legation-effect";
 import type { Category, Customer, Employee, Order, OrderDetail, Product, Supplier } from "./domain";
 
 /** Rows as a read resolves them: the node value plus its `include`d edges. */

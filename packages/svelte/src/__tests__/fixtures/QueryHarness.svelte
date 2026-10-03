@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Aggregate, type Query } from "@legation/effect";
+  import { Aggregate, type Query } from "@thomasfosterau/legation-effect";
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useAggregate, useAggregateGrouped, useQuery } from "../../index.svelte.js";

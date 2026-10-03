@@ -1,10 +1,10 @@
 ---
-"@legation/browser": minor
-"@legation/effect": patch
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-effect": patch
 ---
 
 Built-in multi-tab leader election for the no-service-worker degraded
-topology (#119): `@legation/browser`'s `ElectedHost.run` wraps
+topology (#119): `@thomasfosterau/legation-browser`'s `ElectedHost.run` wraps
 `navigator.locks` (held for the tab's whole lifetime, no voluntary
 step-down) around `ServiceWorkerHost.run`'s main-thread host composition —
 `ClientEngine` + durable store + transports + `BroadcastMirrorChannel`
@@ -18,7 +18,7 @@ same journal, rows, and cookie — so the CVR conversation resumes rather
 than restarting. Environments without `navigator.locks` get a documented
 fallback (becomes host immediately), not a polyfill.
 
-`@legation/effect`'s `Mirror` now fails any request still in flight when
+`@thomasfosterau/legation-effect`'s `Mirror` now fails any request still in flight when
 the host it was talking to is gone — either because the mirror's own scope
 closed, or because a second `HostReady` announces the host restarted — with
 a clear `TransportError` instead of leaving the caller's `mutate` /

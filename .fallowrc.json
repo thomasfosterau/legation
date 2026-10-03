@@ -1,9 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": ["packages/*/src/index.ts", "packages/*/examples/*.ts"],
-  "publicPackages": ["@legation/*"],
+  "publicPackages": ["@thomasfosterau/legation-*"],
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", "scripts/**", "**/*.bench.ts"],
-  "ignoreDependencies": ["@legation/effect", "@legation/sql", "publint", "@arethetypeswrong/cli"],
+  "ignoreDependencies": [
+    "@thomasfosterau/legation-effect",
+    "@thomasfosterau/legation-sql",
+    "publint",
+    "@arethetypeswrong/cli",
+    "@effect/vitest"
+  ],
   "rules": {
     "duplicate-exports": "off"
   },

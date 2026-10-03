@@ -48,7 +48,9 @@ export interface FanoutBroker {
  * The {@link FanoutBroker} service tag, for apps that provide a broker by layer;
  * `FanoutBus.make` takes it as an option.
  */
-export const FanoutBroker = Context.Service<FanoutBroker>("@legation/effect/FanoutBroker");
+export const FanoutBroker = Context.Service<FanoutBroker>(
+  "@thomasfosterau/legation-effect/FanoutBroker"
+);
 
 interface Lease {
   readonly topics: ReadonlySet<Topic>;

@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/browser": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": patch
 ---
 
 Add `observeChanges(subset, options?)`: a public row-level change feed
@@ -26,7 +26,7 @@ view-step:
 `LiveView` window `observe` already keeps (surfaced, not recomputed);
 `Mirror` — which has no local `LiveView` — diffs the whole-page updates its
 host already broadcasts, so both hosts emit identical batches for identical
-page transitions. `@legation/browser`'s `ElectedHost` switches an observer
+page transitions. `@thomasfosterau/legation-browser`'s `ElectedHost` switches an observer
 onto whichever `ClientView` (mirror or owned engine) is currently active, so
 `observeChanges` works unchanged across a leader-election transition too.
 

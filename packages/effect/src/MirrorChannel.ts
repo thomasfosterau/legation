@@ -3,7 +3,7 @@
  *
  * The mirror↔engine-host message carrier seam (ADR-0010): one more
  * implementation of "schema-defined messages over a pluggable carrier".
- * The BroadcastChannel implementation ships in `@legation/browser`
+ * The BroadcastChannel implementation ships in `@thomasfosterau/legation-browser`
  * (`BroadcastMirrorChannel`); the loopback pair here serves tests and
  * same-process (no-service-worker) hosting on any runtime.
  *

@@ -126,7 +126,7 @@ export const pushMutations = Metric.histogram("legation_push_mutations", {
 
 /**
  * Times a cached response's row count exceeded the HTTP cache's fine-tag
- * budget (`HttpCacheInvalidation.FINE_TAG_ROW_BUDGET` in `@legation/browser`)
+ * budget (`HttpCacheInvalidation.FINE_TAG_ROW_BUDGET` in `@thomasfosterau/legation-browser`)
  * and fell back to tagging that response with its coarse
  * `collection:{name}` tag alone, skipping the per-row `collection:{name}:{id}`
  * tags. Correctness is unaffected (the coarse tag still evicts it on any row

@@ -1,7 +1,7 @@
-# @legation/sql
+# @thomasfosterau/legation-sql
 
 A driver-agnostic SQL reference backend for the
-[`@legation/effect`](../effect) engine.
+[`@thomasfosterau/legation-effect`](../effect) engine.
 
 - **`Sql`** — a pure translator from a `Subset` predicate to a parameterized
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
@@ -30,7 +30,7 @@ handlers inside one transaction with the per-client `lastMutationId` bump.
 ## Install
 
 ```sh
-npm install @legation/sql @legation/effect effect
+npm install @thomasfosterau/legation-sql @thomasfosterau/legation-effect effect
 ```
 
 ## Effect version

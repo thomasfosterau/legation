@@ -17,8 +17,8 @@
 
 import type { D1Database } from "@cloudflare/workers-types";
 import { Effect } from "effect";
-import { BackendError } from "@legation/effect";
-import type { SqlBackend, Sql } from "@legation/sql";
+import { BackendError } from "@thomasfosterau/legation-effect";
+import type { SqlBackend, Sql } from "@thomasfosterau/legation-sql";
 
 const asBackendError = (operation: string) => (cause: unknown) =>
   new BackendError({ message: `D1 ${operation} failed`, cause });

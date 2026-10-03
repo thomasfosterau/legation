@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Add `Undo`: an optional, additive undo/redo module layered over anything that
@@ -30,7 +30,7 @@ The **delete-then-undo** criterion is met by the paired-intents pattern: capture
 the row's pre-delete value from the local view at run time and pass it as the
 undo's re-create args, so an undo restores the row exactly.
 
-`@legation/svelte` gains `useUndo(manager)` — `canUndo` / `canRedo` as runes
+`@thomasfosterau/legation-svelte` gains `useUndo(manager)` — `canUndo` / `canRedo` as runes
 over the manager's change streams, plus `undo` / `redo` handlers. The `todo`
 example wires ⌘Z / Ctrl+Z (Shift for redo) through the manager and documents
 the recipe.

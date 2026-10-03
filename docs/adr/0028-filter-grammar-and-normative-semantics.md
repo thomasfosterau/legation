@@ -15,7 +15,7 @@ disagree.
   `"status" <> $1`. In SQL that expression is NULL for a NULL column and the
   row is excluded. The module documents itself as a superset pre-filter, but
   on NULL rows it returns a strict subset of what `Predicate.test` returns.
-- `JsonApiQuery.safeFilters` (`@legation/jsonapi`) is a lossy one-way URL
+- `JsonApiQuery.safeFilters` (`@thomasfosterau/legation-jsonapi`) is a lossy one-way URL
   encoder. It emits top-level `eq`/`In` conjuncts and drops everything else.
   No parser exists.
 
@@ -52,7 +52,7 @@ Issue #156 defers the collation decision here too.
 
 **Postgres semantics define what a filter means.** `Subset.apply`,
 `Predicate.evaluate`, `Subset.comparator`, the Postgres and SQLite compilers
-in `@legation/sql`, and the later IndexedDB evaluator (#158) are all
+in `@thomasfosterau/legation-sql`, and the later IndexedDB evaluator (#158) are all
 implementations. Each must agree with Postgres exactly, and that agreement is
 proven by the differential harness (#153) with a real Postgres as the oracle.
 
@@ -224,10 +224,10 @@ forbidden for filterable or sortable use.
 | ----------------------------------------------- | ------------------------------------------------------------ |
 | Filter AST, URL ⇄ AST codec, canonical encoding | effect-jsonapi (thomasfosterau/effect-jsonapi#83, #85, #86)  |
 | Per-attribute `filterable` / `sortable`         | effect-jsonapi `Resource` (thomasfosterau/effect-jsonapi#84) |
-| `Predicate.evaluate` (JS), `Subset.comparator`  | `@legation/effect` (#155)                                    |
-| Postgres and SQLite compilers                   | `@legation/sql` (#156)                                       |
-| IndexedDB evaluator and indexes                 | `@legation/browser`, later design (#158)                     |
-| Bridge: filter AST ⇄ `Predicate`                | `@legation/jsonapi` (#161)                                   |
+| `Predicate.evaluate` (JS), `Subset.comparator`  | `@thomasfosterau/legation-effect` (#155)                     |
+| Postgres and SQLite compilers                   | `@thomasfosterau/legation-sql` (#156)                        |
+| IndexedDB evaluator and indexes                 | `@thomasfosterau/legation-browser`, later design (#158)      |
+| Bridge: filter AST ⇄ `Predicate`                | `@thomasfosterau/legation-jsonapi` (#161)                    |
 
 `Exists` remains a server-only `Predicate` node. It has no URL form, and the
 classifier rejects it for URL and client use; a backend resolves it before

@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Per-row and per-mutation durable storage for the KeyValueStore-backed `ClientStore`. Confirmed rows now persist one key each at `row/{collection}/{id}` behind a small `rowIndex/{collection}` id-array, and pending mutations one key each at `journal/{clientId}/{mutationId}` behind a compact ordered `journalIndex`. A `putRow`/`appendMutation` rewrites a single value plus a tiny index instead of the whole collection or journal, and `acknowledge` drops acked mutation bodies without rewriting the survivors.

@@ -14,8 +14,8 @@ who gets to define it?**
 Two things were already true and turned out to answer this together:
 
 - `Subset.apply` (filter → sort → cursor → limit) is **the** reference
-  evaluation semantics. Every backend (`MemoryBackend`, `@legation/sql`'s
-  `SqlBackend`, `@legation/jsonapi`'s `JsonApiBackend`) pushes down only
+  evaluation semantics. Every backend (`MemoryBackend`, `@thomasfosterau/legation-sql`'s
+  `SqlBackend`, `@thomasfosterau/legation-jsonapi`'s `JsonApiBackend`) pushes down only
   the predicate; order, cursor, and limit are always finalized locally with
   `Subset.apply` (`Sql.ts`: "the `WHERE` only has to return a superset").
   So the server's cursor pages are already defined by this one function,

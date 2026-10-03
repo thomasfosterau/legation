@@ -1,5 +1,5 @@
 ---
-"@legation/effect": patch
+"@thomasfosterau/legation-effect": patch
 ---
 
 Fix paced compaction stranding the journal behind a mutation-id gap (#249).

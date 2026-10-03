@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Live queries re-evaluate selectively: a change event now names the collections

@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": patch
+"@thomasfosterau/legation-jsonapi": patch
 ---
 
 Correct the account of what effect-jsonapi 0.15 changed in URL parsing (the

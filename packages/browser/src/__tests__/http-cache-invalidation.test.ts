@@ -5,9 +5,9 @@
  * touched collections/rows, and `tagsFor` builds a response's tags under the
  * fine-tag row budget.
  */
-import type { ClientEngine, HttpCache } from "@legation/effect/internal";
-import { Telemetry } from "@legation/effect/internal";
-import { StoreError } from "@legation/effect";
+import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
+import { Telemetry } from "@thomasfosterau/legation-effect/internal";
+import { StoreError } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Metric, Stream } from "effect";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";

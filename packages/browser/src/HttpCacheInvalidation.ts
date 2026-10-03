@@ -31,8 +31,8 @@
  * shifted" fallback), so it only ever contributes coarse tags.
  */
 
-import type { ClientEngine, HttpCache } from "@legation/effect/internal";
-import { Telemetry } from "@legation/effect/internal";
+import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
+import { Telemetry } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Metric, Stream } from "effect";
 import type { Scope } from "effect";
 
@@ -53,7 +53,7 @@ export const defaultFineTagFor = (collection: string, id: string): string =>
  * `x-legation-cache-meta` (`CacheApiHttpCache.metaHeader`), which carries
  * `encodeURIComponent(JSON.stringify(meta))` and so must fit under Node's
  * default `--max-http-header-size` of 16 KiB (16384 bytes) once responses are
- * served through `@legation/node`:
+ * served through `@thomasfosterau/legation-node`:
  *
  * - `encodeURIComponent` expands every byte outside its unreserved set to
  *   `%XX` (3 bytes), so 3x the raw byte length is a safe upper bound on

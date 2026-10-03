@@ -32,7 +32,7 @@ import {
   Transport,
   TransportError,
   VersionNotSupportedError,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -40,8 +40,8 @@ import {
   Paced,
   Subset,
   SyncServer,
-} from "@legation/effect/internal";
-import type { Protocol } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
+import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Effect,

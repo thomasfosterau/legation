@@ -1,5 +1,5 @@
 ---
-"@legation/effect": patch
+"@thomasfosterau/legation-effect": patch
 ---
 
 Fix a lost-write window in paced compaction (#249 follow-up). Once

@@ -1,5 +1,5 @@
 /**
- * @legation/cloudflare
+ * @thomasfosterau/legation-cloudflare
  *
  * The Cloudflare Workers reference topology (ADR-0022, ADR-0023):
  *

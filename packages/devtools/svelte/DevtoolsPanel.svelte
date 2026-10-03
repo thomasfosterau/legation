@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * @legation/devtools/svelte — DevtoolsPanel
+   * @thomasfosterau/legation-devtools/svelte — DevtoolsPanel
    *
    * A thin Svelte panel over the headless `DevtoolsCore` (#120): every
    * section below just reads a store built by `store.ts` (which in turn
@@ -9,7 +9,7 @@
    */
   import { untrack } from "svelte";
   import { Effect, Fiber, HashMap } from "effect";
-  import type { DevtoolsCore } from "@legation/devtools";
+  import type { DevtoolsCore } from "@thomasfosterau/legation-devtools";
   import { makeStores } from "./store.js";
 
   const props: { core: DevtoolsCore } = $props();

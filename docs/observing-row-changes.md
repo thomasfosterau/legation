@@ -96,7 +96,7 @@ works identically whether the engine runs in this thread or is hosted
 elsewhere (a service worker, an Electron main process) behind a `Mirror`:
 
 ```ts
-import { ClientEngine, ClientView, Mirror } from "@legation/effect/internal";
+import { ClientEngine, ClientView, Mirror } from "@thomasfosterau/legation-effect/internal";
 
 // Same call, either host:
 engine.observeChanges(subset, options);
@@ -123,7 +123,7 @@ append order when it's not (a mirror-backed source):
 ```svelte
 <script lang="ts">
   import { Effect, Stream } from "effect";
-  import * as FractionalIndex from "@legation/effect/internal/FractionalIndex";
+  import * as FractionalIndex from "@thomasfosterau/legation-effect/internal/FractionalIndex";
   import type { Todo } from "./schema";
 
   interface Row {

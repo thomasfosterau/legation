@@ -22,7 +22,7 @@ jobs:
 
       # vitest, tsc and the Node adapter's tests run on Node (bun runs their
       # `#!/usr/bin/env node` bins). CI tests on one Node, the latest stable
-      # (#299); `engines.node` on `@legation/node` stays the published floor
+      # (#299); `engines.node` on `@thomasfosterau/legation-node` stays the published floor
       # (ADR-0003), and the release job publishes from the same line.
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -65,7 +65,7 @@ jobs:
         run: bun run analyze:audit:ci
 
   # The test suite against the lowest `effect` the published peer range admits
-  # (`@legation/effect`'s `peerDependencies.effect`, `>=X` -> `X`), so each
+  # (`@thomasfosterau/legation-effect`'s `peerDependencies.effect`, `>=X` -> `X`), so each
   # package README's "tested against … the floor" claim holds on every PR.
   # Tests only: the full gate set runs once, at the pinned version, in Quality
   # Gates. Only the catalog entries versioned in lockstep with effect (`effect`
@@ -141,7 +141,7 @@ jobs:
           '
 
       # The one gate the tests need: the commerce façade's browser test
-      # `vite build`s the example app, which resolves `@legation/*` through
+      # `vite build`s the example app, which resolves `@thomasfosterau/legation-*` through
       # each package's `exports` (`dist/`), not Vitest's source aliases.
       - name: Build
         run: bun run build

@@ -19,7 +19,7 @@ everyone): see [Commands](CLAUDE.md#commands),
 and [Conventions](CLAUDE.md#conventions). Two workspace mechanics it doesn't
 repeat:
 
-- Packages import each other by published name (`@legation/effect`); bun workspaces link them.
+- Packages import each other by published name (`@thomasfosterau/legation-effect`); bun workspaces link them.
 - `tsc --build` (project references) handles build order; Vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never need a prior build.
 
 ## Development Workflow
@@ -50,7 +50,7 @@ Use Effect for side effects, dependency injection, and typed failures.
 
 Conventions:
 
-- Services: interface + `Context.Service<Interface>("@legation/<pkg>/<Name>")` constant of the same name
+- Services: interface + `Context.Service<Interface>("@thomasfosterau/legation-<pkg>/<Name>")` constant of the same name
 - Errors: `Data.TaggedError` classes
 - Every service has a `layer`; in-memory implementations exist for everything so tests never need external infrastructure
 - Use the vocabulary from [CONTEXT.md](CONTEXT.md)
@@ -94,7 +94,7 @@ package.
 
 CI's **Tests (effect floor)** job (`ci.yml`) runs the test suite on every PR
 against the published floor as well as the pin: it reads the floor from
-`@legation/effect`'s `peerDependencies.effect`, points the catalog entries
+`@thomasfosterau/legation-effect`'s `peerDependencies.effect`, points the catalog entries
 versioned with effect (`effect`, the `@effect/*` runtime packages and the
 `@effect/platform-node-shared` override) at it in its own checkout, then
 installs, builds and runs `bun run test:run`. It never moves `typescript`,
@@ -118,7 +118,7 @@ carries the bumped versions); when that PR is merged it runs `bun run release`
    tag the packages the failed run had already published, nor create their
    GitHub releases: create those by hand.
 2. Each of those packages is packed with `bun pm pack`, which rewrites the
-   `workspace:^` dependencies on `@legation/effect` and `@legation/sql` and any
+   `workspace:^` dependencies on `@thomasfosterau/legation-effect` and `@thomasfosterau/legation-sql` and any
    `catalog:` specifier to real ranges; `npm pack` copies both verbatim and
    would ship uninstallable manifests
    ([#267](https://github.com/thomasfosterau/legation/issues/267)). `bun pm
@@ -164,7 +164,7 @@ approval, and never runs on forks.
    open pull requests even though the job grants `pull-requests: write`.
 2. **Configure the trusted publisher on every package.** A trusted publisher
    can only be attached to a package that already exists on npm (see the first
-   release below). For each `@legation/*` package on npmjs.com, open
+   release below). For each `@thomasfosterau/legation-*` package on npmjs.com, open
    **Settings → Trusted Publisher** and add:
    - Provider: **GitHub Actions**
    - Repository: `thomasfosterau/legation`
@@ -182,12 +182,14 @@ approval, and never runs on forks.
 
 ### First release (manual, once per package)
 
-The `@legation` scope must be provisioned, and each package must exist on the
-registry before a trusted publisher can be attached to it. The initial publish
-is therefore done by hand, with your own npm login:
+The packages publish under the `@thomasfosterau` user scope, which belongs to
+the npm account of the same name, so there is no organisation to create; but
+each package must exist on the registry before a trusted publisher can be
+attached to it. The initial publish is therefore done by hand, with your own
+npm login:
 
-1. Create the `@legation` organisation/scope on npm and confirm you have
-   publish rights.
+1. Confirm you are logged in to npm as `thomasfosterau` (`npm whoami`): a user
+   scope only accepts publishes from its owner.
 2. From a clean checkout of `trunk`, logged in to npm (`npm login`), run
    `bun ci`, then `bun run release:dry-run` and inspect the tarballs in the
    directory it prints, then `bun run release`. It builds, packs and publishes every
@@ -195,7 +197,7 @@ is therefore done by hand, with your own npm login:
    place of OIDC; npm's 2FA prompt appears in the terminal. It publishes with
    `--access public` (`.changeset/config.json` → `access: "public"`), which
    the scoped packages need, and creates a local git tag per package
-   (`@legation/effect@0.1.0`, …); push them with `git push origin --tags`.
+   (`@thomasfosterau/legation-effect@0.1.0`, …); push them with `git push origin --tags`.
    Never use `npm publish` or `npm publish --workspaces` directly: npm copies
    `workspace:^` and `catalog:` into the published `package.json` verbatim
    ([#267](https://github.com/thomasfosterau/legation/issues/267)).

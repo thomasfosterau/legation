@@ -28,7 +28,7 @@
  * the same rules: one request carrying an ordered batch of `add` / `update`
  * / `remove` operations on reviews, cart items and orders, applied inside one
  * SQL transaction — the first failure rolls the whole batch back and names
- * the failing operation. `@legation/jsonapi`'s `JsonApiBackend` pushes its
+ * the failing operation. `@thomasfosterau/legation-jsonapi`'s `JsonApiBackend` pushes its
  * journal through it as one request per batch when the api advertises it.
  *
  * The api's shape — endpoints and wire errors — lives in `server/api.ts`,
@@ -51,8 +51,8 @@ import { HttpServerRequest as Request } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { ApiError, Atomic, Handlers, Lid, Middleware } from "@thomasfosterau/effect-jsonapi";
-import type { Backend } from "@legation/effect";
-import { RestHandlers } from "@legation/jsonapi";
+import type { Backend } from "@thomasfosterau/legation-effect";
+import { RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "../src/lib/domain.js";
 import { api, NotFound, Unauthorized } from "./api.js";
 import type { OperationRejected } from "./api.js";
@@ -391,7 +391,7 @@ type OrderRow = { id: string; userId: string; status: string; totalCents: number
 
 /**
  * effect-jsonapi's typed `add` operation carries `lid` but no `id`, so a
- * client-generated id is dropped by decoding — and `@legation/jsonapi`'s
+ * client-generated id is dropped by decoding — and `@thomasfosterau/legation-jsonapi`'s
  * atomic push always sends one, so a `JsonApiBackend` push must keep its
  * ids. As in #160's contract server, the id is recovered from the raw request
  * document (the body is cached, so re-reading it after decoding is free); an

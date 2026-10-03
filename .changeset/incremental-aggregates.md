@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 `observeAggregate` / `observeAggregateGrouped` now maintain their fold

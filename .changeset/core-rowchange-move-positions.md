@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 `RowChange` (#115) gains `move` and a `position` field on `enter`/`update`

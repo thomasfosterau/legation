@@ -1,6 +1,6 @@
-# @legation/cloudflare
+# @thomasfosterau/legation-cloudflare
 
-The reference deployment of the [`@legation/effect`](../effect) sync engine on
+The reference deployment of the [`@thomasfosterau/legation-effect`](../effect) sync engine on
 Cloudflare — per-user Durable Object rooms, topic-sharded fan-out, and a D1
 backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 
@@ -35,16 +35,16 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 ## Install
 
 ```sh
-npm install @legation/cloudflare @legation/effect @legation/sql effect
+npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation-effect @thomasfosterau/legation-sql effect
 ```
 
 ## Usage
 
 ```ts
 // worker.ts
-import { Authorization, Node } from "@legation/effect";
-import { SqlBackend } from "@legation/sql";
-import { D1Executor, FanoutShard, Room, Worker } from "@legation/cloudflare";
+import { Authorization, Node } from "@thomasfosterau/legation-effect";
+import { SqlBackend } from "@thomasfosterau/legation-sql";
+import { D1Executor, FanoutShard, Room, Worker } from "@thomasfosterau/legation-cloudflare";
 
 export class LegationShard extends FanoutShard.makeShardClass({
   rooms: (env) => env.ROOMS,
@@ -85,8 +85,8 @@ a `BindingTransport` and the render pulls over the binding:
 
 ```ts
 // +page.server.ts — the effect an Effect-based `load` runs
-import { BindingTransport } from "@legation/cloudflare";
-import { loadSnapshot } from "@legation/svelte/kit";
+import { BindingTransport } from "@thomasfosterau/legation-cloudflare";
+import { loadSnapshot } from "@thomasfosterau/legation-svelte/kit";
 
 const pageSnapshot = ({ cookies, request, platform }) =>
   loadSnapshot(cookies, {

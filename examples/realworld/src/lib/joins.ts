@@ -11,7 +11,7 @@
  * Counts and flags come from the join collections, never denormalised onto the
  * row — so a rebase can never leave a stale counter.
  */
-import type { Client } from "@legation/effect";
+import type { Client } from "@thomasfosterau/legation-effect";
 import type { Article, Comment, Favorite, Follow, User } from "./domain";
 import type { ArticlePage, ArticleView, CommentView, Feed, ProfileView } from "./types";
 

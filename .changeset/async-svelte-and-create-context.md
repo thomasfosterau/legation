@@ -1,5 +1,5 @@
 ---
-"@legation/svelte": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Async Svelte support and a type-safe runtime context. Every live rune hook's

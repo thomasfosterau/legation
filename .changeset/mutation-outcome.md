@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Per-mutation outcome surface (#36). Callers can now await a mutation's

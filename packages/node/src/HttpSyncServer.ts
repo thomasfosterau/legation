@@ -16,8 +16,8 @@ import { createServer } from "node:http";
 // imports the `redis` peer at load, so a consumer without `redis` could not
 // import this module (#254).
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Transport } from "@legation/effect";
-import { RpcTransport } from "@legation/effect/internal";
+import { Transport } from "@thomasfosterau/legation-effect";
+import { RpcTransport } from "@thomasfosterau/legation-effect/internal";
 import { Layer } from "effect";
 import { HttpRouter } from "effect/http";
 import type { ServeError } from "effect/http/HttpServerError";

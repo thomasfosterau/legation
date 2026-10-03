@@ -48,7 +48,7 @@ export interface EngineIntrospection {
 
 /** The {@link EngineIntrospection} service devtools read through. */
 export const EngineIntrospection = Context.Service<EngineIntrospection>(
-  "@legation/effect/EngineIntrospection"
+  "@thomasfosterau/legation-effect/EngineIntrospection"
 );
 
 /** Build the introspection view over a given engine and store. */

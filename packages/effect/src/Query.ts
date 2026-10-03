@@ -397,7 +397,9 @@ export interface QueryResolver {
 }
 
 /** The {@link QueryResolver} service the sync server resolves named subscriptions with. */
-export const QueryResolver = Context.Service<QueryResolver>("@legation/effect/QueryResolver");
+export const QueryResolver = Context.Service<QueryResolver>(
+  "@thomasfosterau/legation-effect/QueryResolver"
+);
 
 /**
  * Build a server resolver from typed entries. Pushed args are untrusted, so

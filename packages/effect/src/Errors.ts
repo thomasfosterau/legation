@@ -91,7 +91,7 @@ export class MutatorError extends Data.TaggedError("MutatorError")<{
  * read could not be compiled (an unknown collection or edge) or parsed from
  * a URL. `parameter` names the offending query-string parameter
  * (`filter[age][gt]`, `include`, `page[limit]`) when the error comes from
- * URL parsing (`@legation/jsonapi`'s `JsonApiQuery.parseRead`) — the value a
+ * URL parsing (`@thomasfosterau/legation-jsonapi`'s `JsonApiQuery.parseRead`) — the value a
  * JSON:API 400 document carries as `source.parameter`.
  */
 export class QueryError extends Data.TaggedError("QueryError")<{

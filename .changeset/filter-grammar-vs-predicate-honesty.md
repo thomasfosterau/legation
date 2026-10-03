@@ -1,5 +1,5 @@
 ---
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Issue #218: the filter grammar (effect-jsonapi's query-parameter format) and

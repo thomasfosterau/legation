@@ -410,7 +410,7 @@ UTF-8 index keys, one transaction per pull
 
 **Body (spec):**
 
-- Package: `@legation/browser`, new module `NativeIndexedDbClientStore`,
+- Package: `@thomasfosterau/legation-browser`, new module `NativeIndexedDbClientStore`,
   same `ClientStore` interface plus `commitPull`.
 - Schema exactly as section 4 of `docs/indexeddb-native-store.md`: one
   object store per collection keyed by `id`; compound indexes

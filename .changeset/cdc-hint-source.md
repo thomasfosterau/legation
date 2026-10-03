@@ -1,20 +1,20 @@
 ---
-"@legation/effect": minor
-"@legation/sql": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": minor
 ---
 
 Change data capture for out-of-band writes (ADR-0019). Writes that bypass the
 mutators — a cron job, an admin tool, another service, `psql` — can now poke
 subscribed clients through a new `HintSource` seam.
 
-`@legation/effect` gains `HintSource`: a small, dependency-free seam that
+`@thomasfosterau/legation-effect` gains `HintSource`: a small, dependency-free seam that
 publishes `ChangeHint`s to the `InvalidationBus` on a scoped fibre alongside the
 SyncServer. `HintSource.fromStream` lifts a stream of hint batches and
 `HintSource.run` forks a source for the caller's scope. A source that publishes
 value-less hints is matched at the collection level by the existing fan-out
 matcher — sound, because over-matching a poke only costs an empty pull.
 
-`@legation/sql` gains `PollingHintSource`: a tier-2 polling source over the
+`@thomasfosterau/legation-sql` gains `PollingHintSource`: a tier-2 polling source over the
 existing `SqlExecutor` seam (no new dependency). It polls each table on an
 interval for a cheap change-detector — `COUNT(*)` plus `MAX(versionColumn)` when
 a version column is mapped — and pokes a collection whose detector moved.

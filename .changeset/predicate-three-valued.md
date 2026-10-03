@@ -1,6 +1,6 @@
 ---
-"@legation/effect": minor
-"@legation/sql": patch
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": patch
 ---
 
 `Predicate` evaluates under Postgres's three-valued semantics (ADR-0028,
@@ -38,6 +38,6 @@ absent.
   `IS NOT NULL` stay residual conjuncts. Sorted runs use the code-point
   comparator. The index is proven equal to the full scan over the
   differential corpus.
-- `@legation/sql`: `Sql.compileWhere` compiles `IsNull` to `IS NULL` /
+- `@thomasfosterau/legation-sql`: `Sql.compileWhere` compiles `IsNull` to `IS NULL` /
   `IS NOT NULL` and `NotIn` to `NOT IN (…)` (empty list → `1 = 1`). The
   `BackendContract` corpus now generates NULL, absent and astral text.

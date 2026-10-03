@@ -18,7 +18,7 @@ import {
   Node,
   Server,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import * as NodeBridge from "../NodeBridge.js";
 
 // The commerce trio, declared once as JSON:API resources. The graph is

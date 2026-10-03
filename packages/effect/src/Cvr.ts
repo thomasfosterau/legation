@@ -66,7 +66,7 @@ export interface CvrStore {
 }
 
 /** The {@link CvrStore} service the sync server keeps CVRs in. */
-export const CvrStore = Context.Service<CvrStore>("@legation/effect/CvrStore");
+export const CvrStore = Context.Service<CvrStore>("@thomasfosterau/legation-effect/CvrStore");
 
 /** In-memory CVR store (tests, single-instance servers, sync rooms). */
 export const makeMemoryStore: Effect.Effect<CvrStore> = Effect.gen(function* () {

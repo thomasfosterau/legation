@@ -23,8 +23,8 @@ import {
   Mutation,
   Node,
   Transport,
-} from "@legation/effect";
-import { ClientEngine, ClientView, Cvr } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation-effect/internal";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import { leases, makeShardClass } from "../FanoutShard.js";
 import { makeRoomClass } from "../Room.js";

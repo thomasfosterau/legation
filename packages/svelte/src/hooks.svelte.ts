@@ -18,7 +18,7 @@
  * (`row.related`), windowed per the edge's declared order (ADR-0024), over
  * owned and worker-hosted engines alike.
  *
- * Re-exported from the package root (`@legation/svelte`), which is the only
+ * Re-exported from the package root (`@thomasfosterau/legation-svelte`), which is the only
  * read/write surface. Requires Svelte 5. Hooks must be called during
  * component initialisation — they read the Client runtime from context
  * ({@link setClientRuntime}) and register a `$effect`.
@@ -26,8 +26,12 @@
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
 import { Effect, Fiber, HashMap, Stream } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { Aggregate, Client, Query } from "@legation/effect";
-import { ClientEngine, type MutationState, type Undo } from "@legation/effect/internal";
+import { Aggregate, Client, Query } from "@thomasfosterau/legation-effect";
+import {
+  ClientEngine,
+  type MutationState,
+  type Undo,
+} from "@thomasfosterau/legation-effect/internal";
 import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */

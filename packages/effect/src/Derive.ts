@@ -45,8 +45,8 @@
  *
  * **Observability.** A derived pipeline is an Effect `Stream` and, via
  * {@link atom}, an Atom on the standard `effect/reactivity` surface —
- * so framework bindings need nothing new: `@legation/svelte`'s `query` store
- * and `@legation/svelte`'s `useQuery` bind a derived stream exactly as they bind
+ * so framework bindings need nothing new: `@thomasfosterau/legation-svelte`'s `query` store
+ * and `@thomasfosterau/legation-svelte`'s `useQuery` bind a derived stream exactly as they bind
  * a raw `observe`.
  *
  * **Lifetime.** {@link observed} pairs a refcounted `Subscriptions` acquire
@@ -82,7 +82,7 @@ export type Source<E> = Stream.Stream<ReadonlyArray<Row>, E>;
 // recover the native change feed without widening that public type: present,
 // it's used; absent (a raw stream, or another combinator's own page output),
 // the page-diff fallback below runs exactly as before.
-const CHANGES = Symbol.for("@legation/effect/Derive/changes");
+const CHANGES = Symbol.for("@thomasfosterau/legation-effect/Derive/changes");
 
 interface ChangeTagged<E> {
   readonly [CHANGES]: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>;

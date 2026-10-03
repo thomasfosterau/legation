@@ -12,8 +12,8 @@
 import { Effect, Schema } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
-import { Backend, BackendError, MutationRejected } from "@legation/effect";
-import type { SqlBackend } from "@legation/sql";
+import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation-effect";
+import type { SqlBackend } from "@thomasfosterau/legation-sql";
 import {
   CartAddArgs,
   CartRemoveArgs,

@@ -1,9 +1,9 @@
 ---
-"@legation/jsonapi": minor
-"@legation/effect": patch
+"@thomasfosterau/legation-jsonapi": minor
+"@thomasfosterau/legation-effect": patch
 ---
 
-The filter-grammar bridge (ADR-0028 §5, #161): `@legation/jsonapi` now
+The filter-grammar bridge (ADR-0028 §5, #161): `@thomasfosterau/legation-jsonapi` now
 translates both ways between effect-jsonapi's filter AST and the engine's
 `Predicate`, parses a JSON:API URL into a `Query.Read`, and encodes the whole
 predicate exactly. Bumps `@thomasfosterau/effect-jsonapi` to ^0.13.0, which

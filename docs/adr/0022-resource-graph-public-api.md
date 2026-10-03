@@ -6,7 +6,7 @@ Status: Accepted
 ## Context
 
 The library grew module-by-module, and it shows at the surface:
-`@legation/effect` exports **39 public namespaces**. A comprehensive
+`@thomasfosterau/legation-effect` exports **39 public namespaces**. A comprehensive
 implementation (the commerce example) must understand concepts at
 three altitudes at once — domain (`Collection`, `Mutator`, `Subset`,
 `Predicate`, named `Query`), machinery (`ClientEngine`, `ClientView`,
@@ -58,7 +58,7 @@ const Product = Node.make("products", {
 });
 ```
 
-Core owns this model (no new core dependency). `@legation/jsonapi` becomes
+Core owns this model (no new core dependency). `@thomasfosterau/legation-jsonapi` becomes
 the first-class bridge: an effect-jsonapi `Resource` graph converts to and
 from Nodes trivially (`Node.fromResource` / endpoint derivation), so a
 JSON:API app defines its domain **once**.
@@ -201,8 +201,8 @@ pull is the correctness path — but the developer story is one line.
 #### Deployment shape: Cloudflare Workers as the reference topology
 
 `Server` is a **logical** object whose parts deploy separately; the
-reference distributed topology (a `@legation/cloudflare` adapter, the
-server-side sibling of `@legation/browser`'s `ServiceWorkerHost`):
+reference distributed topology (a `@thomasfosterau/legation-cloudflare` adapter, the
+server-side sibling of `@thomasfosterau/legation-browser`'s `ServiceWorkerHost`):
 
 - A stateless **Worker fetch handler** serves the REST/JSON:API baseline
   against the backend and routes `/sync` WebSocket upgrades to the user's

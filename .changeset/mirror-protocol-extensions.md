@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/svelte": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-svelte": minor
 ---
 
 Named queries and auto-subscribing relational reads cross the mirror
@@ -23,6 +23,6 @@ their subject with the host for the stream's lifetime through a per-key
 interest ledger (a mirror only carries keys some tab registered, and the
 host refcounts per tab, so the ledger posts `Subscribe` on first interest
 and `Unsubscribe` only when the last observer ends and no explicit
-`subscribe` pins the key). In `@legation/svelte`, `namedQuery`,
+`subscribe` pins the key). In `@thomasfosterau/legation-svelte`, `namedQuery`,
 `useNamedQuery`, and `useRelated({ subscribe: true })` now work over
 mirror-only runtimes (the internal engine-lookup fallback is removed).

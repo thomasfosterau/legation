@@ -12,7 +12,7 @@
  * with Kleene connectives), an absent attribute is NULL, text orders by code
  * point, and a `Compare`/`In` against a `null` literal is unknown. `test` is
  * the `WHERE` collapse of `evaluate`: a row matches iff the result is
- * `Some(true)`. The differential harness in `@legation/sql` proves every
+ * `Some(true)`. The differential harness in `@thomasfosterau/legation-sql` proves every
  * evaluator agrees with a real Postgres.
  *
  * Core ships this in-memory evaluator; storage-specific translators (e.g.
@@ -36,7 +36,7 @@ export type Comparison = "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
  * `integer` (int4), `double` (double precision), `boolean`, and `instant`
  * (an ISO-8601 UTC string in the fixed `Date#toISOString` format, so text
  * order is chronological order). A declared attribute carries one of these;
- * the SQL compilers bind and collate by it (`@legation/sql`), and the
+ * the SQL compilers bind and collate by it (`@thomasfosterau/legation-sql`), and the
  * differential corpus (`FilterCorpus`) generates literals of it.
  */
 export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";

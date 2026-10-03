@@ -203,7 +203,7 @@ export interface MutationEvent {
  *   resets the whole view, and contributes no `rows` (there is no finite row
  *   list for "everything"). The touched collections and rows drive
  *   collection- and row-scoped reactions such as HTTP-cache tag invalidation
- *   (`@legation/browser`'s `HttpCacheInvalidation`, #207), which is why they
+ *   (`@thomasfosterau/legation-browser`'s `HttpCacheInvalidation`, #207), which is why they
  *   are reported even on a client with an empty journal (the common case,
  *   where a pull emits a `Patch` change and no `ViewRebuilt`).
  * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
@@ -806,7 +806,9 @@ export interface ClientEngine {
  * The {@link ClientEngine} service, for integrations that take the engine from context
  * (`JsonApiSync.start`).
  */
-export const ClientEngine = Context.Service<ClientEngine>("@legation/effect/ClientEngine");
+export const ClientEngine = Context.Service<ClientEngine>(
+  "@thomasfosterau/legation-effect/ClientEngine"
+);
 
 /**
  * Build a {@link ClientEngine} over the `ClientStore` and `ClientTransport` in context; the engine

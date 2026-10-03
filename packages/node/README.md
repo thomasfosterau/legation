@@ -1,4 +1,4 @@
-# @legation/node
+# @thomasfosterau/legation-node
 
 Node-runtime adapters for the legation engine: serving the default RPC sync transport over HTTP and WebSocket.
 
@@ -7,7 +7,7 @@ Node-runtime adapters for the legation engine: serving the default RPC sync tran
 ## Install
 
 ```sh
-npm install @legation/node @legation/effect effect @effect/platform-node
+npm install @thomasfosterau/legation-node @thomasfosterau/legation-effect effect @effect/platform-node
 ```
 
 `@effect/platform-node` declares a peer on `redis` (`>=5.0.0 <7.0.0`), so a

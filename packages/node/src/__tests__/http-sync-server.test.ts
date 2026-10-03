@@ -5,8 +5,18 @@
  */
 import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Authorization, ClientStore, MemoryBackend, Mutator } from "@legation/effect";
-import { ClientEngine, RpcTransport, Subset, SyncRoom } from "@legation/effect/internal";
+import {
+  Authorization,
+  ClientStore,
+  MemoryBackend,
+  Mutator,
+} from "@thomasfosterau/legation-effect";
+import {
+  ClientEngine,
+  RpcTransport,
+  Subset,
+  SyncRoom,
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";

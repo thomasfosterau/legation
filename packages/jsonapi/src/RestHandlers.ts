@@ -68,8 +68,8 @@ import {
   type Node,
   type Query,
   QueryError,
-} from "@legation/effect";
-import { type Subset, SyncServer } from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect";
+import { type Subset, SyncServer } from "@thomasfosterau/legation-effect/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Linkage from "./Linkage.js";

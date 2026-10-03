@@ -17,7 +17,7 @@ import {
   MemoryBackend,
   Server,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   CLIENT_GROUP_ID,
   CLIENT_ID,

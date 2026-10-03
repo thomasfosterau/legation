@@ -63,11 +63,11 @@
  * request whose row the covered replica does not hold is forwarded too: the
  * 404 is the endpoint's own error class, which only the server can write.
  *
- * It lives in `@legation/jsonapi` rather than `@legation/browser` by
+ * It lives in `@thomasfosterau/legation-jsonapi` rather than `@thomasfosterau/legation-browser` by
  * ADR-0006's rule: its dependencies are this package's (the codec, the
  * writer, route reflection) plus the standard `Request` / `Response`
  * globals, and the one browser-only reading — `navigator.onLine` — is an
- * option with a guarded default. `@legation/browser` therefore stays free of
+ * option with a guarded default. `@thomasfosterau/legation-browser` therefore stays free of
  * effect-jsonapi; its `ServiceWorkerHost.start` hands a worker what this
  * handler needs from the host.
  */
@@ -76,8 +76,8 @@ import { Effect, Schema } from "effect";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
-import type { Node, Query, QueryError } from "@legation/effect";
-import type { ClientView, Coverage } from "@legation/effect/internal";
+import type { Node, Query, QueryError } from "@thomasfosterau/legation-effect";
+import type { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "./Convention.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as ReplicaDocuments from "./ReplicaDocuments.js";

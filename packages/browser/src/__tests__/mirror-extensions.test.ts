@@ -14,7 +14,7 @@ import {
   Predicate,
   Query,
   Transport,
-} from "@legation/effect";
+} from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
   Cvr,
@@ -24,7 +24,7 @@ import {
   Subset,
   SyncServer,
   Mirror,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Ref, Schema, Stream } from "effect";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";

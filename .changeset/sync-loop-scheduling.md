@@ -1,7 +1,7 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
-"@legation/jsonapi": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
+"@thomasfosterau/legation-jsonapi": minor
 ---
 
 Sync-loop scheduling (#33). `ClientEngine` grows a configurable scheduler on
@@ -15,12 +15,12 @@ Sync-loop scheduling (#33). `ClientEngine` grows a configurable scheduler on
   and every scheduling fibre is scoped — interrupted when the engine scope
   closes.
 
-`@legation/browser` adds `BrowserConnectivity.withBrowserConnectivity`, which
+`@thomasfosterau/legation-browser` adds `BrowserConnectivity.withBrowserConnectivity`, which
 layers `navigator.onLine` + `online`/`offline` + `visibilitychange` onto any
 `ClientTransport` so `statusChanges` becomes truthful for carriers (like the RPC
 transport) that otherwise report themselves permanently connected, and a
 return-to-visible surfaces a poke.
 
-`@legation/jsonapi` `JsonApiSync` now configures the core loop (`pullInterval`,
+`@thomasfosterau/legation-jsonapi` `JsonApiSync` now configures the core loop (`pullInterval`,
 `pushDebounce` options, 5-second default interval) instead of running its own
 `Effect.forever` poll; `JsonApiSync.start` just runs `runSync`.

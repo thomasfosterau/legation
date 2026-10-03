@@ -23,14 +23,20 @@
 
 import type { DurableObjectNamespace, DurableObjectState } from "@cloudflare/workers-types";
 import { type Duration, Effect, Ref, Scope } from "effect";
-import { Authorization, Backend, Query, type Node, type Transport } from "@legation/effect";
+import {
+  Authorization,
+  Backend,
+  Query,
+  type Node,
+  type Transport,
+} from "@thomasfosterau/legation-effect";
 import {
   Cvr,
   FanoutBus,
   InvalidationBus,
   type Subset,
   SyncServer,
-} from "@legation/effect/internal";
+} from "@thomasfosterau/legation-effect/internal";
 import * as DurableCvrStore from "./DurableCvrStore.js";
 import * as DurableFanoutBroker from "./DurableFanoutBroker.js";
 import { type RoomSocket, upgradeResponse, webSocketPair } from "./Platform.js";

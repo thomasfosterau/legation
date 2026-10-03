@@ -1,5 +1,5 @@
 ---
-"@legation/effect": minor
+"@thomasfosterau/legation-effect": minor
 ---
 
 Schema-version negotiation and fleet cookie-reset (#48) — the runtime mechanism

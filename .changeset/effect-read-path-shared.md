@@ -1,12 +1,12 @@
 ---
-"@legation/effect": patch
+"@thomasfosterau/legation-effect": patch
 ---
 
 ADR-0025's read path is reusable outside the protocol carrier (#163).
 `SyncServer.readSubsets(deps, context, request)` is `handleRead` without the
 identity resolution: the filterable check, `SyncMiddleware.onRead`, the
 deny-by-default auth filters, then `Backend.evaluate` + `getRows` per subset;
-`handleRead` calls it, and the derived REST handlers in `@legation/jsonapi`
+`handleRead` calls it, and the derived REST handlers in `@thomasfosterau/legation-jsonapi`
 call it behind an HTTP request's identity. Every subset of a batch is
 authorized before any is evaluated, as `handleRead` always did, and the rows
 of each subset now come back in the evaluated order (`getRows` promises

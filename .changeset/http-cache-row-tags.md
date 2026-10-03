@@ -1,18 +1,18 @@
 ---
-"@legation/effect": minor
-"@legation/browser": minor
+"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-browser": minor
 ---
 
 Per-row HTTP-cache tags (#207): row-granular cache invalidation, closing the
 collection-level ceiling noted in `.changeset/http-cache-invalidation.md`.
 
-- **Change feed carries row ids** (`@legation/effect`): the `PullCompleted`
+- **Change feed carries row ids** (`@thomasfosterau/legation-effect`): the `PullCompleted`
   `EngineEvent` now also carries `rows` — the `(collection, id)` pairs the
   pulled patch's `Put`/`Del` ops touched (a `Clear` contributes to
   `collections` only, since it has no finite row list). Always present,
   possibly empty.
 
-- **Fine tag convention** (`@legation/browser`): `HttpCacheInvalidation` gains
+- **Fine tag convention** (`@thomasfosterau/legation-browser`): `HttpCacheInvalidation` gains
   `defaultFineTagFor` — `collection:{name}:{id}`, one level finer than the
   existing `collection:{name}` (`defaultTagFor`). `collectionChanges` now
   yields `Touched` (`{ collections, rows }`) and `invalidateOnChanges` evicts
@@ -21,7 +21,7 @@ collection-level ceiling noted in `.changeset/http-cache-invalidation.md`.
   an aggregate document can be staled by a row it does not yet contain, which
   has no fine tag to match.
 
-- **Response tagging + budget** (`@legation/browser`): `tagsFor(collection,
+- **Response tagging + budget** (`@thomasfosterau/legation-browser`): `tagsFor(collection,
 rowIds)` builds a response's tags — coarse plus one fine tag per row, up to
   `FINE_TAG_ROW_BUDGET` (43, derived in a comment against the real ceiling on
   the `x-legation-cache-meta` header these tags ride on). Beyond the budget, a

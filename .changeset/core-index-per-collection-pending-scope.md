@@ -1,5 +1,5 @@
 ---
-"@legation/effect": patch
+"@thomasfosterau/legation-effect": patch
 ---
 
 `CollectionIndex` acceleration (#113) is no longer bypassed for every

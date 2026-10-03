@@ -33,13 +33,13 @@
  * answers (ADR-0025).
  *
  * Package-internal: the two callers import it directly; nothing outside
- * `@legation/jsonapi` derives linkage.
+ * `@thomasfosterau/legation-jsonapi` derives linkage.
  */
 
 import { Effect } from "effect";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Collection, type Node, Predicate, Query } from "@legation/effect";
-import { type Related, Subset } from "@legation/effect/internal";
+import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation-effect";
+import { type Related, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 
 /** A batch of subsets evaluated to rows — the row source a read runs over. */
