@@ -34,7 +34,11 @@
           "preferSchemaOverJson": "off",
           // Effect.runFork inside event-handler callbacks (WebSocket/IDB
           // bridges) is the intended pattern for those modules.
-          "runEffectInsideEffect": "suggestion"
+          "runEffectInsideEffect": "suggestion",
+          // Effect 4 marks much of its HTTP surface `@stability unstable`, so
+          // the warning fires on every such import and drowns real signal; as
+          // a suggestion it stays listed without counting as a warning (#279).
+          "unstableApiUsage": "suggestion"
         }
       }
     ]
