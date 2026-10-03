@@ -10,7 +10,10 @@
 # against dependabot-core's `bun` file parser, 2026-10-02), so it does not
 # propose bumps of the root `workspaces.catalog` entries today. The catalog
 # rules below keep those pins held if it learns to read the catalog.
-# `playwright-core` is a catalog entry too, so it is a manual bump.
+# `playwright-core` and the dev tools in the catalog (vite, the Svelte
+# plugin, svelte-check, prettier, oxlint, fallow, jsdom, tsx and the
+# `@types/*` / workers-types entries) are catalog entries too, so they are
+# manual bumps: edit the catalog and run `bun install`.
 #
 # Effect is deliberately excluded from version updates: the exact dev pin
 # lives once in the root Bun catalog (`overrides` pins the transitive

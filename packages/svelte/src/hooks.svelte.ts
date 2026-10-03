@@ -261,8 +261,7 @@ export const useConnection = (
   // the current base has no engine-level retarget available (falls back to
   // the pre-#133 behavior).
   let retargetHandle:
-    | { readonly baseKey: string; readonly retarget: (limit: number) => void }
-    | undefined;
+    { readonly baseKey: string; readonly retarget: (limit: number) => void } | undefined;
 
   const windowed = live(
     runtime,

@@ -243,9 +243,8 @@ export const simulateOffline = (
       );
 
     const status = SubscriptionRef.get(offline).pipe(
-      Effect.flatMap(
-        (isOffline): Effect.Effect<ConnectionStatus> =>
-          isOffline ? Effect.succeed("disconnected") : transport.status
+      Effect.flatMap((isOffline): Effect.Effect<ConnectionStatus> =>
+        isOffline ? Effect.succeed("disconnected") : transport.status
       )
     );
 

@@ -232,14 +232,11 @@ export const make = (
         const retarget: WindowHandle["retarget"] = (window) =>
           observation.retarget(window).pipe(
             Effect.andThen(
-              Ref.update(
-                currentRef,
-                (current): Subset.Subset => ({
-                  ...current,
-                  ...(window.limit !== undefined ? { limit: window.limit } : {}),
-                  ...(window.cursor !== undefined ? { cursor: window.cursor } : {}),
-                })
-              )
+              Ref.update(currentRef, (current): Subset.Subset => ({
+                ...current,
+                ...(window.limit !== undefined ? { limit: window.limit } : {}),
+                ...(window.cursor !== undefined ? { cursor: window.cursor } : {}),
+              }))
             )
           );
         let released = false;

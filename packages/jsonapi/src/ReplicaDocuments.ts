@@ -276,9 +276,8 @@ export const make = (options: Options): ReplicaDocuments => {
 
   const fromUrl: ReplicaDocuments["fromUrl"] = (view, url) =>
     JsonApiQuery.parseRead(nodes, url).pipe(
-      Effect.flatMap(
-        (parsed): Effect.Effect<Document, QueryError> =>
-          parsed.id === undefined ? collection(view, parsed) : data(view, parsed)
+      Effect.flatMap((parsed): Effect.Effect<Document, QueryError> =>
+        parsed.id === undefined ? collection(view, parsed) : data(view, parsed)
       )
     );
 

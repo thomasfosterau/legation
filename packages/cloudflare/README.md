@@ -53,10 +53,7 @@ export class LegationShard extends FanoutShard.makeShardClass({
 export class LegationRoom extends Room.makeRoomClass({
   nodes,
   backend: (env) => SqlBackend.make({ executor: D1Executor.make(env.DB), nodes }),
-  policy: () =>
-    Authorization.policy({
-      /* … */
-    }),
+  policy: () => Authorization.policy({/* … */}),
   shards: (env) => env.SHARDS,
 }) {}
 
