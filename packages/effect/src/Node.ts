@@ -56,9 +56,9 @@ export const Id = <const Type extends string>(type: Type): Id<Type> =>
 
 /** The foreign-key fields a node's `one` edges add to its row schema. */
 type ViaFields<Edges extends Record<string, Edge.Edge>> = {
-  readonly [K in keyof Edges as Edges[K] extends Edge.One<string, infer Via>
-    ? Via
-    : never]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
+  readonly [
+    K in keyof Edges as Edges[K] extends Edge.One<string, infer Via> ? Via : never
+  ]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
 };
 
 /**

@@ -277,8 +277,7 @@ interface Candidate {
 
 /** How a candidate request leaves the façade short of a document: forwarded, or answered with an error. */
 type Outcome =
-  | { readonly _tag: "Forward" }
-  | { readonly _tag: "Respond"; readonly response: Response };
+  { readonly _tag: "Forward" } | { readonly _tag: "Respond"; readonly response: Response };
 
 const forward: Outcome = { _tag: "Forward" };
 const respond = (response: Response): Outcome => ({ _tag: "Respond", response });

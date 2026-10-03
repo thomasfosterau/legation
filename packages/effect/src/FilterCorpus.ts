@@ -510,10 +510,10 @@ export const generateOrderBy = (
     const count = Math.min(columns.length, 1 + (yield* int(2)));
     const shuffled = yield* Random.shuffle(columns);
     return yield* Effect.forEach(shuffled.slice(0, count), (column) =>
-      Effect.map(
-        Random.nextBoolean,
-        (asc): Subset.OrderBy => ({ field: column.name, direction: asc ? "asc" : "desc" })
-      )
+      Effect.map(Random.nextBoolean, (asc): Subset.OrderBy => ({
+        field: column.name,
+        direction: asc ? "asc" : "desc",
+      }))
     );
   });
 

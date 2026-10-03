@@ -131,8 +131,7 @@ export interface WindowObservation {
  * permanently refused it (#35). Observed via {@link MutationHandle}.
  */
 export type MutationOutcome =
-  | { readonly _tag: "applied" }
-  | { readonly _tag: "rejected"; readonly reason: string };
+  { readonly _tag: "applied" } | { readonly _tag: "rejected"; readonly reason: string };
 
 /**
  * A handle to a journaled mutation whose backend outcome can be awaited. The
@@ -1921,15 +1920,13 @@ export const make = (
           touched.add(row.collection);
         }
         yield* updateIndexes(
-          rows.map(
-            (row): PatchOp => ({
-              _tag: "Put",
-              collection: row.collection,
-              id: row.id,
-              version: row.version,
-              value: row.value,
-            })
-          )
+          rows.map((row): PatchOp => ({
+            _tag: "Put",
+            collection: row.collection,
+            id: row.id,
+            version: row.version,
+            value: row.value,
+          }))
         );
         yield* invalidateOverlay;
         yield* publishChange(rebuildFor(touched));

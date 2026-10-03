@@ -195,13 +195,11 @@ export const makeIndexed = (
 
 /** The visible page: the subset's cursor + limit over the maintained order. */
 export const result = (view: LiveView): ReadonlyArray<PositionedRow> =>
-  windowSlice(view.order, view.byId, view.subset).map(
-    (row): PositionedRow => ({
-      id: row.id,
-      value: row.value,
-      position: view.positions.get(row.id)!,
-    })
-  );
+  windowSlice(view.order, view.byId, view.subset).map((row): PositionedRow => ({
+    id: row.id,
+    value: row.value,
+    position: view.positions.get(row.id)!,
+  }));
 
 /**
  * Retarget the window — a new `limit` and/or `cursor`, e.g. "load more"
