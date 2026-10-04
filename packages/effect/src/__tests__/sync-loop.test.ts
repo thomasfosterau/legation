@@ -1,10 +1,15 @@
 /**
  * Sync-loop scheduling (issue #33): push-on-mutate debounce, interval pull as
  * the correctness backstop, and scoped interruption of the scheduling fibres.
- * These fibres run on real timers, so the suite uses `it.live` (wall time).
+ *
+ * Every case runs under `it.effect`, so the debounce, the interval and the
+ * retry schedules all sleep on the `TestClock` and only move when a test
+ * advances it. Nothing here waits on wall-clock time, so a loaded machine
+ * cannot make a case time out (#309).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Ref, Schema, Scope, Stream } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -71,16 +76,14 @@ const makeClient = (
     const store = yield* ClientStoreModule.makeMemory;
     const base = yield* makeInMemory(handler, `group-${name}`);
     // Count only network legs the engine actually makes (push short-circuits an
-    // empty journal before reaching the transport).
+    // empty journal before reaching the transport), and count each one once it
+    // has completed, so a count the tests wait on means the leg's effects
+    // (a drained journal, rows in the store) are already visible.
+    const count = (counter: Ref.Ref<number> | undefined) =>
+      counter ? Ref.update(counter, (n) => n + 1) : Effect.void;
     const transport: ClientTransport = {
-      push: (request) =>
-        (opts?.counters ? Ref.update(opts.counters.push, (n) => n + 1) : Effect.void).pipe(
-          Effect.andThen(base.push(request))
-        ),
-      pull: (request) =>
-        (opts?.counters ? Ref.update(opts.counters.pull, (n) => n + 1) : Effect.void).pipe(
-          Effect.andThen(base.pull(request))
-        ),
+      push: (request) => base.push(request).pipe(Effect.tap(() => count(opts?.counters?.push))),
+      pull: (request) => base.pull(request).pipe(Effect.tap(() => count(opts?.counters?.pull))),
       pokes: opts?.pokes ?? base.pokes,
       status: base.status,
       statusChanges: base.statusChanges,
@@ -99,19 +102,30 @@ const makeClient = (
 
 const allTodos = Subset.make({ collection: "todos" });
 
-// Poll until the condition holds (generous under parallel-suite load; passing
-// runs exit early) — fixed post-debounce sleeps flake when workers contend.
-const eventually = (condition: Effect.Effect<boolean>) =>
+// Advance the TestClock in `step` increments until the condition holds. Each
+// `TestClock.adjust` also yields to the engine's forked fibres, so this both
+// lets in-flight work (the connect push+pull, a debounced push) finish and
+// fires the timers due by then. Time is virtual: the bound is a number of
+// steps, not a wall-clock budget, so machine load cannot exhaust it.
+const advanceUntil = <E>(
+  condition: Effect.Effect<boolean, E>,
+  step: Duration.Input,
+  maxSteps = 200
+) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+    for (let attempt = 0; attempt < maxSteps; attempt++) {
       if (yield* condition) return;
-      yield* Effect.sleep(Duration.millis(10));
+      yield* TestClock.adjust(step);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    if (yield* condition) return;
+    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
   });
 
+const atLeast = (counter: Ref.Ref<number>, n: number) =>
+  Effect.map(Ref.get(counter), (count) => count >= n);
+
 describe("sync-loop scheduling (#33)", () => {
-  it.live("auto-pushes a mutation with no app-level push call", () =>
+  it.effect("auto-pushes a mutation with no app-level push call", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const push = yield* Ref.make(0);
@@ -125,17 +139,21 @@ describe("sync-loop scheduling (#33)", () => {
       yield* engine.subscribe(allTodos);
       yield* engine.runSync;
       // Let the initial connect-triggered push+pull (empty journal) settle.
-      yield* Effect.sleep(Duration.millis(30));
+      yield* advanceUntil(atLeast(pull, 1), Duration.millis(1));
+      expect(yield* Ref.get(push)).toBe(0);
 
       yield* engine.mutate("todo/set", { id: "1", title: "auto", done: false });
+      // Inside the debounce window nothing has been pushed yet.
+      yield* TestClock.adjust(Duration.millis(29));
+      expect(yield* Ref.get(push)).toBe(0);
       // After the debounce window the journal drains without an app push.
-      yield* eventually(Effect.map(Ref.get(push), (count) => count === 1));
+      yield* advanceUntil(atLeast(push, 1), Duration.millis(1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
   );
 
-  it.live(
+  it.effect(
     "pins the default: an unconfigured connected client never auto-pushes a journaled mutation (#143)",
     () =>
       Effect.gen(function* () {
@@ -150,20 +168,20 @@ describe("sync-loop scheduling (#33)", () => {
         yield* engine.runSync;
         // Let the initial connect-triggered push+pull (empty journal) settle;
         // the transport is connected throughout (in-memory transport default).
-        yield* Effect.sleep(Duration.millis(30));
+        yield* advanceUntil(atLeast(pull, 1), Duration.millis(1));
 
         yield* engine.mutate("todo/set", { id: "1", title: "a", done: false });
         yield* engine.mutate("todo/set", { id: "2", title: "b", done: false });
         // Comfortably longer than any debounce window used elsewhere in this
         // suite (30-150ms): with no `syncLoop` options, nothing auto-pushes.
-        yield* Effect.sleep(Duration.millis(1000));
+        yield* TestClock.adjust(Duration.millis(1000));
 
         expect(yield* Ref.get(push)).toBe(0);
         expect(yield* store.pendingMutations).toHaveLength(2);
       })
   );
 
-  it.live("coalesces a burst of mutations into a single push", () =>
+  it.effect("coalesces a burst of mutations into a single push", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const push = yield* Ref.make(0);
@@ -176,51 +194,57 @@ describe("sync-loop scheduling (#33)", () => {
       );
       yield* engine.subscribe(allTodos);
       yield* engine.runSync;
-      yield* Effect.sleep(Duration.millis(30));
+      yield* advanceUntil(atLeast(pull, 1), Duration.millis(1));
 
       yield* engine.mutate("todo/set", { id: "1", title: "a", done: false });
       yield* engine.mutate("todo/set", { id: "2", title: "b", done: false });
       yield* engine.mutate("todo/set", { id: "3", title: "c", done: false });
-      // Inside the (widened) window nothing has been pushed yet.
-      yield* Effect.sleep(Duration.millis(20));
+      // Up to the last instant of the window nothing has been pushed yet.
+      yield* TestClock.adjust(Duration.millis(149));
       expect(yield* Ref.get(push)).toBe(0);
       expect(yield* store.pendingMutations).toHaveLength(3);
       // The window closes: exactly one push drains all three.
-      yield* eventually(Effect.map(Ref.get(push), (count) => count >= 1));
+      yield* advanceUntil(atLeast(push, 1), Duration.millis(1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
   );
 
-  it.live("converges on remote changes over interval pull alone (no pokes)", () =>
+  it.effect("converges on remote changes over interval pull alone (no pokes)", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
+      const push = yield* Ref.make(0);
+      const pull = yield* Ref.make(0);
       const a = yield* makeClient(handler, "a");
       const b = yield* makeClient(
         handler,
         "b",
         { pullInterval: Duration.millis(25) },
-        {
-          pokes: Stream.empty,
-        }
+        { pokes: Stream.empty, counters: { push, pull } }
       );
       yield* a.engine.subscribe(allTodos);
       yield* b.engine.subscribe(allTodos);
       yield* b.engine.runSync;
-      yield* Effect.sleep(Duration.millis(10)); // initial connect-pull settles
+      // The connect pull and the interval's first pull settle.
+      yield* advanceUntil(atLeast(pull, 2), Duration.millis(1));
 
       // A commits a write; B receives no pokes, so only its interval pull can
       // converge it.
       yield* a.engine.mutate("todo/set", { id: "x", title: "remote", done: false });
       yield* a.engine.push;
 
-      yield* Effect.sleep(Duration.millis(90));
-      const seen = yield* b.engine.query(allTodos);
-      expect(seen.map((row) => (row.value as Todo).title)).toEqual(["remote"]);
+      const titles = Effect.map(b.engine.query(allTodos), (rows) =>
+        rows.map((row) => (row.value as Todo).title)
+      );
+      yield* advanceUntil(
+        Effect.map(titles, (seen) => seen.length > 0),
+        Duration.millis(25)
+      );
+      expect(yield* titles).toEqual(["remote"]);
     })
   );
 
-  it.live("interrupts scheduling fibres when the engine scope closes", () =>
+  it.effect("interrupts scheduling fibres when the engine scope closes", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const push = yield* Ref.make(0);
@@ -236,13 +260,20 @@ describe("sync-loop scheduling (#33)", () => {
       // Fork the loop into a scope we control, not the test's.
       yield* engine.runSync.pipe(Effect.provideService(Scope.Scope, scope));
 
-      yield* Effect.sleep(Duration.millis(90));
-      const before = yield* Ref.get(pull);
-      expect(before).toBeGreaterThan(1); // interval fired repeatedly
+      // The interval fires repeatedly: the connect pull plus at least three
+      // interval pulls.
+      yield* advanceUntil(atLeast(pull, 4), Duration.millis(20));
 
       yield* Scope.close(scope, Exit.void);
-      yield* Effect.sleep(Duration.millis(90));
-      // No further pulls after the scope closed: the fibre was interrupted.
+      // Read the count once the scope has closed, so a pull completing while
+      // the fibres are being interrupted is already in it.
+      const before = yield* Ref.get(pull);
+      expect(before).toBeGreaterThan(1);
+      // Ten more intervals of virtual time: no further pulls after the scope
+      // closed, because the fibre was interrupted.
+      for (let interval = 0; interval < 10; interval++) {
+        yield* TestClock.adjust(Duration.millis(20));
+      }
       expect(yield* Ref.get(pull)).toBe(before);
     })
   );
