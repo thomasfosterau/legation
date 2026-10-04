@@ -5,9 +5,16 @@
  * two-room end-to-end — a write on one room pokes another room's
  * fine-registered window across the broker, while a write to a different
  * parent leaves it silent (routing precision, not just delivery).
+ *
+ * The timed cases run under `it.effect`: lease expiry and the bus heartbeat
+ * read the `TestClock`, which only moves when a test advances it, and each
+ * wait is for a specific event (a lease registered, a publish routed, a
+ * window updated). Nothing waits on wall-clock time, so a loaded machine
+ * cannot expire a lease or skip a heartbeat mid-test (#282, #292).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
   Client,
@@ -109,8 +116,23 @@ describe("FanoutTopics", () => {
   });
 });
 
+/**
+ * The batch waiting on a room's feed, or `undefined` when nothing is. `publish`
+ * hands a match to the feed before it returns, so after a publish this tells
+ * routed from not routed without waiting: a take forked here either finds the
+ * batch at once or is still suspended once the test has yielded to it.
+ */
+const waitingPoke = (pokes: FanoutBroker.TopicPokes) =>
+  Effect.gen(function* () {
+    const taker = yield* Effect.forkChild(pokes.take);
+    yield* TestClock.adjust("0 millis");
+    const exit = taker.pollUnsafe();
+    yield* Fiber.interrupt(taker);
+    return exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
+  });
+
 describe("FanoutBroker leases", () => {
-  it.live("routes only intersecting topics; expired leases age out", () =>
+  it.effect("routes only intersecting topics; expired leases age out", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const broker = yield* FanoutBroker.makeInProcess;
@@ -119,17 +141,19 @@ describe("FanoutBroker leases", () => {
 
         // A non-intersecting publish stays silent; an intersecting one lands.
         yield* broker.publish(["reviews/productId=p-2", "products"]);
+        expect(yield* waitingPoke(pokes)).toBeUndefined();
         yield* broker.publish(["reviews/productId=p-1", "reviews"]);
-        expect(yield* pokes.take).toEqual(["reviews/productId=p-1"]);
+        expect(yield* waitingPoke(pokes)).toEqual(["reviews/productId=p-1"]);
 
-        // Past the TTL the lease is gone: publishes stop routing.
-        yield* Effect.sleep("250 millis");
+        // Up to the last instant of the TTL the lease still routes.
+        yield* TestClock.adjust("149 millis");
         yield* broker.publish(["reviews/productId=p-1"]);
-        const raced = yield* Effect.raceFirst(
-          pokes.take.pipe(Effect.map(() => "poked" as const)),
-          Effect.sleep("150 millis").pipe(Effect.as("silent" as const))
-        );
-        expect(raced).toBe("silent");
+        expect(yield* waitingPoke(pokes)).toEqual(["reviews/productId=p-1"]);
+
+        // At the TTL the lease is gone: publishes stop routing.
+        yield* TestClock.adjust("1 millis");
+        yield* broker.publish(["reviews/productId=p-1"]);
+        expect(yield* waitingPoke(pokes)).toBeUndefined();
       })
     )
   );
@@ -137,17 +161,48 @@ describe("FanoutBroker leases", () => {
 
 // ─── Two rooms over one broker: precision end to end ─────────────────────────
 
-const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
-
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+// Advance the TestClock in 10 ms steps (a fifth of the rooms' heartbeat) until `read` satisfies `until`. Each `TestClock.adjust` yields to
+// the forked fibres (engines, bus heartbeats, the server's fan-out loop) and
+// fires the timers due by then. Time is virtual: the bound is a number of
+// steps, not a wall-clock budget, so machine load cannot exhaust it, and
+// 200 steps (2 s) stay far inside the clients' 10-minute pull interval.
+const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+    for (let attempt = 0; attempt < maxSteps; attempt++) {
       const value = yield* read;
       if (until(value)) return value;
-      yield* sleepReal(10);
+      yield* TestClock.adjust(Duration.millis(10));
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    const value = yield* read;
+    if (until(value)) return value;
+    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+  });
+
+/**
+ * The broker, recording what reaches it: each room's latest registered topic
+ * set, and every publish once it has returned (by then each match is already
+ * in its room's poke feed).
+ */
+const observedBroker = (broker: FanoutBroker.FanoutBroker) =>
+  Effect.gen(function* () {
+    const registered = yield* Ref.make(new Map<string, ReadonlySet<string>>());
+    const published = yield* Ref.make<ReadonlyArray<ReadonlySet<string>>>([]);
+    const observed: FanoutBroker.FanoutBroker = {
+      register: (roomId, topics, ttl) =>
+        broker
+          .register(roomId, topics, ttl)
+          .pipe(
+            Effect.tap(() => Ref.update(registered, (map) => new Map(map).set(roomId, topics)))
+          ),
+      publish: (topics) => {
+        const all = new Set(topics);
+        return broker
+          .publish(all)
+          .pipe(Effect.tap(() => Ref.update(published, (list) => [...list, all])));
+      },
+      pokes: broker.pokes,
+    };
+    return { broker: observed, registered, published };
   });
 
 const reviewSet = Mutation.make("review/set", Schema.Unknown);
@@ -207,7 +262,7 @@ const makeRoomClient = (handler: Transport.ServerHandler, group: string) =>
   });
 
 describe("two rooms over one broker", () => {
-  it.live("a foreign write pokes the fine-registered room; other parents stay silent", () =>
+  it.effect("a foreign write pokes the fine-registered room; other parents stay silent", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const backend = yield* MemoryBackend.make(
@@ -217,25 +272,46 @@ describe("two rooms over one broker", () => {
             ),
           ])
         );
-        const broker = yield* FanoutBroker.makeInProcess;
+        const { broker, registered, published } = yield* observedBroker(
+          yield* FanoutBroker.makeInProcess
+        );
+        // Every poke routed to room A, read off its feed by a probe of our own.
+        const roomAPokes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+        const probe = yield* broker.pokes("room-a");
+        yield* Effect.forkScoped(
+          Effect.forever(
+            probe.take.pipe(
+              Effect.flatMap((topics) => Ref.update(roomAPokes, (all) => [...all, topics]))
+            )
+          )
+        );
         const roomA = yield* makeRoom("room-a", backend, broker);
         const roomB = yield* makeRoom("room-b", backend, broker);
 
         // Room A's user watches product p-1's reviews (a fine-topic window).
         const reader = yield* makeRoomClient(roomA, "group-a");
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        const emissions = yield* Ref.make(0);
         yield* Effect.forkScoped(
           Stream.runForEach(
             reader.client.observe({ collection: "reviews", where: { productId: "p-1" } }),
-            (rows) => Ref.set(latest, rows)
+            (rows) =>
+              Ref.set(latest, rows).pipe(Effect.andThen(Ref.update(emissions, (n) => n + 1)))
           ).pipe(Effect.ignore)
         );
-        // A pull registers the window; a heartbeat leases its fine topic.
-        yield* eventually(Ref.get(latest), () => true);
+        // The observer's first emission means its window is subscribed. A pull
+        // then registers the window; a heartbeat leases its fine topic.
+        yield* advanceUntil(Ref.get(emissions), (n) => n > 0);
         yield* reader.engine.pull.pipe(Effect.orDie);
-        yield* sleepReal(120);
+        yield* advanceUntil(
+          Ref.get(registered),
+          (rooms) => rooms.get("room-a")?.has("reviews/productId=p-1") === true
+        );
 
         // Room B's user writes a p-1 review: fine topic → room A → poke → pull.
+        // The writer pushes explicitly, so the write reaches room B's server
+        // without depending on when its auto-push debounce fibre starts; the
+        // push returns once room B has published the write to the broker.
         const writer = yield* makeRoomClient(roomB, "group-b");
         yield* writer.client.mutate("review/set", {
           id: "r-1",
@@ -243,18 +319,27 @@ describe("two rooms over one broker", () => {
           createdAt: "2026-01-01",
           productId: "p-1",
         });
-        const rows = yield* eventually(Ref.get(latest), (current) => current.length === 1);
+        yield* writer.engine.push.pipe(Effect.orDie);
+        const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
         expect((rows[0]!.value as { body: string }).body).toBe("cross-room");
+        expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
 
         // A write to ANOTHER parent must not poke room A (routing precision):
-        // its window stays at one row through the quiet period.
+        // once its publish has been routed (and the probe has had a turn to
+        // read anything routed), room A has still had only the p-1 poke, and
+        // its window one row.
         yield* writer.client.mutate("review/set", {
           id: "r-2",
           body: "other parent",
           createdAt: "2026-01-02",
           productId: "p-9",
         });
-        yield* sleepReal(250);
+        yield* writer.engine.push.pipe(Effect.orDie);
+        expect(
+          (yield* Ref.get(published)).some((topics) => topics.has("reviews/productId=p-9"))
+        ).toBe(true);
+        yield* TestClock.adjust(Duration.millis(10));
+        expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
         expect(yield* Ref.get(latest)).toHaveLength(1);
       })
     )
