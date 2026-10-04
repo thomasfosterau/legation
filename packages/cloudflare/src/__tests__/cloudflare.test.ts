@@ -6,8 +6,13 @@
  * room B poking room A's hibernation-style socket AND its fine-registered
  * window converging, while a write to a different parent leaves room A
  * silent.
+ *
+ * The headline test waits for specific events (a lease written at a shard, a
+ * publish answered, a window updated), never for a fixed time, and pins
+ * `Date` (which the shards read for lease expiry) so a loaded machine cannot
+ * age a lease out between its heartbeat and the write it must route (#282).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import type {
   DurableObjectNamespace,
@@ -165,15 +170,43 @@ const mutations = Mutation.registry([
   },
 ]);
 
-const sleepReal = (millis: number) => new Promise<void>((resolve) => setTimeout(resolve, millis));
+/** A request a shard has answered: which shard (topic), which route, what body. */
+interface ShardCall {
+  readonly shard: string;
+  readonly path: string;
+  readonly body: { readonly roomId?: string; readonly topics?: ReadonlyArray<string> };
+}
 
-const eventuallyAsync = async <A>(read: () => Promise<A>, until: (value: A) => boolean) => {
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const value = await read();
-    if (until(value)) return value;
-    await sleepReal(10);
-  }
-  throw new Error("eventually: condition never held");
+/**
+ * Every shard request, recorded once the shard has answered it, and a way to
+ * wait for one. A `/publish` answers only after it has poked each leased
+ * room, so its completion means any poke it routed has landed.
+ */
+const makeShardCalls = () => {
+  const calls: Array<ShardCall> = [];
+  const waiters: Array<{
+    readonly match: (call: ShardCall) => boolean;
+    readonly done: () => void;
+  }> = [];
+  return {
+    record: (call: ShardCall) => {
+      calls.push(call);
+      for (const waiter of waiters.filter((w) => w.match(call))) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.done();
+      }
+    },
+    /** How many calls have completed so far: a mark to pass to `next`. */
+    count: () => calls.length,
+    /**
+     * Resolve once a matching call has completed, counting only calls after
+     * the `since` mark (at once if one already has).
+     */
+    next: (match: (call: ShardCall) => boolean, since = 0): Promise<void> =>
+      calls.slice(since).some(match)
+        ? Promise.resolve()
+        : new Promise<void>((done) => waiters.push({ match, done })),
+  };
 };
 
 /** A ClientTransport calling a room instance's fetch directly. */
@@ -201,6 +234,10 @@ const roomTransport = (room: { fetch: (request: Request) => Promise<Response> })
 
 describe("rooms + shards, end to end", () => {
   it("a cross-room write pokes the fine-registered room's sockets and window", async () => {
+    // Shards stamp and check leases with `Date.now()`. Pinning it means a
+    // lease cannot expire mid-test however late a heartbeat runs; expiry has
+    // its own unit test above. Timers stay real, so heartbeats still fire.
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const scope = Effect.runSync(Scope.make());
     try {
       const backend = await Effect.runPromise(
@@ -220,13 +257,17 @@ describe("rooms + shards, end to end", () => {
         const room = rooms.get(name);
         return room === undefined ? new Response("no room", { status: 404 }) : room.fetch(request);
       });
+      const shardCalls = makeShardCalls();
       const shardsNs = makeNamespace(async (name, request) => {
         let shard = shards.get(name);
         if (shard === undefined) {
           shard = new ShardClass(makeState(`shard:${name}`).state, {});
           shards.set(name, shard);
         }
-        return shard.fetch(request);
+        const body = (await request.clone().json()) as ShardCall["body"];
+        const response = await shard.fetch(request);
+        shardCalls.record({ shard: name, path: new URL(request.url).pathname, body });
+        return response;
       });
       const ShardClass = makeShardClass<unknown>({ rooms: () => roomsNs });
       const RoomClass = makeRoomClass<unknown>({
@@ -276,17 +317,33 @@ describe("rooms + shards, end to end", () => {
       );
       const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
       const latest: Array<ReadonlyArray<unknown>> = [[]];
+      // Resolves on the observer's first emission (its window is subscribed by
+      // then), and on the first emission holding one row.
+      let subscribed!: () => void;
+      const isSubscribed = new Promise<void>((resolve) => (subscribed = resolve));
+      let converged!: () => void;
+      const hasConverged = new Promise<void>((resolve) => (converged = resolve));
       const observing = Effect.runPromise(
         Stream.runForEach(
           readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
-          (rows) => Effect.sync(() => void (latest[0] = rows))
+          (rows) =>
+            Effect.sync(() => {
+              latest[0] = rows;
+              subscribed();
+              if (rows.length === 1) converged();
+            })
         ).pipe(Scope.provide(readerScope), Effect.ignore)
       );
       void observing;
-      await sleepReal(50);
+      await isSubscribed;
       await Effect.runPromise(reader.pull.pipe(Effect.orDie));
       // A heartbeat leases the fine topic at its shard.
-      await sleepReal(150);
+      await shardCalls.next(
+        (call) =>
+          call.shard === "reviews/productId=p-1" &&
+          call.path === "/register" &&
+          call.body.roomId === "room-a"
+      );
 
       // Room B's client writes a p-1 review and pushes.
       const writerScope = Effect.runSync(Scope.make());
@@ -313,21 +370,21 @@ describe("rooms + shards, end to end", () => {
       );
       await Effect.runPromise(writer.push.pipe(Effect.orDie));
 
-      // The shard poked room A: its socket got a contentless frame…
-      await eventuallyAsync(
-        async () => socketA.sent.length,
-        (count) => count > 0
+      // The shard poked room A: once the fine topic's publish is answered, its
+      // socket has a contentless frame…
+      await shardCalls.next(
+        (call) => call.shard === "reviews/productId=p-1" && call.path === "/publish"
       );
+      expect(socketA.sent.length).toBeGreaterThan(0);
       expect(JSON.parse(socketA.sent[0]!)).toEqual({ type: "poke" });
       // …and (a client honouring the poke pulls) the window converges.
       await Effect.runPromise(reader.pull.pipe(Effect.orDie));
-      await eventuallyAsync(
-        async () => latest[0]!,
-        (rows) => rows.length === 1
-      );
+      await hasConverged;
+      expect(latest[0]).toHaveLength(1);
 
       // A write to a DIFFERENT parent leaves room A's socket silent.
       const sends = socketA.sent.length;
+      const before = shardCalls.count();
       await Effect.runPromise(
         writer.mutate("review/set", {
           id: "r-2",
@@ -337,13 +394,20 @@ describe("rooms + shards, end to end", () => {
         })
       );
       await Effect.runPromise(writer.push.pipe(Effect.orDie));
-      await sleepReal(250);
+      // Both of the write's topics are published: the coarse one and the p-9
+      // one. Once each publish is answered, any poke it routed has landed.
+      await shardCalls.next((call) => call.shard === "reviews" && call.path === "/publish", before);
+      await shardCalls.next(
+        (call) => call.shard === "reviews/productId=p-9" && call.path === "/publish",
+        before
+      );
       expect(socketA.sent.length).toBe(sends);
 
       await Effect.runPromise(Scope.close(writerScope, Exit.void));
       await Effect.runPromise(Scope.close(readerScope, Exit.void));
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void));
+      vi.useRealTimers();
     }
   }, 20_000);
 });
