@@ -166,7 +166,7 @@ describe("sync-loop scheduling (#33)", () => {
   for (const forked of [true, false]) {
     for (let turns = 0; turns <= 8; turns++) {
       it.effect(
-        `auto-pushes a mutation journaled ${turns} turns after ${forked ? "forking" : "running"} runSync (#317)`,
+        `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync (#317)`,
         () =>
           Effect.gen(function* () {
             const handler = yield* makeServer;
