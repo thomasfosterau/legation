@@ -310,8 +310,9 @@ describe("two rooms over one broker", () => {
 
         // Room B's user writes a p-1 review: fine topic → room A → poke → pull.
         // The writer pushes explicitly, so the write reaches room B's server
-        // without depending on when its auto-push debounce fibre starts; the
-        // push returns once room B has published the write to the broker.
+        // without depending on its auto-push debounce, which can miss a
+        // trigger (#317); the push returns once room B has published the
+        // write to the broker.
         const writer = yield* makeRoomClient(roomB, "group-b");
         yield* writer.client.mutate("review/set", {
           id: "r-1",
