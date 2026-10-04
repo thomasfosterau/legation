@@ -2011,6 +2011,17 @@ export const make = (
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
+      // Subscribe to the push trigger here, before anything is forked (#317).
+      // `Stream.fromPubSub` would subscribe only once the debounce's forked
+      // upstream fibre first pulls, a few scheduler turns after this returns,
+      // and a trigger published in between is lost; the connect leg below has
+      // already read the journal by then, so that mutation would wait for
+      // some unrelated push. Subscribing first leaves no gap: a mutation
+      // journaled before this point is in the journal the connect leg reads,
+      // and every later one queues a trigger on this subscription.
+      const pushDebounce = options.syncLoop?.pushDebounce;
+      const pushTriggers =
+        pushDebounce === undefined ? undefined : yield* PubSub.subscribe(pushTrigger);
       // Pull on every poke; re-establish the poke stream with backoff, and
       // surface if it stays down (the replay-1 hub covers the resubscribe race).
       yield* Effect.forkScoped(
@@ -2028,10 +2039,9 @@ export const make = (
         )
       );
       // Auto-push after mutations, debounced so a burst coalesces into one push.
-      const pushDebounce = options.syncLoop?.pushDebounce;
-      if (pushDebounce !== undefined) {
+      if (pushDebounce !== undefined && pushTriggers !== undefined) {
         yield* Effect.forkScoped(
-          Stream.fromPubSub(pushTrigger).pipe(
+          Stream.fromSubscription(pushTriggers).pipe(
             Stream.debounce(pushDebounce),
             Stream.runForEach(() => attemptPush)
           )

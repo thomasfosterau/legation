@@ -154,6 +154,46 @@ describe("sync-loop scheduling (#33)", () => {
     })
   );
 
+  // A mutation journaled at any point after `runSync` is auto-pushed (#317).
+  // The connect leg's push reads the journal once; the debounce fibre must
+  // already be subscribed to the push trigger by the time a later mutation
+  // signals it, or the trigger is lost and the mutation sits in the journal.
+  // `Client.make` forks `runSync`, so each case runs both forked and awaited,
+  // with the mutation journaled after every number of scheduler turns from
+  // "before the loop's fibres have run" to "long after they settled". On the
+  // TestClock the debounce only elapses when the case advances it, so a
+  // missed trigger fails deterministically instead of after a live timeout.
+  for (const forked of [true, false]) {
+    for (let turns = 0; turns <= 8; turns++) {
+      it.effect(
+        `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync (#317)`,
+        () =>
+          Effect.gen(function* () {
+            const handler = yield* makeServer;
+            const push = yield* Ref.make(0);
+            const pull = yield* Ref.make(0);
+            const { engine, store } = yield* makeClient(
+              handler,
+              "a",
+              { pushDebounce: Duration.millis(30) },
+              { counters: { push, pull } }
+            );
+            if (forked) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
+            else yield* engine.runSync;
+            for (let turn = 0; turn < turns; turn++) yield* Effect.yieldNow;
+
+            yield* engine.mutate("todo/set", { id: "1", title: "late", done: false });
+            // Whichever leg takes it (the connect push, or the debounced push
+            // the mutation triggered), the journal drains once the window has
+            // elapsed.
+            yield* TestClock.adjust(Duration.millis(30));
+            expect(yield* store.pendingMutations).toEqual([]);
+            expect(yield* Ref.get(push)).toBe(1);
+          })
+      );
+    }
+  }
+
   it.effect(
     "pins the default: an unconfigured connected client never auto-pushes a journaled mutation (#143)",
     () =>
