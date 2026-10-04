@@ -6,7 +6,7 @@
  * inferred status. Version rejections propagate without touching either.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Ref, Stream } from "effect";
+import { Deferred, Effect, Fiber, Ref, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
@@ -203,6 +203,29 @@ describe("Transport.withFallback", () => {
   );
 });
 
+/**
+ * Yields to the scheduler until a collector has recorded `count` statuses.
+ * The bound is a number of scheduler turns, not a wall-clock budget, so
+ * machine load cannot exhaust it; a missing change dies with a clear message
+ * instead of hanging the test.
+ */
+const awaitSeen = (
+  seen: Ref.Ref<ReadonlyArray<Transport.ConnectionStatus>>,
+  count: number,
+  maxTurns = 1_000
+) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < maxTurns; turn++) {
+      if ((yield* Ref.get(seen)).length >= count) return;
+      yield* Effect.yieldNow;
+    }
+    const all = yield* Ref.get(seen);
+    if (all.length >= count) return;
+    return yield* Effect.die(
+      new Error(`awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all}`)
+    );
+  });
+
 describe("Transport.simulateOffline", () => {
   it.effect("passes calls through while online, fails them while toggled offline", () =>
     Effect.scoped(
@@ -225,12 +248,13 @@ describe("Transport.simulateOffline", () => {
     )
   );
 
-  // Real clock: the collector subscribes to two combined SubscriptionRef-backed
-  // streams on a background fiber, so give it a turn to establish before the
-  // toggles fire (mirrors mutation-states-engine.test.ts's own live-collector
-  // pattern) — a TestClock would freeze the fiber's subscribe race instead of
-  // resolving it.
-  it.live(
+  // The collector runs on a background fiber. It signals `subscribed` once it
+  // has seen the current status: `SubscriptionRef.changes` replays the current
+  // value only to a live subscriber, so by then both streams `statusChanges`
+  // combines are subscribed and no toggle below can be missed. Each step then
+  // waits for the collector to record the change. No sleep and no clock, so a
+  // loaded machine cannot reorder a step (#284).
+  it.effect(
     "status/statusChanges report disconnected while offline, else the wrapped transport's",
     () =>
       Effect.scoped(
@@ -243,18 +267,27 @@ describe("Transport.simulateOffline", () => {
           expect(yield* isOffline).toBe(false);
           expect(yield* transport.status).toBe("connected");
 
-          const changes = yield* Effect.forkChild(
-            Stream.runCollect(Stream.take(transport.statusChanges, 3))
+          const subscribed = yield* Deferred.make<void>();
+          const seen = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(transport.statusChanges, (status) =>
+              Ref.update(seen, (all) => [...all, status]).pipe(
+                Effect.andThen(Deferred.succeed(subscribed, undefined))
+              )
+            )
           );
-          yield* Effect.sleep(Duration.millis(20));
+          yield* Deferred.await(subscribed);
+          expect(yield* Ref.get(seen)).toEqual(["connected"]);
 
           yield* setOffline(true);
           expect(yield* transport.status).toBe("disconnected");
+          yield* awaitSeen(seen, 2);
+          expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected"]);
+
           yield* setOffline(false);
           expect(yield* transport.status).toBe("connected");
-
-          const seen = [...(yield* Fiber.join(changes).pipe(Effect.timeout(Duration.seconds(2))))];
-          expect(seen).toEqual(["connected", "disconnected", "connected"]);
+          yield* awaitSeen(seen, 3);
+          expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected", "connected"]);
         })
       )
   );
