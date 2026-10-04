@@ -2,7 +2,9 @@
  * Tab-mirror tests: a real ClientEngine served by EngineHost, consumed by
  * Mirror — over the loopback pair and over a Node BroadcastChannel.
  * Mirror updates arrive on background fibers, so assertions poll with real
- * timers (clock-independent under the test environment).
+ * timers (clock-independent under the test environment). The liveness cases
+ * are the exception: they drive the host's sweep and the mirror's heartbeat
+ * on the TestClock (#312).
  */
 import {
   Authorization,
@@ -29,7 +31,8 @@ import {
   Mirror,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Ref, Schema } from "effect";
+import { Clock, Effect, Exit, Fiber, Ref, Schema } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 
 const TodoArgs = Schema.Struct({
@@ -71,6 +74,46 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     }
     return yield* Effect.die(new Error("eventually: condition never held"));
   });
+
+// The liveness cases (#312) step the TestClock with these.
+
+/**
+ * Advance the TestClock (which starts at 0) 1 ms at a time to `millis`, so
+ * every heartbeat and sweep due on the way wakes at its own instant and runs
+ * (each `TestClock.adjust` yields to the forked fibres) before the next.
+ */
+const stepTo = (millis: number) =>
+  Effect.gen(function* () {
+    while ((yield* Clock.currentTimeMillis) < millis) yield* TestClock.adjust("1 millis");
+  });
+
+/**
+ * Yield to the forked fibres, without moving the clock, until `condition`
+ * holds. The bound is a number of scheduler turns, not a time budget.
+ */
+const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < maxTurns; turn++) {
+      if (yield* condition) return;
+      yield* Effect.yieldNow;
+    }
+    if (yield* condition) return;
+    return yield* Effect.die(new Error(`settle: condition never held in ${maxTurns} turns`));
+  });
+
+/**
+ * Yield to the forked fibres for `turns` scheduler turns without moving the
+ * clock, so work already due by now (a sweep that just woke) has finished
+ * before a case asserts that something did not happen.
+ */
+const drain = (turns = 20) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < turns; turn++) yield* Effect.yieldNow;
+  });
+
+/** Whether `counter` currently reads `n`. */
+const is = (counter: Ref.Ref<number>, n: number) =>
+  Effect.map(Ref.get(counter), (count) => count === n);
 
 const makeEngine = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(
@@ -227,44 +270,59 @@ describe("EngineHost subset refcounting", () => {
 });
 
 describe("EngineHost liveness (heartbeat)", () => {
+  // Both cases run under `it.effect`: the host's sweep and the mirror's
+  // heartbeat sleep on the TestClock and its `Clock.currentTimeMillis` stamps
+  // last-seen times, so virtual time only moves when a case advances it. The
+  // loopback channel is a PubSub, so delivery needs fibre yields, never wall
+  // time, and scheduler delay on a loaded machine cannot starve a heartbeat
+  // past the timeout (#312).
   const liveness = { mirrorTimeout: "60 millis", sweepInterval: "15 millis" } as const;
 
-  // Real clock: heartbeat/sweep run on Effect.sleep, which the TestClock
-  // would freeze. `it.live` uses wall time, so the short intervals fire.
-  it.live("reclaims a subset from a tab that stops heartbeating", () =>
-    Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
-      const unsubs = yield* Ref.make(0);
-      const counted = {
-        ...engine,
-        unsubscribe: (subset) =>
-          Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
-      } satisfies typeof engine;
+  /** The engine with its subscribe and unsubscribe calls counted. */
+  const makeCountedEngine = Effect.gen(function* () {
+    const { engine } = yield* makeEngine;
+    const subs = yield* Ref.make(0);
+    const unsubs = yield* Ref.make(0);
+    const counted = {
+      ...engine,
+      subscribe: (subset) =>
+        Ref.update(subs, (n) => n + 1).pipe(Effect.andThen(engine.subscribe(subset))),
+      unsubscribe: (subset) =>
+        Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
+    } satisfies typeof engine;
+    return { engine: counted, subs, unsubs };
+  });
 
+  it.effect("reclaims a subset from a tab that stops heartbeating", () =>
+    Effect.gen(function* () {
+      const { engine, subs, unsubs } = yield* makeCountedEngine;
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
-      yield* EngineHost.run({ channel: host, engine: counted, liveness });
+      yield* EngineHost.run({ channel: host, engine, liveness });
 
       // A "ghost" tab subscribes directly on the channel and never
       // heartbeats — modelling a crashed tab that can't send Disconnect.
+      // The host stamps it last seen at t = 0 when it registers the subset.
       yield* mirrorChannel.post({ _tag: "Subscribe", mirrorId: "ghost", subset: allTodos });
+      yield* settle(is(subs, 1));
 
-      // The sweep reclaims it once its last-seen passes the timeout.
-      yield* eventually(Ref.get(unsubs), (n) => n === 1);
+      // Up to the timeout every sweep finds it fresh: at t = 60 ms it is
+      // exactly 60 ms old, which is not yet past the timeout.
+      yield* stepTo(60);
+      yield* drain();
+      expect(yield* Ref.get(unsubs)).toBe(0);
+
+      // The first sweep after that (t = 75 ms) reclaims it, before the clock
+      // moves again.
+      yield* TestClock.adjust("15 millis");
+      yield* settle(is(unsubs, 1));
     })
   );
 
-  it.live("keeps a live tab's subset across several sweeps", () =>
+  it.effect("keeps a live tab's subset across several sweeps", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
-      const unsubs = yield* Ref.make(0);
-      const counted = {
-        ...engine,
-        unsubscribe: (subset) =>
-          Ref.update(unsubs, (n) => n + 1).pipe(Effect.andThen(engine.unsubscribe(subset))),
-      } satisfies typeof engine;
-
+      const { engine, subs, unsubs } = yield* makeCountedEngine;
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
-      yield* EngineHost.run({ channel: host, engine: counted, liveness });
+      yield* EngineHost.run({ channel: host, engine, liveness });
       // A real mirror heartbeats faster than the timeout.
       const mirror = yield* Mirror.make({
         channel: mirrorChannel,
@@ -272,10 +330,11 @@ describe("EngineHost liveness (heartbeat)", () => {
         heartbeatInterval: "15 millis",
       });
       yield* mirror.subscribe(allTodos);
-      yield* eventually(mirror.query(allTodos), (current) => current.length === 0);
+      yield* settle(is(subs, 1));
 
-      // Across several timeout windows the heartbeat keeps it alive.
-      yield* Effect.sleep("200 millis");
+      // Across five timeout windows (twenty sweeps) the heartbeat keeps it alive.
+      yield* stepTo(300);
+      yield* drain();
       expect(yield* Ref.get(unsubs)).toBe(0);
     })
   );
