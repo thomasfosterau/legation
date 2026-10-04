@@ -45,8 +45,31 @@ export default defineConfig({
             "examples/realworld/tests/**/*.test.ts",
           ],
           // The binding tests mount components and need the `svelte`
-          // project below; the /kit tests are plain node.
-          exclude: ["**/node_modules/**", "packages/svelte/src/__tests__/**"],
+          // project below; the /kit tests are plain node. The commerce
+          // browser test runs in `commerce-browser`, after its build.
+          exclude: [
+            "**/node_modules/**",
+            "packages/svelte/src/__tests__/**",
+            "examples/commerce/tests/facade-browser.test.ts",
+          ],
+        },
+      },
+      {
+        // The commerce façade's browser test serves the app's production
+        // build. Its global setup builds the app once, before the parallel
+        // test phase (#289): a `vite build` inside the test's `beforeAll`
+        // competed with every other file for CPU, so its wall time scaled
+        // with host load. Vitest runs the setup only when this project has
+        // files in the run.
+        extends: true,
+        test: {
+          name: "commerce-browser",
+          environment: "node",
+          globalSetup: [
+            "./vitest.global-setup.ts",
+            "./examples/commerce/tests/support/global-setup.ts",
+          ],
+          include: ["examples/commerce/tests/facade-browser.test.ts"],
         },
       },
       {

@@ -10,7 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json",
-    "test": "vitest run --root ../.. --project node examples/commerce",
+    "test": "vitest run --root ../.. --project node --project commerce-browser examples/commerce",
     "prepare": "svelte-kit sync"
   },
   "dependencies": {
