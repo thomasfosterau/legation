@@ -146,8 +146,9 @@ describe("sync-loop scheduling (#33)", () => {
       // Inside the debounce window nothing has been pushed yet.
       yield* TestClock.adjust(Duration.millis(29));
       expect(yield* Ref.get(push)).toBe(0);
-      // After the debounce window the journal drains without an app push.
-      yield* advanceUntil(atLeast(push, 1), Duration.millis(1));
+      // The window closes on the next millisecond: the journal drains without
+      // an app push, and not a millisecond later.
+      yield* TestClock.adjust(Duration.millis(1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
@@ -203,8 +204,9 @@ describe("sync-loop scheduling (#33)", () => {
       yield* TestClock.adjust(Duration.millis(149));
       expect(yield* Ref.get(push)).toBe(0);
       expect(yield* store.pendingMutations).toHaveLength(3);
-      // The window closes: exactly one push drains all three.
-      yield* advanceUntil(atLeast(push, 1), Duration.millis(1));
+      // The window closes on the next millisecond: exactly one push drains all
+      // three, and not a millisecond later.
+      yield* TestClock.adjust(Duration.millis(1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
@@ -268,7 +270,7 @@ describe("sync-loop scheduling (#33)", () => {
       // Read the count once the scope has closed, so a pull completing while
       // the fibres are being interrupted is already in it.
       const before = yield* Ref.get(pull);
-      expect(before).toBeGreaterThan(1);
+      expect(before).toBeGreaterThanOrEqual(4);
       // Ten more intervals of virtual time: no further pulls after the scope
       // closed, because the fibre was interrupted.
       for (let interval = 0; interval < 10; interval++) {
