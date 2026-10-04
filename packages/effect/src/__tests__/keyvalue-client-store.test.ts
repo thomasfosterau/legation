@@ -189,83 +189,112 @@ describe("ClientStore.makeKeyValue", () => {
 const idsOf = (mutations: ReadonlyArray<{ readonly mutationId: number }>) =>
   mutations.map((m) => m.mutationId);
 
-describe("KeyValue journal compaction is crash-safe (#249)", () => {
-  const numbered = (mutationId: number, clientId = "c1"): Mutation => ({
-    ...mutation(mutationId),
-    clientId,
-    args: { n: mutationId },
-  });
+const numbered = (mutationId: number, clientId = "c1"): Mutation => ({
+  ...mutation(mutationId),
+  clientId,
+  args: { n: mutationId },
+});
 
-  /** A KVS that can be made to fail after a number of further writes. */
-  const faultyStore = () => {
-    const data = new Map<string, string>();
-    const reads: Array<string> = [];
-    const budget = { writes: Number.POSITIVE_INFINITY };
-    // When set, the write of the compaction intent lands but reports failure
-    // (an ambiguous IndexedDB abort), once.
-    const flaky = { landButFail: false };
-    const spend = (method: string, key: string) =>
-      budget.writes <= 0
-        ? Effect.fail(
-            new KeyValueStore.KeyValueStoreError({ message: "injected fault", method, key })
-          )
-        : Effect.sync(() => void (budget.writes -= 1));
-    const store = KeyValueStore.makeStringOnly({
-      get: (key) =>
-        Effect.sync(() => {
-          reads.push(key);
-          return data.get(key);
-        }),
-      set: (key, value) =>
-        key.endsWith("compactionIntent") && flaky.landButFail
-          ? Effect.sync(() => {
-              data.set(key, value);
-              flaky.landButFail = false;
-            }).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  new KeyValueStore.KeyValueStoreError({
-                    message: "write landed but reported failure",
-                    method: "set",
-                    key,
-                  })
-                )
+/** A KVS that can be made to fail after a number of further writes. */
+const faultyStore = () => {
+  const data = new Map<string, string>();
+  const reads: Array<string> = [];
+  const budget = { writes: Number.POSITIVE_INFINITY };
+  // When set, the write of the compaction intent lands but reports failure
+  // (an ambiguous IndexedDB abort), once.
+  const flaky = { landButFail: false };
+  const spend = (method: string, key: string) =>
+    budget.writes <= 0
+      ? Effect.fail(
+          new KeyValueStore.KeyValueStoreError({ message: "injected fault", method, key })
+        )
+      : Effect.sync(() => void (budget.writes -= 1));
+  const store = KeyValueStore.makeStringOnly({
+    get: (key) =>
+      Effect.sync(() => {
+        reads.push(key);
+        return data.get(key);
+      }),
+    set: (key, value) =>
+      key.endsWith("compactionIntent") && flaky.landButFail
+        ? Effect.sync(() => {
+            data.set(key, value);
+            flaky.landButFail = false;
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new KeyValueStore.KeyValueStoreError({
+                  message: "write landed but reported failure",
+                  method: "set",
+                  key,
+                })
               )
             )
-          : spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
-      remove: (key) =>
-        spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
-      clear: Effect.sync(() => data.clear()),
-      size: Effect.sync(() => data.size),
-    });
-    return { store, data, budget, reads, flaky };
-  };
-  type Faulty = ReturnType<typeof faultyStore>;
+          )
+        : spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
+    remove: (key) =>
+      spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
+    clear: Effect.sync(() => data.clear()),
+    size: Effect.sync(() => data.size),
+  });
+  return { store, data, budget, reads, flaky };
+};
+type Faulty = ReturnType<typeof faultyStore>;
 
-  const seeded = (size: number) =>
-    Effect.gen(function* () {
-      const kv = faultyStore();
-      const first = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
-      );
-      for (let n = 1; n <= size; n++) {
-        yield* first.appendMutation(numbered(yield* first.nextMutationId("c1")));
-      }
-      return { kv, first };
-    });
-
-  const reopen = (kv: Faulty) =>
-    ClientStoreModule.makeKeyValue().pipe(
+const seeded = (size: number) =>
+  Effect.gen(function* () {
+    const kv = faultyStore();
+    const first = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
     );
+    for (let n = 1; n <= size; n++) {
+      yield* first.appendMutation(numbered(yield* first.nextMutationId("c1")));
+    }
+    return { kv, first };
+  });
 
-  /** A new store handle over a copy of the persisted bytes, as a restarted process would see. */
-  const structuredCloneOf = (kv: Faulty): Faulty => {
-    const copy = faultyStore();
-    for (const [key, value] of kv.data) copy.data.set(key, value);
-    return copy;
-  };
+const reopen = (kv: Faulty) =>
+  ClientStoreModule.makeKeyValue().pipe(
+    Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
+  );
 
+/** A new store handle over a copy of the persisted bytes, as a restarted process would see. */
+const structuredCloneOf = (kv: Faulty): Faulty => {
+  const copy = faultyStore();
+  for (const [key, value] of kv.data) copy.data.set(key, value);
+  return copy;
+};
+
+/** Old or new journal, whole, with a counter that continues it and appends that stay gap-free. */
+const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
+  Effect.gen(function* () {
+    const pending = yield* store.pendingMutations;
+    const ids = idsOf(pending);
+    const ns = pending.map((m) => (m.args as { n: number }).n);
+    const isOld = ids.join() === "1,2,3,4,5" && ns.join() === "1,2,3,4,5";
+    const isNew = ids.join() === "1,2,3" && ns.join() === "1,3,5";
+    expect(isOld || isNew, `${label}: ${ids} / ${ns}`).toBe(true);
+    const nextId = yield* store.nextMutationId("c1");
+    expect(nextId, label).toBe(isOld ? 6 : 4);
+    yield* store.appendMutation(numbered(nextId));
+    const after = idsOf(yield* store.pendingMutations);
+    expect(after, label).toEqual(after.map((_, i) => i + 1));
+    return isNew;
+  });
+
+/** The journal index on disk, and how many of its entries still have a body. */
+const onDisk = (kv: Faulty) => {
+  const index = JSON.parse(kv.data.get("legation/journalIndex") ?? "[]") as Array<{
+    clientId: string;
+    mutationId: number;
+  }>;
+  const withBody = index.filter((e) =>
+    kv.data.has(`legation/journal/${e.clientId}/${e.mutationId}`)
+  ).length;
+  return { index, withBody };
+};
+
+describe("KeyValue journal compaction is crash-safe (#249)", () => {
   /** The compaction under test: drop 2 and 4 from 1..5, leaving 1,3,5 renumbered 1,2,3. */
   const EXPECTED = {
     dropped: [2, 4],
@@ -274,23 +303,6 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
       { from: 5, to: 3 },
     ],
   };
-
-  /** Old or new journal, whole, with a counter that continues it and appends that stay gap-free. */
-  const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
-    Effect.gen(function* () {
-      const pending = yield* store.pendingMutations;
-      const ids = idsOf(pending);
-      const ns = pending.map((m) => (m.args as { n: number }).n);
-      const isOld = ids.join() === "1,2,3,4,5" && ns.join() === "1,2,3,4,5";
-      const isNew = ids.join() === "1,2,3" && ns.join() === "1,3,5";
-      expect(isOld || isNew, `${label}: ${ids} / ${ns}`).toBe(true);
-      const nextId = yield* store.nextMutationId("c1");
-      expect(nextId, label).toBe(isOld ? 6 : 4);
-      yield* store.appendMutation(numbered(nextId));
-      const after = idsOf(yield* store.pendingMutations);
-      expect(after, label).toEqual(after.map((_, i) => i + 1));
-      return isNew;
-    });
 
   it.effect(
     "a crash at any write leaves the old or the new journal whole, never a gap or a duplicate",
@@ -420,6 +432,113 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
       const result = yield* restarted.compactPending("c1", [1, 2, 4]);
       expect(result).toEqual({ dropped: [4], renumbered: [{ from: 5, to: 4 }] });
       expect(idsOf(yield* restarted.pendingMutations)).toEqual([1, 2, 3, 4]);
+    })
+  );
+});
+
+describe("KeyValue acknowledge leaves no index entry without a body (#294)", () => {
+  /** c1 holds 1..5 and c2 holds 1..2; the acknowledgement under test is c1 up to 3. */
+  const seededTwoClients = Effect.gen(function* () {
+    const { kv, first } = yield* seeded(5);
+    yield* first.appendMutation(numbered(yield* first.nextMutationId("c2"), "c2"));
+    yield* first.appendMutation(numbered(yield* first.nextMutationId("c2"), "c2"));
+    return { kv, first };
+  });
+
+  it.effect("a crash at any write of an acknowledgement is healed on the next open", () =>
+    Effect.gen(function* () {
+      let orphaned = 0;
+      let ranToCompletion = false;
+      for (let writes = 0; writes < 20 && !ranToCompletion; writes++) {
+        const { kv, first } = yield* seededTwoClients;
+        kv.budget.writes = writes;
+        yield* Effect.exit(first.acknowledge("c1", 3));
+        ranToCompletion = kv.budget.writes > 0;
+        kv.budget.writes = Number.POSITIVE_INFINITY;
+        const label = `writes=${writes}`;
+
+        // The crash window: bodies removed, the index not yet rewritten.
+        const crashed = onDisk(kv);
+        if (crashed.withBody < crashed.index.length) orphaned += 1;
+
+        const restarted = structuredCloneOf(kv);
+        const store = yield* reopen(restarted);
+        const healed = onDisk(restarted);
+        // Every surviving index entry has its body, and the count agrees.
+        expect(healed.withBody, label).toBe(healed.index.length);
+        expect(yield* store.pendingCount, label).toBe(healed.withBody);
+        expect(yield* store.pendingCount, label).toBe((yield* store.pendingMutations).length);
+
+        // Some prefix of the acknowledged run may survive (re-pushing it is an
+        // idempotent skip), but nothing above `upTo` and nothing of c2 is lost.
+        const c1 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1"));
+        const c2 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c2"));
+        expect(
+          [
+            [1, 2, 3, 4, 5],
+            [2, 3, 4, 5],
+            [3, 4, 5],
+            [4, 5],
+          ],
+          label
+        ).toContainEqual(c1);
+        expect(c2, label).toEqual([1, 2]);
+
+        // The pending count is read from the index alone (#260).
+        restarted.reads.length = 0;
+        yield* store.pendingCount;
+        expect(
+          restarted.reads.filter((k) => k.startsWith("legation/journal/")),
+          label
+        ).toEqual([]);
+
+        // No acknowledged id is reissued, and a compaction no longer trips
+        // over a missing body (#249 N-d).
+        const next = yield* store.appendNext({
+          clientId: "c1",
+          mutator: "noop",
+          args: {},
+          createdAt: 0,
+        });
+        expect(next.mutationId, label).toBe(6);
+        yield* store.compactPending("c1", [4]);
+        expect(
+          idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1")).at(-1)
+        ).toBe(5);
+      }
+      expect(ranToCompletion).toBe(true);
+      // The sweep did exercise the window #294 is about.
+      expect(orphaned).toBeGreaterThan(0);
+    })
+  );
+
+  it.effect("an open drops an index entry whose body is missing, reserving its id", () =>
+    Effect.gen(function* () {
+      const { kv } = yield* seededTwoClients;
+      // A store damaged by an earlier release's crash: the bodies of c1's 4 and
+      // 5 are gone, the index still lists them, and the counter never saw 5.
+      kv.data.delete("legation/journal/c1/4");
+      kv.data.delete("legation/journal/c1/5");
+      kv.data.set("legation/counters", JSON.stringify({ c1: 3, c2: 2 }));
+      expect(onDisk(kv)).toMatchObject({ withBody: 5 });
+      expect(onDisk(kv).index).toHaveLength(7);
+
+      const store = yield* reopen(kv);
+      expect(yield* store.pendingCount).toBe(5);
+      expect(onDisk(kv).index).toHaveLength(5);
+      // Ids that leave the journal stay reserved, as `acknowledge` keeps them.
+      expect(yield* store.nextMutationId("c1")).toBe(6);
+    })
+  );
+
+  it.effect("an open of a healthy journal writes nothing", () =>
+    Effect.gen(function* () {
+      const { kv } = yield* seededTwoClients;
+      // Every successful write spends one from the budget.
+      kv.budget.writes = 1000;
+      const store = yield* reopen(kv);
+      expect(kv.budget.writes).toBe(1000);
+      expect(yield* store.pendingCount).toBe(7);
     })
   );
 });
