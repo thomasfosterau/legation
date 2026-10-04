@@ -272,13 +272,14 @@ transactions (K + 6 for a K-row pull, section C). A service worker can be
 killed between any two of them (ADR-0010). The crash windows and why the
 current design survives them:
 
-| Crash after                                  | State left behind                                            | Why it is safe today                                                                                                     |
-| -------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| Some row values, before the id-index rewrite | New rows exist under `row/…` but are invisible to `listRows` | The cookie is unchanged, so the next pull re-sends the same patch; puts are idempotent and the index rewrite catches up. |
-| `applyRowOps`, before `acknowledge`          | Rows confirmed; acknowledged mutations still in the journal  | They are re-pushed; the backend's `lastMutationId` makes re-application a no-op (ADR-0008), and the next ack trims them. |
-| `acknowledge`, before `setCookie`            | Journal trimmed; cookie stale                                | The next pull re-sends the patch. Idempotent again.                                                                      |
-| Mid-`Clear` (`clearRowsInner`)               | Some collections wiped, others not                           | The cookie is unchanged, so the reset patch is re-sent in full.                                                          |
-| Mid-`compactPending` (#249)                  | Journal bodies, index and counter partly rewritten           | A write-ahead `compactionIntent` is the commit point; it is rolled forward on the next open (see below).                 |
+| Crash after                                  | State left behind                                            | Why it is safe today                                                                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Some row values, before the id-index rewrite | New rows exist under `row/…` but are invisible to `listRows` | The cookie is unchanged, so the next pull re-sends the same patch; puts are idempotent and the index rewrite catches up.                                 |
+| `applyRowOps`, before `acknowledge`          | Rows confirmed; acknowledged mutations still in the journal  | They are re-pushed; the backend's `lastMutationId` makes re-application a no-op (ADR-0008), and the next ack trims them.                                 |
+| `acknowledge`, before `setCookie`            | Journal trimmed; cookie stale                                | The next pull re-sends the patch. Idempotent again.                                                                                                      |
+| Mid-`Clear` (`clearRowsInner`)               | Some collections wiped, others not                           | The cookie is unchanged, so the reset patch is re-sent in full.                                                                                          |
+| Mid-`acknowledge` (#294)                     | Some acknowledged bodies removed; the index still lists them | Reads skip a missing body; the next open drops those index entries (their ids already reserved), so `pendingCount` and the high-water check agree again. |
+| Mid-`compactPending` (#249)                  | Journal bodies, index and counter partly rewritten           | A write-ahead `compactionIntent` is the commit point; it is rolled forward on the next open (see below).                                                 |
 
 Paced compaction (#117, #249) is the one journal write that is neither a
 prefix trim nor idempotent by construction: it drops superseded unpushed

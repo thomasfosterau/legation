@@ -174,8 +174,10 @@ export interface ClientStore {
    * journal: an implementation counts from whatever it already keeps (the
    * memory store's array, the key-value store's journal index), never by
    * loading each pending body. Equal to `pendingMutations`' length, except
-   * that the key-value store counts an index entry whose body is missing
-   * (a corrupt store), which `pendingMutations` skips.
+   * that the key-value store counts an index entry whose body is missing,
+   * which `pendingMutations` skips. A crash or failed write mid-acknowledge
+   * can leave one; the key-value store drops such entries the next time it
+   * opens (#294).
    */
   readonly pendingCount: Effect.Effect<number, StoreError>;
   /** Drop journal entries with `mutationId <= upTo` for the client. */
@@ -1151,6 +1153,39 @@ export const makeKeyValue = (
           compactionPending = true;
         })
       )
+    );
+
+    // Drop journal index entries whose body is gone (#294). Removals delete
+    // the bodies before rewriting the index (`acknowledge`, the quarantine's
+    // `clearJournalInner`), so a crash between the two leaves entries with
+    // nothing to push. Reads already skip them, but `pendingCount` and the
+    // high-water check count the index alone (#260), and `compactPending`
+    // refuses a run with a missing body, so they are repaired here, once per
+    // open, rather than paying a body read on every count. The dropped ids
+    // stay reserved, as `acknowledge` keeps them (see `raiseCounters`). Runs
+    // after the compaction roll-forward, whose index supersedes this one, and
+    // writes nothing when every body is present.
+    const repairJournalIndex = Effect.gen(function* () {
+      const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+      if (index === undefined) return;
+      const kept: Array<JournalIndexEntry> = [];
+      const orphaned: Array<JournalIndexEntry> = [];
+      for (const entry of index) {
+        const key = journalBodyKey(entry.clientId, entry.mutationId);
+        const present = yield* store
+          .has(key)
+          .pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
+        (present ? kept : orphaned).push(entry);
+      }
+      if (orphaned.length === 0) return;
+      yield* raiseCounters(orphaned);
+      yield* writeJson("journalIndex", kept);
+    });
+    // Infallible at construction like the opens around it: a failed repair
+    // leaves the index as it was (reads still skip the missing bodies), and
+    // the next open retries.
+    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex))).pipe(
+      Effect.catch(() => Effect.void)
     );
 
     // Local store-version buster (#48): a mismatch clears confirmed rows + the
