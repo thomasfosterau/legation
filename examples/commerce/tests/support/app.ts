@@ -11,16 +11,17 @@
  *   fulfilment worker, no polling hint source: nothing writes out of band
  *   here), with the REST tier's backend wrapped to count its calls, so a
  *   test can assert the server was never asked for a locally served URL.
- * - The app is `vite build` (adapter-node), whose `handler` is mounted on
- *   the front server in-process — `ORIGIN`, `SYNC_ORIGIN`, `COMMERCE_DB`
- *   and the Better Auth secret are set before the build's modules load,
- *   which is when they read them.
+ * - The app is `vite build` (adapter-node), made once per Vitest run by
+ *   the `commerce-browser` project's global setup before the test files
+ *   start (`build.ts`, #289), whose `handler` is mounted on the front
+ *   server in-process — `ORIGIN`, `SYNC_ORIGIN`, `COMMERCE_DB` and the
+ *   Better Auth secret are set before the build's modules load, which is
+ *   when they read them.
  * - The front routes `/sync*` (the carriers, WebSocket upgrades included)
  *   to the sync server and everything else to the app, so the browser
  *   talks one origin, as it does behind a real reverse proxy or the dev
  *   server's proxy.
  */
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import {
   createServer,
@@ -32,7 +33,8 @@ import {
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { inject } from "@effect/vitest";
 import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
@@ -41,10 +43,8 @@ import { HttpSyncServer } from "@thomasfosterau/legation-node";
 import { clientLayer, migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";
 import { CommerceSync, syncLayer } from "../../server/runtime.js";
+import { appDir as app } from "./build.js";
 import { type Calls, countedBackend } from "./counted.js";
-
-/** The example's directory. */
-const app = fileURLToPath(new URL("../../", import.meta.url));
 
 export interface App {
   /** The browser's origin: the front serving the app and proxying the carriers. */
@@ -66,22 +66,20 @@ export interface App {
 
 type KitHandler = (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
 
-/** `vite build` the app (adapter-node) — a fresh build each run, never a stale one. */
-const build = () => {
-  try {
-    execFileSync("bun", ["run", "build"], {
-      cwd: app,
-      env: { ...process.env, BETTER_AUTH_SECRET: "commerce-browser-test" },
-      stdio: "pipe",
-    });
-  } catch (error) {
-    const failure = error as { stdout?: Buffer; stderr?: Buffer; message: string };
+/**
+ * Check the run built the app: `global-setup.ts` provides the outcome, so a
+ * failed build fails here with its output, and a run that skipped the setup
+ * fails rather than serving whatever `build/` holds.
+ */
+const requireBuild = () => {
+  const build = inject("commerceBuild");
+  if (build === undefined) {
     throw new Error(
-      `vite build of examples/commerce failed:\n${failure.stdout?.toString() ?? ""}${
-        failure.stderr?.toString() ?? ""
-      }${failure.message}`
+      "examples/commerce was not built for this run: run the browser test through the root " +
+        "vitest config's `commerce-browser` project, whose global setup builds the app."
     );
   }
+  if (build._tag === "Failed") throw new Error(build.message);
 };
 
 /** The sync server on an ephemeral port, its REST reads counted. */
@@ -145,9 +143,9 @@ const listen = (server: Server): Promise<number> =>
     });
   });
 
-/** Build and serve the app; `close` tears everything down. */
+/** Serve the run's build of the app; `close` tears everything down. */
 export const serveApp = async (): Promise<App> => {
-  build();
+  requireBuild();
   const dir = mkdtempSync(join(tmpdir(), "legation-commerce-"));
   const dbPath = join(dir, "commerce.db");
   const calls: Calls = { n: 0 };

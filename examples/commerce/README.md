@@ -167,25 +167,30 @@ the workspace runner:
   declared read's document from a synced replica equals the derived REST
   handler's byte for byte, and the façade over that replica answers covered
   URLs with those bytes.
-- `facade-browser.test.ts` — the façade end to end in a browser (#168):
-  the harness (`tests/support/app.ts`) builds the app (`vite build`, about
-  fifteen seconds) and serves it in-process with its service worker active,
-  in front of the sync server on ephemeral ports; Playwright drives the
-  pre-installed Chromium and issues plain `fetch()`es from the page. It
-  asserts, in order: online, an uncovered URL is the network's and a
-  covered one is served from the replica once pulled, byte for byte the
-  network's document; offline (`context.setOffline(true)` — Playwright's
-  CDP network emulation over the page and the worker, the DevTools
-  toggle's equivalent), the covered URL is still served, header present;
-  offline, the uncovered URL is the 503 `offline` error document, both when
-  the browser reads offline and when it reads online but the harness drops
-  the worker's forward at the socket (the emulation leaves the worker's own
-  fetches reachable); offline, "Add to cart" journals a mutation the
-  covered cart URL shows before the server has the row, and the server
-  catches up on reconnect. It needs Chromium: `bunx playwright-core install
-  chromium` (or `PLAYWRIGHT_BROWSERS_PATH` pointing at an install); without
-  it the suite fails naming the missing binary — it never skips. About
-  forty seconds wall time, most of it the build and the engine's first pull.
+- `facade-browser.test.ts` — the façade end to end in a browser (#168): the
+  `commerce-browser` Vitest project's global setup
+  (`tests/support/global-setup.ts`) builds the app (`vite build`, about
+  fifteen seconds) once per run, before any test file starts, so the build
+  doesn't compete with the parallel test phase (#289); the harness
+  (`tests/support/app.ts`) serves that build in-process with its service
+  worker active, in front of the sync server on ephemeral ports; Playwright
+  drives the pre-installed Chromium and issues plain `fetch()`es from the
+  page. It asserts, in order: online, an uncovered URL is the network's and
+  a covered one is served from the replica once pulled, byte for byte the
+  network's document; offline (`context.setOffline(true)` — Playwright's CDP
+  network emulation over the page and the worker, the DevTools toggle's
+  equivalent), the covered URL is still served, header present; offline, the
+  uncovered URL is the 503 `offline` error document, both when the browser
+  reads offline and when it reads online but the harness drops the worker's
+  forward at the socket (the emulation leaves the worker's own fetches
+  reachable); offline, "Add to cart" journals a mutation the covered cart
+  URL shows before the server has the row, and the server catches up on
+  reconnect. It needs Chromium: `bunx playwright-core install chromium` (or
+  `PLAYWRIGHT_BROWSERS_PATH` pointing at an install); without it the suite
+  fails naming the missing binary — it never skips. About forty seconds wall
+  time, most of it the build and the engine's first pull. Run it through the
+  root config (`bun run test` here selects both projects); a run without the
+  global setup fails rather than serving a stale `build/`.
 
 ## Deliberate next steps
 
