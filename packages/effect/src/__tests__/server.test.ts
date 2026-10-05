@@ -4,9 +4,14 @@
  * single verb for out-of-band changes. The test tells ADR-0019's story end
  * to end: a write that bypasses the push path is invisible to a synced
  * Client until `broadcast` pokes its group and the pull picks it up.
+ *
+ * Both cases run under `it.effect`: every wait advances the `TestClock`, so
+ * the debounced auto-push fires when a case moves time past it, and nothing
+ * waits on wall-clock time a loaded machine could exhaust (#285).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Ref, Schema, Stream } from "effect";
+import { Deferred, Duration, Effect, Ref, Schema, Stream } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
   Client,
@@ -33,17 +38,21 @@ const mutations = Mutator.registry([
   },
 ]);
 
-const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
-
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+// Advance the TestClock 1 ms at a time until the condition holds. Each
+// `TestClock.adjust` also yields to the Clients' forked fibres, so this both
+// lets in-flight work (a connect push + pull, a poke-driven pull) finish and
+// fires the timers due by then. Time is virtual: the bound is a number of
+// steps, not a wall-clock budget, so machine load cannot exhaust it.
+const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+    for (let attempt = 0; attempt < maxSteps; attempt++) {
       const value = yield* read;
       if (until(value)) return value;
-      yield* sleepReal(10);
+      yield* TestClock.adjust(Duration.millis(1));
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    const value = yield* read;
+    if (until(value)) return value;
+    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
   });
 
 describe("Server", () => {
@@ -122,7 +131,7 @@ describe("Server", () => {
         // Connect: the one push + pull hydrates the seed. Once it has
         // arrived the Client is idle: nothing else can make it pull.
         yield* transport.setStatus("connected");
-        yield* eventually(Ref.get(latest), (rows) => rows.length === 1);
+        yield* advanceUntil(Ref.get(latest), (rows) => rows.length === 1);
 
         yield* writeBypassingPush(2, { id: "p-oob", name: "Dropped by cron" });
 
@@ -134,7 +143,7 @@ describe("Server", () => {
         // The one verb: broadcast → poke → pull → the row arrives.
         yield* server.broadcast({ collection: "products", ids: ["p-oob"] });
         expect(yield* Ref.get(hintBatches)).toBe(1);
-        const rows = yield* eventually(Ref.get(latest), (current) => current.length === 2);
+        const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 2);
         expect(rows.map((row) => (row.value as { name: string }).name).sort()).toEqual([
           "Dropped by cron",
           "Seed",
@@ -161,38 +170,99 @@ describe("Server", () => {
           auth: { policy: Authorization.policy({ products: Authorization.allowAll }) },
         });
 
-        const makeClient = (clientId: string, group: string) =>
+        const pushDebounce = Duration.millis(10);
+
+        // A Client synced through the handler, counting the pushes and pulls
+        // that reach the server once each has completed, so a count the test
+        // reads means that leg's effects are already visible. Neither Client
+        // has an interval pull, so only a (re)connect, a poke or (for the
+        // writer) the debounced auto-push makes one talk to the server.
+        const makeClient = (
+          clientId: string,
+          group: string,
+          options: { readonly autoPush: boolean; readonly connected: boolean }
+        ) =>
           Effect.gen(function* () {
             const store = yield* ClientStore.makeMemory;
-            const transport = yield* Transport.makeInMemory(server.handler, group);
-            return yield* Client.make({
+            const inMemory = yield* Transport.makeInMemory(server.handler, group);
+            const pushes = yield* Ref.make(0);
+            const pulls = yield* Ref.make(0);
+            const transport: typeof inMemory = {
+              ...inMemory,
+              push: (request) =>
+                inMemory.push(request).pipe(Effect.tap(() => Ref.update(pushes, (n) => n + 1))),
+              pull: (request) =>
+                inMemory.pull(request).pipe(Effect.tap(() => Ref.update(pulls, (n) => n + 1))),
+            };
+            if (!options.connected) yield* transport.setStatus("disconnected");
+            const client = yield* Client.make({
               nodes,
               mutations,
               clientId,
               clientGroupId: group,
-              syncLoop: { pullInterval: "10 minutes", pushDebounce: "10 millis" },
+              ...(options.autoPush ? { syncLoop: { pushDebounce } } : {}),
             }).pipe(
               Effect.provideService(ClientStore.ClientStore, store),
               Effect.provideService(Transport.ClientTransport, transport)
             );
+            return { client, transport, pushes, pulls };
           });
 
-        const writer = yield* makeClient("client-a", "group-a");
-        const reader = yield* makeClient("client-b", "group-b");
+        // The writer starts connected: its sync loop's connect leg finds an
+        // empty journal (no push) and pulls once.
+        const writer = yield* makeClient("client-a", "group-a", {
+          autoPush: true,
+          connected: true,
+        });
+        // The reader starts disconnected, so its one connect pull runs after
+        // its subscription is registered and registers it with the server.
+        const reader = yield* makeClient("client-b", "group-b", {
+          autoPush: false,
+          connected: false,
+        });
 
+        const observing = yield* Deferred.make<void>();
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
         yield* Effect.forkScoped(
-          Stream.runForEach(reader.observe({ collection: "products" }), (rows) =>
-            Ref.set(latest, rows)
+          Stream.runForEach(reader.client.observe({ collection: "products" }), (rows) =>
+            Ref.set(latest, rows).pipe(Effect.andThen(Deferred.succeed(observing, undefined)))
           ).pipe(Effect.ignore)
         );
-        yield* eventually(Ref.get(latest), () => true);
+        // The first emission comes after the subscription is registered.
+        yield* Deferred.await(observing);
 
-        // Writer pushes (auto sync loop); the push path's hints poke the
-        // reader's group across the same bus — no broadcast call anywhere.
-        yield* writer.mutate("product/set", { id: "p-1", name: "Pushed" });
-        const rows = yield* eventually(Ref.get(latest), (current) => current.length === 1);
+        // Connect the reader, then wait until both connect legs are done.
+        // From here both Clients are idle: the writer's journal is empty and
+        // nothing but a poke can make the reader pull.
+        yield* reader.transport.setStatus("connected");
+        yield* advanceUntil(
+          Effect.all([Ref.get(writer.pulls), Ref.get(reader.pulls)]),
+          ([writerPulls, readerPulls]) => writerPulls >= 1 && readerPulls >= 1
+        );
+        expect(yield* Ref.get(writer.pushes)).toBe(0);
+        expect(yield* Ref.get(reader.pulls)).toBe(1);
+        expect(yield* Ref.get(latest)).toEqual([]);
+
+        // The writer journals a mutation; no app code pushes it. Its connect
+        // leg has already run, and its debounce fibre has had every scheduler
+        // turn since the writer was built to subscribe to the push trigger
+        // (#317), so only the debounced auto-push can send the mutation:
+        // nothing reaches the server inside the debounce window, and the
+        // push lands the moment the window closes.
+        yield* writer.client.mutate("product/set", { id: "p-1", name: "Pushed" });
+        yield* TestClock.adjust(Duration.subtract(pushDebounce, Duration.millis(1)));
+        expect(yield* Ref.get(writer.pushes)).toBe(0);
+        yield* TestClock.adjust(Duration.millis(1));
+        expect(yield* Ref.get(writer.pushes)).toBe(1);
+
+        // The push path's hints poke the reader's group across the server's
+        // bus (no broadcast call anywhere), and the poke's pull brings the
+        // row in.
+        const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
         expect((rows[0]!.value as { name: string }).name).toBe("Pushed");
+        // The connect pull and the one the push's poke caused: no other pull
+        // could have brought the row in.
+        expect(yield* Ref.get(reader.pulls)).toBe(2);
       })
     )
   );
