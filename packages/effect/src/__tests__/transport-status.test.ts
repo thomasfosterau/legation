@@ -6,7 +6,7 @@
  * inferred status. Version rejections propagate without touching either.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref, Stream } from "effect";
+import { Effect, Fiber, Ref, Stream, SubscriptionRef } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
@@ -248,12 +248,14 @@ describe("Transport.simulateOffline", () => {
     )
   );
 
-  // The collector runs on a background fiber. It signals `subscribed` once it
-  // has seen the current status: `SubscriptionRef.changes` replays the current
-  // value only to a live subscriber, so by then both streams `statusChanges`
-  // combines are subscribed and no toggle below can be missed. Each step then
-  // waits for the collector to record the change. No sleep and no clock, so a
-  // loaded machine cannot reorder a step (#284).
+  // The collector runs on a background fiber. Waiting for it to record the
+  // current status proves it is subscribed: `SubscriptionRef.changes` replays
+  // the current value only to a live subscriber, so by then both streams
+  // `statusChanges` combines are subscribed and no toggle below can be missed.
+  // Each step then waits for the collector to record the change. No sleep and
+  // no clock, so a loaded machine cannot reorder a step (#284), and every wait
+  // is bounded in scheduler turns, so a missing status fails instead of
+  // hanging (#325).
   it.effect(
     "status/statusChanges report disconnected while offline, else the wrapped transport's",
     () =>
@@ -267,16 +269,13 @@ describe("Transport.simulateOffline", () => {
           expect(yield* isOffline).toBe(false);
           expect(yield* transport.status).toBe("connected");
 
-          const subscribed = yield* Deferred.make<void>();
           const seen = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
           yield* Effect.forkScoped(
             Stream.runForEach(transport.statusChanges, (status) =>
-              Ref.update(seen, (all) => [...all, status]).pipe(
-                Effect.andThen(Deferred.succeed(subscribed, undefined))
-              )
+              Ref.update(seen, (all) => [...all, status])
             )
           );
-          yield* Deferred.await(subscribed);
+          yield* awaitSeen(seen, 1);
           expect(yield* Ref.get(seen)).toEqual(["connected"]);
 
           yield* setOffline(true);
@@ -286,6 +285,57 @@ describe("Transport.simulateOffline", () => {
 
           yield* setOffline(false);
           expect(yield* transport.status).toBe("connected");
+          yield* awaitSeen(seen, 3);
+          expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected", "connected"]);
+        })
+      )
+  );
+
+  // The wrapped transport's own status keeps changing while the gate is
+  // closed, and each change reaches the combiner, which maps it to
+  // "disconnected" again. `statusChanges` must not repeat it. `delivered`
+  // records each wrapped status as the combiner pulls it. Each change waits
+  // for the previous one to be pulled, so each arrives in its own pull; the
+  // wrapped stream runs on one fiber, so once it has pulled the second change,
+  // the first has been combined and passed on, ahead of the toggle back
+  // online. Without the dedupe, that first change repeats "disconnected".
+  it.effect(
+    "statusChanges does not repeat disconnected while the wrapped status changes offline",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* makeFake();
+          const real = yield* SubscriptionRef.make<Transport.ConnectionStatus>("connected");
+          const delivered = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
+          const { transport, setOffline } = yield* Transport.simulateOffline({
+            ...fake.transport,
+            status: SubscriptionRef.get(real),
+            statusChanges: SubscriptionRef.changes(real).pipe(
+              Stream.tap((status) => Ref.update(delivered, (all) => [...all, status]))
+            ),
+          });
+
+          const seen = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
+          yield* Effect.forkScoped(
+            Stream.runForEach(transport.statusChanges, (status) =>
+              Ref.update(seen, (all) => [...all, status])
+            )
+          );
+          yield* awaitSeen(seen, 1);
+          expect(yield* Ref.get(seen)).toEqual(["connected"]);
+
+          yield* setOffline(true);
+          yield* awaitSeen(seen, 2);
+          expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected"]);
+
+          yield* SubscriptionRef.set(real, "disconnected");
+          yield* awaitSeen(delivered, 2);
+          yield* SubscriptionRef.set(real, "connected");
+          yield* awaitSeen(delivered, 3);
+          expect(yield* Ref.get(delivered)).toEqual(["connected", "disconnected", "connected"]);
+          expect(yield* transport.status).toBe("disconnected");
+
+          yield* setOffline(false);
           yield* awaitSeen(seen, 3);
           expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected", "connected"]);
         })
