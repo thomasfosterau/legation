@@ -6,11 +6,12 @@
  * fine-registered window across the broker, while a write to a different
  * parent leaves it silent (routing precision, not just delivery).
  *
- * The timed cases run under `it.effect`: lease expiry and the bus heartbeat
- * read the `TestClock`, which only moves when a test advances it, and each
- * wait is for a specific event (a lease registered, a publish routed, a
- * window updated). Nothing waits on wall-clock time, so a loaded machine
- * cannot expire a lease or skip a heartbeat mid-test (#282, #292).
+ * The timed cases run under `it.effect`: lease expiry, the bus heartbeat and
+ * the writer's push debounce read the `TestClock`, which only moves when a
+ * test advances it, and each wait is for a specific event (a lease
+ * registered, a write pushed, a publish routed, a window updated). Nothing
+ * waits on wall-clock time, so a loaded machine cannot expire a lease or skip
+ * a heartbeat mid-test (#282, #292).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
@@ -244,6 +245,30 @@ const makeRoom = (roomId: string, backend: Backend.Backend, broker: FanoutBroker
     return handler;
   });
 
+/**
+ * A room's handler, recording the review ids each push carried, in order, once
+ * the room has applied it (and so published its topics to the broker).
+ */
+const recordPushes = (handler: Transport.ServerHandler) =>
+  Effect.gen(function* () {
+    const pushes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+    const recorded: Transport.ServerHandler = {
+      ...handler,
+      handlePush: (request) =>
+        handler
+          .handlePush(request)
+          .pipe(
+            Effect.tap(() =>
+              Ref.update(pushes, (all) => [
+                ...all,
+                request.mutations.map((mutation) => (mutation.args as { id: string }).id),
+              ])
+            )
+          ),
+    };
+    return { handler: recorded, pushes };
+  });
+
 const makeRoomClient = (handler: Transport.ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
@@ -286,7 +311,7 @@ describe("two rooms over one broker", () => {
           )
         );
         const roomA = yield* makeRoom("room-a", backend, broker);
-        const roomB = yield* makeRoom("room-b", backend, broker);
+        const roomB = yield* recordPushes(yield* makeRoom("room-b", backend, broker));
 
         // Room A's user watches product p-1's reviews (a fine-topic window).
         const reader = yield* makeRoomClient(roomA, "group-a");
@@ -309,37 +334,42 @@ describe("two rooms over one broker", () => {
         );
 
         // Room B's user writes a p-1 review: fine topic → room A → poke → pull.
-        // The writer pushes explicitly, so the write reaches room B's server
-        // without depending on its auto-push debounce, which can miss a
-        // trigger (#317); the push returns once room B has published the
-        // write to the broker.
-        const writer = yield* makeRoomClient(roomB, "group-b");
+        // Nothing pushes explicitly: the writer's sync loop carries each write
+        // to room B. r-1 is journaled before the writer's forked `runSync` has
+        // run, so its connect leg pushes it; r-2 comes after start-up, and only
+        // the push debounce can push it. Before #317 was fixed, the debounce
+        // subscribed to its trigger a few scheduler turns too late and r-2 was
+        // never pushed.
+        const writer = yield* makeRoomClient(roomB.handler, "group-b");
         yield* writer.client.mutate("review/set", {
           id: "r-1",
           body: "cross-room",
           createdAt: "2026-01-01",
           productId: "p-1",
         });
-        yield* writer.engine.push.pipe(Effect.orDie);
+        yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => pushes.length > 0);
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
         expect((rows[0]!.value as { body: string }).body).toBe("cross-room");
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
 
         // A write to ANOTHER parent must not poke room A (routing precision):
-        // once its publish has been routed (and the probe has had a turn to
-        // read anything routed), room A has still had only the p-1 poke, and
-        // its window one row.
+        // once the debounce has pushed it and room B has published it (and the
+        // probe has had a turn to read anything routed), room A has still had
+        // only the p-1 poke, and its window one row.
         yield* writer.client.mutate("review/set", {
           id: "r-2",
           body: "other parent",
           createdAt: "2026-01-02",
           productId: "p-9",
         });
-        yield* writer.engine.push.pipe(Effect.orDie);
+        yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => pushes.length > 1);
         expect(
           (yield* Ref.get(published)).some((topics) => topics.has("reviews/productId=p-9"))
         ).toBe(true);
-        yield* TestClock.adjust(Duration.millis(10));
+        // Past another debounce window nothing more is pushed: each write went
+        // to room B exactly once.
+        yield* TestClock.adjust(Duration.millis(20));
+        expect(yield* Ref.get(roomB.pushes)).toEqual([["r-1"], ["r-2"]]);
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
         expect(yield* Ref.get(latest)).toHaveLength(1);
       })
