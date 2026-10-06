@@ -37,7 +37,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-jsonapi": "^0.16.1",
+    "@thomasfosterau/effect-jsonapi": "^0.16.3",
     "@thomasfosterau/legation-effect": "workspace:^"
   },
   "peerDependencies": {
