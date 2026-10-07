@@ -118,15 +118,17 @@ describe("EngineIntrospection (#45)", () => {
       // No `ViewRebuilt` after `MutationJournaled` (#109): a mutate now
       // publishes a delta `Patch` onto the cached overlay rather than a
       // `Rebuild`, so it never emits `ViewRebuilt` at all.
+      // The push ack reveals nothing (#286): the applied mutation keeps its
+      // overlay effects until the pull that reports it, which is the rebuild.
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
         "PushStarted",
         // #116: every journaled mutation now settles (not just `mutateWithAck`
         // ones), so a plain `mutate` also reports `MutationAcknowledged`.
         "MutationAcknowledged",
-        "ViewRebuilt",
         "PushCompleted",
         "PullStarted",
+        "ViewRebuilt",
         "PullCompleted",
       ]);
     })

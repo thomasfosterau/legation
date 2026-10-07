@@ -487,6 +487,12 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, authorized)
             );
 
+            // Read the watermark before the view is evaluated (#286). A push that
+            // lands mid-pull is then left out of this response's ids, so the client
+            // keeps its overlay until a later pull reports it. Read afterwards, the
+            // ids could report a push whose effects the patch does not carry, and
+            // the client would reveal that mutation's view without its effects.
+            const lastMutationIds = yield* backend.lastMutationIds(context);
             const next = yield* evaluateView(context, authorized);
             const previous = yield* resolvePrevious(checked.cookie);
             const isReset = checked.cookie !== undefined && previous === undefined;
@@ -503,7 +509,6 @@ export const makeWithIntrospectionWith = (
             yield* Ref.update(activeCvrs, (m) =>
               new Map(m).set(request.clientGroupId, { rows: next.rows })
             );
-            const lastMutationIds = yield* backend.lastMutationIds(context);
             yield* Metric.update(Telemetry.patchOps, patch.length);
             yield* Metric.update(Telemetry.serverPullsTotal, 1);
             return { cookie, patch, lastMutationIds };

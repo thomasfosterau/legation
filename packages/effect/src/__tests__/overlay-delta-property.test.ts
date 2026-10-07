@@ -2,8 +2,9 @@
  * Delta-maintained optimistic overlay property test (#109): the view an
  * observer sees — confirmed rows plus the overlay deltas `mutate`/push/pull
  * publish — must equal one materialized from scratch (confirmed rows with
- * the pending journal replayed on top), for every interleaving of
- * mutate/push (ack or permanent rejection)/pull. `engine.query` reads the
+ * the acknowledged-but-unpulled tail, then the pending journal, replayed on
+ * top; #286), for every interleaving of mutate/push (ack or permanent
+ * rejection)/pull. `engine.query` reads the
  * same cache `mutate` now patches in place (rather than invalidates), so
  * comparing it against an independently-reimplemented "from scratch"
  * materialization exercises the cache-patch path directly; a live `observe`
@@ -26,6 +27,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
+import type { Mutation } from "../Protocol.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 
 interface PutArgs {
@@ -166,12 +168,15 @@ const runStep = (
   }
 };
 
-// Independently re-derives "confirmed rows + pending journal replayed on
-// top" straight from the public `ClientStore` surface and the mutator
-// registry's local handlers — deliberately not calling into
-// `ClientEngine`'s private `computeOverlay`, so it is a genuine oracle for
+// Independently re-derives "confirmed rows + acknowledged-but-unpulled tail +
+// pending journal, replayed on top" straight from the public `ClientStore`
+// surface and the mutator registry's local handlers — deliberately not calling
+// into `ClientEngine`'s private `computeOverlay`, so it is a genuine oracle for
 // what the engine's delta-maintained cache should equal.
-const referenceOverlay = (store: ClientStore): Effect.Effect<Map<string, unknown>, unknown> =>
+const referenceOverlay = (
+  store: ClientStore,
+  tail: ReadonlyArray<Mutation>
+): Effect.Effect<Map<string, unknown>, unknown> =>
   Effect.gen(function* () {
     const rows = new Map<string, unknown>();
     for (const row of yield* store.listRows("todos")) rows.set(row.id, row.value);
@@ -181,7 +186,7 @@ const referenceOverlay = (store: ClientStore): Effect.Effect<Map<string, unknown
       del: (_collection: string, id: string) => Effect.sync(() => rows.delete(id)),
       get: (_collection: string, id: string) => Effect.sync(() => rows.get(id)),
     };
-    for (const mutation of yield* store.pendingMutations) {
+    for (const mutation of [...tail, ...(yield* store.pendingMutations)]) {
       const handler = mutators.handlers.get(mutation.mutator);
       if (handler === undefined) continue;
       yield* handler(mutation.args, writer);
@@ -196,6 +201,32 @@ const sortRows = (rows: ReadonlyArray<{ readonly id: string; readonly value: unk
   rows.map((r) => [r.id, r.value] as const).toSorted(byId);
 
 const sortMap = (map: Map<string, unknown>) => [...map.entries()].toSorted(byId);
+
+/**
+ * Run one step and track the acknowledged-but-unpulled tail (#286). A push
+ * trims the entries the backend applied from the journal; those stay overlaid
+ * until a pull reports them, so the oracle takes them from the journal's
+ * trims (the store does not hold the tail). A permanent rejection was not
+ * applied, so it is never tail. A pull reports everything applied, so it
+ * empties the tail.
+ */
+const runTracked = (
+  engine: ClientEngineModule.ClientEngine,
+  store: ClientStore,
+  tail: Ref.Ref<ReadonlyArray<Mutation>>,
+  step: Step
+): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const before = yield* store.pendingMutations;
+    yield* runStep(engine, step);
+    if (step.kind === "pull") yield* Ref.set(tail, []);
+    if (step.kind !== "push") return;
+    const remaining = new Set((yield* store.pendingMutations).map((m) => m.mutationId));
+    const applied = before.filter(
+      (m) => !remaining.has(m.mutationId) && m.mutator !== "todo/reject"
+    );
+    yield* Ref.update(tail, (current) => [...current, ...applied]);
+  });
 
 const SEEDS = 15;
 const STEPS_PER_SEED = 25;
@@ -212,11 +243,12 @@ describe("optimistic overlay delta-maintenance property (#109)", () => {
           const store = yield* ClientStoreModule.makeMemory;
           const engine = yield* makeEngine(handler, store, `seed-${seed}`);
           yield* engine.subscribe(allTodos);
+          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
 
           for (let step = 0; step < STEPS_PER_SEED; step++) {
-            yield* runStep(engine, randomStep(rng, IDS));
+            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
             const actual = sortRows(yield* engine.query(allTodos));
-            const expected = sortMap(yield* referenceOverlay(store));
+            const expected = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
             expect(actual, `seed ${seed}, step ${step}`).toEqual(expected);
           }
         }
@@ -243,14 +275,15 @@ describe("optimistic overlay delta-maintenance property (#109)", () => {
           );
           yield* Effect.sleep(Duration.millis(20));
 
+          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
           for (let step = 0; step < 40; step++) {
-            yield* runStep(engine, randomStep(rng, IDS));
+            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
           }
           yield* Effect.sleep(Duration.millis(80));
 
           const observed = sortRows(yield* Ref.get(latest));
           const queried = sortRows(yield* engine.query(allTodos));
-          const reference = sortMap(yield* referenceOverlay(store));
+          const reference = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
           expect(queried, `seed ${seed}`).toEqual(reference);
           expect(observed, `seed ${seed}`).toEqual(reference);
         }

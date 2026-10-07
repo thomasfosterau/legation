@@ -288,16 +288,36 @@ type ViewChange =
 const REBUILD: ViewChange = { _tag: "Rebuild" };
 
 // What a journaled mutation's local effects are applied onto (#260): the warm
-// overlay cache, or the pending journal from before the append to replay into
+// overlay cache, or the overlay journal from before the append to replay into
 // a cold one. Read under `overlayLock`, so the journal is only read when the
 // cache is cold.
 type OverlayBase =
   | { readonly _tag: "Warm"; readonly view: Map<string, Map<RowId, LocalRow>> }
-  | { readonly _tag: "Cold"; readonly pendingBefore: ReadonlyArray<Mutation> };
+  | { readonly _tag: "Cold"; readonly journalBefore: ReadonlyArray<Mutation> };
 
 /** A rebuild scoped to `collections`, or the global {@link REBUILD} when undefined. */
 const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
   collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
+
+/**
+ * Most acknowledged-but-unpulled mutations the engine keeps in the overlay
+ * (#286). A push acknowledges entries that the next pull reports; if pulls
+ * never arrive, the oldest are released past this bound (with a
+ * `logWarning`), so the tail cannot grow without limit.
+ */
+const UNPULLED_LIMIT = 1024;
+
+/**
+ * Whether a `lastMutationIds` watermark covers `mutation`: its client's
+ * watermark is at or above the mutation's id.
+ */
+const isCoveredBy = (
+  lastMutationIds: Readonly<Record<string, number>>,
+  mutation: Mutation
+): boolean => {
+  const upTo: number | undefined = lastMutationIds[mutation.clientId];
+  return upTo !== undefined && mutation.mutationId <= upTo;
+};
 
 // A windowed subset (limit/cursor) can't fold an aggregate incrementally
 // without also tracking window-boundary shifts (a delta outside the window
@@ -1054,6 +1074,26 @@ export const make = (
     // to avoid deadlocking on the non-reentrant semaphore.
     const invalidateOverlay = Semaphore.withPermit(overlayLock, Ref.set(overlayCache, undefined));
 
+    // The acknowledged-but-unpulled tail (#286, ADR-0008). A push trims the
+    // entries the backend applied from the journal, so they are never sent
+    // again, but parks them here, oldest first, so the overlay keeps showing
+    // their effects until a pull's `lastMutationIds` covers them. That pull's
+    // patch carries the effects, and the rebase reveals them in one change.
+    // Process-local: a restart before that pull shows the confirmed rows until
+    // it lands, as before this tail existed. Written only under `overlayLock`,
+    // so the tail and the journal read together form one snapshot.
+    const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+    // The journal the overlay replays: the unpulled tail, then the pending
+    // journal. The caller holds `overlayLock`.
+    const overlayJournalLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
+      function* () {
+        const tail = yield* Ref.get(unpulled);
+        return [...tail, ...(yield* store.pendingMutations)];
+      }
+    );
+    // The same snapshot, for a caller that does not already hold the lock.
+    const overlayJournal = Semaphore.withPermit(overlayLock, overlayJournalLocked);
+
     // Ensure `view` holds a live, mutable map for `collection`, seeding it
     // lazily from confirmed rows the first time it's touched. Shared by
     // `computeOverlay` (fresh materialization, replayed sequentially so no
@@ -1225,7 +1265,8 @@ export const make = (
 
     // Indexed evaluation is sound only while a collection's confirmed rows
     // equal its materialized view — i.e. no pending mutation's optimistic
-    // overlay could have shifted it (the index tracks confirmed rows only).
+    // overlay (or acknowledged-but-unpulled tail, #286) could have shifted it
+    // (the index tracks confirmed rows only).
     // Scoped per-collection (#133): a pending mutation's touched collections
     // are already computed for the rebase path (`collectionsTouchedByMutations`,
     // #109's tracked-write machinery), so a mutation pending against
@@ -1237,7 +1278,7 @@ export const make = (
     const indexForCollection = (
       collection: string
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
-      store.pendingMutations.pipe(
+      overlayJournal.pipe(
         Effect.flatMap((pending) => {
           if (pending.length === 0) return ensureIndexBuilt(collection);
           return collectionsTouchedByMutations(pending).pipe(
@@ -1271,13 +1312,13 @@ export const make = (
         })
       );
 
-    /** Confirmed rows + pending mutations replayed on top (the overlay). */
+    /** Confirmed rows + the overlay journal (unpulled tail, then pending) replayed on top. */
     const computeOverlay: Effect.Effect<
       Map<string, Map<RowId, LocalRow>>,
       StoreError | MutatorError
     > = Effect.gen(function* () {
       const view = new Map<string, Map<RowId, LocalRow>>();
-      yield* replayMutations(view, yield* store.pendingMutations);
+      yield* replayMutations(view, yield* overlayJournalLocked);
       return view;
     });
 
@@ -1370,10 +1411,10 @@ export const make = (
     // touches, not a full journal replay. Must run under `overlayLock` — the
     // caller (`journal`) holds the permit for its whole body, so this
     // reads/mutates/writes the cache without racing `materialize`'s fill or
-    // another mutation's tracked write. `pendingBefore` is the journal
+    // another mutation's tracked write. `journalBefore` is the overlay journal
     // snapshot from *before* this mutation was appended to the store — the
-    // cold-cache fallback replays exactly that (not a fresh
-    // `store.pendingMutations`, which would already include this mutation by
+    // cold-cache fallback replays exactly that (not a fresh overlay journal,
+    // which would already include this mutation by
     // the time this runs), so `trackedWriter` below applies this mutation's
     // effect exactly once rather than once from the replay and once more from
     // the tracked write. Falls back to a Rebuild scoped to the mutator's
@@ -1405,12 +1446,12 @@ export const make = (
         if (base._tag === "Warm") {
           view = base.view;
         } else {
-          const pendingBefore = base.pendingBefore;
+          const journalBefore = base.journalBefore;
           const filled = yield* Effect.exit(
             timedRebase(
               Effect.gen(function* () {
                 const fresh = new Map<string, Map<RowId, LocalRow>>();
-                yield* replayMutations(fresh, pendingBefore);
+                yield* replayMutations(fresh, journalBefore);
                 return fresh;
               })
             )
@@ -1535,16 +1576,69 @@ export const make = (
         }
       });
 
+    // Settle this client's own entries that a watermark covers as applied.
+    const settleOwnApplied = (lastMutationIds: Readonly<Record<string, number>>) =>
+      Effect.gen(function* () {
+        const lastId = lastMutationIds[yield* currentClientId];
+        if (lastId !== undefined) yield* settleApplied(lastId);
+      });
+
+    // Pull ack (ADR-0008). The pull's patch already carries the effects of
+    // everything its `lastMutationIds` covers, so the acknowledged tail those
+    // entries occupy is released here, under the same invalidation as the
+    // journal trim (#286). The caller reveals the result in one change.
     const acknowledge = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
           yield* store.acknowledge(clientId, upTo);
         }
-        const lastId = lastMutationIds[yield* currentClientId];
-        if (lastId !== undefined) yield* settleApplied(lastId);
-        yield* invalidateOverlay; // trimming the journal shifts the overlay
+        yield* settleOwnApplied(lastMutationIds);
+        yield* Semaphore.withPermit(
+          overlayLock,
+          Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m))).pipe(
+            Effect.andThen(Ref.set(overlayCache, undefined))
+          )
+        );
         yield* sampleJournalDepth; // the trim changed journal depth
       });
+
+    // Push ack (ADR-0008, #286). The backend applied every journal entry the
+    // response covers, so trim them from the journal, where they must never be
+    // sent again, and park the applied ones at the end of the unpulled tail:
+    // their effects stay overlaid until a pull reports them, so the view does
+    // not revert in between. A permanently rejected entry was not applied, so
+    // it leaves the overlay now. Returns those rejected entries for the caller
+    // to reveal. Holds `overlayLock`, so the trim and the tail move together.
+    const acknowledgePushed = (
+      response: PushResponse
+    ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
+      Semaphore.withPermit(
+        overlayLock,
+        Effect.gen(function* () {
+          const rejectedKeys = new Set(
+            (response.rejected ?? []).map((entry) => `${entry.clientId}\u0000${entry.mutationId}`)
+          );
+          const isRejected = (m: Mutation) =>
+            rejectedKeys.has(`${m.clientId}\u0000${m.mutationId}`);
+          const covered = (yield* store.pendingMutations).filter((m) =>
+            isCoveredBy(response.lastMutationIds, m)
+          );
+          for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
+            yield* store.acknowledge(clientId, upTo);
+          }
+          const tail = [...(yield* Ref.get(unpulled)), ...covered.filter((m) => !isRejected(m))];
+          const released = Math.max(0, tail.length - UNPULLED_LIMIT);
+          if (released > 0) {
+            yield* Effect.logWarning(
+              "ClientEngine: no pull reported the oldest acknowledged mutations within the unpulled limit; releasing their overlay early",
+              { released, limit: UNPULLED_LIMIT }
+            );
+          }
+          yield* Ref.set(unpulled, released > 0 ? tail.slice(released) : tail);
+          yield* Ref.set(overlayCache, undefined);
+          return covered.filter(isRejected);
+        })
+      );
 
     // #117 / #249: compact superseded, still-pending journal entries for
     // pacing strategies, then renumber the survivors so the ids the backend
@@ -1660,6 +1754,9 @@ export const make = (
         let quarantined = 0;
         if (transition === "Reset") {
           quarantined = yield* store.quarantinePending(current);
+          // The unpulled tail's effects belong to the superseded identity's rows,
+          // which are cleared just below, so the tail goes with them (#286).
+          yield* Semaphore.withPermit(overlayLock, Ref.set(unpulled, []));
           yield* store.clearRows;
           yield* store.clearCookie;
           yield* Ref.set(subscriptions, []);
@@ -1776,16 +1873,19 @@ export const make = (
           mutations: pending,
           ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
         });
-        // Trimming these pending mutations drops their optimistic effects, so
-        // only their collections can shift — scope the rebuild to that union so
-        // observers of untouched collections don't re-materialize.
-        const touched = yield* collectionsTouchedByMutations(pending);
         // Settle permanently-rejected mutations before the ack sweep, so a
         // rejected id reports `rejected` rather than `applied`.
         yield* settleRejected(response);
-        // Effects arrive via the next pull; the ack only trims the journal.
-        yield* acknowledge(response.lastMutationIds);
-        yield* publishChange(rebuildFor(touched));
+        // The applied entries keep their overlay effects in the unpulled tail
+        // until a pull reports them (#286), so the view does not change here.
+        // Only a permanent rejection leaves the overlay now; reveal just those
+        // collections.
+        const rejected = yield* acknowledgePushed(response);
+        yield* settleOwnApplied(response.lastMutationIds);
+        yield* sampleJournalDepth; // the trim changed journal depth
+        if (rejected.length > 0) {
+          yield* publishChange(rebuildFor(yield* collectionsTouchedByMutations(rejected)));
+        }
         yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
         yield* Metric.update(Telemetry.pushesTotal, 1);
         yield* Metric.update(Telemetry.pushMutations, pending.length);
@@ -1845,8 +1945,10 @@ export const make = (
         // pull mutations touch — scope a Rebuild to their union rather than
         // forcing a global one (#109's "stays a scoped Rebuild" rebase path);
         // a reset (`Clear`) still forces the unscoped fallback.
-        const pendingBefore = yield* store.pendingMutations;
-        const hadPending = pendingBefore.length > 0;
+        // The overlay journal before this pull (the unpulled tail, then pending),
+        // as one snapshot under the lock: the pull may release part of it.
+        const journalBefore = yield* overlayJournal;
+        const hadPending = journalBefore.length > 0;
         const hasClear = response.patch.some((op) => op._tag === "Clear");
         const touched = yield* pullTouchedCollections(response.patch);
         yield* applyPatch(response.patch);
@@ -1858,7 +1960,7 @@ export const make = (
         } else if (!hadPending) {
           change = { _tag: "Patch", ops: response.patch };
         } else {
-          const mutationCollections = yield* collectionsTouchedByMutations(pendingBefore);
+          const mutationCollections = yield* collectionsTouchedByMutations(journalBefore);
           change = rebuildFor(
             mutationCollections === undefined
               ? undefined
@@ -2554,7 +2656,7 @@ export const make = (
           const cachedBefore = yield* Ref.get(overlayCache);
           const base: OverlayBase =
             cachedBefore === undefined
-              ? { _tag: "Cold", pendingBefore: yield* store.pendingMutations }
+              ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked }
               : { _tag: "Warm", view: cachedBefore };
           const clientId = yield* currentClientId;
           const journaledAt = yield* Clock.currentTimeMillis;
