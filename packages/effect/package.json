@@ -1,7 +1,7 @@
 {
   "name": "@thomasfosterau/legation-effect",
   "version": "0.1.0",
-  "description": "An Effect-native sync engine: write-through caching, TanStack-Query-style client queries/mutations/subscriptions, offline outbox, HTTP caching for service workers and edge runtimes, and a server-side sync hub with client fan-out",
+  "description": "An offline-first sync engine over a typed resource graph: Node (with its Edges), Collection, declarative Query reads, named Mutation writes, one Client per thread and one Server per backend",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
