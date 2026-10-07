@@ -48,6 +48,7 @@
         "svelte": "^5",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "@sveltejs/adapter-node": "^5.0.0",
         "@sveltejs/kit": "^2.0.0",
         "@sveltejs/vite-plugin-svelte": "catalog:",
@@ -90,6 +91,7 @@
         "svelte": "^5",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "@sveltejs/adapter-static": "^3.0.0",
         "@sveltejs/kit": "^2.0.0",
         "@sveltejs/vite-plugin-svelte": "catalog:",
@@ -143,6 +145,7 @@
       },
       "devDependencies": {
         "@cloudflare/workers-types": "catalog:",
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
       },
       "peerDependencies": {
@@ -156,6 +159,7 @@
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
         "svelte": "^5",
       },
@@ -186,6 +190,7 @@
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
       },
       "peerDependencies": {
@@ -200,6 +205,7 @@
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
         "effect": "catalog:",
       },
@@ -215,6 +221,7 @@
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "effect": "catalog:",
       },
       "peerDependencies": {
@@ -229,6 +236,7 @@
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "@sveltejs/kit": "^3.0.0",
         "effect": "catalog:",
         "svelte": "^5",

@@ -52,6 +52,7 @@
     "@sveltejs/kit": "^2.0.0 || ^3.0.0"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "svelte": "^5",
     "@sveltejs/kit": "^3.0.0"

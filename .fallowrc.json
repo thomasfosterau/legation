@@ -7,8 +7,7 @@
     "@thomasfosterau/legation-effect",
     "@thomasfosterau/legation-sql",
     "publint",
-    "@arethetypeswrong/cli",
-    "@effect/vitest"
+    "@arethetypeswrong/cli"
   ],
   "rules": {
     "duplicate-exports": "off"

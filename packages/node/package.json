@@ -51,7 +51,8 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "effect": "catalog:",
-    "@effect/platform-node": "catalog:"
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:"
   },
   "repository": {
     "type": "git",
