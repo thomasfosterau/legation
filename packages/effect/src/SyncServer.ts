@@ -55,6 +55,14 @@ import type { Subset } from "./Subset.js";
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
 
+// Whether two `lastMutationIds` watermarks name the same ids at the same values (#286).
+const sameWatermark = (
+  a: Readonly<Record<string, number>>,
+  b: Readonly<Record<string, number>>
+): boolean =>
+  Object.keys(a).length === Object.keys(b).length &&
+  Object.keys(a).every((key) => a[key] === b[key]);
+
 /** One row a read returns: its collection beside the backend's `(id, version, value)`. */
 export type ReadRow = ReadResponse["rows"][number];
 
@@ -472,6 +480,61 @@ export const makeWithIntrospectionWith = (
       return cvrStore.get(cookie);
     };
 
+    // How many passes a pull makes over its view before it stops retrying a
+    // moving watermark (#286). A pass only repeats when a push committed during
+    // it, so a bound of 3 is ample under normal load.
+    const PULL_VIEW_ATTEMPTS = 3;
+
+    // One pass over a pull's view: the watermark, the evaluated rows and the
+    // patch, then the watermark again. `consistent` is true when the two
+    // watermarks agree. Writes nothing: the CVR is recorded once, by the caller,
+    // for the view it returns.
+    const readPullOnce = (
+      context: SyncContext,
+      authorized: ReadonlyArray<Subset>,
+      cookie: string | undefined
+    ) =>
+      Effect.gen(function* () {
+        const before = yield* backend.lastMutationIds(context);
+        const next = yield* evaluateView(context, authorized);
+        const previous = yield* resolvePrevious(cookie);
+        const isReset = cookie !== undefined && previous === undefined;
+        const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
+        const after = yield* backend.lastMutationIds(context);
+        return { next, patch, lastMutationIds: after, consistent: sameWatermark(before, after) };
+      });
+
+    // The pull's view as one snapshot (#286). Backend guarantee 1 bumps a
+    // client's `lastMutationId` in the same commit as its effects, so when the
+    // watermark reads the same before and after the rows, no push committed in
+    // between: every push the watermark covers is in the rows, and no push is in
+    // the rows without being covered. That is the invariant the client's
+    // overlay relies on to release an acknowledged mutation without a revert or a
+    // double application. A push that lands mid-read moves the watermark, so the
+    // view is read again, up to PULL_VIEW_ATTEMPTS passes. If every pass is
+    // disturbed, the last pass's watermark is returned, read after its patch. It
+    // may then cover a push whose effects the patch lacks, which is a transient
+    // revert until the next pull; it never covers less than the patch carries,
+    // so it cannot double-apply.
+    const readPullView = (
+      context: SyncContext,
+      authorized: ReadonlyArray<Subset>,
+      cookie: string | undefined
+    ) =>
+      Effect.gen(function* () {
+        let view = yield* readPullOnce(context, authorized, cookie);
+        for (let attempt = 1; !view.consistent && attempt < PULL_VIEW_ATTEMPTS; attempt++) {
+          view = yield* readPullOnce(context, authorized, cookie);
+        }
+        if (!view.consistent) {
+          yield* Effect.logDebug(
+            "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch",
+            { attempts: PULL_VIEW_ATTEMPTS, clientGroupId: context.clientGroupId }
+          );
+        }
+        return view;
+      });
+
     const handlePull = (
       request: PullRequest
     ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
@@ -487,19 +550,10 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, authorized)
             );
 
-            // Read the watermark before the view is evaluated (#286). A push that
-            // lands mid-pull is then left out of this response's ids, so the client
-            // keeps its overlay until a later pull reports it. Read afterwards, the
-            // ids could report a push whose effects the patch does not carry, and
-            // the client would reveal that mutation's view without its effects.
-            const lastMutationIds = yield* backend.lastMutationIds(context);
-            const next = yield* evaluateView(context, authorized);
-            const previous = yield* resolvePrevious(checked.cookie);
-            const isReset = checked.cookie !== undefined && previous === undefined;
-            const patch = yield* assemblePatch(
+            const { next, patch, lastMutationIds } = yield* readPullView(
               context,
-              Cvr.diff(previous ?? Cvr.empty, next),
-              isReset
+              authorized,
+              checked.cookie
             );
 
             const cookie = yield* freshCookie;

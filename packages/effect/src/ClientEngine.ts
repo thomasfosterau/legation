@@ -1586,19 +1586,18 @@ export const make = (
     // Pull ack (ADR-0008). The pull's patch already carries the effects of
     // everything its `lastMutationIds` covers, so the acknowledged tail those
     // entries occupy is released here, under the same invalidation as the
-    // journal trim (#286). The caller reveals the result in one change.
-    const acknowledge = (lastMutationIds: Readonly<Record<string, number>>) =>
+    // journal trim (#286). The caller holds `overlayLock` for the whole of
+    // `applyPull`, the patch write included: a read in between would see the
+    // new rows with the tail still parked, and replay the tail over them.
+    // Takes no lock itself (the lock is not reentrant).
+    const acknowledgeLocked = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
           yield* store.acknowledge(clientId, upTo);
         }
         yield* settleOwnApplied(lastMutationIds);
-        yield* Semaphore.withPermit(
-          overlayLock,
-          Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m))).pipe(
-            Effect.andThen(Ref.set(overlayCache, undefined))
-          )
-        );
+        yield* Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m)));
+        yield* Ref.set(overlayCache, undefined);
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
@@ -1945,14 +1944,22 @@ export const make = (
         // pull mutations touch — scope a Rebuild to their union rather than
         // forcing a global one (#109's "stays a scoped Rebuild" rebase path);
         // a reset (`Clear`) still forces the unscoped fallback.
-        // The overlay journal before this pull (the unpulled tail, then pending),
-        // as one snapshot under the lock: the pull may release part of it.
-        const journalBefore = yield* overlayJournal;
-        const hadPending = journalBefore.length > 0;
         const hasClear = response.patch.some((op) => op._tag === "Clear");
         const touched = yield* pullTouchedCollections(response.patch);
-        yield* applyPatch(response.patch);
-        yield* acknowledge(response.lastMutationIds);
+        // One critical section (#286): the overlay journal before this pull
+        // (the unpulled tail, then pending), the confirmed-row write and the tail
+        // release. A read that runs between the row write and the release would
+        // otherwise see the new rows with the tail still replayed over them.
+        const journalBefore = yield* Semaphore.withPermit(
+          overlayLock,
+          Effect.gen(function* () {
+            const before = yield* overlayJournalLocked;
+            yield* applyPatch(response.patch);
+            yield* acknowledgeLocked(response.lastMutationIds);
+            return before;
+          })
+        );
+        const hadPending = journalBefore.length > 0;
         yield* store.setCookie(response.cookie);
         let change: ViewChange;
         if (hasClear) {

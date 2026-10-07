@@ -36,7 +36,12 @@ import type * as Subset from "./Subset.js";
 export interface EngineIntrospection {
   /** Active subsets: raw subscriptions plus each named subscription resolved. */
   readonly subscriptions: Effect.Effect<ReadonlyArray<Subset.Subset>>;
-  /** The journal: pending (unacknowledged) mutations in causal order. */
+  /**
+   * The journal: pending (unacknowledged) mutations in causal order. It holds
+   * pending entries only. A mutation the backend acknowledged but no pull has
+   * reported yet is in the engine's unpulled tail (#286), which this view does
+   * not show.
+   */
   readonly journal: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
   /** The current pull cookie, or `undefined` before the first pull. */
   readonly cookie: Effect.Effect<string | undefined, StoreError>;
