@@ -339,7 +339,10 @@ describe("two rooms over one broker", () => {
         // run, so its connect leg pushes it; r-2 comes after start-up, and only
         // the push debounce can push it. Before #317 was fixed, the debounce
         // subscribed to its trigger a few scheduler turns too late and r-2 was
-        // never pushed.
+        // never pushed. That regression guard relies on the waits below
+        // returning without a further clock advance before r-2 is written: a
+        // `TestClock.adjust` in between gives the debounce time to subscribe
+        // and lets the pre-#317 engine pass.
         const writer = yield* makeRoomClient(roomB.handler, "group-b");
         yield* writer.client.mutate("review/set", {
           id: "r-1",
@@ -366,8 +369,8 @@ describe("two rooms over one broker", () => {
         expect(
           (yield* Ref.get(published)).some((topics) => topics.has("reviews/productId=p-9"))
         ).toBe(true);
-        // Past another debounce window nothing more is pushed: each write went
-        // to room B exactly once.
+        // Two debounce windows later nothing more has been pushed: each write
+        // went to room B exactly once.
         yield* TestClock.adjust(Duration.millis(20));
         expect(yield* Ref.get(roomB.pushes)).toEqual([["r-1"], ["r-2"]]);
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
