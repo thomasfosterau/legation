@@ -333,6 +333,9 @@ export const makeWithIntrospectionWith = (
     // correctness). Poke-then-pull; correctness never depends on it.
     // Subscribing before `make` returns guarantees the loop sees every hint
     // published after construction, even ones racing the forked fiber's start.
+    // The exception is a Redis Streams broker while Redis is unreachable, which
+    // may miss a publish that races `subscribe`; a hint so missed only delays the
+    // next pull.
     const hintSubscription = yield* bus.subscribe;
     yield* Effect.forkScoped(
       Effect.forever(
