@@ -12,7 +12,9 @@ npm install @thomasfosterau/legation-node @thomasfosterau/legation-effect effect
 
 ## Effect version
 
-Peers `effect >=4.0.2` and `@effect/platform-node >=4.0.2`. The floor is 4.0.2 because `@effect/platform-node` 4.0.2 is the first release that stops a normal WebSocket close on Bun from logging a 500 on `/sync-ws`, and it peers `effect ^4.0.2`. Tested against `4.0.2` (the version CI pins, which is also this floor). Install one copy of `effect` in your app: two copies break `Context` identity.
+Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. `@effect/platform-node` is peered with the same floor. Tested against `4.0.2` (the version CI pins) and `4.0.0-rc.118` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
+
+On Bun, `@effect/platform-node` before 4.0.2 logs `Stream is already ended` and answers a 500 on every normal `/sync-ws` close. Install `effect` and `@effect/platform-node` 4.0.2 or later together for the fix: 4.0.2 peers `effect ^4.0.2`.
 
 Requires Node.js 22 or newer (`engines.node: ">=22"`), the published floor. CI tests on the latest stable Node.
 
