@@ -183,7 +183,8 @@ export interface MutationEvent {
  * they are observability, not reconstructable via pull.
  *
  * - `MutationJournaled` — a mutation was journaled locally (from `mutate`,
- *   `mutateEncoded`, or `mutateWithAck`).
+ *   `mutateEncoded`, or `mutateWithAck`), or a journal entry a direct store write
+ *   (`Hydration.hydrate`) appended was adopted into this engine (#358), once per entry.
  * - `MutationAcknowledged` — the backend applied a journaled mutation.
  * - `MutationRejected` — the backend permanently refused it, with a `reason`.
  *   Each mutation settles once: a later response that repeats or contradicts
@@ -919,6 +920,24 @@ export const make = (
       )
     );
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
+    // Track journal entries the map does not know yet as pending (#358): entries a direct store
+    // write appended under this engine, or entries whose boot-time read failed (`initialPending`
+    // falls back to none). An entry already tracked keeps its phase. Runs on every reload and on
+    // every push claim, so an untracked entry is tracked before the push that sends it can settle it.
+    // Each adopted entry announces `MutationJournaled` once, as a local `journal` does, so the
+    // outcome that follows it (`MutationAcknowledged` / `MutationRejected`) has its opening event.
+    // Callers hold `overlayLock`, so the journal cannot change between the read and the fold. The
+    // gate stays a read: `SubscriptionRef.modify` publishes even when nothing moved, so a no-op
+    // adoption (the common case on every push) must not reach it.
+    const adoptPending = (pending: ReadonlyArray<Mutation>): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (!MutationState.hasUntracked(yield* SubscriptionRef.get(mutationStates), pending))
+          return;
+        const adopted = yield* SubscriptionRef.modify(mutationStates, (map) =>
+          MutationState.adopt(map, pending)
+        );
+        for (const mutation of adopted) yield* emitEvent(mutation.mutationId, "journaled");
+      });
     // #212: with the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
     // sequence the backend requires to be contiguous (ADR-0008's exactly-once
@@ -1706,16 +1725,26 @@ export const make = (
             return [prior, next] as const;
           })
         ),
-        Effect.flatMap((prior) =>
-          prior === "pending"
-            ? resolveAck(id, { _tag: "rejected", reason }).pipe(
-                Effect.andThen(emitEvent(id, "rejected", reason))
-              )
-            : Effect.logDebug("ClientEngine: ignoring a rejection for a settled mutation", {
-                mutationId: id,
-                phase: prior ?? "untracked",
-              })
-        )
+        Effect.flatMap((prior) => {
+          if (prior === "pending") {
+            return resolveAck(id, { _tag: "rejected", reason }).pipe(
+              Effect.andThen(emitEvent(id, "rejected", reason))
+            );
+          }
+          // A repeat of this rejection, or an id already evicted, is harmless. Any other settled
+          // phase contradicts the outcome the client already observed: the server commits one
+          // outcome per id (#355), so that means an invariant broke.
+          if (prior === undefined || prior === "rejected") {
+            return Effect.logDebug("ClientEngine: ignoring a repeated or evicted rejection", {
+              mutationId: id,
+              phase: prior ?? "untracked",
+            });
+          }
+          return Effect.logWarning(
+            "ClientEngine: ignoring a rejection that contradicts the outcome already observed",
+            { mutationId: id, phase: prior }
+          );
+        })
       );
 
     // Resolve deferreds for the mutations this client had permanently rejected.
@@ -2003,6 +2032,7 @@ export const make = (
       overlayLock,
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
+        yield* adoptPending(pending);
         if (pending.length === 0) return pending;
         const highest = new Map<string, number>();
         for (const m of pending) {
@@ -2198,10 +2228,29 @@ export const make = (
         yield* publishChange(rebuildFor(touched));
       });
 
+    // A direct store write (`Hydration.hydrate`) appends journal entries the map does not track;
+    // adopt them so they settle like a locally journaled mutation (#358). A failed read keeps the
+    // map as it was (logged); the push claim adopts the journal again before it sends anything.
+    // The read and the fold run under `overlayLock`, as every other journal writer does: a pull's
+    // trim cannot land between them and leave an adopted id with no journal row behind it.
+    const adoptJournal: Effect.Effect<void> = Semaphore.withPermit(
+      overlayLock,
+      store.pendingMutations.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "ClientEngine: could not read the journal to track entries written directly to the store",
+            { error }
+          ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
+        ),
+        Effect.flatMap(adoptPending)
+      )
+    );
+
     // Re-read everything derived from the store and reveal it: the built indexes, the overlay
     // (confirmed rows plus the journal) and every observer. Shared by `clearRows` and by a direct
     // store write (`resyncAttachedEngines`).
     const reloadFromStore: Effect.Effect<void> = invalidateAllIndexes.pipe(
+      Effect.andThen(adoptJournal),
       Effect.andThen(invalidateOverlay),
       Effect.andThen(sampleJournalDepth),
       Effect.andThen(publishChange(REBUILD))
