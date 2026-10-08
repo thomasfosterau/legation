@@ -487,6 +487,34 @@ interface SeqChange {
   readonly change: ViewChange;
 }
 
+/**
+ * The built secondary indexes (#113) and the counters that guard installing one (#339). Immutable:
+ * every change makes a new value, so a build can compare the value it started from against the
+ * current one inside a single `Ref.modify`.
+ */
+interface IndexState {
+  /** The built index per collection; absent means not built yet (or nothing to index). */
+  readonly built: ReadonlyMap<string, Index.CollectionIndex>;
+  /**
+   * Per collection, bumped by every confirmed-row write to it (built or not) and by a field-set
+   * change, which makes any index built against the old set stale.
+   */
+  readonly generations: ReadonlyMap<string, number>;
+  /** Bumped by a `Clear`, which touches every collection. */
+  readonly clears: number;
+}
+
+/**
+ * Whether no confirmed-row write or field-set change touching `collection` happened between two
+ * states, so an index built from rows read in `from` is still current in `to` (#339).
+ */
+const indexUnchangedFor = (collection: string, from: IndexState, to: IndexState): boolean =>
+  from.clears === to.clears &&
+  (from.generations.get(collection) ?? 0) === (to.generations.get(collection) ?? 0);
+
+/** Attempts an index build gets when confirmed-row writes keep racing it; then it full-scans (#339). */
+const MAX_INDEX_BUILD_ATTEMPTS = 3;
+
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
 
@@ -1184,10 +1212,11 @@ export const make = (
 
     // Secondary field-value indexes over confirmed rows (issue #113).
     // `indexFields` is the declared-plus-auto-discovered field set per
-    // collection; `builtIndexes` is the actual `Index.CollectionIndex`,
+    // collection; `indexState` holds the actual `Index.CollectionIndex`es,
     // built lazily from the store and kept current by `applyPatch`/`seed`
-    // deltas. An absent `builtIndexes` entry means "not built yet" (or the
+    // deltas. An absent `built` entry means "not built yet" (or the
     // collection has no indexed fields) — the next access rebuilds it.
+    // `generations` guard that rebuild against writes racing it (#339).
     const indexFields = yield* Ref.make(
       new Map<string, Set<string>>(
         Object.entries(options.indexes ?? {}).map(([collection, fields]) => [
@@ -1196,7 +1225,11 @@ export const make = (
         ])
       )
     );
-    const builtIndexes = yield* Ref.make(new Map<string, Index.CollectionIndex>());
+    const indexState = yield* Ref.make<IndexState>({
+      built: new Map(),
+      generations: new Map(),
+      clears: 0,
+    });
 
     // The fields a subset's `where` could narrow via an index: the top-level
     // (or top-level-`And`) `Compare`/`In` conjuncts' fields. Used only to
@@ -1235,11 +1268,13 @@ export const make = (
       }).pipe(
         Effect.flatMap((grew) =>
           grew
-            ? Ref.update(builtIndexes, (built) => {
-                if (!built.has(subset.collection)) return built;
-                const next = new Map(built);
-                next.delete(subset.collection); // force a rebuild with the widened field set
-                return next;
+            ? Ref.update(indexState, (state) => {
+                const built = new Map(state.built);
+                built.delete(subset.collection); // force a rebuild with the widened field set
+                // An in-flight build over the old field set must not install (#339).
+                const generations = new Map(state.generations);
+                generations.set(subset.collection, (generations.get(subset.collection) ?? 0) + 1);
+                return { built, generations, clears: state.clears };
               })
             : Effect.void
         )
@@ -1248,19 +1283,46 @@ export const make = (
 
     // (Re)build a collection's index from confirmed store rows if it isn't
     // already built for its current declared field set. `undefined` means
-    // the collection has no indexed fields — the caller's cue to full-scan.
+    // the collection has no indexed fields, or the build kept losing a race
+    // to a write (#339) — the caller's cue to full-scan.
+    //
+    // The build reads rows, yields, then installs, and a write can land in
+    // that window: `updateIndexes` skips a collection with no built index, so
+    // the write would be missing from `fresh`. The generation is therefore read
+    // BEFORE `listRows` and compared inside the install's `Ref.modify`: a write
+    // that bumped it after the read discards `fresh` and the build is retried.
+    // A write that landed before the read is already in the rows.
+    //
+    // Serialising the build on `overlayLock` (the lock `applyPull` holds across
+    // its patch write) was rejected: it would queue every read and mutation
+    // behind a full-collection `listRows`, and the lock is not reentrant, so a
+    // caller that already holds it would deadlock. The generation check keeps
+    // reads unblocked and needs no lock.
     const ensureIndexBuilt = (
       collection: string
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
       Effect.gen(function* () {
-        const fields = (yield* Ref.get(indexFields)).get(collection);
-        if (fields === undefined || fields.size === 0) return undefined;
-        const existing = (yield* Ref.get(builtIndexes)).get(collection);
-        if (existing !== undefined) return existing;
-        const fresh = Index.empty(fields);
-        Index.rebuild(fresh, yield* store.listRows(collection));
-        yield* Ref.update(builtIndexes, (map) => new Map(map).set(collection, fresh));
-        return fresh;
+        for (let attempt = 0; attempt < MAX_INDEX_BUILD_ATTEMPTS; attempt++) {
+          const fields = (yield* Ref.get(indexFields)).get(collection);
+          if (fields === undefined || fields.size === 0) return undefined;
+          const before = yield* Ref.get(indexState);
+          const existing = before.built.get(collection);
+          if (existing !== undefined) return existing;
+          const fresh = Index.empty(fields);
+          Index.rebuild(fresh, yield* store.listRows(collection));
+          const installed = yield* Ref.modify(indexState, (state) => {
+            // Another build installed first; it is kept current like any built index.
+            const current = state.built.get(collection);
+            if (current !== undefined) return [current, state] as const;
+            if (!indexUnchangedFor(collection, before, state)) return [undefined, state] as const;
+            return [
+              fresh,
+              { ...state, built: new Map(state.built).set(collection, fresh) },
+            ] as const;
+          });
+          if (installed !== undefined) return installed;
+        }
+        return undefined;
       });
 
     // Indexed evaluation is sound only while a collection's confirmed rows
@@ -1294,9 +1356,22 @@ export const make = (
     // Apply confirmed-row deltas (patch ops / seeded rows) to already-built
     // indexes. A collection with no built index yet is left alone — it
     // rebuilds fully from the store (which already reflects these deltas) on
-    // next access.
-    const updateIndexes = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void> =>
-      Ref.get(builtIndexes).pipe(
+    // next access. Every touched collection's generation is bumped, built or
+    // not, so a build that read the rows before this write discards its result
+    // rather than installing a snapshot that lacks it (#339). The bump and the
+    // `built` snapshot are one `Ref.modify`, so an install is ordered entirely
+    // before or entirely after this write.
+    const updateIndexes = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void> => {
+      if (ops.length === 0) return Effect.void;
+      return Ref.modify(indexState, (state) => {
+        let clears = state.clears;
+        const generations = new Map(state.generations);
+        for (const op of ops) {
+          if (op._tag === "Clear") clears++;
+          else generations.set(op.collection, (generations.get(op.collection) ?? 0) + 1);
+        }
+        return [state.built, { built: state.built, generations, clears }] as const;
+      }).pipe(
         Effect.map((built) => {
           if (built.size === 0) return;
           for (const op of ops) {
@@ -1311,6 +1386,7 @@ export const make = (
           }
         })
       );
+    };
 
     /** Confirmed rows + the overlay journal (unpulled tail, then pending) replayed on top. */
     const computeOverlay: Effect.Effect<
