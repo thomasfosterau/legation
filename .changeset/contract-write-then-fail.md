@@ -18,8 +18,10 @@ The unknown-mutator `BackendError` that `MemoryBackend`, `SqlBackend` and
 `JsonApiBackend` raise now carries a typed cause, built by `UnknownMutator.make`
 (`@thomasfosterau/legation-effect/internal`). Rule 10 and rule 4 (`contract/fail`, #382)
 recognise an unregistered mutator by that cause, so a backend that words the message
-differently is still caught. The message match stays as a fallback for a third-party
-backend that does not use the helper yet.
+differently is still caught. The exact message `Unknown mutator: <name>` stays as a
+fallback for a third-party backend that does not use the helper yet. Rule 4 now also
+needs the probe to fail with a `BackendError`: a `failAlways` that dies with a defect
+fails the rule instead of passing it.
 
 **Action required:** backend authors who run `verifyBackendContract` (imported from
 `@thomasfosterau/legation-effect/internal`) must register `BackendContract.failAlways`

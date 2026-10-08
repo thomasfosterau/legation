@@ -8,6 +8,7 @@ import type { Backend } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
+import * as UnknownMutator from "../UnknownMutator.js";
 
 /** The reference handlers without the named contract mutator, i.e. an unregistered one. */
 const withoutHandler = (name: string) =>
@@ -112,6 +113,28 @@ describe("verifyBackendContract", () => {
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure.rule).toContain("discards");
       expect(failure.message).toContain("not registered");
+    })
+  );
+
+  it.effect("does not mistake a registered handler's error that mentions an unknown mutator", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      // Rewords every handler failure except the typed unknown-mutator one, so a
+      // registered failAlways fails with text that contains "Unknown mutator".
+      const wordy: Backend = {
+        ...inner,
+        applyMutations: (context, mutations) =>
+          inner
+            .applyMutations(context, mutations)
+            .pipe(
+              Effect.mapError((error) =>
+                UnknownMutator.isError(error)
+                  ? error
+                  : new BackendError({ message: `Unknown mutator: none here (${error.message})` })
+              )
+            ),
+      };
+      yield* BackendContract.verifyBackendContract(wordy);
     })
   );
 

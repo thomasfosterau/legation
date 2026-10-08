@@ -20,12 +20,12 @@
  * handler can express, and its concurrency differs per backend. Each backend
  * therefore discharges it itself: `MemoryBackend` by its stage (covered by
  * `memory-backend-atomicity.test.ts`, "keeps a handler's writes and its bump
- * invisible until the mutation commits"). `SqlBackend` (a transaction) and
- * `JsonApiBackend` (the server's all-or-nothing batch) have parked-handler tests
- * (#352), but those check only the ledger watermark: no test that a read sees
- * neither the handler's writes nor the bump while it is parked. That gap is
- * tracked in #381. A new backend must add its own mid-flight test before it can
- * claim guarantee 1.
+ * invisible until the mutation commits"). `SqlBackend` (a transaction) has
+ * parked-handler tests (#352) that check the ledger watermark and how often the
+ * handler runs; `JsonApiBackend` (the server's all-or-nothing batch) has none.
+ * Neither has a test that a read sees neither the handler's writes nor the bump
+ * while the handler is parked. That gap is tracked in #381. A new backend must
+ * add its own mid-flight test before it can claim guarantee 1.
  */
 
 import { Data, Effect, Exit, Option, Schema } from "effect";
@@ -189,12 +189,13 @@ interface Harness {
 }
 
 /**
- * True when a failed call shows its mutator is not registered. The
- * `UnknownMutator` tag identifies it; the message match is a fallback for a
- * third-party backend that does not use `UnknownMutator.make` yet.
+ * True when a failed call shows `mutator` is not registered. The
+ * `UnknownMutator` tag identifies it; the exact message `UnknownMutator.make`
+ * writes is a fallback for a third-party backend that does not use it yet, so a
+ * registered handler whose own error merely mentions "Unknown mutator" still counts.
  */
-const isUnregisteredFailure = (error: BackendError): boolean =>
-  UnknownMutator.isError(error) || error.message.includes("Unknown mutator");
+const isUnregisteredFailure = (error: BackendError, mutator: string): boolean =>
+  UnknownMutator.isError(error) || error.message === `Unknown mutator: ${mutator}`;
 
 const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harness => {
   const rows = options?.collection ?? "__contract";
@@ -226,7 +227,7 @@ const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harn
         }
         return check(
           rule,
-          !isUnregisteredFailure(failure.value),
+          !isUnregisteredFailure(failure.value, mutator),
           `${mutator} is not registered: register BackendContract.${exportName}`
         );
       })
