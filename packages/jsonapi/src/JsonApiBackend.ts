@@ -187,6 +187,18 @@ const recordPut = (
   puts.set(collection, (puts.get(collection) ?? new Map<string, unknown>()).set(id, value));
 };
 
+/**
+ * Drop an id's PUT value (mutates `puts`): a later delete of the row in the
+ * same push leaves it with no value, so the hint names it as a delete (#369).
+ */
+const forgetPut = (
+  puts: Map<string, Map<string, unknown>>,
+  collection: string,
+  id: string
+): void => {
+  puts.get(collection)?.delete(id);
+};
+
 /** Record a touched id under its collection (mutates `touched`). */
 const recordTouched = (touched: Map<string, Set<string>>, collection: string, id: string): void => {
   touched.set(collection, (touched.get(collection) ?? new Set<string>()).add(id));
@@ -214,6 +226,7 @@ const recordOutcome = (
   if (outcome._tag === "applied") {
     recordTouched(acc.touched, type, outcome.id);
     if (outcome.value !== undefined) recordPut(acc.puts, type, outcome.id, outcome.value);
+    else forgetPut(acc.puts, type, outcome.id);
   } else {
     acc.rejected.push({
       clientId: mutation.clientId,
@@ -737,13 +750,17 @@ export const make = (
           pending = pending.filter((entry) => !rejectedAt.has(entry.index));
         }
 
-        // Hints from what applied: the result document's resource where the
-        // server returned one, else the value the request wrote.
+        // Hints from what applied, in push order: the result document's resource
+        // where the server returned one, else the value the request wrote. A
+        // delete drops an earlier write's value for the row (#369).
         const touched = new Map<string, Set<string>>();
         const puts = new Map<string, Map<string, unknown>>();
         pending.forEach(({ write }, position) => {
           recordTouched(touched, write.type, write.id);
-          if (write.operation === "delete") return;
+          if (write.operation === "delete") {
+            forgetPut(puts, write.type, write.id);
+            return;
+          }
           recordPut(
             puts,
             write.type,
