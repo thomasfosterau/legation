@@ -262,8 +262,10 @@ export interface ClientStore {
    * operation sets a row or removes it), writes the cookie, trims the journal
    * and releases the tail to the watermark. So a crash at any point after this
    * call shows the pull's effects, never the rows without them (#387). A release
-   * still outstanding is finished first, so a record is only overwritten once its
-   * own finish has run. If that finish fails, this call fails and the outstanding
+   * still outstanding is finished first, whichever engine on this store began it,
+   * so a record is only overwritten once its own finish has run (the finish
+   * applies the whole recorded patch, so the other engine's release is completed,
+   * not lost). If that finish, or the read of the record, fails, this call fails and the outstanding
    * record stays for the next call or pull to finish (or, after a failure past its
    * read, the store seals). A call that fails may still have written the record, so
    * the caller finishes the release either way.

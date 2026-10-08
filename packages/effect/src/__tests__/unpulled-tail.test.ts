@@ -462,6 +462,19 @@ describe("ClientStore's unpulled tail (#336)", () => {
 });
 
 describe("the tail in an engine (#336)", () => {
+  for (const limit of [0, -1, 1.5, Number.NaN]) {
+    it.effect(
+      `an unpulledLimit that is not a positive integer is a defect when the engine is made (${limit})`,
+      () =>
+        Effect.gen(function* () {
+          const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+          const store = yield* ClientStoreModule.makeMemory;
+          const exit = yield* Effect.exit(makeCounterEngine(server, store, limit));
+          expect(Exit.isFailure(exit) && Exit.hasDies(exit)).toBe(true);
+        }).pipe(Effect.scoped)
+    );
+  }
+
   it.effect("a restart between a push acknowledgement and the next pull keeps the effect", () =>
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));

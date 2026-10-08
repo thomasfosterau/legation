@@ -435,7 +435,7 @@ export interface ClientEngineOptions {
   /**
    * Most acknowledged-but-unpulled mutations the overlay keeps before the oldest are released early, with
    * a `logWarning` (#286). Defaults to 1024. An internal seam: a test lowers it to reach the bound with a
-   * few mutations.
+   * few mutations. Must be a positive integer; any other value is a defect when the engine is made.
    */
   readonly unpulledLimit?: number;
   /**
@@ -904,6 +904,12 @@ export const make = (
   options: ClientEngineOptions
 ): Effect.Effect<ClientEngine, never, ClientStore | ClientTransport | Scope.Scope> =>
   Effect.gen(function* () {
+    const unpulledLimit = options.unpulledLimit ?? UNPULLED_LIMIT;
+    if (!Number.isInteger(unpulledLimit) || unpulledLimit < 1) {
+      return yield* Effect.die(
+        new Error(`ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`)
+      );
+    }
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
     // The keyed mutation-state map (#116), seeded from the journal so a
@@ -1875,12 +1881,11 @@ export const make = (
           const tail = [...held, ...applied];
           yield* Ref.set(unpulled, tail);
           yield* Ref.set(overlayCache, undefined);
-          const limit = options.unpulledLimit ?? UNPULLED_LIMIT;
-          const released = Math.max(0, tail.length - limit);
+          const released = Math.max(0, tail.length - unpulledLimit);
           if (released > 0) {
             yield* Effect.logWarning(
               "ClientEngine: no pull reported the oldest acknowledged mutations within the unpulled limit; releasing their overlay early",
-              { released, limit }
+              { released, limit: unpulledLimit }
             );
             // The released entries are the head of each client's run in the tail, so the
             // highest id released per client is a watermark that releases exactly them.
@@ -1888,8 +1893,8 @@ export const make = (
             for (const m of tail.slice(0, released)) {
               watermark[m.clientId] = Math.max(watermark[m.clientId] ?? 0, m.mutationId);
             }
-            // A release that carries no rows still goes through the durable record. It refuses to
-            // overwrite an outstanding one (#387), so no pull record is lost here. The record is
+            // A release that carries no rows still goes through the durable record. It finishes an
+            // outstanding one before recording its own (#387), so no pull record is lost here. The record is
             // written inside the scope whose failure is finished below: a `beginRelease` that
             // reports failure may still have written it (#387).
             yield* Effect.gen(function* () {
