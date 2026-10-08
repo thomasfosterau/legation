@@ -3,14 +3,27 @@
  * writes become visible only together with its lastMutationId bump, a
  * `BackendError` discards its writes, and a handler reads back its own staged
  * writes.
+ *
+ * The concurrency sections cover overlapping copies of one mutation (#346) and
+ * the committed outcome a losing copy reports (#355), at the backend and
+ * through a ClientEngine whose two push responses arrive in either order.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref } from "effect";
-import type { SyncContext } from "../Backend.js";
+import { Deferred, Effect, Fiber, HashMap, Option, Ref, Schema, Stream } from "effect";
+import * as Authorization from "../Authorization.js";
+import { Backend, type SyncContext } from "../Backend.js";
+import * as ClientEngineModule from "../ClientEngine.js";
+import * as ClientStoreModule from "../ClientStore.js";
+import { ClientStore } from "../ClientStore.js";
+import * as Cvr from "../Cvr.js";
 import { BackendError, MutationRejected } from "../Errors.js";
+import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
+import * as Mutator from "../Mutator.js";
 import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
+import * as SyncServer from "../SyncServer.js";
+import { ClientTransport, makeInMemory } from "../Transport.js";
 
 const context: SyncContext = { clientGroupId: "memory-atomicity-group" };
 const clientId = "memory-atomicity-client";
@@ -313,4 +326,258 @@ describe("MemoryBackend concurrent applyMutations (#346)", () => {
       expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(beforeStale);
     })
   );
+});
+
+/** The #346 handlers, plus a mutator that rejects at once and a plain set (#355). */
+const outcomeHandlers = (
+  gates: Record<GateName, Gate>
+): Record<string, MemoryBackend.BackendHandler> => ({
+  ...gatedHandlers(gates),
+  "test/reject": () => Effect.fail(new MutationRejected({ reason: "forbidden" })),
+  "test/set": (raw, writer) => {
+    const { id, n } = argsOf(raw);
+    return writer.put(rows, id, { n });
+  },
+});
+
+const rejectedMutation = (mutationId: number): Mutation => mutation(mutationId, "test/reject", {});
+
+const rejection = (mutationId: number) => ({ clientId, mutationId, reason: "forbidden" });
+
+describe("MemoryBackend committed outcome of a copy that loses the race (#355)", () => {
+  it.effect("a skipped copy of N does not stop N+1 from applying, in order", () =>
+    Effect.gen(function* () {
+      const gates = yield* makeGates;
+      const backend = yield* MemoryBackend.make(gatedHandlers(gates));
+
+      // Copy A of [1, 2] parks inside mutation 1.
+      const copyA = yield* Effect.forkChild(
+        backend.applyMutations(context, [
+          gatedMutation(1, "a", "x", 1),
+          gatedMutation(2, "next", "y", 2),
+        ])
+      );
+      yield* Deferred.await(gates.a.entered);
+
+      // Copy B of mutation 1 commits first.
+      yield* Deferred.succeed(gates.b.release, undefined);
+      yield* backend.applyMutations(context, [gatedMutation(1, "b", "x", 1)]);
+
+      // A resumes: its mutation 1 is skipped at commit, and mutation 2 still applies after it.
+      yield* Deferred.succeed(gates.a.release, undefined);
+      yield* Deferred.succeed(gates.next.release, undefined);
+      const resultA = yield* Fiber.join(copyA);
+
+      expect(resultA.lastMutationIds[clientId]).toBe(2);
+      expect(resultA.rejected).toBeUndefined();
+      expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 2 });
+      const stored = yield* backend.getRows(context, rows, ["x", "counter", "y"]);
+      expect(stored.map((row) => row.value)).toEqual([{ n: 1 }, { count: 2 }, { n: 2 }]);
+      const version = (id: string) => Number(stored.find((row) => row.id === id)?.version);
+      expect(version("x")).toBeLessThan(version("counter"));
+      expect(version("counter")).toBeLessThan(version("y"));
+    })
+  );
+
+  it.effect("a copy of a mutation committed as rejected reports the rejection", () =>
+    Effect.gen(function* () {
+      const gates = yield* makeGates;
+      const backend = yield* MemoryBackend.make(outcomeHandlers(gates));
+
+      // Copy A of an applied mutation 1 parks.
+      const copyA = yield* Effect.forkChild(
+        backend.applyMutations(context, [gatedMutation(1, "a", "x", 1)])
+      );
+      yield* Deferred.await(gates.a.entered);
+
+      // Copy B of mutation 1 is rejected, and it commits first.
+      const copyB = yield* backend.applyMutations(context, [rejectedMutation(1)]);
+      expect(copyB.rejected).toEqual([rejection(1)]);
+
+      // A resumes and loses. Its response reports the committed rejection, so it agrees with B.
+      yield* Deferred.succeed(gates.a.release, undefined);
+      const resultA = yield* Fiber.join(copyA);
+      expect(resultA.rejected).toEqual([rejection(1)]);
+      expect(resultA.hints).toEqual([]);
+      expect(resultA.lastMutationIds[clientId]).toBe(1);
+
+      // Neither copy's effects are visible, and the id is bumped once.
+      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual([]);
+      expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
+    })
+  );
+
+  it.effect("a replay reports a committed rejection until the client's next push passes it", () =>
+    Effect.gen(function* () {
+      const backend = yield* MemoryBackend.make(outcomeHandlers(yield* makeGates));
+
+      yield* backend.applyMutations(context, [rejectedMutation(1)]);
+
+      // A retry after a lost response is a replay: no effects, and the same outcome.
+      const replay = yield* backend.applyMutations(context, [rejectedMutation(1)]);
+      expect(replay.rejected).toEqual([rejection(1)]);
+      expect(replay.hints).toEqual([]);
+
+      // The client's next push starts at 2, so it has already seen the outcome of 1. The
+      // rejection is forgotten then, which bounds what a backend keeps (see Backend.ts).
+      yield* backend.applyMutations(context, [mutation(2, "test/set", { id: "y", n: 2 })]);
+      const late = yield* backend.applyMutations(context, [rejectedMutation(1)]);
+      expect(late.rejected).toBeUndefined();
+      expect(late.lastMutationIds[clientId]).toBe(2);
+    })
+  );
+});
+
+/**
+ * A push gate: the test sees when the backend has answered a push, and decides
+ * when that response reaches the client (#355).
+ */
+interface PushGate {
+  readonly returned: Deferred.Deferred<void>;
+  readonly deliver: Deferred.Deferred<void>;
+}
+
+const pushGate = Effect.gen(function* () {
+  return {
+    returned: yield* Deferred.make<void>(),
+    deliver: yield* Deferred.make<void>(),
+  } satisfies PushGate;
+});
+
+/** Wraps the in-memory transport so the test chooses the order responses reach the client. */
+const racingTransport = (
+  inner: ClientTransport,
+  pushes: Ref.Ref<number>,
+  gates: ReadonlyArray<PushGate>
+): ClientTransport => ({
+  ...inner,
+  push: (request) =>
+    Effect.gen(function* () {
+      const gate = gates[(yield* Ref.updateAndGet(pushes, (n) => n + 1)) - 1]!;
+      const response = yield* inner.push(request);
+      yield* Deferred.succeed(gate.returned, undefined);
+      yield* Deferred.await(gate.deliver);
+      return response;
+    }),
+});
+
+const raceContext: SyncContext = { clientGroupId: "group-a" };
+
+const raceMutators = Mutator.registry([
+  {
+    mutator: Mutator.make("todo/race", Schema.Unknown),
+    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+  },
+]);
+
+/**
+ * `todo/race`: the first copy to reach the backend parks, then applies once the
+ * second copy has committed. The second copy is rejected at once.
+ */
+const raceHandlers = (
+  copies: Ref.Ref<number>,
+  parked: { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+): Record<string, MemoryBackend.BackendHandler> => ({
+  "todo/race": (args, writer) =>
+    Effect.gen(function* () {
+      const copy = yield* Ref.updateAndGet(copies, (n) => n + 1);
+      if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
+      yield* Deferred.succeed(parked.entered, undefined);
+      yield* Deferred.await(parked.release);
+      yield* writer.put("todos", (args as { readonly id: string }).id, args);
+    }),
+});
+
+const serverFor = (backend: Backend) =>
+  Effect.gen(function* () {
+    const cvrStore = yield* Cvr.makeMemoryStore;
+    const bus = yield* InvalidationBus.makeInProcess;
+    return yield* SyncServer.make.pipe(
+      Effect.provideService(Backend, backend),
+      Effect.provideService(
+        Authorization.AuthPolicy,
+        Authorization.policy({ todos: Authorization.allowAll })
+      ),
+      Effect.provideService(Cvr.CvrStore, cvrStore),
+      Effect.provideService(InvalidationBus.InvalidationBus, bus)
+    );
+  });
+
+/** The client's mutation state for one id, read as a snapshot. */
+const stateOf = (engine: ClientEngineModule.ClientEngine, mutationId: number) =>
+  Stream.runHead(engine.mutationStates).pipe(
+    Effect.map((head) =>
+      Option.isSome(head) ? Option.getOrUndefined(HashMap.get(head.value, mutationId)) : undefined
+    )
+  );
+
+/**
+ * One mutation, two copies racing at the backend (#355). The first copy parks
+ * and applies only after the second, which is rejected and commits first. The
+ * client receives the two responses in the given order; either way it must
+ * settle the mutation as the server committed it.
+ */
+const runRace = (order: "rejected-first" | "losing-first") =>
+  Effect.gen(function* () {
+    const copies = yield* Ref.make(0);
+    const parked = {
+      entered: yield* Deferred.make<void>(),
+      release: yield* Deferred.make<void>(),
+    };
+    const backend = yield* MemoryBackend.make(raceHandlers(copies, parked));
+    const handler = yield* serverFor(backend);
+    const store = yield* ClientStoreModule.makeMemory;
+    const pushes = yield* Ref.make(0);
+    const gates = [yield* pushGate, yield* pushGate] as const;
+    const transport = yield* makeInMemory(handler, "group-a");
+    const engine = yield* ClientEngineModule.make({
+      clientId: "client-a",
+      clientGroupId: "group-a",
+      mutators: raceMutators,
+    }).pipe(
+      Effect.provideService(ClientStore, store),
+      Effect.provideService(ClientTransport, racingTransport(transport, pushes, gates))
+    );
+    yield* engine.subscribe(Subset.make({ collection: "todos" }));
+
+    const handle = yield* engine.mutateWithAck("todo/race", {
+      id: "x",
+      title: "doomed",
+      done: false,
+    });
+    // Copy A reaches the backend first and parks inside its handler.
+    const pushA = yield* Effect.forkChild(engine.push);
+    yield* Deferred.await(parked.entered);
+    // Copy B is a second push of the same entry. It is rejected and commits first.
+    const pushB = yield* Effect.forkChild(engine.push);
+    yield* Deferred.await(gates[1].returned);
+    // A resumes and loses. Its response is ready but has not reached the client.
+    yield* Deferred.succeed(parked.release, undefined);
+    yield* Deferred.await(gates[0].returned);
+
+    const pushFibers = [pushA, pushB] as const;
+    for (const index of order === "rejected-first" ? [1, 0] : [0, 1]) {
+      yield* Deferred.succeed(gates[index].deliver, undefined);
+      yield* Fiber.join(pushFibers[index]!);
+    }
+
+    // The client settles as the server committed: rejected, with no effects shown.
+    expect(yield* handle.acknowledged).toEqual({ _tag: "rejected", reason: "forbidden" });
+    expect(yield* stateOf(engine, 1)).toMatchObject({ phase: "rejected", reason: "forbidden" });
+    expect(yield* store.pendingMutations).toEqual([]);
+    expect(yield* engine.query(Subset.make({ collection: "todos" }))).toEqual([]);
+
+    // The server agrees: no effects, and the id is bumped.
+    expect(yield* backend.getRows(raceContext, "todos", ["x"])).toEqual([]);
+    expect(yield* backend.lastMutationIds(raceContext)).toEqual({ "client-a": 1 });
+
+    // A pull changes nothing the client shows.
+    yield* engine.pull;
+    expect(yield* engine.query(Subset.make({ collection: "todos" }))).toEqual([]);
+  });
+
+describe("ClientEngine outcome of a race between a rejected and an applied copy (#355)", () => {
+  it.effect("the rejected copy's response arrives first", () => runRace("rejected-first"));
+
+  it.effect("the losing copy's response arrives first", () => runRace("losing-first"));
 });
