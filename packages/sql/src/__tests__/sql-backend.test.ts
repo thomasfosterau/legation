@@ -5,7 +5,7 @@
  * mutation-id ledger.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schema } from "effect";
 import {
   Authorization,
   BackendError,
@@ -38,10 +38,24 @@ const makeMock = (): Mock => {
 
   const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
 
+  // The claim and its release: `UPDATE "sync_mutations"` with params
+  // `[next, group, client, expected]`, moving the row only when it reads
+  // `expected`, as the database's conditional UPDATE does.
+  const casLedger = (fragment: Sql.SqlFragment): boolean => {
+    const [next, group, client, expected] = fragment.params as [number, string, string, number];
+    const key = `${group}:${client}`;
+    if (ledger.get(key) !== expected) return false;
+    ledger.set(key, next);
+    return true;
+  };
+
   const executor: SqlBackend.SqlExecutor = {
     query: (fragment) =>
       Effect.sync(() => {
         queries.push(fragment);
+        if (fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
+          return casLedger(fragment) ? [{ last_mutation_id: fragment.params[0] }] : [];
+        }
         if (fragment.text.includes(`"sync_mutations"`)) {
           const group = fragment.params[0];
           return [...ledger.entries()]
@@ -56,9 +70,13 @@ const makeMock = (): Mock => {
       }),
     run: (fragment) =>
       Effect.sync(() => {
-        if (fragment.text.includes(`"sync_mutations"`)) {
-          const [group, client, last] = fragment.params as [string, string, number];
-          ledger.set(`${group}:${client}`, last);
+        if (fragment.text.startsWith(`INSERT INTO "sync_mutations"`)) {
+          // Insert-if-absent: `ON CONFLICT DO NOTHING` at 0.
+          const [group, client] = fragment.params as [string, string];
+          const key = `${group}:${client}`;
+          if (!ledger.has(key)) ledger.set(key, 0);
+        } else if (fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
+          casLedger(fragment);
         }
       }),
     transaction: (effect) => effect,
@@ -584,5 +602,112 @@ describe("tombstones and fail-closed relations across a pull (issue #204)", () =
         expect(second.patch).toEqual([{ _tag: "Del", collection: "todos", id: "2" }]);
       })
     )
+  );
+});
+
+// Single mutations for the READ COMMITTED model below.
+const setMutation = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: "todo/set",
+  args: { id: "1" },
+  createdAt: 0,
+});
+const parkMutation = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: "todo/park",
+  args: { id: "1" },
+  createdAt: 0,
+});
+
+describe("SqlBackend overlapping calls (READ COMMITTED model, issue #352)", () => {
+  // The mock's transaction does not serialise, so two calls interleave the way
+  // PostgreSQL READ COMMITTED lets them: a handler parked after its writes does
+  // not hold a second call back. A parked call's claim is already in the
+  // ledger, which is what the second call must see.
+  const parkTodo = Mutator.make("todo/park", Schema.Struct({ id: Schema.String }));
+
+  const makeParkable = (mock: Mock) =>
+    Effect.gen(function* () {
+      const ran = yield* Ref.make(0);
+      const parks = yield* Ref.make(0);
+      const written = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const backend = SqlBackend.make({
+        executor: mock.executor,
+        tables,
+        mutators: new Map<string, Mutator.AnyMutator>([
+          [setTodo.name, setTodo],
+          [parkTodo.name, parkTodo],
+        ]),
+        handlers: {
+          "todo/set": () =>
+            Ref.update(ran, (n) => n + 1).pipe(Effect.as<ReadonlyArray<Backend.ChangeHint>>([])),
+          // Counts, then (on the first call only) parks until released. A
+          // second application must not wait on the gate, so it fails on its
+          // counts rather than hanging.
+          "todo/park": () =>
+            Effect.gen(function* () {
+              yield* Ref.update(ran, (n) => n + 1);
+              if ((yield* Ref.getAndUpdate(parks, (n) => n + 1)) === 0) {
+                yield* Deferred.succeed(written, undefined);
+                yield* Deferred.await(release);
+              }
+              return [] as ReadonlyArray<Backend.ChangeHint>;
+            }),
+        },
+      });
+      return { backend, ran, written, release };
+    });
+
+  it.effect("a copy of a mutation that is in flight is skipped, not applied again", () => {
+    const mock = makeMock();
+    return Effect.gen(function* () {
+      const { backend, ran, written, release } = yield* makeParkable(mock);
+      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+
+      const first = yield* Effect.forkChild(
+        backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+      );
+      yield* Deferred.await(written);
+
+      // The copy runs while the first call is parked after its claim and writes.
+      const copy = yield* backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)]);
+      expect(copy.lastMutationIds).toEqual({ c1: 2 });
+
+      yield* Deferred.succeed(release, undefined);
+      const applied = yield* Fiber.join(first);
+      expect(applied.lastMutationIds).toEqual({ c1: 2 });
+      // set (1) and park (2) ran once each; the copy ran nothing.
+      expect(yield* Ref.get(ran)).toBe(2);
+    });
+  });
+
+  it.effect(
+    "a parked call that finishes after a later mutation never moves the watermark back",
+    () => {
+      const mock = makeMock();
+      return Effect.gen(function* () {
+        const { backend, written, release } = yield* makeParkable(mock);
+        yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+
+        const parked = yield* Effect.forkChild(
+          backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+        );
+        yield* Deferred.await(written);
+
+        // Mutations 2 (a copy) and 3 commit while mutation 2's first call is parked.
+        yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(2)]);
+        const later = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(3)]);
+        expect(later.lastMutationIds).toEqual({ c1: 3 });
+
+        yield* Deferred.succeed(release, undefined);
+        const applied = yield* Fiber.join(parked);
+        // A stale bump of 2 would move the watermark from 3 back to 2.
+        expect(applied.lastMutationIds).toEqual({ c1: 3 });
+        expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 3 });
+      });
+    }
   );
 });
