@@ -16,7 +16,14 @@
  *    behind it still apply. Calls for one client group may overlap (a retry
  *    while the first push is in flight): each mutation must still apply at most
  *    once, and `lastMutationId` must never move backwards, so a copy whose
- *    mutation a concurrent call already committed is skipped.
+ *    mutation a concurrent call already committed is skipped. Every copy
+ *    reports the committed outcome (#355): a copy that is skipped, whether as
+ *    a replay or because a concurrent call committed first, lists its mutation
+ *    in `rejected` when that mutation was committed as rejected, with the same
+ *    reason. So a client's outcome does not depend on which response reaches
+ *    it first. A backend may forget a committed rejection once the client's
+ *    next push starts past it, since a client resends only ids it has not had
+ *    acknowledged.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.
@@ -87,7 +94,8 @@ export interface ApplyResult {
   readonly hints: ReadonlyArray<ChangeHint>;
   /**
    * Mutations acknowledged but permanently rejected (`MutationRejected`): their
-   * id was bumped without applying effects. Omitted/empty when none were.
+   * id was bumped without applying effects. Includes a rejected mutation a
+   * replayed copy names (guarantee 1). Omitted/empty when none were.
    */
   readonly rejected?: ReadonlyArray<RejectedMutation>;
 }

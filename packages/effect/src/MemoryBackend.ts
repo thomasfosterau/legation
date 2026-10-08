@@ -18,6 +18,13 @@
  * commit re-checks the client's committed `lastMutationId`, so a copy of a
  * mutation that another call committed while its handler ran is dropped (its
  * stage discarded, reported as a replay skip), and the watermark only rises.
+ *
+ * Every copy reports the committed outcome (#355). A mutation committed as
+ * permanently rejected is remembered with its reason, so a copy that loses the
+ * race, or a later replay, lists it in `rejected` just as the copy that
+ * committed it did. The client's outcome therefore does not depend on which
+ * response arrives first. A remembered rejection is forgotten once the client's
+ * next push starts past it (see {@link forgetRejectionsBelow}).
  */
 
 import { Effect, Layer, Ref, Schema } from "effect";
@@ -109,9 +116,33 @@ interface MemoryState {
   readonly versionCounter: number;
   /** clientGroupId → clientId → last applied mutation id. */
   readonly lastMutationIds: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  /**
+   * clientGroupId → clientId → mutationId → reason, for mutations committed as
+   * permanently rejected and not yet forgotten (see {@link forgetRejectionsBelow}).
+   */
+  readonly rejections: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<number, string>>>;
 }
 
-const emptyState: MemoryState = { rows: new Map(), versionCounter: 0, lastMutationIds: new Map() };
+const emptyState: MemoryState = {
+  rows: new Map(),
+  versionCounter: 0,
+  lastMutationIds: new Map(),
+  rejections: new Map(),
+};
+
+/** How one mutation's handler settled: its staged writes, or a permanent rejection. */
+type Outcome =
+  | { readonly _tag: "applied"; readonly log: ReadonlyArray<StagedEntry> }
+  | { readonly _tag: "rejected"; readonly reason: string };
+
+/**
+ * How a copy of a mutation settled at commit: it committed its own outcome, or
+ * an earlier call had already committed this mutation (`rejection` is that
+ * call's rejection reason, when it was rejected).
+ */
+type Settlement =
+  | { readonly _tag: "committed" }
+  | { readonly _tag: "replayed"; readonly rejection: string | undefined };
 
 /** A write a handler made: a `put` of a value, or a `del`. */
 type StagedWrite = { readonly _tag: "put"; readonly value: unknown } | { readonly _tag: "del" };
@@ -183,6 +214,76 @@ const commitMutation = (
   return { ...s, rows, versionCounter, lastMutationIds: lastIds };
 };
 
+/** The reason a mutation was committed as rejected, while that rejection is remembered. */
+const rejectionOf = (
+  s: MemoryState,
+  clientGroupId: string,
+  clientId: string,
+  mutationId: number
+): string | undefined => s.rejections.get(clientGroupId)?.get(clientId)?.get(mutationId);
+
+/** The state with a permanent rejection of one mutation remembered (#355). */
+const withRejection = (
+  s: MemoryState,
+  clientGroupId: string,
+  clientId: string,
+  mutationId: number,
+  reason: string
+): MemoryState => {
+  const groups = new Map(s.rejections);
+  const clients = new Map(groups.get(clientGroupId) ?? []);
+  const ids = new Map(clients.get(clientId) ?? []);
+  ids.set(mutationId, reason);
+  clients.set(clientId, ids);
+  groups.set(clientGroupId, clients);
+  return { ...s, rejections: groups };
+};
+
+/** The lowest mutation id a push carries, per client (the push's floors, #355). */
+const lowestIdPerClient = (mutations: ReadonlyArray<Mutation>): Map<string, number> => {
+  const floors = new Map<string, number>();
+  for (const { clientId, mutationId } of mutations) {
+    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
+  }
+  return floors;
+};
+
+/**
+ * Forget the rejections a client has moved past (#355). `floors` maps each
+ * client in a push to the lowest mutation id that push carries. A client
+ * resends only ids it has not had acknowledged, and it trims an id only when a
+ * response covering it reaches it, so a push whose lowest id is `f` proves the
+ * client has already seen the outcome of every id below `f`. Those rejections
+ * are dropped; the ones at or above `f` are kept. So a client's remembered
+ * rejections stay within its unacknowledged journal as of its latest push, plus
+ * any rejection committed since. A client that never pushes again keeps its
+ * last push's rejections, so the held state is bounded by the client's journal.
+ */
+const forgetRejectionsBelow = (
+  s: MemoryState,
+  clientGroupId: string,
+  floors: ReadonlyMap<string, number>
+): MemoryState => {
+  const clients = s.rejections.get(clientGroupId);
+  if (clients === undefined) return s;
+  const kept = new Map(clients);
+  let changed = false;
+  for (const [clientId, floor] of floors) {
+    const ids = clients.get(clientId);
+    if (ids === undefined) continue;
+    const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
+    if (remaining.size === ids.size) continue;
+    changed = true;
+    if (remaining.size === 0) kept.delete(clientId);
+    else kept.set(clientId, remaining);
+  }
+  if (!changed) return s;
+  const groups = new Map(s.rejections);
+  if (kept.size === 0) groups.delete(clientGroupId);
+  else groups.set(clientGroupId, kept);
+  return { ...s, rejections: groups };
+};
+
 /**
  * Fold a committed stage into a batch's hint inputs: the ids it touched and
  * the values of its PUTs (a delete removes the id from the values, so it is
@@ -212,11 +313,11 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
 
-    // Commit one mutation's stage (empty for a rejection) and its bump in one
-    // state update, so readers see both or neither. The client's committed
-    // watermark is re-checked inside that update: a concurrent call may have
-    // committed this mutation while its handler was running, and then this
-    // copy's stage is dropped (#346). Returns whether it committed.
+    // Commit one mutation's outcome and its bump in one state update, so
+    // readers see both or neither. The client's committed watermark is
+    // re-checked inside that update: a concurrent call may have committed this
+    // mutation while its handler was running, and then this copy's outcome is
+    // dropped (#346) and the committed one is reported instead (#355).
     //
     // The start-of-mutation gap rule needs no re-check here: it proved
     // `mutationId <= watermark + 1` when the mutation started, and the watermark
@@ -224,13 +325,31 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     const commit = (
       context: SyncContext,
       mutation: Mutation,
-      log: ReadonlyArray<StagedEntry>
-    ): Effect.Effect<boolean> =>
-      Ref.modify(state, (s) => {
+      outcome: Outcome
+    ): Effect.Effect<Settlement> =>
+      Ref.modify(state, (s): readonly [Settlement, MemoryState] => {
         if (lastIdOf(s, context.clientGroupId, mutation.clientId) >= mutation.mutationId) {
-          return [false, s] as const;
+          const rejection = rejectionOf(
+            s,
+            context.clientGroupId,
+            mutation.clientId,
+            mutation.mutationId
+          );
+          return [{ _tag: "replayed", rejection }, s];
         }
-        return [true, commitMutation(s, context, mutation, log)] as const;
+        const log = outcome._tag === "applied" ? outcome.log : [];
+        const next = commitMutation(s, context, mutation, log);
+        const committed =
+          outcome._tag === "rejected"
+            ? withRejection(
+                next,
+                context.clientGroupId,
+                mutation.clientId,
+                mutation.mutationId,
+                outcome.reason
+              )
+            : next;
+        return [{ _tag: "committed" }, committed] as const;
       });
 
     // The writer a handler sees. Writes land in the mutation's stage, not in
@@ -257,7 +376,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // mutation is acknowledged, skipped, and cannot block the ones behind it.
     // A transient `BackendError` discards the stage and fails before any bump,
     // aborting the batch. A copy whose mutation a concurrent call committed
-    // while its handler ran is dropped at commit, like a replay.
+    // while its handler ran is dropped at commit, like a replay. Every replay
+    // and dropped copy reports the committed rejection, if there is one (#355).
     const applyOne = (
       context: SyncContext,
       mutation: Mutation,
@@ -271,7 +391,19 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           mutation.clientId
         ) as number | undefined;
         const lastId = last ?? 0;
-        if (mutation.mutationId <= lastId) return; // idempotent skip
+        if (mutation.mutationId <= lastId) {
+          // Idempotent skip: no effects, but the committed rejection (if any).
+          const reason = rejectionOf(
+            current,
+            context.clientGroupId,
+            mutation.clientId,
+            mutation.mutationId
+          );
+          if (reason !== undefined) {
+            rejected.push({ clientId: mutation.clientId, mutationId: mutation.mutationId, reason });
+          }
+          return;
+        }
         if (mutation.mutationId > lastId + 1) {
           return yield* new BackendError({
             message: `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${lastId + 1}`,
@@ -283,20 +415,27 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         }
 
         const stage = newStage();
-        const outcome = yield* handle(mutation.args, stagingWriter(stage), context).pipe(
-          Effect.map(() => ({ _tag: "applied" }) as const),
+        const outcome: Outcome = yield* handle(mutation.args, stagingWriter(stage), context).pipe(
+          Effect.map((): Outcome => ({ _tag: "applied", log: stage.log })),
           Effect.catchTag("MutationRejected", (error) =>
-            Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
+            Effect.succeed<Outcome>({ _tag: "rejected", reason: error.reason })
           )
         );
-        const committed = yield* commit(
-          context,
-          mutation,
-          outcome._tag === "applied" ? stage.log : []
-        );
-        // A concurrent copy committed this mutation first: a replay skip, so
-        // its stage, its hints and any rejection are dropped, as for a replay.
-        if (!committed) return;
+        const settlement = yield* commit(context, mutation, outcome);
+        if (settlement._tag === "replayed") {
+          // A concurrent copy committed this mutation first: its stage, hints
+          // and own outcome are dropped, as for a replay. The committed
+          // rejection, if there was one, is reported so this response agrees
+          // with the one that committed it (#355).
+          if (settlement.rejection !== undefined) {
+            rejected.push({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason: settlement.rejection,
+            });
+          }
+          return;
+        }
         if (outcome._tag === "applied") {
           foldStage(stage, touched, puts);
         } else {
@@ -313,6 +452,11 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       mutations: ReadonlyArray<Mutation>
     ): Effect.Effect<ApplyResult, BackendError> =>
       Effect.gen(function* () {
+        // The rejections below this push's floors are ones each client has
+        // already seen the outcome of (#355).
+        const floors = lowestIdPerClient(mutations);
+        yield* Ref.update(state, (s) => forgetRejectionsBelow(s, context.clientGroupId, floors));
+
         // Pre-batch snapshot: the old values fine-grained fan-out derives
         // moved-away topics from (ADR-0023).
         const before = yield* Ref.get(state);
