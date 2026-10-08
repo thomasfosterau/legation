@@ -370,8 +370,19 @@ export const makeWithIntrospectionWith = (
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId);
             const checked = yield* middleware.onPush(context, request);
-            const result = yield* backend.applyMutations(context, checked.mutations);
-            yield* bus.publish(result.hints);
+            // The commit and the fan-out of its hints are one uninterruptible
+            // region (#356): an interrupt landing after the backend commits must
+            // not skip the publish, because a replayed retry carries no hints and
+            // would never repair the loss. The Backend contract cannot tell
+            // "committed" from "not yet", so the whole applyMutations call is
+            // protected. Trade-off: a slow applyMutations cannot be cancelled
+            // mid-push; an interrupt waits for the commit and its publish. Middleware
+            // above stays interruptible, since nothing has been committed there.
+            const result = yield* Effect.uninterruptible(
+              backend
+                .applyMutations(context, checked.mutations)
+                .pipe(Effect.tap((applied) => bus.publish(applied.hints)))
+            );
             return {
               lastMutationIds: result.lastMutationIds,
               ...(result.rejected !== undefined && result.rejected.length > 0
