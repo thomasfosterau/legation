@@ -3,7 +3,7 @@
  * Redis Streams broker each carry a ChangeHint between two serialized buses.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, PubSub, Ref } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, PubSub, Queue, Ref } from "effect";
 import { Redis } from "effect/persistence";
 import * as TestClock from "effect/testing/TestClock";
 import type { ChangeHint } from "../Backend.js";
@@ -58,62 +58,103 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
 // ─── Redis Streams broker ────────────────────────────────────────────────────
 
 /**
- * A blocking in-memory fake of the Redis commands the broker uses: XADD
- * appends to a stream and signals; XREAD BLOCK resolves "$" to the current
- * length once, then parks until a new entry arrives or the block times out.
- * The block bound runs on the TestClock, so it fires only when a test advances
- * virtual time. `readerParked` completes once a reader has resolved its start
- * position, so a test can publish only after that point.
+ * An in-memory fake of the Redis commands the Streams broker uses. XADD
+ * appends an entry; XREVRANGE returns the last entry; XREAD BLOCK resolves its
+ * start ID when it is called (`$` is the stream's end at that moment, a
+ * concrete ID is the entries after it) and then parks until an entry arrives
+ * or the block times out. The block bound is a TestClock sleep, so it fires
+ * only when a test advances virtual time.
+ *
+ * `events` logs the reader's steps in order, so a test can sequence against
+ * them: "parked" once an XREAD blocks (its bound is armed), "timedOut" when a
+ * BLOCK returns null, "delivered" when an XREAD returns entries. A
+ * timed-out reply is held until `releaseTimeoutReply` completes, which lets a
+ * test publish inside the window between the null reply and the re-issued XREAD.
  */
+// Entry IDs are `<seq>-0`, so the sequence number orders them.
+const seqOf = (id: string) => Number(id.split("-")[0]);
+
 const makeFakeRedis = Effect.gen(function* () {
   const entries = yield* Ref.make<Array<{ readonly id: string; readonly payload: string }>>([]);
   const signal = yield* PubSub.unbounded<void>();
+  const events = yield* Queue.unbounded<string>();
   const readerParked = yield* Deferred.make<void>();
+  const releaseTimeoutReply = yield* Deferred.make<void>();
   let seq = 0;
 
-  const send = (<A>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A> => {
-    if (command === "XADD") {
-      const payload = args[3]!;
-      seq += 1;
-      const id = `${seq}-0`;
-      return Ref.update(entries, (es) => [...es, { id, payload }]).pipe(
-        Effect.andThen(PubSub.publish(signal, undefined)),
-        Effect.as(id as unknown as A)
-      );
-    }
-    // XREAD BLOCK <ms> STREAMS <stream> <lastId>
-    const blockMs = Number(args[1]);
-    const stream = args[3]!;
-    const lastId = args[4]!;
-    return Effect.scoped(
+  // XADD <stream> * p <payload>
+  const xadd = (payload: string): Effect.Effect<unknown> => {
+    seq += 1;
+    const id = `${seq}-0`;
+    return Ref.update(entries, (es) => [...es, { id, payload }]).pipe(
+      Effect.andThen(PubSub.publish(signal, undefined)),
+      Effect.as(id)
+    );
+  };
+
+  // XREVRANGE <stream> + - COUNT 1
+  const xrevrange = (): Effect.Effect<unknown> =>
+    Ref.get(entries).pipe(
+      Effect.map((es) => {
+        const last = es.at(-1);
+        return last === undefined ? [] : [[last.id, ["p", last.payload]]];
+      })
+    );
+
+  // XREAD BLOCK <ms> STREAMS <stream> <lastId>
+  const xread = (stream: string, blockMs: number, lastId: string): Effect.Effect<unknown> =>
+    Effect.scoped(
       Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(signal);
-        const all = yield* Ref.get(entries);
-        const start = lastId === "$" ? all.length : all.findIndex((e) => e.id === lastId) + 1;
-        yield* Deferred.succeed(readerParked, undefined);
-        const loop = (): Effect.Effect<A> =>
+        // "$" resolves at call time: only entries added after this call are read.
+        const after = lastId === "$" ? seq : seqOf(lastId);
+        // The bound is armed before "parked" is announced, so a test that
+        // advances the clock after "parked" always fires it.
+        const deadline = yield* Effect.forkScoped(Effect.sleep(Duration.millis(blockMs)), {
+          startImmediately: true,
+        });
+        const loop = (): Effect.Effect<unknown> =>
           Effect.gen(function* () {
-            const slice = (yield* Ref.get(entries)).slice(start);
+            const slice = (yield* Ref.get(entries)).filter((e) => seqOf(e.id) > after);
             if (slice.length > 0) {
-              const reply = [[stream, slice.map((e) => [e.id, ["p", e.payload]])]];
-              return reply as unknown as A;
+              yield* Queue.offer(events, "delivered");
+              return [[stream, slice.map((e) => [e.id, ["p", e.payload]])]];
             }
-            const outcome = yield* Effect.race(
-              PubSub.take(subscription).pipe(Effect.as("signal" as const)),
-              Effect.sleep(Duration.millis(blockMs)).pipe(Effect.as("timeout" as const))
+            yield* Deferred.succeed(readerParked, undefined);
+            yield* Queue.offer(events, "parked");
+            const woke = yield* Effect.race(
+              PubSub.take(subscription).pipe(Effect.as(true)),
+              Fiber.join(deadline).pipe(Effect.as(false))
             );
-            return outcome === "timeout" ? (null as unknown as A) : yield* loop();
+            if (woke) return yield* loop();
+            yield* Queue.offer(events, "timedOut");
+            yield* Deferred.await(releaseTimeoutReply);
+            return null;
           });
         return yield* loop();
       })
     );
+
+  const send = (<A>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A> => {
+    const reply: Effect.Effect<unknown> =
+      command === "XADD"
+        ? xadd(args[3]!)
+        : command === "XREVRANGE"
+          ? xrevrange()
+          : xread(args[3]!, Number(args[1]), args[4]!);
+    return reply as Effect.Effect<A>;
   }) as Redis.Redis["Service"]["send"];
 
   // `Redis.make` requires pub/sub too; the Streams broker only ever sends
   // commands, so a subscribe here is a test bug, not a code path.
   const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
 
-  return { redis: yield* Redis.make({ send, subscribe }), readerParked };
+  return {
+    redis: yield* Redis.make({ send, subscribe }),
+    events,
+    readerParked,
+    releaseTimeoutReply,
+  };
 });
 
 describe("makeRedisBroker (Redis Streams)", () => {
@@ -131,6 +172,33 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const subscription = yield* busB.subscribe;
       yield* Deferred.await(readerParked);
       yield* busA.publish([hint]);
+      expect(yield* subscription.take).toEqual([hint]);
+    }).pipe(Effect.scoped)
+  );
+
+  // The reader must resolve its start position once. Re-resolving "$" on every
+  // XREAD makes an entry published between a BLOCK timeout and the re-issued
+  // XREAD fall before the new "$", so this subscriber never reads it.
+  it.effect("a publish between a BLOCK timeout and the re-issued XREAD is delivered", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeRedis;
+      const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
+        Effect.provideService(Redis.Redis, fake.redis)
+      );
+      const busA = InvalidationBus.makeSerialized(yield* make);
+      const busB = InvalidationBus.makeSerialized(yield* make);
+
+      const subscription = yield* busB.subscribe;
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Queue.take(fake.events)).toBe("timedOut");
+
+      // The reader holds its null reply, so this publish lands strictly before
+      // the re-issued XREAD.
+      yield* busA.publish([hint]);
+      yield* Deferred.succeed(fake.releaseTimeoutReply, undefined);
+
+      expect(yield* Queue.take(fake.events)).toBe("delivered");
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
   );
