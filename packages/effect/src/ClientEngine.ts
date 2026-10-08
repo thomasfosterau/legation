@@ -1950,6 +1950,11 @@ export const make = (
         // (the unpulled tail, then pending), the confirmed-row write and the tail
         // release. A read that runs between the row write and the release would
         // otherwise see the new rows with the tail still replayed over them.
+        // Reads and mutations wait on the store's patch write while the lock is
+        // held (one IndexedDB transaction in the browser store). The section is
+        // not failure-atomic: a store error after `applyPatch` leaves the rows
+        // written and the tail unreleased, so the view double-counts until the
+        // next successful pull.
         const journalBefore = yield* Semaphore.withPermit(
           overlayLock,
           Effect.gen(function* () {

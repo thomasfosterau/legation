@@ -504,18 +504,25 @@ export const makeWithIntrospectionWith = (
         return { next, patch, lastMutationIds: after, consistent: sameWatermark(before, after) };
       });
 
-    // The pull's view as one snapshot (#286). Backend guarantee 1 bumps a
-    // client's `lastMutationId` in the same commit as its effects, so when the
-    // watermark reads the same before and after the rows, no push committed in
-    // between: every push the watermark covers is in the rows, and no push is in
-    // the rows without being covered. That is the invariant the client's
-    // overlay relies on to release an acknowledged mutation without a revert or a
-    // double application. A push that lands mid-read moves the watermark, so the
-    // view is read again, up to PULL_VIEW_ATTEMPTS passes. If every pass is
-    // disturbed, the last pass's watermark is returned, read after its patch. It
-    // may then cover a push whose effects the patch lacks, which is a transient
-    // revert until the next pull; it never covers less than the patch carries,
-    // so it cannot double-apply.
+    // The pull's view as one snapshot (#286), for a backend that meets Backend
+    // guarantee 1: a client's `lastMutationId` bumped in the same commit as its
+    // effects. Then a watermark that reads the same before and after the rows
+    // means no push committed in between: every push the watermark covers is in
+    // the rows, and no push is in the rows without being covered. That is the
+    // invariant the client's overlay relies on to release an acknowledged
+    // mutation without a revert or a double application. A backend that exposes
+    // effects before the bump (MemoryBackend today, #341; SqlBackend on D1, #342)
+    // can still hand a pull an effect its watermark does not cover; this check
+    // cannot see that window.
+    //
+    // A push that lands mid-read moves the watermark, so the view is read again,
+    // up to PULL_VIEW_ATTEMPTS passes. Each pass costs a full evaluation (for
+    // JsonApiBackend, an HTTP list per subset, plus its `getRows` cache refresh,
+    // which is harmless because a pass evaluates before it fetches). If every
+    // pass is disturbed, the last pass's watermark is returned, read after its
+    // patch. It may then cover a push whose effects the patch lacks, which is a
+    // transient revert until the next pull; it never covers less than the patch
+    // carries, so it cannot double-apply.
     const readPullView = (
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
@@ -527,8 +534,8 @@ export const makeWithIntrospectionWith = (
           view = yield* readPullOnce(context, authorized, cookie);
         }
         if (!view.consistent) {
-          yield* Effect.logDebug(
-            "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch",
+          yield* Effect.logWarning(
+            "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch, so a client may briefly revert an acknowledged mutation",
             { attempts: PULL_VIEW_ATTEMPTS, clientGroupId: context.clientGroupId }
           );
         }

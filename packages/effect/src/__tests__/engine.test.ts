@@ -3,7 +3,7 @@
  * memory backend applies authoritatively → CVR diff → pull patch → rebase.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Ref, Schema, Scope, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -588,10 +588,9 @@ describe("a pull's reveal is atomic with its tail release (#286)", () => {
       yield* Deferred.await(parking.reached);
       // A read now must not see the new confirmed row with E still replayed over it.
       const reading = yield* Effect.forkChild(counterValue(engine));
+      // The read waits on the pull's critical section rather than completing early.
       const early = yield* runUntilFinishedOrStalled(reading);
-      if (early !== undefined) {
-        expect(Exit.isSuccess(early) ? early.value : "failed").toBe(2);
-      }
+      expect(early).toBeUndefined();
 
       yield* Deferred.succeed(parking.release, undefined);
       yield* Fiber.join(pulling);
@@ -659,10 +658,17 @@ describe("a pull's watermark and rows are one snapshot (#286)", () => {
         ),
         Effect.asVoid
       );
+      const watermarkReads = yield* Ref.make(0);
       const racing: Backend = {
         ...inner,
         lastMutationIds: (context) =>
-          inner.lastMutationIds(context).pipe(Effect.tap(() => landAfterRead)),
+          inner
+            .lastMutationIds(context)
+            .pipe(
+              Effect.tap(() =>
+                Ref.update(watermarkReads, (n) => n + 1).pipe(Effect.andThen(landAfterRead))
+              )
+            ),
       };
       const server = yield* serverOver(racing);
       yield* otherCommit(server, 1);
@@ -679,13 +685,18 @@ describe("a pull's watermark and rows are one snapshot (#286)", () => {
       // but never carry a push it does not report: that would double-apply.
       expect(counted).toHaveLength(1);
       expect(counted.every((n) => n <= reported)).toBe(true);
+      // Three passes, two watermark reads each: the retry bound holds.
+      expect(yield* Ref.get(watermarkReads)).toBe(6);
     })
   );
 
   // The server-side invariant the client relies on: the rows a pull carries hold
   // exactly the pushes its watermark reports. Each push adds one, so the counter
   // in the patch equals the sum of the watermark.
-  for (const at of ["watermark", "evaluate", "rows"] as const) {
+  // `rows` lands just before the patch's rows are fetched; `rows-returned` lands
+  // just after, before the closing watermark read (the revert direction: a
+  // watermark read only after the rows would report a push they lack).
+  for (const at of ["watermark", "evaluate", "rows", "rows-returned"] as const) {
     it.effect(
       `a push landing during the pull's ${at} read is in the patch iff the watermark reports it`,
       () =>
@@ -722,7 +733,8 @@ describe("a pull's watermark and rows are one snapshot (#286)", () => {
                 .pipe(Effect.tap(() => (at === "evaluate" ? landOnce : Effect.void))),
             getRows: (context, collection, ids) =>
               (at === "rows" ? landOnce : Effect.void).pipe(
-                Effect.andThen(inner.getRows(context, collection, ids))
+                Effect.andThen(inner.getRows(context, collection, ids)),
+                Effect.tap(() => (at === "rows-returned" ? landOnce : Effect.void))
               ),
           };
           const server = yield* serverOver(racing);
