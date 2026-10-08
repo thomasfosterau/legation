@@ -221,6 +221,7 @@
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
+        "@effect/sql-sqlite-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
       },
