@@ -64,7 +64,7 @@ import {
   MutationRejected,
   Predicate,
 } from "@thomasfosterau/legation-effect";
-import { Hash, Protocol } from "@thomasfosterau/legation-effect/internal";
+import { Hash, Protocol, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import type { Mutator } from "@thomasfosterau/legation-effect";
 import { documentToRows, parseResponse, resourceToRow } from "./CollectionLoader.js";
@@ -557,7 +557,7 @@ export const make = (
         const custom = config.writes?.get(mutation.mutator);
         const operation = config.operations.get(mutation.mutator);
         if (definition === undefined || (custom === undefined && operation === undefined))
-          return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+          return yield* UnknownMutator.make(mutation.mutator);
         const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
           Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
         );

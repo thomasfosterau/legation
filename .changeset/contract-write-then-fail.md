@@ -1,5 +1,7 @@
 ---
 "@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation-sql": patch
+"@thomasfosterau/legation-jsonapi": patch
 ---
 
 `BackendContract.verifyBackendContract` probes write-then-`BackendError` (#343).
@@ -12,7 +14,17 @@ this, and `failAlways` does not probe it because it writes nothing first.
 Visibility before the bump is documented in `BackendContract` as a per-backend
 obligation, not a generic rule: the harness cannot observe a backend mid-mutation.
 
-**Action required:** backend authors who run `verifyBackendContract` must register
-`BackendContract.writeThenFail` with a handler that writes a row and then fails with
-`BackendError`. An unregistered mutator fails the rule. `BackendContract.memoryHandlers`
-already includes it.
+The unknown-mutator `BackendError` that `MemoryBackend`, `SqlBackend` and
+`JsonApiBackend` raise now carries a typed cause, built by `UnknownMutator.make`
+(`@thomasfosterau/legation-effect/internal`). Rule 10 and rule 4 (`contract/fail`, #382)
+recognise an unregistered mutator by that cause, so a backend that words the message
+differently is still caught. The message match stays as a fallback for a third-party
+backend that does not use the helper yet.
+
+**Action required:** backend authors who run `verifyBackendContract` (imported from
+`@thomasfosterau/legation-effect/internal`) must register `BackendContract.failAlways`
+and `BackendContract.writeThenFail`. The second is a handler that writes a row and then
+fails with `BackendError`, called with args `{ collection, id }`. An unregistered mutator
+fails rule 4 or rule 10. `BackendContract.memoryHandlers` already includes both. A
+non-transactional executor (D1-style) fails rule 10 by design, since each statement
+commits on its own (#342), so it is not run through this contract.

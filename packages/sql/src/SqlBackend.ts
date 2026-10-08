@@ -70,7 +70,7 @@ import {
   Predicate,
   type Mutator,
 } from "@thomasfosterau/legation-effect";
-import { Hash, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Hash, Subset, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).
@@ -491,7 +491,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       const handler = config.handlers[mutation.mutator];
       const definition = config.mutators.get(mutation.mutator);
       if (handler === undefined || definition === undefined) {
-        return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+        return yield* UnknownMutator.make(mutation.mutator);
       }
       const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
 

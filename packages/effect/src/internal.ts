@@ -14,6 +14,7 @@ export * as Subset from "./Subset.js";
 export * as Related from "./Related.js";
 export * as Coverage from "./Coverage.js";
 export * as Hash from "./Hash.js";
+export * as UnknownMutator from "./UnknownMutator.js";
 export * as CollectionIndex from "./CollectionIndex.js";
 
 // ─── Protocol ────────────────────────────────────────────────────────────────
