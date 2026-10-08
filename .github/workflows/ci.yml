@@ -15,7 +15,7 @@ jobs:
     # unset in CI, so both jobs that run the suite carry the service.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -100,7 +100,7 @@ jobs:
     # unset in CI, so both jobs that run the suite carry the service.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
         env:
           POSTGRES_PASSWORD: postgres
         ports:
