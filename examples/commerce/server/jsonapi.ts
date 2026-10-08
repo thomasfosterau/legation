@@ -254,6 +254,7 @@ const cartItemsLive = HttpApiBuilder.group(api, "cartItems", (handlers) =>
   Effect.map(Rest, (rest) =>
     handlers
       .handle("list", rest.list(CartItem))
+      .handle("get", rest.get(CartItem, notFound))
       .handle("create", ({ payload }) =>
         Effect.gen(function* () {
           const userId = yield* requireUser;

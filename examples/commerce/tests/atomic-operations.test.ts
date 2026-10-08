@@ -400,14 +400,14 @@ const cartItemCreate = (id: string, variantId: string, qty: number) => ({
   relationships: { variant: { data: { type: "variants", id: variantId } } },
 });
 
-const makeBackend = (client: HttpClient.HttpClient) => {
+const makeBackend = (client: HttpClient.HttpClient, atomic = true) => {
   const inspected = JsonApiSync.inspect(api);
   return JsonApiBackend.make({
     baseUrl: BASE_URL,
     resources: inspected.resources,
     mutators: inspected.registry.mutators,
     operations: inspected.operations,
-    atomic: { path: inspected.atomic!.path },
+    ...(atomic ? { atomic: { path: inspected.atomic!.path } } : {}),
   }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 };
 
@@ -494,4 +494,55 @@ describe("JsonApiBackend pushing through the commerce operations endpoint", () =
         })
       )
   );
+});
+
+describe("JsonApiBackend deleting a cart item through the commerce api", () => {
+  // The backend reads the row before it deletes it, so the api's get route is
+  // what lets the delete through: GET, then the delete, on either delivery path.
+  for (const atomic of [false, true] as const) {
+    it.effect(
+      `reads the cart item, then deletes it, ${atomic ? "as one atomic operation" : "per resource"}`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { sql, requests, asUser } = yield* makeWorld();
+            yield* sql`INSERT INTO cartItems (id, userId, variantId, qty)
+                       VALUES ('ci-del-1', 'u1', 'v-01a', 2)`;
+            const backend = yield* makeBackend(asUser("u1"), atomic);
+
+            const result = yield* backend.applyMutations(pushContext, [
+              mutation(1, "cartItems/delete", { type: "cartItems", id: "ci-del-1" }),
+            ]);
+
+            expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual(
+              atomic
+                ? ["GET /jsonapi/cartItems/ci-del-1", `POST ${OPERATIONS_PATH}`]
+                : ["GET /jsonapi/cartItems/ci-del-1", "DELETE /jsonapi/cartItems/ci-del-1"]
+            );
+            expect(result.rejected).toBeUndefined();
+            expect(result.lastMutationIds).toEqual({ "c-u1": 1 });
+            expect(yield* sql`SELECT id FROM cartItems WHERE id = 'ci-del-1'`).toEqual([]);
+            // The hint names the row as the push found it: the value the read returned.
+            expect(result.hints).toEqual([
+              {
+                collection: "cartItems",
+                ids: ["ci-del-1"],
+                values: [],
+                oldValues: [
+                  {
+                    id: "ci-del-1",
+                    value: {
+                      userId: "u1",
+                      qty: 2,
+                      id: "ci-del-1",
+                      relationships: { variant: { type: "variants", id: "v-01a" } },
+                    },
+                  },
+                ],
+              },
+            ]);
+          })
+        )
+    );
+  }
 });
