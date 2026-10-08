@@ -72,6 +72,16 @@ const cursorAfter = (reply: XRevRangeReply): string => {
 /**
  * A BusBroker over Redis Streams. Captures the `Redis` service; each
  * `subscribe` forks a scoped reader looping `XREAD BLOCK`.
+ *
+ * `subscribe` returns without contacting Redis. The forked reader resolves its
+ * start position (`XREVRANGE`, or `0-0` for an empty stream) on its first run,
+ * then reads from the last ID it saw. While Redis is unreachable the reader logs
+ * a warning and retries every 200 ms. Delivery is best-effort (ADR-0009): a
+ * publish that lands after `subscribe` returns but before the reader resolves
+ * its start position can be missed, as it could before the cursor was resolved.
+ * Known limit: after a `DEL` and recreate of the stream, or a Redis clock
+ * stepping backwards, new IDs can fall at or below the sticky cursor and be
+ * skipped until the subscriber resubscribes.
  */
 export const makeRedisBroker = (
   options?: RedisBrokerOptions
@@ -83,18 +93,14 @@ export const makeRedisBroker = (
     const from = options?.from ?? "$";
     const timeout = options?.timeout ?? "5 seconds";
 
-    // The ID an XREAD starts from. Resolved once per subscription, before the
-    // reader forks, so every publish after `subscribe` returns lands past it.
-    // XREAD's "$" re-resolves on each call, so a BLOCK timeout followed by a
-    // publish would move the cursor past that entry and the subscriber would
-    // never read it. XREVRANGE reads the last ID without blocking; a Redis error
-    // backs off and retries, as the reader does, so subscribe still completes.
-    const lastId: Effect.Effect<string> = redis
+    // The start position of a subscription, read by its reader before the first
+    // XREAD. XREAD's "$" re-resolves on each call, so a BLOCK timeout followed by
+    // a publish would move the cursor past that entry and the subscriber would
+    // never read it; the ID read here does not move. A failure is raised to the
+    // reader, which backs off and asks again.
+    const lastId = redis
       .send<XRevRangeReply>("XREVRANGE", stream, "+", "-", "COUNT", "1")
-      .pipe(
-        Effect.map(cursorAfter),
-        Effect.catch(() => Effect.sleep("200 millis").pipe(Effect.andThen(lastId)))
-      );
+      .pipe(Effect.map(cursorAfter));
 
     return {
       // Best-effort: a failed or timed-out publish only delays the next pull
@@ -109,9 +115,11 @@ export const makeRedisBroker = (
         ),
       subscribe: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<string>();
-        // Resolve the start position once, before the reader forks (see `lastId`).
-        const cursor: { id: string } = { id: from === "0" ? "0" : yield* lastId };
+        // The ID the next XREAD continues from. `from: "0"` needs no lookup; any
+        // other start is resolved by the reader's first step (see `lastId`).
+        const cursor: { id: string | undefined } = { id: from === "0" ? "0" : undefined };
         const readOnce = Effect.gen(function* () {
+          if (cursor.id === undefined) cursor.id = yield* lastId;
           const reply = yield* redis.send<XReadReply>(
             "XREAD",
             "BLOCK",
@@ -129,8 +137,14 @@ export const makeRedisBroker = (
             }
           }
         }).pipe(
-          // A transient Redis error must not kill the subscription; back off.
-          Effect.catch(() => Effect.sleep("200 millis"))
+          // A transient Redis error (or an unresolved start position) must not kill
+          // the subscription: log it, back off, and run the step again.
+          Effect.catch((error) =>
+            Effect.logWarning(
+              "Redis broker: reader step failed; retrying in 200 millis",
+              error
+            ).pipe(Effect.andThen(Effect.sleep("200 millis")))
+          )
         );
         yield* Effect.forkScoped(Effect.forever(readOnce));
         return { take: Queue.take(queue) };

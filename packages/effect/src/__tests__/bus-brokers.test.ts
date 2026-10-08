@@ -66,10 +66,11 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
  * only when a test advances virtual time.
  *
  * `events` logs the reader's steps in order, so a test can sequence against
- * them: "parked" once an XREAD blocks (its bound is armed), "timedOut" when a
- * BLOCK returns null, "delivered" when an XREAD returns entries. A
- * timed-out reply is held until `releaseTimeoutReply` completes, which lets a
- * test publish inside the window between the null reply and the re-issued XREAD.
+ * them: "refused" when a command fails because `setDown(true)` is in effect,
+ * "parked" once an XREAD blocks (its bound is armed), "timedOut" when a BLOCK
+ * returns null, "delivered" when an XREAD returns entries. A timed-out reply is
+ * held until `releaseTimeoutReply` completes, which lets a test publish after
+ * the BLOCK times out, before the re-issue.
  */
 // Entry IDs are `<seq>-0`, so the sequence number orders them.
 const seqOf = (id: string) => Number(id.split("-")[0]);
@@ -81,6 +82,7 @@ const makeFakeRedis = Effect.gen(function* () {
   const readerParked = yield* Deferred.make<void>();
   const releaseTimeoutReply = yield* Deferred.make<void>();
   let seq = 0;
+  let down = false;
 
   // XADD <stream> * p <payload>
   const xadd = (payload: string): Effect.Effect<unknown> => {
@@ -135,15 +137,26 @@ const makeFakeRedis = Effect.gen(function* () {
       })
     );
 
-  const send = (<A>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A> => {
-    const reply: Effect.Effect<unknown> =
-      command === "XADD"
+  // Refusal is decided inside `Effect.suspend`, so each run of a command sees the
+  // current `down` state, not the state when the command was built.
+  const send = (<A>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A, Error> =>
+    Effect.suspend((): Effect.Effect<unknown, Error> => {
+      if (down) {
+        return Queue.offer(events, "refused").pipe(
+          Effect.andThen(Effect.fail(new Error("fake Redis: connection refused")))
+        );
+      }
+      return command === "XADD"
         ? xadd(args[3]!)
         : command === "XREVRANGE"
           ? xrevrange()
-          : xread(args[3]!, Number(args[1]), args[4]!);
-    return reply as Effect.Effect<A>;
-  }) as Redis.Redis["Service"]["send"];
+          : command === "XREAD"
+            ? xread(args[3]!, Number(args[1]), args[4]!)
+            : Effect.die(new Error(`fake Redis: unhandled ${command}`));
+    }) as Effect.Effect<A, Error>) as Redis.Redis["Service"]["send"];
+
+  // Makes every command fail (until `setDown(false)`), as if Redis were unreachable.
+  const setDown = (value: boolean) => Effect.sync(() => void (down = value));
 
   // `Redis.make` requires pub/sub too; the Streams broker only ever sends
   // commands, so a subscribe here is a test bug, not a code path.
@@ -154,6 +167,7 @@ const makeFakeRedis = Effect.gen(function* () {
     events,
     readerParked,
     releaseTimeoutReply,
+    setDown,
   };
 });
 
@@ -193,11 +207,37 @@ describe("makeRedisBroker (Redis Streams)", () => {
       yield* TestClock.adjust("200 millis");
       expect(yield* Queue.take(fake.events)).toBe("timedOut");
 
-      // The reader holds its null reply, so this publish lands strictly before
-      // the re-issued XREAD.
+      // The reader holds its null reply, so this publish lands after the BLOCK
+      // times out, before the re-issue.
       yield* busA.publish([hint]);
       yield* Deferred.succeed(fake.releaseTimeoutReply, undefined);
 
+      expect(yield* Queue.take(fake.events)).toBe("delivered");
+      expect(yield* subscription.take).toEqual([hint]);
+    }).pipe(Effect.scoped)
+  );
+
+  // `subscribe` must not wait on Redis: the reader resolves its start position
+  // itself, so a subscriber made while Redis is down returns at once. Once Redis
+  // recovers, the reader catches up and a publish reaches it.
+  it.effect("subscribe returns while Redis is down, and delivers once Redis recovers", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeRedis;
+      yield* fake.setDown(true);
+      const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
+        Effect.provideService(Redis.Redis, fake.redis)
+      );
+      const busA = InvalidationBus.makeSerialized(yield* make);
+      const busB = InvalidationBus.makeSerialized(yield* make);
+
+      const subscription = yield* busB.subscribe;
+      // The reader's start-position lookup is refused, then backs off on the TestClock.
+      expect(yield* Queue.take(fake.events)).toBe("refused");
+      yield* fake.setDown(false);
+      yield* TestClock.adjust("200 millis");
+      // The reader has resolved its start position and parked, so the publish is past it.
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+      yield* busA.publish([hint]);
       expect(yield* Queue.take(fake.events)).toBe("delivered");
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
