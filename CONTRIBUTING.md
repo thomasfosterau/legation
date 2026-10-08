@@ -44,6 +44,13 @@ Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest):
   tests inside; services are available directly in each test effect's context.
 - Assertions go inside the effect; never wrap tests in `Effect.runPromise`.
 
+**PostgreSQL test.** `packages/sql/src/__tests__/sql-backend-postgres.test.ts` runs the READ
+COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for
+a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and
+drops them again when it finishes. Without the variable the suite is skipped locally with a
+warning; in CI (where `CI` is set) it fails instead. For example:
+`DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch bunx vitest run packages/sql`.
+
 ## Effect Code
 
 Use Effect for side effects, dependency injection, and typed failures.

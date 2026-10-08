@@ -38,8 +38,11 @@ const CLIENT_GROUP = "g";
 const CLIENT = "c1";
 const context = { clientGroupId: CLIENT_GROUP };
 
+/** Drops the test's tables. Run before the suite (a clean slate) and after it (the database is left as found). */
+const DROP_TABLES = `DROP TABLE IF EXISTS todos, effects, sync_mutations`;
+
 const DDL: ReadonlyArray<string> = [
-  `DROP TABLE IF EXISTS todos, effects, sync_mutations`,
+  DROP_TABLES,
   `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT NOT NULL)`,
   // One row per handler application, so a second application is visible.
   `CREATE TABLE effects (seq INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, id TEXT NOT NULL)`,
@@ -64,23 +67,33 @@ const withDatabase = <A>(
       );
       const sql = Context.get(built, SqlClient);
       for (const statement of DDL) yield* sql.unsafe(statement).unprepared;
-      return yield* use(sql);
+      return yield* use(sql).pipe(
+        Effect.ensuring(sql.unsafe(DROP_TABLES).unprepared.pipe(Effect.ignore))
+      );
     })
   ).pipe(Effect.orDie);
 
 const asBackendError = (message: string) => (cause: unknown) =>
   new BackendError({ message, cause });
 
-/** A `SqlExecutor` over the PostgreSQL client: transactions are real and do not serialise. */
+/**
+ * A `SqlExecutor` over the PostgreSQL client: transactions are real and do not
+ * serialise. Statements run unprepared: a cached prepared statement is not
+ * re-reported to `pg_stat_activity`, so the copy's lock wait would show a stale
+ * statement text instead of the one it is waiting in.
+ */
 const executorOver = (sql: SqlClient): SqlBackend.SqlExecutor => ({
   query: (fragment) =>
     sql
       .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)
-      .pipe(Effect.mapError(asBackendError(`query failed: ${fragment.text}`))),
+      .unprepared.pipe(Effect.mapError(asBackendError(`query failed: ${fragment.text}`))),
   run: (fragment) =>
     sql
       .unsafe(fragment.text, fragment.params)
-      .pipe(Effect.asVoid, Effect.mapError(asBackendError(`statement failed: ${fragment.text}`))),
+      .unprepared.pipe(
+        Effect.asVoid,
+        Effect.mapError(asBackendError(`statement failed: ${fragment.text}`))
+      ),
   transaction: (effect) =>
     sql
       .withTransaction(effect)
@@ -142,23 +155,36 @@ const applicationsOf = (sql: SqlClient, id: string) =>
     Effect.orDie
   );
 
-/** How the copy of a mutation settled: it finished, or it is waiting on a lock for `statement`. */
+/**
+ * How the copy of a mutation settled: it finished, or its backend is waiting on
+ * a lock. `blockers` are the backends that hold that lock (`pg_blocking_pids`),
+ * and `statement` is the statement it is waiting in.
+ */
 type CopySettled =
-  { readonly _tag: "Finished" } | { readonly _tag: "Blocked"; readonly statement: string };
+  | { readonly _tag: "Finished" }
+  | {
+      readonly _tag: "Blocked";
+      readonly blockers: ReadonlyArray<number>;
+      readonly statement: string;
+    };
 
 /**
- * The statement another backend is waiting on a lock for, if any. A lock-wait
- * check on `pg_stat_activity`, not a sleep.
+ * A backend waiting on a lock, if any: its statement and the backends blocking
+ * it. A lock-wait check on `pg_stat_activity`, not a sleep.
  */
 const lockWaitOf = (sql: SqlClient) =>
   sql
-    .unsafe<{ query: string }>(
-      `SELECT query FROM pg_stat_activity ` +
+    .unsafe<{ query: string; blockers: ReadonlyArray<number | string> }>(
+      `SELECT query, pg_blocking_pids(pid) AS blockers FROM pg_stat_activity ` +
         `WHERE datname = current_database() AND pid <> pg_backend_pid() ` +
         `AND wait_event_type = 'Lock' ORDER BY pid LIMIT 1`
     )
     .pipe(
-      Effect.map((rows) => rows[0]?.query),
+      Effect.map((rows) => {
+        const row = rows[0];
+        if (row === undefined) return undefined;
+        return { statement: row.query, blockers: row.blockers.map(Number) };
+      }),
       Effect.orDie
     );
 
@@ -172,8 +198,8 @@ const lockWaitOf = (sql: SqlClient) =>
 const awaitCopySettled = (sql: SqlClient, copy: Fiber.Fiber<unknown, unknown>) =>
   Effect.gen(function* () {
     if (copy.pollUnsafe() !== undefined) return { _tag: "Finished" } as CopySettled;
-    const statement = yield* lockWaitOf(sql);
-    if (statement !== undefined) return { _tag: "Blocked", statement } as CopySettled;
+    const wait = yield* lockWaitOf(sql);
+    if (wait !== undefined) return { _tag: "Blocked", ...wait } as CopySettled;
     return yield* Effect.fail("pending" as const);
   }).pipe(
     Effect.retry({
@@ -213,14 +239,15 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
   // `it.live`, not `it.effect`: the copy's lock wait is observed by polling a
   // real server, so the test runs on the real clock (CONTRIBUTING, "Tests").
   it.live(
-    "a copy of a mutation in flight blocks on the first call's claim, then skips; the handler applies once",
+    "a copy of a mutation in flight blocks on the first call's ledger row, then skips; the handler applies once",
     () =>
       withDatabase(url, (sql) =>
         Effect.gen(function* () {
           // The first call's handler writes, then parks inside its transaction
           // (holding its claim row) until the test releases it.
           const parked = yield* Ref.make(false);
-          const written = yield* Deferred.make<void>();
+          // Carries the parked call's backend pid: the copy's lock wait names it.
+          const written = yield* Deferred.make<number>();
           const release = yield* Deferred.make<void>();
           const backend = SqlBackend.make({
             executor: executorOver(sql),
@@ -235,7 +262,12 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
                 Effect.gen(function* () {
                   const hints = yield* applyWrite(tx, raw as Args);
                   if (!(yield* Ref.getAndSet(parked, true))) {
-                    yield* Deferred.succeed(written, undefined);
+                    // This handler runs on the first call's transaction connection.
+                    const rows = yield* tx.query({
+                      text: "SELECT pg_backend_pid() AS pid",
+                      params: [],
+                    });
+                    yield* Deferred.succeed(written, Number(rows[0]?.pid));
                     yield* Deferred.await(release);
                   }
                   return hints;
@@ -251,10 +283,17 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
           );
           // Surfaces the first call's own failure instead of waiting for a
           // signal that would never come.
-          yield* Effect.raceFirst(Deferred.await(written), Fiber.join(first));
+          const firstPid = yield* Effect.raceFirst(
+            Deferred.await(written),
+            Fiber.join(first).pipe(
+              Effect.andThen(Effect.die("the first call finished before its handler parked"))
+            )
+          );
 
           // The copy of mutation 2 runs while the first call is parked after its
-          // claim: its ledger statements wait on that uncommitted row.
+          // claim. The claim UPDATE has moved the client's ledger row to 2 inside
+          // the first call's open transaction, so the copy's ensureLedgerRow insert
+          // waits on that uncommitted row.
           const copy = yield* Effect.forkChild(
             backend.applyMutations(context, [mutation(2, "todo/park")])
           );
@@ -277,13 +316,18 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
           const next = yield* backend.applyMutations(context, [mutation(3, "todo/set")]);
           expect(next.lastMutationIds).toEqual({ [CLIENT]: 3 });
 
-          // The copy waited on the first call's claim row (it did not finish
-          // ahead of it). Asserted last, so a failure above names the double
-          // application or the moved watermark first.
+          // The copy waited on the first call's uncommitted ledger row: the only
+          // backend blocking it is the first call's, and the statement it waits in
+          // is ensureLedgerRow's insert (`DO NOTHING`), not a handler write. Asserted
+          // last, so a failure above names the double application or the moved
+          // watermark first.
           expect(copySettled).toEqual(
             Exit.succeed({
               _tag: "Blocked",
-              statement: expect.stringContaining(`"sync_mutations"`),
+              blockers: [firstPid],
+              statement: expect.stringMatching(
+                /^INSERT INTO "sync_mutations" .* ON CONFLICT .* DO NOTHING$/
+              ),
             })
           );
         })
