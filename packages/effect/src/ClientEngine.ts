@@ -1486,10 +1486,12 @@ export const make = (
 
     // Drop every confirmed row: the `reset` writer (#350). The store is cleared first and the
     // indexes second, so a build that read the rows before the clear sees its generation change
-    // and discards its result.
-    const clearConfirmedRows: Effect.Effect<void, StoreError> = store.clearRows.pipe(
-      Effect.andThen(invalidateAllIndexes)
-    );
+    // and discards its result. Under `overlayLock`, so no reader rebuilds the overlay from the
+    // half-cleared store.
+    const clearConfirmedRows: Effect.Effect<void, StoreError> = Semaphore.withPermit(
+      overlayLock,
+      store.clearRows
+    ).pipe(Effect.andThen(invalidateAllIndexes));
 
     /** Confirmed rows + the overlay journal (unpulled tail, then pending) replayed on top. */
     const computeOverlay: Effect.Effect<
@@ -1817,6 +1819,15 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
+    // What a store write that failed part-way leaves behind (#387): the store may hold more or less of
+    // the tail than the copy, so the copy re-reads it before its next use and the cached overlay is
+    // dropped. The store then finishes the release it may have recorded, or seals itself. Holds
+    // `overlayLock`.
+    const settleFailedTail: Effect.Effect<void> = Ref.set(unpulledStale, true).pipe(
+      Effect.andThen(Ref.set(overlayCache, undefined)),
+      Effect.andThen(store.finishRelease.pipe(Effect.ignore))
+    );
+
     // Push ack (ADR-0008, #286). The backend applied every journal entry the
     // response covers, so trim them from the journal, where they must never be
     // sent again, and park the applied ones at the end of the unpulled tail:
@@ -1846,9 +1857,13 @@ export const make = (
           // entries about to be added.
           const held = yield* tailLocked;
           yield* store.parkUnpulled(applied);
-          for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
-            yield* store.acknowledge(clientId, upTo);
-          }
+          // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
+          // that in process, as an open does, and the copy re-reads the tail on its next use (#336).
+          yield* Effect.gen(function* () {
+            for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
+              yield* store.acknowledge(clientId, upTo);
+            }
+          }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail)));
           // The store now holds the full tail. The copy takes it before the overflow release below
           // can fail, so a failed release leaves the copy and the store agreeing (#387).
           const tail = [...held, ...applied];
@@ -1867,19 +1882,17 @@ export const make = (
               watermark[m.clientId] = Math.max(watermark[m.clientId] ?? 0, m.mutationId);
             }
             // A release that carries no rows still goes through the durable record. It refuses to
-            // overwrite an outstanding one (#387), so no pull record is lost here.
-            yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
-            yield* Ref.set(unpulled, tail.slice(released));
-            yield* Ref.set(overlayCache, undefined);
-            // A release that fails part-way is finished in this process from its record, or the store
-            // seals itself (#387). The copy already holds the released tail, so it agrees either way.
-            yield* store
-              .releaseUnpulled(watermark)
-              .pipe(
-                Effect.onExit((exit) =>
-                  Exit.isSuccess(exit) ? Effect.void : store.finishRelease.pipe(Effect.ignore)
-                )
-              );
+            // overwrite an outstanding one (#387), so no pull record is lost here. The record is
+            // written inside the scope whose failure is finished below: a `beginRelease` that
+            // reports failure may still have written it (#387).
+            yield* Effect.gen(function* () {
+              yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
+              yield* store.releaseUnpulled(watermark);
+              yield* Ref.set(unpulled, tail.slice(released));
+              yield* Ref.set(overlayCache, undefined);
+            }).pipe(
+              Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail))
+            );
           }
           return covered.filter(isRejected);
         })
@@ -2191,9 +2204,12 @@ export const make = (
     const rollForwardPullLocked = (
       lastMutationIds: Readonly<Record<string, number>>
     ): Effect.Effect<void> =>
-      store.finishRelease.pipe(
-        Effect.andThen(Ref.set(unpulledStale, true)),
+      // The store may have released part of the tail before it failed, so the copy and the cached
+      // overlay are dropped whatever the outcome: a failed roll-forward must not leave a view that
+      // still shows what the store no longer holds.
+      Ref.set(unpulledStale, true).pipe(
         Effect.andThen(Ref.set(overlayCache, undefined)),
+        Effect.andThen(store.finishRelease),
         Effect.andThen(settleOwnApplied(lastMutationIds)),
         Effect.andThen(publishChange(REBUILD)),
         Effect.catch((error) =>
@@ -2231,17 +2247,19 @@ export const make = (
           overlayLock,
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
-            // The durable marker goes down before the first row, so a crash mid-section
-            // is finished on the next open rather than double-counting (#336).
-            yield* store.beginRelease({
-              lastMutationIds: response.lastMutationIds,
-              cookie: response.cookie,
-              patch: response.patch,
-            });
-            // A failure after the marker is rolled forward here, from the same record, as the
-            // open does. If that fails too the store seals itself, so no writer runs with the
-            // record outstanding (#387).
+            // A failure in this scope is rolled forward here, from the same record, as the open does.
+            // If that fails too the store seals itself, so no later store write succeeds while the
+            // record is outstanding (#387). The marker is written inside this scope too: a
+            // `beginRelease` that reports failure may still have written it, so it is finished
+            // either way, and finishing is a no-op when nothing landed (#387).
             yield* Effect.gen(function* () {
+              // The durable marker goes down before the first row, so a crash mid-section
+              // is finished on the next open rather than double-counting (#336).
+              yield* store.beginRelease({
+                lastMutationIds: response.lastMutationIds,
+                cookie: response.cookie,
+                patch: response.patch,
+              });
               yield* applyPatch(response.patch);
               // The cookie goes down before the release removes the record, so a crash between the
               // two leaves the next open to write it again, not an old cookie over new rows (#387).
@@ -2315,14 +2333,21 @@ export const make = (
     const seed: ClientEngine["seed"] = (rows) =>
       Effect.gen(function* () {
         const touched = new Set<string>();
-        for (const row of rows) {
-          yield* store.putRow(row.collection, {
-            id: row.id,
-            version: row.version,
-            value: row.value,
-          });
-          touched.add(row.collection);
-        }
+        // The row writes run under `overlayLock`, so a pull's release cannot be in flight across
+        // them: the rows it writes and the release it records stay one section (#387).
+        yield* Semaphore.withPermit(
+          overlayLock,
+          Effect.gen(function* () {
+            for (const row of rows) {
+              yield* store.putRow(row.collection, {
+                id: row.id,
+                version: row.version,
+                value: row.value,
+              });
+              touched.add(row.collection);
+            }
+          })
+        );
         yield* updateIndexes(
           rows.map((row): PatchOp => ({
             _tag: "Put",
@@ -2389,9 +2414,10 @@ export const make = (
 
     // Drop every confirmed row and reveal the empty view. A direct `store.clearRows` would
     // leave the view and the indexes showing the cleared rows (#350).
-    const clearRows: ClientEngine["clearRows"] = store.clearRows.pipe(
-      Effect.andThen(reloadFromStore)
-    );
+    const clearRows: ClientEngine["clearRows"] = Semaphore.withPermit(
+      overlayLock,
+      store.clearRows
+    ).pipe(Effect.andThen(reloadFromStore));
 
     // Register this engine for direct store writes for as long as its scope lasts (#350).
     const attached = liveEngines.get(store) ?? new Set<Effect.Effect<void>>();

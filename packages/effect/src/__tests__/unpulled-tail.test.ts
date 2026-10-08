@@ -100,37 +100,96 @@ const mutation = (clientId: string, mutationId: number): Mutation => ({
   createdAt: 0,
 });
 
-// The writes a `flakyKeyValue` refuses: the keys, and whether each refusal is the next write only.
+// The writes a `flakyKeyValue` refuses: the keys, whether each refusal is the next write only, and
+// whether a refused write lands before it reports failure (an ambiguous abort).
 interface Refusal {
   readonly keys: ReadonlySet<string>;
   readonly once: boolean;
+  readonly landed: boolean;
 }
-const refuse = (refused: Ref.Ref<Refusal>, keys: ReadonlyArray<string>, once: boolean) =>
-  Ref.set(refused, { keys: new Set(keys), once });
+const refuse = (
+  refused: Ref.Ref<Refusal>,
+  keys: ReadonlyArray<string>,
+  once: boolean,
+  landed = false
+) => Ref.set(refused, { keys: new Set(keys), once, landed });
+
+// Whether the next operation on `key` is refused, and whether a refused write lands anyway. A refusal
+// names the key once when `once` is set.
+const nextRefusal = (refused: Ref.Ref<Refusal>, key: string) =>
+  Ref.modify(refused, (current) => {
+    if (!current.keys.has(key)) return [{ refused: false, landed: false }, current] as const;
+    const outcome = { refused: true, landed: current.landed };
+    if (!current.once) return [outcome, current] as const;
+    const keys = new Set(current.keys);
+    keys.delete(key);
+    return [outcome, { ...current, keys }] as const;
+  });
 
 // A KeyValueStore whose writes to the refused keys fail, as a store error would: once per key, or
-// on every write until the test clears the refusals.
-const flakyKeyValue = (refused: Ref.Ref<Refusal>) =>
+// on every write until the test clears the refusals. `removals` refuses removals the same way.
+const flakyKeyValue = (refused: Ref.Ref<Refusal>, removals: Ref.Ref<Refusal>) =>
   Effect.gen(function* () {
     const kv = yield* KeyValueStore.KeyValueStore;
     return {
       ...kv,
       set: (key: string, value: string | Uint8Array) =>
-        Ref.modify(refused, (current) => {
-          if (!current.keys.has(key)) return [false, current] as const;
-          if (!current.once) return [true, current] as const;
-          const keys = new Set(current.keys);
-          keys.delete(key);
-          return [true, { keys, once: current.once }] as const;
-        }).pipe(
-          Effect.flatMap((refusedWrite) =>
-            refusedWrite
+        nextRefusal(refused, key).pipe(
+          Effect.flatMap(({ refused: refusedWrite, landed }) => {
+            if (!refusedWrite) return kv.set(key, value);
+            const failure = new KeyValueStore.KeyValueStoreError({
+              message: "refused",
+              method: "set",
+              key,
+            });
+            return landed
+              ? kv.set(key, value).pipe(Effect.andThen(Effect.fail(failure)))
+              : Effect.fail(failure);
+          })
+        ),
+      remove: (key: string) =>
+        nextRefusal(removals, key).pipe(
+          Effect.flatMap(({ refused: refusedRemoval }) =>
+            refusedRemoval
               ? Effect.fail(
-                  new KeyValueStore.KeyValueStoreError({ message: "refused", method: "set", key })
+                  new KeyValueStore.KeyValueStoreError({
+                    message: "refused",
+                    method: "remove",
+                    key,
+                  })
                 )
-              : kv.set(key, value)
+              : kv.remove(key)
           )
         ),
+    } satisfies KeyValueStore.KeyValueStore;
+  });
+
+// A KeyValueStore whose writes to `key` block until the test releases them, then fail: the window in
+// which another fiber can queue behind a failing write.
+const gatedKeyValue = (
+  key: string,
+  reached: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>
+) =>
+  Effect.gen(function* () {
+    const kv = yield* KeyValueStore.KeyValueStore;
+    return {
+      ...kv,
+      set: (k: string, value: string | Uint8Array) =>
+        k !== key
+          ? kv.set(k, value)
+          : Deferred.succeed(reached, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(
+                Effect.fail(
+                  new KeyValueStore.KeyValueStoreError({
+                    message: "refused",
+                    method: "set",
+                    key: k,
+                  })
+                )
+              )
+            ),
     } satisfies KeyValueStore.KeyValueStore;
   });
 
@@ -753,8 +812,9 @@ describe("a pull release that fails part-way (#387)", () => {
   const setUp = (ids: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
-      const refused = yield* Ref.make<Refusal>({ keys: new Set(), once: false });
-      const flaky = yield* flakyKeyValue(refused);
+      const refused = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+      const removals = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+      const flaky = yield* flakyKeyValue(refused, removals);
       const store = yield* ClientStoreModule.makeKeyValue().pipe(
         Effect.provideService(KeyValueStore.KeyValueStore, flaky)
       );
@@ -763,7 +823,7 @@ describe("a pull release that fails part-way (#387)", () => {
       yield* engine.pull;
       for (const id of ids) yield* engine.mutate("counter/inc", { id });
       yield* engine.push;
-      return { server, refused, store, engine };
+      return { server, refused, removals, store, engine };
     });
   const rowKeyOf = (id: string) => `legation/row/counters/${id}`;
 
@@ -886,5 +946,405 @@ describe("a pull release that fails part-way (#387)", () => {
       const reopened = yield* ClientStoreModule.makeKeyValue();
       expect(yield* rowCount(reopened, "c")).toBeUndefined();
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+// The release record's review follow-up (#387): the store-level guarantees, over both implementations
+// where both can exhibit them.
+describe("a release record's guarantees across both stores (#387 review)", () => {
+  const putCounter = (store: ClientStore, id: string, n: number) =>
+    store.putRow("counters", { id, version: 1, value: { id, n } });
+
+  for (const [name, open] of stores) {
+    it.effect(`${name}: clearUnpulled also ends a release in progress`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.beginRelease({ lastMutationIds: { c1: 1 }, patch: [] });
+        yield* store.clearUnpulled;
+        // The record went with the tail, so the next release may begin.
+        yield* store.beginRelease({ lastMutationIds: {}, patch: [] });
+        yield* store.releaseUnpulled({});
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: a finish drops the journal copy of a parked entry, as an open does`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.appendMutation(mutation("c1", 1));
+        yield* store.appendMutation(mutation("c1", 2));
+        // Parked, but its journal copy was not trimmed (a push whose acknowledgement stopped short).
+        yield* store.parkUnpulled([mutation("c1", 1)]);
+        yield* store.finishRelease;
+        expect((yield* store.pendingMutations).map((m) => m.mutationId)).toEqual([2]);
+        expect(yield* tailOf(store)).toEqual(["c1#1"]);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: a row write finishes an outstanding release before it writes`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+          ],
+        });
+        // The release's patch must not land over this write when the release finishes later.
+        yield* putCounter(store, "c", 5);
+        yield* store.finishRelease;
+        expect(yield* rowCount(store, "c")).toBe(5);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: a row delete finishes an outstanding release before it deletes`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+          ],
+        });
+        yield* store.delRow("counters", "c");
+        yield* store.finishRelease;
+        expect(yield* rowCount(store, "c")).toBeUndefined();
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: clearRows finishes an outstanding release before it clears the rows`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+          ],
+        });
+        yield* store.clearRows;
+        expect(yield* rowCount(store, "c")).toBeUndefined();
+        // The record was finished, so there is nothing for a later finish to re-apply.
+        yield* store.finishRelease;
+        expect(yield* rowCount(store, "c")).toBeUndefined();
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: a hydration finishes an outstanding release before it writes`, () =>
+      Effect.gen(function* () {
+        const store = yield* open;
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+          ],
+        });
+        const source = yield* ClientStoreModule.makeMemory;
+        yield* putCounter(source, "c", 5);
+        yield* Hydration.hydrate(store, yield* Hydration.dehydrate(source));
+        expect(yield* rowCount(store, "c")).toBe(5);
+        // The release finished first, so its cookie is in place, and the snapshot did not revert it.
+        expect(yield* store.getCookie).toBe("cookie-1");
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    it.effect(`${name}: the two stores finish the same release to the same state`, () =>
+      Effect.gen(function* () {
+        // The same scenario over `store`: two parked entries, one of them covered by the release.
+        const scenario = (store: ClientStore) =>
+          Effect.gen(function* () {
+            yield* store.appendMutation(mutation("c1", 1));
+            yield* store.appendMutation(mutation("c1", 2));
+            yield* store.appendMutation(mutation("c1", 3));
+            yield* store.parkUnpulled([mutation("c1", 1), mutation("c1", 2)]);
+            yield* store.beginRelease({
+              lastMutationIds: { c1: 1 },
+              cookie: "cookie-1",
+              patch: [
+                {
+                  _tag: "Put",
+                  collection: "counters",
+                  id: "c",
+                  version: 1,
+                  value: { id: "c", n: 1 },
+                },
+              ],
+            });
+            yield* store.finishRelease;
+            return {
+              row: yield* rowCount(store, "c"),
+              cookie: yield* store.getCookie,
+              tail: yield* tailOf(store),
+              pending: (yield* store.pendingMutations).map((m) => `${m.clientId}#${m.mutationId}`),
+            };
+          });
+        const memory = yield* scenario(yield* ClientStoreModule.makeMemory);
+        const keyValue = yield* scenario(yield* ClientStoreModule.makeKeyValue());
+        expect(memory).toEqual({
+          row: 1,
+          cookie: "cookie-1",
+          tail: ["c1#2"],
+          pending: ["c1#3"],
+        });
+        expect(keyValue).toEqual(memory);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+  }
+
+  it.effect("key-value: a row write that finishes a release is the one an open leaves", () =>
+    Effect.gen(function* () {
+      const first = yield* ClientStoreModule.makeKeyValue();
+      yield* first.beginRelease({
+        lastMutationIds: {},
+        cookie: "cookie-1",
+        patch: [
+          { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+        ],
+      });
+      yield* putCounter(first, "c", 5);
+      // The release is finished by the write, so the next open does not re-apply its patch over it.
+      const reopened = yield* ClientStoreModule.makeKeyValue();
+      expect(yield* rowCount(reopened, "c")).toBe(5);
+      expect(yield* reopened.getCookie).toBe("cookie-1");
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "key-value: a write queued behind a failing finish is refused, not run over the record",
+    () =>
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const gated = yield* gatedKeyValue("legation/row/counters/c", reached, release);
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, gated)
+        );
+        // A release whose patch sets `c`; its finish writes `c` and blocks there, then fails.
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+          ],
+        });
+        const finishing = yield* Effect.forkChild(store.finishRelease);
+        yield* Deferred.await(reached);
+        // Queued behind the finish, before it fails. Once it fails the store is sealed, so this must not
+        // write `d` over the outstanding record.
+        const queued = yield* Effect.forkChild(putCounter(store, "d", 1));
+        for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+        yield* Deferred.succeed(release, undefined);
+        expect(Exit.isFailure(yield* Effect.exit(Fiber.join(finishing)))).toBe(true);
+        expect(Exit.isFailure(yield* Effect.exit(Fiber.join(queued)))).toBe(true);
+
+        // Reopen: the record finishes as it would have, and the refused write is absent.
+        const kv = yield* KeyValueStore.KeyValueStore;
+        expect(yield* kv.has("legation/row/counters/d")).toBe(false);
+        const reopened = yield* ClientStoreModule.makeKeyValue();
+        expect(yield* rowCount(reopened, "c")).toBe(1);
+        expect(yield* rowCount(reopened, "d")).toBeUndefined();
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("key-value: a park whose journal trim failed is settled by the in-process finish", () =>
+    Effect.gen(function* () {
+      const armed = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+      const kv = yield* flakyKeyValue(
+        yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false }),
+        armed
+      );
+      const store = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, kv)
+      );
+      yield* store.appendMutation(mutation("c1", 1));
+      yield* store.appendMutation(mutation("c1", 2));
+      yield* store.parkUnpulled([mutation("c1", 1)]);
+      // The acknowledgement's removal of entry 1's body is refused: the journal keeps its copy.
+      yield* refuse(armed, ["legation/journal/c1/1"], true);
+      expect(Exit.isFailure(yield* Effect.exit(store.acknowledge("c1", 1)))).toBe(true);
+      yield* store.finishRelease;
+
+      // The in-process finish leaves what an open would leave.
+      expect((yield* store.pendingMutations).map((m) => m.mutationId)).toEqual([2]);
+      const reopened = yield* ClientStoreModule.makeKeyValue();
+      expect((yield* reopened.pendingMutations).map((m) => m.mutationId)).toEqual([2]);
+      expect(yield* tailOf(reopened)).toEqual(["c1#1"]);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+// The engine's failure paths around the release record, and the locks its direct store writes take
+// (#387 review).
+describe("the engine's release failure paths (#387 review)", () => {
+  const rowKeyOf = (id: string) => `legation/row/counters/${id}`;
+  // The counter setUp of the failing-pull suite, without the flaky writes of its own.
+  const counterSetUp = (ids: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const refused = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+      const removals = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+      const flaky = yield* flakyKeyValue(refused, removals);
+      const store = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, flaky)
+      );
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+      yield* engine.pull;
+      for (const id of ids) yield* engine.mutate("counter/inc", { id });
+      yield* engine.push;
+      return { server, refused, removals, store, engine };
+    });
+
+  it.effect(
+    "a pull whose release record lands but reports failure is finished, so the next pull succeeds",
+    () =>
+      Effect.gen(function* () {
+        const { refused, store, engine } = yield* counterSetUp(["c", "d"]);
+        // The record is written, then its write reports failure, as an ambiguous abort does.
+        yield* refuse(refused, ["legation/releaseIntent"], true, true);
+        expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
+
+        // The failed record was finished in this process, so the store is not wedged.
+        yield* engine.pull;
+        expect(yield* counterValue(engine)).toBe(1);
+        expect(yield* rowCount(store, "c")).toBe(1);
+        expect(yield* rowCount(store, "d")).toBe(1);
+        expect(yield* tailOf(store)).toEqual([]);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "a pull whose cookie write fails is finished, so a reopen holds the pull's cookie",
+    () =>
+      Effect.gen(function* () {
+        const { refused, store, engine } = yield* counterSetUp(["c", "d"]);
+        const before = yield* store.getCookie;
+        // The cookie write is the pull's only write after its rows and before its release.
+        yield* refuse(refused, ["legation/cookie"], true);
+        expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
+
+        // The reopened store has the pull's cookie, not the one from before the pull.
+        const reopened = yield* ClientStoreModule.makeKeyValue();
+        const cookie = yield* reopened.getCookie;
+        expect(cookie).toBeDefined();
+        expect(cookie).not.toBe(before);
+        expect(yield* tailOf(reopened)).toEqual([]);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "a pull whose roll-forward fails drops the cached overlay: the sealed engine fails",
+    () =>
+      Effect.gen(function* () {
+        const { refused, engine } = yield* counterSetUp(["c", "d"]);
+        // Warm the overlay cache with the view before the pull.
+        expect(yield* counterValue(engine)).toBe(1);
+        // Every write of `d` fails, so the roll-forward fails too and the store seals.
+        yield* refuse(refused, [rowKeyOf("d")], false);
+        expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
+        // A cached view must not answer for a sealed store.
+        expect(Exit.isFailure(yield* Effect.exit(counterValue(engine)))).toBe(true);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("a push whose journal trim fails leaves no journal copy of the parked entry", () =>
+    Effect.gen(function* () {
+      const { removals, store, engine } = yield* counterSetUp([]);
+      yield* engine.mutate("counter/inc", { id: "c" });
+      // The acknowledgement's removal of the body is refused, after the entry is parked.
+      yield* refuse(removals, ["legation/journal/client-a/1"], true);
+      expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+
+      // The entry is in the tail alone: not pushable, and not replayed twice in the overlay.
+      expect(yield* store.pendingMutations).toEqual([]);
+      expect(yield* tailOf(store)).toEqual(["client-a#1"]);
+      expect(yield* counterValue(engine)).toBe(1);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "a seed waits for the overlay lock, so no pull's release is in flight across its rows",
+    () =>
+      Effect.gen(function* () {
+        const inner = yield* ClientStoreModule.makeMemory;
+        const holdNext = yield* Ref.make(false);
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const store: ClientStore = {
+          ...inner,
+          putRow: (collection, row) =>
+            Ref.getAndSet(holdNext, false).pipe(
+              Effect.flatMap((hold) =>
+                hold
+                  ? Deferred.succeed(reached, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.andThen(inner.putRow(collection, row))
+                    )
+                  : inner.putRow(collection, row)
+              )
+            ),
+        };
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const engine = yield* makeCounterEngine(server, store);
+        yield* engine.subscribe(countersSubset);
+
+        yield* Ref.set(holdNext, true);
+        const seeding = yield* Effect.forkChild(
+          engine.seed([{ collection: "counters", id: "c", version: 1, value: { id: "c", n: 4 } }])
+        );
+        yield* Deferred.await(reached);
+
+        // A read started while the seed holds its writes must wait for them.
+        const done = yield* Ref.make(false);
+        const reading = yield* Effect.forkChild(
+          counterValue(engine).pipe(Effect.tap(() => Ref.set(done, true)))
+        );
+        for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+        expect(yield* Ref.get(done)).toBe(false);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(seeding);
+        expect(yield* Fiber.join(reading)).toBe(4);
+      })
+  );
+
+  it.effect("a reset waits for the overlay lock while it clears the confirmed rows", () =>
+    Effect.gen(function* () {
+      const inner = yield* ClientStoreModule.makeMemory;
+      yield* inner.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 4 } });
+      const holdNext = yield* Ref.make(false);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const store: ClientStore = {
+        ...inner,
+        clearRows: Ref.getAndSet(holdNext, false).pipe(
+          Effect.flatMap((hold) =>
+            hold
+              ? Deferred.succeed(reached, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(inner.clearRows)
+                )
+              : inner.clearRows
+          )
+        ),
+      };
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+
+      yield* Ref.set(holdNext, true);
+      const resetting = yield* Effect.forkChild(
+        engine.reset("sha256:alice" as Identity.Fingerprint)
+      );
+      yield* Deferred.await(reached);
+
+      // A read started while the reset clears the rows must wait, and then see them cleared.
+      const done = yield* Ref.make(false);
+      const reading = yield* Effect.forkChild(
+        counterValue(engine).pipe(Effect.tap(() => Ref.set(done, true)))
+      );
+      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+      expect(yield* Ref.get(done)).toBe(false);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(resetting);
+      expect(yield* Fiber.join(reading)).toBeUndefined();
+    })
   );
 });
