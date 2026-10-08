@@ -10,6 +10,23 @@ jobs:
   quality:
     name: Quality Gates
     runs-on: ubuntu-latest
+    # The PostgreSQL overlap test (packages/sql/src/__tests__/sql-backend-postgres.test.ts,
+    # #360) runs against this server. It fails, not skips, when DATABASE_URL is
+    # unset in CI, so both jobs that run the suite carry the service.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,6 +95,23 @@ jobs:
   effect-floor:
     name: Tests (effect floor)
     runs-on: ubuntu-latest
+    # The PostgreSQL overlap test (packages/sql/src/__tests__/sql-backend-postgres.test.ts,
+    # #360) runs against this server. It fails, not skips, when DATABASE_URL is
+    # unset in CI, so both jobs that run the suite carry the service.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
