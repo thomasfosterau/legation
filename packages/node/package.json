@@ -42,8 +42,8 @@
     "@thomasfosterau/legation-effect": "workspace:^"
   },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.118",
-    "@effect/platform-node": ">=4.0.0-rc.118"
+    "effect": ">=4.0.2",
+    "@effect/platform-node": ">=4.0.2"
   },
   "engines": {
     "node": ">=22"

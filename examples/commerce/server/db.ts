@@ -10,6 +10,7 @@
 import { Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import { SqlClient as SqlClientService } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError } from "@thomasfosterau/legation-effect";
 import type { SqlBackend } from "@thomasfosterau/legation-sql";
@@ -17,7 +18,7 @@ import type { SqlBackend } from "@thomasfosterau/legation-sql";
 /** The SQLite client layer both server processes build their stack on. */
 export const clientLayer = (
   filename: string
-): Layer.Layer<SqliteClient.SqliteClient | SqlClient> => SqliteClient.layer({ filename });
+): Layer.Layer<SqliteClient.SqliteClient | SqlClient, SqlError> => SqliteClient.layer({ filename });
 
 /** `SqlExecutor` over the Effect SQL client (fragments → unsafe statements). */
 export const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
