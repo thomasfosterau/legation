@@ -377,9 +377,12 @@ export const makeWithIntrospectionWith = (
             // "committed" from "not yet", so the whole applyMutations call is
             // protected. Trade-off: a slow applyMutations cannot be cancelled
             // mid-push; an interrupt waits for the commit and its publish. The
-            // publish's broker I/O (the FanoutBus and Redis calls) is uninterruptible
-            // too, but each call is bounded by its transport's timeout, so a hung
-            // broker drops its poke instead of holding the region open. Middleware
+            // publish's broker I/O is uninterruptible too, but every broker call is
+            // bounded, so a hung broker drops its poke instead of holding the region
+            // open: the FanoutBus (its publish and lease registration), the Durable
+            // Object shard calls (DurableFanoutBroker), the Redis broker's XADD, and
+            // the publish of a custom BusBroker under makeSerialized each take a
+            // `timeout` (default 5 seconds). Middleware
             // above stays interruptible, since nothing has been committed there.
             const result = yield* Effect.uninterruptible(
               backend

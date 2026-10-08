@@ -14,7 +14,7 @@
  * implementing one tiny interface.
  */
 
-import { Context, Effect, Layer, Metric, PubSub, Schema, Scope } from "effect";
+import { Context, Duration, Effect, Layer, Metric, PubSub, Schema, Scope } from "effect";
 import type { ChangeHint } from "./Backend.js";
 import * as Telemetry from "./Telemetry.js";
 
@@ -173,15 +173,42 @@ const HintsFromJson = Schema.fromJsonString(
  */
 const decodeHints = Schema.decodeUnknownEffect(HintsFromJson);
 
+/** Options for {@link makeSerialized}. */
+export interface SerializedBusOptions {
+  /**
+   * Bound on the broker's `publish`. A publish that exceeds it is logged and dropped, since a
+   * lost poke only delays the next pull (ADR-0009). `publish` runs inside the sync server's
+   * uninterruptible commit-and-publish region, so this bound is what keeps a hung broker from
+   * holding that region open. Default 5 seconds.
+   */
+  readonly timeout?: Duration.Input | undefined;
+}
+
 /**
  * An InvalidationBus over a {@link BusBroker}: hints are JSON-serialized
  * onto the channel and decoded back on the other side. Correctness still
  * never depends on the bus (ADR-0009), so malformed payloads are skipped
- * rather than failed — the next pull repairs any missed poke.
+ * rather than failed — the next pull repairs any missed poke, and a publish
+ * that the broker does not finish within its `timeout` is logged and dropped.
  */
-export const makeSerialized = (broker: BusBroker): InvalidationBus =>
-  InvalidationBus.of({
-    publish: (hints) => (hints.length === 0 ? Effect.void : broker.publish(JSON.stringify(hints))),
+export const makeSerialized = (
+  broker: BusBroker,
+  options?: SerializedBusOptions
+): InvalidationBus => {
+  const timeout = options?.timeout ?? "5 seconds";
+  return InvalidationBus.of({
+    publish: (hints) =>
+      hints.length === 0
+        ? Effect.void
+        : broker.publish(JSON.stringify(hints)).pipe(
+            Effect.timeoutOrElse({
+              duration: timeout,
+              orElse: () =>
+                Effect.logWarning(
+                  "InvalidationBus: broker publish timed out; dropped (the next pull recovers it)"
+                ),
+            })
+          ),
     subscribe: broker.subscribe.pipe(
       Effect.map((subscription) => {
         const take: Effect.Effect<ReadonlyArray<ChangeHint>> = subscription.take.pipe(
@@ -191,10 +218,13 @@ export const makeSerialized = (broker: BusBroker): InvalidationBus =>
       })
     ),
   });
+};
 
-/** Layer for a serialized bus over an in-context broker. */
-export const layerSerialized = (broker: BusBroker): Layer.Layer<InvalidationBus> =>
-  Layer.succeed(InvalidationBus)(makeSerialized(broker));
+/** Layer for a serialized bus over an in-context broker ({@link makeSerialized}). */
+export const layerSerialized = (
+  broker: BusBroker,
+  options?: SerializedBusOptions
+): Layer.Layer<InvalidationBus> => Layer.succeed(InvalidationBus)(makeSerialized(broker, options));
 
 /**
  * An in-memory broker over a shared, bounded PubSub: every bus built on the
