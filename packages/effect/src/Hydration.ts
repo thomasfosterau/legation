@@ -156,7 +156,13 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
       // The tail's effects are already in the rows, and the next pull releases it (#336).
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
+      // `dehydrate` reads the journal and the tail in two calls, so a push acknowledgement
+      // between them puts an entry in both. The tail copy wins: it is not journaled again (#387).
+      const parked = new Set(
+        (decoded.unpulled ?? []).map((m) => `${m.clientId}\u0000${m.mutationId}`)
+      );
       for (const mutation of decoded.journal) {
+        if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) continue;
         yield* store.appendMutation(mutation);
       }
       // These entries came from another context: whether they were pushed there

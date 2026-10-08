@@ -6,7 +6,7 @@
  * windows are exercised by failing the store at each step and reopening it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Ref, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -203,7 +203,7 @@ describe("ClientStore's unpulled tail (#336)", () => {
       yield* first.parkUnpulled([mutation("c1", 1)]);
       yield* first.acknowledge("c1", 1);
       yield* first.parkUnpulled([mutation("c1", 2)]);
-      yield* first.beginRelease({ c1: 1 });
+      yield* first.beginRelease({ lastMutationIds: { c1: 1 }, patch: [] });
       // Crash here: the release marker is down, the tail still holds entry 1.
       expect(yield* kv.has("legation/releaseIntent")).toBe(true);
 
@@ -218,7 +218,7 @@ describe("ClientStore's unpulled tail (#336)", () => {
       const kv = yield* KeyValueStore.KeyValueStore;
       const store = yield* ClientStoreModule.makeKeyValue();
       yield* store.parkUnpulled([mutation("c1", 1)]);
-      yield* store.beginRelease({ c1: 1 });
+      yield* store.beginRelease({ lastMutationIds: { c1: 1 }, patch: [] });
       yield* store.releaseUnpulled({ c1: 1 });
       expect(yield* kv.has("legation/releaseIntent")).toBe(false);
       expect(yield* store.unpulled).toEqual([]);
@@ -476,5 +476,220 @@ describe("the tail in an engine (#336)", () => {
       const dehydrated = yield* Hydration.dehydrate(store);
       expect("unpulled" in dehydrated).toBe(false);
     })
+  );
+});
+
+describe("the tail's crash windows and interleavings (#387)", () => {
+  it.effect("an overflow release that fails keeps the copy and the store agreeing", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const inner = yield* ClientStoreModule.makeMemory;
+      // The first release refused, as a store error would: the tail is parked and acknowledged.
+      const refuseNext = yield* Ref.make(true);
+      const store: ClientStore = {
+        ...inner,
+        releaseUnpulled: (lastMutationIds) =>
+          Ref.getAndSet(refuseNext, false).pipe(
+            Effect.flatMap((refuse) =>
+              refuse
+                ? Effect.fail(new StoreError({ message: "release refused" }))
+                : inner.releaseUnpulled(lastMutationIds)
+            )
+          ),
+      };
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+      // One more than the bound, so the push's park overflows and releases the oldest entry.
+      for (let i = 0; i < 1025; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+      expect(yield* inner.unpulled).toHaveLength(1025);
+
+      // A forced overlay rebuild reads the copy: it must still hold every entry the store holds.
+      yield* engine.seed([]);
+      expect(yield* counterValue(engine)).toBe(1025);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("a boot read of the tail that fails is repaired by the next push", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const store = yield* ClientStoreModule.makeMemory;
+      const first = yield* makeCounterEngine(server, store);
+      yield* first.subscribe(countersSubset);
+      yield* first.mutate("counter/inc", { id: "c" });
+      yield* first.push;
+      expect(yield* tailOf(store)).toEqual(["client-a#1"]);
+
+      // The second session's first read of the tail fails, at boot.
+      const failNext = yield* Ref.make(true);
+      const flaky: ClientStore = {
+        ...store,
+        unpulled: Effect.suspend(() => Ref.getAndSet(failNext, false)).pipe(
+          Effect.flatMap((fail) =>
+            fail
+              ? Effect.fail(new StoreError({ message: "unpulled read refused" }))
+              : store.unpulled
+          )
+        ),
+      };
+      const second = yield* makeCounterEngine(server, flaky);
+      yield* second.subscribe(countersSubset);
+      yield* second.mutate("counter/inc", { id: "c" });
+      yield* second.push;
+
+      // The push must not write back a copy that dropped the stored entry.
+      expect(yield* tailOf(store)).toEqual(["client-a#1", "client-a#2"]);
+      expect(yield* counterValue(second)).toBe(2);
+    })
+  );
+
+  it.effect(
+    "a crash between a pull's release marker and its first row write keeps the effect",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const inner = yield* ClientStoreModule.makeKeyValue();
+        // The pull's first row write fails: the marker is down, no row has changed.
+        const crashNext = yield* Ref.make(false);
+        const store: ClientStore = {
+          ...inner,
+          applyRowOps: (ops) =>
+            Ref.getAndSet(crashNext, false).pipe(
+              Effect.flatMap((crash) =>
+                crash
+                  ? Effect.fail(new StoreError({ message: "crashed before the first row write" }))
+                  : inner.applyRowOps(ops)
+              )
+            ),
+        };
+        const engine = yield* makeCounterEngine(server, store);
+        yield* engine.subscribe(countersSubset);
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+
+        yield* Ref.set(crashNext, true);
+        expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
+
+        // Reopen before any pull: the open finishes the pull, so the effect is still shown.
+        const reopened = yield* ClientStoreModule.makeKeyValue();
+        const restarted = yield* makeCounterEngine(server, reopened);
+        yield* restarted.subscribe(countersSubset);
+        expect(yield* counterValue(restarted)).toBe(1);
+        expect(yield* tailOf(reopened)).toEqual([]);
+        yield* restarted.pull;
+        expect(yield* counterValue(restarted)).toBe(1);
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("a pull that interleaves with a push's park waits for the push's store writes", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const inner = yield* ClientStoreModule.makeMemory;
+      // The push parks its entry, then stops until the test resumes it: the window before its trim.
+      const holdNext = yield* Ref.make(false);
+      const parked = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const store: ClientStore = {
+        ...inner,
+        parkUnpulled: (mutations) =>
+          Ref.getAndSet(holdNext, false).pipe(
+            Effect.flatMap((hold) =>
+              hold
+                ? inner
+                    .parkUnpulled(mutations)
+                    .pipe(
+                      Effect.andThen(Deferred.succeed(parked, undefined)),
+                      Effect.andThen(Deferred.await(resume))
+                    )
+                : inner.parkUnpulled(mutations)
+            )
+          ),
+      };
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+      yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Ref.set(holdNext, true);
+      const pushing = yield* Effect.forkChild(engine.push);
+      yield* Deferred.await(parked);
+
+      // A pull started now must wait for the push. Yielding lets it run as far as it can:
+      // without the lock it would release the entry and the push would re-add it.
+      const pulling = yield* Effect.forkChild(engine.pull);
+      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.join(pushing);
+      yield* Fiber.join(pulling);
+
+      expect(yield* counterValue(engine)).toBe(1);
+      expect(yield* tailOf(inner)).toEqual([]);
+      expect(yield* inner.pendingMutations).toEqual([]);
+    })
+  );
+
+  it.effect("a snapshot taken across a push's acknowledgement does not count the entry twice", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const source = yield* ClientStoreModule.makeMemory;
+      const engine = yield* makeCounterEngine(server, source);
+      yield* engine.subscribe(countersSubset);
+      yield* engine.mutate("counter/inc", { id: "c" });
+      const entry = (yield* source.pendingMutations)[0] as Mutation;
+
+      // The acknowledgement lands between dehydrate's journal read and its tail read.
+      const acked = yield* Ref.make(false);
+      const racing: ClientStore = {
+        ...source,
+        unpulled: Effect.suspend(() => Ref.getAndSet(acked, true)).pipe(
+          Effect.flatMap((already) =>
+            already
+              ? Effect.void
+              : source
+                  .parkUnpulled([entry])
+                  .pipe(Effect.andThen(source.acknowledge(entry.clientId, entry.mutationId)))
+          ),
+          Effect.andThen(source.unpulled)
+        ),
+      };
+      const snapshot = yield* Hydration.dehydrate(racing);
+      expect(snapshot.journal).toHaveLength(1);
+      expect(snapshot.unpulled).toHaveLength(1);
+
+      const target = yield* ClientStoreModule.makeMemory;
+      yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+      expect(yield* target.pendingMutations).toEqual([]);
+      expect(yield* tailOf(target)).toEqual(["client-a#1"]);
+    })
+  );
+
+  it.effect("key-value: a release whose body removal fails is finished on the next open", () =>
+    Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      // The second body's removal fails, after the first body has gone.
+      const faulty = KeyValueStore.KeyValueStore.of({
+        ...kv,
+        remove: (key) =>
+          key === "legation/unpulled/c1/2"
+            ? Effect.fail(
+                new KeyValueStore.KeyValueStoreError({
+                  message: "refused",
+                  method: "remove",
+                  key,
+                })
+              )
+            : kv.remove(key),
+      });
+      const first = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, faulty)
+      );
+      yield* first.parkUnpulled([mutation("c1", 1), mutation("c1", 2)]);
+      yield* first.beginRelease({ lastMutationIds: { c1: 2 }, patch: [] });
+      expect(Exit.isFailure(yield* Effect.exit(first.releaseUnpulled({ c1: 2 })))).toBe(true);
+
+      // Reopen over the healthy store: the release is finished, and no body is left behind.
+      const reopened = yield* ClientStoreModule.makeKeyValue();
+      expect(yield* reopened.unpulled).toEqual([]);
+      expect(yield* kv.has("legation/unpulled/c1/1")).toBe(false);
+      expect(yield* kv.has("legation/unpulled/c1/2")).toBe(false);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 });

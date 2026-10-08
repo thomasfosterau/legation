@@ -1163,21 +1163,39 @@ export const make = (
     // change, and reloaded when the store is written directly. Written only
     // under `overlayLock`, so the tail and the journal read together form one
     // snapshot.
-    const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>(
-      yield* store.unpulled.pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(
-            "ClientEngine: could not read the unpulled tail at boot; its effects are not overlaid until a pull reports them",
-            { error }
-          ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
+    const bootTail = yield* store.unpulled.pipe(
+      Effect.map((entries) => ({ entries, stale: false })),
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "ClientEngine: could not read the unpulled tail at boot; the copy is re-read from the store before its next use",
+          { error }
+        ).pipe(
+          Effect.as<{ readonly entries: ReadonlyArray<Mutation>; readonly stale: boolean }>({
+            entries: [],
+            stale: true,
+          })
         )
       )
     );
+    const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>(bootTail.entries);
+    // Set while the copy may differ from the store: its boot read failed, or a reload did. The
+    // next reader under `overlayLock` re-reads the store first, so a failed read cannot leave the
+    // copy empty for good (#387).
+    const unpulledStale = yield* Ref.make(bootTail.stale);
+    // The tail as the store holds it, for a caller that holds `overlayLock`.
+    const tailLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(function* () {
+      if (yield* Ref.get(unpulledStale)) {
+        yield* Ref.set(unpulled, yield* store.unpulled);
+        yield* Ref.set(unpulledStale, false);
+        yield* Ref.set(overlayCache, undefined);
+      }
+      return yield* Ref.get(unpulled);
+    });
     // The journal the overlay replays: the unpulled tail, then the pending
     // journal. The caller holds `overlayLock`.
     const overlayJournalLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
       function* () {
-        const tail = yield* Ref.get(unpulled);
+        const tail = yield* tailLocked;
         return [...tail, ...(yield* store.pendingMutations)];
       }
     );
@@ -1823,11 +1841,18 @@ export const make = (
             isCoveredBy(response.lastMutationIds, m)
           );
           const applied = covered.filter((m) => !isRejected(m));
+          // Read before the park, so a reload of a stale copy cannot already hold the
+          // entries about to be added.
+          const held = yield* tailLocked;
           yield* store.parkUnpulled(applied);
           for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
             yield* store.acknowledge(clientId, upTo);
           }
-          const tail = [...(yield* Ref.get(unpulled)), ...applied];
+          // The store now holds the full tail. The copy takes it before the overflow release below
+          // can fail, so a failed release leaves the copy and the store agreeing (#387).
+          const tail = [...held, ...applied];
+          yield* Ref.set(unpulled, tail);
+          yield* Ref.set(overlayCache, undefined);
           const released = Math.max(0, tail.length - UNPULLED_LIMIT);
           if (released > 0) {
             yield* Effect.logWarning(
@@ -1840,10 +1865,13 @@ export const make = (
             for (const m of tail.slice(0, released)) {
               watermark[m.clientId] = Math.max(watermark[m.clientId] ?? 0, m.mutationId);
             }
+            // A release that carries no rows still goes through the durable record, so a
+            // failure part-way through its removals is finished on the next open (#387).
+            yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
             yield* store.releaseUnpulled(watermark);
+            yield* Ref.set(unpulled, tail.slice(released));
+            yield* Ref.set(overlayCache, undefined);
           }
-          yield* Ref.set(unpulled, released > 0 ? tail.slice(released) : tail);
-          yield* Ref.set(overlayCache, undefined);
           return covered.filter(isRejected);
         })
       );
@@ -2174,7 +2202,11 @@ export const make = (
             const before = yield* overlayJournalLocked;
             // The durable marker goes down before the first row, so a crash mid-section
             // is finished on the next open rather than double-counting (#336).
-            yield* store.beginRelease(response.lastMutationIds);
+            yield* store.beginRelease({
+              lastMutationIds: response.lastMutationIds,
+              cookie: response.cookie,
+              patch: response.patch,
+            });
             yield* applyPatch(response.patch);
             yield* acknowledgeLocked(response.lastMutationIds);
             return before;
@@ -2286,11 +2318,17 @@ export const make = (
     const adoptUnpulled: Effect.Effect<void> = Semaphore.withPermit(
       overlayLock,
       store.unpulled.pipe(
-        Effect.flatMap((entries) => Ref.set(unpulled, entries)),
+        Effect.flatMap((entries) =>
+          Ref.set(unpulled, entries).pipe(Effect.andThen(Ref.set(unpulledStale, false)))
+        ),
         Effect.catch((error) =>
-          Effect.logWarning(
-            "ClientEngine: could not reload the unpulled tail from the store; keeping the copy in memory",
-            { error }
+          Ref.set(unpulledStale, true).pipe(
+            Effect.andThen(
+              Effect.logWarning(
+                "ClientEngine: could not reload the unpulled tail from the store; re-reading it before its next use",
+                { error }
+              )
+            )
           )
         )
       )

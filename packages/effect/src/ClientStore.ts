@@ -22,7 +22,7 @@ import { KeyValueStore } from "effect/persistence";
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
-import { MutationSchema, type Mutation, type PatchOp } from "./Protocol.js";
+import { MutationSchema, PatchOpSchema, type Mutation, type PatchOp } from "./Protocol.js";
 
 /**
  * A confirmed row as persisted: encoded value + authoritative version. The
@@ -249,16 +249,15 @@ export interface ClientStore {
    */
   readonly parkUnpulled: (mutations: ReadonlyArray<Mutation>) => Effect.Effect<void, StoreError>;
   /**
-   * Record, before a pull writes its rows, the watermark that pull will
-   * release. The durable half of the pull's critical section: a crash after
-   * this call and before {@link ClientStore.releaseUnpulled} is finished on
-   * the next open, which trims the journal and the tail to the watermark. A
-   * crash before the pull's first row write therefore reverts the covered
-   * entries until the next pull, as a restart does today.
+   * Record, before a release writes anything, the whole release: its watermark
+   * and, for a pull, the cookie and patch its rows come from. The durable half
+   * of the release: an open that finds the record finishes the release rather
+   * than reverting it. It re-applies the patch (idempotent, since every
+   * operation sets a row or removes it), writes the cookie, trims the journal
+   * and releases the tail to the watermark. So a crash at any point after this
+   * call shows the pull's effects, never the rows without them (#387).
    */
-  readonly beginRelease: (
-    lastMutationIds: Readonly<Record<string, number>>
-  ) => Effect.Effect<void, StoreError>;
+  readonly beginRelease: (release: PullRelease) => Effect.Effect<void, StoreError>;
   /**
    * Release the tail entries `lastMutationIds` covers, and end the release
    * {@link ClientStore.beginRelease} started. Covered means the entry's id is
@@ -400,6 +399,24 @@ export const freezePending = (store: ClientStore): Effect.Effect<void, StoreErro
       discard: true,
     });
   });
+
+/**
+ * What a release will do, recorded by {@link ClientStore.beginRelease} before it writes (#387).
+ */
+export interface PullRelease {
+  /** The watermark the release covers: the entries at or below it leave the tail. */
+  readonly lastMutationIds: Readonly<Record<string, number>>;
+  /**
+   * The pull's cookie, written when the release finishes. Absent for a release
+   * that carries no rows.
+   */
+  readonly cookie?: string | undefined;
+  /**
+   * The pull's patch, re-applied when the release finishes. Empty for a release
+   * that carries no rows.
+   */
+  readonly patch: ReadonlyArray<PatchOp>;
+}
 
 /** In-memory implementation (tests, SSR, ephemeral clients). */
 export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
@@ -771,7 +788,10 @@ const COMPACTION_KEY = "compactionIntent";
 const SENT_KEY = "sentUpTo";
 /** The index of the acknowledged-but-unpulled tail, oldest first (#336). */
 const UNPULLED_INDEX_KEY = "unpulledIndex";
-/** The watermark of a pull release in progress, present only mid-release (#336). */
+/**
+ * The pull release in progress, present only mid-release (#336, #387): its
+ * watermark, cookie and patch, so an open can finish it.
+ */
 const RELEASE_KEY = "releaseIntent";
 
 /** Per-row / per-mutation key builders (layout 2). */
@@ -808,6 +828,13 @@ const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const MutationFromJson = Schema.fromJsonString(MutationSchema);
 const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntrySchema));
 const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
+const ReleaseIntentFromJson = Schema.fromJsonString(
+  Schema.Struct({
+    lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+    cookie: Schema.optional(Schema.String),
+    patch: Schema.Array(PatchOpSchema),
+  })
+);
 /**
  * The write-ahead record of an in-progress compaction (#249): everything
  * needed to finish it from scratch, so replaying it is idempotent.
@@ -1078,11 +1105,11 @@ export const makeKeyValue = (
     // Two crash windows need the open-time settle below. (1) A park that
     // committed but did not trim the journal leaves each entry in both places;
     // the journal copy would be pushed again and replayed over the tail's, so
-    // the open drops it from the journal. (2) A pull that wrote `beginRelease`
-    // but did not finish its release leaves the covered entries in the journal
-    // and the tail; the open finishes the release. Rows written before the
-    // crash already carry the covered effects, so finishing it is what stops a
-    // double count.
+    // the open drops it from the journal. (2) A release that wrote
+    // `beginRelease` but did not finish leaves the covered entries in the
+    // journal and the tail; the open finishes it by re-applying the recorded
+    // patch, which is idempotent, so the rows end up as the pull left them
+    // whether or not any of them were written before the crash.
     const unpulledIndexOf = readDecoded(UNPULLED_INDEX_KEY, JournalIndexFromJson).pipe(
       Effect.map((entries) => entries ?? [])
     );
@@ -1114,20 +1141,24 @@ export const makeKeyValue = (
         yield* raiseCounters(mutations);
       });
 
+    // The bodies go before the index, so a crash cannot orphan one. A crash
+    // (or a failed removal) between the two leaves index entries whose bodies
+    // are gone: reads skip them. The marker that `beginRelease` wrote first is
+    // still down, so the next open finishes the release.
     const releaseUnpulledInner = (
       lastMutationIds: Readonly<Record<string, number>>
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         const index = yield* unpulledIndexOf;
         const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
+        for (const entry of released) {
+          yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
+        }
         if (released.length > 0) {
           yield* writeJson(
             UNPULLED_INDEX_KEY,
             index.filter((entry) => !coveredBy(lastMutationIds, entry))
           );
-        }
-        for (const entry of released) {
-          yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
         }
         yield* remove(RELEASE_KEY);
       });
@@ -1393,10 +1424,18 @@ export const makeKeyValue = (
     // disagree, and serving either would double-count or revert, so the store
     // is sealed like an unestablished identity boundary. The next open retries.
     const settleUnpulled = Effect.gen(function* () {
-      const release = yield* readDecoded(RELEASE_KEY, CountersFromJson);
+      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
       if (release !== undefined) {
-        yield* trimJournal((entry) => coveredBy(release, entry));
-        yield* releaseUnpulledInner(release);
+        // Roll the release forward from its record: the patch is idempotent, so
+        // re-applying it is correct whether or not the crash had written rows.
+        yield* applyRowOpsInner(release.patch);
+        if (release.cookie !== undefined) {
+          yield* store
+            .set("cookie", release.cookie)
+            .pipe(Effect.mapError(storeError(`Failed to write "cookie"`)));
+        }
+        yield* trimJournal((entry) => coveredBy(release.lastMutationIds, entry));
+        yield* releaseUnpulledInner(release.lastMutationIds);
       }
       const parked = yield* unpulledIndexOf;
       if (parked.length > 0) {
@@ -1708,7 +1747,7 @@ export const makeKeyValue = (
 
       unpulled: unpulledOf,
       parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
-      beginRelease: (lastMutationIds) => locked(writeJson(RELEASE_KEY, lastMutationIds)),
+      beginRelease: (release) => locked(writeJson(RELEASE_KEY, release)),
       releaseUnpulled: (lastMutationIds) => locked(releaseUnpulledInner(lastMutationIds)),
       clearUnpulled: locked(clearUnpulledInner),
 

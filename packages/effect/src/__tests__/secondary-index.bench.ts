@@ -101,7 +101,8 @@ const makeBulkSeededStore = (
           counters.set(clientId, next);
           return next;
         }),
-      // The unpulled tail is empty throughout: no push is acknowledged in a query-path benchmark.
+      // Nothing parks here: no push is acknowledged in a query-path benchmark, so the tail stays
+      // empty. The members below are a working contract for the store, not a fixture the bench reads.
       unpulled: Effect.sync(() => unpulled),
       parkUnpulled: (mutations) => Effect.sync(() => void (unpulled = unpulled.concat(mutations))),
       beginRelease: () => Effect.void,
