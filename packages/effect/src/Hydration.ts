@@ -72,13 +72,16 @@ export const SnapshotRowSchema = Schema.Struct({
 
 /**
  * A serialisable capture of a {@link ClientStore}: confirmed rows (flattened
- * with their collection), the pull cookie, and the pending-mutation journal.
- * The schema is the source of truth; {@link Snapshot} is derived from it.
+ * with their collection), the pull cookie, the pending-mutation journal, and
+ * the acknowledged-but-unpulled tail (#336). The tail is optional so a
+ * snapshot taken before it existed still loads, as an empty tail. The schema
+ * is the source of truth; {@link Snapshot} is derived from it.
  */
 export const SnapshotSchema = Schema.Struct({
   rows: Schema.Array(SnapshotRowSchema),
   cookie: Schema.optional(Schema.String),
   journal: Schema.Array(MutationSchema),
+  unpulled: Schema.optional(Schema.Array(MutationSchema)),
 });
 
 /** {@inheritDoc SnapshotSchema} */
@@ -97,8 +100,9 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
 
 /**
  * Read a {@link ClientStore} into a {@link Snapshot}: enumerate the collections,
- * gather their confirmed rows (flattened with the collection), the cookie, and
- * the journal.
+ * gather their confirmed rows (flattened with the collection), the cookie, the
+ * journal, and the unpulled tail. The tail is left out when empty, so a
+ * snapshot without one keeps its previous shape.
  */
 export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreError> =>
   Effect.gen(function* () {
@@ -110,13 +114,20 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
     }
     const cookie = yield* store.getCookie;
     const journal = yield* store.pendingMutations;
-    return { rows, ...(cookie !== undefined ? { cookie } : {}), journal };
+    const unpulled = yield* store.unpulled;
+    return {
+      rows,
+      ...(cookie !== undefined ? { cookie } : {}),
+      journal,
+      ...(unpulled.length > 0 ? { unpulled } : {}),
+    };
   });
 
 /**
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
  * {@link SnapshotSchema} (so a malformed snapshot fails as a `StoreError`), then
- * put the rows, set the cookie if present, and append the journal in order.
+ * put the rows, set the cookie if present, park the unpulled tail, and append
+ * the journal in order. A snapshot without a tail parks nothing.
  *
  * A running {@link ClientEngine} built over the store re-reads its view and built
  * indexes afterwards: a direct write does not go through the engine, so without this
@@ -143,7 +154,15 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
         yield* store.putRow(collection, row);
       }
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
+      // The tail's effects are already in the rows, and the next pull releases it (#336).
+      if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
+      // `dehydrate` reads the journal and the tail in two calls, so a push acknowledgement
+      // between them puts an entry in both. The tail copy wins: it is not journaled again (#387).
+      const parked = new Set(
+        (decoded.unpulled ?? []).map((m) => `${m.clientId}\u0000${m.mutationId}`)
+      );
       for (const mutation of decoded.journal) {
+        if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) continue;
         yield* store.appendMutation(mutation);
       }
       // These entries came from another context: whether they were pushed there
@@ -157,13 +176,14 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
   });
 
 /**
- * Whether a store holds nothing: no rows, no cookie, no journalled mutations.
+ * Whether a store holds nothing: no rows, no cookie, no journalled or unpulled mutations.
  * The "fresh browser" test {@link hydrateIfEmpty} gates on.
  */
 export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> =>
   Effect.gen(function* () {
     if ((yield* store.getCookie) !== undefined) return false;
     if ((yield* store.pendingMutations).length > 0) return false;
+    if ((yield* store.unpulled).length > 0) return false;
     for (const collection of yield* store.listCollections) {
       if ((yield* store.listRows(collection)).length > 0) return false;
     }

@@ -49,6 +49,7 @@ const makeBulkSeededStore = (
       return created;
     };
     let journal: ReadonlyArray<Mutation> = [];
+    let unpulled: ReadonlyArray<Mutation> = [];
     let cookie: string | undefined;
     let identity: string | undefined;
     const counters = new Map<string, number>();
@@ -100,6 +101,19 @@ const makeBulkSeededStore = (
           counters.set(clientId, next);
           return next;
         }),
+      // Nothing parks here: no push is acknowledged in a query-path benchmark, so the tail stays
+      // empty. The members below are a working contract for the store, not a fixture the bench reads.
+      unpulled: Effect.sync(() => unpulled),
+      parkUnpulled: (mutations) => Effect.sync(() => void (unpulled = unpulled.concat(mutations))),
+      beginRelease: () => Effect.void,
+      releaseUnpulled: (lastMutationIds) =>
+        Effect.sync(
+          () =>
+            void (unpulled = unpulled.filter(
+              (m) => !(m.mutationId <= (lastMutationIds[m.clientId] ?? 0))
+            ))
+        ),
+      clearUnpulled: Effect.sync(() => void (unpulled = [])),
       getCookie: Effect.sync(() => cookie),
       setCookie: (value) => Effect.sync(() => void (cookie = value)),
       clearCookie: Effect.sync(() => void (cookie = undefined)),
