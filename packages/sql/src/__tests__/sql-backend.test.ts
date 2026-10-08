@@ -30,6 +30,10 @@ interface Mock {
 
 const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
 const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
+// The bump after a handler on an executor without transactions: an upsert to
+// the larger of the stored and the new id (SqlBackend's `dialect.greatest`).
+const MONOTONIC_BUMP =
+  /DO UPDATE SET "last_mutation_id" = MAX\("last_mutation_id", excluded\."last_mutation_id"\)$/;
 const unmodelled = (fragment: Sql.SqlFragment): never => {
   throw new Error(`mock ledger: unmodelled statement: ${fragment.text}`);
 };
@@ -46,8 +50,8 @@ const unmodelled = (fragment: Sql.SqlFragment): never => {
  * - `transactional` (the default; its transaction does not serialise): the
  *   reads, insert-if-absent at 0, the conditional claim (`UPDATE ... RETURNING`)
  *   and the claim's release (a conditional `UPDATE`).
- * - `transactional: false` (D1's order): the reads and the unconditional bump
- *   upsert after the handler.
+ * - `transactional: false` (D1's order): the reads and the bump after the
+ *   handler, an upsert to the larger of the stored and the new id.
  */
 const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const transactional = options.transactional ?? true;
@@ -65,6 +69,31 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
     ledger.set(key, next);
     return true;
   };
+
+  // The ledger writes each ordering issues, matched by statement text.
+  const insertIfAbsent = (fragment: Sql.SqlFragment): void => {
+    // `ON CONFLICT DO NOTHING` at 0.
+    const [group, client] = fragment.params as [string, string];
+    const key = `${group}:${client}`;
+    if (!ledger.has(key)) ledger.set(key, 0);
+  };
+  const giveBackClaim = (fragment: Sql.SqlFragment): void => {
+    // The release of a claim: a conditional UPDATE.
+    casLedger(fragment);
+  };
+  const bumpMonotonic = (fragment: Sql.SqlFragment): void => {
+    // The bump after the handler: the watermark only rises.
+    const [group, client, id] = fragment.params as [string, string, number];
+    const key = `${group}:${client}`;
+    ledger.set(key, Math.max(ledger.get(key) ?? 0, id));
+  };
+  const ledgerWrites: ReadonlyArray<readonly [RegExp, (fragment: Sql.SqlFragment) => void]> =
+    transactional
+      ? [
+          [/DO NOTHING$/, insertIfAbsent],
+          [/^UPDATE "sync_mutations"/, giveBackClaim],
+        ]
+      : [[MONOTONIC_BUMP, bumpMonotonic]];
 
   const executor: SqlBackend.SqlExecutor = {
     query: (fragment) =>
@@ -91,25 +120,9 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
     run: (fragment) =>
       Effect.sync(() => {
         if (!isLedger(fragment.text)) return;
-        if (transactional && fragment.text.endsWith("DO NOTHING")) {
-          // Insert-if-absent: `ON CONFLICT DO NOTHING` at 0.
-          const [group, client] = fragment.params as [string, string];
-          const key = `${group}:${client}`;
-          if (!ledger.has(key)) ledger.set(key, 0);
-          return;
-        }
-        if (transactional && fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
-          // The release of a claim (a conditional UPDATE).
-          casLedger(fragment);
-          return;
-        }
-        if (!transactional && fragment.text.includes("DO UPDATE SET")) {
-          // The bump after the handler: an unconditional upsert to the id.
-          const [group, client, id] = fragment.params as [string, string, number];
-          ledger.set(`${group}:${client}`, id);
-          return;
-        }
-        unmodelled(fragment);
+        const statement = ledgerWrites.find(([pattern]) => pattern.test(fragment.text));
+        if (statement === undefined) return unmodelled(fragment);
+        statement[1](fragment);
       }),
     transaction: (effect) => effect,
     transactional,
@@ -330,7 +343,10 @@ describe("SqlBackend evaluate / getRows", () => {
   });
 });
 
-describe("SqlBackend applyMutations", () => {
+// Trunk's behaviour, under both orderings: claim-first (transactions) and
+// handler-then-bump (no transactions, D1). The claim-specific READ COMMITTED
+// tests below stay on the transactional ordering.
+describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (transactional) => {
   const makeBackend = (mock: Mock, ran: Ref.Ref<number>) =>
     SqlBackend.make({
       executor: mock.executor,
@@ -353,7 +369,7 @@ describe("SqlBackend applyMutations", () => {
   });
 
   it.effect("applies in order, bumps the ledger, and skips replays", () => {
-    const mock = makeMock();
+    const mock = makeMock({ transactional });
     return Effect.gen(function* () {
       const ran = yield* Ref.make(0);
       const backend = makeBackend(mock, ran);
@@ -375,7 +391,7 @@ describe("SqlBackend applyMutations", () => {
   });
 
   it.effect("enriches hints with the PUT's current row values", () => {
-    const mock = makeMock();
+    const mock = makeMock({ transactional });
     // A row the enrichment read finds for the hinted id.
     mock.seed("todos", [{ id: "1", version: "a", title: "x" }]);
     return Effect.gen(function* () {
@@ -394,7 +410,7 @@ describe("SqlBackend applyMutations", () => {
   });
 
   it.effect("rejects a mutation-id gap", () => {
-    const mock = makeMock();
+    const mock = makeMock({ transactional });
     return Effect.gen(function* () {
       const ran = yield* Ref.make(0);
       const backend = makeBackend(mock, ran);
@@ -406,9 +422,9 @@ describe("SqlBackend applyMutations", () => {
   });
 
   it.effect(
-    "rolls a permanently rejected mutation back to a savepoint but still bumps its id",
+    "rolls a permanently rejected mutation back to a savepoint but still takes its id",
     () => {
-      const mock = makeMock();
+      const mock = makeMock({ transactional });
       // Record every statement so we can assert the savepoint dance.
       const runs: Array<string> = [];
       const executor: SqlBackend.SqlExecutor = {
@@ -660,46 +676,50 @@ const parkMutation = (mutationId: number) => ({
   createdAt: 0,
 });
 
+// A mutator whose handler parks on its first call (see `makeParkable`).
+const parkTodo = Mutator.make("todo/park", Schema.Struct({ id: Schema.String }));
+
+/**
+ * A backend whose `todo/park` handler counts, then parks on its first call
+ * until `release` is succeeded; `written` is succeeded once the parked call has
+ * written. A second application does not wait on the gate, so it fails on its
+ * counts rather than hanging.
+ */
+const makeParkable = (mock: Mock) =>
+  Effect.gen(function* () {
+    const ran = yield* Ref.make(0);
+    const parks = yield* Ref.make(0);
+    const written = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map<string, Mutator.AnyMutator>([
+        [setTodo.name, setTodo],
+        [parkTodo.name, parkTodo],
+      ]),
+      handlers: {
+        "todo/set": () =>
+          Ref.update(ran, (n) => n + 1).pipe(Effect.as<ReadonlyArray<Backend.ChangeHint>>([])),
+        "todo/park": () =>
+          Effect.gen(function* () {
+            yield* Ref.update(ran, (n) => n + 1);
+            if ((yield* Ref.getAndUpdate(parks, (n) => n + 1)) === 0) {
+              yield* Deferred.succeed(written, undefined);
+              yield* Deferred.await(release);
+            }
+            return [] as ReadonlyArray<Backend.ChangeHint>;
+          }),
+      },
+    });
+    return { backend, ran, written, release };
+  });
+
 describe("SqlBackend overlapping calls (READ COMMITTED model, issue #352)", () => {
   // The mock's transaction does not serialise, so two calls interleave the way
   // PostgreSQL READ COMMITTED lets them: a handler parked after its writes does
   // not hold a second call back. A parked call's claim is already in the
   // ledger, which is what the second call must see.
-  const parkTodo = Mutator.make("todo/park", Schema.Struct({ id: Schema.String }));
-
-  const makeParkable = (mock: Mock) =>
-    Effect.gen(function* () {
-      const ran = yield* Ref.make(0);
-      const parks = yield* Ref.make(0);
-      const written = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const backend = SqlBackend.make({
-        executor: mock.executor,
-        tables,
-        mutators: new Map<string, Mutator.AnyMutator>([
-          [setTodo.name, setTodo],
-          [parkTodo.name, parkTodo],
-        ]),
-        handlers: {
-          "todo/set": () =>
-            Ref.update(ran, (n) => n + 1).pipe(Effect.as<ReadonlyArray<Backend.ChangeHint>>([])),
-          // Counts, then (on the first call only) parks until released. A
-          // second application must not wait on the gate, so it fails on its
-          // counts rather than hanging.
-          "todo/park": () =>
-            Effect.gen(function* () {
-              yield* Ref.update(ran, (n) => n + 1);
-              if ((yield* Ref.getAndUpdate(parks, (n) => n + 1)) === 0) {
-                yield* Deferred.succeed(written, undefined);
-                yield* Deferred.await(release);
-              }
-              return [] as ReadonlyArray<Backend.ChangeHint>;
-            }),
-        },
-      });
-      return { backend, ran, written, release };
-    });
-
   it.effect("a copy of a mutation that is in flight is skipped, not applied again", () => {
     const mock = makeMock();
     return Effect.gen(function* () {
@@ -803,4 +823,33 @@ describe("SqlBackend ledger order follows the executor's transactions (#342, #35
       })
     )
   );
+});
+
+describe("SqlBackend watermark without transactions (#352)", () => {
+  it.effect("a parked call that finishes after a later bump never moves the watermark back", () => {
+    // D1's order: nothing is claimed, so a copy of mutation 2 runs while the
+    // first call is parked (the double-apply #342 describes). The watermark is
+    // still what the bump makes of it: the parked call's bump of 2 must not
+    // undo the bump of 3.
+    const mock = makeMock({ transactional: false });
+    return Effect.gen(function* () {
+      const { backend, written, release } = yield* makeParkable(mock);
+      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+
+      const parked = yield* Effect.forkChild(
+        backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+      );
+      yield* Deferred.await(written);
+
+      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(2)]);
+      const later = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(3)]);
+      expect(later.lastMutationIds).toEqual({ c1: 3 });
+
+      yield* Deferred.succeed(release, undefined);
+      const applied = yield* Fiber.join(parked);
+      // A plain upsert of 2 would move the watermark from 3 back to 2.
+      expect(applied.lastMutationIds).toEqual({ c1: 3 });
+      expect(mock.ledgerOf("g", "c1")).toBe(3);
+    });
+  });
 });

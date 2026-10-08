@@ -7,7 +7,9 @@ A driver-agnostic SQL reference backend for the
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
   dialects.
 - **`SqlBackend`** — an implementation of the core `Backend` contract over a
-  tiny `SqlExecutor` seam (`query` / `run` / `transaction`). Bring your own
+  tiny `SqlExecutor` seam (`query` / `run` / `transaction`, and the optional
+  `transactional` flag, which an executor without transactions sets to
+  `false`). Bring your own
   driver (`bun:sqlite`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.

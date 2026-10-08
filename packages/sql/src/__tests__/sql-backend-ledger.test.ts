@@ -43,10 +43,10 @@ const withDatabase = <A>(use: (sql: SqlClient) => Effect.Effect<A, unknown>) =>
     })
   );
 
-/** `SqlExecutor` over the sqlite client; `transactional: false` mimics D1 (no transactions). */
 const asBackendError = (message: string) => (cause: unknown) =>
   new BackendError({ message, cause });
 
+/** `SqlExecutor` over the sqlite client; `transactional: false` mimics D1 (no transactions). */
 const makeExecutor = (sql: SqlClient, transactional: boolean): SqlBackend.SqlExecutor => {
   return {
     query: (fragment) =>
@@ -269,6 +269,64 @@ describe("SqlBackend ledger on SQLite (issue #352)", () => {
         expect(yield* countOf(sql, "effects")).toBe(1);
         expect(yield* countOf(sql, "todos")).toBe(1);
         expect(yield* ledgerOf(sql)).toBe(2);
+      })
+    )
+  );
+
+  it.effect(
+    "on an executor without transactions a re-sent applied mutation writes no second effect",
+    () =>
+      withDatabase((sql) =>
+        Effect.gen(function* () {
+          const backend = backendWith(
+            sql,
+            { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            false
+          );
+          const first = yield* backend.applyMutations(context, [mutation(1)]);
+          expect(first.lastMutationIds).toEqual({ [CLIENT]: 1 });
+          expect(yield* countOf(sql, "effects")).toBe(1);
+
+          // The replay is covered by the ledger: its handler does not run again.
+          const replay = yield* backend.applyMutations(context, [mutation(1)]);
+          expect(replay.lastMutationIds).toEqual({ [CLIENT]: 1 });
+          expect(replay.hints).toEqual([]);
+          expect(yield* countOf(sql, "effects")).toBe(1);
+          expect(yield* ledgerOf(sql)).toBe(1);
+        })
+      )
+  );
+
+  it.effect("on an executor without transactions a late bump never moves the watermark back", () =>
+    withDatabase((sql) =>
+      Effect.gen(function* () {
+        // Mutation 2's handler, mid-run, lets an overlapping call apply a copy of
+        // 2 and then 3 on the same connection. The outer call's bump of 2 then
+        // lands after 3's, and the watermark must stay at 3 (MAX on SQLite).
+        let backend: Backend.Backend | undefined;
+        const nested = yield* Ref.make(false);
+        const outer = yield* Effect.sync(() =>
+          backendWith(
+            sql,
+            {
+              "todo/set": (raw, tx) => {
+                const args = raw as Args;
+                return Effect.gen(function* () {
+                  if (args.id === "2" && !(yield* Ref.getAndSet(nested, true))) {
+                    yield* backend!.applyMutations(context, [mutation(2), mutation(3)]);
+                  }
+                  return yield* applyWrite(tx, args);
+                });
+              },
+            },
+            false
+          )
+        );
+        backend = outer;
+
+        const result = yield* outer.applyMutations(context, [mutation(1), mutation(2)]);
+        expect(result.lastMutationIds).toEqual({ [CLIENT]: 3 });
+        expect(yield* ledgerOf(sql)).toBe(3);
       })
     )
   );

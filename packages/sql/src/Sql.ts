@@ -82,6 +82,8 @@ export interface Dialect {
   readonly textCollation: string;
   /** How a boolean literal binds (Postgres has booleans; SQLite stores `0`/`1`). */
   readonly boolean: (value: boolean) => unknown;
+  /** The larger of two SQL expressions: `MAX` on SQLite, `GREATEST` on PostgreSQL. */
+  readonly greatest: (left: string, right: string) => string;
 }
 
 /** Field → literal kind, for the collation clause and typed binds. */
@@ -103,6 +105,7 @@ export const sqlite: Dialect = {
   quote: quoteDouble,
   textCollation: "BINARY",
   boolean: (value) => (value ? 1 : 0),
+  greatest: (left, right) => `MAX(${left}, ${right})`,
 };
 
 /** PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans. */
@@ -111,6 +114,7 @@ export const postgres: Dialect = {
   quote: quoteDouble,
   textCollation: `"C"`,
   boolean: (value) => value,
+  greatest: (left, right) => `GREATEST(${left}, ${right})`,
 };
 
 const comparators: Record<Predicate.Comparison, string> = {

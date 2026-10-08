@@ -39,10 +39,12 @@
  * - D1 is non-conforming (#342). It has no interactive transactions, so its
  *   executor sets `transactional: false` and each statement commits on its own.
  *   `applyMutations` then keeps trunk's order: the handler runs, then the
- *   ledger is bumped. The handler's writes commit before the bump, so a pull
- *   between the two carries the effect without the watermark; a crash after the
- *   writes and before the bump makes the retry run the handler again; and a
- *   transient failure leaves the writes committed for the retry to repeat. The
+ *   ledger is bumped to the larger of the stored and the new id, so an
+ *   overlapping call that finishes late cannot move the watermark back. The
+ *   handler's writes commit before the bump, so a pull between the two carries
+ *   the effect without the watermark; a crash after the writes and before the
+ *   bump makes the retry run the handler again; and a transient failure leaves
+ *   the writes committed for the retry to repeat. The
  *   claim order is not used on D1 because a claim committed on its own would
  *   leave a crash between the claim and the handler's commit claimed and
  *   unapplied, so a retry would skip the mutation (#359).
@@ -445,8 +447,11 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       return yield* gapError(clientId, mutationId, last);
     });
 
-  // The bump of the handler-then-bump order (executors without transactions):
-  // an unconditional upsert, as trunk had it. It runs after the handler's writes.
+  // The bump of the handler-then-bump order (executors without transactions).
+  // It runs after the handler's writes, and it takes the larger of the stored and
+  // the new id, so a call that parked before a later bump cannot move the
+  // watermark back when it finishes (#352). It is not atomic with those writes
+  // (#342).
   const bumpLastId = (clientGroupId: string, clientId: string, mutationId: number) =>
     executor.run({
       text:
@@ -455,7 +460,9 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // `excluded.` instead of re-binding ph(3): with `?` placeholders a
         // reused index renders an extra placeholder with no matching param
         // (found by the commerce example's contract run over node:sqlite).
-        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = excluded.${q("last_mutation_id")}`,
+        // The unqualified column is the stored row's value.
+        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ` +
+        dialect.greatest(q("last_mutation_id"), `excluded.${q("last_mutation_id")}`),
       params: [clientGroupId, clientId, mutationId],
     });
 
@@ -553,13 +560,16 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       Effect.gen(function* () {
         const hints: Array<Backend.ChangeHint> = [];
         const rejected: Array<Backend.RejectedMutation> = [];
+        // Numbered per handler run, as trunk did: a replay runs no savepoint and
+        // takes no number.
         let savepointCounter = 0;
         for (const mutation of mutations) {
           // Ids start at 1 and the ledger at 0, so a non-positive id is never
           // new: skip it without writing a ledger row for it.
           if (mutation.mutationId <= 0) continue;
-          const outcome = yield* applyOne(context, mutation, savepointCounter++);
+          const outcome = yield* applyOne(context, mutation, savepointCounter);
           if (outcome === undefined) continue; // idempotent skip: a replay
+          savepointCounter++;
           if (outcome._tag === "applied") {
             hints.push(...outcome.hints);
           } else {
