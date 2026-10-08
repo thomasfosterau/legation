@@ -186,6 +186,8 @@ export interface MutationEvent {
  *   `mutateEncoded`, or `mutateWithAck`).
  * - `MutationAcknowledged` — the backend applied a journaled mutation.
  * - `MutationRejected` — the backend permanently refused it, with a `reason`.
+ *   Each mutation settles once: a later response that repeats or contradicts
+ *   its outcome is ignored (#364), so no second event follows.
  * - `MutationDropped` — a paced strategy (#117) compacted a still-unpushed
  *   entry out of the journal in favour of a newer one for the same key; the
  *   entry never reached the backend.
@@ -574,6 +576,8 @@ export interface ClientEngine {
   /**
    * Mutation lifecycle events: a `journaled` event for every journaled
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
+   * The first outcome the client observes is the one emitted: a settled
+   * mutation emits no further settle event (#364).
    */
   readonly mutationEvents: Stream.Stream<MutationEvent>;
   /**
@@ -1680,15 +1684,38 @@ export const make = (
     // Fold one mutation's permanent rejection in (#116), resolve any
     // registered `mutateWithAck` deferred, and emit `rejected` — regardless of
     // whether it was journaled via `mutate`, `mutateEncoded`, or `mutateWithAck`.
+    //
+    // Only a still-`"pending"` entry settles (#364). A response can repeat a
+    // rejection this client already holds (a losing copy's response, #355), or
+    // contradict an outcome it already observed. The first committed outcome
+    // stands: a settled entry gets no second state change, no second deferred
+    // resolution and no second event. The report is logged at debug and ignored.
     const rejectAck = (id: number, reason: string): Effect.Effect<void> =>
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
-          SubscriptionRef.update(mutationStates, (map) =>
-            MutationState.rejected(map, id, reason, now, options.mutationStateRetention)
-          )
+          SubscriptionRef.modify(mutationStates, (map) => {
+            const prior = MutationState.phaseOf(map, id);
+            if (prior !== "pending") return [prior, map] as const;
+            const next = MutationState.rejected(
+              map,
+              id,
+              reason,
+              now,
+              options.mutationStateRetention
+            );
+            return [prior, next] as const;
+          })
         ),
-        Effect.andThen(resolveAck(id, { _tag: "rejected", reason })),
-        Effect.andThen(emitEvent(id, "rejected", reason))
+        Effect.flatMap((prior) =>
+          prior === "pending"
+            ? resolveAck(id, { _tag: "rejected", reason }).pipe(
+                Effect.andThen(emitEvent(id, "rejected", reason))
+              )
+            : Effect.logDebug("ClientEngine: ignoring a rejection for a settled mutation", {
+                mutationId: id,
+                phase: prior ?? "untracked",
+              })
+        )
       );
 
     // Resolve deferreds for the mutations this client had permanently rejected.
