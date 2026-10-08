@@ -92,6 +92,8 @@ export const api = HttpApi.make("commerce")
     Group.make(
       CartItem,
       Endpoint.list(CartItem, { query: query("cartItems") }),
+      // The row a JsonApiBackend reads before it deletes the row (#372).
+      Endpoint.get(CartItem, { query: singleRowQuery("cartItems"), errors: [NotFound] }),
       Endpoint.create(CartItem, {
         errors: [Unauthorized, ApiError.BadRequest],
       }),

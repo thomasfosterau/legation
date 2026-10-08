@@ -113,7 +113,10 @@ authoritative cart. Relationship operations are not supported.
 `@thomasfosterau/legation-jsonapi`'s `JsonApiSync.inspect` detects the endpoint from the api,
 so a `JsonApiBackend` over this server pushes each journal batch as one
 all-or-nothing request, drops a pointer-named rejection as a permanent
-rejection of that mutation, and resends the rest.
+rejection of that mutation, and resends the rest. Because that backend reads each
+row an update or delete touches before writing it (#372), a queued cart-item delete
+for an item an order placement already removed fails with a 404 on that read and
+stalls that client's queue until the client is reset: an accepted trade-off of #372.
 
 ## Running it
 

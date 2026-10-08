@@ -39,16 +39,22 @@
  * elsewhere goes unseen, and this backend's own writes do not refresh its
  * cache), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
- * creates has no old value. A read that fails transiently fails the push
- * (BackendError). On the atomic path nothing has been written by then, so the
- * retry reads again. On the per-resource path the writes before the failed read
- * have already applied and been acknowledged, so the retry does not resend them
+ * creates was absent before the push, so it is not read (`enterBatchCreate`),
+ * unless the server refuses the create and a later write of the row needs its
+ * value (`readRefusedCreates`, #402). Every failed read fails the push with
+ * BackendError, a 4xx and a 404 included, and so does a 2xx with no resource, so
+ * an update or delete is either sent with its old value or not sent. On the
+ * atomic path nothing has been written by then, so the retry reads again. On the
+ * per-resource path the writes before the failed read have already applied and
+ * been acknowledged, so the retry does not resend them
  * and their hints are lost: the at-least-once delivery described below, as for
- * any transient write failure there. A read that finds no row (404) or is
- * refused with another 4xx proceeds with no `oldValues` entry for that row, and
- * logs a warning. The new value of a create or update is the server's returned
- * document when it sends one, else the row read before the push merged with
- * the write (so a partial PATCH hints the full row), else the written value.
+ * any transient write failure there. A read the server refuses (a 4xx) stalls
+ * that client's queue until the refusal is resolved. A resource that receives
+ * updates or deletes needs a `getOne` route: without one each of its updates
+ * and deletes fails its push, before anything is written. The new value of a
+ * create or update is the server's returned document when it sends one, else
+ * the row read before the push merged with the write (so a partial PATCH hints
+ * the full row), else the written value.
  *
  * **Delivery semantics.** Without a cooperating server there is no
  * server-side mutation-id ledger, so this backend keeps an in-session ledger.
@@ -467,6 +473,12 @@ const rejectionsOf = (
   return [...byIndex].map(([index, reason]) => ({ index, reason }));
 };
 
+/** A write of one push's batch, with its position in the batch. */
+interface BatchEntry {
+  readonly index: number;
+  readonly write: Write;
+}
+
 /** The row an `atomic:results` entry carries, if it returned a resource. */
 const resultRow = (result: unknown): JsonApiRow | undefined => {
   const data =
@@ -483,6 +495,19 @@ type AtomicOutcome =
       readonly rejections: ReadonlyArray<{ readonly index: number; readonly reason: string }>;
     };
 
+/**
+ * Enter a row an atomic batch creates, before the batch's one request. The row
+ * was absent before the push, so it needs no read: a later update or delete of
+ * it in the same batch must not GET it, since that 404 would fail the push. An
+ * entry already present (an earlier delete in the batch read the row) is kept.
+ * A create the server refuses is the one case where the row may exist; the
+ * resend reads it then (`readRefusedCreates`).
+ */
+const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
+  if (entryOf(acc, write.type, write.id) === undefined)
+    setEntry(acc, write.type, write.id, { before: Option.none(), current: Option.none() });
+};
+
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
   config: JsonApiBackendConfig
@@ -497,8 +522,6 @@ export const make = (
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
     // clientGroupId → clientId → highest applied mutation id (in-session).
     const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
-    // Resources already warned as having no `getOne` route (one warning each).
-    const warnedNoGetOne = yield* Ref.make(new Set<string>());
 
     const getJson = (url: string) =>
       Effect.scoped(
@@ -535,79 +558,131 @@ export const make = (
       );
 
     /**
-     * Read a row before the push writes it: the value the server holds now, or
-     * none when the row is absent or the read is refused with a 4xx (each logs a
-     * warning). A transient failure fails the push. On the atomic path every
-     * read precedes the one request, so nothing is written on a read the push
-     * cannot complete. On the per-resource path the writes before the failed
-     * read have already applied, and their hints are lost (see the module
-     * header's delivery note).
+     * The `getOne` route an update or delete reads its row through. A resource
+     * with no such route cannot be written by update or delete, so the write
+     * fails with BackendError before anything is sent.
+     */
+    const getOneFor = (type: string): Effect.Effect<{ readonly path: string }, BackendError> => {
+      const getOne = config.resources.get(type)?.getOne;
+      return getOne === undefined
+        ? Effect.fail(
+            new BackendError({
+              message: `"${type}" has no getOne route, so its updates and deletes cannot read the row before writing it`,
+            })
+          )
+        : Effect.succeed(getOne);
+    };
+
+    /**
+     * Read a row before the push writes it: the value the server holds now. Every
+     * failed read fails the push with BackendError, a 404 and any other 4xx
+     * included, and so does a 2xx whose document carries no resource: an update
+     * or delete that went out without its old value would hint no `oldValues`, so
+     * it is not sent instead. On the atomic path every read precedes the one
+     * request, so nothing is written on a read the push cannot complete. On the
+     * per-resource path the writes before the failed read have already applied,
+     * and their hints are lost (see the module header's delivery note).
      *
      * A cache-hit path would plug in here, returning the cached row without the
      * GET, once the cache has a freshness signal (a version token, or
      * invalidation by this backend's own writes). Until then the cache is never
      * consulted for an old value; see #395.
      */
-    const readBefore = (
-      type: string,
-      id: string
-    ): Effect.Effect<Option.Option<JsonApiRow>, BackendError> =>
+    const readBefore = (type: string, id: string): Effect.Effect<JsonApiRow, BackendError> =>
       Effect.gen(function* () {
-        const getOne = config.resources.get(type)?.getOne;
-        if (getOne === undefined) {
-          const first = yield* Ref.modify(
-            warnedNoGetOne,
-            (seen): readonly [boolean, Set<string>] =>
-              seen.has(type) ? [false, seen] : [true, new Set(seen).add(type)]
-          );
-          if (first)
-            yield* Effect.logWarning(
-              `JsonApiBackend: "${type}" has no getOne endpoint; its change hints carry no oldValues`
-            );
-          return Option.none<JsonApiRow>();
-        }
+        const getOne = yield* getOneFor(type);
         const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
           Effect.mapError(backendError(`Failed to read ${type}/${id} before writing it`))
         );
-        const status = response.status;
-        if (status === 404) {
-          // Absent: a row a concurrent writer deleted, or one this batch creates
-          // earlier on the atomic path (which reads before its one request).
-          yield* Effect.logWarning(
-            `JsonApiBackend: ${type}/${id} is absent before the push writes it; its change hint carries no oldValues for it`
-          );
-          return Option.none<JsonApiRow>();
-        }
-        if (status >= 500 || transientStatuses.has(status))
+        if (response.status < 200 || response.status >= 300)
           return yield* new BackendError({
-            message: `JSON:API read of ${type}/${id} returned HTTP ${status}`,
+            message: `JSON:API read of ${type}/${id} returned HTTP ${response.status}`,
           });
-        if (status < 200 || status >= 300) {
-          yield* Effect.logWarning(
-            `JsonApiBackend: read of ${type}/${id} returned HTTP ${status}; its change hint carries no oldValues for it`
-          );
-          return Option.none<JsonApiRow>();
-        }
         const document = yield* parseResponse(response).pipe(
           Effect.mapError(backendError(`Invalid JSON:API resource ${type}/${id}`))
         );
         const resource = documentToRows(document).rows[0]?.value;
-        return resource === undefined ? Option.none<JsonApiRow>() : Option.some(toRow(resource));
+        if (resource === undefined)
+          return yield* new BackendError({
+            message: `JSON:API read of ${type}/${id} returned no resource`,
+          });
+        return toRow(resource);
       });
 
     /**
      * Enter a row the write touches. An update or delete reads the row on the
      * push's first write to it, so the pre-push value is kept for the hint (the
-     * read is `readBefore`, where a cache hit would replace it, #395); a create
-     * reads nothing, and its row is entered when the create applies.
+     * read is `readBefore`, where a cache hit would replace it, #395). A row
+     * already entered is not read again. A create reads nothing and enters no
+     * row: its row is entered when the create applies, or up front for the
+     * atomic path's batch (`enterBatchCreate`).
      */
     const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
       if (write.operation === "create" || entryOf(acc, write.type, write.id) !== undefined)
         return Effect.void;
       return readBefore(write.type, write.id).pipe(
-        Effect.map((before) => setEntry(acc, write.type, write.id, { before, current: before }))
+        Effect.map((before) =>
+          setEntry(acc, write.type, write.id, {
+            before: Option.some(before),
+            current: Option.some(before),
+          })
+        )
       );
     };
+
+    /**
+     * Refuse a write that cannot be read before it is sent: an update or delete
+     * of a resource with no `getOne` route. Checked for a whole push before its
+     * first write, so a push that cannot be read sends nothing on either path.
+     */
+    const checkReadable = (write: Write): Effect.Effect<void, BackendError> =>
+      write.operation === "create" ? Effect.void : getOneFor(write.type).pipe(Effect.asVoid);
+
+    /** Enter one write of an atomic batch before its request: a create as absent, others by reading the row. */
+    const enterBatchWrite = (
+      acc: WriteAccumulator,
+      write: Write
+    ): Effect.Effect<void, BackendError> =>
+      write.operation === "create"
+        ? Effect.sync(() => enterBatchCreate(acc, write))
+        : enterRow(acc, write);
+
+    /**
+     * Read the rows the batch's refused creates would have made absent (#402).
+     * The batch entered each row a create touches as absent, which is right only
+     * while the create applies. The server refused these creates, so the row may
+     * exist: when a later update or delete of it is still to be sent, read it
+     * now, before the resend, so that write carries its pre-push value. Each row
+     * is read at most once, and a row no remaining update or delete touches is
+     * not read, so a create that applies never makes a read that can fail the push.
+     */
+    const readRefusedCreates = (
+      acc: WriteAccumulator,
+      refused: ReadonlyArray<BatchEntry>,
+      remaining: ReadonlyArray<BatchEntry>
+    ): Effect.Effect<void, BackendError> =>
+      Effect.forEach(
+        refused.filter((entry) => entry.write.operation === "create"),
+        (create) => {
+          const { type, id } = create.write;
+          const laterWrite = remaining.some(
+            (entry) =>
+              entry.index > create.index &&
+              entry.write.operation !== "create" &&
+              entry.write.type === type &&
+              entry.write.id === id
+          );
+          const entry = entryOf(acc, type, id);
+          if (!laterWrite || (entry !== undefined && Option.isSome(entry.before)))
+            return Effect.void;
+          return readBefore(type, id).pipe(
+            Effect.map((row) =>
+              setEntry(acc, type, id, { before: Option.some(row), current: Option.some(row) })
+            )
+          );
+        },
+        { discard: true }
+      );
 
     const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
       Ref.update(cache, (current) => {
@@ -811,7 +886,68 @@ export const make = (
         Effect.map((current) => Object.fromEntries(current.get(context.clientGroupId) ?? new Map()))
       );
 
-    /** Replay each write as its own request (at-least-once, in order). */
+    /**
+     * The mutations a push still has to send, in order, each with its write. A
+     * mutation at or below its client's acknowledged id was already applied, so it
+     * is skipped (idempotent, in-session). With `strict`, a mutation past the next
+     * expected id is a gap the push cannot apply, so the push is refused.
+     */
+    const unacknowledged = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>,
+      strict: boolean
+    ): Effect.Effect<
+      Array<{ readonly mutation: PushedMutation; readonly write: Write }>,
+      BackendError
+    > =>
+      Effect.gen(function* () {
+        const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
+        const expected = new Map<string, number>(group);
+        const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
+        for (const mutation of mutations) {
+          const last = expected.get(mutation.clientId) ?? 0;
+          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          if (strict && mutation.mutationId > last + 1)
+            return yield* new BackendError({
+              message: `Mutation-id gap for client "${mutation.clientId}": expected ${last + 1}, got ${mutation.mutationId}`,
+            });
+          expected.set(mutation.clientId, mutation.mutationId);
+          batch.push({ mutation, write: yield* writeFor(mutation) });
+        }
+        return batch;
+      });
+
+    /**
+     * The mutations a per-resource push still has to send, in order. A mutation
+     * at or below its client's acknowledged id was already applied, so it is
+     * skipped (idempotent, in-session). Unlike `unacknowledged`, nothing is
+     * decoded and no gap is refused here: the send loop does both, in order.
+     */
+    const pendingEach = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>
+    ): Effect.Effect<ReadonlyArray<PushedMutation>> =>
+      Effect.gen(function* () {
+        const expected = new Map<string, number>(
+          (yield* Ref.get(ledger)).get(context.clientGroupId) ?? []
+        );
+        const pending: Array<PushedMutation> = [];
+        for (const mutation of mutations) {
+          const last = expected.get(mutation.clientId) ?? 0;
+          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          expected.set(mutation.clientId, mutation.mutationId);
+          pending.push(mutation);
+        }
+        return pending;
+      });
+
+    /**
+     * Replay each write as its own request (at-least-once, in order). Before the
+     * first request, each pending mutation that decodes is checked for a `getOne`
+     * route, so a write that cannot be read sends nothing. A mutation whose args
+     * do not decode is not checked: the loop fails the push at it, after the
+     * writes before it, as it always has.
+     */
     const applyEach = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<PushedMutation>
@@ -823,12 +959,21 @@ export const make = (
           rejected: [],
           rows: new Map(),
         };
-        for (const mutation of mutations) {
-          const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
-          const last = group.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+        const pending = yield* pendingEach(context, mutations);
+        const decoded = yield* Effect.forEach(pending, (mutation) =>
+          Effect.gen(function* () {
+            const write = yield* writeFor(mutation).pipe(Effect.option);
+            if (Option.isSome(write)) yield* checkReadable(write.value);
+            return { mutation, write };
+          })
+        );
 
-          const write = yield* writeFor(mutation);
+        for (const { mutation, write: decodedWrite } of decoded) {
+          // An undecodable mutation decodes again here and fails the push with the
+          // same BackendError it always raised, leaving its ledger entry unmoved.
+          const write = Option.isSome(decodedWrite)
+            ? decodedWrite.value
+            : yield* writeFor(mutation);
           yield* enterRow(acc, write);
           // A permanent HTTP rejection (4xx) skips this mutation but still bumps
           // its id, so it is acknowledged and never poisons the queue. A
@@ -903,29 +1048,18 @@ export const make = (
       atomic: { readonly path: string }
     ): Effect.Effect<Backend.ApplyResult, BackendError> =>
       Effect.gen(function* () {
-        const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
-        const expected = new Map<string, number>(group);
-        const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
-        for (const mutation of mutations) {
-          const last = expected.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (in-session)
-          if (mutation.mutationId > last + 1)
-            return yield* new BackendError({
-              message: `Mutation-id gap for client "${mutation.clientId}": expected ${last + 1}, got ${mutation.mutationId}`,
-            });
-          expected.set(mutation.clientId, mutation.mutationId);
-          batch.push({ mutation, write: yield* writeFor(mutation) });
-        }
+        const batch = yield* unacknowledged(context, mutations, true);
 
         // Read the rows the batch updates or deletes before the one request that
-        // writes them, so a failed read sends nothing.
+        // writes them, so a failed read sends nothing. A row the batch creates is
+        // not read (see enterBatchCreate).
         const acc: WriteAccumulator = {
           touched: new Map(),
           puts: new Map(),
           rejected: [],
           rows: new Map(),
         };
-        for (const { write } of batch) yield* enterRow(acc, write);
+        for (const { write } of batch) yield* enterBatchWrite(acc, write);
 
         // Batch index → rejection reason; each round trip drops at least one.
         const rejectedAt = new Map<number, string>();
@@ -940,10 +1074,14 @@ export const make = (
             results = outcome.results;
             break;
           }
+          const refused = outcome.rejections.map(({ index }) => pending[index]!);
           for (const { index, reason } of outcome.rejections) {
             rejectedAt.set(pending[index]!.index, reason);
           }
           pending = pending.filter((entry) => !rejectedAt.has(entry.index));
+          // A create the server refused may have left its row in place: read it
+          // before the resend when a later write of it still needs the old value.
+          yield* readRefusedCreates(acc, refused, pending);
         }
 
         // Hints from what applied, in push order: each row's value from the

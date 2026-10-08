@@ -92,17 +92,24 @@ const rowResponse = (id: string, row: StoredRow) =>
  * An HttpClient that records every request and answers from a script. The
  * script's index counts the writes it is asked (0, 1, …), not the reads. A
  * `GET /todos/:id` is answered from `rows` (404 when absent), or by the next
- * entry of `readStatuses` while there are any, so a test can fail a read. A
- * write the server accepts (a 2xx) is kept in `rows` as the server would store
- * it, so a read after a write sees the written row, as it does on a real server.
+ * entry of `readStatuses` while there are any, so a test can fail a read, or by
+ * the next of `readDocuments`, a 200 carrying that document, so a test can
+ * answer a read with a document that names no resource. A write the server
+ * accepts (a 2xx) is kept in `rows` as the server would store it, so a read
+ * after a write sees the written row, as it does on a real server.
  */
 const makeServer = (
   script: (request: Recorded, index: number) => Response,
-  options: { readonly rows?: Rows; readonly readStatuses?: ReadonlyArray<number> } = {}
+  options: {
+    readonly rows?: Rows;
+    readonly readStatuses?: ReadonlyArray<number>;
+    readonly readDocuments?: ReadonlyArray<unknown>;
+  } = {}
 ) => {
   const requests: Array<Recorded> = [];
   const rows: Record<string, StoredRow> = { ...options.rows };
   const readStatuses = [...(options.readStatuses ?? [])];
+  const readDocuments = [...(options.readDocuments ?? [])];
   let writes = 0;
   const answer = (recorded: Recorded): Response => {
     const id = recorded.path.match(/^\/todos\/([^/]+)$/)?.[1];
@@ -110,6 +117,7 @@ const makeServer = (
       const status = readStatuses.shift();
       if (status !== undefined)
         return respond(status, { errors: [{ title: "Refused" }] }, jsonHeaders);
+      if (readDocuments.length > 0) return respond(200, readDocuments.shift(), jsonHeaders);
       const row = rows[id];
       return row === undefined ? empty(404) : rowResponse(id, row);
     }
@@ -274,10 +282,18 @@ describe("Convention.reflectAtomic", () => {
   });
 });
 
+/** The rows the server holds before `three` is pushed: the update's and the delete's targets. */
+const threeRows: Rows = {
+  "2": { attributes: { title: "old second", done: false } },
+  "3": { attributes: { title: "old third" } },
+};
+const threeServer = (script: (request: Recorded, index: number) => Response) =>
+  makeServer(script, { rows: threeRows });
+
 describe("JsonApiBackend in atomic mode", () => {
   it.effect("pushes a three-mutation batch as one atomic:operations request", () =>
     Effect.gen(function* () {
-      const server = makeServer((request) =>
+      const server = threeServer((request) =>
         respond(200, resultsFor(request.body["atomic:operations"]))
       );
       const backend = yield* makeBackend(server);
@@ -306,7 +322,7 @@ describe("JsonApiBackend in atomic mode", () => {
   it.effect("derives change hints from the result document, deletes as bare ids", () =>
     Effect.gen(function* () {
       // The server decorates what it stored; the hint must carry its value.
-      const server = makeServer(() =>
+      const server = threeServer(() =>
         respond(
           200,
           Atomic.results([
@@ -326,28 +342,42 @@ describe("JsonApiBackend in atomic mode", () => {
             { id: "1", value: { title: "first", createdAt: "server", id: "1", relationships: {} } },
             { id: "2", value: { title: "second", id: "2", relationships: {} } },
           ],
+          // The updated and deleted rows' values before the push, as read.
+          oldValues: [
+            { id: "2", value: { title: "old second", done: false, id: "2", relationships: {} } },
+            { id: "3", value: { title: "old third", id: "3", relationships: {} } },
+          ],
         },
       ]);
     })
   );
 
-  it.effect("falls back to the written value when the result carries no resource", () =>
-    Effect.gen(function* () {
-      const server = makeServer(() => empty(204));
-      const backend = yield* makeBackend(server);
-      const result = yield* backend.applyMutations(context, three);
-      expect(result.lastMutationIds).toEqual({ "client-1": 3 });
-      // The fallback carries the same shape a returned resource would (`toRow`).
-      expect(result.hints[0]?.values).toEqual([
-        { id: "1", value: { id: "1", title: "first", relationships: {} } },
-        { id: "2", value: { id: "2", title: "second", relationships: {} } },
-      ]);
-    })
+  it.effect(
+    "falls back to the row read before the push, merged with the write, without a resource",
+    () =>
+      Effect.gen(function* () {
+        const server = threeServer(() => empty(204));
+        const backend = yield* makeBackend(server);
+        const result = yield* backend.applyMutations(context, three);
+        expect(result.lastMutationIds).toEqual({ "client-1": 3 });
+        // The fallback carries the same shape a returned resource would (`toRow`).
+        expect(result.hints[0]?.values).toEqual([
+          { id: "1", value: { id: "1", title: "first", relationships: {} } },
+          {
+            id: "2",
+            value: { id: "2", title: "second", done: false, relationships: {} },
+          },
+        ]);
+        expect(result.hints[0]?.oldValues).toEqual([
+          { id: "2", value: { title: "old second", done: false, id: "2", relationships: {} } },
+          { id: "3", value: { title: "old third", id: "3", relationships: {} } },
+        ]);
+      })
   );
 
   it.effect("resends without a permanently rejected operation and acknowledges all three", () =>
     Effect.gen(function* () {
-      const server = makeServer((request, index) =>
+      const server = threeServer((request, index) =>
         index === 0
           ? rejectionAt(1, "title taken")
           : respond(200, resultsFor(request.body["atomic:operations"]))
@@ -371,6 +401,7 @@ describe("JsonApiBackend in atomic mode", () => {
           collection: "todos",
           ids: ["1", "3"],
           values: [{ id: "1", value: { title: "first", id: "1", relationships: {} } }],
+          oldValues: [{ id: "3", value: { title: "old third", id: "3", relationships: {} } }],
         },
       ]);
     })
@@ -380,7 +411,7 @@ describe("JsonApiBackend in atomic mode", () => {
     "a pointer below the operation still names it; several rejections drop in one round trip",
     () =>
       Effect.gen(function* () {
-        const server = makeServer((request, index) =>
+        const server = threeServer((request, index) =>
           index === 0
             ? respond(422, {
                 errors: [
@@ -409,7 +440,7 @@ describe("JsonApiBackend in atomic mode", () => {
 
   it.effect("acknowledges nothing when the whole batch is rejected", () =>
     Effect.gen(function* () {
-      const server = makeServer(() => rejectionAt(0, "no"));
+      const server = threeServer(() => rejectionAt(0, "no"));
       const backend = yield* makeBackend(server);
       const result = yield* backend.applyMutations(context, [three[0]!]);
       expect(server.requests).toHaveLength(1);
@@ -421,7 +452,7 @@ describe("JsonApiBackend in atomic mode", () => {
 
   it.effect("a 5xx is transient: BackendError and no ledger movement", () =>
     Effect.gen(function* () {
-      const server = makeServer(() => empty(500));
+      const server = threeServer(() => empty(500));
       const backend = yield* makeBackend(server);
       const failure = yield* Effect.flip(backend.applyMutations(context, three));
       expect(failure._tag).toBe("BackendError");
@@ -433,7 +464,7 @@ describe("JsonApiBackend in atomic mode", () => {
 
   it.effect("a 4xx naming no operation is transient too", () =>
     Effect.gen(function* () {
-      const server = makeServer(() =>
+      const server = threeServer(() =>
         respond(403, { errors: [{ status: "403", title: "Forbidden" }] })
       );
       const backend = yield* makeBackend(server);
@@ -448,7 +479,7 @@ describe("JsonApiBackend in atomic mode", () => {
       // Mid-batch rejection, then the resend fails: the server holds nothing,
       // so neither the rejection nor the survivors are acknowledged — the
       // client's retry resends all three.
-      const server = makeServer((_request, index) =>
+      const server = threeServer((_request, index) =>
         index === 0 ? rejectionAt(1, "no") : empty(503)
       );
       const backend = yield* makeBackend(server);
@@ -461,7 +492,7 @@ describe("JsonApiBackend in atomic mode", () => {
 
   it.effect("skips acknowledged mutations on replay and rejects gaps", () =>
     Effect.gen(function* () {
-      const server = makeServer((request) =>
+      const server = threeServer((request) =>
         respond(200, resultsFor(request.body["atomic:operations"]))
       );
       const backend = yield* makeBackend(server);
@@ -531,6 +562,8 @@ for (const mode of ["atomic", "per-resource"] as const) {
         // The row was written then deleted: the hint names it as a delete.
         expect(result.hints).toEqual([{ collection: "todos", ids: ["1"], values: [] }]);
         expect(result.lastMutationIds).toEqual({ "client-1": 2 });
+        // The row was absent before the push, so the delete reads nothing.
+        expect(readsOf(server, "/todos/1")).toHaveLength(0);
       })
     );
 
@@ -568,7 +601,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
       "a delete then a later create of the same row in one push carries the new value",
       () =>
         Effect.gen(function* () {
-          const server = modeServer(mode);
+          const server = modeServer(mode, { "1": before });
           const backend = yield* makeModeBackend(mode, server);
 
           const result = yield* backend.applyMutations(context, [
@@ -576,12 +609,14 @@ for (const mode of ["atomic", "per-resource"] as const) {
             mutation(2, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
           ]);
 
-          // The row exists again at the end of the push, so its final value is hinted.
+          // The row exists again at the end of the push, so its final value is hinted, and
+          // the delete read the row the push found, which is its old value.
           expect(result.hints).toEqual([
             {
               collection: "todos",
               ids: ["1"],
               values: [{ id: "1", value: { title: "again", id: "1", relationships: {} } }],
+              oldValues: [{ id: "1", value: beforeRow }],
             },
           ]);
         })
@@ -608,24 +643,33 @@ for (const mode of ["atomic", "per-resource"] as const) {
       })
     );
 
-    it.effect("a single update with a 204 (no-body) response carries its written value", () =>
-      Effect.gen(function* () {
-        // No response document: the hint falls back to the value the request wrote.
-        const server = makeServer(() => empty(204));
-        const backend = yield* makeModeBackend(mode, server);
+    it.effect(
+      "a single update with a 204 (no-body) response carries the row read before it, merged with the write",
+      () =>
+        Effect.gen(function* () {
+          // No response document: the hint merges the write over the row read before the push.
+          const server = makeServer(() => empty(204), { rows: { "1": before } });
+          const backend = yield* makeModeBackend(mode, server);
 
-        const result = yield* backend.applyMutations(context, [
-          mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "second" } }),
-        ]);
+          const result = yield* backend.applyMutations(context, [
+            mutation(1, "todos/update", {
+              type: "todos",
+              id: "1",
+              attributes: { title: "second" },
+            }),
+          ]);
 
-        expect(result.hints).toEqual([
-          {
-            collection: "todos",
-            ids: ["1"],
-            values: [{ id: "1", value: { title: "second", id: "1", relationships: {} } }],
-          },
-        ]);
-      })
+          expect(result.hints).toEqual([
+            {
+              collection: "todos",
+              ids: ["1"],
+              values: [
+                { id: "1", value: { title: "second", done: false, id: "1", relationships: {} } },
+              ],
+              oldValues: [{ id: "1", value: beforeRow }],
+            },
+          ]);
+        })
     );
 
     it.effect("[create 1, delete 1 rejected] keeps the create's value", () =>
@@ -752,10 +796,9 @@ for (const mode of ["atomic", "per-resource"] as const) {
           mutation(2, "todos/update", { type: "todos", id: "2", attributes: { title: "newer" } }),
         ]);
 
-        // The atomic path reads before its one request, so the row the batch creates is
-        // read too; it is absent then, so the hint still has no old value. The per-resource
-        // path enters the row when its create applies, and reads nothing.
-        expect(readsOf(server, "/todos/2")).toHaveLength(mode === "atomic" ? 1 : 0);
+        // A row the push creates was absent before the push: neither path reads it, so a
+        // 404 on that read cannot fail the push. The hint has no old value.
+        expect(readsOf(server, "/todos/2")).toHaveLength(0);
         expect(result.hints).toEqual([
           {
             collection: "todos",
@@ -925,33 +968,356 @@ for (const mode of ["atomic", "per-resource"] as const) {
         })
     );
 
-    it.effect("a read refused with a 4xx other than 404 proceeds with no oldValues entry", () =>
+    it.effect("a 2xx read whose document names no resource fails the push and sends no write", () =>
       Effect.gen(function* () {
-        const server = makeServer(bareWrites(mode), {
-          rows: { "1": before },
-          readStatuses: [403],
-        });
+        const server = makeServer(bareWrites(mode), { readDocuments: [{ data: null }] });
         const backend = yield* makeModeBackend(mode, server);
 
+        const failure = yield* Effect.flip(
+          backend.applyMutations(context, [
+            mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
+          ])
+        );
+        // A read with no row cannot supply the old value, so the update is not sent without one.
+        expect(failure._tag).toBe("BackendError");
+        expect(failure.message).toContain("returned no resource");
+        expect(readsOf(server, "/todos/1")).toHaveLength(1);
+        expect(writesOf(server)).toHaveLength(0);
+        expect(yield* backend.lastMutationIds(context)).toEqual({});
+      })
+    );
+
+    for (const status of [403, 404]) {
+      it.effect(`a read refused with HTTP ${status} fails the push and writes nothing`, () =>
+        Effect.gen(function* () {
+          const server = makeServer(bareWrites(mode), {
+            rows: { "1": before },
+            readStatuses: [status],
+          });
+          const backend = yield* makeModeBackend(mode, server);
+
+          const failure = yield* Effect.flip(
+            backend.applyMutations(context, [
+              mutation(1, "todos/update", {
+                type: "todos",
+                id: "1",
+                attributes: { title: "after" },
+              }),
+            ])
+          );
+          // The read is the one thing that decides whether the write may go: a refused read
+          // stops the push, so the server is not written and the ledger does not move.
+          expect(failure._tag).toBe("BackendError");
+          expect(failure.message).toContain(`HTTP ${status}`);
+          expect(writesOf(server)).toHaveLength(0);
+          expect(yield* backend.lastMutationIds(context)).toEqual({});
+        })
+      );
+
+      it.effect(
+        `a read refused with HTTP ${status} after an earlier write: atomic writes nothing, per-resource keeps that write`,
+        () =>
+          Effect.gen(function* () {
+            const server = makeServer(bareWrites(mode), {
+              rows: { "1": before },
+              readStatuses: [status],
+            });
+            const backend = yield* makeModeBackend(mode, server);
+            const push = [
+              mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "new" } }),
+              mutation(2, "todos/update", {
+                type: "todos",
+                id: "1",
+                attributes: { title: "after" },
+              }),
+            ];
+
+            const failure = yield* Effect.flip(backend.applyMutations(context, push));
+            expect(failure._tag).toBe("BackendError");
+            expect(writesOf(server)).toHaveLength(mode === "atomic" ? 0 : 1);
+            expect(yield* backend.lastMutationIds(context)).toEqual(
+              mode === "atomic" ? {} : { "client-1": 1 }
+            );
+          })
+      );
+    }
+  });
+}
+
+/**
+ * A create the atomic path refuses (the row already exists, a conflict) leaves
+ * its row in place, so a later update or delete of that row in the same batch
+ * must still carry the pre-push value (#402). The batch reads that row before
+ * the resend, and only when such a write is still to be sent.
+ */
+describe("JsonApiBackend atomic batch after a refused create (#402)", () => {
+  /** The first request is refused on its create; the resend and later requests apply. */
+  const refusedCreate = (request: Recorded, index: number) =>
+    index === 0 ? rejectionAt(0, "exists") : bareWrites("atomic")(request);
+
+  it.effect(
+    "an update of the refused create's row carries the pre-push row, merged with the write",
+    () =>
+      Effect.gen(function* () {
+        const server = makeServer(refusedCreate, { rows: { "1": before } });
+        const backend = yield* makeModeBackend("atomic", server);
+
         const result = yield* backend.applyMutations(context, [
-          mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
+          mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+          mutation(2, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
         ]);
 
-        // The write itself decides the row's fate. With no row read, the value is the
-        // written attributes alone (as before the read), and the hint has no oldValues.
-        expect(writesOf(server)).toHaveLength(1);
-        expect(result.lastMutationIds).toEqual({ "client-1": 1 });
+        // The refused request, the read of the row, then the resend without the create.
+        expect(sequenceOf(server)).toEqual([
+          "POST /operations",
+          "GET /todos/1",
+          "POST /operations",
+        ]);
+        expect(result.rejected).toEqual([
+          { clientId: "client-1", mutationId: 1, reason: "exists" },
+        ]);
+        expect(result.lastMutationIds).toEqual({ "client-1": 2 });
         expect(result.hints).toEqual([
           {
             collection: "todos",
             ids: ["1"],
-            values: [{ id: "1", value: { title: "after", id: "1", relationships: {} } }],
+            values: [
+              { id: "1", value: { title: "after", done: false, id: "1", relationships: {} } },
+            ],
+            oldValues: [{ id: "1", value: beforeRow }],
           },
         ]);
       })
+  );
+
+  it.effect("a delete of the refused create's row carries the pre-push row", () =>
+    Effect.gen(function* () {
+      const server = makeServer(refusedCreate, { rows: { "1": before } });
+      const backend = yield* makeModeBackend("atomic", server);
+
+      const result = yield* backend.applyMutations(context, [
+        mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+        mutation(2, "todos/delete", { type: "todos", id: "1" }),
+      ]);
+
+      expect(sequenceOf(server)).toEqual(["POST /operations", "GET /todos/1", "POST /operations"]);
+      expect(result.lastMutationIds).toEqual({ "client-1": 2 });
+      expect(result.hints).toEqual([
+        {
+          collection: "todos",
+          ids: ["1"],
+          values: [],
+          oldValues: [{ id: "1", value: beforeRow }],
+        },
+      ]);
+    })
+  );
+
+  for (const status of [503, 404]) {
+    it.effect(
+      `a read of the refused create's row failing with HTTP ${status} fails the push, sends no resend, and a retry applies it`,
+      () =>
+        Effect.gen(function* () {
+          // The first two requests are refused on the create (the retry's first request too),
+          // so the resend happens only once the read succeeds.
+          const server = makeServer(
+            (request, index) =>
+              index <= 1 ? rejectionAt(0, "exists") : bareWrites("atomic")(request),
+            { rows: { "1": before }, readStatuses: [status] }
+          );
+          const backend = yield* makeModeBackend("atomic", server);
+          const push = [
+            mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+            mutation(2, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
+          ];
+
+          const failure = yield* Effect.flip(backend.applyMutations(context, push));
+          expect(failure._tag).toBe("BackendError");
+          expect(failure.message).toContain(`HTTP ${status}`);
+          // The refused batch was never resent, so nothing was written and the ledger is unmoved.
+          expect(sequenceOf(server)).toEqual(["POST /operations", "GET /todos/1"]);
+          expect(yield* backend.lastMutationIds(context)).toEqual({});
+
+          const result = yield* backend.applyMutations(context, push);
+          expect(sequenceOf(server)).toEqual([
+            "POST /operations",
+            "GET /todos/1",
+            "POST /operations",
+            "GET /todos/1",
+            "POST /operations",
+          ]);
+          expect(result.lastMutationIds).toEqual({ "client-1": 2 });
+          expect(result.hints[0]?.oldValues).toEqual([{ id: "1", value: beforeRow }]);
+        })
     );
-  });
-}
+  }
+
+  it.effect("a refused create with no later write of its row is not read", () =>
+    Effect.gen(function* () {
+      const server = makeServer(refusedCreate, { rows: { "1": before } });
+      const backend = yield* makeModeBackend("atomic", server);
+
+      const result = yield* backend.applyMutations(context, [
+        mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+        mutation(2, "todos/create", { type: "todos", id: "2", attributes: { title: "new" } }),
+      ]);
+
+      // Nothing the resend writes needs the refused row's old value, so no read can fail the push.
+      expect(readsOf(server, "/todos/1")).toHaveLength(0);
+      expect(sequenceOf(server)).toEqual(["POST /operations", "POST /operations"]);
+      expect(result.rejected).toEqual([{ clientId: "client-1", mutationId: 1, reason: "exists" }]);
+      expect(result.hints[0]?.oldValues).toBeUndefined();
+    })
+  );
+});
+
+/**
+ * A push that writes a resource with no `getOne` route is refused before its
+ * first write on either delivery path, so the writes before it are not sent (S2).
+ */
+describe("JsonApiBackend checks getOne for the whole push before its first write", () => {
+  const mixed = HttpApi.make("app")
+    .add(
+      HttpApiGroup.make("todos")
+        .add(HttpApiEndpoint.get("getOne", "/todos/:id", { ...idParam, success: Schema.Unknown }))
+        .add(HttpApiEndpoint.post("create", "/todos", body))
+    )
+    .add(
+      HttpApiGroup.make("notes").add(
+        HttpApiEndpoint.patch("update", "/notes/:id", { ...idParam, ...body })
+      )
+    );
+
+  for (const mode of ["atomic", "per-resource"] as const) {
+    it.effect(
+      `a write no getOne route can read sends nothing, even after an earlier write, ${mode} path`,
+      () =>
+        Effect.gen(function* () {
+          const inspected = JsonApiSync.inspect(mixed);
+          const server = makeServer(bareWrites(mode));
+          const backend = yield* JsonApiBackend.make({
+            baseUrl: "http://api.test",
+            resources: inspected.resources,
+            mutators: inspected.registry.mutators,
+            operations: inspected.operations,
+            ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+          }).pipe(Effect.provide(server.layer));
+
+          const failure = yield* Effect.flip(
+            backend.applyMutations(context, [
+              mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "new" } }),
+              mutation(2, "notes/update", {
+                type: "notes",
+                id: "1",
+                attributes: { body: "after" },
+              }),
+            ])
+          );
+          expect(failure._tag).toBe("BackendError");
+          expect(failure.message).toContain('"notes" has no getOne route');
+          expect(server.requests).toHaveLength(0);
+          expect(yield* backend.lastMutationIds(context)).toEqual({});
+        })
+    );
+  }
+});
+
+/** A resource that receives updates or deletes but has no `getOne` route cannot be read before a write. */
+describe("JsonApiBackend without a getOne route for updated or deleted resources", () => {
+  const writeOnly = HttpApi.make("app").add(
+    HttpApiGroup.make("todos")
+      .add(HttpApiEndpoint.patch("update", "/todos/:id", { ...idParam, ...body }))
+      .add(HttpApiEndpoint.make("DELETE")("remove", "/todos/:id", idParam))
+  );
+
+  for (const mode of ["atomic", "per-resource"] as const) {
+    it.effect(`an update or delete fails its push before any write, ${mode} path`, () =>
+      Effect.gen(function* () {
+        const inspected = JsonApiSync.inspect(writeOnly);
+        const server = makeServer(bareWrites(mode));
+        const backend = yield* JsonApiBackend.make({
+          baseUrl: "http://api.test",
+          resources: inspected.resources,
+          mutators: inspected.registry.mutators,
+          operations: inspected.operations,
+          ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+        }).pipe(Effect.provide(server.layer));
+
+        const failure = yield* Effect.flip(
+          backend.applyMutations(context, [
+            mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
+          ])
+        );
+        expect(failure._tag).toBe("BackendError");
+        expect(failure.message).toContain('"todos" has no getOne route');
+        expect(server.requests).toHaveLength(0);
+        expect(yield* backend.lastMutationIds(context)).toEqual({});
+      })
+    );
+  }
+
+  it.effect("a resource that only receives creates needs no getOne route", () =>
+    Effect.gen(function* () {
+      const createOnly = HttpApi.make("app").add(
+        HttpApiGroup.make("todos").add(HttpApiEndpoint.post("create", "/todos", body))
+      );
+      const inspected = JsonApiSync.inspect(createOnly);
+      const server = makeServer(() => empty(204));
+      const backend = yield* JsonApiBackend.make({
+        baseUrl: "http://api.test",
+        resources: inspected.resources,
+        mutators: inspected.registry.mutators,
+        operations: inspected.operations,
+      }).pipe(Effect.provide(server.layer));
+      const result = yield* backend.applyMutations(context, [
+        mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "x" } }),
+      ]);
+      expect(result.lastMutationIds).toEqual({ "client-1": 1 });
+    })
+  );
+});
+
+/**
+ * A mutation whose args do not decode fails the push where its turn comes, as
+ * it did before the getOne check: on the per-resource path the writes before it
+ * are delivered, and on the atomic path nothing is sent, since the batch decodes
+ * before its one request.
+ */
+describe("JsonApiBackend and a mutation whose args do not decode", () => {
+  const push = [
+    mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "x" } }),
+    mutation(2, "todos/update", { type: "todos", id: "1", attributes: 5 }),
+  ];
+
+  it.effect(
+    "an undecodable later mutation does not block the earlier writes, per-resource path",
+    () =>
+      Effect.gen(function* () {
+        const server = makeServer(bareWrites("per-resource"));
+        const backend = yield* makeModeBackend("per-resource", server);
+
+        const failure = yield* Effect.flip(backend.applyMutations(context, push));
+        expect(failure._tag).toBe("BackendError");
+        expect(failure.message).toContain('Invalid args for mutator "todos/update"');
+        // The create reached the server; the undecodable update is refused before any read.
+        expect(sequenceOf(server)).toEqual(["POST /todos"]);
+        expect(yield* backend.lastMutationIds(context)).toEqual({ "client-1": 1 });
+      })
+  );
+
+  it.effect("an undecodable mutation sends nothing on the atomic path", () =>
+    Effect.gen(function* () {
+      const server = makeServer(bareWrites("atomic"));
+      const backend = yield* makeModeBackend("atomic", server);
+
+      const failure = yield* Effect.flip(backend.applyMutations(context, push));
+      expect(failure._tag).toBe("BackendError");
+      expect(failure.message).toContain('Invalid args for mutator "todos/update"');
+      expect(server.requests).toHaveLength(0);
+      expect(yield* backend.lastMutationIds(context)).toEqual({});
+    })
+  );
+});
 
 describe("JsonApiSync.layer atomic detection", () => {
   /** A stateful server answering both the per-resource and the atomic routes. */

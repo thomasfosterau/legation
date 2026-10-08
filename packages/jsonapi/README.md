@@ -155,18 +155,46 @@ pokes that window.
 A REST API exposes no change token, so the old value is read rather than
 cached: each update or delete makes one `GET /{type}/{id}` before its write,
 once per row per push, on both the per-resource and the atomic path. Each such
-read is an extra request. A row the push creates has no old value. Without a
-`getOne` route the backend cannot read a row, so its hint carries no
-`oldValues` (a warning is logged once per resource).
+read is an extra request. A row the push creates was absent before the push, so
+it is not read and has no old value. The one exception is on the atomic path: a
+create the server refuses, followed by an update or delete of the same row in
+the same batch, is read once the refusal arrives, before the batch is resent, so
+that later write carries the row's pre-push value.
 
-A read that fails transiently fails the push. On the atomic path nothing has
-been written by then, so the retry reads again. On the per-resource path the
-writes before the failed read have already applied and been acknowledged, so
-the retry does not resend them and their hints are lost: that path is
-at-least-once, and a transient write failure loses those hints the same way. A
-read that finds no row (404) or is refused with another 4xx leaves that row with
-no `oldValues` entry, and logs a warning. The write itself still decides the
-row's fate.
+Every update or delete carries its old value or is not sent. A read that fails
+for any reason fails the push with a `BackendError`: a transport error, a 5xx, a
+408 or 429, a 4xx such as 403, a 404 (the row is absent), or a 2xx whose document
+names no resource. On the atomic path nothing has been written by then, so the
+retry reads again. On the per-resource path the writes before the failed read
+have already applied and been acknowledged, so the retry does not resend them
+and their hints are lost: that path is at-least-once, and a transient write
+failure loses those hints the same way.
+
+A refused read stalls the client's queue until the read can succeed or the
+client is reset. Two consequences follow:
+
+- Deleting a row that is already gone fails with a 404 on the read, so every
+  retry fails the same way. The delete used to be acknowledged as a no-op.
+- A create the server refuses for a reason other than a conflict (a 422, say)
+  stalls the queue in the same way when a later update or delete in the same
+  push touches that row. The row is absent, so its read finds a 404.
+- The stall reaches the application through the sync loop. The `BackendError`
+  arrives at the client as a `TransportError`, the client's retry policy retries
+  it (by default, exponential backoff from 1 second, capped at 30 seconds, for
+  five retries), and the push then surfaces as a `SyncFailure` with
+  `operation: "push"` on `syncFailures`. The loop does not retry in a tight
+  loop. With `syncLoop.pushDebounce` set, the next push comes with the next
+  local mutation; otherwise it waits for a reconnect or an explicit `push`.
+- The in-session ledger belongs to one backend instance. After a restart, a
+  delete that had already applied is sent again, its read finds nothing, and the
+  queue stalls in the same way.
+
+A resource that receives updates or deletes must have a `getOne` route, since
+that is how its rows are read. A push that contains one of its updates or
+deletes (one whose args decode) fails with a `BackendError` before any write in
+that push is sent, on both paths, which stalls that client's queue until the
+route exists. A resource
+that only receives creates needs no `getOne` route.
 
 ## Standalone collection loading
 
