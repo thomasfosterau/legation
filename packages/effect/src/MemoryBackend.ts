@@ -286,8 +286,10 @@ const forgetRejectionsBelow = (
 
 /**
  * Fold a committed stage into a batch's hint inputs: the ids it touched and
- * the values of its PUTs (a delete removes the id from the values, so it is
- * absent from what the hint emits).
+ * the values of its PUTs. A delete removes the id from the values, so it is
+ * absent from what the hint emits, even when an earlier mutation of the same
+ * batch put the row (#344): the hint describes the batch's final state, and a
+ * row deleted later in the batch carries no value.
  */
 const foldStage = (
   stage: Stage,
@@ -298,11 +300,13 @@ const foldStage = (
     const ids = touched.get(collection) ?? new Set<string>();
     for (const [id, write] of writes) {
       ids.add(id);
+      const values = puts.get(collection) ?? new Map<string, unknown>();
       if (write._tag === "put") {
-        const values = puts.get(collection) ?? new Map<string, unknown>();
         values.set(id, write.value);
-        puts.set(collection, values);
+      } else {
+        values.delete(id);
       }
+      puts.set(collection, values);
     }
     touched.set(collection, ids);
   }
