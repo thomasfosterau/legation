@@ -3,7 +3,7 @@
  * Redis Streams broker each carry a ChangeHint between two serialized buses.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, PubSub, Ref } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, PubSub, Ref } from "effect";
 import { Redis } from "effect/persistence";
 import * as TestClock from "effect/testing/TestClock";
 import type { ChangeHint } from "../Backend.js";
@@ -61,10 +61,14 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
  * A blocking in-memory fake of the Redis commands the broker uses: XADD
  * appends to a stream and signals; XREAD BLOCK resolves "$" to the current
  * length once, then parks until a new entry arrives or the block times out.
+ * The block bound runs on the TestClock, so it fires only when a test advances
+ * virtual time. `readerParked` completes once a reader has resolved its start
+ * position, so a test can publish only after that point.
  */
 const makeFakeRedis = Effect.gen(function* () {
   const entries = yield* Ref.make<Array<{ readonly id: string; readonly payload: string }>>([]);
   const signal = yield* PubSub.unbounded<void>();
+  const readerParked = yield* Deferred.make<void>();
   let seq = 0;
 
   const send = (<A>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A> => {
@@ -86,6 +90,7 @@ const makeFakeRedis = Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(signal);
         const all = yield* Ref.get(entries);
         const start = lastId === "$" ? all.length : all.findIndex((e) => e.id === lastId) + 1;
+        yield* Deferred.succeed(readerParked, undefined);
         const loop = (): Effect.Effect<A> =>
           Effect.gen(function* () {
             const slice = (yield* Ref.get(entries)).slice(start);
@@ -108,25 +113,23 @@ const makeFakeRedis = Effect.gen(function* () {
   // commands, so a subscribe here is a test bug, not a code path.
   const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
 
-  return yield* Redis.make({ send, subscribe });
+  return { redis: yield* Redis.make({ send, subscribe }), readerParked };
 });
 
 describe("makeRedisBroker (Redis Streams)", () => {
-  // Real clock: the reader's XREAD BLOCK and the "$" start race resolve in
-  // wall time exactly as they would against a real Redis.
-  it.live("carries a hint between two buses over a shared stream", () =>
+  it.effect("carries a hint between two buses over a shared stream", () =>
     Effect.gen(function* () {
-      const redis = yield* makeFakeRedis;
+      const { redis, readerParked } = yield* makeFakeRedis;
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, redis)
       );
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      // Subscribe first ("$" = only future); let the reader park on XREAD,
-      // then publish on the other bus.
+      // Subscribe first ("$" = only future). Publish only once the reader has
+      // resolved its start position, so the hint is past it.
       const subscription = yield* busB.subscribe;
-      yield* Effect.sleep("40 millis");
+      yield* Deferred.await(readerParked);
       yield* busA.publish([hint]);
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)

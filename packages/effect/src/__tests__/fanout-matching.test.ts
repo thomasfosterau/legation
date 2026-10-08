@@ -6,15 +6,15 @@
  * value-less hint or an `Exists` predicate falls back to a collection-level
  * match, and a delete matches against the rows a group's CVR actually holds.
  *
- * The fan-out fibre pokes asynchronously, so counts are observed as
- * before/after deltas of the `legation_pokes*` metrics after a short real-time
- * settle (`it.effect` with `sleepReal`, mirroring `serialized-bus.test.ts`),
- * and a group that must NOT be poked is confirmed by losing a race to a
- * timeout. This sidesteps the poke hub's replay buffer, which would replay only
- * the last (other-group) poke to a late per-group subscriber.
+ * The fan-out fibre pokes asynchronously, so each case waits for the fan-out to
+ * finish the hint batch it was handed (its per-batch latency sample), then reads
+ * the `legation_pokes*` deltas. Nothing here reads the wall clock. A group that
+ * must be poked is confirmed by its hub's replayed poke; a group that must NOT
+ * be poked is confirmed by the poke total, since each case publishes one batch
+ * and the poked group accounts for the whole total.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Metric, Scope, Stream } from "effect";
+import { Effect, Metric, Option, Scope, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import type { ChangeHint } from "../Backend.js";
@@ -75,24 +75,47 @@ const pushRemove = (group: string, client: string, mutationId: number, id: strin
 const subscribe = (handler: ServerHandler, group: string, subset: Subset.Subset) =>
   handler.handlePull({ clientGroupId: group, cookie: undefined, subscriptions: [subset] });
 
-const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
-
-/** Let the forked fan-out fibre drain the published hint. */
-const settle = sleepReal(50);
-
 /** Snapshot the poke counters, for before/after deltas. */
 const counts = Effect.all({
   poked: Metric.value(Telemetry.pokesTotal),
   suppressed: Metric.value(Telemetry.pokesSuppressedTotal),
 });
 
-/** Whether a group is poked within a short real-time window (else "quiet"). */
-const pokedOrQuiet = (handler: ServerHandler, group: string) =>
-  Effect.race(
-    Stream.runHead(handler.pokes(group)).pipe(Effect.as("poked" as const)),
-    sleepReal(60).pipe(Effect.as("quiet" as const))
-  );
+/** How many hint batches the fan-out has finished deciding. */
+const decidedBatches = Metric.value(Telemetry.fanoutLatencyMs).pipe(
+  Effect.map((state) => state.count)
+);
+
+/**
+ * Wait until the fan-out has decided the batch published after `before` was
+ * read. It records one latency sample per batch, after its last group is poked
+ * or suppressed, so the sample advancing is the batch-done event (this relies
+ * on SyncServer recording the sample after its poke loop). The loop
+ * yields between reads; it never waits on a timer, and a fan-out that never
+ * decides the batch fails at the runner's timeout.
+ */
+const awaitBatch = (before: number) =>
+  Effect.gen(function* () {
+    while ((yield* decidedBatches) <= before) yield* Effect.yieldNow;
+  });
+
+/** Publish one batch, wait for the fan-out to decide it, and return the poke deltas it caused. */
+const fanoutDeltas = <E>(publish: Effect.Effect<unknown, E>) =>
+  Effect.gen(function* () {
+    const batchesBefore = yield* decidedBatches;
+    const before = yield* counts;
+    yield* publish;
+    yield* awaitBatch(batchesBefore);
+    const after = yield* counts;
+    return {
+      poked: after.poked.count - before.poked.count,
+      suppressed: after.suppressed.count - before.suppressed.count,
+    };
+  });
+
+/** Whether the group's hub holds a poke: a late subscriber gets the group's last poke replayed. */
+const wasPoked = (handler: ServerHandler, group: string) =>
+  Stream.runHead(handler.pokes(group)).pipe(Effect.map(Option.isSome));
 
 describe("predicate-aware fan-out matching (#42)", () => {
   it.effect("pokes only the group whose predicate the write matches", () =>
@@ -101,19 +124,15 @@ describe("predicate-aware fan-out matching (#42)", () => {
       yield* subscribe(handler, "group-a", tenant("a"));
       yield* subscribe(handler, "group-b", tenant("b"));
 
-      const before = yield* counts;
       // A write whose row matches group A's predicate but not group B's.
-      yield* handler.handlePush(
-        pushSet("group-w", "c-w", 1, { id: "1", tenantId: "a", title: "x" })
+      const deltas = yield* fanoutDeltas(
+        handler.handlePush(pushSet("group-w", "c-w", 1, { id: "1", tenantId: "a", title: "x" }))
       );
-      yield* settle;
-      const after = yield* counts;
 
       // Exactly one poke (A) and one suppression (B, disjoint predicate).
-      expect(after.poked.count - before.poked.count).toBe(1);
-      expect(after.suppressed.count - before.suppressed.count).toBe(1);
-      // And B, concretely, is never poked.
-      expect(yield* pokedOrQuiet(handler, "group-b")).toBe("quiet");
+      expect(deltas).toEqual({ poked: 1, suppressed: 1 });
+      // The one poke went to A, so B, which the batch never poked, stays quiet.
+      expect(yield* wasPoked(handler, "group-a")).toBe(true);
     }).pipe(Effect.scoped)
   );
 
@@ -123,15 +142,11 @@ describe("predicate-aware fan-out matching (#42)", () => {
       yield* subscribe(handler, "group-a", tenant("a"));
       yield* subscribe(handler, "group-b", tenant("b"));
 
-      const before = yield* counts;
       // No `values`: the server cannot decide by predicate, so it pokes every
       // group subscribed to the collection (both A and B, disjoint predicates).
-      yield* bus.publish([{ collection: "todos", ids: ["z"] }]);
-      yield* settle;
-      const after = yield* counts;
+      const deltas = yield* fanoutDeltas(bus.publish([{ collection: "todos", ids: ["z"] }]));
 
-      expect(after.poked.count - before.poked.count).toBe(2);
-      expect(after.suppressed.count - before.suppressed.count).toBe(0);
+      expect(deltas).toEqual({ poked: 2, suppressed: 0 });
     }).pipe(Effect.scoped)
   );
 
@@ -148,17 +163,16 @@ describe("predicate-aware fan-out matching (#42)", () => {
       });
       yield* subscribe(handler, "group-e", withExists);
 
-      const before = yield* counts;
       // A single row can't decide an Exists, so the group is poked regardless
       // of the row's value (conservative match), never suppressed.
-      yield* handler.handlePush(
-        pushSet("group-w", "c-w", 1, { id: "1", tenantId: "unmatched", title: "x" })
+      const deltas = yield* fanoutDeltas(
+        handler.handlePush(
+          pushSet("group-w", "c-w", 1, { id: "1", tenantId: "unmatched", title: "x" })
+        )
       );
-      yield* settle;
-      const after = yield* counts;
 
-      expect(after.poked.count - before.poked.count).toBe(1);
-      expect(after.suppressed.count - before.suppressed.count).toBe(0);
+      expect(deltas).toEqual({ poked: 1, suppressed: 0 });
+      expect(yield* wasPoked(handler, "group-e")).toBe(true);
     }).pipe(Effect.scoped)
   );
 
@@ -167,25 +181,20 @@ describe("predicate-aware fan-out matching (#42)", () => {
       const { handler } = yield* makeServer;
       // Seed a row and let its hint drain before any group subscribes, so the
       // seed does not race the subscriptions and skew the counters.
-      yield* handler.handlePush(
-        pushSet("group-w", "c-w", 1, { id: "1", tenantId: "a", title: "x" })
+      yield* fanoutDeltas(
+        handler.handlePush(pushSet("group-w", "c-w", 1, { id: "1", tenantId: "a", title: "x" }))
       );
-      yield* settle;
       // group-holder syncs the row (its CVR now holds todos/1); group-other, on
       // a disjoint predicate, holds nothing.
       yield* subscribe(handler, "group-holder", allTodos);
       yield* subscribe(handler, "group-other", tenant("other"));
 
-      const before = yield* counts;
       // Delete row 1: its id is in the hint's ids but absent from its values.
-      yield* handler.handlePush(pushRemove("group-w", "c-w", 2, "1"));
-      yield* settle;
-      const after = yield* counts;
+      const deltas = yield* fanoutDeltas(handler.handlePush(pushRemove("group-w", "c-w", 2, "1")));
 
       // Only the group whose CVR held the row is poked; the other is suppressed.
-      expect(after.poked.count - before.poked.count).toBe(1);
-      expect(after.suppressed.count - before.suppressed.count).toBe(1);
-      expect(yield* pokedOrQuiet(handler, "group-other")).toBe("quiet");
+      expect(deltas).toEqual({ poked: 1, suppressed: 1 });
+      expect(yield* wasPoked(handler, "group-holder")).toBe(true);
     }).pipe(Effect.scoped)
   );
 

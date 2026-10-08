@@ -3,18 +3,16 @@
  * batch it takes off the stream to the in-context InvalidationBus, and stops
  * when the scope closes.
  *
- * The consumer runs on a forked fibre, so the "stops on scope close" case uses
- * `it.live` (wall time) and a real-timer race to a timeout, mirroring
- * `fanout-matching.test.ts`.
+ * Both cases run on the TestClock and wait on events, never on a timer. The
+ * stop case awaits the consumer's own teardown (a finalizer on its stream), and
+ * proves a later offer never reaches the bus with a sentinel hint that must
+ * arrive first.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Queue, Stream } from "effect";
+import { Deferred, Effect, Queue, Stream } from "effect";
 import type { ChangeHint } from "../Backend.js";
 import * as HintSource from "../HintSource.js";
 import * as InvalidationBus from "../InvalidationBus.js";
-
-const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
 
 describe("HintSource.fromStream (#43)", () => {
   it.effect("publishes each hint batch from the stream to the bus", () =>
@@ -36,31 +34,41 @@ describe("HintSource.fromStream (#43)", () => {
     }).pipe(Effect.scoped)
   );
 
-  it.live("stops publishing when its scope closes", () =>
+  it.effect("stops publishing when its scope closes", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;
       const subscription = yield* bus.subscribe;
       const queue = yield* Queue.unbounded<ReadonlyArray<ChangeHint>>();
+      // Completes when the consumer's stream is finalized, which happens exactly
+      // when its fibre is interrupted.
+      const stopped = yield* Deferred.make<void>();
+      const source = Stream.fromQueue(queue).pipe(
+        Stream.ensuring(Deferred.succeed(stopped, undefined).pipe(Effect.asVoid))
+      );
 
       // Run the source inside an inner scope; when that scope closes, the forked
       // consumer fibre is interrupted.
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* HintSource.run(HintSource.fromStream(Stream.fromQueue(queue))).pipe(
+          yield* HintSource.run(HintSource.fromStream(source)).pipe(
             Effect.provideService(InvalidationBus.InvalidationBus, bus)
           );
           yield* Queue.offer(queue, [{ collection: "todos", ids: ["1"] }]);
           expect(yield* subscription.take).toEqual([{ collection: "todos", ids: ["1"] }]);
         })
       );
+      yield* Deferred.await(stopped);
 
-      // The consumer is gone: a later offer never reaches the bus.
+      // The consumer is gone, which `stopped` proves: the stream's finalizer runs
+      // only after the consumer's in-flight publish, if any, has finished. This
+      // part checks the effect: a later offer never reaches the bus. The yields
+      // give a still-running consumer the chance to publish the offer before
+      // the sentinel; without them the sentinel would win the race either way.
       yield* Queue.offer(queue, [{ collection: "todos", ids: ["2"] }]);
-      const outcome = yield* Effect.race(
-        subscription.take.pipe(Effect.as("published" as const)),
-        sleepReal(30).pipe(Effect.as("quiet" as const))
-      );
-      expect(outcome).toBe("quiet");
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      const sentinel: ReadonlyArray<ChangeHint> = [{ collection: "lists", ids: ["sentinel"] }];
+      yield* bus.publish(sentinel);
+      expect(yield* subscription.take).toEqual(sentinel);
     }).pipe(Effect.scoped)
   );
 });
