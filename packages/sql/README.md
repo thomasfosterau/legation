@@ -28,8 +28,23 @@ explicit code-point collation (`COLLATE "C"` / `COLLATE BINARY`) on every
 comparison, literals bind by the declared kind, and booleans are stored as
 `0`/`1` on SQLite and decoded back by the backend. Writes run app-authored
 handlers inside one transaction, and each mutation's `lastMutationId` is
-claimed before its handler runs. An executor without transactions sets
-`transactional: false` and bumps after the handler instead (D1).
+claimed before its handler runs. Mutations from different client groups are
+serialisable: SQLite serialises its writers, and PostgreSQL runs each
+transaction at `SERIALIZABLE` (a handler whose reads went stale is refused
+with a serialization failure, which the client retries). An executor without
+transactions sets `transactional: false` and bumps after the handler instead
+(D1), and D1 does not isolate handlers, so it does not meet that guarantee.
+
+> **PostgreSQL apps must pass `dialect: Sql.postgres` to `SqlBackend.make`.**
+> That dialect is what sets `SERIALIZABLE` on each mutation transaction. Leave it
+> out and the backend falls back to SQLite's dialect, which runs no isolation
+> statement and raises no error for that. Batches then run at PostgreSQL's default
+> READ COMMITTED, and a lost update across client groups goes unreported.
+> A hand-written dialect without a `serializable` statement also gets no
+> isolation statement, so its executor must provide the isolation itself. The
+> executor's `transaction` must also open a top-level transaction, not a savepoint
+> nested in another: PostgreSQL refuses `SET TRANSACTION` there, and the batch
+> fails with a `BackendError` instead of running weaker.
 
 ## Install
 

@@ -84,6 +84,15 @@ export interface Dialect {
   readonly boolean: (value: boolean) => unknown;
   /** The larger of two SQL expressions: `MAX` on SQLite, `GREATEST` on PostgreSQL. */
   readonly greatest: (left: string, right: string) => string;
+  /**
+   * The statement that makes the transaction it runs in SERIALIZABLE, run first
+   * in each `applyMutations` transaction (#353). It must be the transaction's first
+   * statement in a top-level transaction: a nested one refuses it, and the batch
+   * then fails. Absent on a dialect whose writers already serialise (SQLite takes
+   * its write lock with `BEGIN IMMEDIATE`); a hand-written dialect without it gets
+   * no isolation statement, so its executor must provide the isolation itself.
+   */
+  readonly serializable?: string | undefined;
 }
 
 /** Field → literal kind, for the collation clause and typed binds. */
@@ -108,13 +117,14 @@ export const sqlite: Dialect = {
   greatest: (left, right) => `MAX(${left}, ${right})`,
 };
 
-/** PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans. */
+/** PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans, SERIALIZABLE transactions. */
 export const postgres: Dialect = {
   placeholder: (index) => `$${index}`,
   quote: quoteDouble,
   textCollation: `"C"`,
   boolean: (value) => value,
   greatest: (left, right) => `GREATEST(${left}, ${right})`,
+  serializable: "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
 };
 
 const comparators: Record<Predicate.Comparison, string> = {

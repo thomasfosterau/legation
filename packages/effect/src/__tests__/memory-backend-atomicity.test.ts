@@ -716,3 +716,133 @@ describe("ClientEngine settled outcomes are not re-settled (#364)", () => {
     })
   );
 });
+
+/** One write to the `hot` row, pushed by one client of one group (#353). */
+const hotMutation = (client: string): Mutation => ({
+  clientId: client,
+  mutationId: 1,
+  mutator: "test/hot",
+  args: {},
+  createdAt: 0,
+});
+
+/** One increment of the shared counter, pushed by one client of one group (#353). */
+const countMutation = (client: string): Mutation => ({
+  clientId: client,
+  mutationId: 1,
+  mutator: "test/count",
+  args: {},
+  createdAt: 0,
+});
+
+describe("MemoryBackend serialisable isolation across client groups (#353)", () => {
+  it.effect("keeps group X's increment when group Y commits between X's read and its write", () =>
+    Effect.gen(function* () {
+      const seen = yield* Deferred.make<number>();
+      const release = yield* Deferred.make<void>();
+      const parked = yield* Ref.make(false);
+      const runs = yield* Ref.make(0);
+      const backend = yield* MemoryBackend.make({
+        // Read the counter, then write it plus one. Group x's first run parks
+        // between the read and the write, reporting the value it read.
+        "test/count": (_raw, writer, callContext) =>
+          Effect.gen(function* () {
+            yield* Ref.update(runs, (n) => n + 1);
+            const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+            const count = current?.count ?? 0;
+            if (callContext.clientGroupId === "group-x" && !(yield* Ref.getAndSet(parked, true))) {
+              yield* Deferred.succeed(seen, count);
+              yield* Deferred.await(release);
+            }
+            yield* writer.put(rows, "counter", { count: count + 1 });
+          }),
+      });
+
+      const x = yield* Effect.forkChild(
+        backend.applyMutations({ clientGroupId: "group-x" }, [countMutation("x-client")])
+      );
+      expect(yield* Deferred.await(seen)).toBe(0);
+
+      // Group Y commits its increment while X is parked after its read. Under a
+      // lock this call would wait for X; without one it commits at once.
+      yield* backend.applyMutations({ clientGroupId: "group-y" }, [countMutation("y-client")]);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(x);
+
+      // Both increments land. X's read was stale when it committed, so X ran
+      // again on Y's value (three runs in all: X, Y, X's retry).
+      const [counter] = yield* backend.getRows({ clientGroupId: "group-x" }, rows, ["counter"]);
+      expect(counter?.value).toEqual({ count: 2 });
+      expect(yield* Ref.get(runs)).toBe(3);
+    })
+  );
+
+  it.effect("fails transiently, writing nothing, when a read goes stale on every attempt", () =>
+    Effect.gen(function* () {
+      // Group x reads `hot`, then group y commits to `hot` while x is still
+      // running, so every run of x is stale at its commit.
+      let backend: Backend | undefined;
+      const xRuns = yield* Ref.make(0);
+      const yCommits = yield* Ref.make(0);
+      const built = yield* MemoryBackend.make({
+        "test/hot": (_raw, writer, callContext) =>
+          Effect.gen(function* () {
+            yield* writer.get(rows, "hot");
+            if (callContext.clientGroupId !== "group-x") {
+              yield* writer.put(rows, "hot", { by: callContext.clientGroupId });
+              return;
+            }
+            yield* Ref.update(xRuns, (n) => n + 1);
+            const y = yield* Ref.updateAndGet(yCommits, (n) => n + 1);
+            if (backend === undefined) return yield* Effect.die("backend not built");
+            yield* backend.applyMutations({ clientGroupId: "group-y" }, [
+              hotMutation(`y-client-${y}`),
+            ]);
+            yield* writer.put(rows, "out", { run: y });
+          }),
+      });
+      backend = built;
+
+      // Flipped so the failure is the success value; a success would die here.
+      const error = yield* Effect.flip(
+        built.applyMutations({ clientGroupId: "group-x" }, [hotMutation("x-client")])
+      ).pipe(Effect.orDie);
+
+      // MemoryBackend's cap is 16 attempts: X ran that many times, each run's
+      // commit was refused, and the batch failed with a transient BackendError.
+      expect(error).toBeInstanceOf(BackendError);
+      expect(error.message).toContain("serialization conflict");
+      expect(yield* Ref.get(xRuns)).toBe(16);
+      expect(yield* Ref.get(yCommits)).toBe(16);
+      // Nothing of X's committed: no write, and the ledger did not move.
+      expect(yield* built.getRows({ clientGroupId: "group-x" }, rows, ["out"])).toEqual([]);
+      expect(yield* built.lastMutationIds({ clientGroupId: "group-x" })).toEqual({});
+      // Group y's own commits, one per run, did land.
+      expect(Object.keys(yield* built.lastMutationIds({ clientGroupId: "group-y" }))).toHaveLength(
+        16
+      );
+    })
+  );
+
+  it.effect("runs a handler once when no row it read changed before its commit", () =>
+    Effect.gen(function* () {
+      const runs = yield* Ref.make(0);
+      const backend = yield* MemoryBackend.make({
+        "test/count": (_raw, writer) =>
+          Effect.gen(function* () {
+            yield* Ref.update(runs, (n) => n + 1);
+            const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+            yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
+          }),
+      });
+
+      yield* backend.applyMutations({ clientGroupId: "group-x" }, [countMutation("x-client")]);
+      yield* backend.applyMutations({ clientGroupId: "group-y" }, [countMutation("y-client")]);
+
+      const [counter] = yield* backend.getRows({ clientGroupId: "group-x" }, rows, ["counter"]);
+      expect(counter?.value).toEqual({ count: 2 });
+      expect(yield* Ref.get(runs)).toBe(2);
+    })
+  );
+});

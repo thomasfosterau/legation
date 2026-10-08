@@ -1,10 +1,12 @@
 /**
- * SqlBackend's mutation-id ledger on a real PostgreSQL server (issue #360): the
- * READ COMMITTED overlap that #352 is about, run with two real transactions.
- * SQLite serialises its transactions and PGlite is one connection behind a
- * mutex, so neither can interleave two calls; the mock in `sql-backend.test.ts`
- * models the interleaving but not PostgreSQL's row locks. This file has none of
- * those gaps.
+ * SqlBackend on a real PostgreSQL server (issue #360): the overlap that #352 is
+ * about, and the lost update across client groups that #353 rules out, run with
+ * two real transactions. Each `applyMutations` transaction runs at SERIALIZABLE
+ * (#353), so an overlap that READ COMMITTED would let through is refused with a
+ * serialization failure instead. SQLite serialises its transactions and PGlite
+ * is one connection behind a mutex, so neither can interleave two calls; the
+ * mock in `sql-backend.test.ts` models the interleaving but not PostgreSQL's row
+ * locks. This file has none of those gaps.
  *
  * The suite needs `DATABASE_URL`, a PostgreSQL URL for a database this test may
  * reset: it drops and recreates `todos`, `effects` and `sync_mutations`.
@@ -233,13 +235,13 @@ if (databaseUrl === undefined && process.env.CI === undefined) {
 
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
-describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #352, #360)", () => {
+describePostgres("SqlBackend on PostgreSQL: overlapping calls (#352, #360)", () => {
   const url = databaseUrl ?? "";
 
   // `it.live`, not `it.effect`: the copy's lock wait is observed by polling a
   // real server, so the test runs on the real clock (CONTRIBUTING, "Tests").
   it.live(
-    "a copy of a mutation in flight blocks on the first call's ledger row, then skips; the handler applies once",
+    "a copy of a mutation in flight blocks on the first call's ledger row, is refused as a serialization failure, then skips on retry; the handler applies once",
     () =>
       withDatabase(url, (sql) =>
         Effect.gen(function* () {
@@ -302,10 +304,20 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
 
           yield* Deferred.succeed(release, undefined);
           const applied = yield* Fiber.join(first);
-          const skipped = yield* Fiber.join(copy);
+          // Under SERIALIZABLE the copy's ledger write, once the first call
+          // commits, is refused with SQLSTATE 40001 (its snapshot predates that
+          // commit), so it fails as a transient BackendError rather than skipping.
+          const refused = yield* Effect.flip(Fiber.join(copy));
+          expect(refused).toMatchObject({
+            _tag: "BackendError",
+            cause: { reason: { _tag: "SerializationError" } },
+          });
+          // The client retries the batch. The ledger now covers mutation 2, so
+          // the retry is a replay that skips it.
+          const skipped = yield* backend.applyMutations(context, [mutation(2, "todo/park")]);
 
           // The handler applied mutation 2 exactly once, and the ledger stayed
-          // at 2 (monotonic): the copy neither applied it nor moved it back.
+          // at 2 (monotonic): the refused copy neither applied it nor moved it back.
           expect(yield* applicationsOf(sql, "2")).toBe(1);
           expect(yield* ledgerOf(sql)).toBe(2);
           expect(applied.lastMutationIds).toEqual({ [CLIENT]: 2 });
@@ -366,6 +378,171 @@ describePostgres("SqlBackend on PostgreSQL: transactional: false bump (#390)", (
           expect(yield* ledgerOf(sql)).toBe(2);
           expect(yield* applicationsOf(sql, "1")).toBe(1);
           expect(yield* applicationsOf(sql, "2")).toBe(1);
+        })
+      ),
+    60_000
+  );
+});
+
+// Serialisable isolation across client groups (#353): group X's handler reads a
+// counter, parks, and group Y commits an increment before X writes. The rows are
+// the same, so X's write must be refused rather than lost.
+const GROUP_X = "gx";
+const GROUP_Y = "gy";
+
+const incrementArgs = Schema.Struct({ id: Schema.String });
+const incrementCounter = Mutator.make("counter/increment", incrementArgs);
+
+/** One increment of the `counter` row by one client of one group; `id` names its effect row. */
+const incrementMutation = (clientId: string, id: string) => ({
+  clientId,
+  mutationId: 1,
+  mutator: incrementCounter.name,
+  args: { id },
+  createdAt: 0,
+});
+
+/** The `counter` row's value: its title holds the count. */
+const counterOf = (sql: SqlClient) =>
+  sql.unsafe<{ title: string }>(`SELECT title FROM todos WHERE id = $1`, ["counter"]).pipe(
+    Effect.map((rows) => Number(rows[0]?.title)),
+    Effect.orDie
+  );
+
+describePostgres(
+  "SqlBackend on PostgreSQL: serialisable isolation across client groups (#353)",
+  () => {
+    const url = databaseUrl ?? "";
+
+    // `it.live`, like the suites above: the server runs on the real clock. The
+    // race itself is staged with Deferreds and explicit joins, not by timing.
+    it.live(
+      "does not lose group X's increment when group Y commits between X's read and its write",
+      () =>
+        withDatabase(url, (sql) =>
+          Effect.gen(function* () {
+            yield* sql.unsafe(`INSERT INTO todos (id, title) VALUES ('counter', '0')`).unprepared;
+
+            // X's first run parks after its read, reporting the value it read.
+            const read = yield* Deferred.make<number>();
+            const release = yield* Deferred.make<void>();
+            const parked = yield* Ref.make(false);
+            const backend = SqlBackend.make({
+              executor: executorOver(sql),
+              tables: { todos: { table: "todos" } },
+              mutators: new Map<string, Mutator.AnyMutator>([
+                [incrementCounter.name, incrementCounter],
+              ]),
+              handlers: {
+                "counter/increment": (raw, tx, callContext) =>
+                  Effect.gen(function* () {
+                    const { id } = raw as Schema.Schema.Type<typeof incrementArgs>;
+                    const rows = yield* tx.query({
+                      text: `SELECT title FROM todos WHERE id = $1`,
+                      params: ["counter"],
+                    });
+                    const value = Number(rows[0]?.title);
+                    if (
+                      callContext.clientGroupId === GROUP_X &&
+                      !(yield* Ref.getAndSet(parked, true))
+                    ) {
+                      yield* Deferred.succeed(read, value);
+                      yield* Deferred.await(release);
+                    }
+                    yield* tx.run({
+                      text: `UPDATE todos SET title = $1 WHERE id = $2`,
+                      params: [String(value + 1), "counter"],
+                    });
+                    yield* tx.run({ text: `INSERT INTO effects (id) VALUES ($1)`, params: [id] });
+                    return [];
+                  }),
+              },
+              dialect: Sql.postgres,
+            });
+
+            const firstX = yield* Effect.forkChild(
+              backend.applyMutations({ clientGroupId: GROUP_X }, [incrementMutation("x1", "x1")])
+            );
+            expect(yield* Deferred.await(read)).toBe(0);
+
+            // Group Y increments and commits while X is parked after its read. Its
+            // transaction touches nothing X has written, so it does not wait.
+            yield* backend.applyMutations({ clientGroupId: GROUP_Y }, [
+              incrementMutation("y1", "y1"),
+            ]);
+
+            yield* Deferred.succeed(release, undefined);
+            // Under SERIALIZABLE, X's write to the row Y changed is refused with
+            // SQLSTATE 40001, which the executor reports as a transient BackendError.
+            const refused = yield* Effect.flip(Fiber.join(firstX));
+            expect(refused).toMatchObject({
+              _tag: "BackendError",
+              cause: { reason: { _tag: "SerializationError" } },
+            });
+
+            // The client retries the batch. Its read now sees Y's value, so X
+            // writes 2, and its refused first attempt left no effect behind.
+            yield* backend.applyMutations({ clientGroupId: GROUP_X }, [
+              incrementMutation("x1", "x1"),
+            ]);
+
+            expect(yield* counterOf(sql)).toBe(2);
+            expect(yield* applicationsOf(sql, "x1")).toBe(1);
+            expect(yield* applicationsOf(sql, "y1")).toBe(1);
+          })
+        ),
+      60_000
+    );
+  }
+);
+
+// A nested transaction cannot set SERIALIZABLE (#353): PostgreSQL refuses SET
+// TRANSACTION inside a subtransaction, which the executor's nested `transaction`
+// runs as a savepoint. The batch must then fail rather than run at READ COMMITTED.
+describePostgres("SqlBackend on PostgreSQL: a nested transaction (#353)", () => {
+  const url = databaseUrl ?? "";
+
+  it.live(
+    "fails applyMutations run inside an outer transaction with a BackendError, writes nothing, and leaves the outer transaction usable",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          const backend = SqlBackend.make({
+            executor: executorOver(sql),
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
+            handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            dialect: Sql.postgres,
+          });
+
+          // The outer transaction makes its own write, then calls the backend,
+          // whose SERIALIZABLE statement is refused inside the nested savepoint.
+          yield* executorOver(sql).transaction(
+            Effect.gen(function* () {
+              // Flipped so the failure is the success value; a success would die here.
+              const failure = yield* Effect.flip(
+                backend.applyMutations(context, [mutation(1, "todo/set")])
+              ).pipe(Effect.orDie);
+              expect(failure).toMatchObject({
+                _tag: "BackendError",
+                message: expect.stringContaining("SERIALIZABLE isolation could not be set"),
+              });
+              // The outer transaction is still usable after the nested failure.
+              yield* executorOver(sql).run({
+                text: `INSERT INTO todos (id, title) VALUES ($1, $2)`,
+                params: ["outer", "outer"],
+              });
+            })
+          );
+
+          // Only the outer write committed: the batch wrote nothing and the ledger
+          // did not move.
+          expect(yield* applicationsOf(sql, "1")).toBe(0);
+          expect(yield* ledgerOf(sql)).toBe(0);
+          const outer = yield* sql.unsafe<{ title: string }>(
+            `SELECT title FROM todos WHERE id = 'outer'`
+          ).unprepared;
+          expect(outer).toEqual([{ title: "outer" }]);
         })
       ),
     60_000

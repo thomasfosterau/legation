@@ -23,20 +23,34 @@
  * mutation only one claim matches and the other is a replay the ledger covers.
  * The watermark only ever moves from `id - 1` to `id`, so it cannot fall. This
  * gives the contract's exactly-once, in-order guarantee for one client group,
- * with the claim itself needing no stronger isolation than READ COMMITTED.
+ * with the claim alone needing no stronger isolation than READ COMMITTED.
  * An executor without transactions (`transactional: false`) cannot commit a
  * claim together with its handler's writes, so it keeps the handler-then-bump
  * order instead (see D1 below).
- * What it does not cover, per dialect:
  *
- * - SQLite serialises transactions on its one connection (the client takes the
- *   write lock with `BEGIN IMMEDIATE`), so overlapping calls never interleave.
- * - PostgreSQL under READ COMMITTED: the claim is safe (a second UPDATE waits
- *   for the first and re-checks its WHERE). A handler's own reads are not
- *   protected by the claim, so a handler that reads rows another client group
- *   writes needs its own locking. Serialisable isolation across client groups
- *   is queued as #353 and is not provided here.
- * - D1 is non-conforming (#342). It has no interactive transactions, so its
+ * Mutations from different client groups are serialisable (guarantee 1, #353),
+ * per dialect:
+ *
+ * - SQLite serialises transactions on its one connection, and the client takes
+ *   the write lock with `BEGIN IMMEDIATE`, so a handler's reads and its writes
+ *   never interleave with another group's transaction. It conforms.
+ * - PostgreSQL runs each `applyMutations` transaction at SERIALIZABLE: the
+ *   dialect's `serializable` statement (`SET TRANSACTION ISOLATION LEVEL
+ *   SERIALIZABLE`) runs first, before any read. It must be the transaction's
+ *   first statement in a top-level transaction: PostgreSQL refuses it inside a
+ *   subtransaction (a nested `transaction`, which a savepoint runs), so
+ *   `applyMutations` then fails with a `BackendError` rather than running at
+ *   READ COMMITTED. A transaction that read a row another transaction changed
+ *   and committed first is refused at its write with SQLSTATE 40001, and rolls
+ *   back. The executor reports that as a
+ *   `BackendError`, which the client treats as transient and retries, and the
+ *   retry runs the handler on the committed state. A handler therefore never
+ *   commits a write computed from a stale read. This is not retried inside the
+ *   backend: the client already re-sends an unacknowledged batch, so the
+ *   transient path covers it without a second retry policy. A PostgreSQL
+ *   executor that sets `transactional: false` loses this guarantee, since the
+ *   ordering then has no transaction to isolate.
+ * - D1 is non-conforming (#342, #353). It has no interactive transactions, so its
  *   executor sets `transactional: false` and each statement commits on its own.
  *   `applyMutations` then keeps trunk's order: the handler runs, then the
  *   ledger is bumped to the larger of the stored and the new id, so an
@@ -44,10 +58,14 @@
  *   handler's writes commit before the bump, so a pull between the two carries
  *   the effect without the watermark; a crash after the writes and before the
  *   bump makes the retry run the handler again; and a transient failure leaves
- *   the writes committed for the retry to repeat. The
+ *   the writes committed for the retry to repeat. Nothing isolates a handler's
+ *   reads from another group's writes, so a lost update is possible. The
  *   claim order is not used on D1 because a claim committed on its own would
  *   leave a crash between the claim and the handler's commit claimed and
  *   unapplied, so a retry would skip the mutation (#359).
+ *
+ * An executor on another database must provide the same isolation, or the
+ * handlers' reads must be version-checked, before it can claim guarantee 1.
  *
  * A mapping's reads run against `readRelation` when given (issue #204): a
  * real app's current-state relation is often a view — one that resolves each
@@ -97,13 +115,33 @@ type Mutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
 /** A row as returned by the driver: a column → value record. */
 export type SqlRow = Record<string, unknown>;
 
-/** The minimal database surface the backend needs. */
+/**
+ * The minimal database surface the backend needs.
+ *
+ * **Isolation (guarantee 1, #353):** `transaction` must run its effect as one
+ * database transaction whose reads a concurrent transaction cannot change under
+ * them before it commits, so a handler never writes from a stale read. That is
+ * SERIALIZABLE isolation, or an equivalent check, and the reference executors
+ * meet it: SQLite serialises writers (`BEGIN IMMEDIATE`), and the PostgreSQL
+ * dialect's `serializable` statement sets SERIALIZABLE on each transaction. On
+ * PostgreSQL that transaction must be top-level, not a nested one run as a
+ * savepoint: the statement is refused there, and `applyMutations` fails with a
+ * `BackendError`. An executor whose database cannot do this does not conform. A
+ * serialization failure (PostgreSQL SQLSTATE 40001 or 40P01) must surface as a
+ * `BackendError`, so the client retries the batch; the D1 executor does not meet
+ * the requirement (`transactional: false`, #342).
+ */
 export interface SqlExecutor {
   /** Run a query and return its rows. */
   readonly query: (fragment: Sql.SqlFragment) => Effect.Effect<ReadonlyArray<SqlRow>, BackendError>;
   /** Run a statement for its effect (insert/update/delete). */
   readonly run: (fragment: Sql.SqlFragment) => Effect.Effect<void, BackendError>;
-  /** Run an effect inside a transaction (atomic commit / rollback on error). */
+  /**
+   * Run an effect inside a transaction (atomic commit / rollback on error). On
+   * PostgreSQL it must open a top-level transaction, not a savepoint nested in
+   * another one, so SERIALIZABLE can be set first (see the `dialect` option of
+   * `SqlBackendConfig`).
+   */
   readonly transaction: <A, R>(
     effect: Effect.Effect<A, BackendError, R>
   ) => Effect.Effect<A, BackendError, R>;
@@ -202,7 +240,14 @@ export interface SqlBackendConfig {
   /** Mutator definitions, for decoding/validating pushed args. */
   readonly mutators: ReadonlyMap<string, Mutator.AnyMutator>;
   readonly handlers: Readonly<Record<string, SqlHandler>>;
-  readonly dialect?: Sql.Dialect;
+  /**
+   * The SQL dialect. Defaults to SQLite (`Sql.sqlite`). A PostgreSQL app must pass
+   * `Sql.postgres`: that sets SERIALIZABLE on each transaction, and omitting it runs
+   * the batches at READ COMMITTED with no error. A hand-written dialect without a
+   * `serializable` statement gets no isolation statement, so its executor must
+   * provide the isolation itself (see {@link SqlExecutor}).
+   */
+  readonly dialect?: Sql.Dialect | undefined;
   /** Per-client mutation-id ledger table. Defaults to `"sync_mutations"`. */
   readonly mutationsTable?: string;
 }
@@ -559,9 +604,32 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // The ordering this executor uses; chosen once, outside the generator.
   const applyOne = transactional ? applyClaimFirst : applyBumpAfter;
 
+  // The transaction's isolation, set before any read so every read in it sees
+  // the snapshot SERIALIZABLE gives (#353). An executor without transactions has
+  // nothing to isolate, and SQLite has no such statement (its writers serialise).
+  const serializable = transactional ? dialect.serializable : undefined;
+
   const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
     executor.transaction(
       Effect.gen(function* () {
+        if (serializable !== undefined) {
+          // PostgreSQL refuses this statement inside a subtransaction (a nested
+          // transaction, which the executor runs as a savepoint) or after another
+          // statement. A refusal fails the batch: the batch must never run at READ
+          // COMMITTED without saying so (#353). The client retries it.
+          yield* executor.run({ text: serializable, params: [] }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new BackendError({
+                  message:
+                    "SERIALIZABLE isolation could not be set for this mutation batch. On PostgreSQL the " +
+                    "executor's transaction must be top-level, with this statement first: SET TRANSACTION " +
+                    "fails inside a nested transaction (a savepoint) or after another statement.",
+                  cause,
+                })
+            )
+          );
+        }
         const hints: Array<Backend.ChangeHint> = [];
         const rejected: Array<Backend.RejectedMutation> = [];
         // Numbered per handler run, as trunk did: a replay runs no savepoint and
