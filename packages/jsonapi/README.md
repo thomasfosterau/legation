@@ -144,6 +144,23 @@ Mutators beyond the derived CRUD ones can ride the same backend: give
 its decoded args as one JSON:API `Write` (a create, update or delete of one
 resource), and both delivery paths carry it.
 
+### Change hints
+
+Each push reports the rows it wrote as change hints, which fan-out uses to poke
+the subscribers whose windows those rows match. A hint carries each row's value
+after the push (`values`) and, for each row an update or delete touched, its
+value before the push (`oldValues`), so a row that moved out of a window still
+pokes that window.
+
+A REST API exposes no change token, so the old value is read rather than
+cached: each update or delete makes one `GET /{type}/{id}` before its write,
+once per row per push, on both the per-resource and the atomic path. Each such
+read is an extra request. A row the push creates has no old value. Without a
+`getOne` route the backend cannot read a row, so its hint carries no
+`oldValues` (a warning is logged). A read that fails transiently fails the push
+before anything is written, so the retry reads again. A read that finds no row,
+or is refused with another 4xx, leaves that row with no `oldValues` entry.
+
 ## Standalone collection loading
 
 `CollectionLoader` reads JSON:API endpoints into rows directly. Every helper is

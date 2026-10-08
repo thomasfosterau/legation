@@ -32,6 +32,20 @@
  * are a content hash of the resource value: the hash changes iff the row
  * changed, which is exactly what CVR diffing needs.
  *
+ * **Change hints.** A push's hints carry each touched row's pre-push value as
+ * `oldValues`, as MemoryBackend's do, so topic-derived fan-out (ADR-0023) pokes
+ * the windows a row moved away from. A REST API keeps no change token, and
+ * nothing here says whether a cached row is still current (a write made
+ * elsewhere goes unseen, and this backend's own writes do not refresh its
+ * cache), so the old value is always read: each update or delete does one
+ * `GET /{type}/{id}` before its write, once per row per push. A row the push
+ * creates has no old value. A read that fails transiently fails the push
+ * (BackendError, nothing written, so the retry reads again); a read that finds
+ * no row, or is refused with another 4xx, proceeds with no `oldValues` entry
+ * for that row. The new value of a create or update is the server's returned
+ * document when it sends one, else the row read before the push merged with
+ * the write (so a partial PATCH hints the full row), else the written value.
+ *
  * **Delivery semantics.** Without a cooperating server there is no
  * server-side mutation-id ledger, so this backend keeps an in-session ledger.
  *
@@ -67,11 +81,17 @@ import {
 import { Hash, Protocol, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import type { Mutator } from "@thomasfosterau/legation-effect";
-import { documentToRows, parseResponse, resourceToRow } from "./CollectionLoader.js";
+import {
+  documentToRows,
+  parseResponse,
+  resourceToRow,
+  type RelationshipRef,
+} from "./CollectionLoader.js";
 import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 import { ResourceObjectSchema } from "./schema.js";
+import type { ResourceObject } from "./types.js";
 
 /**
  * One JSON:API write — the unit both delivery paths speak: a create (`POST`,
@@ -207,35 +227,80 @@ const recordTouched = (touched: Map<string, Set<string>>, collection: string, id
   touched.set(collection, (touched.get(collection) ?? new Set<string>()).add(id));
 };
 
+/** What one push knows about a row it writes (ADR-0023's `oldValues`). */
+interface RowEntry {
+  /** The row's value before the push's first write to it: none when absent, or when the push created it. */
+  readonly before: Option.Option<JsonApiRow>;
+  /** The row's value after the writes applied so far: none once deleted, or when unknown. */
+  current: Option.Option<JsonApiRow>;
+}
+
 /** The mutable accumulators one push folds its per-mutation outcomes into. */
 interface WriteAccumulator {
   readonly touched: Map<string, Set<string>>;
   readonly puts: Map<string, Map<string, unknown>>;
   readonly rejected: Array<Backend.RejectedMutation>;
+  /** The rows this push has read or applied a write to, by collection, then id. */
+  readonly rows: Map<string, Map<string, RowEntry>>;
 }
 
-/** One mutation's outcome: applied (with its effect on the row) or rejected. */
-type WriteOutcome =
-  | { readonly _tag: "applied"; readonly id: string; readonly effect: WriteEffect }
-  | { readonly _tag: "rejected"; readonly reason: string };
+/** The row entry for (collection, id), if this push has entered the row. */
+const entryOf = (acc: WriteAccumulator, collection: string, id: string): RowEntry | undefined =>
+  acc.rows.get(collection)?.get(id);
 
-/** Fold one mutation's outcome into the push accumulators (mutates `acc`). */
-const recordOutcome = (
-  acc: WriteAccumulator,
-  type: string,
-  mutation: { readonly clientId: string; readonly mutationId: number },
-  outcome: WriteOutcome
-): void => {
-  if (outcome._tag === "applied") {
-    recordTouched(acc.touched, type, outcome.id);
-    recordEffect(acc.puts, type, outcome.id, outcome.effect);
-  } else {
-    acc.rejected.push({
-      clientId: mutation.clientId,
-      mutationId: mutation.mutationId,
-      reason: outcome.reason,
-    });
+/** Enter a row under (collection, id) (mutates `acc`). */
+const setEntry = (acc: WriteAccumulator, collection: string, id: string, entry: RowEntry): void => {
+  acc.rows.set(
+    collection,
+    (acc.rows.get(collection) ?? new Map<string, RowEntry>()).set(id, entry)
+  );
+};
+
+/**
+ * The pre-push values this push read, as the hints' `olds`: the same snapshot
+ * MemoryBackend takes before it applies a batch.
+ */
+const oldsOf = (acc: WriteAccumulator): Map<string, Map<string, unknown>> => {
+  const olds = new Map<string, Map<string, unknown>>();
+  for (const [collection, entries] of acc.rows) {
+    for (const [id, entry] of entries) {
+      if (Option.isSome(entry.before)) {
+        olds.set(
+          collection,
+          (olds.get(collection) ?? new Map<string, unknown>()).set(id, entry.before.value)
+        );
+      }
+    }
   }
+  return olds;
+};
+
+/**
+ * Fold one applied write into the push: the row's value after it, and the
+ * write's effect on the hint. A row the push has not entered was absent before
+ * the push wrote it (a create), so it starts with no value.
+ */
+const recordApplied = (
+  acc: WriteAccumulator,
+  write: Write,
+  document: JsonApiRow | undefined
+): void => {
+  const entry = entryOf(acc, write.type, write.id) ?? {
+    before: Option.none<JsonApiRow>(),
+    current: Option.none<JsonApiRow>(),
+  };
+  setEntry(acc, write.type, write.id, entry);
+  entry.current =
+    write.operation === "delete"
+      ? Option.none<JsonApiRow>()
+      : Option.some(rowAfter(write, entry.current, document));
+  recordTouched(acc.touched, write.type, write.id);
+  recordEffect(
+    acc.puts,
+    write.type,
+    write.id,
+    Option.isSome(entry.current) ? { _tag: "put", value: entry.current.value } : { _tag: "delete" }
+  );
 };
 
 /** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
@@ -253,6 +318,14 @@ const writeBody = (
   },
 });
 
+/** A write's relationships in the row's linkage shape, as `toRow` gives a server document. */
+const linkageOf = (write: Write): Record<string, RelationshipRef> =>
+  resourceToRow({
+    type: write.type,
+    id: write.id,
+    relationships: write.relationships ?? {},
+  } as ResourceObject).value.relationships;
+
 /**
  * The value a create/update writes, as the hint carries it — the same shape
  * `toRow` gives a resource the server returned, so a hint looks alike
@@ -261,8 +334,28 @@ const writeBody = (
 const writtenValue = (write: Write): JsonApiRow => ({
   ...write.attributes,
   id: write.id,
-  relationships: (write.relationships ?? {}) as JsonApiRow["relationships"],
+  relationships: linkageOf(write),
 });
+
+/** The row after a partial update: the row read before the push, with the write laid over it. */
+const mergeWrite = (read: JsonApiRow, write: Write): JsonApiRow => ({
+  ...read,
+  ...write.attributes,
+  id: write.id,
+  relationships: { ...read.relationships, ...linkageOf(write) },
+});
+
+/**
+ * The value a create or update leaves its row with: the server's document when
+ * it returned one; otherwise the row's value so far merged with the write; or
+ * the written value alone when the push does not know the row.
+ */
+const rowAfter = (
+  write: Write,
+  current: Option.Option<JsonApiRow>,
+  document: JsonApiRow | undefined
+): JsonApiRow =>
+  document ?? (Option.isSome(current) ? mergeWrite(current.value, write) : writtenValue(write));
 
 /** Express a derived CRUD mutator's decoded args as one JSON:API write. */
 const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, BackendError> => {
@@ -416,17 +509,77 @@ export const make = (
     const transientStatuses = new Set([408, 429]);
     const isPermanentStatus = (status: number): boolean =>
       status >= 400 && status < 500 && !transientStatuses.has(status);
+    /** Send one write; the resource document it answers with, if it answers with one. */
     const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.scoped(client.execute(request)).pipe(
         Effect.mapError(backendError("JSON:API write failed")),
-        Effect.flatMap((response): Effect.Effect<void, BackendError | MutationRejected> => {
-          if (response.status >= 200 && response.status < 300) return Effect.void;
-          const message = `JSON:API write returned HTTP ${response.status}`;
-          return isPermanentStatus(response.status)
-            ? Effect.fail(new MutationRejected({ reason: message }))
-            : Effect.fail(new BackendError({ message }));
-        })
+        Effect.flatMap(
+          (response): Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected> => {
+            if (response.status >= 200 && response.status < 300)
+              return response.json.pipe(
+                Effect.orElseSucceed(() => undefined),
+                Effect.map(resultRow)
+              );
+            const message = `JSON:API write returned HTTP ${response.status}`;
+            return isPermanentStatus(response.status)
+              ? Effect.fail(new MutationRejected({ reason: message }))
+              : Effect.fail(new BackendError({ message }));
+          }
+        )
       );
+
+    /**
+     * Read a row before the push writes it: the value the server holds now, or
+     * none when the row is absent or the read is refused with a 4xx. A transient
+     * failure fails the push, so nothing is written on a read the push cannot
+     * complete.
+     */
+    const readBefore = (
+      type: string,
+      id: string
+    ): Effect.Effect<Option.Option<JsonApiRow>, BackendError> =>
+      Effect.gen(function* () {
+        const getOne = config.resources.get(type)?.getOne;
+        if (getOne === undefined) {
+          yield* Effect.logWarning(
+            `JsonApiBackend: "${type}" has no getOne endpoint; its change hint for ${id} carries no oldValues`
+          );
+          return Option.none<JsonApiRow>();
+        }
+        const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
+          Effect.mapError(backendError(`Failed to read ${type}/${id} before writing it`))
+        );
+        const status = response.status;
+        if (status === 404) return Option.none<JsonApiRow>();
+        if (status >= 500 || transientStatuses.has(status))
+          return yield* new BackendError({
+            message: `JSON:API read of ${type}/${id} returned HTTP ${status}`,
+          });
+        if (status < 200 || status >= 300) {
+          yield* Effect.logWarning(
+            `JsonApiBackend: read of ${type}/${id} returned HTTP ${status}; its change hint carries no oldValues for it`
+          );
+          return Option.none<JsonApiRow>();
+        }
+        const document = yield* parseResponse(response).pipe(
+          Effect.mapError(backendError(`Invalid JSON:API resource ${type}/${id}`))
+        );
+        const resource = documentToRows(document).rows[0]?.value;
+        return resource === undefined ? Option.none<JsonApiRow>() : Option.some(toRow(resource));
+      });
+
+    /**
+     * Enter a row the write touches. An update or delete reads the row on the
+     * push's first write to it, so the pre-push value is kept for the hint; a
+     * create reads nothing, and its row is entered when the create applies.
+     */
+    const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
+      if (write.operation === "create" || entryOf(acc, write.type, write.id) !== undefined)
+        return Effect.void;
+      return readBefore(write.type, write.id).pipe(
+        Effect.map((before) => setEntry(acc, write.type, write.id, { before, current: before }))
+      );
+    };
 
     const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
       Ref.update(cache, (current) => {
@@ -564,16 +717,11 @@ export const make = (
         return custom !== undefined ? custom(args) : yield* writeOf(operation!, args);
       });
 
-    // Apply one write as its own request and report the affected id plus its
-    // effect on the row: for create/update, a put of the written row
-    // (`{ id, ...attributes }`) so the hint can carry it for predicate matching;
-    // for a delete, a delete, which leaves the row out of the hint's values.
+    // Apply one write as its own request. Resolves to the resource document the
+    // server answered a create or update with, if it sent one.
     const applyOne = (
       write: Write
-    ): Effect.Effect<
-      { readonly id: string; readonly effect: WriteEffect },
-      BackendError | MutationRejected
-    > =>
+    ): Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected> =>
       Effect.gen(function* () {
         const resource = config.resources.get(write.type);
         switch (write.operation) {
@@ -581,7 +729,7 @@ export const make = (
             const ref = resource?.create;
             if (ref === undefined)
               return yield* new BackendError({ message: `No create endpoint for "${write.type}"` });
-            yield* sendWrite(
+            return yield* sendWrite(
               HttpClientRequest.post(urlFor(config.baseUrl, ref.path)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
@@ -589,13 +737,12 @@ export const make = (
                 )
               )
             );
-            return { id: write.id, effect: { _tag: "put", value: writtenValue(write) } };
           }
           case "update": {
             const ref = resource?.update;
             if (ref === undefined)
               return yield* new BackendError({ message: `No update endpoint for "${write.type}"` });
-            yield* sendWrite(
+            return yield* sendWrite(
               HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
@@ -603,7 +750,6 @@ export const make = (
                 )
               )
             );
-            return { id: write.id, effect: { _tag: "put", value: writtenValue(write) } };
           }
           case "delete": {
             const ref = resource?.delete;
@@ -614,7 +760,7 @@ export const make = (
                 HttpClientRequest.setHeaders(jsonApiHeaders)
               )
             );
-            return { id: write.id, effect: { _tag: "delete" } };
+            return undefined;
           }
         }
       });
@@ -643,32 +789,42 @@ export const make = (
       mutations: ReadonlyArray<PushedMutation>
     ): Effect.Effect<Backend.ApplyResult, BackendError> =>
       Effect.gen(function* () {
-        const touched = new Map<string, Set<string>>();
-        const puts = new Map<string, Map<string, unknown>>();
-        const rejected: Array<Backend.RejectedMutation> = [];
+        const acc: WriteAccumulator = {
+          touched: new Map(),
+          puts: new Map(),
+          rejected: [],
+          rows: new Map(),
+        };
         for (const mutation of mutations) {
           const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
           const last = group.get(mutation.clientId) ?? 0;
           if (mutation.mutationId <= last) continue; // idempotent (in-session)
 
           const write = yield* writeFor(mutation);
+          yield* enterRow(acc, write);
           // A permanent HTTP rejection (4xx) skips this mutation but still bumps
           // its id, so it is acknowledged and never poisons the queue. A
           // transient failure propagates and aborts the push.
           const outcome = yield* applyOne(write).pipe(
-            Effect.map((applied) => ({ _tag: "applied", ...applied }) as const),
+            Effect.map((document) => ({ _tag: "applied", document }) as const),
             Effect.catchTag("MutationRejected", (error) =>
               Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
             )
           );
-          recordOutcome({ touched, puts, rejected }, write.type, mutation, outcome);
+          if (outcome._tag === "applied") recordApplied(acc, write, outcome.document);
+          else
+            acc.rejected.push({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason: outcome.reason,
+            });
           yield* bumpLedger(context, [mutation]);
         }
 
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
-          hints: Backend.buildChangeHints(touched, puts),
-          ...(rejected.length > 0 ? { rejected } : {}),
+          hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
+          ...(acc.rejected.length > 0 ? { rejected: acc.rejected } : {}),
         };
       });
 
@@ -733,6 +889,16 @@ export const make = (
           batch.push({ mutation, write: yield* writeFor(mutation) });
         }
 
+        // Read the rows the batch updates or deletes before the one request that
+        // writes them, so a failed read sends nothing.
+        const acc: WriteAccumulator = {
+          touched: new Map(),
+          puts: new Map(),
+          rejected: [],
+          rows: new Map(),
+        };
+        for (const { write } of batch) yield* enterRow(acc, write);
+
         // Batch index → rejection reason; each round trip drops at least one.
         const rejectedAt = new Map<number, string>();
         let pending = batch.map((entry, index) => ({ ...entry, index }));
@@ -752,22 +918,12 @@ export const make = (
           pending = pending.filter((entry) => !rejectedAt.has(entry.index));
         }
 
-        // Hints from what applied, in push order: the result document's resource
-        // where the server returned one, else the value the request wrote. A
-        // delete drops an earlier write's value for the row (#369).
-        const touched = new Map<string, Set<string>>();
-        const puts = new Map<string, Map<string, unknown>>();
-        pending.forEach(({ write }, position) => {
-          recordTouched(touched, write.type, write.id);
-          recordEffect(
-            puts,
-            write.type,
-            write.id,
-            write.operation === "delete"
-              ? { _tag: "delete" }
-              : { _tag: "put", value: resultRow(results[position]) ?? writtenValue(write) }
-          );
-        });
+        // Hints from what applied, in push order: each row's value from the
+        // result document where the server returned one, else as merged or
+        // written. A delete drops an earlier write's value for the row (#369).
+        pending.forEach(({ write }, position) =>
+          recordApplied(acc, write, resultRow(results[position]))
+        );
 
         // Applied and rejected alike are acknowledged, in original order.
         yield* bumpLedger(
@@ -784,7 +940,7 @@ export const make = (
 
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
-          hints: Backend.buildChangeHints(touched, puts),
+          hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
           ...(rejected.length > 0 ? { rejected } : {}),
         };
       });
