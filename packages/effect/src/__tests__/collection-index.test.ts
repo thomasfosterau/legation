@@ -1,12 +1,12 @@
 /**
  * Unit tests for `CollectionIndex.ts` (issue #113): hash/ordered maintenance,
  * the And-conjunct planner, and the ClientEngine-level integration — declared
- * indexes, `autoIndex` discovery, the pending-journal fallback, and Put/Del/
- * Clear consistency across a pull.
+ * indexes, `autoIndex` discovery, the pending-journal fallback, Put/Del/
+ * Clear consistency across a pull, and a pull landing mid-build (#339).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
@@ -445,5 +445,101 @@ describe("ClientEngine + CollectionIndex", () => {
       yield* engine.pull; // Clear
       expect((yield* byPriority1()).map((r) => r.id)).toEqual([]);
     })
+  );
+
+  it.effect(
+    "#339: a pull that lands while an index build is reading rows is reflected by later queries",
+    () =>
+      Effect.gen(function* () {
+        const memory = yield* ClientStoreModule.makeMemory;
+        // Parks the next `listRows` AFTER it has read the rows: the build holds
+        // the pre-patch snapshot while the pull below writes and reveals.
+        const gate = yield* Ref.make<
+          | { readonly reached: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+          | undefined
+        >(undefined);
+        const store = ClientStore.of({
+          ...memory,
+          listRows: (collection) =>
+            Ref.getAndSet(gate, undefined).pipe(
+              Effect.flatMap((parked) =>
+                memory
+                  .listRows(collection)
+                  .pipe(
+                    Effect.flatMap((rows) =>
+                      parked === undefined
+                        ? Effect.succeed(rows)
+                        : Deferred.succeed(parked.reached, undefined).pipe(
+                            Effect.andThen(Deferred.await(parked.release)),
+                            Effect.as(rows)
+                          )
+                    )
+                  )
+              )
+            ),
+        });
+        // i1 is seeded at priority 1; the pull moves it to priority 3.
+        const patches = yield* Ref.make<ReadonlyArray<PullResponse["patch"]>>([
+          [
+            {
+              _tag: "Put",
+              collection: "items",
+              id: "i1",
+              version: 2,
+              value: { id: "i1", priority: 3, done: false },
+            },
+          ],
+        ]);
+        const handler: ServerHandler = {
+          handlePush: () => Effect.succeed({ lastMutationIds: {} }),
+          handlePull: () =>
+            Ref.modify(patches, (queue) => [queue[0] ?? [], queue.slice(1)]).pipe(
+              Effect.map((patch) => ({ patch, cookie: "c", lastMutationIds: {} }))
+            ),
+          handleRead: () => Effect.succeed({ rows: [] }),
+          pokes: () => noopHandler.pokes("g"),
+        };
+        const transport = yield* makeInMemory(handler, "g");
+        const engine = yield* ClientEngineModule.make({
+          clientId: "c",
+          clientGroupId: "g",
+          mutators: setItem,
+          autoIndex: true,
+        }).pipe(
+          Effect.provideService(ClientStore, store),
+          Effect.provideService(ClientTransport, transport)
+        );
+
+        yield* seedEngine(engine, items(200));
+        // Warm the overlay view without declaring an index: `IS NOT NULL` never
+        // narrows, so `priority` is not discovered and no build runs here.
+        yield* engine.query(
+          Subset.make({ collection: "items", where: Predicate.isNotNull("done") })
+        );
+
+        // The next query discovers `priority` and builds its index, reading rows
+        // through the parked `listRows`.
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        yield* Ref.set(gate, { reached, release });
+        const byPriority3 = () =>
+          engine.query(Subset.make({ collection: "items", where: Predicate.eq("priority", 3) }));
+        const building = yield* Effect.forkChild(byPriority3());
+        yield* Deferred.await(reached);
+
+        // The pull lands mid-build: its patch writes and reveals while the build
+        // holds the pre-patch rows.
+        yield* engine.pull;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(building);
+
+        const expected = [
+          ...items(200)
+            .filter((r) => r.priority === 3)
+            .map((r) => r.id),
+          "i1",
+        ].toSorted();
+        expect((yield* byPriority3()).map((r) => r.id).toSorted()).toEqual(expected);
+      })
   );
 });
