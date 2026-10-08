@@ -435,7 +435,7 @@ Recorded when the handler shipped; the decisions above stand.
   (under its unchanged policy), then the network; a candidate whose forward
   rejects at the transport becomes the 503 document in the worker
   (`facade.offline`, cookie included). The api's shape — endpoints and
-  wire errors, no handlers, no SQL — lives in `server/api.ts`, loaded by
+  wire errors, no handlers, no SQL — lives in `src/lib/api.ts`, loaded by
   both the server and the worker, so the façade reflects the routes the
   server serves by construction.
 

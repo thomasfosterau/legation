@@ -11,7 +11,7 @@ import { Effect } from "effect";
 import { myCartItems } from "../../lib/domain.js";
 import { apiFor, readCollection, run } from "../../../server/client.js";
 import { cartItemId } from "../../../server/jsonapi.js";
-import { CartItem } from "../../../server/resources.js";
+import { CartItem } from "../../lib/resources.js";
 
 export const load = (async ({ locals }) => {
   if (locals.user === undefined) return { lines: [], variants: [] };

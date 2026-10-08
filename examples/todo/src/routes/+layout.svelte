@@ -7,7 +7,7 @@
    * same way.
    */
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
-  import { setDemo } from "$lib/demo.svelte";
+  import { setDemo } from "#lib/demo.svelte.js";
   import "../app.css";
 
   const { data, children } = $props();

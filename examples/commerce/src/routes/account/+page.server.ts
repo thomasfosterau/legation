@@ -9,7 +9,7 @@
 import type { Actions } from "./$types";
 import { fail, redirect } from "@sveltejs/kit";
 import { APIError } from "better-auth";
-import { auth } from "$lib/server/auth.js";
+import { auth } from "#lib/server/auth.js";
 
 const submitted = async (request: Request) => {
   const form = await request.formData();

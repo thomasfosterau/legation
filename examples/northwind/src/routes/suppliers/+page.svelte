@@ -4,8 +4,8 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { allSuppliers, type Supplier } from "$lib/domain";
-  import { values } from "$lib/data";
+  import { allSuppliers, type Supplier } from "#lib/domain.js";
+  import { values } from "#lib/data.js";
 
   const rows = useQuery(() => allSuppliers);
   const suppliers = $derived(values<Supplier>(AsyncResult.getOrElse(rows.current, () => [])));

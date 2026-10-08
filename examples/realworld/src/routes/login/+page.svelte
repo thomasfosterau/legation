@@ -4,7 +4,7 @@
    */
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { getSession } from "$lib/session.svelte";
+  import { getSession } from "#lib/session.svelte.js";
 
   const session = getSession();
 

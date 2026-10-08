@@ -25,8 +25,9 @@ becomes offline-first and live.
 
 ## The JSON:API
 
-`server/resources.ts` declares the resources, `server/jsonapi.ts` the
-endpoints. Reads are derived from the node graph in `src/lib/domain.ts`, so a
+`src/lib/resources.ts` declares the resources and `src/lib/api.ts` the
+endpoints (no handlers, so the service worker's façade can load it too);
+`server/jsonapi.ts` binds the handlers. Reads are derived from the node graph in `src/lib/domain.ts`, so a
 URL is the filter grammar over each node's **filterable set** (`id` and the
 `one`-edge keys by `eq` / `in`; `userId` by `eq` on the private collections;
 `sort` by `id`, `name` on categories, `createdAt` on reviews and orders):
@@ -116,6 +117,8 @@ rejection of that mutation, and resends the rest.
 
 ## Running it
 
+SvelteKit 3 needs Node 22.17 or later.
+
 ```bash
 bun install && bun run build          # workspace root: build the packages
 cd examples/commerce
@@ -133,7 +136,10 @@ in the console — the response carries `x-legation-served-at`.
 A production build (`bun run build`, adapter-node) needs `BETTER_AUTH_SECRET`
 set, and serves the read proxy itself; put a reverse proxy in front that
 routes `/sync*` to the sync server, as the dev server and the browser test's
-harness do.
+harness do. adapter-node takes the app's origin from the request, not from an
+`ORIGIN` variable: behind a proxy that terminates TLS, name the scheme with
+`PROTOCOL_HEADER=x-forwarded-proto` (it defaults to `https`), or set
+`kit.paths.origin` at build time.
 
 ## Tests
 

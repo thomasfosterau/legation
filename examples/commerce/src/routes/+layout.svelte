@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { browser } from "$app/environment";
+  import { browser } from "$app/env";
   import { Effect, Fiber, Stream } from "effect";
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import type { ElectedHost } from "@thomasfosterau/legation-browser";

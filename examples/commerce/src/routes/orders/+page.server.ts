@@ -6,7 +6,7 @@ import type { PageServerLoad } from "./$types";
 import { Effect } from "effect";
 import { myOrders } from "../../lib/domain.js";
 import { readCollection } from "../../../server/client.js";
-import { Order } from "../../../server/resources.js";
+import { Order } from "../../lib/resources.js";
 
 export const load = (async ({ locals }) => {
   if (locals.user === undefined) return { orders: [] };

@@ -30,7 +30,9 @@
  * experience).
  */
 /// <reference lib="webworker" />
-import { build, files, version } from "$service-worker";
+import { version } from "$app/env";
+import { assets, immutable } from "$app/manifest";
+import { asset, type AssetPath } from "$app/paths";
 import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation-effect/internal";
@@ -44,7 +46,10 @@ declare const self: ServiceWorkerGlobalScope;
 
 // ─── HTTP cache ──────────────────────────────────────────────────────────────
 
-const ASSETS = new Set([...build, ...files]);
+/** The build's immutable files and the static directory, as the URLs the browser requests them by. */
+const ASSETS = new Set(
+  [...immutable, ...assets].map(({ path }) => asset(path as AssetPath))
+);
 const CACHE_NAME = `commerce-${version}`;
 
 const policy = (request: Request): HttpCache.HttpCachePolicy | undefined => {

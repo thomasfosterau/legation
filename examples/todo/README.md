@@ -21,7 +21,7 @@ app is a SvelteKit **SPA**: `ssr = false` in the root layout and
   undo and **⇧⌘Z / Ctrl+Shift+Z** to redo, or use the toolbar buttons; the
   history is in-memory and per-client (a reload clears it).
 - **The filter is a route** — `/`, `/active`, and `/completed` are one
-  optional route param (`[[filter=filter]]`, matched by `src/params/filter.ts`)
+  optional route param (`[[filter=filter]]`, matched by `src/params.ts`)
   loaded into `data.filter`, not component state: the tabs are links, the back
   button works, and a filtered list is shareable.
 - **Live views** — the list is `useQuery(() => allTodos)`, whose reactive
@@ -72,7 +72,7 @@ long as the app does.
   lifetime of the app, and turns SSR off (the engine is browser-only).
 - `src/routes/+layout.svelte` — wires the engine runtime and the demo controls
   into context for the whole route tree.
-- `src/params/filter.ts` + `src/routes/[[filter=filter]]/` — the filter is the
+- `src/params.ts` + `src/routes/[[filter=filter]]/` — the filter is the
   URL: one optional, matched route param serves `/`, `/active`, and
   `/completed`, so the tabs are plain links and a filtered list is shareable.
 - `src/routes/[[filter=filter]]/+page.svelte` — the UI: `useQuery`,

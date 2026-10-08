@@ -12,13 +12,13 @@
   import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { getActions } from "$lib/actions.svelte";
-  import { getSession } from "$lib/session.svelte";
-  import { allFollows, articleBySlug, articleComments, type Follow } from "$lib/domain";
-  import { toArticle, toComments, values } from "$lib/joins";
-  import ArticleMeta from "$lib/components/ArticleMeta.svelte";
-  import FavoriteButton from "$lib/components/FavoriteButton.svelte";
-  import FollowButton from "$lib/components/FollowButton.svelte";
+  import { getActions } from "#lib/actions.svelte.js";
+  import { getSession } from "#lib/session.svelte.js";
+  import { allFollows, articleBySlug, articleComments, type Follow } from "#lib/domain.js";
+  import { toArticle, toComments, values } from "#lib/joins.js";
+  import ArticleMeta from "#lib/components/ArticleMeta.svelte";
+  import FavoriteButton from "#lib/components/FavoriteButton.svelte";
+  import FollowButton from "#lib/components/FollowButton.svelte";
 
   const slug = $derived(page.params.slug!);
 

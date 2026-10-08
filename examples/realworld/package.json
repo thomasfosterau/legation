@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
   "description": "RealWorld (Conduit) app driving the legation engine through @thomasfosterau/legation-svelte on SvelteKit: file-based routing, optimistic mutators, relational live queries joined over the mirror, server-side write authorization.",
   "scripts": {
     "dev": "vite dev",
@@ -20,8 +23,8 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@sveltejs/adapter-static": "^3.0.0",
-    "@sveltejs/kit": "^2.0.0",
+    "@sveltejs/adapter-static": "catalog:",
+    "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "svelte-check": "catalog:",
     "typescript": "catalog:",

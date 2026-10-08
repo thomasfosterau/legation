@@ -16,7 +16,7 @@
  * declared: a product's `variants` (the catalog and detail pages include
  * them); reviews and order items are read as their own collections filtered
  * by the parent's key (`productReviews`, `myOrderItems`), so no parent edge
- * names them. The REST resources (`server/resources.ts`) declare the same
+ * names them. The REST resources (`src/lib/resources.ts`) declare the same
  * graph, and `tests/derived-rest.test.ts` checks the two agree.
  *
  * Public catalog collections (products, variants, categories, sellers,

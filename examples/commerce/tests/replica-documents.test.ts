@@ -5,7 +5,7 @@
  * produces from a synced replica equals, byte for byte, the document the
  * derived REST handler (`RestHandlers`, #163) produces from the SQLite
  * server for the same URL under the same resource declarations
- * (`server/resources.ts`). The host never appears in `links.self` on either
+ * (`src/lib/resources.ts`). The host never appears in `links.self` on either
  * side (both prefix `/jsonapi`), so nothing is ignored.
  *
  * Two worlds over one seed: the SQLite server as `derived-rest.test.ts`
@@ -53,7 +53,7 @@ import {
   Review,
   Seller,
   Variant,
-} from "../server/resources.js";
+} from "../src/lib/resources.js";
 import { authPolicy, CommerceSync, syncLayer } from "../server/runtime.js";
 import { tables } from "../server/handlers.js";
 

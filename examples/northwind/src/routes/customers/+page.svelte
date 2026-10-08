@@ -8,8 +8,8 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { allCustomers } from "$lib/domain";
-  import { toCustomerCounts } from "$lib/data";
+  import { allCustomers } from "#lib/domain.js";
+  import { toCustomerCounts } from "#lib/data.js";
 
   const rows = useQuery(() => allCustomers);
   const customers = $derived(toCustomerCounts(AsyncResult.getOrElse(rows.current, () => [])));

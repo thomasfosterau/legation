@@ -20,7 +20,7 @@
 import type { PageLoad } from "./$types";
 import { allCategories, allVariants, productPage } from "../lib/domain.js";
 import { readCollection } from "../lib/reads.js";
-import { Category, Product, Variant } from "../../server/resources.js";
+import { Category, Product, Variant } from "../lib/resources.js";
 
 export const load = (async ({ fetch, url }) => {
   const categoryId = url.searchParams.get("category") ?? undefined;

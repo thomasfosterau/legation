@@ -11,11 +11,11 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { getActions } from "$lib/actions";
-  import { toProductViews, values } from "$lib/data";
-  import type { ProductFilter } from "$lib/data";
-  import { allCategories, allProducts, type Category } from "$lib/domain";
-  import ProductRow from "$lib/ProductRow.svelte";
+  import { getActions } from "#lib/actions.js";
+  import { toProductViews, values } from "#lib/data.js";
+  import type { ProductFilter } from "#lib/data.js";
+  import { allCategories, allProducts, type Category } from "#lib/domain.js";
+  import ProductRow from "#lib/ProductRow.svelte";
 
   const PAGE_SIZE = 8;
 

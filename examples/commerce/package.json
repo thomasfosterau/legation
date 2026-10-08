@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
   "description": "SvelteKit commerce catalog driving the legation engine end to end: SSR + hydration with CVR continuation, public/private auth split over IdentityResolver, live relational joins, cursor pagination, offline-first writes over WebSockets with HTTP fallback, and a no-JS baseline.",
   "scripts": {
     "dev": "vite dev",
@@ -30,8 +33,8 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@sveltejs/adapter-node": "^5.0.0",
-    "@sveltejs/kit": "^2.0.0",
+    "@sveltejs/adapter-node": "catalog:",
+    "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@types/better-sqlite3": "catalog:",
     "@types/node": "catalog:",

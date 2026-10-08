@@ -7,9 +7,9 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { getActions } from "$lib/actions";
-  import { allCategories } from "$lib/domain";
-  import { toCategoryCounts } from "$lib/data";
+  import { getActions } from "#lib/actions.js";
+  import { allCategories } from "#lib/domain.js";
+  import { toCategoryCounts } from "#lib/data.js";
 
   const actions = getActions();
   const result = useQuery(() => allCategories);
