@@ -460,9 +460,13 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // `excluded.` instead of re-binding ph(3): with `?` placeholders a
         // reused index renders an extra placeholder with no matching param
         // (found by the commerce example's contract run over node:sqlite).
-        // The unqualified column is the stored row's value.
+        // The stored row's column is qualified with the table name: PostgreSQL
+        // reads an unqualified name here as ambiguous with `excluded` (#390).
         `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ` +
-        dialect.greatest(q("last_mutation_id"), `excluded.${q("last_mutation_id")}`),
+        dialect.greatest(
+          `${q(mutationsTable)}.${q("last_mutation_id")}`,
+          `excluded.${q("last_mutation_id")}`
+        ),
       params: [clientGroupId, clientId, mutationId],
     });
 

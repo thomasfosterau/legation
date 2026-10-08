@@ -335,3 +335,39 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (READ COMMITTED, #
     60_000
   );
 });
+
+// The `transactional: false` ordering (D1's, #342) on PostgreSQL: each handler is
+// followed by the bump, an upsert whose DO UPDATE names the row's column. The
+// executor keeps its real transaction, because PostgreSQL's SAVEPOINT needs one;
+// only the ordering is the non-transactional one (#390).
+describePostgres("SqlBackend on PostgreSQL: transactional: false bump (#390)", () => {
+  const url = databaseUrl ?? "";
+
+  it.live(
+    "applies mutations on the bump-after ordering: the upsert to the larger id runs on PostgreSQL, twice for one client",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          const backend = SqlBackend.make({
+            executor: { ...executorOver(sql), transactional: false },
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
+            handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            dialect: Sql.postgres,
+          });
+
+          // The first bump inserts the client's ledger row; the second conflicts
+          // with it, so the upsert's larger-of-two runs against the stored row.
+          const first = yield* backend.applyMutations(context, [mutation(1, "todo/set")]);
+          const second = yield* backend.applyMutations(context, [mutation(2, "todo/set")]);
+
+          expect(first.lastMutationIds).toEqual({ [CLIENT]: 1 });
+          expect(second.lastMutationIds).toEqual({ [CLIENT]: 2 });
+          expect(yield* ledgerOf(sql)).toBe(2);
+          expect(yield* applicationsOf(sql, "1")).toBe(1);
+          expect(yield* applicationsOf(sql, "2")).toBe(1);
+        })
+      ),
+    60_000
+  );
+});

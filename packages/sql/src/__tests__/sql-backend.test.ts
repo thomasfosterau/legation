@@ -33,7 +33,7 @@ const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
 // The bump after a handler on an executor without transactions: an upsert to
 // the larger of the stored and the new id (SqlBackend's `dialect.greatest`).
 const MONOTONIC_BUMP =
-  /DO UPDATE SET "last_mutation_id" = MAX\("last_mutation_id", excluded\."last_mutation_id"\)$/;
+  /DO UPDATE SET "last_mutation_id" = MAX\("sync_mutations"\."last_mutation_id", excluded\."last_mutation_id"\)$/;
 const unmodelled = (fragment: Sql.SqlFragment): never => {
   throw new Error(`mock ledger: unmodelled statement: ${fragment.text}`);
 };
