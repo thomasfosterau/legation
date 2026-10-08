@@ -122,7 +122,19 @@ const evictTerminal = (
   return next;
 };
 
-/** Fold one mutation's terminal outcome in, without applying retention. */
+/**
+ * The phase a mutation is in, or `undefined` when it is not tracked (already
+ * evicted, or settled before this engine instance seeded its map).
+ */
+export const phaseOf = (map: MutationStateMap, mutationId: number): MutationPhase | undefined =>
+  Option.getOrUndefined(Option.map(HashMap.get(map, mutationId), (state) => state.phase));
+
+/**
+ * Fold one mutation's terminal outcome in, without applying retention. Only a
+ * `"pending"` entry moves (#364): a settled phase is never overwritten, so the
+ * first outcome the client observed stands and a later, repeated or
+ * contradictory report folds nothing.
+ */
 const transition = (
   map: MutationStateMap,
   mutationId: number,
@@ -132,8 +144,8 @@ const transition = (
 ): MutationStateMap => {
   const current = HashMap.get(map, mutationId);
   // Not tracked (already evicted, or settled before this engine instance
-  // seeded its map): nothing to fold.
-  if (Option.isNone(current)) return map;
+  // seeded its map), or already settled: nothing to fold.
+  if (Option.isNone(current) || current.value.phase !== "pending") return map;
   return HashMap.set(map, mutationId, {
     ...current.value,
     phase,

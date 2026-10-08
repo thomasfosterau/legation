@@ -512,10 +512,57 @@ const stateOf = (engine: ClientEngineModule.ClientEngine, mutationId: number) =>
   );
 
 /**
+ * Subscribes to the engine's events now, before the mutation under test, and
+ * returns `read`: every event emitted before its call, once it has returned.
+ *
+ * `Stream.toPull` subscribes on its first pull, so a reader forked here
+ * subscribes only when it first runs, and events emitted before that are lost.
+ * The set-up therefore pulls until the reader has seen one of the `PullCompleted`
+ * events those pulls emit, which proves the subscription is live. `read` pulls
+ * once more and waits for the reader to reach that event, so it never misses one
+ * and needs no wall-clock wait.
+ */
+const openEngineEvents = (engine: ClientEngineModule.ClientEngine) =>
+  Effect.gen(function* () {
+    const pull = yield* Stream.toPull(engine.engineEvents);
+    const seen = yield* Ref.make<ReadonlyArray<ClientEngineModule.EngineEvent>>([]);
+    const pullsSeen = Ref.get(seen).pipe(
+      Effect.map((events) => events.filter((event) => event._tag === "PullCompleted").length)
+    );
+    yield* Effect.forkScoped(
+      Effect.forever(
+        pull.pipe(Effect.flatMap((chunk) => Ref.update(seen, (prior) => [...prior, ...chunk])))
+      )
+    );
+    while ((yield* pullsSeen) === 0) {
+      yield* engine.pull;
+      yield* Effect.yieldNow;
+    }
+    return {
+      read: Effect.gen(function* () {
+        const before = yield* pullsSeen;
+        yield* engine.pull;
+        while ((yield* pullsSeen) === before) yield* Effect.yieldNow;
+        return yield* Ref.get(seen);
+      }),
+    };
+  });
+
+/** The mutation-lifecycle event tags emitted for one mutation id, in order. */
+const mutationTagsOf = (
+  events: ReadonlyArray<ClientEngineModule.EngineEvent>,
+  mutationId: number
+) =>
+  events.flatMap((event) =>
+    "mutationId" in event && event.mutationId === mutationId ? [event._tag] : []
+  );
+
+/**
  * One mutation, two copies racing at the backend (#355). The first copy parks
  * and applies only after the second, which is rejected and commits first. The
  * client receives the two responses in the given order; either way it must
- * settle the mutation as the server committed it.
+ * settle the mutation as the server committed it, and emit that outcome once
+ * (#364): both responses report the rejection, but the second repeats it.
  */
 const runRace = (order: "rejected-first" | "losing-first") =>
   Effect.gen(function* () {
@@ -539,6 +586,7 @@ const runRace = (order: "rejected-first" | "losing-first") =>
       Effect.provideService(ClientTransport, racingTransport(transport, pushes, gates))
     );
     yield* engine.subscribe(Subset.make({ collection: "todos" }));
+    const events = yield* openEngineEvents(engine);
 
     const handle = yield* engine.mutateWithAck("todo/race", {
       id: "x",
@@ -574,10 +622,97 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     // A pull changes nothing the client shows.
     yield* engine.pull;
     expect(yield* engine.query(Subset.make({ collection: "todos" }))).toEqual([]);
+
+    // Both responses reported the rejection, but the outcome is emitted once.
+    expect(mutationTagsOf(yield* events.read, 1)).toEqual([
+      "MutationJournaled",
+      "MutationRejected",
+    ]);
   });
+
+/**
+ * Adds one more rejected entry to the response of the push numbered `pushNumber`
+ * (1-based): a report the client has already seen contradicted, or repeated.
+ */
+const withLateRejection = (
+  inner: ClientTransport,
+  pushNumber: number,
+  report: { readonly clientId: string; readonly mutationId: number; readonly reason: string }
+): Effect.Effect<ClientTransport> =>
+  Effect.gen(function* () {
+    const pushes = yield* Ref.make(0);
+    return {
+      ...inner,
+      push: (request) =>
+        Effect.gen(function* () {
+          const response = yield* inner.push(request);
+          const sent = yield* Ref.updateAndGet(pushes, (n) => n + 1);
+          return sent === pushNumber
+            ? { ...response, rejected: [...(response.rejected ?? []), report] }
+            : response;
+        }),
+    };
+  });
+
+const setMutators = Mutator.registry([
+  {
+    mutator: Mutator.make("todo/set", Schema.Unknown),
+    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+  },
+]);
 
 describe("ClientEngine outcome of a race between a rejected and an applied copy (#355)", () => {
   it.effect("the rejected copy's response arrives first", () => runRace("rejected-first"));
 
   it.effect("the losing copy's response arrives first", () => runRace("losing-first"));
+});
+
+describe("ClientEngine settled outcomes are not re-settled (#364)", () => {
+  it.effect("a rejection reported after the entry was acknowledged is ignored", () =>
+    Effect.gen(function* () {
+      const backend = yield* MemoryBackend.make({
+        "todo/set": (args, writer) =>
+          writer.put("todos", (args as { readonly id: string }).id, args),
+      });
+      const handler = yield* serverFor(backend);
+      const store = yield* ClientStoreModule.makeMemory;
+      const transport = yield* makeInMemory(handler, "group-a");
+      // The second push's response reports mutation 1 rejected, though the client already has it applied.
+      const contradicting = yield* withLateRejection(transport, 2, {
+        clientId: "client-a",
+        mutationId: 1,
+        reason: "forbidden",
+      });
+      const engine = yield* ClientEngineModule.make({
+        clientId: "client-a",
+        clientGroupId: "group-a",
+        mutators: setMutators,
+      }).pipe(
+        Effect.provideService(ClientStore, store),
+        Effect.provideService(ClientTransport, contradicting)
+      );
+      yield* engine.subscribe(Subset.make({ collection: "todos" }));
+      const events = yield* openEngineEvents(engine);
+
+      const first = yield* engine.mutateWithAck("todo/set", { id: "x", title: "a", done: false });
+      yield* engine.push;
+      expect(yield* first.acknowledged).toEqual({ _tag: "applied" });
+
+      yield* engine.mutate("todo/set", { id: "y", title: "b", done: false });
+      yield* engine.push;
+
+      // The applied outcome stands: no phase change, no event, and the second entry settles normally.
+      expect(yield* stateOf(engine, 1)).toMatchObject({ phase: "acknowledged" });
+      expect((yield* stateOf(engine, 1))?.reason).toBeUndefined();
+      expect(yield* stateOf(engine, 2)).toMatchObject({ phase: "acknowledged" });
+      expect(yield* store.pendingMutations).toEqual([]);
+
+      yield* engine.pull;
+      expect(mutationTagsOf(yield* events.read, 1)).toEqual([
+        "MutationJournaled",
+        "MutationAcknowledged",
+      ]);
+      expect(yield* backend.lastMutationIds(raceContext)).toEqual({ "client-a": 2 });
+    })
+  );
 });

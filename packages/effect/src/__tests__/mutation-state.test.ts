@@ -80,6 +80,17 @@ describe("MutationState (#116)", () => {
     expect(MutationState.rejected(map, 999, "x", 1)).toBe(map);
   });
 
+  it("a settled entry never moves: a later outcome is a no-op (#364)", () => {
+    const acknowledged = MutationState.acknowledged(MutationState.seed([mutation(1)]), 1, 2000);
+    expect(MutationState.rejected(acknowledged, 1, "late", 3000)).toBe(acknowledged);
+    expect(MutationState.dropped(acknowledged, 1, 3000)).toBe(acknowledged);
+
+    const rejected = MutationState.rejected(MutationState.seed([mutation(2)]), 2, "first", 2000);
+    expect(MutationState.acknowledged(rejected, 2, 3000)).toBe(rejected);
+    expect(MutationState.rejected(rejected, 2, "second", 3000)).toBe(rejected);
+    expect(get(rejected, 2)).toMatchObject({ phase: "rejected", reason: "first", settledAt: 2000 });
+  });
+
   it("retains pending entries regardless of the terminal bound", () => {
     let map = MutationState.seed([mutation(1), mutation(2), mutation(3)]);
     // Bound of 0 terminal entries — every pending stays, since eviction only
