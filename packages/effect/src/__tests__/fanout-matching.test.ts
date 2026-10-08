@@ -89,7 +89,8 @@ const decidedBatches = Metric.value(Telemetry.fanoutLatencyMs).pipe(
 /**
  * Wait until the fan-out has decided the batch published after `before` was
  * read. It records one latency sample per batch, after its last group is poked
- * or suppressed, so the sample advancing is the batch-done event. The loop
+ * or suppressed, so the sample advancing is the batch-done event (this relies
+ * on SyncServer recording the sample after its poke loop). The loop
  * yields between reads; it never waits on a timer, and a fan-out that never
  * decides the batch fails at the runner's timeout.
  */

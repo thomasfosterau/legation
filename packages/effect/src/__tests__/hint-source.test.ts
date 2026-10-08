@@ -59,10 +59,13 @@ describe("HintSource.fromStream (#43)", () => {
       );
       yield* Deferred.await(stopped);
 
-      // The consumer is gone: a later offer never reaches the bus. A sentinel
-      // published straight to the bus must arrive first; had the offer been
-      // published, it would sit ahead of the sentinel.
+      // The consumer is gone, which `stopped` proves: the stream's finalizer runs
+      // only after the consumer's in-flight publish, if any, has finished. This
+      // part checks the effect: a later offer never reaches the bus. The yields
+      // give a still-running consumer the chance to publish the offer before
+      // the sentinel; without them the sentinel would win the race either way.
       yield* Queue.offer(queue, [{ collection: "todos", ids: ["2"] }]);
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
       const sentinel: ReadonlyArray<ChangeHint> = [{ collection: "lists", ids: ["sentinel"] }];
       yield* bus.publish(sentinel);
       expect(yield* subscription.take).toEqual(sentinel);
