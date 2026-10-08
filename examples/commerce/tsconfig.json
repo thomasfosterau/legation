@@ -1,12 +1,12 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
   "compilerOptions": {
     "strict": true,
     "moduleResolution": "bundler",
     "module": "ESNext",
     "target": "ES2023",
-    "types": ["node"],
+    "types": ["node", "$app/types"],
     "skipLibCheck": true
   },
-  "exclude": ["vite.config.ts", "node_modules/**", ".svelte-kit/[!a]*/**"]
+  "exclude": ["vite.config.ts", "node_modules/**", ".svelte-kit/[!a]*/**", "src/service-worker.ts", "build"]
 }

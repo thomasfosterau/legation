@@ -55,7 +55,7 @@
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "svelte": "^5",
-    "@sveltejs/kit": "^3.0.0"
+    "@sveltejs/kit": "catalog:"
   },
   "repository": {
     "type": "git",

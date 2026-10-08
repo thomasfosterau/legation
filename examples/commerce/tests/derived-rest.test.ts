@@ -12,7 +12,7 @@
  *    fixture (`fixtures/rest/<read>.json`) — what #163's comparison with the
  *    hand-written handlers turned into once those were deleted. Regenerate
  *    with `COMMERCE_FIXTURES=write bun run test` and review the diff.
- * 2. **The declarations agree.** `server/resources.ts` bridged through
+ * 2. **The declarations agree.** `src/lib/resources.ts` bridged through
  *    `NodeBridge.registry` is the hand-written graph of `src/lib/domain.ts`,
  *    node for node: attributes, edges, the filterable set, the sortable
  *    fields, the hint keys.
@@ -41,7 +41,7 @@ import {
   productPage,
   productReviews,
 } from "../src/lib/domain.js";
-import { resources } from "../server/resources.js";
+import { resources } from "../src/lib/resources.js";
 import { type Json, makeWorld } from "./support/world.js";
 
 // ─── 1. The documents: the app's reads against committed fixtures ────────────
@@ -142,7 +142,7 @@ const declarationOf = (node: Node.AnyNode) => ({
   hintKeys: node.hintKeys,
 });
 
-describe("server/resources.ts agrees with src/lib/domain.ts", () => {
+describe("src/lib/resources.ts agrees with src/lib/domain.ts", () => {
   it("bridges to the hand-written node graph, declaration for declaration", () => {
     // Hint keys are ADR-0023 fan-out state, not part of a JSON:API resource:
     // the one thing the bridge is told beside the resources.

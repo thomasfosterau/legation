@@ -47,7 +47,7 @@ app is a SvelteKit **SPA**: `ssr = false` in the root layout and
 ```
 src/lib/          domain (nodes/edges/reads), sync world, view shaping,
                   actions, session, paths
-src/params/       route-param matchers (favorites)
+src/params.ts      route-param matchers (favorites)
 src/routes/       +layout.ts (builds the world once) + one folder per screen
 ```
 

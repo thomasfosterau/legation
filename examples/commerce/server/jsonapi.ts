@@ -31,7 +31,7 @@
  * the failing operation. `@thomasfosterau/legation-jsonapi`'s `JsonApiBackend` pushes its
  * journal through it as one request per batch when the api advertises it.
  *
- * The api's shape — endpoints and wire errors — lives in `server/api.ts`,
+ * The api's shape — endpoints and wire errors — lives in `src/lib/api.ts`,
  * which the service worker also loads to reflect the read routes for the
  * façade (ADR-0029): this module binds the handlers to it and re-exports it.
  *
@@ -54,9 +54,9 @@ import { ApiError, Atomic, Handlers, Lid, Middleware } from "@thomasfosterau/eff
 import type { Backend } from "@thomasfosterau/legation-effect";
 import { RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "../src/lib/domain.js";
-import { api, NotFound, Unauthorized } from "./api.js";
-import type { OperationRejected } from "./api.js";
-import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "./resources.js";
+import { api, NotFound, Unauthorized } from "../src/lib/api.js";
+import type { OperationRejected } from "../src/lib/api.js";
+import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "../src/lib/resources.js";
 import { authPolicy, CommerceSync } from "./runtime.js";
 
 export {
@@ -67,13 +67,13 @@ export {
   OperationRejected,
   OperationUnauthorized,
   Unauthorized,
-} from "./api.js";
+} from "../src/lib/api.js";
 
 /**
  * One operation's failure inside an atomic batch — the in-handler form. The
  * extension wants the error document to name the failing operation through
  * `source.pointer`; `ApiError.make` carries custom fields under `meta`, not
- * `source`, so the wire shape is declared structurally in `server/api.ts`
+ * `source`, so the wire shape is declared structurally in `src/lib/api.ts`
  * (any `{ status, wire }` is an `ErrorClass`, one per status) and this class
  * is what the batch logic fails with. `detail` doubles as the rejection reason a pushing
  * `JsonApiBackend` records, so it mirrors the sync mutators' reasons.

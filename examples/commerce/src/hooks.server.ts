@@ -16,13 +16,13 @@
  * module import — the first request pays for boot, every later request
  * reuses it.
  */
-import type { Handle } from "@sveltejs/kit";
+import type { Handle } from "@sveltejs/kit/hooks";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { clientLayer, migrate } from "../server/db.js";
 import { bindClientGroup, currentUser } from "../server/runtime.js";
-import { auth, migrateAuth } from "$lib/server/auth.js";
+import { auth, migrateAuth } from "#lib/server/auth.js";
 import { svelteKitHandler } from "better-auth/svelte-kit";
-import { building } from "$app/environment";
+import { building } from "$app/env";
 
 const DB_PATH = process.env.COMMERCE_DB ?? new URL("../commerce.db", import.meta.url).pathname;
 

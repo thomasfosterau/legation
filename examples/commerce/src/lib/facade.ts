@@ -5,14 +5,14 @@
  * `fetch` listener (src/service-worker.ts); this module only says what the
  * façade is built from.
  *
- * **The routes** are the api's own (`server/api.ts`, the shape both the
+ * **The routes** are the api's own (`src/lib/api.ts`, the shape both the
  * server and this worker load): its `list` / `get` endpoints, declared with
  * the node graph's codec and served by the derived handlers, so the URLs
  * the façade answers are the URLs the server serves, under one grammar —
  * the parity the façade presumes.
  *
  * **The declarations.** Linkage follows the resources those endpoints are
- * declared with (`server/resources.ts`), so a locally served document
+ * declared with (`src/lib/resources.ts`), so a locally served document
  * carries exactly the relationships the server writes (ADR-0029 §6;
  * `tests/replica-documents.test.ts` checks the bytes).
  */
@@ -21,8 +21,8 @@ import type { Resource } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@thomasfosterau/legation-effect";
 import type { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
 import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
-import { api } from "../../server/api.js";
-import { resources as declared } from "../../server/resources.js";
+import { api } from "./api.js";
+import { resources as declared } from "./resources.js";
 import { nodes } from "./domain.js";
 
 /** The resource declarations the api's endpoints carry, by type. */

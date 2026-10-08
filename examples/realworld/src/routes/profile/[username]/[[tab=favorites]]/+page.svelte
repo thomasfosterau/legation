@@ -19,12 +19,12 @@
     userProfile,
     type Favorite,
     type Follow,
-  } from "$lib/domain";
-  import { toArticlePage, toProfile, values } from "$lib/joins";
-  import { getSession } from "$lib/session.svelte";
-  import ArticleList from "$lib/components/ArticleList.svelte";
-  import FollowButton from "$lib/components/FollowButton.svelte";
-  import type { Feed } from "$lib/types";
+  } from "#lib/domain.js";
+  import { toArticlePage, toProfile, values } from "#lib/joins.js";
+  import { getSession } from "#lib/session.svelte.js";
+  import ArticleList from "#lib/components/ArticleList.svelte";
+  import FollowButton from "#lib/components/FollowButton.svelte";
+  import type { Feed } from "#lib/types.js";
 
   const username = $derived(kitPage.params.username!);
   const favorites = $derived(kitPage.params.tab === "favorites");

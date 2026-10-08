@@ -14,9 +14,11 @@
  * - The app is `vite build` (adapter-node), made once per Vitest run by
  *   the `commerce-browser` project's global setup before the test files
  *   start (`build.ts`, #289), whose `handler` is mounted on the front
- *   server in-process — `ORIGIN`, `SYNC_ORIGIN`, `COMMERCE_DB` and the
- *   Better Auth secret are set before the build's modules load, which is
- *   when they read them.
+ *   server in-process — `SYNC_ORIGIN`, `PROTOCOL_HEADER`, `COMMERCE_DB` and
+ *   the Better Auth secret are set before the build's modules load, which
+ *   is when they read them. adapter-node 6 takes the app's origin from the
+ *   request (`Host`, and the protocol from the `PROTOCOL_HEADER`, else
+ *   `https`), so the front, as a reverse proxy would, names `http`.
  * - The front routes `/sync*` (the carriers, WebSocket upgrades included)
  *   to the sync server and everything else to the app, so the browser
  *   talks one origin, as it does behind a real reverse proxy or the dev
@@ -168,6 +170,7 @@ export const serveApp = async (): Promise<App> => {
       res.statusCode = 503;
       return res.end("app not loaded");
     }
+    req.headers["x-forwarded-proto"] = "http";
     handler(req, res, () => {
       res.statusCode = 404;
       res.end("not found");
@@ -180,8 +183,8 @@ export const serveApp = async (): Promise<App> => {
   const origin = `http://127.0.0.1:${await listen(front)}`;
 
   // The build's server modules read their environment when they load.
-  process.env.ORIGIN = origin;
   process.env.SYNC_ORIGIN = `http://127.0.0.1:${syncPort}`;
+  process.env.PROTOCOL_HEADER = "x-forwarded-proto";
   process.env.COMMERCE_DB = dbPath;
   process.env.BETTER_AUTH_SECRET = "commerce-browser-test";
   process.env.BETTER_AUTH_URL = origin;

@@ -13,7 +13,7 @@ import { Effect } from "effect";
 import { productDetail, productReviews } from "../../../lib/domain.js";
 import { apiFor, readCollection } from "../../../../server/client.js";
 import { productId, variantId } from "../../../../server/jsonapi.js";
-import { Product, Review, Seller, Variant } from "../../../../server/resources.js";
+import { Product, Review, Seller, Variant } from "../../../lib/resources.js";
 
 export const load = (async ({ locals, params }) => {
   const user = locals.user?.id;

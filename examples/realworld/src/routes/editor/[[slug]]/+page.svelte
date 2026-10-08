@@ -11,10 +11,10 @@
   import { resolve } from "$app/paths";
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { getActions } from "$lib/actions.svelte";
-  import { getSession } from "$lib/session.svelte";
-  import { articleBySlug } from "$lib/domain";
-  import { toArticle } from "$lib/joins";
+  import { getActions } from "#lib/actions.svelte.js";
+  import { getSession } from "#lib/session.svelte.js";
+  import { articleBySlug } from "#lib/domain.js";
+  import { toArticle } from "#lib/joins.js";
 
   const actions = getActions();
   const session = getSession();

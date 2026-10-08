@@ -9,11 +9,11 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { allArticles, allFavorites, allFollows, type Favorite, type Follow } from "$lib/domain";
-  import { toArticlePage, toTags, values } from "$lib/joins";
-  import { getSession } from "$lib/session.svelte";
-  import ArticleList from "$lib/components/ArticleList.svelte";
-  import type { Feed } from "$lib/types";
+  import { allArticles, allFavorites, allFollows, type Favorite, type Follow } from "#lib/domain.js";
+  import { toArticlePage, toTags, values } from "#lib/joins.js";
+  import { getSession } from "#lib/session.svelte.js";
+  import ArticleList from "#lib/components/ArticleList.svelte";
+  import type { Feed } from "#lib/types.js";
 
   const session = getSession();
   const articleRows = useQuery(() => allArticles);

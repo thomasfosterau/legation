@@ -18,9 +18,9 @@
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
   import type { Transport } from "@thomasfosterau/legation-effect";
-  import { allUsers, type User } from "$lib/domain";
-  import { values } from "$lib/joins";
-  import { createSession, setSession } from "$lib/session.svelte";
+  import { allUsers, type User } from "#lib/domain.js";
+  import { values } from "#lib/joins.js";
+  import { createSession, setSession } from "#lib/session.svelte.js";
 
   const { data, children } = $props();
   // The world is a stable singleton the root `load` builds once, so reading it

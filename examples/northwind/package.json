@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
   "description": "Northwind Traders admin dashboard driving the legation engine through @thomasfosterau/legation-svelte on SvelteKit: a route per screen, seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
     "dev": "vite dev",
@@ -20,8 +23,8 @@
     "svelte": "^5"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.0",
-    "@sveltejs/kit": "^2.0.0",
+    "@sveltejs/adapter-static": "catalog:",
+    "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "svelte-check": "catalog:",
     "typescript": "catalog:",

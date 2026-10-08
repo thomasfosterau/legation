@@ -13,7 +13,7 @@
  * the components as-is (no serialization boundary to cross).
  */
 import type { LayoutLoad } from "./$types";
-import { createWorld } from "$lib/sync";
+import { createWorld } from "#lib/sync.js";
 
 export const ssr = false;
 

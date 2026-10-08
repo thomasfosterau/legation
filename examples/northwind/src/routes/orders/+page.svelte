@@ -12,9 +12,9 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { getActions } from "$lib/actions";
-  import { lineTotal, toOrderLines, toOrderViews } from "$lib/data";
-  import { allOrders, orderLines } from "$lib/domain";
+  import { getActions } from "#lib/actions.js";
+  import { lineTotal, toOrderLines, toOrderViews } from "#lib/data.js";
+  import { allOrders, orderLines } from "#lib/domain.js";
 
   const actions = getActions();
   const orderRows = useQuery(() => allOrders);
