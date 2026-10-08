@@ -44,9 +44,10 @@ const withDatabase = <A>(use: (sql: SqlClient) => Effect.Effect<A, unknown>) =>
   );
 
 /** `SqlExecutor` over the sqlite client; `transactional: false` mimics D1 (no transactions). */
+const asBackendError = (message: string) => (cause: unknown) =>
+  new BackendError({ message, cause });
+
 const makeExecutor = (sql: SqlClient, transactional: boolean): SqlBackend.SqlExecutor => {
-  const asBackendError = (message: string) => (cause: unknown) =>
-    new BackendError({ message, cause });
   return {
     query: (fragment) =>
       sql
