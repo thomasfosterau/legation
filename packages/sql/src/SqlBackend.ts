@@ -553,7 +553,9 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     });
 
   // The ordering this executor uses; chosen once, outside the generator.
-  const applyOne = applyBumpAfter; // TEMP MUTANT for CI evidence, reverted in the next commit
+  // TEMP MUTANT for CI evidence, reverted in the next commit
+  const applyOne = transactional ? applyBumpAfter : applyBumpAfter;
+  void applyClaimFirst;
 
   const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
     executor.transaction(
