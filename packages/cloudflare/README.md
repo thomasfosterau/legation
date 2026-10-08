@@ -9,7 +9,10 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
   the object, is answered, and lets it hibernate), CVRs in the object's
   transactional storage (co-located with the user), a `FanoutBus` over the
   topic shards, and WebSockets that carry only contentless poke frames — so
-  hibernated sockets cost nothing between writes.
+  hibernated sockets cost nothing between writes. Each shard call and lease
+  registration is bounded by `publishTimeout` (default 5 seconds): a hung shard
+  is aborted and its poke dropped, so it cannot hold a push open, and a lost
+  poke only delays the next pull.
 - **`FanoutShard` (`makeShardClass`)** — one Durable Object per topic
   (`idFromName(topic)` is the shard function). Rooms lease their topics on a
   heartbeat; a publish pokes every live room and ages out expired leases

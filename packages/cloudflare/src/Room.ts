@@ -64,6 +64,11 @@ export interface RoomConfig<Env> {
   readonly shards: (env: Env) => DurableObjectNamespace;
   /** Shard lease heartbeat (default 30 seconds; TTL is 3×). */
   readonly heartbeat?: Duration.Input;
+  /**
+   * Bound on each shard call and lease registration the room makes; a call that exceeds it is
+   * logged and dropped, so a hung shard cannot hold a push's publish open. Default 5 seconds.
+   */
+  readonly publishTimeout?: Duration.Input | undefined;
 }
 
 interface RoomRuntime {
@@ -91,7 +96,10 @@ const boot = <Env>(
       const scope = yield* Scope.make();
       return yield* Effect.gen(function* () {
         const roomId = state.id.name ?? state.id.toString();
-        const durable = yield* DurableFanoutBroker.make({ shards: config.shards(env) });
+        const durable = yield* DurableFanoutBroker.make({
+          shards: config.shards(env),
+          timeout: config.publishTimeout,
+        });
         // Late binding: the bus leases the room's windows, which the
         // handler's introspection provides once built.
         const subsetsRef = yield* Ref.make<Effect.Effect<ReadonlyArray<Subset.Subset>>>(
@@ -103,6 +111,7 @@ const boot = <Env>(
           nodes: config.nodes,
           subsets: Ref.get(subsetsRef).pipe(Effect.flatten),
           heartbeat: config.heartbeat ?? "30 seconds",
+          timeout: config.publishTimeout,
         });
         let build = SyncServer.makeWithIntrospection.pipe(
           Effect.provideService(Backend.Backend, config.backend(env)),

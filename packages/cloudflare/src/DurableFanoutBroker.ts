@@ -29,7 +29,7 @@ export interface MakeOptions {
    * Bound on one shard call. A call that exceeds it is aborted, logged and dropped, so a hung
    * shard cannot hold the publish that awaits it. Default 5 seconds.
    */
-  readonly timeout?: Duration.Input;
+  readonly timeout?: Duration.Input | undefined;
 }
 
 /** The broker plus the room's poke-inlet (wire it to the `/poke` route). */
