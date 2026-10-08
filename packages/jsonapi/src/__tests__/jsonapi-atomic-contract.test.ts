@@ -191,10 +191,12 @@ const applyAdd = (
     id,
     attributes: operation.data.attributes as Record<string, unknown>,
   };
-  if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
   if (row.attributes.poison === true)
     return Effect.fail(rejection(index, "poison rows are refused"));
+  // Staged before the crash check: a row written and then crashed must be
+  // discarded with the batch, not leaked into the committed store.
   tableOf(staged, row.type).set(id, row);
+  if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
   return Effect.succeed({ data: resourceOf(row) });
 };
 
@@ -309,6 +311,7 @@ const mutators = new Map<string, Mutator.AnyMutator>(
     BackendContract.delRow,
     BackendContract.failAlways,
     BackendContract.rejectAlways,
+    BackendContract.writeThenFail,
   ].map((mutator) => [mutator.name, mutator])
 );
 
@@ -346,6 +349,20 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
     (args) => {
       const a = args as { collection: string; id: string };
       return { operation: "create", type: a.collection, id: a.id, attributes: { poison: true } };
+    },
+  ],
+  [
+    BackendContract.writeThenFail.name,
+    (args) => {
+      const a = args as { collection: string; id: string };
+      // The server stages the row before it falls over (see applyAdd), so the
+      // staged write must be discarded with the batch.
+      return {
+        operation: "create",
+        type: a.collection,
+        id: a.id,
+        attributes: { n: 99, crash: true },
+      };
     },
   ],
 ]);

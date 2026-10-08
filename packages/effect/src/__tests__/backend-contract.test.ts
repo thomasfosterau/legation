@@ -62,4 +62,21 @@ describe("verifyBackendContract", () => {
       expect(failure.rule).toContain("gaps");
     })
   );
+
+  it.effect("catches a backend that does not register the write-then-fail mutator", () =>
+    Effect.gen(function* () {
+      // An unregistered mutator fails with "Unknown mutator", a BackendError too: the
+      // write-then-fail rule must not let that pass as the expected failure.
+      const handlers = Object.fromEntries(
+        Object.entries(BackendContract.memoryHandlers).filter(
+          ([name]) => name !== BackendContract.writeThenFail.name
+        )
+      );
+      const broken = yield* MemoryBackend.make(handlers);
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
+      expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("discards");
+      expect(failure.message).toContain("not registered");
+    })
+  );
 });
