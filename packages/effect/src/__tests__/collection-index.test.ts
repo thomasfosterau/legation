@@ -785,6 +785,62 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
+  it.effect("#350: an engine attached while a hydrate is writing is re-read afterwards", () =>
+    Effect.gen(function* () {
+      const memory = yield* ClientStoreModule.makeMemory;
+      yield* memory.putRow("items", {
+        id: "i1",
+        version: 1,
+        value: { id: "i1", priority: 1, done: false },
+      });
+      // Parks the hydrate's write of i1 once armed, before it reaches the store.
+      const armed = yield* Ref.make(false);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const store = ClientStore.of({
+        ...memory,
+        putRow: (collection, stored) =>
+          Effect.gen(function* () {
+            if (stored.id === "i1" && (yield* Ref.getAndSet(armed, false))) {
+              yield* Deferred.succeed(reached, undefined);
+              yield* Deferred.await(release);
+            }
+            yield* memory.putRow(collection, stored);
+          }),
+      });
+
+      yield* Ref.set(armed, true);
+      const hydrating = yield* Effect.forkChild(
+        Hydration.hydrate(store, {
+          rows: [
+            {
+              collection: "items",
+              id: "i1",
+              version: 2,
+              value: { id: "i1", priority: 3, done: false },
+            },
+          ],
+          journal: [],
+        })
+      );
+      yield* Deferred.await(reached);
+
+      // An engine built mid-hydrate indexes the pre-hydrate row.
+      const engine = yield* priorityEngine(store);
+      const at = (priority: number) =>
+        engine.query(
+          Subset.make({ collection: "items", where: Predicate.eq("priority", priority) })
+        );
+      expect((yield* at(1)).map((r) => r.id)).toEqual(["i1"]);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(hydrating);
+      // The hydrate's re-read reached it: the index matches the stored row.
+      expect(yield* at(1)).toEqual([]);
+      expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
+    })
+  );
+
   it.effect("#350: a closed engine is deregistered and is not re-read by a later hydrate", () =>
     Effect.gen(function* () {
       const snapshot: Hydration.Snapshot = {

@@ -528,7 +528,12 @@ const liveEngines = new WeakMap<ClientStore, Set<Effect.Effect<void>>>();
  * engine's built indexes and view showing the old rows (#350).
  */
 export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =>
-  Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, { discard: true });
+  // Read the attached set when the effect runs, not when it is built: a caller
+  // that builds this before its writes (`Effect.ensuring`) must still reach an
+  // engine attached during them (#350).
+  Effect.suspend(() =>
+    Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, { discard: true })
+  );
 
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
