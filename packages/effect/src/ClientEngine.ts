@@ -183,7 +183,8 @@ export interface MutationEvent {
  * they are observability, not reconstructable via pull.
  *
  * - `MutationJournaled` — a mutation was journaled locally (from `mutate`,
- *   `mutateEncoded`, or `mutateWithAck`).
+ *   `mutateEncoded`, or `mutateWithAck`), or a journal entry a direct store write
+ *   (`Hydration.hydrate`) appended was adopted into this engine (#358), once per entry.
  * - `MutationAcknowledged` — the backend applied a journaled mutation.
  * - `MutationRejected` — the backend permanently refused it, with a `reason`.
  *   Each mutation settles once: a later response that repeats or contradicts
@@ -923,12 +924,19 @@ export const make = (
     // write appended under this engine, or entries whose boot-time read failed (`initialPending`
     // falls back to none). An entry already tracked keeps its phase. Runs on every reload and on
     // every push claim, so an untracked entry is tracked before the push that sends it can settle it.
-    // Only a real change publishes: `SubscriptionRef.update` notifies even when nothing moved.
+    // Each adopted entry announces `MutationJournaled` once, as a local `journal` does, so the
+    // outcome that follows it (`MutationAcknowledged` / `MutationRejected`) has its opening event.
+    // Callers hold `overlayLock`, so the journal cannot change between the read and the fold. The
+    // gate stays a read: `SubscriptionRef.modify` publishes even when nothing moved, so a no-op
+    // adoption (the common case on every push) must not reach it.
     const adoptPending = (pending: ReadonlyArray<Mutation>): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!MutationState.hasUntracked(yield* SubscriptionRef.get(mutationStates), pending))
           return;
-        yield* SubscriptionRef.update(mutationStates, (map) => MutationState.adopt(map, pending));
+        const adopted = yield* SubscriptionRef.modify(mutationStates, (map) =>
+          MutationState.adopt(map, pending)
+        );
+        for (const mutation of adopted) yield* emitEvent(mutation.mutationId, "journaled");
       });
     // #212: with the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
@@ -2223,14 +2231,19 @@ export const make = (
     // A direct store write (`Hydration.hydrate`) appends journal entries the map does not track;
     // adopt them so they settle like a locally journaled mutation (#358). A failed read keeps the
     // map as it was (logged); the push claim adopts the journal again before it sends anything.
-    const adoptJournal: Effect.Effect<void> = store.pendingMutations.pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(
-          "ClientEngine: could not read the journal to track entries written directly to the store",
-          { error }
-        ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
-      ),
-      Effect.flatMap(adoptPending)
+    // The read and the fold run under `overlayLock`, as every other journal writer does: a pull's
+    // trim cannot land between them and leave an adopted id with no journal row behind it.
+    const adoptJournal: Effect.Effect<void> = Semaphore.withPermit(
+      overlayLock,
+      store.pendingMutations.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "ClientEngine: could not read the journal to track entries written directly to the store",
+            { error }
+          ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
+        ),
+        Effect.flatMap(adoptPending)
+      )
     );
 
     // Re-read everything derived from the store and reveal it: the built indexes, the overlay

@@ -125,7 +125,9 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * store. It reaches only the engines built over this exact store object: a store
  * wrapped in a new object (`ClientStore.of({ ...store })`) is not seen, so its engine
  * can stay stale. The same re-read tracks the appended journal entries in its
- * `mutationStates` as `"pending"` (#358), so they settle like a local mutation.
+ * `mutationStates` as `"pending"` (#358), so they settle like a local mutation. Journal ids
+ * should be ids this client has not already settled: an id the map has evicted is tracked again,
+ * and its outcome event can then follow a second time.
  *
  * The writes are not atomic. Between the first `putRow` and the re-read, an indexed
  * read on an async store can see the old index against the new rows. Once `hydrate`

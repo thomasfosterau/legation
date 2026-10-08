@@ -8,7 +8,19 @@
  * mutation storm.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, HashMap, Option, Ref, Schema, Scope, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  HashMap,
+  Logger,
+  Option,
+  Ref,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -365,9 +377,19 @@ describe("hydrated journal entries in a running engine (#358)", () => {
           journaledAt: 456,
         });
 
+        // A second hydrate of the same entry re-adopts nothing: the id is already tracked.
+        yield* Hydration.hydrate(store, {
+          rows: [],
+          journal: [hydratedEntry(1, "todo/set", todo)],
+        });
+
         yield* engine.push;
         expect(get(yield* snapshot(engine), 1)?.phase).toBe("acknowledged");
-        expect(eventsFor(yield* events.read, 1)).toEqual(["MutationAcknowledged"]);
+        // The same opening as a locally journaled mutation: journaled once, then the outcome.
+        expect(eventsFor(yield* events.read, 1)).toEqual([
+          "MutationJournaled",
+          "MutationAcknowledged",
+        ]);
       })
   );
 
@@ -401,7 +423,7 @@ describe("hydrated journal entries in a running engine (#358)", () => {
             reason: "permission revoked",
           },
         ]);
-        expect(eventsFor(seen, 2)).toEqual(["MutationRejected"]);
+        expect(eventsFor(seen, 2)).toEqual(["MutationJournaled", "MutationRejected"]);
 
         const states = yield* snapshot(engine);
         expect(get(states, 2)?.phase).toBe("rejected");
@@ -416,6 +438,7 @@ describe("hydrated journal entries in a running engine (#358)", () => {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
+      const events = yield* openEvents(engine);
 
       yield* engine.mutate("todo/set", todo);
       yield* engine.push;
@@ -434,6 +457,12 @@ describe("hydrated journal entries in a running engine (#358)", () => {
       yield* engine.push;
       expect(get(yield* snapshot(engine), 1)?.phase).toBe("acknowledged");
       expect(get(yield* snapshot(engine), 2)?.phase).toBe("acknowledged");
+
+      // Id 1 was journaled once (by the local mutate) and never re-announced by the duplicate;
+      // id 2 is announced once, at adoption, ahead of its outcome.
+      const seen = yield* events.read;
+      expect(eventsFor(seen, 1)).toEqual(["MutationJournaled", "MutationAcknowledged"]);
+      expect(eventsFor(seen, 2)).toEqual(["MutationJournaled", "MutationAcknowledged"]);
     })
   );
 
@@ -469,8 +498,140 @@ describe("hydrated journal entries in a running engine (#358)", () => {
         const events = yield* openEvents(engine);
         yield* engine.push;
 
-        expect(eventsFor(yield* events.read, 1)).toEqual(["MutationRejected"]);
+        expect(eventsFor(yield* events.read, 1)).toEqual(["MutationJournaled", "MutationRejected"]);
         expect(get(yield* snapshot(engine), 1)?.phase).toBe("rejected");
       })
+  );
+
+  it.effect(
+    "a pull that trims a hydrated entry while its adoption read is in flight does not re-track it (#358 review S1)",
+    () =>
+      Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const memory = yield* ClientStoreModule.makeMemory;
+        // The first journal read after `armed` is cleared takes its snapshot, then parks until the
+        // test releases it. Only `resyncAttachedEngines` runs in that window, so the parked read is
+        // the adoption read, and the snapshot still holds id 5 when the pull below trims it.
+        const armed = yield* Ref.make(false);
+        const readStarted = yield* Deferred.make<void>();
+        const releaseRead = yield* Deferred.make<void>();
+        const trimmed = yield* Ref.make(false);
+        const gated = ClientStore.of({
+          ...memory,
+          pendingMutations: Ref.getAndSet(armed, false).pipe(
+            Effect.flatMap((gate) =>
+              gate
+                ? memory.pendingMutations.pipe(
+                    Effect.tap(() =>
+                      Deferred.succeed(readStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseRead))
+                      )
+                    )
+                  )
+                : memory.pendingMutations
+            )
+          ),
+          acknowledge: (clientId, upTo) =>
+            memory.acknowledge(clientId, upTo).pipe(Effect.tap(() => Ref.set(trimmed, true))),
+        });
+
+        // A peer under the same client id applies mutations 1..5, so the server reports
+        // lastMutationIds["client-a"] = 5 and a pull of `engine` trims every journal entry up to 5.
+        const peer = yield* makeEngine(handler, yield* ClientStoreModule.makeMemory);
+        for (let id = 1; id <= 5; id++) {
+          yield* peer.mutate("todo/set", { id: String(id), title: "peer", done: false });
+        }
+        yield* peer.push;
+
+        const engine = yield* makeEngine(handler, gated);
+        yield* engine.subscribe(allTodos);
+        const events = yield* openEvents(engine);
+        yield* Ref.set(trimmed, false); // only the pull below is the trim under test
+
+        // Written directly, as `Hydration.hydrate` does, with no engine tracking it yet.
+        yield* memory.appendMutation(hydratedEntry(5, "todo/set", todo));
+        yield* Ref.set(armed, true);
+        const resync = yield* Effect.forkChild(ClientEngineModule.resyncAttachedEngines(gated));
+        yield* Deferred.await(readStarted);
+
+        const pull = yield* Effect.forkChild(engine.pull);
+        // Without the lock the pull trims id 5 now, while the read still holds its snapshot; with
+        // it, the pull waits behind the read. Either way it gets a bounded number of scheduler
+        // turns (no timers), then the read is released.
+        for (let turn = 0; turn < 10_000 && !(yield* Ref.get(trimmed)); turn++) {
+          yield* Effect.yieldNow;
+        }
+        yield* Deferred.succeed(releaseRead, undefined);
+        yield* Fiber.join(resync);
+        yield* Fiber.join(pull);
+
+        // The journal row is gone, and id 5 is settled by the pull. Never a pending state without
+        // a journal row behind it.
+        expect(yield* memory.pendingMutations).toEqual([]);
+        const states = yield* snapshot(engine);
+        expect(get(states, 5)?.phase).toBe("acknowledged");
+        expect([...HashMap.values(states)].filter((s) => s.phase === "pending")).toEqual([]);
+        expect(eventsFor(yield* events.read, 5)).toEqual([
+          "MutationJournaled",
+          "MutationAcknowledged",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a rejection that contradicts an acknowledgement is logged at warning and ignored (#358 review N3)",
+    () => {
+      const warnings: Array<string> = [];
+      const logger = Logger.make((options) => {
+        if (options.logLevel === "Warn") warnings.push(String(options.message));
+      });
+      return Effect.gen(function* () {
+        const handler = yield* makeServer;
+        const store = yield* ClientStoreModule.makeMemory;
+        const inner = yield* makeInMemory(handler, "group-a");
+        // Once `contradict` is set, every push reports id 1 as permanently rejected, though this
+        // client already holds id 1 acknowledged.
+        const contradict = yield* Ref.make(false);
+        const transport = {
+          ...inner,
+          push: (request: Parameters<typeof inner.push>[0]) =>
+            inner.push(request).pipe(
+              Effect.flatMap((response) =>
+                Ref.get(contradict).pipe(
+                  Effect.map((on) =>
+                    on
+                      ? {
+                          ...response,
+                          rejected: [{ clientId: "client-a", mutationId: 1, reason: "late" }],
+                        }
+                      : response
+                  )
+                )
+              )
+            ),
+        };
+        const engine = yield* ClientEngineModule.make({
+          clientId: "client-a",
+          clientGroupId: "group-a",
+          mutators,
+        }).pipe(
+          Effect.provideService(ClientStore, store),
+          Effect.provideService(ClientTransport, transport)
+        );
+
+        yield* engine.mutate("todo/set", { id: "a", title: "t", done: false });
+        yield* engine.push;
+        expect(get(yield* snapshot(engine), 1)?.phase).toBe("acknowledged");
+
+        yield* Ref.set(contradict, true);
+        yield* engine.mutate("todo/set", { id: "b", title: "t", done: false });
+        yield* engine.push;
+
+        const states = yield* snapshot(engine);
+        expect(get(states, 1)?.phase).toBe("acknowledged");
+        expect(get(states, 1)?.reason).toBeUndefined();
+        expect(warnings.filter((message) => message.includes("contradicts"))).toHaveLength(1);
+      }).pipe(Effect.provide(Logger.layer([logger])));
+    }
   );
 });

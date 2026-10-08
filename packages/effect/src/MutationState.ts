@@ -89,13 +89,15 @@ export const hasUntracked = (map: MutationStateMap, pending: ReadonlyArray<Mutat
  * Track the journal entries the map does not know yet as `"pending"` (#358): the entries a direct
  * store write (`Hydration.hydrate`) appended under a running engine, which never went through
  * `journaled`. An entry the map already tracks keeps its phase, whatever the journal says, so a
- * settled entry is never reset to pending.
+ * settled entry is never reset to pending. Returns the entries it adopted, in journal order, so
+ * the caller can announce each one exactly once.
  */
 export const adopt = (
   map: MutationStateMap,
   pending: ReadonlyArray<Mutation>
-): MutationStateMap => {
+): readonly [adopted: ReadonlyArray<Mutation>, map: MutationStateMap] => {
   let next = map;
+  const adopted: Array<Mutation> = [];
   for (const mutation of pending) {
     if (HashMap.has(next, mutation.mutationId)) continue;
     next = journaled(next, {
@@ -104,8 +106,9 @@ export const adopt = (
       args: mutation.args,
       journaledAt: mutation.createdAt,
     });
+    adopted.push(mutation);
   }
-  return next;
+  return [adopted, next];
 };
 
 /** Fold a freshly-journaled mutation in as `"pending"`. */
