@@ -13,7 +13,10 @@
  *    client retries); one that fails with `MutationRejected` is permanent — the
  *    id is bumped atomically *without* applying effects, so the mutation is
  *    acknowledged and skipped rather than poisoning the queue, and mutations
- *    behind it still apply.
+ *    behind it still apply. Calls for one client group may overlap (a retry
+ *    while the first push is in flight): each mutation must still apply at most
+ *    once, and `lastMutationId` must never move backwards, so a copy whose
+ *    mutation a concurrent call already committed is skipped.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.

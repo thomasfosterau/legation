@@ -182,3 +182,135 @@ describe("MemoryBackend atomicity", () => {
     })
   );
 });
+
+/** Names of the parked copies a concurrency test drives. */
+type GateName = "a" | "b" | "first" | "stale" | "fresh" | "next";
+
+/**
+ * A copy parks at `release` after it has entered its handler, so the test
+ * decides when it resumes and commits.
+ */
+interface Gate {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
+const makeGate = Effect.gen(function* () {
+  return {
+    entered: yield* Deferred.make<void>(),
+    release: yield* Deferred.make<void>(),
+  } satisfies Gate;
+});
+
+const makeGates = Effect.all({
+  a: makeGate,
+  b: makeGate,
+  first: makeGate,
+  stale: makeGate,
+  fresh: makeGate,
+  next: makeGate,
+});
+
+/**
+ * `test/gated`: park, then read the counter and increment it, then write the
+ * row. The read happens after the park, so a copy that resumes late sees
+ * whatever committed while it was parked; a counter that moves twice means
+ * the mutation applied twice.
+ */
+const gatedHandlers = (
+  gates: Record<GateName, Gate>
+): Record<string, MemoryBackend.BackendHandler> => ({
+  "test/gated": (raw, writer) => {
+    const { id, n, gate } = raw as {
+      readonly id: string;
+      readonly n: number;
+      readonly gate: GateName;
+    };
+    const hook = gates[gate];
+    return Effect.gen(function* () {
+      yield* Deferred.succeed(hook.entered, undefined);
+      yield* Deferred.await(hook.release);
+      const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+      yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
+      yield* writer.put(rows, id, { n });
+    });
+  },
+});
+
+const gatedMutation = (mutationId: number, gate: GateName, id: string, n: number): Mutation =>
+  mutation(mutationId, "test/gated", { id, n, gate });
+
+describe("MemoryBackend concurrent applyMutations (#346)", () => {
+  it.effect("applies a mutation once when two in-flight copies of it race", () =>
+    Effect.gen(function* () {
+      const gates = yield* makeGates;
+      const backend = yield* MemoryBackend.make(gatedHandlers(gates));
+
+      // Both copies of (c1, 1) pass the start-of-mutation check and park.
+      const copyA = yield* Effect.forkChild(
+        backend.applyMutations(context, [gatedMutation(1, "a", "x", 1)])
+      );
+      const copyB = yield* Effect.forkChild(
+        backend.applyMutations(context, [gatedMutation(1, "b", "x", 1)])
+      );
+      yield* Deferred.await(gates.a.entered);
+      yield* Deferred.await(gates.b.entered);
+
+      // B commits first; then A resumes holding a stale copy of the same mutation.
+      yield* Deferred.succeed(gates.b.release, undefined);
+      const resultB = yield* Fiber.join(copyB);
+      expect(resultB.lastMutationIds[clientId]).toBe(1);
+      const afterB = yield* backend.getRows(context, rows, ["x", "counter"]);
+      expect(afterB.map((row) => row.value)).toEqual([{ n: 1 }, { count: 1 }]);
+
+      yield* Deferred.succeed(gates.a.release, undefined);
+      const resultA = yield* Fiber.join(copyA);
+
+      // A's copy is a replay: the rows keep B's versions, and it reports no effects.
+      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(afterB);
+      expect(resultA.lastMutationIds[clientId]).toBe(1);
+      expect(resultA.hints).toEqual([]);
+      expect(resultA.rejected).toBeUndefined();
+      expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
+    })
+  );
+
+  it.effect("does not move lastMutationIds backwards when a stale copy commits last", () =>
+    Effect.gen(function* () {
+      const gates = yield* makeGates;
+      const backend = yield* MemoryBackend.make(gatedHandlers(gates));
+
+      // Mutation 1 commits, so mutation 2 passes the gap check.
+      yield* Deferred.succeed(gates.first.release, undefined);
+      yield* backend.applyMutations(context, [gatedMutation(1, "first", "x", 1)]);
+
+      // Copy A of mutation 2 parks; copy B of mutation 2 and mutation 3 run to commit.
+      const staleCopy = yield* Effect.forkChild(
+        backend.applyMutations(context, [gatedMutation(2, "stale", "x", 2)])
+      );
+      yield* Deferred.await(gates.stale.entered);
+      yield* Deferred.succeed(gates.fresh.release, undefined);
+      yield* Deferred.succeed(gates.next.release, undefined);
+      yield* backend.applyMutations(context, [gatedMutation(2, "fresh", "x", 2)]);
+      const committed = yield* backend.applyMutations(context, [gatedMutation(3, "next", "x", 3)]);
+      expect(committed.lastMutationIds[clientId]).toBe(3);
+      const beforeStale = yield* backend.getRows(context, rows, ["x", "counter"]);
+      expect(beforeStale.map((row) => row.value)).toEqual([{ n: 3 }, { count: 3 }]);
+
+      // The stale copy of mutation 2 resumes last.
+      yield* Deferred.succeed(gates.stale.release, undefined);
+      const staleResult = yield* Fiber.join(staleCopy);
+
+      // The watermark stays at 3, and the stale writes do not land over
+      // mutation 3's row or bump the counter again.
+      expect(staleResult.lastMutationIds[clientId]).toBe(3);
+      expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 3 });
+      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(beforeStale);
+
+      // A later retry of mutation 3 is a replay and stays a no-op.
+      const retry = yield* backend.applyMutations(context, [gatedMutation(3, "next", "x", 3)]);
+      expect(retry.lastMutationIds[clientId]).toBe(3);
+      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(beforeStale);
+    })
+  );
+});
