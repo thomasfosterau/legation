@@ -7,7 +7,9 @@ A driver-agnostic SQL reference backend for the
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
   dialects.
 - **`SqlBackend`** — an implementation of the core `Backend` contract over a
-  tiny `SqlExecutor` seam (`query` / `run` / `transaction`). Bring your own
+  tiny `SqlExecutor` seam (`query` / `run` / `transaction`, and the optional
+  `transactional` flag, which an executor without transactions sets to
+  `false`). Bring your own
   driver (`bun:sqlite`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.
@@ -25,7 +27,9 @@ are text, instants, numbers or booleans: a column declared `text` gets an
 explicit code-point collation (`COLLATE "C"` / `COLLATE BINARY`) on every
 comparison, literals bind by the declared kind, and booleans are stored as
 `0`/`1` on SQLite and decoded back by the backend. Writes run app-authored
-handlers inside one transaction with the per-client `lastMutationId` bump.
+handlers inside one transaction, and each mutation's `lastMutationId` is
+claimed before its handler runs. An executor without transactions sets
+`transactional: false` and bumps after the handler instead (D1).
 
 ## Install
 

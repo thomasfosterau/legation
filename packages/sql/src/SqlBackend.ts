@@ -15,9 +15,39 @@
  * columns and binds literals by kind (booleans per dialect); the row decoder
  * maps SQLite's `0`/`1` back to booleans for columns declared `boolean`, and
  * otherwise leaves rows as the driver returns them (values stay opaque,
- * ADR-0014). Writes run app-provided handlers inside one
- * transaction with the per-client `lastMutationId` bump — the contract's
- * exactly-once, in-order, atomic guarantee, delegated to the database.
+ * ADR-0014). Writes run app-provided handlers inside one transaction (on an
+ * executor that has transactions), and each mutation is first claimed in the
+ * client's ledger row: a conditional UPDATE
+ * from `id - 1` to `id` that runs before its handler. The database evaluates
+ * that WHERE against the latest committed row, so of two calls racing for one
+ * mutation only one claim matches and the other is a replay the ledger covers.
+ * The watermark only ever moves from `id - 1` to `id`, so it cannot fall. This
+ * gives the contract's exactly-once, in-order guarantee for one client group,
+ * with the claim itself needing no stronger isolation than READ COMMITTED.
+ * An executor without transactions (`transactional: false`) cannot commit a
+ * claim together with its handler's writes, so it keeps the handler-then-bump
+ * order instead (see D1 below).
+ * What it does not cover, per dialect:
+ *
+ * - SQLite serialises transactions on its one connection (the client takes the
+ *   write lock with `BEGIN IMMEDIATE`), so overlapping calls never interleave.
+ * - PostgreSQL under READ COMMITTED: the claim is safe (a second UPDATE waits
+ *   for the first and re-checks its WHERE). A handler's own reads are not
+ *   protected by the claim, so a handler that reads rows another client group
+ *   writes needs its own locking. Serialisable isolation across client groups
+ *   is queued as #353 and is not provided here.
+ * - D1 is non-conforming (#342). It has no interactive transactions, so its
+ *   executor sets `transactional: false` and each statement commits on its own.
+ *   `applyMutations` then keeps trunk's order: the handler runs, then the
+ *   ledger is bumped to the larger of the stored and the new id, so an
+ *   overlapping call that finishes late cannot move the watermark back. The
+ *   handler's writes commit before the bump, so a pull between the two carries
+ *   the effect without the watermark; a crash after the writes and before the
+ *   bump makes the retry run the handler again; and a transient failure leaves
+ *   the writes committed for the retry to repeat. The
+ *   claim order is not used on D1 because a claim committed on its own would
+ *   leave a crash between the claim and the handler's commit claimed and
+ *   unapplied, so a retry would skip the mutation (#359).
  *
  * A mapping's reads run against `readRelation` when given (issue #204): a
  * real app's current-state relation is often a view — one that resolves each
@@ -55,6 +85,15 @@ const decodeArgs = (
     )
   );
 
+/** The `BackendError` for an id past the next expected one (a gap in the client's ids). */
+const gapError = (clientId: string, mutationId: number, last: number) =>
+  new BackendError({
+    message: `Mutation id gap for client ${clientId}: got ${mutationId}, expected ${last + 1}`,
+  });
+
+/** One pushed mutation, as `applyMutations` receives it. */
+type Mutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
+
 /** A row as returned by the driver: a column → value record. */
 export type SqlRow = Record<string, unknown>;
 
@@ -68,6 +107,14 @@ export interface SqlExecutor {
   readonly transaction: <A, R>(
     effect: Effect.Effect<A, BackendError, R>
   ) => Effect.Effect<A, BackendError, R>;
+  /**
+   * Whether `transaction` commits and rolls back atomically; defaults to `true`.
+   *
+   * Set `false` on an executor without transactions (D1). `applyMutations` then
+   * bumps each id after its handler instead of claiming it first, because a
+   * claim committed on its own would be skipped by a retry after a crash.
+   */
+  readonly transactional?: boolean | undefined;
 }
 
 /** How a collection maps onto a table. */
@@ -170,6 +217,7 @@ export const versionOf = Hash.contentHash;
 export const make = (config: SqlBackendConfig): Backend.Backend => {
   const dialect = config.dialect ?? Sql.sqlite;
   const executor = config.executor;
+  const transactional = executor.transactional ?? true;
   const mutationsTable = config.mutationsTable ?? "sync_mutations";
   const ph = (index: number) => dialect.placeholder(index);
   const q = (id: string) => dialect.quote(id);
@@ -348,6 +396,62 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         )
       );
 
+  // Create the client's ledger row at 0 when it has none. `DO NOTHING` leaves a
+  // row another transaction inserted alone (on PostgreSQL the insert waits for
+  // that transaction to commit or roll back first), so the claim below finds
+  // exactly one row either way.
+  const ensureLedgerRow = (clientGroupId: string, clientId: string) =>
+    executor.run({
+      text:
+        `INSERT INTO ${q(mutationsTable)} (${q("client_group_id")}, ${q("client_id")}, ${q("last_mutation_id")}) ` +
+        `VALUES (${ph(1)}, ${ph(2)}, 0) ` +
+        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO NOTHING`,
+      params: [clientGroupId, clientId],
+    });
+
+  // The claim: one conditional UPDATE from `mutationId - 1` to `mutationId`. The
+  // database evaluates the WHERE against the latest committed row, so two calls
+  // racing for one mutation cannot both match (READ COMMITTED re-checks the
+  // WHERE once a concurrent writer commits). RETURNING says whether this call
+  // moved the row. Only the claim decides; no read is trusted to decide it.
+  const claimLedger = (
+    clientGroupId: string,
+    clientId: string,
+    mutationId: number
+  ): Effect.Effect<boolean, BackendError> =>
+    executor
+      .query({
+        text:
+          `UPDATE ${q(mutationsTable)} SET ${q("last_mutation_id")} = ${ph(1)} ` +
+          `WHERE ${q("client_group_id")} = ${ph(2)} AND ${q("client_id")} = ${ph(3)} ` +
+          `AND ${q("last_mutation_id")} = ${ph(4)} RETURNING ${q("last_mutation_id")}`,
+        params: [mutationId, clientGroupId, clientId, mutationId - 1],
+      })
+      .pipe(Effect.map((rows) => rows.length > 0));
+
+  // Claim `mutationId` before its handler runs. `true`: this call won the claim
+  // and must run the handler. `false`: the ledger already covers the id, so it
+  // is a replay to skip. Otherwise the id is past the next expected one: a gap,
+  // a `BackendError`. A zero-row claim re-reads the ledger, which only ever
+  // rises, so a stale claim cannot move the watermark back.
+  const claimMutation = (
+    clientGroupId: string,
+    clientId: string,
+    mutationId: number
+  ): Effect.Effect<boolean, BackendError> =>
+    Effect.gen(function* () {
+      yield* ensureLedgerRow(clientGroupId, clientId);
+      if (yield* claimLedger(clientGroupId, clientId, mutationId)) return true;
+      const last = (yield* readLastIds(clientGroupId))[clientId] ?? 0;
+      if (mutationId <= last) return false;
+      return yield* gapError(clientId, mutationId, last);
+    });
+
+  // The bump of the handler-then-bump order (executors without transactions).
+  // It runs after the handler's writes, and it takes the larger of the stored and
+  // the new id, so a call that parked before a later bump cannot move the
+  // watermark back when it finishes (#352). It is not atomic with those writes
+  // (#342).
   const bumpLastId = (clientGroupId: string, clientId: string, mutationId: number) =>
     executor.run({
       text:
@@ -356,47 +460,116 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // `excluded.` instead of re-binding ph(3): with `?` placeholders a
         // reused index renders an extra placeholder with no matching param
         // (found by the commerce example's contract run over node:sqlite).
-        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = excluded.${q("last_mutation_id")}`,
+        // The unqualified column is the stored row's value.
+        `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ` +
+        dialect.greatest(q("last_mutation_id"), `excluded.${q("last_mutation_id")}`),
       params: [clientGroupId, clientId, mutationId],
     });
+
+  // Give a claim back after its handler failed transiently. A transaction rolls
+  // the claim back with the handler's effects. An executor without transactions
+  // (D1, see D1Executor) keeps it, so this restores the id and the client's
+  // retry applies the mutation again. Best effort: the handler's error is what
+  // the caller sees, and inside a failed PostgreSQL transaction this statement
+  // is refused and ignored, the rollback doing the work instead.
+  const releaseClaim = (clientGroupId: string, clientId: string, mutationId: number) =>
+    executor
+      .run({
+        text:
+          `UPDATE ${q(mutationsTable)} SET ${q("last_mutation_id")} = ${ph(1)} ` +
+          `WHERE ${q("client_group_id")} = ${ph(2)} AND ${q("client_id")} = ${ph(3)} ` +
+          `AND ${q("last_mutation_id")} = ${ph(4)}`,
+        params: [mutationId - 1, clientGroupId, clientId, mutationId],
+      })
+      .pipe(Effect.ignore);
+
+  // Run one mutation's handler inside a savepoint, so a permanent rejection drops
+  // its writes while the id's ledger write (the claim, or the bump after it)
+  // stays. A transient BackendError propagates and aborts the batch.
+  const runHandler = (context: Backend.SyncContext, mutation: Mutation, savepointIndex: number) =>
+    Effect.gen(function* () {
+      const handler = config.handlers[mutation.mutator];
+      const definition = config.mutators.get(mutation.mutator);
+      if (handler === undefined || definition === undefined) {
+        return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+      }
+      const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
+
+      const savepoint = q(`legation_sp_${savepointIndex}`);
+      yield* executor.run({ text: `SAVEPOINT ${savepoint}`, params: [] });
+      const outcome = yield* handler(args, executor, context).pipe(
+        Effect.map((hs) => ({ _tag: "applied", hints: hs }) as const),
+        Effect.catchTag("MutationRejected", (error) =>
+          executor
+            .run({ text: `ROLLBACK TO SAVEPOINT ${savepoint}`, params: [] })
+            .pipe(Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const))
+        )
+      );
+      yield* executor.run({ text: `RELEASE SAVEPOINT ${savepoint}`, params: [] });
+      return outcome;
+    });
+
+  // Claim-first, for an executor with transactions: the id is claimed, then its
+  // handler runs. A transient failure gives the claim back (best effort; the
+  // transaction's rollback does the same when it aborts the batch).
+  // `undefined`: a replay the ledger covers, to skip.
+  const applyClaimFirst = (
+    context: Backend.SyncContext,
+    mutation: Mutation,
+    savepointIndex: number
+  ) =>
+    Effect.gen(function* () {
+      const claimed = yield* claimMutation(
+        context.clientGroupId,
+        mutation.clientId,
+        mutation.mutationId
+      );
+      if (!claimed) return undefined;
+      return yield* runHandler(context, mutation, savepointIndex).pipe(
+        Effect.onError(() =>
+          releaseClaim(context.clientGroupId, mutation.clientId, mutation.mutationId)
+        )
+      );
+    });
+
+  // Handler-then-bump, for an executor without transactions (D1): trunk's order.
+  // The ledger is read first, a covered id is skipped, and the id is bumped only
+  // after the handler has run. Nothing is claimed, so a crash cannot leave an id
+  // claimed and unapplied. `undefined`: a replay the ledger covers, to skip.
+  const applyBumpAfter = (
+    context: Backend.SyncContext,
+    mutation: Mutation,
+    savepointIndex: number
+  ) =>
+    Effect.gen(function* () {
+      const last = (yield* readLastIds(context.clientGroupId))[mutation.clientId] ?? 0;
+      if (mutation.mutationId <= last) return undefined;
+      if (mutation.mutationId > last + 1) {
+        return yield* gapError(mutation.clientId, mutation.mutationId, last);
+      }
+      const outcome = yield* runHandler(context, mutation, savepointIndex);
+      yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
+      return outcome;
+    });
+
+  // The ordering this executor uses; chosen once, outside the generator.
+  const applyOne = transactional ? applyClaimFirst : applyBumpAfter;
 
   const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
     executor.transaction(
       Effect.gen(function* () {
         const hints: Array<Backend.ChangeHint> = [];
         const rejected: Array<Backend.RejectedMutation> = [];
+        // Numbered per handler run, as trunk did: a replay runs no savepoint and
+        // takes no number.
         let savepointCounter = 0;
         for (const mutation of mutations) {
-          const lastIds = yield* readLastIds(context.clientGroupId);
-          const last = lastIds[mutation.clientId] ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent skip
-          if (mutation.mutationId > last + 1) {
-            return yield* new BackendError({
-              message: `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${last + 1}`,
-            });
-          }
-          const handler = config.handlers[mutation.mutator];
-          const definition = config.mutators.get(mutation.mutator);
-          if (handler === undefined || definition === undefined) {
-            return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
-          }
-          const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
-
-          // Run the handler inside a savepoint so a permanent rejection can drop
-          // its writes while the lastMutationId bump (committed with the outer
-          // transaction) still lands. A transient BackendError aborts the whole
-          // transaction and propagates unchanged.
-          const savepoint = q(`legation_sp_${savepointCounter++}`);
-          yield* executor.run({ text: `SAVEPOINT ${savepoint}`, params: [] });
-          const outcome = yield* handler(args, executor, context).pipe(
-            Effect.map((hs) => ({ _tag: "applied", hints: hs }) as const),
-            Effect.catchTag("MutationRejected", (error) =>
-              executor
-                .run({ text: `ROLLBACK TO SAVEPOINT ${savepoint}`, params: [] })
-                .pipe(Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const))
-            )
-          );
-          yield* executor.run({ text: `RELEASE SAVEPOINT ${savepoint}`, params: [] });
+          // Ids start at 1 and the ledger at 0, so a non-positive id is never
+          // new: skip it without writing a ledger row for it.
+          if (mutation.mutationId <= 0) continue;
+          const outcome = yield* applyOne(context, mutation, savepointCounter);
+          if (outcome === undefined) continue; // idempotent skip: a replay
+          savepointCounter++;
           if (outcome._tag === "applied") {
             hints.push(...outcome.hints);
           } else {
@@ -406,7 +579,6 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
               reason: outcome.reason,
             });
           }
-          yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
         }
         // Enrich once, after all writes, so the reads see the final tx state
         // (a row a later mutation deleted is correctly absent from `values`).

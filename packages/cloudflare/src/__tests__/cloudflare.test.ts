@@ -15,6 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import type {
+  D1Database,
   DurableObjectNamespace,
   DurableObjectState,
   DurableObjectStorage,
@@ -30,6 +31,7 @@ import {
   Transport,
 } from "@thomasfosterau/legation-effect";
 import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation-effect/internal";
+import * as D1Executor from "../D1Executor.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import { leases, makeShardClass } from "../FanoutShard.js";
 import { makeRoomClass } from "../Room.js";
@@ -410,4 +412,11 @@ describe("rooms + shards, end to end", () => {
       vi.useRealTimers();
     }
   }, 20_000);
+});
+
+describe("D1Executor", () => {
+  it("declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)", () => {
+    // A claim committed on its own would be skipped by a retry after a crash.
+    expect(D1Executor.make({} as D1Database).transactional).toBe(false);
+  });
 });
