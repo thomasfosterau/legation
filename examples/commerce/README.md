@@ -25,8 +25,9 @@ becomes offline-first and live.
 
 ## The JSON:API
 
-`src/lib/resources.ts` declares the resources, `server/jsonapi.ts` the
-endpoints. Reads are derived from the node graph in `src/lib/domain.ts`, so a
+`src/lib/resources.ts` declares the resources and `src/lib/api.ts` the
+endpoints (no handlers, so the service worker's façade can load it too);
+`server/jsonapi.ts` binds the handlers. Reads are derived from the node graph in `src/lib/domain.ts`, so a
 URL is the filter grammar over each node's **filterable set** (`id` and the
 `one`-edge keys by `eq` / `in`; `userId` by `eq` on the private collections;
 `sort` by `id`, `name` on categories, `createdAt` on reviews and orders):
@@ -115,6 +116,8 @@ all-or-nothing request, drops a pointer-named rejection as a permanent
 rejection of that mutation, and resends the rest.
 
 ## Running it
+
+SvelteKit 3 needs Node 22.17 or later.
 
 ```bash
 bun install && bun run build          # workspace root: build the packages
