@@ -10,12 +10,12 @@
       "examples/*"
     ],
     "catalog": {
-      "effect": "4.0.0",
-      "@effect/platform-browser": "4.0.0",
-      "@effect/platform-node": "4.0.0",
-      "@effect/vitest": "4.0.0",
-      "@effect/sql-pg": "4.0.0",
-      "@effect/sql-sqlite-node": "4.0.0",
+      "effect": "4.0.2",
+      "@effect/platform-browser": "4.0.2",
+      "@effect/platform-node": "4.0.2",
+      "@effect/vitest": "4.0.2",
+      "@effect/sql-pg": "4.0.2",
+      "@effect/sql-sqlite-node": "4.0.2",
       "typescript": "6.0.2",
       "@effect/tsgo": "0.47.2",
       "@typescript/native": "npm:typescript@7.0.2",
@@ -37,7 +37,7 @@
     }
   },
   "overrides": {
-    "@effect/platform-node-shared": "4.0.0"
+    "@effect/platform-node-shared": "4.0.2"
   },
   "scripts": {
     "build": "node node_modules/@typescript/native/bin/tsc --build tsconfig.json",

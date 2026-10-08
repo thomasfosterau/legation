@@ -185,7 +185,11 @@ const makeEngine = (
 
 /** SQLite on `:memory:` through the Effect SQL client. */
 export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(function* () {
-  const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
+  // effect-sql-sqlite-node 4.0.2 reports database setup failures as a typed SqlError;
+  // a failed in-memory setup is a broken test environment, so it dies here.
+  const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" })).pipe(
+    Effect.orDie
+  );
   const sql = Context.get(context, SqlClient);
   const runner: Runner = {
     exec: (text) => sql.unsafe(text).unprepared.pipe(Effect.asVoid, Effect.orDie),
