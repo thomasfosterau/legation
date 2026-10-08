@@ -13,6 +13,11 @@
  * `lastMutationId` bump then commit in one state update, so a concurrent
  * `evaluate`, `getRows` or `lastMutationIds` sees both or neither. A
  * `BackendError` discards the stage and skips the bump.
+ *
+ * Concurrent `applyMutations` calls for one client group are safe (#346): the
+ * commit re-checks the client's committed `lastMutationId`, so a copy of a
+ * mutation that another call committed while its handler ran is dropped (its
+ * stage discarded, reported as a replay skip), and the watermark only rises.
  */
 
 import { Effect, Layer, Ref, Schema } from "effect";
@@ -137,10 +142,15 @@ const stageWrite = (stage: Stage, entry: StagedEntry): void => {
   stage.overlay.set(entry.collection, rowOverlay);
 };
 
+/** The client's committed `lastMutationId` in a group; 0 before its first mutation. */
+const lastIdOf = (s: MemoryState, clientGroupId: string, clientId: string): number =>
+  s.lastMutationIds.get(clientGroupId)?.get(clientId) ?? 0;
+
 /**
  * The state after one mutation commits: its `log` applied in order (each put
  * takes the next version) and the client's `lastMutationId` bumped. Pure, so
- * the caller can hand it to a single `Ref.update`.
+ * the caller can hand it to a single `Ref.modify`. The bump takes the max, so
+ * the watermark never falls, even if a caller commits a lower id.
  */
 const commitMutation = (
   s: MemoryState,
@@ -165,7 +175,10 @@ const commitMutation = (
   for (const [collection, collectionRows] of working) rows.set(collection, collectionRows);
   const lastIds = new Map(s.lastMutationIds);
   const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
-  groupIds.set(mutation.clientId, mutation.mutationId);
+  groupIds.set(
+    mutation.clientId,
+    Math.max(lastIdOf(s, context.clientGroupId, mutation.clientId), mutation.mutationId)
+  );
   lastIds.set(context.clientGroupId, groupIds);
   return { ...s, rows, versionCounter, lastMutationIds: lastIds };
 };
@@ -200,9 +213,25 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     const state = yield* Ref.make(emptyState);
 
     // Commit one mutation's stage (empty for a rejection) and its bump in one
-    // state update, so readers see both or neither.
-    const commit = (context: SyncContext, mutation: Mutation, log: ReadonlyArray<StagedEntry>) =>
-      Ref.update(state, (s) => commitMutation(s, context, mutation, log));
+    // state update, so readers see both or neither. The client's committed
+    // watermark is re-checked inside that update: a concurrent call may have
+    // committed this mutation while its handler was running, and then this
+    // copy's stage is dropped (#346). Returns whether it committed.
+    //
+    // The start-of-mutation gap rule needs no re-check here: it proved
+    // `mutationId <= watermark + 1` when the mutation started, and the watermark
+    // only rises, so the bound still holds at commit.
+    const commit = (
+      context: SyncContext,
+      mutation: Mutation,
+      log: ReadonlyArray<StagedEntry>
+    ): Effect.Effect<boolean> =>
+      Ref.modify(state, (s) => {
+        if (lastIdOf(s, context.clientGroupId, mutation.clientId) >= mutation.mutationId) {
+          return [false, s] as const;
+        }
+        return [true, commitMutation(s, context, mutation, log)] as const;
+      });
 
     // The writer a handler sees. Writes land in the mutation's stage, not in
     // `state`, so nothing is visible before the mutation commits. Reads check
@@ -227,7 +256,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // `MutationRejected` discards them and still bumps the id, so the poison
     // mutation is acknowledged, skipped, and cannot block the ones behind it.
     // A transient `BackendError` discards the stage and fails before any bump,
-    // aborting the batch.
+    // aborting the batch. A copy whose mutation a concurrent call committed
+    // while its handler ran is dropped at commit, like a replay.
     const applyOne = (
       context: SyncContext,
       mutation: Mutation,
@@ -259,16 +289,22 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
           )
         );
+        const committed = yield* commit(
+          context,
+          mutation,
+          outcome._tag === "applied" ? stage.log : []
+        );
+        // A concurrent copy committed this mutation first: a replay skip, so
+        // its stage, its hints and any rejection are dropped, as for a replay.
+        if (!committed) return;
         if (outcome._tag === "applied") {
           foldStage(stage, touched, puts);
-          yield* commit(context, mutation, stage.log);
         } else {
           rejected.push({
             clientId: mutation.clientId,
             mutationId: mutation.mutationId,
             reason: outcome.reason,
           });
-          yield* commit(context, mutation, []);
         }
       });
 
