@@ -394,6 +394,85 @@ describe("JsonApiBackend in atomic mode", () => {
   );
 });
 
+/**
+ * Change hints across the mutations of one push (#369, as #344 for
+ * MemoryBackend). A row a later mutation of the push deletes carries no value,
+ * on both delivery paths: the atomic request and the per-resource writes.
+ */
+type HintMode = "atomic" | "per-resource";
+
+/** The atomic path answers every operation; the per-resource path answers each write with 204. */
+const modeServer = (mode: HintMode) =>
+  makeServer((request) =>
+    mode === "atomic" ? respond(200, resultsFor(request.body["atomic:operations"])) : empty(204)
+  );
+
+const makeModeBackend = (mode: HintMode, server: ReturnType<typeof makeServer>) =>
+  JsonApiBackend.make({
+    baseUrl: "http://api.test",
+    resources,
+    mutators: registry.mutators,
+    operations,
+    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+  }).pipe(Effect.provide(server.layer));
+
+for (const mode of ["atomic", "per-resource"] as const) {
+  describe(`JsonApiBackend change hints across mutations, ${mode} path`, () => {
+    it.effect("a create then a later delete of the same row in one push carries no value", () =>
+      Effect.gen(function* () {
+        const server = modeServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+
+        const result = yield* backend.applyMutations(context, [
+          mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "x" } }),
+          mutation(2, "todos/delete", { type: "todos", id: "1" }),
+        ]);
+
+        // The row was written then deleted: the hint names it as a delete.
+        expect(result.hints).toEqual([{ collection: "todos", ids: ["1"], values: [] }]);
+        expect(result.lastMutationIds).toEqual({ "client-1": 2 });
+      })
+    );
+
+    it.effect("an update of an existing row then a later delete carries no value", () =>
+      Effect.gen(function* () {
+        const server = modeServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+
+        const result = yield* backend.applyMutations(context, [
+          mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "second" } }),
+          mutation(2, "todos/delete", { type: "todos", id: "1" }),
+        ]);
+
+        expect(result.hints).toEqual([{ collection: "todos", ids: ["1"], values: [] }]);
+      })
+    );
+
+    it.effect(
+      "a delete then a later create of the same row in one push carries the new value",
+      () =>
+        Effect.gen(function* () {
+          const server = modeServer(mode);
+          const backend = yield* makeModeBackend(mode, server);
+
+          const result = yield* backend.applyMutations(context, [
+            mutation(1, "todos/delete", { type: "todos", id: "1" }),
+            mutation(2, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+          ]);
+
+          // The row exists again at the end of the push, so its final value is hinted.
+          expect(result.hints).toEqual([
+            {
+              collection: "todos",
+              ids: ["1"],
+              values: [{ id: "1", value: { title: "again", id: "1", relationships: {} } }],
+            },
+          ]);
+        })
+    );
+  });
+}
+
 describe("JsonApiSync.layer atomic detection", () => {
   /** A stateful server answering both the per-resource and the atomic routes. */
   const makeStatefulServer = () => {
