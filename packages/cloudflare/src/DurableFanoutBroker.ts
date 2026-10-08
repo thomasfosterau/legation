@@ -14,7 +14,10 @@
  * interval pull.
  */
 
-import type { DurableObjectNamespace } from "@cloudflare/workers-types";
+import type {
+  AbortSignal as WorkersAbortSignal,
+  DurableObjectNamespace,
+} from "@cloudflare/workers-types";
 import { Duration, Effect, PubSub, Scope } from "effect";
 import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation-effect/internal";
 
@@ -22,6 +25,11 @@ import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation-effect
 export interface MakeOptions {
   /** The shard namespace binding (`env.SHARDS`). */
   readonly shards: DurableObjectNamespace;
+  /**
+   * Bound on one shard call. A call that exceeds it is aborted, logged and dropped, so a hung
+   * shard cannot hold the publish that awaits it. Default 5 seconds.
+   */
+  readonly timeout?: Duration.Input;
 }
 
 /** The broker plus the room's poke-inlet (wire it to the `/poke` route). */
@@ -35,19 +43,29 @@ const post = (
   shards: DurableObjectNamespace,
   topic: string,
   path: string,
-  body: unknown
+  body: unknown,
+  timeout: Duration.Input
 ): Effect.Effect<void> =>
-  Effect.promise(() =>
+  Effect.promise((signal) =>
     shards
       .get(shards.idFromName(topic))
       .fetch(`https://shard${path}`, {
         method: "POST",
         body: JSON.stringify(body),
         headers: { "content-type": "application/json" },
+        // Interrupting this call (the timeout below) aborts the request. The
+        // Effect signal is typed by Node's globals, not the Workers types.
+        signal: signal as WorkersAbortSignal,
       })
       .then(() => undefined)
       // Fire-and-forget: pull is the correctness path.
       .catch(() => undefined)
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: timeout,
+      orElse: () =>
+        Effect.logWarning(`DurableFanoutBroker: ${path} to shard "${topic}" timed out; dropped`),
+    })
   );
 
 /**
@@ -60,22 +78,26 @@ export const make = (options: MakeOptions): Effect.Effect<DurableBroker, never, 
       PubSub.dropping<ReadonlyArray<FanoutTopics.Topic>>({ capacity: 256 }),
       (pubsub) => PubSub.shutdown(pubsub)
     );
+    const timeout = options.timeout ?? "5 seconds";
     return {
       broker: {
         register: (roomId, topics, ttl) =>
           Effect.forEach(
             topics,
             (topic) =>
-              post(options.shards, topic, "/register", {
-                roomId,
-                ttlMillis: Duration.toMillis(ttl),
-              }),
+              post(
+                options.shards,
+                topic,
+                "/register",
+                { roomId, ttlMillis: Duration.toMillis(ttl) },
+                timeout
+              ),
             { discard: true, concurrency: 8 }
           ),
         publish: (topics) =>
           Effect.forEach(
             [...topics],
-            (topic) => post(options.shards, topic, "/publish", { topics: [topic] }),
+            (topic) => post(options.shards, topic, "/publish", { topics: [topic] }, timeout),
             { discard: true, concurrency: 8 }
           ),
         pokes: () =>

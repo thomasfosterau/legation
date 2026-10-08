@@ -33,6 +33,12 @@ export interface RedisBrokerOptions {
    * the whole stream (harmless for a bus, but unbounded without trimming).
    */
   readonly from?: "$" | "0";
+  /**
+   * Bound on one XADD. A publish that exceeds it is logged and dropped: the bus publishes inside
+   * the sync server's uninterruptible commit-and-publish region, so a hung Redis must not hold
+   * that region open. Defaults to 5 seconds.
+   */
+  readonly timeout?: Duration.Input;
 }
 
 /** One stream entry: `[id, [field0, value0, ...]]`. */
@@ -64,12 +70,19 @@ export const makeRedisBroker = (
     const stream = options?.stream ?? "legation:hints";
     const blockMs = String(Math.trunc(Duration.toMillis(options?.block ?? "5 seconds")));
     const from = options?.from ?? "$";
+    const timeout = options?.timeout ?? "5 seconds";
 
     return {
-      // Best-effort: a failed publish only delays the next pull (ADR-0009),
-      // and BusBroker.publish has no error channel.
+      // Best-effort: a failed or timed-out publish only delays the next pull
+      // (ADR-0009), and BusBroker.publish has no error channel.
       publish: (payload) =>
-        redis.send("XADD", stream, "*", PAYLOAD_FIELD, payload).pipe(Effect.ignore),
+        redis.send("XADD", stream, "*", PAYLOAD_FIELD, payload).pipe(
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () => Effect.logWarning("Redis broker: XADD timed out; publish dropped"),
+          }),
+          Effect.ignore
+        ),
       subscribe: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<string>();
         const cursor: { id: string } = { id: from };
