@@ -6,6 +6,13 @@
  * app-supplied authoritative mutator handlers. Used in tests, demos, and
  * same-process sync rooms — and as the executable specification of the
  * contract's semantics (idempotent skip, gap rejection, atomic bump).
+ *
+ * Each mutation runs against a stage: its `put`/`del` writes are held in a
+ * local overlay that its handler reads through, and nothing reaches the
+ * committed rows until the handler returns. The staged writes and the
+ * `lastMutationId` bump then commit in one state update, so a concurrent
+ * `evaluate`, `getRows` or `lastMutationIds` sees both or neither. A
+ * `BackendError` discards the stage and skips the bump.
  */
 
 import { Effect, Layer, Ref, Schema } from "effect";
@@ -22,7 +29,11 @@ import type { Mutation } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
 
-/** The write surface handed to authoritative mutator handlers. */
+/**
+ * The write surface handed to authoritative mutator handlers. Writes become
+ * visible to other readers only when the mutation commits; `get` sees the
+ * handler's own earlier writes.
+ */
 export interface BackendWriter {
   readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void>;
   readonly del: (collection: string, id: string) => Effect.Effect<void>;
@@ -97,79 +108,126 @@ interface MemoryState {
 
 const emptyState: MemoryState = { rows: new Map(), versionCounter: 0, lastMutationIds: new Map() };
 
+/** A write a handler made: a `put` of a value, or a `del`. */
+type StagedWrite = { readonly _tag: "put"; readonly value: unknown } | { readonly _tag: "del" };
+
+/** One staged write, tagged with the row it targets. */
+interface StagedEntry {
+  readonly collection: string;
+  readonly id: string;
+  readonly write: StagedWrite;
+}
+
+/**
+ * A mutation's writes, not yet committed. `log` keeps them in handler order so
+ * the commit assigns row versions exactly as an unstaged run would; `overlay`
+ * keeps the latest write per row so the handler's reads see its own writes.
+ */
+interface Stage {
+  readonly log: Array<StagedEntry>;
+  readonly overlay: Map<string, Map<string, StagedWrite>>;
+}
+
+const newStage = (): Stage => ({ log: [], overlay: new Map() });
+
+const stageWrite = (stage: Stage, entry: StagedEntry): void => {
+  stage.log.push(entry);
+  const rowOverlay = stage.overlay.get(entry.collection) ?? new Map<string, StagedWrite>();
+  rowOverlay.set(entry.id, entry.write);
+  stage.overlay.set(entry.collection, rowOverlay);
+};
+
+/**
+ * The state after one mutation commits: its `log` applied in order (each put
+ * takes the next version) and the client's `lastMutationId` bumped. Pure, so
+ * the caller can hand it to a single `Ref.update`.
+ */
+const commitMutation = (
+  s: MemoryState,
+  context: SyncContext,
+  mutation: Mutation,
+  log: ReadonlyArray<StagedEntry>
+): MemoryState => {
+  const working = new Map<string, Map<string, MemoryRow>>();
+  let versionCounter = s.versionCounter;
+  for (const { collection, id, write } of log) {
+    const collectionRows =
+      working.get(collection) ?? new Map<string, MemoryRow>(s.rows.get(collection) ?? []);
+    working.set(collection, collectionRows);
+    if (write._tag === "put") {
+      versionCounter += 1;
+      collectionRows.set(id, { id, version: versionCounter, value: write.value });
+    } else {
+      collectionRows.delete(id);
+    }
+  }
+  const rows = new Map(s.rows);
+  for (const [collection, collectionRows] of working) rows.set(collection, collectionRows);
+  const lastIds = new Map(s.lastMutationIds);
+  const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
+  groupIds.set(mutation.clientId, mutation.mutationId);
+  lastIds.set(context.clientGroupId, groupIds);
+  return { ...s, rows, versionCounter, lastMutationIds: lastIds };
+};
+
+/**
+ * Fold a committed stage into a batch's hint inputs: the ids it touched and
+ * the values of its PUTs (a delete removes the id from the values, so it is
+ * absent from what the hint emits).
+ */
+const foldStage = (
+  stage: Stage,
+  touched: Map<string, Set<string>>,
+  puts: Map<string, Map<string, unknown>>
+): void => {
+  for (const [collection, writes] of stage.overlay) {
+    const ids = touched.get(collection) ?? new Set<string>();
+    for (const [id, write] of writes) {
+      ids.add(id);
+      if (write._tag === "put") {
+        const values = puts.get(collection) ?? new Map<string, unknown>();
+        values.set(id, write.value);
+        puts.set(collection, values);
+      }
+    }
+    touched.set(collection, ids);
+  }
+};
+
 /** Build a memory backend with the given authoritative handlers. */
 export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect.Effect<Backend> =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
 
-    const bumpLastId = (context: SyncContext, mutation: Mutation) =>
-      Ref.update(state, (s) => {
-        const lastIds = new Map(s.lastMutationIds);
-        const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
-        groupIds.set(mutation.clientId, mutation.mutationId);
-        lastIds.set(context.clientGroupId, groupIds);
-        return { ...s, lastMutationIds: lastIds };
-      });
+    // Commit one mutation's stage (empty for a rejection) and its bump in one
+    // state update, so readers see both or neither.
+    const commit = (context: SyncContext, mutation: Mutation, log: ReadonlyArray<StagedEntry>) =>
+      Ref.update(state, (s) => commitMutation(s, context, mutation, log));
 
-    // A writer that records what it touches into `localTouched`, so a rejected
-    // mutation's writes can be identified and rolled back, and the value of
-    // each PUT into `localPuts`, so hints can carry it for predicate matching
-    // (a delete removes the id, so it is absent from the values it emits).
-    const stagingWriter = (
-      localTouched: Map<string, Set<string>>,
-      localPuts: Map<string, Map<string, unknown>>
-    ): BackendWriter => ({
+    // The writer a handler sees. Writes land in the mutation's stage, not in
+    // `state`, so nothing is visible before the mutation commits. Reads check
+    // the stage first, so the handler sees its own writes.
+    const stagingWriter = (stage: Stage): BackendWriter => ({
       put: (collection, id, value) =>
-        Ref.update(state, (s) => {
-          const rows = new Map(s.rows);
-          const collectionRows = new Map(rows.get(collection) ?? []);
-          const version = s.versionCounter + 1;
-          collectionRows.set(id, { id, version, value });
-          rows.set(collection, collectionRows);
-          localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
-          localPuts.set(collection, (localPuts.get(collection) ?? new Map()).set(id, value));
-          return { ...s, rows, versionCounter: version };
-        }),
+        Effect.sync(() => stageWrite(stage, { collection, id, write: { _tag: "put", value } })),
       del: (collection, id) =>
-        Ref.update(state, (s) => {
-          const rows = new Map(s.rows);
-          const collectionRows = new Map(rows.get(collection) ?? []);
-          collectionRows.delete(id);
-          rows.set(collection, collectionRows);
-          localTouched.set(collection, (localTouched.get(collection) ?? new Set()).add(id));
-          localPuts.get(collection)?.delete(id);
-          return { ...s, rows };
-        }),
-      get: (collection, id) =>
-        Ref.get(state).pipe(Effect.map((s) => s.rows.get(collection)?.get(id)?.value)),
+        Effect.sync(() => stageWrite(stage, { collection, id, write: { _tag: "del" } })),
+      get: (collection, id) => {
+        const staged = stage.overlay.get(collection)?.get(id);
+        if (staged !== undefined) {
+          return Effect.succeed(staged._tag === "put" ? staged.value : undefined);
+        }
+        return Ref.get(state).pipe(Effect.map((s) => s.rows.get(collection)?.get(id)?.value));
+      },
     });
 
-    const mergeTouched = (into: Map<string, Set<string>>, from: Map<string, Set<string>>) => {
-      for (const [collection, ids] of from) {
-        const set = into.get(collection) ?? new Set<string>();
-        for (const id of ids) set.add(id);
-        into.set(collection, set);
-      }
-    };
-
-    const mergePuts = (
-      into: Map<string, Map<string, unknown>>,
-      from: Map<string, Map<string, unknown>>
-    ) => {
-      for (const [collection, values] of from) {
-        const map = into.get(collection) ?? new Map<string, unknown>();
-        for (const [id, value] of values) map.set(id, value);
-        into.set(collection, map);
-      }
-    };
-
     // Apply one mutation: skip replays, reject id gaps, then run the handler
-    // atomically. Effects + the lastMutationId bump are atomic by construction
-    // (single-threaded Ref updates). A transient `BackendError` aborts the batch
-    // before any bump; a permanent `MutationRejected` rolls this mutation's
-    // writes back (restore `current`, which predates them) yet still bumps the
-    // id, so the poison mutation is acknowledged, skipped, and cannot block
-    // the ones behind it.
+    // against a stage. The stage and the lastMutationId bump commit in one
+    // state update. A handler that succeeds commits its writes. A permanent
+    // `MutationRejected` discards them and still bumps the id, so the poison
+    // mutation is acknowledged, skipped, and cannot block the ones behind it.
+    // A transient `BackendError` discards the stage and fails before any bump,
+    // aborting the batch.
     const applyOne = (
       context: SyncContext,
       mutation: Mutation,
@@ -194,31 +252,24 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
         }
 
-        const localTouched = new Map<string, Set<string>>();
-        const localPuts = new Map<string, Map<string, unknown>>();
-        const outcome = yield* handle(
-          mutation.args,
-          stagingWriter(localTouched, localPuts),
-          context
-        ).pipe(
+        const stage = newStage();
+        const outcome = yield* handle(mutation.args, stagingWriter(stage), context).pipe(
           Effect.map(() => ({ _tag: "applied" }) as const),
           Effect.catchTag("MutationRejected", (error) =>
-            Ref.set(state, current).pipe(
-              Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const)
-            )
+            Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
           )
         );
         if (outcome._tag === "applied") {
-          mergeTouched(touched, localTouched);
-          mergePuts(puts, localPuts);
+          foldStage(stage, touched, puts);
+          yield* commit(context, mutation, stage.log);
         } else {
           rejected.push({
             clientId: mutation.clientId,
             mutationId: mutation.mutationId,
             reason: outcome.reason,
           });
+          yield* commit(context, mutation, []);
         }
-        yield* bumpLastId(context, mutation);
       });
 
     const applyMutations = (
