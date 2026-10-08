@@ -853,3 +853,61 @@ describe("SqlBackend watermark without transactions (#352)", () => {
     });
   });
 });
+
+// The isolation statement (#353): a dialect that names one runs it first in each
+// transaction, before any read or ledger write; SQLite, which serialises its own
+// writers, names none; an executor without transactions runs no transaction.
+// Runs one applyMutations call and returns the statements it ran, in order (#353).
+const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
+  const mock = makeMock({ transactional });
+  const statements: Array<string> = [];
+  const executor: SqlBackend.SqlExecutor = {
+    ...mock.executor,
+    run: (fragment) =>
+      Effect.sync(() => {
+        statements.push(fragment.text);
+      }).pipe(
+        // The mock models SQLite's `MAX` bump, not PostgreSQL's `GREATEST`; the
+        // bump's text is all this test reads, so it is recorded and not run.
+        Effect.andThen(/GREATEST\(/.test(fragment.text) ? Effect.void : mock.executor.run(fragment))
+      ),
+  };
+  const backend = SqlBackend.make({
+    executor,
+    tables,
+    mutators: new Map([[setTodo.name, setTodo]]),
+    handlers: { "todo/set": () => Effect.succeed([]) },
+    dialect,
+  });
+  return backend
+    .applyMutations({ clientGroupId: "g" }, [
+      { clientId: "c1", mutationId: 1, mutator: "todo/set", args: { id: "1" }, createdAt: 0 },
+    ])
+    .pipe(Effect.as(statements));
+};
+
+describe("SqlBackend isolation statement (#353)", () => {
+  it.effect(
+    "runs the PostgreSQL SERIALIZABLE statement before the transaction's first ledger write",
+    () =>
+      Effect.gen(function* () {
+        const statements = yield* applyOnce(Sql.postgres, true);
+        expect(statements[0]).toBe("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        expect(statements.filter((text) => text.startsWith("SET TRANSACTION"))).toHaveLength(1);
+      })
+  );
+
+  it.effect("runs no isolation statement on SQLite, which serialises its writers", () =>
+    Effect.gen(function* () {
+      const statements = yield* applyOnce(Sql.sqlite, true);
+      expect(statements.some((text) => /SET TRANSACTION|ISOLATION/.test(text))).toBe(false);
+    })
+  );
+
+  it.effect("runs no isolation statement on an executor without transactions", () =>
+    Effect.gen(function* () {
+      const statements = yield* applyOnce(Sql.postgres, false);
+      expect(statements.some((text) => /SET TRANSACTION|ISOLATION/.test(text))).toBe(false);
+    })
+  );
+});

@@ -19,6 +19,16 @@
  * mutation that another call committed while its handler ran is dropped (its
  * stage discarded, reported as a replay skip), and the watermark only rises.
  *
+ * Calls from different client groups are serialisable (#353). Every row a
+ * handler reads from committed state is recorded with the version it had, and
+ * the commit re-checks those versions inside the same state update that applies
+ * the writes. A row another group changed since the read makes the commit
+ * stale, so nothing is written and the handler runs again against the new
+ * state. A counter read and incremented by two groups therefore loses no
+ * increment. Reads of a handler's own staged writes are not recorded, since
+ * those writes commit with the handler. A handler can run more than once, so
+ * its effects outside the writer must be safe to repeat (see {@link BackendHandler}).
+ *
  * Every copy reports the committed outcome (#355). A mutation committed as
  * permanently rejected is remembered with its reason, so a copy that loses the
  * race, or a later replay, lists it in `rejected` just as the copy that
@@ -56,7 +66,9 @@ export interface BackendWriter {
 /**
  * An authoritative mutator handler. Fail with `BackendError` for a transient
  * error (aborts the batch, client retries) or `MutationRejected` for a
- * permanent one (id bumped without effects; the mutation is skipped).
+ * permanent one (id bumped without effects; the mutation is skipped). A handler
+ * may run more than once when a row it read changed before its commit (#353),
+ * so anything it does outside the writer must be safe to repeat.
  */
 export type BackendHandler = (
   args: unknown,
@@ -137,13 +149,15 @@ type Outcome =
   | { readonly _tag: "rejected"; readonly reason: string };
 
 /**
- * How a copy of a mutation settled at commit: it committed its own outcome, or
- * an earlier call had already committed this mutation (`rejection` is that
- * call's rejection reason, when it was rejected).
+ * How a copy of a mutation settled at commit: it committed its own outcome, an
+ * earlier call had already committed this mutation (`rejection` is that call's
+ * rejection reason, when it was rejected), or a row the handler read changed
+ * first, so nothing was written and the handler must run again (#353).
  */
 type Settlement =
   | { readonly _tag: "committed" }
-  | { readonly _tag: "replayed"; readonly rejection: string | undefined };
+  | { readonly _tag: "replayed"; readonly rejection: string | undefined }
+  | { readonly _tag: "conflicted" };
 
 /** A write a handler made: a `put` of a value, or a `del`. */
 type StagedWrite = { readonly _tag: "put"; readonly value: unknown } | { readonly _tag: "del" };
@@ -156,22 +170,57 @@ interface StagedEntry {
 }
 
 /**
+ * The committed rows a handler read: for each row, the version it had at the
+ * first read (`undefined` when the row was absent). The commit re-checks them.
+ */
+type ReadSet = Map<string, Map<string, number | undefined>>;
+
+/**
  * A mutation's writes, not yet committed. `log` keeps them in handler order so
  * the commit assigns row versions exactly as an unstaged run would; `overlay`
- * keeps the latest write per row so the handler's reads see its own writes.
+ * keeps the latest write per row so the handler's reads see its own writes;
+ * `reads` is what the handler saw in committed state (#353).
  */
 interface Stage {
   readonly log: Array<StagedEntry>;
   readonly overlay: Map<string, Map<string, StagedWrite>>;
+  readonly reads: ReadSet;
 }
 
-const newStage = (): Stage => ({ log: [], overlay: new Map() });
+const newStage = (): Stage => ({ log: [], overlay: new Map(), reads: new Map() });
 
 const stageWrite = (stage: Stage, entry: StagedEntry): void => {
   stage.log.push(entry);
   const rowOverlay = stage.overlay.get(entry.collection) ?? new Map<string, StagedWrite>();
   rowOverlay.set(entry.id, entry.write);
   stage.overlay.set(entry.collection, rowOverlay);
+};
+
+/** Record the version a committed read saw; the first read of a row is the one checked. */
+const recordRead = (
+  stage: Stage,
+  collection: string,
+  id: string,
+  version: number | undefined
+): void => {
+  const rows = stage.reads.get(collection) ?? new Map<string, number | undefined>();
+  if (!rows.has(id)) rows.set(id, version);
+  stage.reads.set(collection, rows);
+};
+
+/**
+ * Whether a row the handler read has changed since: its committed version is no
+ * longer the one it read. Versions only ever rise, so a row written again never
+ * matches an old version, even if it was deleted in between.
+ */
+const readsStale = (s: MemoryState, reads: ReadSet): boolean => {
+  for (const [collection, ids] of reads) {
+    const rows = s.rows.get(collection);
+    for (const [id, seen] of ids) {
+      if (rows?.get(id)?.version !== seen) return true;
+    }
+  }
+  return false;
 };
 
 /** The client's committed `lastMutationId` in a group; 0 before its first mutation. */
@@ -327,10 +376,16 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // The start-of-mutation gap rule needs no re-check here: it proved
     // `mutationId <= watermark + 1` when the mutation started, and the watermark
     // only rises, so the bound still holds at commit.
+    //
+    // The reads the handler made are re-checked here too (#353), after the
+    // replay check and before any write. A changed read means nothing commits
+    // and the caller runs the handler again. Because the check and the write are
+    // one state update, no other group's commit can land between them.
     const commit = (
       context: SyncContext,
       mutation: Mutation,
-      outcome: Outcome
+      outcome: Outcome,
+      reads: ReadSet
     ): Effect.Effect<Settlement> =>
       Ref.modify(state, (s): readonly [Settlement, MemoryState] => {
         if (lastIdOf(s, context.clientGroupId, mutation.clientId) >= mutation.mutationId) {
@@ -342,6 +397,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           );
           return [{ _tag: "replayed", rejection }, s];
         }
+        if (readsStale(s, reads)) return [{ _tag: "conflicted" }, s];
         const log = outcome._tag === "applied" ? outcome.log : [];
         const next = commitMutation(s, context, mutation, log);
         const committed =
@@ -370,7 +426,13 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         if (staged !== undefined) {
           return Effect.succeed(staged._tag === "put" ? staged.value : undefined);
         }
-        return Ref.get(state).pipe(Effect.map((s) => s.rows.get(collection)?.get(id)?.value));
+        return Ref.get(state).pipe(
+          Effect.map((s) => {
+            const row = s.rows.get(collection)?.get(id);
+            recordRead(stage, collection, id, row?.version);
+            return row?.value;
+          })
+        );
       },
     });
 
@@ -383,6 +445,31 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // aborting the batch. A copy whose mutation a concurrent call committed
     // while its handler ran is dropped at commit, like a replay. Every replay
     // and dropped copy reports the committed rejection, if there is one (#355).
+    // A handler whose reads went stale before its commit runs again, on a new
+    // stage, until it commits or is dropped (#353).
+    interface Attempt {
+      readonly stage: Stage;
+      readonly outcome: Outcome;
+      readonly settlement: Settlement;
+    }
+    const attempt = (
+      context: SyncContext,
+      mutation: Mutation,
+      handle: BackendHandler
+    ): Effect.Effect<Attempt, BackendError> =>
+      Effect.gen(function* () {
+        const stage = newStage();
+        const outcome: Outcome = yield* handle(mutation.args, stagingWriter(stage), context).pipe(
+          Effect.map((): Outcome => ({ _tag: "applied", log: stage.log })),
+          Effect.catchTag("MutationRejected", (error) =>
+            Effect.succeed<Outcome>({ _tag: "rejected", reason: error.reason })
+          )
+        );
+        const settlement = yield* commit(context, mutation, outcome, stage.reads);
+        if (settlement._tag === "conflicted") return yield* attempt(context, mutation, handle);
+        return { stage, outcome, settlement };
+      });
+
     const applyOne = (
       context: SyncContext,
       mutation: Mutation,
@@ -419,14 +506,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           return yield* UnknownMutator.make(mutation.mutator);
         }
 
-        const stage = newStage();
-        const outcome: Outcome = yield* handle(mutation.args, stagingWriter(stage), context).pipe(
-          Effect.map((): Outcome => ({ _tag: "applied", log: stage.log })),
-          Effect.catchTag("MutationRejected", (error) =>
-            Effect.succeed<Outcome>({ _tag: "rejected", reason: error.reason })
-          )
-        );
-        const settlement = yield* commit(context, mutation, outcome);
+        const { stage, outcome, settlement } = yield* attempt(context, mutation, handle);
         if (settlement._tag === "replayed") {
           // A concurrent copy committed this mutation first: its stage, hints
           // and own outcome are dropped, as for a replay. The committed

@@ -28,8 +28,12 @@ explicit code-point collation (`COLLATE "C"` / `COLLATE BINARY`) on every
 comparison, literals bind by the declared kind, and booleans are stored as
 `0`/`1` on SQLite and decoded back by the backend. Writes run app-authored
 handlers inside one transaction, and each mutation's `lastMutationId` is
-claimed before its handler runs. An executor without transactions sets
-`transactional: false` and bumps after the handler instead (D1).
+claimed before its handler runs. Mutations from different client groups are
+serialisable: SQLite serialises its writers, and PostgreSQL runs each
+transaction at `SERIALIZABLE` (a handler whose reads went stale is refused
+with a serialization failure, which the client retries). An executor without
+transactions sets `transactional: false` and bumps after the handler instead
+(D1), and D1 does not isolate handlers, so it does not meet that guarantee.
 
 ## Install
 

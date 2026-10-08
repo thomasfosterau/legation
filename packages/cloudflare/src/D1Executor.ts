@@ -12,8 +12,10 @@
  * the handler's writes. A pull between the two can carry a mutation's effect
  * without its watermark, and a crash after the writes and before the bump
  * makes the retry run the handler again, so a non-idempotent handler can apply
- * twice. A transient failure also leaves the handler's writes committed. This
- * does not meet Backend guarantee 1 (#342). Apps that need that guarantee should
+ * twice. A transient failure also leaves the handler's writes committed. D1
+ * has no isolation either, so a handler's reads are not protected from another
+ * client group's commit, and an increment can be lost (#353). This does not
+ * meet Backend guarantee 1 (#342, #353). Apps that need that guarantee should
  * use Durable Object storage or Postgres via Hyperdrive; on D1, prefer
  * single-statement, idempotent handlers.
  */

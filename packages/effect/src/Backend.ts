@@ -24,6 +24,17 @@
  *    it first. A backend may forget a committed rejection once the client's
  *    next push starts past it, since a client resends only ids it has not had
  *    acknowledged.
+ *
+ *    Mutations from different client groups are serialisable (#353): the
+ *    effects of all committed mutations are equivalent to some serial order,
+ *    and a handler's reads see a state consistent with that order. So no
+ *    committed write is lost to a concurrent call from another group that read
+ *    the same row. A backend meets this with a store-wide lock, with a commit
+ *    that re-checks each row the handler read and runs the handler again when
+ *    one changed, or, on a database, with serialisable isolation. A backend may
+ *    therefore run a handler more than once, so a handler's effects outside its
+ *    writer must be safe to repeat. A backend that does not meet this does not
+ *    conform to guarantee 1.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.
