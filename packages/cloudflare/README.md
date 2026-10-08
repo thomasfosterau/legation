@@ -19,9 +19,10 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
   forwards the route (WebSocket upgrades included), and returns `undefined`
   for everything else, so it composes inside any existing fetch handler.
 - **`D1Executor`** — a `SqlBackend` executor over a Cloudflare D1 binding.
-  Prefer single-statement mutation handlers: D1 has no interactive
-  transactions, so mutation-id idempotency carries replay safety (Postgres via
-  Hyperdrive keeps full transactionality).
+  D1 has no interactive transactions, so a mutation's writes and its
+  mutation-id bump commit separately: SqlBackend on D1 does not meet Backend
+  guarantee 1 (#342). For apps that need it, use Durable Object storage or
+  Postgres via Hyperdrive; on D1, prefer single-statement, idempotent handlers.
 - **`RoomTransport`** — the browser-side `ClientTransport`: push/pull/read as
   HTTP POSTs plus one reconnecting poke socket. Sync stays correct over HTTP
   alone — a dead socket only delays pokes, and the pull interval is the safety

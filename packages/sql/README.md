@@ -25,7 +25,9 @@ are text, instants, numbers or booleans: a column declared `text` gets an
 explicit code-point collation (`COLLATE "C"` / `COLLATE BINARY`) on every
 comparison, literals bind by the declared kind, and booleans are stored as
 `0`/`1` on SQLite and decoded back by the backend. Writes run app-authored
-handlers inside one transaction with the per-client `lastMutationId` bump.
+handlers inside one transaction, and each mutation's `lastMutationId` is
+claimed before its handler runs. An executor without transactions sets
+`transactional: false` and bumps after the handler instead (D1).
 
 ## Install
 

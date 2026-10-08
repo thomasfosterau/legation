@@ -67,6 +67,7 @@ const makeExecutor = (sql: SqlClient, transactional: boolean): SqlBackend.SqlExe
               )
             )
       : (effect) => effect,
+    transactional,
   };
 };
 
@@ -272,37 +273,40 @@ describe("SqlBackend ledger on SQLite (issue #352)", () => {
     )
   );
 
-  it.effect("on an executor without transactions a transient failure gives the claim back", () =>
-    withDatabase((sql) =>
-      Effect.gen(function* () {
-        const failing = yield* Ref.make(true);
-        // D1-shaped: no transaction, so the claim commits with each statement.
-        const backend = backendWith(
-          sql,
-          {
-            "todo/set": (raw, tx) =>
-              Ref.get(failing).pipe(
-                Effect.flatMap((fail) =>
-                  fail
-                    ? Effect.fail(new BackendError({ message: "transient" }))
-                    : applyWrite(tx, raw as Args)
-                )
-              ),
-          },
-          false
-        );
+  it.effect(
+    "on an executor without transactions a transient failure leaves the watermark alone",
+    () =>
+      withDatabase((sql) =>
+        Effect.gen(function* () {
+          const failing = yield* Ref.make(true);
+          // D1-shaped: no transaction, so the handler's writes commit with each
+          // statement and the id is bumped only after the handler.
+          const backend = backendWith(
+            sql,
+            {
+              "todo/set": (raw, tx) =>
+                Ref.get(failing).pipe(
+                  Effect.flatMap((fail) =>
+                    fail
+                      ? Effect.fail(new BackendError({ message: "transient" }))
+                      : applyWrite(tx, raw as Args)
+                  )
+                ),
+            },
+            false
+          );
 
-        const error = yield* backend.applyMutations(context, [mutation(1)]).pipe(Effect.flip);
-        expect(error).toBeInstanceOf(BackendError);
-        // The failed handler released its claim, so the watermark is where it was.
-        expect(yield* ledgerOf(sql)).toBe(0);
+          const error = yield* backend.applyMutations(context, [mutation(1)]).pipe(Effect.flip);
+          expect(error).toBeInstanceOf(BackendError);
+          // The handler failed before the bump, so the watermark is where it was.
+          expect(yield* ledgerOf(sql)).toBe(0);
 
-        yield* Ref.set(failing, false);
-        const retried = yield* backend.applyMutations(context, [mutation(1)]);
-        expect(retried.lastMutationIds).toEqual({ [CLIENT]: 1 });
-        expect(yield* countOf(sql, "effects")).toBe(1);
-      })
-    )
+          yield* Ref.set(failing, false);
+          const retried = yield* backend.applyMutations(context, [mutation(1)]);
+          expect(retried.lastMutationIds).toEqual({ [CLIENT]: 1 });
+          expect(yield* countOf(sql, "effects")).toBe(1);
+        })
+      )
   );
 
   it.effect("a gap is a BackendError and leaves the ledger unchanged", () =>

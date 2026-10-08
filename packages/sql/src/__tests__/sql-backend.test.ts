@@ -24,19 +24,36 @@ interface Mock {
   readonly executor: SqlBackend.SqlExecutor;
   readonly queries: ReadonlyArray<Sql.SqlFragment>;
   readonly seed: (table: string, rows: ReadonlyArray<SqlBackend.SqlRow>) => void;
+  /** The ledger's watermark for a client (0 when it has no row). */
+  readonly ledgerOf: (clientGroupId: string, clientId: string) => number;
 }
+
+const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
+const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
+const unmodelled = (fragment: Sql.SqlFragment): never => {
+  throw new Error(`mock ledger: unmodelled statement: ${fragment.text}`);
+};
 
 /**
  * An executor that returns ledger rows for `sync_mutations` and seeded rows for
  * any other table (ignoring its WHERE — the backend re-applies the predicate
  * via Subset.apply). Records every query for SQL assertions.
+ *
+ * The ledger models exactly the statements `SqlBackend` issues for one ordering
+ * and throws on any other ledger SQL, so a regression to an unmodelled
+ * statement (say, an unconditional bump after the handler on the claim-first
+ * path) fails the tests instead of passing silently:
+ * - `transactional` (the default; its transaction does not serialise): the
+ *   reads, insert-if-absent at 0, the conditional claim (`UPDATE ... RETURNING`)
+ *   and the claim's release (a conditional `UPDATE`).
+ * - `transactional: false` (D1's order): the reads and the unconditional bump
+ *   upsert after the handler.
  */
-const makeMock = (): Mock => {
+const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
+  const transactional = options.transactional ?? true;
   const tables = new Map<string, ReadonlyArray<SqlBackend.SqlRow>>();
   const ledger = new Map<string, number>(); // `${group}:${client}` → lastId
   const queries: Array<Sql.SqlFragment> = [];
-
-  const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
 
   // The claim and its release: `UPDATE "sync_mutations"` with params
   // `[next, group, client, expected]`, moving the row only when it reads
@@ -53,36 +70,57 @@ const makeMock = (): Mock => {
     query: (fragment) =>
       Effect.sync(() => {
         queries.push(fragment);
-        if (fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
-          return casLedger(fragment) ? [{ last_mutation_id: fragment.params[0] }] : [];
-        }
-        if (fragment.text.includes(`"sync_mutations"`)) {
-          const group = fragment.params[0];
-          return [...ledger.entries()]
-            .filter(([key]) => key.startsWith(`${group}:`))
-            .map(([key, last]) => ({
-              client_id: key.slice(String(group).length + 1),
-              last_mutation_id: last,
-            }));
+        if (isLedger(fragment.text)) {
+          if (transactional && /^UPDATE "sync_mutations" .* RETURNING /.test(fragment.text)) {
+            return casLedger(fragment) ? [{ last_mutation_id: fragment.params[0] }] : [];
+          }
+          if (/^SELECT .* FROM "sync_mutations" WHERE /.test(fragment.text)) {
+            const group = fragment.params[0];
+            return [...ledger.entries()]
+              .filter(([key]) => key.startsWith(`${group}:`))
+              .map(([key, last]) => ({
+                client_id: key.slice(String(group).length + 1),
+                last_mutation_id: last,
+              }));
+          }
+          return unmodelled(fragment);
         }
         const table = tableOf(fragment.text);
         return table !== undefined ? (tables.get(table) ?? []) : [];
       }),
     run: (fragment) =>
       Effect.sync(() => {
-        if (fragment.text.startsWith(`INSERT INTO "sync_mutations"`)) {
+        if (!isLedger(fragment.text)) return;
+        if (transactional && fragment.text.endsWith("DO NOTHING")) {
           // Insert-if-absent: `ON CONFLICT DO NOTHING` at 0.
           const [group, client] = fragment.params as [string, string];
           const key = `${group}:${client}`;
           if (!ledger.has(key)) ledger.set(key, 0);
-        } else if (fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
-          casLedger(fragment);
+          return;
         }
+        if (transactional && fragment.text.startsWith(`UPDATE "sync_mutations"`)) {
+          // The release of a claim (a conditional UPDATE).
+          casLedger(fragment);
+          return;
+        }
+        if (!transactional && fragment.text.includes("DO UPDATE SET")) {
+          // The bump after the handler: an unconditional upsert to the id.
+          const [group, client, id] = fragment.params as [string, string, number];
+          ledger.set(`${group}:${client}`, id);
+          return;
+        }
+        unmodelled(fragment);
       }),
     transaction: (effect) => effect,
+    transactional,
   };
 
-  return { executor, queries, seed: (table, rows) => tables.set(table, rows) };
+  return {
+    executor,
+    queries,
+    seed: (table, rows) => tables.set(table, rows),
+    ledgerOf: (group, client) => ledger.get(`${group}:${client}`) ?? 0,
+  };
 };
 
 const setTodo = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
@@ -332,6 +370,7 @@ describe("SqlBackend applyMutations", () => {
 
       yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(2)]);
       expect(yield* Ref.get(ran)).toBe(2);
+      expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 2 });
     });
   });
 
@@ -681,6 +720,8 @@ describe("SqlBackend overlapping calls (READ COMMITTED model, issue #352)", () =
       expect(applied.lastMutationIds).toEqual({ c1: 2 });
       // set (1) and park (2) ran once each; the copy ran nothing.
       expect(yield* Ref.get(ran)).toBe(2);
+      // The watermark after the parked call is 2, not a value the copy left behind.
+      expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 2 });
     });
   });
 
@@ -709,5 +750,57 @@ describe("SqlBackend overlapping calls (READ COMMITTED model, issue #352)", () =
         expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 3 });
       });
     }
+  );
+});
+
+// Runs one mutation whose handler records the watermark it sees, and returns
+// that value with the call's result and the ledger after the call.
+const observeOrder = (transactional: boolean) =>
+  Effect.gen(function* () {
+    const mock = makeMock({ transactional });
+    const seen = yield* Ref.make(-1);
+    const backend = SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
+      handlers: {
+        "todo/set": () =>
+          Effect.sync(() => mock.ledgerOf("g", "c1")).pipe(
+            Effect.flatMap((last) => Ref.set(seen, last)),
+            Effect.as<ReadonlyArray<Backend.ChangeHint>>([])
+          ),
+      },
+    });
+    const result = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+    return {
+      seen: yield* Ref.get(seen),
+      watermark: result.lastMutationIds,
+      after: mock.ledgerOf("g", "c1"),
+      claimIssued: mock.queries.some((fragment) => fragment.text.includes("RETURNING")),
+    };
+  });
+
+describe("SqlBackend ledger order follows the executor's transactions (#342, #359)", () => {
+  it.effect("with transactions the id is claimed before its handler runs", () =>
+    observeOrder(true).pipe(
+      Effect.map(({ seen, watermark, after }) => {
+        expect(seen).toBe(1);
+        expect(watermark).toEqual({ c1: 1 });
+        expect(after).toBe(1);
+      })
+    )
+  );
+
+  it.effect("without transactions the handler runs first and the id is bumped after it", () =>
+    observeOrder(false).pipe(
+      Effect.map(({ seen, watermark, after, claimIssued }) => {
+        // The watermark is still behind the id while the handler runs.
+        expect(seen).toBe(0);
+        expect(watermark).toEqual({ c1: 1 });
+        expect(after).toBe(1);
+        // Nothing was claimed, so nothing can be left claimed by a crash.
+        expect(claimIssued).toBe(false);
+      })
+    )
   );
 });
