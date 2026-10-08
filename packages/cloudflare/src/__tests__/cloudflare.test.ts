@@ -414,6 +414,75 @@ describe("rooms + shards, end to end", () => {
   }, 20_000);
 });
 
+describe("Room publishTimeout", () => {
+  it("bounds the shard calls a push makes, so a hung shard cannot hold the push open", async () => {
+    // The room boots and bounds its shard calls on the real clock (Effect's
+    // timeout here runs on real timers, as Room boot does), so a TestClock is
+    // not usable: the 200 ms bound is what lets the push finish quickly.
+    const scope = Effect.runSync(Scope.make());
+    try {
+      const backend = await Effect.runPromise(
+        MemoryBackend.make(
+          MemoryBackend.validatedHandlers([
+            MemoryBackend.handler(reviewSet, (args, writer) =>
+              writer.put("reviews", (args as { id: string }).id, args)
+            ),
+          ])
+        ).pipe(Scope.provide(scope))
+      );
+      // Every shard call hangs, so the room's publish finishes only by timing
+      // out (a register with no subsets makes no shard call at boot).
+      const hungShards = makeNamespace(() => new Promise<Response>(() => undefined));
+      const RoomClass = makeRoomClass<unknown>({
+        nodes,
+        backend: () => backend,
+        policy: () =>
+          Authorization.policy({
+            products: Authorization.allowAll,
+            reviews: Authorization.allowAll,
+          }),
+        shards: () => hungShards,
+        publishTimeout: "200 millis",
+      });
+      const room = new RoomClass(makeState("room-hung").state, {});
+
+      const writerScope = Effect.runSync(Scope.make());
+      const writer = await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* ClientStore.makeMemory;
+          return yield* ClientEngine.make({
+            clientId: "client-hung",
+            clientGroupId: "group-hung",
+            mutators: mutations,
+          }).pipe(
+            Effect.provideService(ClientStore.ClientStore, store),
+            Effect.provideService(Transport.ClientTransport, roomTransport(room))
+          );
+        }).pipe(Scope.provide(writerScope))
+      );
+      await Effect.runPromise(
+        writer.mutate("review/set", {
+          id: "r-1",
+          body: "hung shard",
+          createdAt: "2026-01-01",
+          productId: "p-1",
+        })
+      );
+
+      // The push's change hint publishes to the hung shards. Unbounded, the push
+      // would wait out the 5 second default; bounded, it finishes after roughly
+      // the 200 ms publish timeout.
+      const started = performance.now();
+      await Effect.runPromise(writer.push.pipe(Effect.orDie));
+      expect(performance.now() - started).toBeLessThan(3000);
+
+      await Effect.runPromise(Scope.close(writerScope, Exit.void));
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
+  }, 20_000);
+});
+
 describe("D1Executor", () => {
   it("declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)", () => {
     // A claim committed on its own would be skipped by a retry after a crash.

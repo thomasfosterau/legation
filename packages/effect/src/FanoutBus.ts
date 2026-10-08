@@ -49,9 +49,11 @@ export interface MakeOptions {
   /**
    * Bound on each broker call the bus makes (a publish, a lease registration). A call that
    * exceeds it is logged and dropped, since a lost poke only delays the next pull (ADR-0009).
-   * `publish` runs inside the sync server's uninterruptible commit-and-publish region, so this
-   * bound is what keeps a hung broker from holding that region open. With Durable Objects one
-   * publish is many shard calls under this single bound, so a multi-topic publish can be cut
+   * `publish` makes two such calls in turn (the broker publish, then a lease registration), each
+   * with its own bound, so a hung broker can hold one `publish` for up to two bounds. `publish`
+   * runs inside the sync server's uninterruptible commit-and-publish region, so these bounds are
+   * what keep a hung broker from holding that region open indefinitely. With Durable Objects one
+   * broker publish is many shard calls under its single bound, so a multi-topic publish can be cut
    * short and its unsent pokes dropped. That is acceptable per ADR-0009: a lost poke only delays
    * the next pull, which `syncLoop.pullInterval` bounds when it is configured. Default 5 seconds.
    */
