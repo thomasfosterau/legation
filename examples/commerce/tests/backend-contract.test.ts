@@ -46,6 +46,7 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
   [BackendContract.delRow.name, BackendContract.delRow],
   [BackendContract.failAlways.name, BackendContract.failAlways],
   [BackendContract.rejectAlways.name, BackendContract.rejectAlways],
+  [BackendContract.writeThenFail.name, BackendContract.writeThenFail],
 ]);
 
 const handlers: Record<string, SqlBackend.SqlHandler> = {
@@ -82,6 +83,19 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
         params: [args.id],
       });
       return yield* Effect.fail(new MutationRejected({ reason: "contract/reject always rejects" }));
+    }),
+  [BackendContract.writeThenFail.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string };
+      const table = yield* tableFor(args.collection);
+      // Overwrite a live row, then fail transiently — the transaction rolls the write back.
+      yield* tx.run({
+        text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
+        params: [args.id],
+      });
+      return yield* Effect.fail(
+        new BackendError({ message: "contract/write-then-fail fails after writing" })
+      );
     }),
 };
 

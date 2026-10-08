@@ -4,17 +4,29 @@
  * The executable specification of the Backend contract (ADR-0009).
  * `verifyBackendContract` drives an implementation through the guarantees
  * documented in Backend.ts — in-order application, idempotent skip, gap
- * rejection, bump-atomic-with-effects, version-bumping writes, reference
- * subset-evaluation semantics (Subset.apply), and client-group isolation —
- * failing with a ContractViolation naming the broken rule.
+ * rejection, bump-atomic-with-effects (for both a transient failure and a
+ * permanent rejection), version-bumping writes, reference subset-evaluation
+ * semantics (Subset.apply), and client-group isolation — failing with a
+ * ContractViolation naming the broken rule.
  *
  * The backend under test must register the contract mutators (the
  * definitions below; `memoryHandlers` is the ready-made registration for
  * MemoryBackend-style backends). Verification writes rows into the
  * configured contract collections, so run it against disposable instances.
+ *
+ * Visibility before the bump (guarantee 1) is not a rule here. The rules make
+ * one call at a time, so the harness never observes a backend mid-mutation:
+ * that needs a handler parked after its write, which only the backend's own
+ * handler can express, and its concurrency differs per backend. Each backend
+ * therefore discharges it itself: `MemoryBackend` by its stage (covered by
+ * `memory-backend-atomicity.test.ts`, "keeps a handler's writes and its bump
+ * invisible until the mutation commits"). `SqlBackend` (a transaction) and
+ * `JsonApiBackend` (the server's all-or-nothing batch) have no mid-flight test
+ * yet; that gap is tracked in #381. A new backend must add its own mid-flight
+ * test before it can claim guarantee 1.
  */
 
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Exit, Option, Schema } from "effect";
 import type { Backend, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
@@ -59,6 +71,19 @@ export const rejectAlways = Mutator.make(
   Schema.Struct({ collection: Schema.String, id: Schema.String })
 );
 
+/**
+ * Writes a row and then fails transiently — probes that a `BackendError` leaves
+ * no trace of that write (the row keeps its value and version) and no bump
+ * (the client's retry applies the mutation again). `failAlways` writes nothing
+ * first, so it does not probe this. A backend that cannot discard a handler's
+ * writes on its own failure fails this rule by design: D1 commits each
+ * statement separately (#342), so it is not run through this contract.
+ */
+export const writeThenFail = Mutator.make(
+  "contract/write-then-fail",
+  Schema.Struct({ collection: Schema.String, id: Schema.String })
+);
+
 /** Ready-made authoritative handlers for MemoryBackend-style registration. */
 export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
   MemoryBackend.validatedHandlers([
@@ -75,6 +100,17 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
         .pipe(
           Effect.andThen(
             Effect.fail(new MutationRejected({ reason: "contract/reject always rejects" }))
+          )
+        )
+    ),
+    MemoryBackend.handler(writeThenFail, (args, writer) =>
+      writer
+        .put(args.collection, args.id, { n: 99 })
+        .pipe(
+          Effect.andThen(
+            Effect.fail(
+              new BackendError({ message: "contract/write-then-fail fails after writing" })
+            )
           )
         )
     ),
@@ -511,6 +547,59 @@ const rule9PermanentRejection: Rule = (h) =>
     );
   });
 
+/**
+ * 10. Transient failure after a write: the failed mutator's write is discarded
+ *     (the row keeps its value and version, and a new row is not created) and
+ *     the id is not bumped, so the client's retry applies the mutation again.
+ */
+const rule10WriteThenFail: Rule = (h) =>
+  Effect.gen(function* () {
+    const { backend, context, rows, check, expectOk } = h;
+    const rule = "discards a transiently failed mutation's writes and does not bump";
+    const startId = yield* h.lastIdOf(rule);
+    const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+    yield* check(rule, before !== undefined, 'Row "a" must exist before the probe');
+
+    const attempt = (id: string) =>
+      Effect.exit(
+        backend.applyMutations(context, [
+          h.mutation(startId + 1, writeThenFail.name, { collection: rows, id }),
+        ])
+      );
+
+    // `contract/write-then-fail` must be registered: an unknown mutator is also a
+    // BackendError, which would let an unregistered backend pass this rule vacuously.
+    const failure = Exit.findErrorOption(yield* attempt("a"));
+    yield* check(
+      rule,
+      Option.isSome(failure),
+      "Expected failure: the contract/write-then-fail mutator"
+    );
+    yield* check(
+      rule,
+      Option.isNone(failure) || !failure.value.message.includes("Unknown mutator"),
+      `${writeThenFail.name} is not registered: register BackendContract.writeThenFail`
+    );
+
+    const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+    yield* check(
+      rule,
+      after?.version === before?.version &&
+        JSON.stringify(after?.value) === JSON.stringify(before?.value),
+      `A failed write must leave row "a" unchanged (was ${JSON.stringify(before?.value)} at version ${before?.version}, now ${JSON.stringify(after?.value)} at version ${after?.version})`
+    );
+
+    yield* attempt("ghost");
+    const ghost = yield* expectOk(rule, backend.getRows(context, rows, ["ghost"]));
+    yield* check(rule, ghost.length === 0, "A failed write must not create a row");
+
+    yield* check(
+      rule,
+      (yield* h.lastIdOf(rule)) === startId,
+      "A failed write must not bump lastMutationId"
+    );
+  });
+
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [
   rule1InOrderApplication,
@@ -522,6 +611,7 @@ const rules: ReadonlyArray<Rule> = [
   rule7OmitsMissingIds,
   rule8ClientGroupIsolation,
   rule9PermanentRejection,
+  rule10WriteThenFail,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────
