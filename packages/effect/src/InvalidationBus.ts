@@ -84,8 +84,10 @@ export interface InvalidationBus {
   readonly publish: (hints: ReadonlyArray<ChangeHint>) => Effect.Effect<void>;
   /**
    * Subscribe to hint batches. The subscription is established once the
-   * effect completes — hints published afterwards are never missed, so a
-   * consumer can subscribe first and start its processing loop later.
+   * effect completes, so a consumer can subscribe first and start its
+   * processing loop later. Hints published afterwards are never missed, with
+   * one exception: the Redis Streams broker may miss a publish that races
+   * `subscribe` while Redis is unreachable.
    */
   readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
 }
@@ -143,7 +145,11 @@ export const layerInProcessWith = (options?: BusCapacityOptions): Layer.Layer<In
  */
 export interface BusBroker {
   readonly publish: (payload: string) => Effect.Effect<void>;
-  /** Subscribe to the channel; established when the effect completes. */
+  /**
+   * Subscribe to the channel; established when the effect completes. While the
+   * transport is unreachable, a publish that races this call may be missed (the
+   * Redis Streams broker may miss one while Redis is unreachable).
+   */
   readonly subscribe: Effect.Effect<{ readonly take: Effect.Effect<string> }, never, Scope.Scope>;
 }
 

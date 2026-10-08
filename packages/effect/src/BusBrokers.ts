@@ -15,7 +15,7 @@
  *   relay (each Worker isolate holds a socket to the DO; the DO rebroadcasts).
  */
 
-import { Duration, Effect, Option, Queue, Scope } from "effect";
+import { Data, Duration, Effect, Option, Queue, Scope } from "effect";
 import { Redis } from "effect/persistence";
 import type { BusBroker } from "./InvalidationBus.js";
 
@@ -75,6 +75,9 @@ const cursorAfter = (reply: XRevRangeReply): string => {
  */
 const START_LOOKUP_BOUND = Duration.millis(500);
 
+/** The reader's start-position lookup did not answer within {@link START_LOOKUP_BOUND}. */
+class StartLookupTimeout extends Data.TaggedError("StartLookupTimeout") {}
+
 /** The reader's first back-off after a failed step; it doubles on each consecutive failure. */
 const RETRY_BASE_MS = 200;
 
@@ -115,7 +118,8 @@ export const makeRedisBroker = (
     // "$" re-resolves on each call, so a BLOCK timeout followed by a publish would
     // move the cursor past that entry and the subscriber would never read it; the
     // ID read here does not move. A failure is raised to the caller: `subscribe`
-    // treats it as "not yet", and the reader asks again.
+    // treats it as "not yet", and the reader asks again. The reader bounds this
+    // lookup itself (START_LOOKUP_BOUND), so a hung Redis is a failed step too.
     const lastId = redis
       .send<XRevRangeReply>("XREVRANGE", stream, "+", "-", "COUNT", "1")
       .pipe(Effect.map(cursorAfter));
@@ -173,7 +177,13 @@ export const makeRedisBroker = (
           });
         const readOnce = Effect.gen(function* () {
           if (cursor.id === undefined) {
-            cursor.id = yield* lastId.pipe(Effect.tap(() => answered));
+            cursor.id = yield* lastId.pipe(
+              Effect.timeoutOrElse({
+                duration: START_LOOKUP_BOUND,
+                orElse: () => Effect.fail(new StartLookupTimeout()),
+              }),
+              Effect.tap(() => answered)
+            );
           }
           const reply = yield* redis
             .send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor.id)
