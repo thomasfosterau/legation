@@ -155,18 +155,30 @@ pokes that window.
 A REST API exposes no change token, so the old value is read rather than
 cached: each update or delete makes one `GET /{type}/{id}` before its write,
 once per row per push, on both the per-resource and the atomic path. Each such
-read is an extra request. A row the push creates has no old value. Without a
-`getOne` route the backend cannot read a row, so its hint carries no
-`oldValues` (a warning is logged once per resource).
+read is an extra request. A row the push creates was absent before the push, so
+it is not read and has no old value.
 
-A read that fails transiently fails the push. On the atomic path nothing has
-been written by then, so the retry reads again. On the per-resource path the
-writes before the failed read have already applied and been acknowledged, so
-the retry does not resend them and their hints are lost: that path is
-at-least-once, and a transient write failure loses those hints the same way. A
-read that finds no row (404) or is refused with another 4xx leaves that row with
-no `oldValues` entry, and logs a warning. The write itself still decides the
-row's fate.
+Every update or delete carries its old value or is not sent, with one exception:
+on the atomic path, a create the server refuses because the row already exists,
+followed by an update or delete of that row in the same batch, is not read
+either, so that write carries no old value.
+
+A read that fails
+for any reason fails the push with a `BackendError`: a transport error, a 5xx,
+a 408 or 429, and also a 4xx such as 403 or a 404 (the row is absent). A refused
+read therefore stalls that client's queue until the refusal is resolved, for
+example until the row exists again or the client's permissions allow the read.
+On the atomic path nothing has been written by then, so the retry reads again.
+On the per-resource path the writes before the failed read have already applied
+and been acknowledged, so the retry does not resend them and their hints are
+lost: that path is at-least-once, and a transient write failure loses those
+hints the same way.
+
+A resource that receives updates or deletes must have a `getOne` route, since
+that is how its rows are read. Without one, each of its updates and deletes
+fails its push with a `BackendError` before anything is written, which stalls
+that client's queue until the route exists. A resource that only receives
+creates needs no `getOne` route.
 
 ## Standalone collection loading
 
