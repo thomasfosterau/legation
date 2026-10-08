@@ -276,9 +276,10 @@ export interface ClientStore {
    * patch, writes the cookie, trims the journal and releases the tail, so the
    * store is in the state the release describes. With no release outstanding it
    * only settles the tail as an open does: a journal copy of a parked entry is
-   * dropped (#336). If the roll-forward fails the store seals itself: every later
-   * call fails until the store is reopened, and the next open finishes the
-   * release from the same record (#387).
+   * dropped (#336). A failed read of the record fails this call alone, with
+   * nothing written. A failure after that read, in the roll-forward or the
+   * journal trim, seals the store: every later call fails until it is reopened,
+   * and the next open finishes the release from the same record (#387).
    */
   readonly finishRelease: Effect.Effect<void, StoreError>;
   /**
@@ -1032,6 +1033,10 @@ export const makeKeyValue = (
     // (#387): the writers inside the permit, so a call queued behind the failing finish is refused
     // rather than run over the outstanding record; the readers before they read.
     const sealedBy = yield* Ref.make<StoreError | undefined>(undefined);
+    // Set whenever a release record or a parked journal copy may exist. While it is clear the
+    // in-process finish has nothing to do, so a row write reads neither (#387). Set before a write
+    // that may land despite reporting failure; cleared only by a finish that completes.
+    const finishPending = yield* Ref.make(false);
     const unsealed = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | StoreError> =>
       Effect.gen(function* () {
         const cause = yield* Ref.get(sealedBy);
@@ -1228,6 +1233,8 @@ export const makeKeyValue = (
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         if (mutations.length === 0) return;
+        // A journal copy may be left behind by the trim that follows, so the finish must run (#387).
+        yield* Ref.set(finishPending, true);
         for (const m of mutations) yield* writeJson(unpulledBodyKey(m.clientId, m.mutationId), m);
         const index = yield* unpulledIndexOf;
         const next = appendMissing(
@@ -1523,9 +1530,8 @@ export const makeKeyValue = (
     // is sealed like an unestablished identity boundary. The next open retries.
     // Roll an outstanding release forward from its record (#336, #387). The patch is idempotent, so
     // re-applying it is correct whether or not the interrupted run had written rows.
-    const finishReleaseInner: Effect.Effect<void, StoreError> = Effect.gen(function* () {
-      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
-      if (release !== undefined) {
+    const rollForward = (release: PullRelease): Effect.Effect<void, StoreError> =>
+      Effect.gen(function* () {
         yield* applyRowOpsInner(release.patch);
         if (release.cookie !== undefined) {
           yield* store
@@ -1534,25 +1540,48 @@ export const makeKeyValue = (
         }
         yield* trimJournal((entry) => coveredBy(release.lastMutationIds, entry));
         yield* releaseUnpulledInner(release.lastMutationIds);
-      }
+      });
+    const finishReleaseInner: Effect.Effect<void, StoreError> = Effect.gen(function* () {
+      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
+      if (release !== undefined) yield* rollForward(release);
     });
-    // The tail settle: the roll-forward, then the journal copies of whatever is still parked. Both
-    // the open and the in-process finish run this one body, so they leave the same state (#387).
-    const settleTailInner = Effect.gen(function* () {
-      yield* finishReleaseInner;
+    // The journal copies of whatever the tail still parks, dropped as an open drops them (#336). Read
+    // after the roll-forward, which releases entries from the tail. A failed trim seals the store even
+    // with no record outstanding: a copy left in both the journal and the tail would be double-counted
+    // by reads and pushed again.
+    const trimParkedCopies: Effect.Effect<void, StoreError> = Effect.gen(function* () {
       const parked = yield* unpulledIndexOf;
       if (parked.length > 0) {
         const keys = new Set(parked.map(entryKey));
         yield* trimJournal((entry) => keys.has(entryKey(entry)));
       }
     });
-    // The in-process finish: a failure seals the store, so no later write runs over the record.
-    const finishOrSeal = settleTailInner.pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
+    // The tail settle: the roll-forward, then the journal copies of whatever is still parked. The
+    // open runs this one body, so it leaves the same state as the in-process finish (#387).
+    const settleTailInner = Effect.gen(function* () {
+      yield* finishReleaseInner;
+      yield* trimParkedCopies;
+    });
     const tailFailure = yield* locked(settleTailInner).pipe(
       Effect.as<StoreError | undefined>(undefined),
       Effect.catch((error) => Effect.succeed<StoreError | undefined>(error))
     );
     if (tailFailure !== undefined) return sealed(tailFailure);
+    yield* Ref.set(finishPending, false);
+    // The in-process finish, run by every row write and clear, and by `finishRelease`. It is a no-op
+    // while `finishPending` is clear. Its first step is a read of the record, and a failure there
+    // fails the call alone: nothing has been written. Every failure after that read seals the store,
+    // because a roll-forward or a journal trim may have part-way written what the record describes,
+    // and no later write may run over it. The open then finishes it from the same record (#387).
+    const finishOrSeal = Effect.gen(function* () {
+      if (!(yield* Ref.get(finishPending))) return;
+      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
+      yield* Effect.gen(function* () {
+        if (release !== undefined) yield* rollForward(release);
+        yield* trimParkedCopies;
+      }).pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
+      yield* Ref.set(finishPending, false);
+    });
 
     // Local store-version buster (#48): a mismatch clears confirmed rows + the
     // cookie (so the next pull rehydrates fully) but preserves the journal, then
@@ -1859,7 +1888,9 @@ export const makeKeyValue = (
       parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
       beginRelease: (release) =>
         locked(
-          readDecoded(RELEASE_KEY, ReleaseIntentFromJson).pipe(
+          // Set before the record is written, since a write that reports failure may still have landed.
+          Ref.set(finishPending, true).pipe(
+            Effect.andThen(readDecoded(RELEASE_KEY, ReleaseIntentFromJson)),
             Effect.flatMap((pending) =>
               pending === undefined
                 ? writeJson(RELEASE_KEY, release)

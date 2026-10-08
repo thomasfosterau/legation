@@ -144,6 +144,11 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * The writes are not atomic. Between the first `putRow` and the re-read, an indexed
  * read on an async store can see the old index against the new rows. Once `hydrate`
  * returns or fails, the engine's view and indexes match the store again.
+ *
+ * `hydrate` does not take the overlay lock of an engine built over the store, so it must
+ * not run while that engine is pulling. Its first step finishes an outstanding pull release
+ * (#387). If that release is a live pull's, the pull's remaining row writes then land over
+ * the snapshot's rows. Hydrate before the engine starts, or while it is stopped.
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
