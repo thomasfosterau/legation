@@ -515,6 +515,21 @@ const indexUnchangedFor = (collection: string, from: IndexState, to: IndexState)
 /** Attempts an index build gets when confirmed-row writes keep racing it; then it full-scans (#339). */
 const MAX_INDEX_BUILD_ATTEMPTS = 3;
 
+/**
+ * The re-read each running engine built over a store has registered, keyed by the store object. A
+ * direct store write (`Hydration.hydrate`) runs them through {@link resyncAttachedEngines}.
+ */
+const liveEngines = new WeakMap<ClientStore, Set<Effect.Effect<void>>>();
+
+/**
+ * Tell every running {@link ClientEngine} built over `store` that the store was written directly
+ * (`Hydration.hydrate`): each drops its built indexes and materialized view and reveals the
+ * result. A store with no running engine is a no-op. Without this a direct write leaves an
+ * engine's built indexes and view showing the old rows (#350).
+ */
+export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =>
+  Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, { discard: true });
+
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
 
@@ -604,6 +619,13 @@ export interface ClientEngine {
       readonly value: unknown;
     }>
   ) => Effect.Effect<void, StoreError>;
+  /**
+   * Drop every confirmed row, then the materialized view and the built indexes with them, and
+   * reveal the empty state (devtools' `clearStore`). The journal, cookie and subscriptions are
+   * untouched. Use this rather than `ClientStore.clearRows` on a running engine: a direct store
+   * write leaves the view and indexes showing the cleared rows (#350).
+   */
+  readonly clearRows: Effect.Effect<void, StoreError>;
   /**
    * Prefetch a subset: `subscribe` to it, and if it currently yields no local
    * rows, `pull` once so the rows are present before the caller proceeds.
@@ -1303,9 +1325,14 @@ export const make = (
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
       Effect.gen(function* () {
         for (let attempt = 0; attempt < MAX_INDEX_BUILD_ATTEMPTS; attempt++) {
+          // The generation is read BEFORE the field set. `noteAutoIndexFields` widens the
+          // fields and then bumps the generation, so a widening that lands after this read
+          // bumps past `before` and the install refuses the build. Read the other way round,
+          // a widening between the two reads would install an index over the old field set,
+          // with nothing left to invalidate it (a missed index until the next rebuild).
+          const before = yield* Ref.get(indexState);
           const fields = (yield* Ref.get(indexFields)).get(collection);
           if (fields === undefined || fields.size === 0) return undefined;
-          const before = yield* Ref.get(indexState);
           const existing = before.built.get(collection);
           if (existing !== undefined) return existing;
           const fresh = Index.empty(fields);
@@ -1353,6 +1380,16 @@ export const make = (
         })
       );
 
+    // Forget every built index, and bump every collection's generation, so the next
+    // access rebuilds from the store and an in-flight build discards its result. For a
+    // confirmed-row write that does not name its rows (a cleared or rewritten store,
+    // #350): unlike a `Clear` patch op, it does not assume the store is now empty.
+    const invalidateAllIndexes: Effect.Effect<void> = Ref.update(indexState, (state) => ({
+      built: new Map(),
+      generations: state.generations,
+      clears: state.clears + 1,
+    }));
+
     // Apply confirmed-row deltas (patch ops / seeded rows) to already-built
     // indexes. A collection with no built index yet is left alone — it
     // rebuilds fully from the store (which already reflects these deltas) on
@@ -1387,6 +1424,13 @@ export const make = (
         })
       );
     };
+
+    // Drop every confirmed row: the `reset` writer (#350). The store is cleared first and the
+    // indexes second, so a build that read the rows before the clear sees its generation change
+    // and discards its result.
+    const clearConfirmedRows: Effect.Effect<void, StoreError> = store.clearRows.pipe(
+      Effect.andThen(invalidateAllIndexes)
+    );
 
     /** Confirmed rows + the overlay journal (unpulled tail, then pending) replayed on top. */
     const computeOverlay: Effect.Effect<
@@ -1832,7 +1876,7 @@ export const make = (
           // The unpulled tail's effects belong to the superseded identity's rows,
           // which are cleared just below, so the tail goes with them (#286).
           yield* Semaphore.withPermit(overlayLock, Ref.set(unpulled, []));
-          yield* store.clearRows;
+          yield* clearConfirmedRows;
           yield* store.clearCookie;
           yield* Ref.set(subscriptions, []);
           yield* Ref.set(namedSubs, []);
@@ -2121,6 +2165,29 @@ export const make = (
         yield* invalidateOverlay;
         yield* publishChange(rebuildFor(touched));
       });
+
+    // Re-read everything derived from the store and reveal it: the built indexes, the overlay
+    // (confirmed rows plus the journal) and every observer. Shared by `clearRows` and by a direct
+    // store write (`resyncAttachedEngines`).
+    const reloadFromStore: Effect.Effect<void> = invalidateAllIndexes.pipe(
+      Effect.andThen(invalidateOverlay),
+      Effect.andThen(sampleJournalDepth),
+      Effect.andThen(publishChange(REBUILD))
+    );
+
+    // Drop every confirmed row and reveal the empty view. A direct `store.clearRows` would
+    // leave the view and the indexes showing the cleared rows (#350).
+    const clearRows: ClientEngine["clearRows"] = store.clearRows.pipe(
+      Effect.andThen(reloadFromStore)
+    );
+
+    // Register this engine for direct store writes for as long as its scope lasts (#350).
+    const attached = liveEngines.get(store) ?? new Set<Effect.Effect<void>>();
+    attached.add(reloadFromStore);
+    liveEngines.set(store, attached);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => attached.delete(reloadFromStore)).pipe(Effect.asVoid)
+    );
 
     // Register or reuse the in-flight pull for a subset. Returns the deferred to
     // await plus whether this call owns the pull (only the owner runs it), so
@@ -2844,6 +2911,7 @@ export const make = (
         }),
       subscribe: subscribeSubset,
       seed,
+      clearRows,
       ensureSubset,
       unsubscribe: (subset) =>
         Ref.update(subscriptions, (current) =>

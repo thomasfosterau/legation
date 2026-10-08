@@ -144,6 +144,20 @@ describe("Devtools.make", () => {
     }).pipe(Effect.scoped)
   );
 
+  it.effect("clearStore also empties the running engine's view, not only the store (#350)", () =>
+    Effect.gen(function* () {
+      const { engine, devtools } = yield* setup;
+      yield* engine.subscribe(allTodos);
+      yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
+      yield* engine.push;
+      yield* engine.pull;
+      expect(yield* engine.query(allTodos)).toHaveLength(1);
+
+      yield* devtools.clearStore;
+      expect(yield* engine.query(allTodos)).toEqual([]);
+    }).pipe(Effect.scoped)
+  );
+
   it.effect("an offline control passed to `make` is exposed on the core unchanged", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* setup;

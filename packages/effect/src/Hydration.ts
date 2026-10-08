@@ -117,6 +117,10 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
  * {@link SnapshotSchema} (so a malformed snapshot fails as a `StoreError`), then
  * put the rows, set the cookie if present, and append the journal in order.
+ *
+ * A running {@link ClientEngine} built over the store re-reads its view and built
+ * indexes afterwards: a direct write does not go through the engine, so without this
+ * an indexed query could return a row whose indexed field changed (#350).
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
@@ -133,6 +137,7 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
     // These entries came from another context: whether they were pushed there
     // is unknowable here, so paced compaction must not renumber them (#249).
     yield* freezePending(store);
+    yield* ClientEngineModule.resyncAttachedEngines(store);
   });
 
 /**
