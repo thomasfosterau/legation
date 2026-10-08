@@ -121,7 +121,7 @@ export const make = (
     forcePush: engine.push,
     forcePull: engine.pull,
     dropSubscription: engine.unsubscribe,
-    clearStore: store.clearRows,
+    clearStore: engine.clearRows,
     ...(options?.offline === undefined ? {} : { offline: options.offline }),
   };
 };

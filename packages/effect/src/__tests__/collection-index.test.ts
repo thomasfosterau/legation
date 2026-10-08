@@ -2,7 +2,8 @@
  * Unit tests for `CollectionIndex.ts` (issue #113): hash/ordered maintenance,
  * the And-conjunct planner, and the ClientEngine-level integration — declared
  * indexes, `autoIndex` discovery, the pending-journal fallback, Put/Del/
- * Clear consistency across a pull, and a pull landing mid-build (#339).
+ * Clear consistency across a pull, a pull landing mid-build (#339), and the
+ * confirmed-row writers that bypass a pull (`reset`, `hydrate`, `clearRows`, #350).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
@@ -11,6 +12,8 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as CollectionIndex from "../CollectionIndex.js";
+import type * as Identity from "../Identity.js";
+import * as Hydration from "../Hydration.js";
 import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
 import type { PullResponse } from "../Protocol.js";
@@ -217,6 +220,68 @@ const items = (n: number): ReadonlyArray<Item> =>
 
 const seedEngine = (engine: ClientEngineModule.ClientEngine, rows: ReadonlyArray<Item>) =>
   engine.seed(rows.map((item) => ({ collection: "items", id: item.id, version: 1, value: item })));
+
+/** A parked `listRows` call: it reads its rows, then waits for `release`. */
+interface Parked {
+  readonly at: number;
+  readonly reached: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
+/** A memory store that counts `listRows` calls and can park one of them mid-read. */
+interface ParkingStore {
+  readonly store: ClientStoreModule.ClientStore;
+  readonly calls: Ref.Ref<number>;
+  readonly gate: Ref.Ref<Parked | undefined>;
+}
+
+const parkingStore = Effect.gen(function* () {
+  const memory = yield* ClientStoreModule.makeMemory;
+  const calls = yield* Ref.make(0);
+  const gate = yield* Ref.make<Parked | undefined>(undefined);
+  const store = ClientStore.of({
+    ...memory,
+    listRows: (collection) =>
+      Effect.gen(function* () {
+        const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
+        const rows = yield* memory.listRows(collection);
+        const parked = yield* Ref.modify(gate, (g) =>
+          g?.at === call ? ([g, undefined] as const) : ([undefined, g] as const)
+        );
+        if (parked !== undefined) {
+          yield* Deferred.succeed(parked.reached, undefined);
+          yield* Deferred.await(parked.release);
+        }
+        return rows;
+      }),
+  });
+  return { store, calls, gate } satisfies ParkingStore;
+});
+
+/** Park the next `listRows` call. `callsBefore` lets a test assert the parked call is the next one. */
+const armPark = (parking: ParkingStore) =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const callsBefore = yield* Ref.get(parking.calls);
+    yield* Ref.set(parking.gate, { at: callsBefore + 1, reached, release });
+    return { callsBefore, reached, release };
+  });
+
+/** An engine over `store` with `items` indexed on `priority`. */
+const priorityEngine = (store: ClientStoreModule.ClientStore) =>
+  Effect.gen(function* () {
+    const transport = yield* makeInMemory(noopHandler, "g");
+    return yield* ClientEngineModule.make({
+      clientId: "c",
+      clientGroupId: "g",
+      mutators: setItem,
+      indexes: { items: ["priority"] },
+    }).pipe(
+      Effect.provideService(ClientStore, store),
+      Effect.provideService(ClientTransport, transport)
+    );
+  });
 
 describe("ClientEngine + CollectionIndex", () => {
   it.effect("declared indexes: eq/In/range queries match an unindexed baseline", () =>
@@ -451,33 +516,8 @@ describe("ClientEngine + CollectionIndex", () => {
     "#339: a pull that lands while an index build is reading rows is reflected by later queries",
     () =>
       Effect.gen(function* () {
-        const memory = yield* ClientStoreModule.makeMemory;
-        // Parks the next `listRows` AFTER it has read the rows: the build holds
-        // the pre-patch snapshot while the pull below writes and reveals.
-        const gate = yield* Ref.make<
-          | { readonly reached: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
-          | undefined
-        >(undefined);
-        const store = ClientStore.of({
-          ...memory,
-          listRows: (collection) =>
-            Ref.getAndSet(gate, undefined).pipe(
-              Effect.flatMap((parked) =>
-                memory
-                  .listRows(collection)
-                  .pipe(
-                    Effect.flatMap((rows) =>
-                      parked === undefined
-                        ? Effect.succeed(rows)
-                        : Deferred.succeed(parked.reached, undefined).pipe(
-                            Effect.andThen(Deferred.await(parked.release)),
-                            Effect.as(rows)
-                          )
-                    )
-                  )
-              )
-            ),
-        });
+        // The build holds the pre-patch snapshot while the pull below writes and reveals.
+        const parking = yield* parkingStore;
         // i1 is seeded at priority 1; the pull moves it to priority 3.
         const patches = yield* Ref.make<ReadonlyArray<PullResponse["patch"]>>([
           [
@@ -506,7 +546,7 @@ describe("ClientEngine + CollectionIndex", () => {
           mutators: setItem,
           autoIndex: true,
         }).pipe(
-          Effect.provideService(ClientStore, store),
+          Effect.provideService(ClientStore, parking.store),
           Effect.provideService(ClientTransport, transport)
         );
 
@@ -517,20 +557,20 @@ describe("ClientEngine + CollectionIndex", () => {
           Subset.make({ collection: "items", where: Predicate.isNotNull("done") })
         );
 
-        // The next query discovers `priority` and builds its index, reading rows
-        // through the parked `listRows`.
-        const reached = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        yield* Ref.set(gate, { reached, release });
+        // The next query discovers `priority` and builds its index. The warm-up
+        // above seeded the view, so the query's first `listRows` call is the build's.
+        const parked = yield* armPark(parking);
         const byPriority3 = () =>
           engine.query(Subset.make({ collection: "items", where: Predicate.eq("priority", 3) }));
         const building = yield* Effect.forkChild(byPriority3());
-        yield* Deferred.await(reached);
+        yield* Deferred.await(parked.reached);
+        // The query has made exactly one `listRows` call so far, and it is the parked build.
+        expect(yield* Ref.get(parking.calls)).toBe(parked.callsBefore + 1);
 
         // The pull lands mid-build: its patch writes and reveals while the build
         // holds the pre-patch rows.
         yield* engine.pull;
-        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.succeed(parked.release, undefined);
         yield* Fiber.join(building);
 
         const expected = [
@@ -540,6 +580,140 @@ describe("ClientEngine + CollectionIndex", () => {
           "i1",
         ].toSorted();
         expect((yield* byPriority3()).map((r) => r.id).toSorted()).toEqual(expected);
+      })
+  );
+
+  it.effect("#350: a hydrate that lands mid-build is not installed as a stale index", () =>
+    Effect.gen(function* () {
+      const parking = yield* parkingStore;
+      const engine = yield* ClientEngineModule.make({
+        clientId: "c",
+        clientGroupId: "g",
+        mutators: setItem,
+        autoIndex: true,
+      }).pipe(
+        Effect.provideService(ClientStore, parking.store),
+        Effect.provideService(ClientTransport, yield* makeInMemory(noopHandler, "g"))
+      );
+      yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
+      yield* engine.query(Subset.make({ collection: "items", where: Predicate.isNotNull("done") }));
+
+      const parked = yield* armPark(parking);
+      const at = (priority: number) =>
+        engine.query(
+          Subset.make({ collection: "items", where: Predicate.eq("priority", priority) })
+        );
+      const building = yield* Effect.forkChild(at(1));
+      yield* Deferred.await(parked.reached);
+      expect(yield* Ref.get(parking.calls)).toBe(parked.callsBefore + 1);
+
+      // The direct write lands while the build holds the pre-hydrate rows.
+      yield* Hydration.hydrate(parking.store, {
+        rows: [
+          {
+            collection: "items",
+            id: "i1",
+            version: 2,
+            value: { id: "i1", priority: 3, done: false },
+          },
+        ],
+        journal: [],
+      });
+      yield* Deferred.succeed(parked.release, undefined);
+      yield* Fiber.join(building);
+
+      expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
+      expect(yield* at(1)).toEqual([]);
+    })
+  );
+
+  it.effect("#350: reset leaves no built index entry for a row it dropped", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* priorityEngine(store);
+      const where = Predicate.eq("priority", 3);
+      yield* engine.reset("sha256:alice" as Identity.Fingerprint);
+      yield* seedEngine(engine, [{ id: "i1", priority: 3, done: false }]);
+      expect((yield* engine.query(Subset.make({ collection: "items", where }))).length).toBe(1);
+
+      yield* engine.reset("sha256:bob" as Identity.Fingerprint);
+      expect(yield* store.listRows("items")).toEqual([]);
+      // Whatever index the next query consults must not name the dropped row.
+      const consulted = vi.spyOn(CollectionIndex, "evaluate");
+      expect(yield* engine.query(Subset.make({ collection: "items", where }))).toEqual([]);
+      const candidates = consulted.mock.calls.flatMap(([index]) => [
+        ...(CollectionIndex.plan(index, where)?.candidateIds ?? []),
+      ]);
+      consulted.mockRestore();
+      expect(candidates).toEqual([]);
+    })
+  );
+
+  it.effect("#350: engine.clearRows empties the view and the built index together", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* priorityEngine(store);
+      yield* seedEngine(engine, items(10));
+      const where = Predicate.eq("priority", 3);
+      expect(
+        (yield* engine.query(Subset.make({ collection: "items", where }))).length
+      ).toBeGreaterThan(0);
+
+      yield* engine.clearRows;
+      expect(yield* store.listRows("items")).toEqual([]);
+      expect(yield* engine.query(Subset.make({ collection: "items" }))).toEqual([]);
+      expect(yield* engine.query(Subset.make({ collection: "items", where }))).toEqual([]);
+    })
+  );
+
+  it.effect("#350: Hydration.hydrate into a running engine re-reads its view and index", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* priorityEngine(store);
+      yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
+      const at = (priority: number) =>
+        engine.query(
+          Subset.make({ collection: "items", where: Predicate.eq("priority", priority) })
+        );
+      // Warm the view and build the index on `priority`.
+      expect((yield* at(1)).map((r) => r.id)).toEqual(["i1"]);
+
+      // A direct store write moves i1 from priority 1 to 3; the row stays present.
+      yield* Hydration.hydrate(store, {
+        rows: [
+          {
+            collection: "items",
+            id: "i1",
+            version: 2,
+            value: { id: "i1", priority: 3, done: false },
+          },
+        ],
+        journal: [],
+      });
+
+      // The indexed answers match the stored rows: no wrong row at priority 1, i1 at priority 3.
+      expect(yield* at(1)).toEqual([]);
+      expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
+      // The unindexed view agrees: the row it holds is the stored one.
+      const all = yield* engine.query(Subset.make({ collection: "items" }));
+      expect(all.map((r) => (r.value as Item).priority)).toEqual([3]);
+    })
+  );
+
+  it.effect(
+    "#350: a hydrate with a cookie and no rows leaves a running engine's rows in place",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ClientStoreModule.makeMemory;
+        const engine = yield* priorityEngine(store);
+        yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
+        expect((yield* engine.query(Subset.make({ collection: "items" }))).length).toBe(1);
+
+        yield* Hydration.hydrate(store, { rows: [], cookie: "c-1", journal: [] });
+        expect(yield* store.getCookie).toBe("c-1");
+        expect(
+          (yield* engine.query(Subset.make({ collection: "items" }))).map((r) => r.id)
+        ).toEqual(["i1"]);
       })
   );
 });
