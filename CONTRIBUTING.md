@@ -51,6 +51,24 @@ drops them again when it finishes. Without the variable the suite is skipped loc
 warning; in CI (where `CI` is set) it fails instead. For example:
 `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch bunx vitest run packages/sql`.
 
+### Refreshing the postgres image digest
+
+Both `postgres` service containers in `.github/workflows/ci.yml` pin the image by digest
+(`postgres:16@sha256:…`). Dependabot does not update images under a workflow's `services:` key,
+so refresh the digest by hand when moving to a newer Postgres 16 build. Read the multi-arch index
+digest from Docker Hub's registry API:
+
+```sh
+TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+curl -sI -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+  https://registry-1.docker.io/v2/library/postgres/manifests/16 | grep -i '^docker-content-digest'
+```
+
+Replace the digest in both `services.postgres.image` entries, keeping the `postgres:16` tag for
+readability, and let CI run the PostgreSQL test against the new image.
+
 ## Effect Code
 
 Use Effect for side effects, dependency injection, and typed failures.
