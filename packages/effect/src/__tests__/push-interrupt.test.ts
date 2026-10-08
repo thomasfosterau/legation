@@ -5,7 +5,7 @@
  * hints, so a lost publish would never be repaired.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as Cvr from "../Cvr.js";
@@ -13,9 +13,6 @@ import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
-
-const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const handlers = MemoryBackend.validatedHandlers([
@@ -75,14 +72,15 @@ describe("SyncServer.handlePush and interruption (#356)", () => {
       });
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.await(interrupting);
+      // The exit of the interrupted push fiber is its interruption.
+      const exit = yield* Fiber.await(push);
+      expect(Exit.hasInterrupts(exit)).toBe(true);
 
-      // The hint was published before the handler finished. Nothing is
-      // published on the trunk code path, so the bounded wait loses the race.
-      const outcome = yield* Effect.race(
-        subscription.take.pipe(Effect.map((hints) => ({ published: hints }))),
-        sleepReal(1000).pipe(Effect.as({ published: undefined }))
-      );
-      expect(outcome.published).toMatchObject([{ collection: "todos", ids: ["1"] }]);
+      // The hint was published before the handler exited. Without the fix
+      // nothing is published, so this take suspends and the runner's test
+      // timeout reports the hang. No wall-clock race is needed.
+      const published = yield* subscription.take;
+      expect(published).toMatchObject([{ collection: "todos", ids: ["1"] }]);
     }).pipe(Effect.scoped)
   );
 });

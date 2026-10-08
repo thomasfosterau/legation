@@ -3,8 +3,9 @@
  * Redis Streams broker each carry a ChangeHint between two serialized buses.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, PubSub, Ref } from "effect";
+import { Duration, Effect, Exit, Fiber, PubSub, Ref } from "effect";
 import { Redis } from "effect/persistence";
+import * as TestClock from "effect/testing/TestClock";
 import type { ChangeHint } from "../Backend.js";
 import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";
@@ -128,6 +129,26 @@ describe("makeRedisBroker (Redis Streams)", () => {
       yield* Effect.sleep("40 millis");
       yield* busA.publish([hint]);
       expect(yield* subscription.take).toEqual([hint]);
+    }).pipe(Effect.scoped)
+  );
+
+  // The publish runs inside the sync server's uninterruptible region, so a hung
+  // XADD must be dropped at its bound. TestClock moves the bound, not wall time.
+  it.effect("a hung XADD is dropped at its timeout, so the publish returns", () =>
+    Effect.gen(function* () {
+      const redis = yield* Redis.make({
+        send: (() => Effect.never) as Redis.Redis["Service"]["send"],
+        subscribe: () => Effect.die(new Error("the Streams broker never subscribes")),
+      });
+      const broker = yield* BusBrokers.makeRedisBroker({ timeout: "2 seconds" }).pipe(
+        Effect.provideService(Redis.Redis, redis)
+      );
+      const publishing = yield* Effect.forkScoped(
+        Effect.uninterruptible(broker.publish("payload")),
+        { startImmediately: true }
+      );
+      yield* TestClock.adjust("2 seconds");
+      expect(Exit.isSuccess(yield* Fiber.await(publishing))).toBe(true);
     }).pipe(Effect.scoped)
   );
 });

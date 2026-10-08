@@ -46,6 +46,13 @@ export interface MakeOptions {
   readonly heartbeat?: Duration.Input;
   /** Lease time-to-live. Default 3× the heartbeat. */
   readonly ttl?: Duration.Input;
+  /**
+   * Bound on each broker call the bus makes (a publish, a lease registration). A call that
+   * exceeds it is logged and dropped, since a lost poke only delays the next pull (ADR-0009).
+   * `publish` runs inside the sync server's uninterruptible commit-and-publish region, so this
+   * bound is what keeps a hung broker from holding that region open. Default 5 seconds.
+   */
+  readonly timeout?: Duration.Input;
 }
 
 /** The topics one hint derives (coarse + fine over old and new values). */
@@ -74,17 +81,33 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
     const derivable = FanoutTopics.derivableSets(options.nodes);
     const heartbeat = options.heartbeat ?? "10 seconds";
     const ttl = options.ttl ?? Duration.millis(Duration.toMillis(heartbeat) * 3);
+    const timeout = options.timeout ?? "5 seconds";
+    // Every broker call is bounded, so a hung broker drops its call instead of
+    // stalling the publish that awaits it (ADR-0009: correctness never depends on the bus).
+    const bounded = (what: string, call: Effect.Effect<void>): Effect.Effect<void> =>
+      call.pipe(
+        Effect.timeoutOrElse({
+          duration: timeout,
+          orElse: () =>
+            Effect.logWarning(
+              `FanoutBus: ${what} timed out; dropped (the next heartbeat or pull recovers it)`
+            ),
+        })
+      );
 
-    const registerNow = options.subsets.pipe(
-      Effect.flatMap((subsets) =>
-        options.broker.register(
-          options.roomId,
-          new Set(
-            subsets.map((subset) =>
-              FanoutTopics.topicForSubset(subset, derivable.get(subset.collection))
-            )
-          ),
-          ttl
+    const registerNow = bounded(
+      "lease registration",
+      options.subsets.pipe(
+        Effect.flatMap((subsets) =>
+          options.broker.register(
+            options.roomId,
+            new Set(
+              subsets.map((subset) =>
+                FanoutTopics.topicForSubset(subset, derivable.get(subset.collection))
+              )
+            ),
+            ttl
+          )
         )
       )
     );
@@ -102,7 +125,7 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
           }
         }
         // Freshen the lease alongside the write — a busy room never expires.
-        return options.broker.publish(topics).pipe(Effect.andThen(registerNow));
+        return bounded("publish", options.broker.publish(topics)).pipe(Effect.andThen(registerNow));
       },
       subscribe: Effect.gen(function* () {
         const pokes = yield* options.broker.pokes(options.roomId);

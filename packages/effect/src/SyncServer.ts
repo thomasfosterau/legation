@@ -376,7 +376,10 @@ export const makeWithIntrospectionWith = (
             // would never repair the loss. The Backend contract cannot tell
             // "committed" from "not yet", so the whole applyMutations call is
             // protected. Trade-off: a slow applyMutations cannot be cancelled
-            // mid-push; an interrupt waits for the commit and its publish. Middleware
+            // mid-push; an interrupt waits for the commit and its publish. The
+            // publish's broker I/O (the FanoutBus and Redis calls) is uninterruptible
+            // too, but each call is bounded by its transport's timeout, so a hung
+            // broker drops its poke instead of holding the region open. Middleware
             // above stays interruptible, since nothing has been committed there.
             const result = yield* Effect.uninterruptible(
               backend
