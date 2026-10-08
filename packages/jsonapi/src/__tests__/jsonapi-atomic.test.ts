@@ -92,14 +92,16 @@ const rowResponse = (id: string, row: StoredRow) =>
  * An HttpClient that records every request and answers from a script. The
  * script's index counts the writes it is asked (0, 1, …), not the reads. A
  * `GET /todos/:id` is answered from `rows` (404 when absent), or by the next
- * entry of `readStatuses` while there are any, so a test can fail a read.
+ * entry of `readStatuses` while there are any, so a test can fail a read. A
+ * write the server accepts (a 2xx) is kept in `rows` as the server would store
+ * it, so a read after a write sees the written row, as it does on a real server.
  */
 const makeServer = (
   script: (request: Recorded, index: number) => Response,
   options: { readonly rows?: Rows; readonly readStatuses?: ReadonlyArray<number> } = {}
 ) => {
   const requests: Array<Recorded> = [];
-  const rows = options.rows ?? {};
+  const rows: Record<string, StoredRow> = { ...options.rows };
   const readStatuses = [...(options.readStatuses ?? [])];
   let writes = 0;
   const answer = (recorded: Recorded): Response => {
@@ -111,7 +113,10 @@ const makeServer = (
       const row = rows[id];
       return row === undefined ? empty(404) : rowResponse(id, row);
     }
-    return script(recorded, recorded.method === "GET" ? -1 : writes++);
+    if (recorded.method === "GET") return script(recorded, -1);
+    const response = script(recorded, writes++);
+    if (response.ok) storeWrite(rows, recorded);
+    return response;
   };
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
@@ -135,6 +140,42 @@ const writesOf = (server: { readonly requests: ReadonlyArray<Recorded> }) =>
 /** The reads of one path a server received. */
 const readsOf = (server: { readonly requests: ReadonlyArray<Recorded> }, path: string) =>
   server.requests.filter((request) => request.method === "GET" && request.path === path);
+
+/** The requests a server received, as `METHOD path`, in arrival order. */
+const sequenceOf = (server: { readonly requests: ReadonlyArray<Recorded> }) =>
+  server.requests.map((request) => `${request.method} ${request.path}`);
+
+/** Store one resource object as the server keeps it: an update merges over the stored row. */
+const storeRow = (rows: Record<string, StoredRow>, data: any, merge: boolean): void => {
+  const existing = merge ? rows[data.id] : undefined;
+  rows[data.id] = {
+    attributes: { ...existing?.attributes, ...data.attributes },
+    ...(existing?.relationships !== undefined || data.relationships !== undefined
+      ? { relationships: { ...existing?.relationships, ...data.relationships } }
+      : {}),
+  };
+};
+
+/** Apply the operations of one accepted atomic request to `rows`. */
+const storeAtomic = (rows: Record<string, StoredRow>, request: Recorded): void => {
+  for (const operation of request.body["atomic:operations"]) {
+    if (operation.op === "remove") delete rows[operation.ref.id];
+    else storeRow(rows, operation.data, operation.op === "update");
+  }
+};
+
+/** Apply one accepted per-resource write (`POST`, `PATCH` or `DELETE /todos/:id`) to `rows`. */
+const storeResource = (rows: Record<string, StoredRow>, request: Recorded): void => {
+  if (request.method === "DELETE") delete rows[request.path.replace("/todos/", "")];
+  else if (request.method === "PATCH") storeRow(rows, request.body.data, true);
+  else storeRow(rows, request.body.data, false);
+};
+
+/** Apply one accepted write to `rows`, the way the server would store it. */
+const storeWrite = (rows: Record<string, StoredRow>, request: Recorded): void => {
+  if (request.path === "/operations") storeAtomic(rows, request);
+  else storeResource(rows, request);
+};
 
 const { resources, registry, operations } = JsonApiSync.inspect(api);
 const makeBackend = (server: ReturnType<typeof makeServer>) =>
@@ -514,7 +555,12 @@ for (const mode of ["atomic", "per-resource"] as const) {
             ],
           },
         ]);
-        expect(readsOf(server, "/todos/1")).toHaveLength(1);
+        // The read precedes the first write on both paths: it sees the row as the push found it.
+        expect(sequenceOf(server)).toEqual(
+          mode === "atomic"
+            ? ["GET /todos/1", "POST /operations"]
+            : ["GET /todos/1", "PATCH /todos/1", "DELETE /todos/1"]
+        );
       })
     );
 
@@ -657,7 +703,11 @@ for (const mode of ["atomic", "per-resource"] as const) {
             oldValues: [{ id: "1", value: beforeRow }],
           },
         ]);
-        expect(readsOf(server, "/todos/1")).toHaveLength(1);
+        expect(sequenceOf(server)).toEqual(
+          mode === "atomic"
+            ? ["GET /todos/1", "POST /operations"]
+            : ["GET /todos/1", "PATCH /todos/1"]
+        );
       })
     );
 
@@ -671,9 +721,12 @@ for (const mode of ["atomic", "per-resource"] as const) {
           mutation(2, "todos/update", { type: "todos", id: "1", attributes: { title: "b" } }),
         ]);
 
-        expect(readsOf(server, "/todos/1")).toHaveLength(1);
         // One atomic request carries both writes; the per-resource path sends two.
-        expect(writesOf(server)).toHaveLength(mode === "atomic" ? 1 : 2);
+        expect(sequenceOf(server)).toEqual(
+          mode === "atomic"
+            ? ["GET /todos/1", "POST /operations"]
+            : ["GET /todos/1", "PATCH /todos/1", "PATCH /todos/1"]
+        );
         expect(result.hints).toEqual([
           {
             collection: "todos",
@@ -835,6 +888,40 @@ for (const mode of ["atomic", "per-resource"] as const) {
           expect(writesOf(server)).toHaveLength(1);
           expect(result.lastMutationIds).toEqual({ "client-1": 1 });
           expect(result.hints[0]?.oldValues).toEqual([{ id: "1", value: beforeRow }]);
+        })
+    );
+
+    it.effect(
+      "a read that fails after an earlier write: atomic writes nothing, per-resource keeps that write",
+      () =>
+        Effect.gen(function* () {
+          const server = makeServer(bareWrites(mode), {
+            rows: { "1": before },
+            readStatuses: [503],
+          });
+          const backend = yield* makeModeBackend(mode, server);
+          // The create reads nothing, so the update's read is the one that fails.
+          const push = [
+            mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "new" } }),
+            mutation(2, "todos/update", { type: "todos", id: "1", attributes: { title: "after" } }),
+          ];
+
+          const failure = yield* Effect.flip(backend.applyMutations(context, push));
+          expect(failure._tag).toBe("BackendError");
+          // Atomic: every read precedes the one request, so nothing was sent. Per-resource:
+          // the create applied and is acknowledged, so the retry does not resend it.
+          expect(writesOf(server)).toHaveLength(mode === "atomic" ? 0 : 1);
+          expect(yield* backend.lastMutationIds(context)).toEqual(
+            mode === "atomic" ? {} : { "client-1": 1 }
+          );
+
+          const result = yield* backend.applyMutations(context, push);
+          expect(writesOf(server)).toHaveLength(mode === "atomic" ? 1 : 2);
+          expect(result.lastMutationIds).toEqual({ "client-1": 2 });
+          // The per-resource retry hints only the update: the create's hint went with the failed push.
+          expect(result.hints.map((hint) => hint.ids)).toEqual(
+            mode === "atomic" ? [["2", "1"]] : [["1"]]
+          );
         })
     );
 

@@ -40,9 +40,13 @@
  * cache), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
  * creates has no old value. A read that fails transiently fails the push
- * (BackendError, nothing written, so the retry reads again); a read that finds
- * no row, or is refused with another 4xx, proceeds with no `oldValues` entry
- * for that row. The new value of a create or update is the server's returned
+ * (BackendError). On the atomic path nothing has been written by then, so the
+ * retry reads again. On the per-resource path the writes before the failed read
+ * have already applied and been acknowledged, so the retry does not resend them
+ * and their hints are lost: the at-least-once delivery described below, as for
+ * any transient write failure there. A read that finds no row (404) or is
+ * refused with another 4xx proceeds with no `oldValues` entry for that row, and
+ * logs a warning. The new value of a create or update is the server's returned
  * document when it sends one, else the row read before the push merged with
  * the write (so a partial PATCH hints the full row), else the written value.
  *
@@ -493,6 +497,8 @@ export const make = (
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
     // clientGroupId → clientId → highest applied mutation id (in-session).
     const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
+    // Resources already warned as having no `getOne` route (one warning each).
+    const warnedNoGetOne = yield* Ref.make(new Set<string>());
 
     const getJson = (url: string) =>
       Effect.scoped(
@@ -530,9 +536,17 @@ export const make = (
 
     /**
      * Read a row before the push writes it: the value the server holds now, or
-     * none when the row is absent or the read is refused with a 4xx. A transient
-     * failure fails the push, so nothing is written on a read the push cannot
-     * complete.
+     * none when the row is absent or the read is refused with a 4xx (each logs a
+     * warning). A transient failure fails the push. On the atomic path every
+     * read precedes the one request, so nothing is written on a read the push
+     * cannot complete. On the per-resource path the writes before the failed
+     * read have already applied, and their hints are lost (see the module
+     * header's delivery note).
+     *
+     * A cache-hit path would plug in here, returning the cached row without the
+     * GET, once the cache has a freshness signal (a version token, or
+     * invalidation by this backend's own writes). Until then the cache is never
+     * consulted for an old value; see #395.
      */
     const readBefore = (
       type: string,
@@ -541,16 +555,29 @@ export const make = (
       Effect.gen(function* () {
         const getOne = config.resources.get(type)?.getOne;
         if (getOne === undefined) {
-          yield* Effect.logWarning(
-            `JsonApiBackend: "${type}" has no getOne endpoint; its change hint for ${id} carries no oldValues`
+          const first = yield* Ref.modify(
+            warnedNoGetOne,
+            (seen): readonly [boolean, Set<string>] =>
+              seen.has(type) ? [false, seen] : [true, new Set(seen).add(type)]
           );
+          if (first)
+            yield* Effect.logWarning(
+              `JsonApiBackend: "${type}" has no getOne endpoint; its change hints carry no oldValues`
+            );
           return Option.none<JsonApiRow>();
         }
         const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
           Effect.mapError(backendError(`Failed to read ${type}/${id} before writing it`))
         );
         const status = response.status;
-        if (status === 404) return Option.none<JsonApiRow>();
+        if (status === 404) {
+          // Absent: a row a concurrent writer deleted, or one this batch creates
+          // earlier on the atomic path (which reads before its one request).
+          yield* Effect.logWarning(
+            `JsonApiBackend: ${type}/${id} is absent before the push writes it; its change hint carries no oldValues for it`
+          );
+          return Option.none<JsonApiRow>();
+        }
         if (status >= 500 || transientStatuses.has(status))
           return yield* new BackendError({
             message: `JSON:API read of ${type}/${id} returned HTTP ${status}`,
@@ -570,8 +597,9 @@ export const make = (
 
     /**
      * Enter a row the write touches. An update or delete reads the row on the
-     * push's first write to it, so the pre-push value is kept for the hint; a
-     * create reads nothing, and its row is entered when the create applies.
+     * push's first write to it, so the pre-push value is kept for the hint (the
+     * read is `readBefore`, where a cache hit would replace it, #395); a create
+     * reads nothing, and its row is entered when the create applies.
      */
     const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
       if (write.operation === "create" || entryOf(acc, write.type, write.id) !== undefined)
