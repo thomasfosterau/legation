@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation-effect": minor
 ---
 
 Keep a secondary index in step with the confirmed-row writes that bypass a pull.
