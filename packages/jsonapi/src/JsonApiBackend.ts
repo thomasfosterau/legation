@@ -177,26 +177,29 @@ const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefi
   }
 };
 
-/** Record a PUT's current value under its collection (mutates `puts`). */
-const recordPut = (
+/** What an applied write leaves in its row: the value it wrote, or a delete. */
+type WriteEffect = { readonly _tag: "put"; readonly value: unknown } | { readonly _tag: "delete" };
+
+/**
+ * Fold one applied write's effect into a push's PUT values (mutates `puts`). A
+ * put records the row's value. A delete drops an earlier write's value for the
+ * row, so a later delete in the same push leaves the hint naming it as a
+ * delete (#369).
+ */
+const recordEffect = (
   puts: Map<string, Map<string, unknown>>,
   collection: string,
   id: string,
-  value: unknown
+  effect: WriteEffect
 ): void => {
-  puts.set(collection, (puts.get(collection) ?? new Map<string, unknown>()).set(id, value));
-};
-
-/**
- * Drop an id's PUT value (mutates `puts`): a later delete of the row in the
- * same push leaves it with no value, so the hint names it as a delete (#369).
- */
-const forgetPut = (
-  puts: Map<string, Map<string, unknown>>,
-  collection: string,
-  id: string
-): void => {
-  puts.get(collection)?.delete(id);
+  if (effect._tag === "delete") {
+    puts.get(collection)?.delete(id);
+  } else {
+    puts.set(
+      collection,
+      (puts.get(collection) ?? new Map<string, unknown>()).set(id, effect.value)
+    );
+  }
 };
 
 /** Record a touched id under its collection (mutates `touched`). */
@@ -211,9 +214,9 @@ interface WriteAccumulator {
   readonly rejected: Array<Backend.RejectedMutation>;
 }
 
-/** One mutation's outcome: applied (with its written value) or rejected. */
+/** One mutation's outcome: applied (with its effect on the row) or rejected. */
 type WriteOutcome =
-  | { readonly _tag: "applied"; readonly id: string; readonly value?: unknown }
+  | { readonly _tag: "applied"; readonly id: string; readonly effect: WriteEffect }
   | { readonly _tag: "rejected"; readonly reason: string };
 
 /** Fold one mutation's outcome into the push accumulators (mutates `acc`). */
@@ -225,8 +228,7 @@ const recordOutcome = (
 ): void => {
   if (outcome._tag === "applied") {
     recordTouched(acc.touched, type, outcome.id);
-    if (outcome.value !== undefined) recordPut(acc.puts, type, outcome.id, outcome.value);
-    else forgetPut(acc.puts, type, outcome.id);
+    recordEffect(acc.puts, type, outcome.id, outcome.effect);
   } else {
     acc.rejected.push({
       clientId: mutation.clientId,
@@ -562,14 +564,14 @@ export const make = (
         return custom !== undefined ? custom(args) : yield* writeOf(operation!, args);
       });
 
-    // Apply one write as its own request and report the affected id plus, for
-    // create/update, the row value (`{ id, ...attributes }`) so the hint can
-    // carry it for predicate matching. A delete reports no value → absent from
-    // the hint's values, marking it a delete.
+    // Apply one write as its own request and report the affected id plus its
+    // effect on the row: for create/update, a put of the written row
+    // (`{ id, ...attributes }`) so the hint can carry it for predicate matching;
+    // for a delete, a delete, which leaves the row out of the hint's values.
     const applyOne = (
       write: Write
     ): Effect.Effect<
-      { readonly id: string; readonly value?: unknown },
+      { readonly id: string; readonly effect: WriteEffect },
       BackendError | MutationRejected
     > =>
       Effect.gen(function* () {
@@ -587,7 +589,7 @@ export const make = (
                 )
               )
             );
-            return { id: write.id, value: writtenValue(write) };
+            return { id: write.id, effect: { _tag: "put", value: writtenValue(write) } };
           }
           case "update": {
             const ref = resource?.update;
@@ -601,7 +603,7 @@ export const make = (
                 )
               )
             );
-            return { id: write.id, value: writtenValue(write) };
+            return { id: write.id, effect: { _tag: "put", value: writtenValue(write) } };
           }
           case "delete": {
             const ref = resource?.delete;
@@ -612,7 +614,7 @@ export const make = (
                 HttpClientRequest.setHeaders(jsonApiHeaders)
               )
             );
-            return { id: write.id };
+            return { id: write.id, effect: { _tag: "delete" } };
           }
         }
       });
@@ -757,15 +759,13 @@ export const make = (
         const puts = new Map<string, Map<string, unknown>>();
         pending.forEach(({ write }, position) => {
           recordTouched(touched, write.type, write.id);
-          if (write.operation === "delete") {
-            forgetPut(puts, write.type, write.id);
-            return;
-          }
-          recordPut(
+          recordEffect(
             puts,
             write.type,
             write.id,
-            resultRow(results[position]) ?? writtenValue(write)
+            write.operation === "delete"
+              ? { _tag: "delete" }
+              : { _tag: "put", value: resultRow(results[position]) ?? writtenValue(write) }
           );
         });
 

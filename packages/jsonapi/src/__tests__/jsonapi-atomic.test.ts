@@ -470,6 +470,84 @@ for (const mode of ["atomic", "per-resource"] as const) {
           ]);
         })
     );
+
+    it.effect("create, delete, then create of the same row carries the final value", () =>
+      Effect.gen(function* () {
+        const server = modeServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+
+        const result = yield* backend.applyMutations(context, [
+          mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "first" } }),
+          mutation(2, "todos/delete", { type: "todos", id: "1" }),
+          mutation(3, "todos/create", { type: "todos", id: "1", attributes: { title: "again" } }),
+        ]);
+
+        expect(result.hints).toEqual([
+          {
+            collection: "todos",
+            ids: ["1"],
+            values: [{ id: "1", value: { title: "again", id: "1", relationships: {} } }],
+          },
+        ]);
+      })
+    );
+
+    it.effect("a single update with a 204 (no-body) response carries its written value", () =>
+      Effect.gen(function* () {
+        // No response document: the hint falls back to the value the request wrote.
+        const server = makeServer(() => empty(204));
+        const backend = yield* makeModeBackend(mode, server);
+
+        const result = yield* backend.applyMutations(context, [
+          mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "second" } }),
+        ]);
+
+        expect(result.hints).toEqual([
+          {
+            collection: "todos",
+            ids: ["1"],
+            values: [{ id: "1", value: { title: "second", id: "1", relationships: {} } }],
+          },
+        ]);
+      })
+    );
+
+    it.effect("[create 1, delete 1 rejected] keeps the create's value", () =>
+      Effect.gen(function* () {
+        // The delete is rejected, so the row still exists and its create's value is hinted.
+        const server =
+          mode === "atomic"
+            ? makeServer((request, index) =>
+                index === 0
+                  ? rejectionAt(1, "gone")
+                  : respond(200, resultsFor(request.body["atomic:operations"]))
+              )
+            : makeServer((request) =>
+                request.method === "DELETE"
+                  ? respond(422, {
+                      errors: [{ status: "422", title: "Unprocessable", detail: "gone" }],
+                    })
+                  : empty(204)
+              );
+        const backend = yield* makeModeBackend(mode, server);
+
+        const result = yield* backend.applyMutations(context, [
+          mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "x" } }),
+          mutation(2, "todos/delete", { type: "todos", id: "1" }),
+        ]);
+
+        expect(result.rejected).toEqual([
+          { clientId: "client-1", mutationId: 2, reason: expect.any(String) },
+        ]);
+        expect(result.hints).toEqual([
+          {
+            collection: "todos",
+            ids: ["1"],
+            values: [{ id: "1", value: { title: "x", id: "1", relationships: {} } }],
+          },
+        ]);
+      })
+    );
   });
 }
 
