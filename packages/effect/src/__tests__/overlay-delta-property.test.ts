@@ -25,9 +25,9 @@ import { MutationRejected } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
+import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
-import type { Mutation } from "../Protocol.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 
 interface PutArgs {

@@ -3,7 +3,7 @@
  * memory backend applies authoritatively → CVR diff → pull patch → rebase.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Ref, Schema, Scope, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -47,7 +47,34 @@ const setTodo = Mutator.registry([
   },
 ]);
 
+// A non-idempotent counter: every application adds one, so a double application
+// shows as an extra count. The put-by-id mutators above cannot show it (#286).
+interface Counter {
+  readonly id: string;
+  readonly n: number;
+}
+
+const incrementCounter = <E>(
+  writer: {
+    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+  },
+  id: string
+): Effect.Effect<void, E> =>
+  Effect.gen(function* () {
+    const current = (yield* writer.get("counters", id)) as Counter | undefined;
+    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+  });
+
+const counterMutators = Mutator.registry([
+  {
+    mutator: Mutator.make("counter/inc", Schema.Unknown),
+    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  },
+]);
+
 const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
@@ -56,7 +83,10 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "refused by the backend" })),
 };
 
-const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
+const authPolicy = Authorization.policy({
+  todos: Authorization.allowAll,
+  counters: Authorization.allowAll,
+});
 
 const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
@@ -386,55 +416,345 @@ describe("a push acknowledgement keeps the overlay until a pull reports it (#286
   );
 });
 
-describe("a pull's lastMutationIds never runs ahead of its patch (#286)", () => {
-  it.effect("a push that lands while the pull reads its view is not reported by that pull", () =>
+// The counter, as the engine's view shows it: confirmed row plus overlay (#286).
+const countersSubset = Subset.make({ collection: "counters" });
+const counterValue = (engine: ClientEngineModule.ClientEngine) =>
+  engine
+    .query(countersSubset)
+    .pipe(
+      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
+    );
+
+// A server over `backend`, wired like `makeServer`.
+const serverOver = (backend: Backend) =>
+  Effect.gen(function* () {
+    return yield* SyncServer.make.pipe(
+      Effect.provideService(Backend, backend),
+      Effect.provideService(Authorization.AuthPolicy, authPolicy),
+      Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+      Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
+    );
+  });
+
+// The counter client "client-a" in group "group-a", over `handler` and `store`.
+const makeCounterEngine = (handler: ServerHandler, store: ClientStore) =>
+  Effect.gen(function* () {
+    const transport = yield* makeInMemory(handler, "group-a");
+    return yield* ClientEngineModule.make({
+      clientId: "client-a",
+      clientGroupId: "group-a",
+      mutators: counterMutators,
+    }).pipe(
+      Effect.provideService(ClientStore, store),
+      Effect.provideService(ClientTransport, transport)
+    );
+  });
+
+// Commit one increment by another client in the same group. Its watermark entry
+// moves and its effect lands on the counter, unseen by the engine under test
+// until that engine pulls.
+const otherCommit = (handler: ServerHandler, mutationId: number) =>
+  handler.handlePush({
+    clientGroupId: "group-a",
+    mutations: [
+      { clientId: "other", mutationId, mutator: "counter/inc", args: { id: "c" }, createdAt: 0 },
+    ],
+  });
+
+// Parks the first call to one step until the test releases it. `reached` fires
+// once the step is parked, so the test can commit or read while it waits.
+interface Parking {
+  readonly armed: Ref.Ref<boolean>;
+  readonly reached: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
+const makeParking = Effect.gen(function* () {
+  const parking: Parking = {
+    armed: yield* Ref.make(false),
+    reached: yield* Deferred.make<void>(),
+    release: yield* Deferred.make<void>(),
+  };
+  return parking;
+});
+
+const parkIfArmed = (parking: Parking) =>
+  Effect.gen(function* () {
+    if (yield* Ref.getAndSet(parking.armed, false)) {
+      yield* Deferred.succeed(parking.reached, undefined);
+      yield* Deferred.await(parking.release);
+    }
+  });
+
+// The pull's backend reads, in order: the watermark, the evaluated view, then
+// the rows of the patch. A pull reads the watermark twice, so each parking
+// applies to the first call only.
+type ReadPoint = "watermark" | "evaluate" | "rows";
+
+// A backend that parks the pull at `at`. For the watermark and evaluate reads it
+// parks after the read has returned, so the value it returned is already fixed.
+// For the rows read it parks before the rows are fetched.
+const parkedBackend = (inner: Backend, at: ReadPoint, parking: Parking): Backend => ({
+  ...inner,
+  lastMutationIds: (context) =>
+    inner
+      .lastMutationIds(context)
+      .pipe(Effect.tap(() => (at === "watermark" ? parkIfArmed(parking) : Effect.void))),
+  evaluate: (context, subset) =>
+    inner
+      .evaluate(context, subset)
+      .pipe(Effect.tap(() => (at === "evaluate" ? parkIfArmed(parking) : Effect.void))),
+  getRows: (context, collection, ids) =>
+    (at === "rows" ? parkIfArmed(parking) : Effect.void).pipe(
+      Effect.andThen(inner.getRows(context, collection, ids))
+    ),
+});
+
+// Lets a fiber run until it finishes, or the scheduler has run the test 1000
+// turns. No wall-clock time: a parked fiber stays unfinished however long it waits.
+const runUntilFinishedOrStalled = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 1000 && fiber.pollUnsafe() === undefined; turn++) {
+      yield* Effect.yieldNow;
+    }
+    return fiber.pollUnsafe();
+  });
+
+describe("a push that commits during a pull never double-counts (#286)", () => {
+  // The pull's watermark and rows must be one snapshot. A push that commits
+  // between them would be in the rows but not the watermark, so the client would
+  // keep its entry in the tail and replay it over rows that already hold it.
+  for (const at of ["watermark", "evaluate", "rows"] as const) {
+    it.effect(`a push committed during the pull's ${at} read is counted once`, () =>
+      Effect.gen(function* () {
+        const parking = yield* makeParking;
+        const inner = yield* MemoryBackend.make(backendHandlers);
+        const server = yield* serverOver(parkedBackend(inner, at, parking));
+        const store = yield* ClientStoreModule.makeMemory;
+        const engine = yield* makeCounterEngine(server, store);
+        yield* engine.subscribe(countersSubset);
+
+        yield* otherCommit(server, 1);
+        yield* engine.pull; // confirmed n = 1
+        yield* otherCommit(server, 2); // server n = 2, not yet seen by the engine
+        yield* engine.mutate("counter/inc", { id: "c" }); // E, pending: view n = 2
+        expect(yield* counterValue(engine)).toBe(2);
+
+        // The pull parks at `at`; E's push commits while it waits. The engine
+        // keeps E in its unpulled tail, so its view is still 2.
+        yield* Ref.set(parking.armed, true);
+        const pulling = yield* Effect.forkChild(engine.pull);
+        yield* Deferred.await(parking.reached);
+        yield* engine.push; // server n = 3
+        expect(yield* counterValue(engine)).toBe(2);
+
+        // The pull reveals the other client's second commit and E: 3, once.
+        yield* Deferred.succeed(parking.release, undefined);
+        yield* Fiber.join(pulling);
+        expect(yield* counterValue(engine)).toBe(3);
+        yield* engine.pull;
+        expect(yield* counterValue(engine)).toBe(3);
+        expect(yield* store.pendingMutations).toEqual([]);
+      })
+    );
+  }
+});
+
+describe("a pull's reveal is atomic with its tail release (#286)", () => {
+  it.effect("a read between the pull's row write and its tail release sees the true count", () =>
+    Effect.gen(function* () {
+      const parking = yield* makeParking;
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const inner = yield* ClientStoreModule.makeMemory;
+      // The pull parks after its confirmed rows are written, before the
+      // acknowledged tail is released.
+      const store: ClientStore = {
+        ...inner,
+        applyRowOps: (ops) => inner.applyRowOps(ops).pipe(Effect.andThen(parkIfArmed(parking))),
+      };
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+
+      yield* engine.mutate("counter/inc", { id: "c" });
+      yield* engine.push;
+      yield* engine.pull; // confirmed n = 1
+      yield* engine.mutate("counter/inc", { id: "c" }); // E pending
+      // server n = 2; E is acknowledged into the tail. No read here: the overlay
+      // cache stays cold until the parked read below.
+      yield* engine.push;
+
+      yield* Ref.set(parking.armed, true);
+      const pulling = yield* Effect.forkChild(engine.pull);
+      yield* Deferred.await(parking.reached);
+      // A read now must not see the new confirmed row with E still replayed over it.
+      const reading = yield* Effect.forkChild(counterValue(engine));
+      // The read waits on the pull's critical section rather than completing early.
+      const early = yield* runUntilFinishedOrStalled(reading);
+      expect(early).toBeUndefined();
+
+      yield* Deferred.succeed(parking.release, undefined);
+      yield* Fiber.join(pulling);
+      expect(yield* Fiber.join(reading)).toBe(2);
+      expect(yield* counterValue(engine)).toBe(2);
+    })
+  );
+
+  it.effect(
+    "a pull computed before a push is delivered after its ack keeps that push's overlay",
+    () =>
+      Effect.gen(function* () {
+        const parking = yield* makeParking;
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        // The pull's response is computed, then parked before it reaches the client.
+        const delayed: ServerHandler = {
+          ...server,
+          handlePull: (request) =>
+            server.handlePull(request).pipe(Effect.tap(() => parkIfArmed(parking))),
+        };
+        const store = yield* ClientStoreModule.makeMemory;
+        const engine = yield* makeCounterEngine(delayed, store);
+        yield* engine.subscribe(countersSubset);
+
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        yield* engine.pull; // confirmed n = 1; watermark client-a: 1
+        yield* engine.mutate("counter/inc", { id: "c" }); // E2 pending
+
+        yield* Ref.set(parking.armed, true);
+        const pulling = yield* Effect.forkChild(engine.pull);
+        yield* Deferred.await(parking.reached); // this response reports client-a: 1
+        yield* engine.push; // E2 applied on the server and parked in the tail
+        expect(yield* counterValue(engine)).toBe(2);
+
+        yield* Deferred.succeed(parking.release, undefined);
+        yield* Fiber.join(pulling);
+        // E2 is past the response's watermark, so it stays overlaid.
+        expect(yield* counterValue(engine)).toBe(2);
+
+        yield* engine.pull;
+        expect(yield* counterValue(engine)).toBe(2);
+      })
+  );
+});
+
+describe("a pull's watermark and rows are one snapshot (#286)", () => {
+  it.effect("under writes on every pass, the pull never reports less than its rows carry", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(backendHandlers);
-      const landed = yield* Ref.make(false);
-      // Lands one push after the first subset read, before the pull returns.
+      const landings = yield* Ref.make(0);
+      // client-a's push lands just after every watermark read, so each pass is
+      // disturbed and the pull stops retrying at its bound.
+      const landAfterRead = Ref.updateAndGet(landings, (n) => n + 1).pipe(
+        Effect.flatMap((mutationId) =>
+          inner.applyMutations({ clientGroupId: "group-a" }, [
+            {
+              clientId: "client-a",
+              mutationId,
+              mutator: "counter/inc",
+              args: { id: "c" },
+              createdAt: 0,
+            },
+          ])
+        ),
+        Effect.asVoid
+      );
+      const watermarkReads = yield* Ref.make(0);
       const racing: Backend = {
         ...inner,
-        evaluate: (context, subset) =>
-          inner.evaluate(context, subset).pipe(
-            Effect.tap(() =>
-              Ref.getAndSet(landed, true).pipe(
-                Effect.flatMap((already) =>
-                  already
-                    ? Effect.void
-                    : inner
-                        .applyMutations(context, [
-                          {
-                            clientId: "client-a",
-                            mutationId: 1,
-                            mutator: "todo/set",
-                            args: { id: "1", title: "raced", done: false },
-                            createdAt: 0,
-                          },
-                        ])
-                        .pipe(Effect.asVoid)
-                )
+        lastMutationIds: (context) =>
+          inner
+            .lastMutationIds(context)
+            .pipe(
+              Effect.tap(() =>
+                Ref.update(watermarkReads, (n) => n + 1).pipe(Effect.andThen(landAfterRead))
               )
-            )
-          ),
+            ),
       };
-      const server = yield* SyncServer.make.pipe(
-        Effect.provideService(Backend, racing),
-        Effect.provideService(Authorization.AuthPolicy, authPolicy),
-        Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
-        Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
-      );
+      const server = yield* serverOver(racing);
+      yield* otherCommit(server, 1);
 
       const response = yield* server.handlePull({
         clientGroupId: "group-a",
-        subscriptions: [allTodos],
+        subscriptions: [countersSubset],
       });
-      expect(yield* Ref.get(landed)).toBe(true);
-      // The push landed after the view was read, so the response must not
-      // report it: a reported id whose effects the patch lacks would be revealed
-      // without them.
-      const reported = response.lastMutationIds["client-a"] ?? 0;
-      expect(reported).toBe(0);
-      expect(response.patch.some((op) => op._tag === "Put" && op.id === "1")).toBe(false);
+      const reported = Object.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
+      const counted = response.patch.flatMap((op) =>
+        op._tag === "Put" && op.collection === "counters" ? [(op.value as Counter).n] : []
+      );
+      // The rows may trail the watermark (a transient revert until the next pull),
+      // but never carry a push it does not report: that would double-apply.
+      expect(counted).toHaveLength(1);
+      expect(counted.every((n) => n <= reported)).toBe(true);
+      // Three passes, two watermark reads each: the retry bound holds.
+      expect(yield* Ref.get(watermarkReads)).toBe(6);
     })
   );
+
+  // The server-side invariant the client relies on: the rows a pull carries hold
+  // exactly the pushes its watermark reports. Each push adds one, so the counter
+  // in the patch equals the sum of the watermark.
+  // `rows` lands just before the patch's rows are fetched; `rows-returned` lands
+  // just after, before the closing watermark read (the revert direction: a
+  // watermark read only after the rows would report a push they lack).
+  for (const at of ["watermark", "evaluate", "rows", "rows-returned"] as const) {
+    it.effect(
+      `a push landing during the pull's ${at} read is in the patch iff the watermark reports it`,
+      () =>
+        Effect.gen(function* () {
+          const inner = yield* MemoryBackend.make(backendHandlers);
+          const landed = yield* Ref.make(false);
+          // client-a's push lands once, just after the first call to `at` returns.
+          const landOnce = Ref.getAndSet(landed, true).pipe(
+            Effect.flatMap((already) =>
+              already
+                ? Effect.void
+                : inner
+                    .applyMutations({ clientGroupId: "group-a" }, [
+                      {
+                        clientId: "client-a",
+                        mutationId: 1,
+                        mutator: "counter/inc",
+                        args: { id: "c" },
+                        createdAt: 0,
+                      },
+                    ])
+                    .pipe(Effect.asVoid)
+            )
+          );
+          const racing: Backend = {
+            ...inner,
+            lastMutationIds: (context) =>
+              inner
+                .lastMutationIds(context)
+                .pipe(Effect.tap(() => (at === "watermark" ? landOnce : Effect.void))),
+            evaluate: (context, subset) =>
+              inner
+                .evaluate(context, subset)
+                .pipe(Effect.tap(() => (at === "evaluate" ? landOnce : Effect.void))),
+            getRows: (context, collection, ids) =>
+              (at === "rows" ? landOnce : Effect.void).pipe(
+                Effect.andThen(inner.getRows(context, collection, ids)),
+                Effect.tap(() => (at === "rows-returned" ? landOnce : Effect.void))
+              ),
+          };
+          const server = yield* serverOver(racing);
+          // Another client commits first, so the racing pull's view holds the counter.
+          yield* otherCommit(server, 1);
+
+          const response = yield* server.handlePull({
+            clientGroupId: "group-a",
+            subscriptions: [countersSubset],
+          });
+          expect(yield* Ref.get(landed)).toBe(true);
+          const reported = Object.values(response.lastMutationIds).reduce(
+            (sum, upTo) => sum + upTo,
+            0
+          );
+          const counted = response.patch.flatMap((op) =>
+            op._tag === "Put" && op.collection === "counters" ? [(op.value as Counter).n] : []
+          );
+          expect(counted).toEqual([reported]);
+        })
+    );
+  }
 });
