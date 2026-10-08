@@ -124,7 +124,8 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * runs when a write fails too, since the rows written before the failure are in the
  * store. It reaches only the engines built over this exact store object: a store
  * wrapped in a new object (`ClientStore.of({ ...store })`) is not seen, so its engine
- * can stay stale.
+ * can stay stale. The same re-read tracks the appended journal entries in its
+ * `mutationStates` as `"pending"` (#358), so they settle like a local mutation.
  *
  * The writes are not atomic. Between the first `putRow` and the re-read, an indexed
  * read on an async store can see the old index against the new rows. Once `hydrate`

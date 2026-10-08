@@ -919,6 +919,17 @@ export const make = (
       )
     );
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
+    // Track journal entries the map does not know yet as pending (#358): entries a direct store
+    // write appended under this engine, or entries whose boot-time read failed (`initialPending`
+    // falls back to none). An entry already tracked keeps its phase. Runs on every reload and on
+    // every push claim, so an untracked entry is tracked before the push that sends it can settle it.
+    // Only a real change publishes: `SubscriptionRef.update` notifies even when nothing moved.
+    const adoptPending = (pending: ReadonlyArray<Mutation>): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (!MutationState.hasUntracked(yield* SubscriptionRef.get(mutationStates), pending))
+          return;
+        yield* SubscriptionRef.update(mutationStates, (map) => MutationState.adopt(map, pending));
+      });
     // #212: with the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
     // sequence the backend requires to be contiguous (ADR-0008's exactly-once
@@ -1706,16 +1717,26 @@ export const make = (
             return [prior, next] as const;
           })
         ),
-        Effect.flatMap((prior) =>
-          prior === "pending"
-            ? resolveAck(id, { _tag: "rejected", reason }).pipe(
-                Effect.andThen(emitEvent(id, "rejected", reason))
-              )
-            : Effect.logDebug("ClientEngine: ignoring a rejection for a settled mutation", {
-                mutationId: id,
-                phase: prior ?? "untracked",
-              })
-        )
+        Effect.flatMap((prior) => {
+          if (prior === "pending") {
+            return resolveAck(id, { _tag: "rejected", reason }).pipe(
+              Effect.andThen(emitEvent(id, "rejected", reason))
+            );
+          }
+          // A repeat of this rejection, or an id already evicted, is harmless. Any other settled
+          // phase contradicts the outcome the client already observed: the server commits one
+          // outcome per id (#355), so that means an invariant broke.
+          if (prior === undefined || prior === "rejected") {
+            return Effect.logDebug("ClientEngine: ignoring a repeated or evicted rejection", {
+              mutationId: id,
+              phase: prior ?? "untracked",
+            });
+          }
+          return Effect.logWarning(
+            "ClientEngine: ignoring a rejection that contradicts the outcome already observed",
+            { mutationId: id, phase: prior }
+          );
+        })
       );
 
     // Resolve deferreds for the mutations this client had permanently rejected.
@@ -2003,6 +2024,7 @@ export const make = (
       overlayLock,
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
+        yield* adoptPending(pending);
         if (pending.length === 0) return pending;
         const highest = new Map<string, number>();
         for (const m of pending) {
@@ -2198,10 +2220,24 @@ export const make = (
         yield* publishChange(rebuildFor(touched));
       });
 
+    // A direct store write (`Hydration.hydrate`) appends journal entries the map does not track;
+    // adopt them so they settle like a locally journaled mutation (#358). A failed read keeps the
+    // map as it was (logged); the push claim adopts the journal again before it sends anything.
+    const adoptJournal: Effect.Effect<void> = store.pendingMutations.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "ClientEngine: could not read the journal to track entries written directly to the store",
+          { error }
+        ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
+      ),
+      Effect.flatMap(adoptPending)
+    );
+
     // Re-read everything derived from the store and reveal it: the built indexes, the overlay
     // (confirmed rows plus the journal) and every observer. Shared by `clearRows` and by a direct
     // store write (`resyncAttachedEngines`).
     const reloadFromStore: Effect.Effect<void> = invalidateAllIndexes.pipe(
+      Effect.andThen(adoptJournal),
       Effect.andThen(invalidateOverlay),
       Effect.andThen(sampleJournalDepth),
       Effect.andThen(publishChange(REBUILD))
