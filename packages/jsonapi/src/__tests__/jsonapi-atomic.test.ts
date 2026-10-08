@@ -1277,6 +1277,48 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
   );
 });
 
+/**
+ * A mutation whose args do not decode fails the push where its turn comes, as
+ * it did before the getOne check: on the per-resource path the writes before it
+ * are delivered, and on the atomic path nothing is sent, since the batch decodes
+ * before its one request.
+ */
+describe("JsonApiBackend and a mutation whose args do not decode", () => {
+  const push = [
+    mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "x" } }),
+    mutation(2, "todos/update", { type: "todos", id: "1", attributes: 5 }),
+  ];
+
+  it.effect(
+    "an undecodable later mutation does not block the earlier writes, per-resource path",
+    () =>
+      Effect.gen(function* () {
+        const server = makeServer(bareWrites("per-resource"));
+        const backend = yield* makeModeBackend("per-resource", server);
+
+        const failure = yield* Effect.flip(backend.applyMutations(context, push));
+        expect(failure._tag).toBe("BackendError");
+        expect(failure.message).toContain('Invalid args for mutator "todos/update"');
+        // The create reached the server; the undecodable update is refused before any read.
+        expect(sequenceOf(server)).toEqual(["POST /todos"]);
+        expect(yield* backend.lastMutationIds(context)).toEqual({ "client-1": 1 });
+      })
+  );
+
+  it.effect("an undecodable mutation sends nothing on the atomic path", () =>
+    Effect.gen(function* () {
+      const server = makeServer(bareWrites("atomic"));
+      const backend = yield* makeModeBackend("atomic", server);
+
+      const failure = yield* Effect.flip(backend.applyMutations(context, push));
+      expect(failure._tag).toBe("BackendError");
+      expect(failure.message).toContain('Invalid args for mutator "todos/update"');
+      expect(server.requests).toHaveLength(0);
+      expect(yield* backend.lastMutationIds(context)).toEqual({});
+    })
+  );
+});
+
 describe("JsonApiSync.layer atomic detection", () => {
   /** A stateful server answering both the per-resource and the atomic routes. */
   const makeStatefulServer = () => {

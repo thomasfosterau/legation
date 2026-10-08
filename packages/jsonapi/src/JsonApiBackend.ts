@@ -918,9 +918,35 @@ export const make = (
       });
 
     /**
-     * Replay each write as its own request (at-least-once, in order). The push's
-     * writes are decoded and checked for a `getOne` route before the first one
-     * is sent, so a write that cannot be read sends nothing.
+     * The mutations a per-resource push still has to send, in order. A mutation
+     * at or below its client's acknowledged id was already applied, so it is
+     * skipped (idempotent, in-session). Unlike `unacknowledged`, nothing is
+     * decoded and no gap is refused here: the send loop does both, in order.
+     */
+    const pendingEach = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>
+    ): Effect.Effect<ReadonlyArray<PushedMutation>> =>
+      Effect.gen(function* () {
+        const expected = new Map<string, number>(
+          (yield* Ref.get(ledger)).get(context.clientGroupId) ?? []
+        );
+        const pending: Array<PushedMutation> = [];
+        for (const mutation of mutations) {
+          const last = expected.get(mutation.clientId) ?? 0;
+          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          expected.set(mutation.clientId, mutation.mutationId);
+          pending.push(mutation);
+        }
+        return pending;
+      });
+
+    /**
+     * Replay each write as its own request (at-least-once, in order). Before the
+     * first request, each pending mutation that decodes is checked for a `getOne`
+     * route, so a write that cannot be read sends nothing. A mutation whose args
+     * do not decode is not checked: the loop fails the push at it, after the
+     * writes before it, as it always has.
      */
     const applyEach = (
       context: Backend.SyncContext,
@@ -933,10 +959,21 @@ export const make = (
           rejected: [],
           rows: new Map(),
         };
-        const batch = yield* unacknowledged(context, mutations, false);
-        yield* Effect.forEach(batch, ({ write }) => checkReadable(write), { discard: true });
+        const pending = yield* pendingEach(context, mutations);
+        const decoded = yield* Effect.forEach(pending, (mutation) =>
+          Effect.gen(function* () {
+            const write = yield* writeFor(mutation).pipe(Effect.option);
+            if (Option.isSome(write)) yield* checkReadable(write.value);
+            return { mutation, write };
+          })
+        );
 
-        for (const { mutation, write } of batch) {
+        for (const { mutation, write: decodedWrite } of decoded) {
+          // An undecodable mutation decodes again here and fails the push with the
+          // same BackendError it always raised, leaving its ledger entry unmoved.
+          const write = Option.isSome(decodedWrite)
+            ? decodedWrite.value
+            : yield* writeFor(mutation);
           yield* enterRow(acc, write);
           // A permanent HTTP rejection (4xx) skips this mutation but still bumps
           // its id, so it is acknowledged and never poisons the queue. A

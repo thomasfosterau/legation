@@ -175,21 +175,25 @@ client is reset. Two consequences follow:
 
 - Deleting a row that is already gone fails with a 404 on the read, so every
   retry fails the same way. The delete used to be acknowledged as a no-op.
+- A create the server refuses for a reason other than a conflict (a 422, say)
+  stalls the queue in the same way when a later update or delete in the same
+  push touches that row. The row is absent, so its read finds a 404.
 - The stall reaches the application through the sync loop. The `BackendError`
   arrives at the client as a `TransportError`, the client's retry policy retries
   it (by default, exponential backoff from 1 second, capped at 30 seconds, for
   five retries), and the push then surfaces as a `SyncFailure` with
   `operation: "push"` on `syncFailures`. The loop does not retry in a tight
-  loop: the next push comes with the next local mutation or a reconnect, or an
-  explicit `push`.
+  loop. With `syncLoop.pushDebounce` set, the next push comes with the next
+  local mutation; otherwise it waits for a reconnect or an explicit `push`.
 - The in-session ledger belongs to one backend instance. After a restart, a
   delete that had already applied is sent again, its read finds nothing, and the
   queue stalls in the same way.
 
 A resource that receives updates or deletes must have a `getOne` route, since
 that is how its rows are read. A push that contains one of its updates or
-deletes fails with a `BackendError` before any write in that push is sent, on
-both paths, which stalls that client's queue until the route exists. A resource
+deletes (one whose args decode) fails with a `BackendError` before any write in
+that push is sent, on both paths, which stalls that client's queue until the
+route exists. A resource
 that only receives creates needs no `getOne` route.
 
 ## Standalone collection loading

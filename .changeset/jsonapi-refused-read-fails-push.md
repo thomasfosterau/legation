@@ -18,6 +18,9 @@ acknowledged as a no-op. The failure reaches the client as a `TransportError`,
 is retried by the client's retry policy, then surfaces as a `SyncFailure` with
 `operation: "push"`. The in-session ledger belongs to one backend instance, so
 after a restart an already-applied delete is sent again and stalls the same way.
+A create the server refuses for a reason other than a conflict (a 422, say)
+stalls the queue the same way when a later update or delete in the same push
+touches that row, since the row is absent and its read finds a 404.
 
 On the atomic path, a create the server refuses, followed by an update or delete
 of the same row in the same batch, now reads that row once the refusal arrives,
@@ -26,5 +29,7 @@ The read follows the same rule as any other: a failed read fails the push with
 nothing written.
 
 A resource that receives updates or deletes but has no `getOne` route now fails
-any push containing one of those writes before any write in that push is sent,
-instead of logging a warning and proceeding without `oldValues`.
+any push containing one of those writes (one whose args decode) before any write
+in that push is sent, instead of logging a warning and proceeding without
+`oldValues`. A mutation whose args do not decode is still refused at its turn, as
+before: on the per-resource path the writes before it are delivered.
