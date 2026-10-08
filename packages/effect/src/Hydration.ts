@@ -120,24 +120,37 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  *
  * A running {@link ClientEngine} built over the store re-reads its view and built
  * indexes afterwards: a direct write does not go through the engine, so without this
- * an indexed query could return a row whose indexed field changed (#350).
+ * an indexed query could return a row whose indexed field changed (#350). The re-read
+ * runs when a write fails too, since the rows written before the failure are in the
+ * store. It reaches only the engines built over this exact store object: a store
+ * wrapped in a new object (`ClientStore.of({ ...store })`) is not seen, so its engine
+ * can stay stale.
+ *
+ * The writes are not atomic. Between the first `putRow` and the re-read, an indexed
+ * read on an async store can see the old index against the new rows. Once `hydrate`
+ * returns or fails, the engine's view and indexes match the store again.
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
     const decoded = yield* Schema.decodeUnknownEffect(SnapshotSchema)(snapshot).pipe(
       Effect.mapError(storeError("Invalid snapshot"))
     );
-    for (const { collection, ...row } of decoded.rows) {
-      yield* store.putRow(collection, row);
-    }
-    if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
-    for (const mutation of decoded.journal) {
-      yield* store.appendMutation(mutation);
-    }
-    // These entries came from another context: whether they were pushed there
-    // is unknowable here, so paced compaction must not renumber them (#249).
-    yield* freezePending(store);
-    yield* ClientEngineModule.resyncAttachedEngines(store);
+    yield* Effect.gen(function* () {
+      for (const { collection, ...row } of decoded.rows) {
+        yield* store.putRow(collection, row);
+      }
+      if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
+      for (const mutation of decoded.journal) {
+        yield* store.appendMutation(mutation);
+      }
+      // These entries came from another context: whether they were pushed there
+      // is unknowable here, so paced compaction must not renumber them (#249).
+      yield* freezePending(store);
+    }).pipe(
+      // A refused write leaves the rows before it in the store, so the re-read
+      // runs on failure too (#350).
+      Effect.ensuring(ClientEngineModule.resyncAttachedEngines(store))
+    );
   });
 
 /**

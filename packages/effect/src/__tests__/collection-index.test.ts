@@ -12,6 +12,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as CollectionIndex from "../CollectionIndex.js";
+import { StoreError } from "../Errors.js";
 import type * as Identity from "../Identity.js";
 import * as Hydration from "../Hydration.js";
 import * as Mutator from "../Mutator.js";
@@ -641,6 +642,7 @@ describe("ClientEngine + CollectionIndex", () => {
       // Whatever index the next query consults must not name the dropped row.
       const consulted = vi.spyOn(CollectionIndex, "evaluate");
       expect(yield* engine.query(Subset.make({ collection: "items", where }))).toEqual([]);
+      expect(consulted).toHaveBeenCalled();
       const candidates = consulted.mock.calls.flatMap(([index]) => [
         ...(CollectionIndex.plan(index, where)?.candidateIds ?? []),
       ]);
@@ -662,7 +664,15 @@ describe("ClientEngine + CollectionIndex", () => {
       yield* engine.clearRows;
       expect(yield* store.listRows("items")).toEqual([]);
       expect(yield* engine.query(Subset.make({ collection: "items" }))).toEqual([]);
+      // The next indexed query must consult an index with no entry for a cleared row.
+      const consulted = vi.spyOn(CollectionIndex, "evaluate");
       expect(yield* engine.query(Subset.make({ collection: "items", where }))).toEqual([]);
+      expect(consulted).toHaveBeenCalled();
+      const candidates = consulted.mock.calls.flatMap(([index]) => [
+        ...(CollectionIndex.plan(index, where)?.candidateIds ?? []),
+      ]);
+      consulted.mockRestore();
+      expect(candidates).toEqual([]);
     })
   );
 
@@ -715,5 +725,172 @@ describe("ClientEngine + CollectionIndex", () => {
           (yield* engine.query(Subset.make({ collection: "items" }))).map((r) => r.id)
         ).toEqual(["i1"]);
       })
+  );
+
+  it.effect("#350: a hydrate that fails partway still re-reads a running engine's index", () =>
+    Effect.gen(function* () {
+      const memory = yield* ClientStoreModule.makeMemory;
+      // Refuses the write of i2 once armed, after i1 has been written.
+      const armed = yield* Ref.make(false);
+      const store = ClientStore.of({
+        ...memory,
+        putRow: (collection, stored) =>
+          Effect.gen(function* () {
+            if (stored.id === "i2" && (yield* Ref.get(armed))) {
+              return yield* Effect.fail(new StoreError({ message: "write refused" }));
+            }
+            yield* memory.putRow(collection, stored);
+          }),
+      });
+      const engine = yield* priorityEngine(store);
+      yield* seedEngine(engine, [
+        { id: "i1", priority: 1, done: false },
+        { id: "i2", priority: 2, done: false },
+      ]);
+      const at = (priority: number) =>
+        engine.query(
+          Subset.make({ collection: "items", where: Predicate.eq("priority", priority) })
+        );
+      // Build the index on `priority` while the rows are still the seeded ones.
+      expect((yield* at(1)).map((r) => r.id)).toEqual(["i1"]);
+
+      yield* Ref.set(armed, true);
+      const failure = yield* Hydration.hydrate(store, {
+        rows: [
+          {
+            collection: "items",
+            id: "i1",
+            version: 2,
+            value: { id: "i1", priority: 3, done: false },
+          },
+          {
+            collection: "items",
+            id: "i2",
+            version: 2,
+            value: { id: "i2", priority: 4, done: false },
+          },
+        ],
+        journal: [],
+      }).pipe(Effect.flip);
+      expect(failure._tag).toBe("StoreError");
+      // i1 was written before the refused write: the store holds it at priority 3.
+      expect((yield* memory.listRows("items")).find((r) => r.id === "i1")?.value).toMatchObject({
+        priority: 3,
+      });
+
+      // An unrelated write later on must not be the thing that repairs the index.
+      yield* seedEngine(engine, [{ id: "i3", priority: 5, done: false }]);
+      expect(yield* at(1)).toEqual([]);
+      expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
+    })
+  );
+
+  it.effect("#350: an engine attached while a hydrate is writing is re-read afterwards", () =>
+    Effect.gen(function* () {
+      const memory = yield* ClientStoreModule.makeMemory;
+      yield* memory.putRow("items", {
+        id: "i1",
+        version: 1,
+        value: { id: "i1", priority: 1, done: false },
+      });
+      // Parks the hydrate's write of i1 once armed, before it reaches the store.
+      const armed = yield* Ref.make(false);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const store = ClientStore.of({
+        ...memory,
+        putRow: (collection, stored) =>
+          Effect.gen(function* () {
+            if (stored.id === "i1" && (yield* Ref.getAndSet(armed, false))) {
+              yield* Deferred.succeed(reached, undefined);
+              yield* Deferred.await(release);
+            }
+            yield* memory.putRow(collection, stored);
+          }),
+      });
+
+      yield* Ref.set(armed, true);
+      const hydrating = yield* Effect.forkChild(
+        Hydration.hydrate(store, {
+          rows: [
+            {
+              collection: "items",
+              id: "i1",
+              version: 2,
+              value: { id: "i1", priority: 3, done: false },
+            },
+          ],
+          journal: [],
+        })
+      );
+      yield* Deferred.await(reached);
+
+      // An engine built mid-hydrate indexes the pre-hydrate row.
+      const engine = yield* priorityEngine(store);
+      const at = (priority: number) =>
+        engine.query(
+          Subset.make({ collection: "items", where: Predicate.eq("priority", priority) })
+        );
+      expect((yield* at(1)).map((r) => r.id)).toEqual(["i1"]);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(hydrating);
+      // The hydrate's re-read reached it: the index matches the stored row.
+      expect(yield* at(1)).toEqual([]);
+      expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
+    })
+  );
+
+  it.effect("#350: a closed engine is deregistered and is not re-read by a later hydrate", () =>
+    Effect.gen(function* () {
+      const snapshot: Hydration.Snapshot = {
+        rows: [
+          {
+            collection: "items",
+            id: "i1",
+            version: 2,
+            value: { id: "i1", priority: 3, done: false },
+          },
+        ],
+        journal: [],
+      };
+      // A store that counts `listRows`: an engine re-read drops its overlay, so its next query lists rows.
+      const counting = Effect.gen(function* () {
+        const memory = yield* ClientStoreModule.makeMemory;
+        const reads = yield* Ref.make(0);
+        const store = ClientStore.of({
+          ...memory,
+          listRows: (collection) =>
+            Ref.update(reads, (n) => n + 1).pipe(Effect.andThen(memory.listRows(collection))),
+        });
+        return { store, reads } as const;
+      });
+      const all = Subset.make({ collection: "items" });
+
+      // Build, seed and warm an engine, then close its scope. Its engine value stays in hand.
+      const closed = yield* counting;
+      const engine = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const built = yield* priorityEngine(closed.store);
+          yield* seedEngine(built, [{ id: "i1", priority: 1, done: false }]);
+          yield* built.query(all);
+          return built;
+        })
+      );
+      yield* Hydration.hydrate(closed.store, snapshot);
+      const closedBefore = yield* Ref.get(closed.reads);
+      yield* engine.query(all);
+      expect(yield* Ref.get(closed.reads)).toBe(closedBefore);
+
+      // Control: an engine still open re-reads on the same hydrate, so the same query lists rows.
+      const open = yield* counting;
+      const live = yield* priorityEngine(open.store);
+      yield* seedEngine(live, [{ id: "i1", priority: 1, done: false }]);
+      yield* live.query(all);
+      yield* Hydration.hydrate(open.store, snapshot);
+      const openBefore = yield* Ref.get(open.reads);
+      yield* live.query(all);
+      expect(yield* Ref.get(open.reads)).toBeGreaterThan(openBefore);
+    })
   );
 });
