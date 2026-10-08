@@ -6,7 +6,15 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { Backend } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
+import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
+import * as UnknownMutator from "../UnknownMutator.js";
+
+/** The reference handlers without the named contract mutator, i.e. an unregistered one. */
+const withoutHandler = (name: string) =>
+  Object.fromEntries(
+    Object.entries(BackendContract.memoryHandlers).filter(([key]) => key !== name)
+  );
 
 describe("verifyBackendContract", () => {
   it.effect("MemoryBackend satisfies the contract", () =>
@@ -63,18 +71,85 @@ describe("verifyBackendContract", () => {
     })
   );
 
+  it.effect("catches a backend that does not register the fail mutator", () =>
+    Effect.gen(function* () {
+      // An unregistered mutator fails with "Unknown mutator", a BackendError too: the
+      // atomic-bump rule must not let that pass as the expected failure.
+      const broken = yield* MemoryBackend.make(withoutHandler(BackendContract.failAlways.name));
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
+      expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("atomic");
+      expect(failure.message).toContain("not registered");
+    })
+  );
+
   it.effect("catches a backend that does not register the write-then-fail mutator", () =>
     Effect.gen(function* () {
       // An unregistered mutator fails with "Unknown mutator", a BackendError too: the
       // write-then-fail rule must not let that pass as the expected failure.
-      const handlers = Object.fromEntries(
-        Object.entries(BackendContract.memoryHandlers).filter(
-          ([name]) => name !== BackendContract.writeThenFail.name
-        )
-      );
-      const broken = yield* MemoryBackend.make(handlers);
+      const broken = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("discards");
+      expect(failure.message).toContain("not registered");
+    })
+  );
+
+  it.effect("detects an unregistered mutator by its typed cause, whatever the message says", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
+      // Rewords the unknown-mutator error but keeps its typed cause.
+      const broken: Backend = {
+        ...inner,
+        applyMutations: (context, mutations) =>
+          inner
+            .applyMutations(context, mutations)
+            .pipe(
+              Effect.mapError(
+                (error) => new BackendError({ message: "no such handler", cause: error.cause })
+              )
+            ),
+      };
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
+      expect(failure.rule).toContain("discards");
+      expect(failure.message).toContain("not registered");
+    })
+  );
+
+  it.effect("does not mistake a registered handler's error that mentions an unknown mutator", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      // Rewords every handler failure except the typed unknown-mutator one, so a
+      // registered failAlways fails with text that contains "Unknown mutator".
+      const wordy: Backend = {
+        ...inner,
+        applyMutations: (context, mutations) =>
+          inner
+            .applyMutations(context, mutations)
+            .pipe(
+              Effect.mapError((error) =>
+                UnknownMutator.isError(error)
+                  ? error
+                  : new BackendError({ message: `Unknown mutator: none here (${error.message})` })
+              )
+            ),
+      };
+      yield* BackendContract.verifyBackendContract(wordy);
+    })
+  );
+
+  it.effect("falls back to the message for a backend that carries no typed cause", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
+      // Drops the typed cause, keeping the "Unknown mutator" message.
+      const broken: Backend = {
+        ...inner,
+        applyMutations: (context, mutations) =>
+          inner
+            .applyMutations(context, mutations)
+            .pipe(Effect.mapError((error) => new BackendError({ message: error.message }))),
+      };
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure.rule).toContain("discards");
       expect(failure.message).toContain("not registered");
     })

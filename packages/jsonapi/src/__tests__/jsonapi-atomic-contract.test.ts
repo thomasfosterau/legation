@@ -367,41 +367,61 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   ],
 ]);
 
-const makeBackend = Effect.gen(function* () {
-  const store: Store = new Map();
-  const { client, requests } = yield* makeInProcessClient(store);
-  const atomic = Convention.reflectAtomic(api);
-  // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
-  expect(atomic).toEqual({
-    groupId: "operations",
-    name: "operations",
-    method: "POST",
-    path: "/operations",
+/** A copy of `map` without `key`. */
+const without = <V>(map: ReadonlyMap<string, V>, key: string) =>
+  new Map([...map].filter(([name]) => name !== key));
+
+/**
+ * The JSON:API backend under test. `omitted` leaves one contract mutator out of
+ * both the decode and the write maps, as a backend that never registered it.
+ */
+const makeBackend = (omitted?: string) =>
+  Effect.gen(function* () {
+    const store: Store = new Map();
+    const { client, requests } = yield* makeInProcessClient(store);
+    const atomic = Convention.reflectAtomic(api);
+    // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
+    expect(atomic).toEqual({
+      groupId: "operations",
+      name: "operations",
+      method: "POST",
+      path: "/operations",
+    });
+    const backend = yield* JsonApiBackend.make({
+      baseUrl: "http://contract.test",
+      resources: Convention.reflectResources(api),
+      mutators: omitted === undefined ? mutators : without(mutators, omitted),
+      operations: new Map(),
+      writes: omitted === undefined ? writes : without(writes, omitted),
+      atomic: { path: atomic!.path },
+      // The server declares no filter/sort parameters (its list endpoint is the
+      // whole table); the backend re-applies the subset locally anyway, so an
+      // empty query is exact over this server.
+      query: { encode: () => Effect.succeed(Option.some("")) },
+    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    return { backend, requests, store };
   });
-  const backend = yield* JsonApiBackend.make({
-    baseUrl: "http://contract.test",
-    resources: Convention.reflectResources(api),
-    mutators,
-    operations: new Map(),
-    writes,
-    atomic: { path: atomic!.path },
-    // The server declares no filter/sort parameters (its list endpoint is the
-    // whole table); the backend re-applies the subset locally anyway, so an
-    // empty query is exact over this server.
-    query: { encode: () => Effect.succeed(Option.some("")) },
-  }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-  return { backend, requests, store };
-});
 
 describe("JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operations", () => {
   it.effect("satisfies verifyBackendContract", () =>
     Effect.gen(function* () {
-      const { backend, requests } = yield* makeBackend;
+      const { backend, requests } = yield* makeBackend();
       yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
       // Every write went through the atomic endpoint; reads through the resources.
       const writeRequests = requests.filter((request) => request.method !== "GET");
       expect(writeRequests.length).toBeGreaterThan(0);
       expect(writeRequests.every((request) => request.path === "/operations")).toBe(true);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("catches an unregistered write-then-fail mutator", () =>
+    Effect.gen(function* () {
+      const { backend } = yield* makeBackend(BackendContract.writeThenFail.name);
+      const failure = yield* Effect.flip(
+        BackendContract.verifyBackendContract(backend, { collection: COLLECTION })
+      );
+      expect(failure.rule).toContain("discards");
+      expect(failure.message).toContain("not registered");
     }).pipe(Effect.scoped)
   );
 

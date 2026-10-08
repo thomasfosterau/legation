@@ -40,6 +40,7 @@ import type { Mutator } from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
+import * as UnknownMutator from "./UnknownMutator.js";
 
 /**
  * The write surface handed to authoritative mutator handlers. Writes become
@@ -415,7 +416,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         }
         const handle = handlers[mutation.mutator];
         if (handle === undefined) {
-          return yield* new BackendError({ message: `Unknown mutator: ${mutation.mutator}` });
+          return yield* UnknownMutator.make(mutation.mutator);
         }
 
         const stage = newStage();

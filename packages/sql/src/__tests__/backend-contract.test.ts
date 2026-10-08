@@ -146,26 +146,53 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
 };
 
+/** A SqlBackend over a fresh SQLite database with the contract tables; needs a scope. */
+const makeContractBackend = (
+  registeredHandlers: Record<string, SqlBackend.SqlHandler>,
+  registeredMutators: Map<string, Mutator.AnyMutator>
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
+    const sql = Context.get(context, SqlClient);
+    for (const statement of CONTRACT_DDL) {
+      yield* sql.unsafe(statement).unprepared;
+    }
+    return SqlBackend.make({
+      executor: makeExecutor(sql),
+      tables: {
+        __contract: { table: "__contract" },
+        __contract_eval: { table: "__contract_eval" },
+      },
+      mutators: registeredMutators,
+      handlers: registeredHandlers,
+    });
+  });
+
 describe("SqlBackend", () => {
   it.effect("passes verifyBackendContract over a real SQLite executor", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
-        const sql = Context.get(context, SqlClient);
-        for (const statement of CONTRACT_DDL) {
-          yield* sql.unsafe(statement).unprepared;
-        }
-        const backend = SqlBackend.make({
-          executor: makeExecutor(sql),
-          tables: {
-            __contract: { table: "__contract" },
-            __contract_eval: { table: "__contract_eval" },
-          },
-          mutators: contractMutators,
-          handlers,
-        });
+        const backend = yield* makeContractBackend(handlers, contractMutators);
         yield* BackendContract.verifyBackendContract(backend);
         expect(true).toBe(true);
+      })
+    )
+  );
+
+  it.effect("catches an unregistered write-then-fail mutator over a real SQLite executor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Unregistered in both the handler and the mutator maps, as a backend that
+        // never heard of the probe would be. The unknown-mutator BackendError must
+        // not pass the write-then-fail rule.
+        const name = BackendContract.writeThenFail.name;
+        const backend = yield* makeContractBackend(
+          Object.fromEntries(Object.entries(handlers).filter(([key]) => key !== name)),
+          new Map([...contractMutators].filter(([key]) => key !== name))
+        );
+        const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));
+        expect(failure.rule).toContain("discards");
+        expect(failure.message).toContain("not registered");
       })
     )
   );

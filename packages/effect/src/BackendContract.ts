@@ -20,10 +20,12 @@
  * handler can express, and its concurrency differs per backend. Each backend
  * therefore discharges it itself: `MemoryBackend` by its stage (covered by
  * `memory-backend-atomicity.test.ts`, "keeps a handler's writes and its bump
- * invisible until the mutation commits"). `SqlBackend` (a transaction) and
- * `JsonApiBackend` (the server's all-or-nothing batch) have no mid-flight test
- * yet; that gap is tracked in #381. A new backend must add its own mid-flight
- * test before it can claim guarantee 1.
+ * invisible until the mutation commits"). `SqlBackend` (a transaction) has
+ * parked-handler tests (#352) that check the ledger watermark and how often the
+ * handler runs; `JsonApiBackend` (the server's all-or-nothing batch) has none.
+ * Neither has a test that a read sees neither the handler's writes nor the bump
+ * while the handler is parked. That gap is tracked in #381. A new backend must
+ * add its own mid-flight test before it can claim guarantee 1.
  */
 
 import { Data, Effect, Exit, Option, Schema } from "effect";
@@ -35,6 +37,7 @@ import * as Mutator from "./Mutator.js";
 import * as Predicate from "./Predicate.js";
 import type { Mutation } from "./Protocol.js";
 import * as Subset from "./Subset.js";
+import * as UnknownMutator from "./UnknownMutator.js";
 
 /** A backend broke one of the contract's guarantees. */
 export class ContractViolation extends Data.TaggedError("ContractViolation")<{
@@ -77,7 +80,9 @@ export const rejectAlways = Mutator.make(
  * (the client's retry applies the mutation again). `failAlways` writes nothing
  * first, so it does not probe this. A backend that cannot discard a handler's
  * writes on its own failure fails this rule by design: D1 commits each
- * statement separately (#342), so it is not run through this contract.
+ * statement separately (#342), so it is not run through this contract. A
+ * registered handler that never writes passes this rule vacuously, and the
+ * contract cannot detect that: it sees only the failure.
  */
 export const writeThenFail = Mutator.make(
   "contract/write-then-fail",
@@ -165,12 +170,32 @@ interface Harness {
     effect: Effect.Effect<unknown, BackendError>,
     what: string
   ) => Effect.Effect<void, ContractViolation>;
+  /**
+   * Run a call that must fail because the named contract mutator ran and
+   * failed. An unregistered mutator fails the same way, so that failure is
+   * reported as a missing registration rather than a pass.
+   */
+  readonly expectRegisteredFailure: (
+    rule: string,
+    effect: Effect.Effect<unknown, BackendError>,
+    mutator: string,
+    exportName: string
+  ) => Effect.Effect<void, ContractViolation>;
   /** The contract client's last mutation id in the verification group. */
   readonly lastIdOf: (rule: string) => Effect.Effect<number, ContractViolation>;
   readonly mutation: (mutationId: number, mutator: string, args: unknown) => Mutation;
   readonly put: (mutationId: number, collection: string, id: string, value: unknown) => Mutation;
   readonly reject: (mutationId: number, collection: string, id: string) => Mutation;
 }
+
+/**
+ * True when a failed call shows `mutator` is not registered. The
+ * `UnknownMutator` tag identifies it; the exact message `UnknownMutator.make`
+ * writes is a fallback for a third-party backend that does not use it yet, so a
+ * registered handler whose own error merely mentions "Unknown mutator" still counts.
+ */
+const isUnregisteredFailure = (error: BackendError, mutator: string): boolean =>
+  UnknownMutator.isError(error) || error.message === `Unknown mutator: ${mutator}`;
 
 const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harness => {
   const rows = options?.collection ?? "__contract";
@@ -187,6 +212,25 @@ const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harn
   const expectFail: Harness["expectFail"] = (rule, effect, what) =>
     Effect.exit(effect).pipe(
       Effect.flatMap((exit) => check(rule, exit._tag === "Failure", `Expected failure: ${what}`))
+    );
+  const expectRegisteredFailure: Harness["expectRegisteredFailure"] = (
+    rule,
+    effect,
+    mutator,
+    exportName
+  ) =>
+    Effect.exit(effect).pipe(
+      Effect.flatMap((exit) => {
+        const failure = Exit.findErrorOption(exit);
+        if (Option.isNone(failure)) {
+          return check(rule, false, `Expected failure: the ${mutator} mutator`);
+        }
+        return check(
+          rule,
+          !isUnregisteredFailure(failure.value, mutator),
+          `${mutator} is not registered: register BackendContract.${exportName}`
+        );
+      })
     );
   const mutation: Harness["mutation"] = (mutationId, mutator, args) => ({
     clientId,
@@ -205,6 +249,7 @@ const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harn
     check,
     expectOk,
     expectFail,
+    expectRegisteredFailure,
     lastIdOf: (rule) =>
       expectOk(rule, backend.lastMutationIds(context)).pipe(
         Effect.map((ids) => ids[clientId] ?? 0)
@@ -305,13 +350,21 @@ const rule3GapRejection: Rule = ({
   });
 
 /** 4. Atomicity: a failed mutator bumps nothing. */
-const rule4AtomicBump: Rule = ({ backend, context, check, expectFail, lastIdOf, mutation }) =>
+const rule4AtomicBump: Rule = ({
+  backend,
+  context,
+  check,
+  expectRegisteredFailure,
+  lastIdOf,
+  mutation,
+}) =>
   Effect.gen(function* () {
     const rule = "keeps the lastMutationId bump atomic with mutator effects";
-    yield* expectFail(
+    yield* expectRegisteredFailure(
       rule,
       backend.applyMutations(context, [mutation(3, failAlways.name, {})]),
-      "the contract/fail mutator"
+      failAlways.name,
+      "failAlways"
     );
     yield* check(
       rule,
@@ -561,25 +614,14 @@ const rule10WriteThenFail: Rule = (h) =>
     yield* check(rule, before !== undefined, 'Row "a" must exist before the probe');
 
     const attempt = (id: string) =>
-      Effect.exit(
-        backend.applyMutations(context, [
-          h.mutation(startId + 1, writeThenFail.name, { collection: rows, id }),
-        ])
-      );
+      backend.applyMutations(context, [
+        h.mutation(startId + 1, writeThenFail.name, { collection: rows, id }),
+      ]);
 
-    // `contract/write-then-fail` must be registered: an unknown mutator is also a
-    // BackendError, which would let an unregistered backend pass this rule vacuously.
-    const failure = Exit.findErrorOption(yield* attempt("a"));
-    yield* check(
-      rule,
-      Option.isSome(failure),
-      "Expected failure: the contract/write-then-fail mutator"
-    );
-    yield* check(
-      rule,
-      Option.isNone(failure) || !failure.value.message.includes("Unknown mutator"),
-      `${writeThenFail.name} is not registered: register BackendContract.writeThenFail`
-    );
+    // An unregistered mutator is also a BackendError, which would let an
+    // unregistered backend pass this rule vacuously: expectRegisteredFailure
+    // reports that case as a missing registration.
+    yield* h.expectRegisteredFailure(rule, attempt("a"), writeThenFail.name, "writeThenFail");
 
     const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
     yield* check(
@@ -589,7 +631,7 @@ const rule10WriteThenFail: Rule = (h) =>
       `A failed write must leave row "a" unchanged (was ${JSON.stringify(before?.value)} at version ${before?.version}, now ${JSON.stringify(after?.value)} at version ${after?.version})`
     );
 
-    yield* attempt("ghost");
+    yield* Effect.exit(attempt("ghost"));
     const ghost = yield* expectOk(rule, backend.getRows(context, rows, ["ghost"]));
     yield* check(rule, ghost.length === 0, "A failed write must not create a row");
 
