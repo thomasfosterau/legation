@@ -1157,10 +1157,22 @@ export const make = (
     // again, but parks them here, oldest first, so the overlay keeps showing
     // their effects until a pull's `lastMutationIds` covers them. That pull's
     // patch carries the effects, and the rebase reveals them in one change.
-    // Process-local: a restart before that pull shows the confirmed rows until
-    // it lands, as before this tail existed. Written only under `overlayLock`,
-    // so the tail and the journal read together form one snapshot.
-    const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+    // The store holds the tail too (#336), so a restart before the pull that
+    // reports it still shows its effects. This is the in-memory copy: seeded
+    // from the store at boot, written through under the same lock as every
+    // change, and reloaded when the store is written directly. Written only
+    // under `overlayLock`, so the tail and the journal read together form one
+    // snapshot.
+    const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>(
+      yield* store.unpulled.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "ClientEngine: could not read the unpulled tail at boot; its effects are not overlaid until a pull reports them",
+            { error }
+          ).pipe(Effect.as<ReadonlyArray<Mutation>>([]))
+        )
+      )
+    );
     // The journal the overlay replays: the unpulled tail, then the pending
     // journal. The caller holds `overlayLock`.
     const overlayJournalLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
@@ -1771,12 +1783,16 @@ export const make = (
     // `applyPull`, the patch write included: a read in between would see the
     // new rows with the tail still parked, and replay the tail over them.
     // Takes no lock itself (the lock is not reentrant).
+    // The store is written first and the copy second, so a store failure leaves
+    // the copy as it was. The store's release also ends the pull's durable
+    // marker (`beginRelease`, #336).
     const acknowledgeLocked = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
           yield* store.acknowledge(clientId, upTo);
         }
         yield* settleOwnApplied(lastMutationIds);
+        yield* store.releaseUnpulled(lastMutationIds);
         yield* Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m)));
         yield* Ref.set(overlayCache, undefined);
         yield* sampleJournalDepth; // the trim changed journal depth
@@ -1788,7 +1804,10 @@ export const make = (
     // their effects stay overlaid until a pull reports them, so the view does
     // not revert in between. A permanently rejected entry was not applied, so
     // it leaves the overlay now. Returns those rejected entries for the caller
-    // to reveal. Holds `overlayLock`, so the trim and the tail move together.
+    // to reveal. Holds `overlayLock`, so the store and the copy move together.
+    // The store parks the applied entries before it trims the journal, so a
+    // crash between the two leaves each entry in both places, which the next
+    // open resolves to the tail alone (#336). It never leaves one in neither.
     const acknowledgePushed = (
       response: PushResponse
     ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
@@ -1803,16 +1822,25 @@ export const make = (
           const covered = (yield* store.pendingMutations).filter((m) =>
             isCoveredBy(response.lastMutationIds, m)
           );
+          const applied = covered.filter((m) => !isRejected(m));
+          yield* store.parkUnpulled(applied);
           for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
             yield* store.acknowledge(clientId, upTo);
           }
-          const tail = [...(yield* Ref.get(unpulled)), ...covered.filter((m) => !isRejected(m))];
+          const tail = [...(yield* Ref.get(unpulled)), ...applied];
           const released = Math.max(0, tail.length - UNPULLED_LIMIT);
           if (released > 0) {
             yield* Effect.logWarning(
               "ClientEngine: no pull reported the oldest acknowledged mutations within the unpulled limit; releasing their overlay early",
               { released, limit: UNPULLED_LIMIT }
             );
+            // The released entries are the head of each client's run in the tail, so the
+            // highest id released per client is a watermark that releases exactly them.
+            const watermark: Record<string, number> = {};
+            for (const m of tail.slice(0, released)) {
+              watermark[m.clientId] = Math.max(watermark[m.clientId] ?? 0, m.mutationId);
+            }
+            yield* store.releaseUnpulled(watermark);
           }
           yield* Ref.set(unpulled, released > 0 ? tail.slice(released) : tail);
           yield* Ref.set(overlayCache, undefined);
@@ -1936,7 +1964,10 @@ export const make = (
           quarantined = yield* store.quarantinePending(current);
           // The unpulled tail's effects belong to the superseded identity's rows,
           // which are cleared just below, so the tail goes with them (#286).
-          yield* Semaphore.withPermit(overlayLock, Ref.set(unpulled, []));
+          yield* Semaphore.withPermit(
+            overlayLock,
+            store.clearUnpulled.pipe(Effect.andThen(Ref.set(unpulled, [])))
+          );
           yield* clearConfirmedRows;
           yield* store.clearCookie;
           yield* Ref.set(subscriptions, []);
@@ -2141,6 +2172,9 @@ export const make = (
           overlayLock,
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
+            // The durable marker goes down before the first row, so a crash mid-section
+            // is finished on the next open rather than double-counting (#336).
+            yield* store.beginRelease(response.lastMutationIds);
             yield* applyPatch(response.patch);
             yield* acknowledgeLocked(response.lastMutationIds);
             return before;
@@ -2246,11 +2280,28 @@ export const make = (
       )
     );
 
+    // Reload the tail's in-memory copy from the store, as `adoptJournal` does for the journal: a
+    // direct store write (`Hydration.hydrate`) parks entries the copy does not hold (#336). A failed
+    // read keeps the copy as it was, and is logged.
+    const adoptUnpulled: Effect.Effect<void> = Semaphore.withPermit(
+      overlayLock,
+      store.unpulled.pipe(
+        Effect.flatMap((entries) => Ref.set(unpulled, entries)),
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "ClientEngine: could not reload the unpulled tail from the store; keeping the copy in memory",
+            { error }
+          )
+        )
+      )
+    );
+
     // Re-read everything derived from the store and reveal it: the built indexes, the overlay
     // (confirmed rows plus the journal) and every observer. Shared by `clearRows` and by a direct
     // store write (`resyncAttachedEngines`).
     const reloadFromStore: Effect.Effect<void> = invalidateAllIndexes.pipe(
       Effect.andThen(adoptJournal),
+      Effect.andThen(adoptUnpulled),
       Effect.andThen(invalidateOverlay),
       Effect.andThen(sampleJournalDepth),
       Effect.andThen(publishChange(REBUILD))

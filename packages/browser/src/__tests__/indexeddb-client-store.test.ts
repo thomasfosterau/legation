@@ -4,9 +4,24 @@
  * backed by fake-indexeddb.
  */
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Identity } from "@thomasfosterau/legation-effect";
+import {
+  Authorization,
+  Backend,
+  ClientStore,
+  Identity,
+  MemoryBackend,
+  Mutator,
+  Transport,
+} from "@thomasfosterau/legation-effect";
+import {
+  ClientEngine,
+  Cvr,
+  InvalidationBus,
+  Subset,
+  SyncServer,
+} from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 
@@ -124,6 +139,91 @@ describe("IndexedDbClientStore", () => {
         const rows = yield* store.listRows("todos");
         expect(rows.map((row) => (row.value as { title: string }).title)).toEqual(["alice's"]);
       }).pipe(Effect.provide(namespacedLayer("two-users", ALICE)));
+    })
+  );
+});
+
+// A counter increment, as a mutator body and as the backend handler.
+const incrementCounter = <E>(
+  writer: {
+    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+  },
+  id: string
+): Effect.Effect<void, E> =>
+  Effect.gen(function* () {
+    const current = (yield* writer.get("counters", id)) as { n: number } | undefined;
+    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+  });
+
+// #336: the acknowledged-but-unpulled tail is durable in IndexedDB, so a
+// restart between a push acknowledgement and the next pull keeps the effect.
+describe("IndexedDbClientStore: the unpulled tail (#336)", () => {
+  const counterMutators = Mutator.registry([
+    {
+      mutator: Mutator.make("counter/inc", Schema.Unknown),
+      local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    },
+  ]);
+  const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+    "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  };
+  const countersSubset = Subset.make({ collection: "counters" });
+  const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
+
+  const makeServer = Effect.gen(function* () {
+    const backend = yield* MemoryBackend.make(backendHandlers);
+    return yield* SyncServer.make.pipe(
+      Effect.provideService(Backend.Backend, backend),
+      Effect.provideService(Authorization.AuthPolicy, authPolicy),
+      Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+      Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
+    );
+  });
+
+  // A counter engine over `handler`, reading and writing the ClientStore in context.
+  const makeEngine = (handler: Transport.ServerHandler) =>
+    Effect.gen(function* () {
+      const transport = yield* Transport.makeInMemory(handler, "group-a");
+      return yield* ClientEngine.make({
+        clientId: "client-a",
+        clientGroupId: "group-a",
+        mutators: counterMutators,
+      }).pipe(Effect.provideService(Transport.ClientTransport, transport));
+    });
+
+  const counterValue = (engine: ClientEngine.ClientEngine) =>
+    engine
+      .query(countersSubset)
+      .pipe(
+        Effect.map(
+          (rows) => (rows.find((row) => row.id === "c")?.value as { n: number } | undefined)?.n
+        )
+      );
+
+  it.effect("a restart before the pull keeps the acknowledged effect; the pull releases it", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer;
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        const engine = yield* makeEngine(handler);
+        yield* engine.subscribe(countersSubset);
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        expect(yield* store.pendingMutations).toEqual([]);
+        expect((yield* store.unpulled).map((m) => m.mutationId)).toEqual([1]);
+      }).pipe(Effect.provide(storeLayer("unpulled-tail")), Effect.scoped);
+
+      // The restart: a new engine over the reopened database, before any pull.
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        const engine = yield* makeEngine(handler);
+        yield* engine.subscribe(countersSubset);
+        expect(yield* counterValue(engine)).toBe(1);
+        yield* engine.pull;
+        expect(yield* store.unpulled).toEqual([]);
+        expect(yield* counterValue(engine)).toBe(1);
+      }).pipe(Effect.provide(storeLayer("unpulled-tail")), Effect.scoped);
     })
   );
 });
