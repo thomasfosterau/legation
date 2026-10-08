@@ -167,8 +167,10 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
       // `dehydrate` reads the journal and the tail in two calls, so a push acknowledgement
       // between them puts an entry in both. The tail copy wins: it is not journaled again (#387).
+      // The store's tail is read too, since an entry the store already parked can sit in a snapshot's
+      // journal; `appendMutation` refuses such an entry, so it must be skipped here.
       const parked = new Set(
-        (decoded.unpulled ?? []).map((m) => `${m.clientId}\u0000${m.mutationId}`)
+        (yield* store.unpulled).map((m) => `${m.clientId}\u0000${m.mutationId}`)
       );
       for (const mutation of decoded.journal) {
         if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) continue;

@@ -433,6 +433,12 @@ export interface ClientEngineOptions {
    */
   readonly changeHubCapacity?: number;
   /**
+   * Most acknowledged-but-unpulled mutations the overlay keeps before the oldest are released early, with
+   * a `logWarning` (#286). Defaults to 1024. An internal seam: a test lowers it to reach the bound with a
+   * few mutations.
+   */
+  readonly unpulledLimit?: number;
+  /**
    * This build's schema version (#48), sent on every push and pull request. The
    * server's acceptor may reject an unsupported version; omit it for today's
    * version-less behaviour.
@@ -1821,8 +1827,8 @@ export const make = (
 
     // What a store write that failed part-way leaves behind (#387): the store may hold more or less of
     // the tail than the copy, so the copy re-reads it before its next use and the cached overlay is
-    // dropped. The store then finishes the release it may have recorded, or seals itself. Holds
-    // `overlayLock`.
+    // dropped. The store then finishes the release it may have recorded. It seals itself only when that
+    // finish fails after reading the record (#387). Holds `overlayLock`.
     const settleFailedTail: Effect.Effect<void> = Ref.set(unpulledStale, true).pipe(
       Effect.andThen(Ref.set(overlayCache, undefined)),
       Effect.andThen(store.finishRelease.pipe(Effect.ignore))
@@ -1869,11 +1875,12 @@ export const make = (
           const tail = [...held, ...applied];
           yield* Ref.set(unpulled, tail);
           yield* Ref.set(overlayCache, undefined);
-          const released = Math.max(0, tail.length - UNPULLED_LIMIT);
+          const limit = options.unpulledLimit ?? UNPULLED_LIMIT;
+          const released = Math.max(0, tail.length - limit);
           if (released > 0) {
             yield* Effect.logWarning(
               "ClientEngine: no pull reported the oldest acknowledged mutations within the unpulled limit; releasing their overlay early",
-              { released, limit: UNPULLED_LIMIT }
+              { released, limit }
             );
             // The released entries are the head of each client's run in the tail, so the
             // highest id released per client is a watermark that releases exactly them.
@@ -2199,8 +2206,9 @@ export const make = (
 
     // The in-process roll-forward of a pull whose section failed after its release record (#387).
     // The store finishes the record, as an open would; the copy is re-read before its next use,
-    // since the store has released the tail. A failed roll-forward has sealed the store, so it is
-    // logged and the pull reports its own error. Holds `overlayLock`.
+    // since the store has released the tail. A failed roll-forward is logged and the pull reports its
+    // own error. The store finishes the record on its next write or pull, and seals itself only when
+    // the failure came after its read of the record (#387). Holds `overlayLock`.
     const rollForwardPullLocked = (
       lastMutationIds: Readonly<Record<string, number>>
     ): Effect.Effect<void> =>
@@ -2214,7 +2222,7 @@ export const make = (
         Effect.andThen(publishChange(REBUILD)),
         Effect.catch((error) =>
           Effect.logError(
-            "ClientEngine: a pull release could not be finished; the store is sealed",
+            "ClientEngine: a pull release could not be finished; the store finishes it on its next write or pull, and seals itself only after a failure past its record read",
             {
               error,
             }
@@ -2248,8 +2256,9 @@ export const make = (
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
             // A failure in this scope is rolled forward here, from the same record, as the open does.
-            // If that fails too the store seals itself, so no later store write succeeds while the
-            // record is outstanding (#387). The marker is written inside this scope too: a
+            // If that fails too, the store finishes the record on its next write or pull. It seals itself
+            // only when the failure came after its read of the record, so no later write runs over a
+            // part-written release (#387). The marker is written inside this scope too: a
             // `beginRelease` that reports failure may still have written it, so it is finished
             // either way, and finishing is a no-op when nothing landed (#387).
             yield* Effect.gen(function* () {

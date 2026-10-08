@@ -142,6 +142,12 @@ export interface ClientStore {
   readonly applyRowOps: (ops: ReadonlyArray<PatchOp>) => Effect.Effect<void, StoreError>;
 
   // Journal
+  /**
+   * Append `mutation` to the journal. Its precondition is that the unpulled tail does not hold the
+   * entry: a journal copy of a parked entry would be double-counted by reads and pushed again. So an
+   * append for an id the tail holds fails with a `StoreError` and writes nothing. A caller that
+   * replays entries from elsewhere, such as `Hydration.hydrate`, skips the ids the tail holds first.
+   */
   readonly appendMutation: (mutation: Mutation) => Effect.Effect<void, StoreError>;
   /**
    * Allocate the client's next mutation id **and** append the entry as one
@@ -255,10 +261,12 @@ export interface ClientStore {
    * than reverting it. It re-applies the patch (idempotent, since every
    * operation sets a row or removes it), writes the cookie, trims the journal
    * and releases the tail to the watermark. So a crash at any point after this
-   * call shows the pull's effects, never the rows without them (#387). It
-   * refuses while another release is outstanding: a record is only overwritten
-   * by its own finish, never by a second release. A call that fails may still
-   * have written the record, so the caller finishes the release either way.
+   * call shows the pull's effects, never the rows without them (#387). A release
+   * still outstanding is finished first, so a record is only overwritten once its
+   * own finish has run. If that finish fails, this call fails and the outstanding
+   * record stays for the next call or pull to finish (or, after a failure past its
+   * read, the store seals). A call that fails may still have written the record, so
+   * the caller finishes the release either way.
    */
   readonly beginRelease: (release: PullRelease) => Effect.Effect<void, StoreError>;
   /**
@@ -562,8 +570,16 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     clearRows: locked(finishInner.pipe(Effect.andThen(Ref.set(rows, new Map())))),
     applyRowOps: (ops) => locked(Ref.update(rows, (map) => applyOpsTo(map, ops))),
 
+    // Refused for an id the tail holds (see `ClientStore.appendMutation`), as the key-value store refuses it.
     appendMutation: (mutation) =>
-      locked(Ref.update(journal, (entries) => entries.concat(mutation))),
+      locked(
+        Effect.gen(function* () {
+          if ((yield* Ref.get(tail)).some((held) => entryKey(held) === entryKey(mutation))) {
+            return yield* alreadyParked(mutation);
+          }
+          yield* Ref.update(journal, (entries) => entries.concat(mutation));
+        })
+      ),
     // Uninterruptible and under the store lock: the counter and the journal
     // change together, and no other operation interleaves (#258). The id is
     // the larger of the counter and the highest id the journal already holds
@@ -654,14 +670,13 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           Effect.andThen(raiseCountersTo(mutations))
         )
       ),
+    // An outstanding release is finished first, as an open would finish it (#387), so a second
+    // release begins rather than being refused. The finish cannot fail here: nothing is stored.
     beginRelease: (release) =>
       locked(
         Ref.get(outstanding).pipe(
-          Effect.flatMap((pending) =>
-            pending === undefined
-              ? Ref.set(outstanding, release)
-              : Effect.fail(new StoreError({ message: OUTSTANDING_RELEASE_MESSAGE }))
-          )
+          Effect.flatMap((pending) => (pending === undefined ? Effect.void : finishInner)),
+          Effect.andThen(Ref.set(outstanding, release))
         )
       ),
     releaseUnpulled: (lastMutationIds) =>
@@ -786,8 +801,14 @@ const sealed = (cause: StoreError): ClientStore => {
   });
 };
 
-const OUTSTANDING_RELEASE_MESSAGE =
-  "A pull release is still outstanding: it must finish before another release starts (#387)";
+/**
+ * The refusal an append gets for an entry the unpulled tail already holds (#336). A journal copy of a
+ * parked entry would be double-counted by reads, and pushed again.
+ */
+const alreadyParked = (mutation: Mutation): StoreError =>
+  new StoreError({
+    message: `Mutation ${mutation.clientId}#${mutation.mutationId} is already in the unpulled tail, so it cannot also be journaled`,
+  });
 
 /**
  * The error every member fails with once a release could not be finished in this process (#387).
@@ -1568,6 +1589,16 @@ export const makeKeyValue = (
     );
     if (tailFailure !== undefined) return sealed(tailFailure);
     yield* Ref.set(finishPending, false);
+    // The finish of a record already read: the roll-forward, then the parked copies. Any failure seals
+    // the store (#387), since the writes may be part-way.
+    const finishRead = (release: PullRelease | undefined): Effect.Effect<void, StoreError> =>
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          if (release !== undefined) yield* rollForward(release);
+          yield* trimParkedCopies;
+        }).pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
+        yield* Ref.set(finishPending, false);
+      });
     // The in-process finish, run by every row write and clear, and by `finishRelease`. It is a no-op
     // while `finishPending` is clear. Its first step is a read of the record, and a failure there
     // fails the call alone: nothing has been written. Every failure after that read seals the store,
@@ -1575,12 +1606,7 @@ export const makeKeyValue = (
     // and no later write may run over it. The open then finishes it from the same record (#387).
     const finishOrSeal = Effect.gen(function* () {
       if (!(yield* Ref.get(finishPending))) return;
-      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
-      yield* Effect.gen(function* () {
-        if (release !== undefined) yield* rollForward(release);
-        yield* trimParkedCopies;
-      }).pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
-      yield* Ref.set(finishPending, false);
+      yield* finishRead(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson));
     });
 
     // Local store-version buster (#48): a mismatch clears confirmed rows + the
@@ -1688,10 +1714,15 @@ export const makeKeyValue = (
       clearRows: locked(finishOrSeal.pipe(Effect.andThen(clearRowsInner))),
       applyRowOps: (ops) => locked(applyRowOpsInner(ops)),
 
+      // Refused for an id the tail holds (see `ClientStore.appendMutation`): a copy written here would
+      // sit in the journal and the tail until a row write trimmed it, and reads would count it twice.
       appendMutation: (mutation) =>
         locked(
           Effect.gen(function* () {
             yield* settleCompaction;
+            if ((yield* unpulledIndexOf).some((held) => entryKey(held) === entryKey(mutation))) {
+              return yield* alreadyParked(mutation);
+            }
             const index = yield* journalIndex;
             if (highWater !== undefined && index.length >= highWater) {
               return yield* new StoreError({
@@ -1886,16 +1917,19 @@ export const makeKeyValue = (
 
       unpulled: unsealed(unpulledOf),
       parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
+      // An outstanding record is finished before this one is written (#387). If that finish fails, this
+      // call fails and the record stays for the next call to finish; a failure after its read seals.
       beginRelease: (release) =>
         locked(
-          // Set before the record is written, since a write that reports failure may still have landed.
+          // Set before the record is read or written, since a write that reports failure may still have landed.
           Ref.set(finishPending, true).pipe(
             Effect.andThen(readDecoded(RELEASE_KEY, ReleaseIntentFromJson)),
             Effect.flatMap((pending) =>
-              pending === undefined
-                ? writeJson(RELEASE_KEY, release)
-                : Effect.fail(new StoreError({ message: OUTSTANDING_RELEASE_MESSAGE }))
-            )
+              pending === undefined ? Effect.void : finishRead(pending)
+            ),
+            // The finish clears the flag, and the record written below must set it again.
+            Effect.andThen(Ref.set(finishPending, true)),
+            Effect.andThen(writeJson(RELEASE_KEY, release))
           )
         ),
       releaseUnpulled: (lastMutationIds) => locked(releaseUnpulledInner(lastMutationIds)),
