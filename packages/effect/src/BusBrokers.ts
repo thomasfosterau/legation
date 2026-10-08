@@ -47,6 +47,8 @@ type StreamEntry = readonly [string, ReadonlyArray<string>];
 type StreamReply = readonly [string, ReadonlyArray<StreamEntry>];
 /** A full XREAD reply, or null on BLOCK timeout. */
 type XReadReply = ReadonlyArray<StreamReply> | null;
+/** An XREVRANGE reply: the entries in range, newest first. */
+type XRevRangeReply = ReadonlyArray<StreamEntry>;
 
 const PAYLOAD_FIELD = "p";
 
@@ -56,6 +58,15 @@ const payloadOf = (fields: ReadonlyArray<string>): string | undefined => {
     if (String(fields[i]) === PAYLOAD_FIELD) return String(fields[i + 1]);
   }
   return undefined;
+};
+
+/**
+ * The ID an XREAD continues from after the given XREVRANGE reply: the newest
+ * entry's ID, or `0-0` for an empty stream (so the next XREAD delivers every entry).
+ */
+const cursorAfter = (reply: XRevRangeReply): string => {
+  const [newest] = reply;
+  return newest === undefined ? "0-0" : newest[0];
 };
 
 /**
@@ -72,6 +83,19 @@ export const makeRedisBroker = (
     const from = options?.from ?? "$";
     const timeout = options?.timeout ?? "5 seconds";
 
+    // The ID an XREAD starts from. Resolved once per subscription, before the
+    // reader forks, so every publish after `subscribe` returns lands past it.
+    // XREAD's "$" re-resolves on each call, so a BLOCK timeout followed by a
+    // publish would move the cursor past that entry and the subscriber would
+    // never read it. XREVRANGE reads the last ID without blocking; a Redis error
+    // backs off and retries, as the reader does, so subscribe still completes.
+    const lastId: Effect.Effect<string> = redis
+      .send<XRevRangeReply>("XREVRANGE", stream, "+", "-", "COUNT", "1")
+      .pipe(
+        Effect.map(cursorAfter),
+        Effect.catch(() => Effect.sleep("200 millis").pipe(Effect.andThen(lastId)))
+      );
+
     return {
       // Best-effort: a failed or timed-out publish only delays the next pull
       // (ADR-0009), and BusBroker.publish has no error channel.
@@ -85,7 +109,8 @@ export const makeRedisBroker = (
         ),
       subscribe: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<string>();
-        const cursor: { id: string } = { id: from };
+        // Resolve the start position once, before the reader forks (see `lastId`).
+        const cursor: { id: string } = { id: from === "0" ? "0" : yield* lastId };
         const readOnce = Effect.gen(function* () {
           const reply = yield* redis.send<XReadReply>(
             "XREAD",
