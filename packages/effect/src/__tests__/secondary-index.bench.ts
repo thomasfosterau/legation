@@ -113,6 +113,7 @@ const makeBulkSeededStore = (
               (m) => !(m.mutationId <= (lastMutationIds[m.clientId] ?? 0))
             ))
         ),
+      finishRelease: Effect.void,
       clearUnpulled: Effect.sync(() => void (unpulled = [])),
       getCookie: Effect.sync(() => cookie),
       setCookie: (value) => Effect.sync(() => void (cookie = value)),

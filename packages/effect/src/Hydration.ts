@@ -127,7 +127,8 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
  * {@link SnapshotSchema} (so a malformed snapshot fails as a `StoreError`), then
  * put the rows, set the cookie if present, park the unpulled tail, and append
- * the journal in order. A snapshot without a tail parks nothing.
+ * the journal, skipping any entry the tail already holds. A snapshot without a
+ * tail parks nothing. An outstanding pull release is finished first.
  *
  * A running {@link ClientEngine} built over the store re-reads its view and built
  * indexes afterwards: a direct write does not go through the engine, so without this
@@ -150,6 +151,9 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       Effect.mapError(storeError("Invalid snapshot"))
     );
     yield* Effect.gen(function* () {
+      // An outstanding pull release goes first: its record would re-apply its patch over the
+      // snapshot's rows on the next open, so it is finished before the snapshot is written (#387).
+      yield* store.finishRelease;
       for (const { collection, ...row } of decoded.rows) {
         yield* store.putRow(collection, row);
       }

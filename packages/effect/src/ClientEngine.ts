@@ -17,6 +17,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Layer,
   Metric,
   PubSub,
@@ -1865,12 +1866,20 @@ export const make = (
             for (const m of tail.slice(0, released)) {
               watermark[m.clientId] = Math.max(watermark[m.clientId] ?? 0, m.mutationId);
             }
-            // A release that carries no rows still goes through the durable record, so a
-            // failure part-way through its removals is finished on the next open (#387).
+            // A release that carries no rows still goes through the durable record. It refuses to
+            // overwrite an outstanding one (#387), so no pull record is lost here.
             yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
-            yield* store.releaseUnpulled(watermark);
             yield* Ref.set(unpulled, tail.slice(released));
             yield* Ref.set(overlayCache, undefined);
+            // A release that fails part-way is finished in this process from its record, or the store
+            // seals itself (#387). The copy already holds the released tail, so it agrees either way.
+            yield* store
+              .releaseUnpulled(watermark)
+              .pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit) ? Effect.void : store.finishRelease.pipe(Effect.ignore)
+                )
+              );
           }
           return covered.filter(isRejected);
         })
@@ -2175,6 +2184,28 @@ export const make = (
         return { collections: [...collections], rows };
       });
 
+    // The in-process roll-forward of a pull whose section failed after its release record (#387).
+    // The store finishes the record, as an open would; the copy is re-read before its next use,
+    // since the store has released the tail. A failed roll-forward has sealed the store, so it is
+    // logged and the pull reports its own error. Holds `overlayLock`.
+    const rollForwardPullLocked = (
+      lastMutationIds: Readonly<Record<string, number>>
+    ): Effect.Effect<void> =>
+      store.finishRelease.pipe(
+        Effect.andThen(Ref.set(unpulledStale, true)),
+        Effect.andThen(Ref.set(overlayCache, undefined)),
+        Effect.andThen(settleOwnApplied(lastMutationIds)),
+        Effect.andThen(publishChange(REBUILD)),
+        Effect.catch((error) =>
+          Effect.logError(
+            "ClientEngine: a pull release could not be finished; the store is sealed",
+            {
+              error,
+            }
+          )
+        )
+      );
+
     const applyPull = (response: PullResponse): Effect.Effect<PullTouched, StoreError> =>
       Effect.gen(function* () {
         // With an empty journal the patch ops are exactly the materialized-view
@@ -2207,13 +2238,24 @@ export const make = (
               cookie: response.cookie,
               patch: response.patch,
             });
-            yield* applyPatch(response.patch);
-            yield* acknowledgeLocked(response.lastMutationIds);
+            // A failure after the marker is rolled forward here, from the same record, as the
+            // open does. If that fails too the store seals itself, so no writer runs with the
+            // record outstanding (#387).
+            yield* Effect.gen(function* () {
+              yield* applyPatch(response.patch);
+              // The cookie goes down before the release removes the record, so a crash between the
+              // two leaves the next open to write it again, not an old cookie over new rows (#387).
+              yield* store.setCookie(response.cookie);
+              yield* acknowledgeLocked(response.lastMutationIds);
+            }).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit) ? Effect.void : rollForwardPullLocked(response.lastMutationIds)
+              )
+            );
             return before;
           })
         );
         const hadPending = journalBefore.length > 0;
-        yield* store.setCookie(response.cookie);
         let change: ViewChange;
         if (hasClear) {
           change = REBUILD;
