@@ -462,7 +462,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // (found by the commerce example's contract run over node:sqlite).
         // The unqualified column is the stored row's value.
         `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ` +
-        `excluded.${q("last_mutation_id")}`, // TEMP MUTANT
+        dialect.greatest(q("last_mutation_id"), `excluded.${q("last_mutation_id")}`),
       params: [clientGroupId, clientId, mutationId],
     });
 
@@ -553,9 +553,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     });
 
   // The ordering this executor uses; chosen once, outside the generator.
-  // TEMP MUTANT for CI evidence, reverted in the next commit
-  const applyOne = transactional ? applyBumpAfter : applyBumpAfter;
-  void applyClaimFirst;
+  const applyOne = transactional ? applyClaimFirst : applyBumpAfter;
 
   const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
     executor.transaction(
