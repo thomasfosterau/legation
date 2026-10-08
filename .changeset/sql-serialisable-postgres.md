@@ -9,3 +9,5 @@
 - **D1** (`transactional: false`) does not conform, since it has no transactions to isolate. The README and the `D1Executor` docs now say so (#342).
 
 `Sql.Dialect` gains an optional `serializable` statement, which `Sql.postgres` sets. The `SqlExecutor` seam docs state the isolation a third-party executor must provide.
+
+**PostgreSQL apps must pass `dialect: Sql.postgres` to `SqlBackend.make`.** Without it the backend uses the SQLite dialect, which runs no isolation statement and raises no error, so batches run at READ COMMITTED. A hand-written dialect without a `serializable` statement gets no isolation statement either. Also, the executor's `transaction` must open a top-level transaction: PostgreSQL refuses `SET TRANSACTION` inside a nested one (a savepoint), and `applyMutations` then fails with a `BackendError` rather than running at a weaker isolation.

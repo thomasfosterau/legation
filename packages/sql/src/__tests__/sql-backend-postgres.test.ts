@@ -495,3 +495,56 @@ describePostgres(
     );
   }
 );
+
+// A nested transaction cannot set SERIALIZABLE (#353): PostgreSQL refuses SET
+// TRANSACTION inside a subtransaction, which the executor's nested `transaction`
+// runs as a savepoint. The batch must then fail rather than run at READ COMMITTED.
+describePostgres("SqlBackend on PostgreSQL: a nested transaction (#353)", () => {
+  const url = databaseUrl ?? "";
+
+  it.live(
+    "fails applyMutations run inside an outer transaction with a BackendError, writes nothing, and leaves the outer transaction usable",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          const backend = SqlBackend.make({
+            executor: executorOver(sql),
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
+            handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            dialect: Sql.postgres,
+          });
+
+          // The outer transaction makes its own write, then calls the backend,
+          // whose SERIALIZABLE statement is refused inside the nested savepoint.
+          yield* executorOver(sql).transaction(
+            Effect.gen(function* () {
+              // Flipped so the failure is the success value; a success would die here.
+              const failure = yield* Effect.flip(
+                backend.applyMutations(context, [mutation(1, "todo/set")])
+              ).pipe(Effect.orDie);
+              expect(failure).toMatchObject({
+                _tag: "BackendError",
+                message: expect.stringContaining("SERIALIZABLE isolation could not be set"),
+              });
+              // The outer transaction is still usable after the nested failure.
+              yield* executorOver(sql).run({
+                text: `INSERT INTO todos (id, title) VALUES ($1, $2)`,
+                params: ["outer", "outer"],
+              });
+            })
+          );
+
+          // Only the outer write committed: the batch wrote nothing and the ledger
+          // did not move.
+          expect(yield* applicationsOf(sql, "1")).toBe(0);
+          expect(yield* ledgerOf(sql)).toBe(0);
+          const outer = yield* sql.unsafe<{ title: string }>(
+            `SELECT title FROM todos WHERE id = 'outer'`
+          ).unprepared;
+          expect(outer).toEqual([{ title: "outer" }]);
+        })
+      ),
+    60_000
+  );
+});

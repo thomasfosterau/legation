@@ -857,12 +857,18 @@ describe("SqlBackend watermark without transactions (#352)", () => {
 // The isolation statement (#353): a dialect that names one runs it first in each
 // transaction, before any read or ledger write; SQLite, which serialises its own
 // writers, names none; an executor without transactions runs no transaction.
-// Runs one applyMutations call and returns the statements it ran, in order (#353).
+// Runs one applyMutations call and returns the statements it ran, in order, from
+// both `query` and `run` (#353): an isolation statement after a read would not
+// isolate that read, so the order is what the test pins.
 const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
   const mock = makeMock({ transactional });
   const statements: Array<string> = [];
   const executor: SqlBackend.SqlExecutor = {
     ...mock.executor,
+    query: (fragment) =>
+      Effect.sync(() => {
+        statements.push(fragment.text);
+      }).pipe(Effect.andThen(mock.executor.query(fragment))),
     run: (fragment) =>
       Effect.sync(() => {
         statements.push(fragment.text);
@@ -888,11 +894,12 @@ const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
 
 describe("SqlBackend isolation statement (#353)", () => {
   it.effect(
-    "runs the PostgreSQL SERIALIZABLE statement before the transaction's first ledger write",
+    "runs the PostgreSQL SERIALIZABLE statement before the transaction's first read or ledger write",
     () =>
       Effect.gen(function* () {
         const statements = yield* applyOnce(Sql.postgres, true);
         expect(statements[0]).toBe("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        expect(statements.length).toBeGreaterThan(1);
         expect(statements.filter((text) => text.startsWith("SET TRANSACTION"))).toHaveLength(1);
       })
   );

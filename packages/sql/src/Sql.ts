@@ -86,8 +86,11 @@ export interface Dialect {
   readonly greatest: (left: string, right: string) => string;
   /**
    * The statement that makes the transaction it runs in SERIALIZABLE, run first
-   * in each `applyMutations` transaction (#353). Absent on a dialect whose
-   * writers already serialise (SQLite takes its write lock with `BEGIN IMMEDIATE`).
+   * in each `applyMutations` transaction (#353). It must be the transaction's first
+   * statement in a top-level transaction: a nested one refuses it, and the batch
+   * then fails. Absent on a dialect whose writers already serialise (SQLite takes
+   * its write lock with `BEGIN IMMEDIATE`); a hand-written dialect without it gets
+   * no isolation statement, so its executor must provide the isolation itself.
    */
   readonly serializable?: string | undefined;
 }

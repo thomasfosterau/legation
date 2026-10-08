@@ -28,6 +28,8 @@
  * increment. Reads of a handler's own staged writes are not recorded, since
  * those writes commit with the handler. A handler can run more than once, so
  * its effects outside the writer must be safe to repeat (see {@link BackendHandler}).
+ * A handler still stale after a fixed number of runs fails with a transient
+ * `BackendError` and writes nothing, so a hot row cannot loop it forever.
  *
  * Every copy reports the committed outcome (#355). A mutation committed as
  * permanently rejected is remembered with its reason, so a copy that loses the
@@ -123,6 +125,13 @@ interface MemoryRow {
   readonly version: number;
   readonly value: unknown;
 }
+
+/**
+ * How many times one mutation's handler runs while a row it read keeps changing
+ * before its commit (#353). A handler still stale after this many runs fails
+ * with a transient `BackendError` instead of looping on a hot row.
+ */
+const MAX_HANDLER_ATTEMPTS = 16;
 
 interface MemoryState {
   readonly rows: ReadonlyMap<string, ReadonlyMap<string, MemoryRow>>;
@@ -446,7 +455,9 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // while its handler ran is dropped at commit, like a replay. Every replay
     // and dropped copy reports the committed rejection, if there is one (#355).
     // A handler whose reads went stale before its commit runs again, on a new
-    // stage, until it commits or is dropped (#353).
+    // stage, until it commits, is dropped, or has run MAX_HANDLER_ATTEMPTS times
+    // (#353). Past the cap it fails transiently, like a serialization failure on
+    // PostgreSQL, so the client's retry takes over and nothing is written.
     interface Attempt {
       readonly stage: Stage;
       readonly outcome: Outcome;
@@ -455,7 +466,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     const attempt = (
       context: SyncContext,
       mutation: Mutation,
-      handle: BackendHandler
+      handle: BackendHandler,
+      attempts = 1
     ): Effect.Effect<Attempt, BackendError> =>
       Effect.gen(function* () {
         const stage = newStage();
@@ -466,7 +478,16 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           )
         );
         const settlement = yield* commit(context, mutation, outcome, stage.reads);
-        if (settlement._tag === "conflicted") return yield* attempt(context, mutation, handle);
+        if (settlement._tag === "conflicted") {
+          if (attempts >= MAX_HANDLER_ATTEMPTS) {
+            return yield* new BackendError({
+              message:
+                `serialization conflict: mutation ${mutation.mutationId} of client ${mutation.clientId} ` +
+                `read rows that changed before its commit on each of ${MAX_HANDLER_ATTEMPTS} attempts`,
+            });
+          }
+          return yield* attempt(context, mutation, handle, attempts + 1);
+        }
         return { stage, outcome, settlement };
       });
 
