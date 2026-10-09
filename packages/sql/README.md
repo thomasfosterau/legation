@@ -46,6 +46,41 @@ transactions sets `transactional: false` and bumps after the handler instead
 > nested in another: PostgreSQL refuses `SET TRANSACTION` there, and the batch
 > fails with a `BackendError` instead of running weaker.
 
+## Migrating to 0.2.0
+
+**Action required before upgrading.** `SqlBackend` now remembers each permanent
+rejection in the client's ledger row, in a new `rejections` column, so a replayed
+copy of a rejected mutation reports the committed rejection and its reason. Run
+the `ALTER TABLE` for your database on the ledger table (`sync_mutations`, or the
+`mutationsTable` you configured) before you upgrade:
+
+```sql
+-- SQLite
+ALTER TABLE sync_mutations ADD COLUMN rejections TEXT;
+
+-- PostgreSQL
+ALTER TABLE sync_mutations ADD COLUMN IF NOT EXISTS rejections TEXT;
+```
+
+The column is nullable and has no default, so existing rows are unchanged. It is
+a metadata-only change on both databases, with a brief lock on the ledger table.
+A ledger without the column fails each push with a `BackendError` that names this
+migration, and that push writes nothing.
+
+A new install creates the ledger with the column:
+
+```sql
+CREATE TABLE sync_mutations (
+  client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+  rejections TEXT,
+  PRIMARY KEY (client_group_id, client_id)
+);
+```
+
+The `rejections` value is a JSON object that maps each remembered mutation id to
+its reason. A push forgets the rejections below its lowest id per client, and a
+client that never pushes again keeps its last push's rejections.
+
 ## Install
 
 ```sh

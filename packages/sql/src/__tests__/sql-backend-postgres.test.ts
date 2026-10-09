@@ -30,7 +30,7 @@ import {
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
-import { Backend, BackendError, Mutator } from "@thomasfosterau/legation-effect";
+import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 
@@ -48,17 +48,31 @@ const DDL: ReadonlyArray<string> = [
   `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT NOT NULL)`,
   // One row per handler application, so a second application is visible.
   `CREATE TABLE effects (seq INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, id TEXT NOT NULL)`,
-  // The ledger's default table and columns (`SqlBackendConfig.mutationsTable`).
+  // The ledger's default table and columns (`SqlBackendConfig.mutationsTable`),
+  // with the `rejections` column a new install creates (#366).
+  `CREATE TABLE sync_mutations (
+    client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    rejections TEXT,
+    PRIMARY KEY (client_group_id, client_id)
+  )`,
+];
+
+/** The schema before #366: the ledger has no `rejections` column. */
+const DDL_BEFORE_366: ReadonlyArray<string> = [
+  DROP_TABLES,
+  `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT NOT NULL)`,
+  `CREATE TABLE effects (seq INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, id TEXT NOT NULL)`,
   `CREATE TABLE sync_mutations (
     client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
     PRIMARY KEY (client_group_id, client_id)
   )`,
 ];
 
-/** Run `use` on a pooled client against a freshly reset schema. */
+/** Run `use` on a pooled client against a freshly reset schema (default: `DDL`). */
 const withDatabase = <A>(
   url: string,
-  use: (sql: SqlClient) => Effect.Effect<A, unknown>
+  use: (sql: SqlClient) => Effect.Effect<A, unknown>,
+  schema: ReadonlyArray<string> = DDL
 ): Effect.Effect<A> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -68,7 +82,7 @@ const withDatabase = <A>(
         PgClient.layer({ url: Redacted.make(url), maxConnections: 4 })
       );
       const sql = Context.get(built, SqlClient);
-      for (const statement of DDL) yield* sql.unsafe(statement).unprepared;
+      for (const statement of schema) yield* sql.unsafe(statement).unprepared;
       return yield* use(sql).pipe(
         Effect.ensuring(sql.unsafe(DROP_TABLES).unprepared.pipe(Effect.ignore))
       );
@@ -544,6 +558,178 @@ describePostgres("SqlBackend on PostgreSQL: a nested transaction (#353)", () => 
           ).unprepared;
           expect(outer).toEqual([{ title: "outer" }]);
         })
+      ),
+    60_000
+  );
+});
+
+// Rejection memory on PostgreSQL (#366). The first copy of a rejected mutation
+// parks inside its transaction, so the copy that is dropped has a real lock
+// wait behind it. The rejection is committed with the claim, so the copy sees
+// the committed outcome once it can read again.
+const rejectionOf = (mutationId: number) => ({
+  clientId: CLIENT,
+  mutationId,
+  reason: `forbidden ${mutationId}`,
+});
+
+describePostgres("SqlBackend on PostgreSQL: rejection memory (#366)", () => {
+  const url = databaseUrl ?? "";
+
+  it.live(
+    "a copy of a rejected mutation dropped behind its first copy reports the committed rejection on retry",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          // The first copy writes, parks inside its transaction, then is rejected.
+          const runs = yield* Ref.make(0);
+          const written = yield* Deferred.make<number>();
+          const release = yield* Deferred.make<void>();
+          const backend = SqlBackend.make({
+            executor: executorOver(sql),
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([
+              [setTodo.name, setTodo],
+              [parkTodo.name, parkTodo],
+            ]),
+            handlers: {
+              "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+              "todo/park": (raw, tx) =>
+                Effect.gen(function* () {
+                  const args = raw as Args;
+                  const run = yield* Ref.updateAndGet(runs, (n) => n + 1);
+                  yield* applyWrite(tx, args);
+                  if (run === 1) {
+                    const rows = yield* tx.query({
+                      text: "SELECT pg_backend_pid() AS pid",
+                      params: [],
+                    });
+                    yield* Deferred.succeed(written, Number(rows[0]?.pid));
+                    yield* Deferred.await(release);
+                  }
+                  return yield* new MutationRejected({ reason: `forbidden ${args.id}` });
+                }),
+            },
+            dialect: Sql.postgres,
+          });
+
+          yield* backend.applyMutations(context, [mutation(1, "todo/set")]);
+
+          const first = yield* Effect.forkChild(
+            backend.applyMutations(context, [mutation(2, "todo/park")])
+          );
+          const firstPid = yield* Effect.raceFirst(
+            Deferred.await(written),
+            Fiber.join(first).pipe(
+              Effect.andThen(Effect.die("the first call finished before its handler parked"))
+            )
+          );
+
+          // The copy waits on the first call's uncommitted ledger row.
+          const copy = yield* Effect.forkChild(
+            backend.applyMutations(context, [mutation(2, "todo/park")])
+          );
+          const copySettled = yield* Effect.exit(awaitCopySettled(sql, copy));
+
+          yield* Deferred.succeed(release, undefined);
+          const applied = yield* Fiber.join(first);
+          expect(applied.rejected).toEqual([rejectionOf(2)]);
+
+          // Under SERIALIZABLE the copy is refused once the first call commits. The
+          // client retries: the ledger covers 2, so the retry is a replay that
+          // reports the committed rejection, and the handler does not run again.
+          const refused = yield* Effect.flip(Fiber.join(copy));
+          expect(refused).toMatchObject({
+            _tag: "BackendError",
+            cause: { reason: { _tag: "SerializationError" } },
+          });
+          const retried = yield* backend.applyMutations(context, [mutation(2, "todo/park")]);
+          expect(retried.rejected).toEqual([rejectionOf(2)]);
+          expect(retried.hints).toEqual([]);
+          expect(yield* Ref.get(runs)).toBe(1);
+          expect(yield* applicationsOf(sql, "2")).toBe(0);
+          expect(yield* ledgerOf(sql)).toBe(2);
+
+          // Asserted last, so a failure above names the double run first.
+          expect(copySettled).toEqual(
+            Exit.succeed({
+              _tag: "Blocked",
+              blockers: [firstPid],
+              statement: expect.stringMatching(
+                /^INSERT INTO "sync_mutations" .* ON CONFLICT .* DO NOTHING$/
+              ),
+            })
+          );
+        })
+      ),
+    60_000
+  );
+
+  it.live(
+    "a rejection is forgotten once a push starts past it, and kept while a push still carries it",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          const backend = SqlBackend.make({
+            executor: executorOver(sql),
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([
+              [setTodo.name, setTodo],
+              [parkTodo.name, parkTodo],
+            ]),
+            handlers: {
+              "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+              "todo/park": (raw, tx) =>
+                Effect.fail(new MutationRejected({ reason: `forbidden ${(raw as Args).id}` })).pipe(
+                  Effect.tap(() => applyWrite(tx, raw as Args))
+                ),
+            },
+            dialect: Sql.postgres,
+          });
+
+          const first = yield* backend.applyMutations(context, [mutation(1, "todo/park")]);
+          expect(first.rejected).toEqual([rejectionOf(1)]);
+
+          const kept = yield* backend.applyMutations(context, [
+            mutation(1, "todo/park"),
+            mutation(2, "todo/set"),
+          ]);
+          expect(kept.rejected).toEqual([rejectionOf(1)]);
+
+          yield* backend.applyMutations(context, [mutation(3, "todo/set")]);
+          const late = yield* backend.applyMutations(context, [mutation(1, "todo/park")]);
+          expect(late.rejected).toBeUndefined();
+          expect(late.lastMutationIds).toEqual({ [CLIENT]: 3 });
+        })
+      ),
+    60_000
+  );
+
+  it.live(
+    "a database without the rejections column fails clearly, naming the migration",
+    () =>
+      withDatabase(
+        url,
+        (sql) =>
+          Effect.gen(function* () {
+            const backend = SqlBackend.make({
+              executor: executorOver(sql),
+              tables: { todos: { table: "todos" } },
+              mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
+              handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+              dialect: Sql.postgres,
+            });
+            const error = yield* backend
+              .applyMutations(context, [mutation(1, "todo/set")])
+              .pipe(Effect.flip);
+            expect(error).toBeInstanceOf(BackendError);
+            expect(error.message).toContain(
+              "ALTER TABLE sync_mutations ADD COLUMN rejections TEXT"
+            );
+            expect(error.message).toContain("Migrating to 0.2.0");
+            expect(yield* applicationsOf(sql, "1")).toBe(0);
+          }),
+        DDL_BEFORE_366
       ),
     60_000
   );

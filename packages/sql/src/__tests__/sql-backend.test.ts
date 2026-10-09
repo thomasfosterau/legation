@@ -50,13 +50,17 @@ const unmodelled = (fragment: Sql.SqlFragment): never => {
  * - `transactional` (the default; its transaction does not serialise): the
  *   reads, insert-if-absent at 0, the conditional claim (`UPDATE ... RETURNING`)
  *   and the claim's release (a conditional `UPDATE`).
- * - `transactional: false` (D1's order): the reads and the bump after the
- *   handler, an upsert to the larger of the stored and the new id.
+ * - `transactional: false` (D1's order): the reads, the bump after the
+ *   handler (an upsert to the larger of the stored and the new id), and, for a
+ *   rejection, the insert-if-absent that creates the row before the rejection
+ *   is stored (#366).
  */
 const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const transactional = options.transactional ?? true;
   const tables = new Map<string, ReadonlyArray<SqlBackend.SqlRow>>();
   const ledger = new Map<string, number>(); // `${group}:${client}` → lastId
+  // `${group}:${client}` → the `rejections` column's JSON text (#366), or null.
+  const rejections = new Map<string, string | null>();
   const queries: Array<Sql.SqlFragment> = [];
 
   // The claim and its release: `UPDATE "sync_mutations"` with params
@@ -81,19 +85,30 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
     // The release of a claim: a conditional UPDATE.
     casLedger(fragment);
   };
+  const storeRejections = (fragment: Sql.SqlFragment): void => {
+    // The rejection memory: `SET "rejections" = ?` for one client's row (#366).
+    const [json, group, client] = fragment.params as [string | null, string, string];
+    rejections.set(`${group}:${client}`, json);
+  };
   const bumpMonotonic = (fragment: Sql.SqlFragment): void => {
     // The bump after the handler: the watermark only rises.
     const [group, client, id] = fragment.params as [string, string, number];
     const key = `${group}:${client}`;
     ledger.set(key, Math.max(ledger.get(key) ?? 0, id));
   };
+  const rejectionWrite = /^UPDATE "sync_mutations" SET "rejections" = /;
   const ledgerWrites: ReadonlyArray<readonly [RegExp, (fragment: Sql.SqlFragment) => void]> =
     transactional
       ? [
           [/DO NOTHING$/, insertIfAbsent],
-          [/^UPDATE "sync_mutations"/, giveBackClaim],
+          [/^UPDATE "sync_mutations" SET "last_mutation_id"/, giveBackClaim],
+          [rejectionWrite, storeRejections],
         ]
-      : [[MONOTONIC_BUMP, bumpMonotonic]];
+      : [
+          [/DO NOTHING$/, insertIfAbsent],
+          [MONOTONIC_BUMP, bumpMonotonic],
+          [rejectionWrite, storeRejections],
+        ];
 
   const executor: SqlBackend.SqlExecutor = {
     query: (fragment) =>
@@ -110,6 +125,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
               .map(([key, last]) => ({
                 client_id: key.slice(String(group).length + 1),
                 last_mutation_id: last,
+                rejections: rejections.get(key) ?? null,
               }));
           }
           return unmodelled(fragment);
@@ -917,4 +933,80 @@ describe("SqlBackend isolation statement (#353)", () => {
       expect(statements.some((text) => /SET TRANSACTION|ISOLATION/.test(text))).toBe(false);
     })
   );
+});
+
+const rejectedAt = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: "todo/reject",
+  args: { id: String(mutationId) },
+  createdAt: 0,
+});
+const setAt = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: "todo/set",
+  args: { id: String(mutationId) },
+  createdAt: 0,
+});
+const rejection = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  reason: `forbidden ${mutationId}`,
+});
+
+/**
+ * The rejection memory over the mock ledger (#366), in both orders: a replayed
+ * copy of a committed rejection reports its stored reason, and a push that
+ * starts past it forgets it.
+ */
+describe("SqlBackend rejection memory over the mock ledger (#366)", () => {
+  const rejectArgs = Schema.Struct({ id: Schema.String });
+  const rejectMutator = Mutator.make("todo/reject", rejectArgs);
+  const rejectingBackend = (mock: Mock) =>
+    SqlBackend.make({
+      executor: mock.executor,
+      tables,
+      mutators: new Map<string, Mutator.AnyMutator>([
+        [setTodo.name, setTodo],
+        [rejectMutator.name, rejectMutator],
+      ]),
+      handlers: {
+        "todo/set": () => Effect.succeed([]),
+        "todo/reject": (raw) =>
+          Effect.fail(new MutationRejected({ reason: `forbidden ${(raw as { id: string }).id}` })),
+      },
+    });
+
+  for (const transactional of [true, false]) {
+    const order = transactional ? "with transactions" : "without transactions";
+
+    it.effect(`a replayed copy of a committed rejection reports its reason, ${order}`, () => {
+      const mock = makeMock({ transactional });
+      const backend = rejectingBackend(mock);
+      return Effect.gen(function* () {
+        const group = { clientGroupId: "g" };
+        const first = yield* backend.applyMutations(group, [rejectedAt(1)]);
+        expect(first.rejected).toEqual([rejection(1)]);
+
+        const replay = yield* backend.applyMutations(group, [rejectedAt(1)]);
+        expect(replay.rejected).toEqual([rejection(1)]);
+        expect(replay.lastMutationIds).toEqual({ c1: 1 });
+      });
+    });
+
+    it.effect(`a push that starts past a rejection forgets it, ${order}`, () => {
+      const mock = makeMock({ transactional });
+      const backend = rejectingBackend(mock);
+      return Effect.gen(function* () {
+        const group = { clientGroupId: "g" };
+        yield* backend.applyMutations(group, [rejectedAt(1)]);
+        yield* backend.applyMutations(group, [setAt(2)]);
+
+        const late = yield* backend.applyMutations(group, [rejectedAt(1)]);
+        expect(late.rejected).toBeUndefined();
+        expect(late.lastMutationIds).toEqual({ c1: 2 });
+      });
+    });
+  }
 });

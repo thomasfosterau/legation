@@ -87,6 +87,7 @@ const DDL: ReadonlyArray<string> = [
   // Per-client mutation-id ledger (SqlBackend's exactly-once bookkeeping).
   `CREATE TABLE IF NOT EXISTS sync_mutations (
     client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    rejections TEXT,
     PRIMARY KEY (client_group_id, client_id)
   )`,
   // The browser's client group → authenticated user binding (IdentityResolver).

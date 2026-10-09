@@ -64,6 +64,7 @@ const CONTRACT_DDL: ReadonlyArray<string> = [
   `CREATE TABLE __contract_eval (id TEXT PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT)`,
   `CREATE TABLE sync_mutations (
     client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    rejections TEXT,
     PRIMARY KEY (client_group_id, client_id)
   )`,
 ];
@@ -258,6 +259,7 @@ describe("paced compaction against SqlBackend (#249)", () => {
         yield* sql.unsafe(
           `CREATE TABLE sync_mutations (
             client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+            rejections TEXT,
             PRIMARY KEY (client_group_id, client_id)
           )`
         ).unprepared;
@@ -342,6 +344,7 @@ const PG_DDL: ReadonlyArray<string> = [
   `CREATE TABLE __contract_eval (id TEXT COLLATE "C" PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT COLLATE "C")`,
   `CREATE TABLE contract_sync_mutations (
     client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    rejections TEXT,
     PRIMARY KEY (client_group_id, client_id)
   )`,
 ];

@@ -28,6 +28,16 @@
  * claim together with its handler's writes, so it keeps the handler-then-bump
  * order instead (see D1 below).
  *
+ * A permanent rejection is remembered in the client's ledger row, in the same
+ * transaction as the claim (#366), in a `rejections` column that holds a JSON
+ * object of mutation id → reason. A replayed copy, or a copy dropped because a
+ * concurrent call committed first, lists its mutation in `rejected` with the
+ * stored reason, so every copy reports the committed outcome (guarantee 1). A
+ * push forgets the rejections below its lowest id per client. The memory is
+ * bounded per client: a client that never pushes again keeps its last push's
+ * rejections. It assumes one journal per `clientId`, which backend contiguity
+ * already requires.
+ *
  * Mutations from different client groups are serialisable (guarantee 1, #353),
  * per dialect:
  *
@@ -111,6 +121,52 @@ const gapError = (clientId: string, mutationId: number, last: number) =>
 
 /** One pushed mutation, as `applyMutations` receives it. */
 type Mutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
+
+/**
+ * How one pushed mutation settled: its handler applied it or rejected it, or a
+ * copy the ledger covers was skipped. A replayed copy carries the committed
+ * rejection's reason, when there is one (#366).
+ */
+type Settlement =
+  | { readonly _tag: "applied"; readonly hints: ReadonlyArray<Backend.ChangeHint> }
+  | { readonly _tag: "rejected"; readonly reason: string }
+  | { readonly _tag: "replayed"; readonly rejection: string | undefined };
+
+/** The lowest mutation id a push carries, per client: the push's floors (as MemoryBackend, #355). */
+const lowestIdPerClient = (mutations: ReadonlyArray<Mutation>): Map<string, number> => {
+  const floors = new Map<string, number>();
+  for (const { clientId, mutationId } of mutations) {
+    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
+  }
+  return floors;
+};
+
+/** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
+const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
+  rejections.size === 0 ? null : JSON.stringify(Object.fromEntries(rejections));
+
+/** Decode the `rejections` column (`null` and absent both mean none remembered). */
+const decodeRejections = (
+  text: unknown,
+  mutationsTable: string
+): Effect.Effect<ReadonlyMap<number, string>, BackendError> => {
+  if (text === null || text === undefined) return Effect.succeed(new Map());
+  return Effect.try({
+    try: () => {
+      if (typeof text !== "string") throw new TypeError("not text");
+      return new Map(
+        Object.entries(JSON.parse(text) as Record<string, string>).map(
+          ([id, reason]) => [Number(id), String(reason)] as const
+        )
+      );
+    },
+    catch: (cause) =>
+      new BackendError({
+        message: `The "rejections" column of the mutation ledger "${mutationsTable}" holds a value that is not a rejection memory`,
+        cause,
+      }),
+  });
+};
 
 /** A row as returned by the driver: a column → value record. */
 export type SqlRow = Record<string, unknown>;
@@ -248,12 +304,22 @@ export interface SqlBackendConfig {
    * provide the isolation itself (see {@link SqlExecutor}).
    */
   readonly dialect?: Sql.Dialect | undefined;
-  /** Per-client mutation-id ledger table. Defaults to `"sync_mutations"`. */
+  /**
+   * Per-client mutation-id ledger table. Defaults to `"sync_mutations"`. It must
+   * have the `rejections` column that #366 added: an older table fails the push
+   * with a `BackendError` naming the migration (see the sql README).
+   */
   readonly mutationsTable?: string;
 }
 
 /** Content-hash fallback version when no version column is mapped. */
 export const versionOf = Hash.contentHash;
+
+/** One client's ledger row: its watermark and the rejections it still remembers (#366). */
+interface LedgerRow {
+  readonly last: number;
+  readonly rejections: ReadonlyMap<number, string>;
+}
 
 /**
  * A {@link Backend.Backend} over a {@link SqlExecutor}: subset evaluation, row fetch and the
@@ -441,6 +507,90 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         )
       );
 
+  // The group's ledger rows with their rejection memory (#366). Every push reads
+  // it, so a ledger without the `rejections` column fails here, on the first
+  // push after an upgrade, naming the migration instead of failing silently.
+  const readLedger = (
+    clientGroupId: string
+  ): Effect.Effect<ReadonlyMap<string, LedgerRow>, BackendError> =>
+    executor
+      .query({
+        text: `SELECT ${q("client_id")}, ${q("last_mutation_id")}, ${q("rejections")} FROM ${q(mutationsTable)} WHERE ${q("client_group_id")} = ${ph(1)}`,
+        params: [clientGroupId],
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new BackendError({
+              message:
+                `The mutation ledger "${mutationsTable}" could not be read with its "rejections" column. ` +
+                `If the column is missing, run \`ALTER TABLE ${mutationsTable} ADD COLUMN rejections TEXT\` ` +
+                `before upgrading (the sql README's "Migrating to 0.2.0" section).`,
+              cause,
+            })
+        ),
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows, (row) =>
+            decodeRejections(row.rejections, mutationsTable).pipe(
+              Effect.map(
+                (rejections) =>
+                  [
+                    String(row.client_id),
+                    { last: Number(row.last_mutation_id), rejections },
+                  ] as const
+              )
+            )
+          )
+        ),
+        Effect.map((entries) => new Map(entries))
+      );
+
+  // Replace one client's remembered rejections (`null` when the set is empty).
+  const writeRejections = (
+    clientGroupId: string,
+    clientId: string,
+    rejections: ReadonlyMap<number, string>
+  ) =>
+    executor.run({
+      text: `UPDATE ${q(mutationsTable)} SET ${q("rejections")} = ${ph(1)} WHERE ${q("client_group_id")} = ${ph(2)} AND ${q("client_id")} = ${ph(3)}`,
+      params: [encodeRejections(rejections), clientGroupId, clientId],
+    });
+
+  // Remember a permanent rejection in the client's ledger row (#366). It runs in
+  // the same transaction as the claim (or, without transactions, before the
+  // bump), so a copy that reads the row afterwards sees the outcome with the id.
+  // The row is created at 0 first if it does not exist yet: a D1 push records the
+  // rejection before the bump that would otherwise create the row.
+  const recordRejection = (
+    clientGroupId: string,
+    clientId: string,
+    mutationId: number,
+    reason: string
+  ) =>
+    Effect.gen(function* () {
+      yield* ensureLedgerRow(clientGroupId, clientId);
+      const row = (yield* readLedger(clientGroupId)).get(clientId);
+      const rejections = new Map(row?.rejections ?? []);
+      rejections.set(mutationId, reason);
+      yield* writeRejections(clientGroupId, clientId, rejections);
+    });
+
+  // Forget the rejections a push has moved past: for each client in the push, the
+  // remembered rejections below its lowest id in the push (#355, as MemoryBackend).
+  const forgetRejections = (clientGroupId: string, floors: ReadonlyMap<string, number>) =>
+    Effect.gen(function* () {
+      if (floors.size === 0) return;
+      const ledger = yield* readLedger(clientGroupId);
+      for (const [clientId, floor] of floors) {
+        const row = ledger.get(clientId);
+        if (row === undefined || row.rejections.size === 0) continue;
+        const kept = new Map([...row.rejections].filter(([mutationId]) => mutationId >= floor));
+        if (kept.size !== row.rejections.size) {
+          yield* writeRejections(clientGroupId, clientId, kept);
+        }
+      }
+    });
+
   // Create the client's ledger row at 0 when it has none. `DO NOTHING` leaves a
   // row another transaction inserted alone (on PostgreSQL the insert waits for
   // that transaction to commit or roll back first), so the claim below finds
@@ -474,21 +624,25 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       })
       .pipe(Effect.map((rows) => rows.length > 0));
 
-  // Claim `mutationId` before its handler runs. `true`: this call won the claim
-  // and must run the handler. `false`: the ledger already covers the id, so it
-  // is a replay to skip. Otherwise the id is past the next expected one: a gap,
-  // a `BackendError`. A zero-row claim re-reads the ledger, which only ever
+  // Claim `mutationId` before its handler runs. `undefined`: this call won the
+  // claim and must run the handler. A `replayed` settlement: the ledger already
+  // covers the id, so it is a replay to skip, reporting the committed rejection
+  // when there is one (#366). Otherwise the id is past the next expected one: a
+  // gap, a `BackendError`. A zero-row claim re-reads the ledger, which only ever
   // rises, so a stale claim cannot move the watermark back.
   const claimMutation = (
     clientGroupId: string,
     clientId: string,
     mutationId: number
-  ): Effect.Effect<boolean, BackendError> =>
+  ): Effect.Effect<Settlement | undefined, BackendError> =>
     Effect.gen(function* () {
       yield* ensureLedgerRow(clientGroupId, clientId);
-      if (yield* claimLedger(clientGroupId, clientId, mutationId)) return true;
-      const last = (yield* readLastIds(clientGroupId))[clientId] ?? 0;
-      if (mutationId <= last) return false;
+      if (yield* claimLedger(clientGroupId, clientId, mutationId)) return undefined;
+      const row = (yield* readLedger(clientGroupId)).get(clientId);
+      const last = row?.last ?? 0;
+      if (mutationId <= last) {
+        return { _tag: "replayed", rejection: row?.rejections.get(mutationId) };
+      }
       return yield* gapError(clientId, mutationId, last);
     });
 
@@ -560,43 +714,64 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   // Claim-first, for an executor with transactions: the id is claimed, then its
   // handler runs. A transient failure gives the claim back (best effort; the
-  // transaction's rollback does the same when it aborts the batch).
-  // `undefined`: a replay the ledger covers, to skip.
+  // transaction's rollback does the same when it aborts the batch). A permanent
+  // rejection is remembered in the same transaction as the claim (#366).
   const applyClaimFirst = (
     context: Backend.SyncContext,
     mutation: Mutation,
     savepointIndex: number
-  ) =>
+  ): Effect.Effect<Settlement, BackendError> =>
     Effect.gen(function* () {
-      const claimed = yield* claimMutation(
+      const replayed = yield* claimMutation(
         context.clientGroupId,
         mutation.clientId,
         mutation.mutationId
       );
-      if (!claimed) return undefined;
-      return yield* runHandler(context, mutation, savepointIndex).pipe(
+      if (replayed !== undefined) return replayed;
+      const outcome = yield* runHandler(context, mutation, savepointIndex).pipe(
         Effect.onError(() =>
           releaseClaim(context.clientGroupId, mutation.clientId, mutation.mutationId)
         )
       );
+      if (outcome._tag === "rejected") {
+        yield* recordRejection(
+          context.clientGroupId,
+          mutation.clientId,
+          mutation.mutationId,
+          outcome.reason
+        );
+      }
+      return outcome;
     });
 
   // Handler-then-bump, for an executor without transactions (D1): trunk's order.
   // The ledger is read first, a covered id is skipped, and the id is bumped only
   // after the handler has run. Nothing is claimed, so a crash cannot leave an id
-  // claimed and unapplied. `undefined`: a replay the ledger covers, to skip.
+  // claimed and unapplied. A rejection is recorded before the bump, so a copy
+  // that sees the id as covered also sees its rejection (#366).
   const applyBumpAfter = (
     context: Backend.SyncContext,
     mutation: Mutation,
     savepointIndex: number
-  ) =>
+  ): Effect.Effect<Settlement, BackendError> =>
     Effect.gen(function* () {
-      const last = (yield* readLastIds(context.clientGroupId))[mutation.clientId] ?? 0;
-      if (mutation.mutationId <= last) return undefined;
+      const row = (yield* readLedger(context.clientGroupId)).get(mutation.clientId);
+      const last = row?.last ?? 0;
+      if (mutation.mutationId <= last) {
+        return { _tag: "replayed", rejection: row?.rejections.get(mutation.mutationId) };
+      }
       if (mutation.mutationId > last + 1) {
         return yield* gapError(mutation.clientId, mutation.mutationId, last);
       }
       const outcome = yield* runHandler(context, mutation, savepointIndex);
+      if (outcome._tag === "rejected") {
+        yield* recordRejection(
+          context.clientGroupId,
+          mutation.clientId,
+          mutation.mutationId,
+          outcome.reason
+        );
+      }
       yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
       return outcome;
     });
@@ -630,6 +805,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             )
           );
         }
+        // The rejections this push has moved past are forgotten first (#366).
+        yield* forgetRejections(context.clientGroupId, lowestIdPerClient(mutations));
         const hints: Array<Backend.ChangeHint> = [];
         const rejected: Array<Backend.RejectedMutation> = [];
         // Numbered per handler run, as trunk did: a replay runs no savepoint and
@@ -639,16 +816,27 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           // Ids start at 1 and the ledger at 0, so a non-positive id is never
           // new: skip it without writing a ledger row for it.
           if (mutation.mutationId <= 0) continue;
-          const outcome = yield* applyOne(context, mutation, savepointCounter);
-          if (outcome === undefined) continue; // idempotent skip: a replay
+          const settled = yield* applyOne(context, mutation, savepointCounter);
+          if (settled._tag === "replayed") {
+            // A copy the ledger covers runs no handler. It reports the committed
+            // rejection, if there is one, so every copy agrees (#366).
+            if (settled.rejection !== undefined) {
+              rejected.push({
+                clientId: mutation.clientId,
+                mutationId: mutation.mutationId,
+                reason: settled.rejection,
+              });
+            }
+            continue;
+          }
           savepointCounter++;
-          if (outcome._tag === "applied") {
-            hints.push(...outcome.hints);
+          if (settled._tag === "applied") {
+            hints.push(...settled.hints);
           } else {
             rejected.push({
               clientId: mutation.clientId,
               mutationId: mutation.mutationId,
-              reason: outcome.reason,
+              reason: settled.reason,
             });
           }
         }

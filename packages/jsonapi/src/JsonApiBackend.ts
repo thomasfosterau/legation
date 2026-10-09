@@ -73,6 +73,13 @@
  * creates carry the client-generated `id`, and no mutator yet needs a
  * server-assigned one.
  *
+ * The in-session ledger also remembers the rejections it has made (#366), so a
+ * replayed copy of a rejected mutation lists it in `rejected` with the same reason,
+ * as MemoryBackend does. A push forgets the rejections below its lowest id per
+ * client. The memory is bounded per client: a client that never pushes again keeps
+ * its last push's rejections. It assumes one journal per `clientId`, which backend
+ * contiguity already requires.
+ *
  * Over per-resource endpoints (no `atomic`) delivery is *at-least-once*:
  * make writes idempotent (client-generated ids on create; PATCH/DELETE are
  * naturally idempotent) and retries are safe.
@@ -508,6 +515,40 @@ const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
     setEntry(acc, write.type, write.id, { before: Option.none(), current: Option.none() });
 };
 
+/**
+ * The rejections a client's push has moved past, forgotten (#355, as MemoryBackend).
+ * `floors` maps each client in the push to the lowest mutation id the push carries
+ * for it: a client resends only ids it has not had acknowledged, so the rejections
+ * below that floor are ones it has seen. Returns `clients` itself when nothing goes.
+ */
+const forgetBelow = (
+  clients: Map<string, Map<number, string>>,
+  floors: ReadonlyMap<string, number>
+): Map<string, Map<number, string>> => {
+  let kept: Map<string, Map<number, string>> | undefined;
+  for (const [clientId, floor] of floors) {
+    const ids = clients.get(clientId);
+    if (ids === undefined) continue;
+    const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
+    if (remaining.size === ids.size) continue;
+    kept ??= new Map(clients);
+    if (remaining.size === 0) kept.delete(clientId);
+    else kept.set(clientId, remaining);
+  }
+  return kept ?? clients;
+};
+
+/** The lowest mutation id a push carries, per client. */
+const floorsOf = (
+  mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
+): Map<string, number> => {
+  const floors = new Map<string, number>();
+  for (const { clientId, mutationId } of mutations) {
+    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
+  }
+  return floors;
+};
+
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
   config: JsonApiBackendConfig
@@ -522,6 +563,9 @@ export const make = (
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
     // clientGroupId → clientId → highest applied mutation id (in-session).
     const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
+    // clientGroupId → clientId → mutation id → reason: the permanent rejections the
+    // in-session ledger still remembers, reported to a replayed copy (#366).
+    const rejectionMemory = yield* Ref.make(new Map<string, Map<string, Map<number, string>>>());
 
     const getJson = (url: string) =>
       Effect.scoped(
@@ -881,6 +925,68 @@ export const make = (
         return next;
       });
 
+    /** Remember permanent rejections, so a replayed copy of them reports the same outcome (#366). */
+    const rememberRejections = (
+      context: Backend.SyncContext,
+      rejected: ReadonlyArray<Backend.RejectedMutation>
+    ) =>
+      Ref.update(rejectionMemory, (current) => {
+        const next = new Map(current);
+        const clients = new Map(next.get(context.clientGroupId) ?? []);
+        for (const entry of rejected) {
+          const ids = new Map(clients.get(entry.clientId) ?? []);
+          ids.set(entry.mutationId, entry.reason);
+          clients.set(entry.clientId, ids);
+        }
+        next.set(context.clientGroupId, clients);
+        return next;
+      });
+
+    /**
+     * Forget the rejections this push's floors have moved past (#355), so the
+     * memory is bounded per client, as MemoryBackend's is.
+     */
+    const forgetRejections = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>
+    ) =>
+      Ref.update(rejectionMemory, (current) => {
+        const clients = current.get(context.clientGroupId);
+        if (clients === undefined) return current;
+        const kept = forgetBelow(clients, floorsOf(mutations));
+        if (kept === clients) return current;
+        const next = new Map(current);
+        if (kept.size === 0) next.delete(context.clientGroupId);
+        else next.set(context.clientGroupId, kept);
+        return next;
+      });
+
+    /**
+     * The rejections a push's replayed copies were committed with (an id the ledger
+     * already covers, with a remembered rejection). They are reported again (#366).
+     */
+    const replayedRejections = (
+      context: Backend.SyncContext,
+      mutations: ReadonlyArray<PushedMutation>
+    ): Effect.Effect<Array<Backend.RejectedMutation>> =>
+      Effect.gen(function* () {
+        const acknowledged = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
+        const remembered = (yield* Ref.get(rejectionMemory)).get(context.clientGroupId);
+        const replayed: Array<Backend.RejectedMutation> = [];
+        for (const mutation of mutations) {
+          if (mutation.mutationId > (acknowledged.get(mutation.clientId) ?? 0)) continue;
+          const reason = remembered?.get(mutation.clientId)?.get(mutation.mutationId);
+          if (reason !== undefined) {
+            replayed.push({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason,
+            });
+          }
+        }
+        return replayed;
+      });
+
     const lastMutationIdsOf = (context: Backend.SyncContext) =>
       Ref.get(ledger).pipe(
         Effect.map((current) => Object.fromEntries(current.get(context.clientGroupId) ?? new Map()))
@@ -959,6 +1065,7 @@ export const make = (
           rejected: [],
           rows: new Map(),
         };
+        const replays = yield* replayedRejections(context, mutations);
         const pending = yield* pendingEach(context, mutations);
         const decoded = yield* Effect.forEach(pending, (mutation) =>
           Effect.gen(function* () {
@@ -985,19 +1092,25 @@ export const make = (
             )
           );
           if (outcome._tag === "applied") recordApplied(acc, write, outcome.document);
-          else
-            acc.rejected.push({
+          else {
+            const rejection = {
               clientId: mutation.clientId,
               mutationId: mutation.mutationId,
               reason: outcome.reason,
-            });
+            };
+            acc.rejected.push(rejection);
+            // Remembered before the id is acknowledged, so a copy that sees the id
+            // as covered also sees its rejection (#366).
+            yield* rememberRejections(context, [rejection]);
+          }
           yield* bumpLedger(context, [mutation]);
         }
 
+        const rejected = [...replays, ...acc.rejected];
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(acc.rejected.length > 0 ? { rejected: acc.rejected } : {}),
+          ...(rejected.length > 0 ? { rejected } : {}),
         };
       });
 
@@ -1048,6 +1161,7 @@ export const make = (
       atomic: { readonly path: string }
     ): Effect.Effect<Backend.ApplyResult, BackendError> =>
       Effect.gen(function* () {
+        const replays = yield* replayedRejections(context, mutations);
         const batch = yield* unacknowledged(context, mutations, true);
 
         // Read the rows the batch updates or deletes before the one request that
@@ -1091,11 +1205,6 @@ export const make = (
           recordApplied(acc, write, resultRow(results[position]))
         );
 
-        // Applied and rejected alike are acknowledged, in original order.
-        yield* bumpLedger(
-          context,
-          batch.map(({ mutation }) => mutation)
-        );
         const rejected = [...rejectedAt]
           .toSorted(([a], [b]) => a - b)
           .map(([index, reason]) => ({
@@ -1103,18 +1212,30 @@ export const make = (
             mutationId: batch[index]!.mutation.mutationId,
             reason,
           }));
+        // The rejections are remembered before the ids are acknowledged (#366).
+        yield* rememberRejections(context, rejected);
+        // Applied and rejected alike are acknowledged, in original order.
+        yield* bumpLedger(
+          context,
+          batch.map(({ mutation }) => mutation)
+        );
 
+        const reported = [...replays, ...rejected];
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(rejected.length > 0 ? { rejected } : {}),
+          ...(reported.length > 0 ? { rejected: reported } : {}),
         };
       });
 
     const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
-      config.atomic === undefined
-        ? applyEach(context, mutations)
-        : applyAtomic(context, mutations, config.atomic);
+      Effect.gen(function* () {
+        // The rejections this push has moved past are forgotten first (#355, #366).
+        yield* forgetRejections(context, mutations);
+        return config.atomic === undefined
+          ? yield* applyEach(context, mutations)
+          : yield* applyAtomic(context, mutations, config.atomic);
+      });
 
     return Backend.Backend.of({
       applyMutations,
