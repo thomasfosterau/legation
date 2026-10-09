@@ -20,9 +20,7 @@ import {
   Exit,
   Layer,
   Metric,
-  Option,
   PubSub,
-  Queue,
   Ref,
   Schedule,
   Schema,
@@ -866,6 +864,12 @@ export interface ClientEngine {
   /**
    * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
    * server rejects this build's `schemaVersion` (#48); see {@link push}.
+   *
+   * Pulls run one at a time. A call made while a pull is in flight waits for it,
+   * and resolves once a pull that started after the call has been applied, so
+   * the rows and cookie it sees are never older than when it was made. A call
+   * whose own pull fails fails with that error, and a call queued behind it then
+   * pulls for itself.
    */
   readonly pull: Effect.Effect<
     void,
@@ -2309,37 +2313,18 @@ export const make = (
         return touched;
       });
 
-    // Pulls are serialised (#412). One worker fibre runs every pull, one at a time, and a pull
-    // is applied before the next one leaves, so a response computed from an older cookie can
-    // never be applied after a newer one. A request is served by the first pull that starts after
-    // it was made: requests made while a pull is in flight wait in the queue, and the worker serves
-    // all of them with its next pull, so a burst of pokes costs one follow-up round trip.
-    type PullError = TransportError | StoreError | MutatorError | VersionNotSupportedError;
-    type PullWaiter = Deferred.Deferred<void, PullError>;
-    const pullWaiters = yield* Queue.unbounded<PullWaiter>();
-    // The requests queued right now, without waiting: the ones the next pull serves.
-    const takeQueuedPulls: Effect.Effect<Array<PullWaiter>> = Effect.gen(function* () {
-      const waiters: Array<PullWaiter> = [];
-      for (
-        let next = yield* Queue.poll(pullWaiters);
-        Option.isSome(next);
-        next = yield* Queue.poll(pullWaiters)
-      ) {
-        waiters.push(next.value);
-      }
-      return waiters;
-    });
-    // Scope close: a request still queued gets no pull, so its caller is interrupted, not parked.
-    yield* Effect.addFinalizer(() =>
-      takeQueuedPulls.pipe(
-        Effect.flatMap((waiters) =>
-          Effect.forEach(waiters, (waiter) => Deferred.interrupt(waiter), { discard: true })
-        ),
-        Effect.andThen(Queue.shutdown(pullWaiters)),
-        Effect.asVoid
-      )
-    );
-    const pullOnce: Effect.Effect<void, PullError> = withVersionLatch(
+    // Pulls are serialised (#412). Each pull runs in the fibre of the caller that holds `pullLock`,
+    // so at most one request is in flight and the caller's context and interruption behave as they
+    // always have. `pullsStarted` numbers each pull as it starts, and `pullsApplied` holds the number
+    // of the last pull that was applied. A caller reads `pullsStarted` on entry and may skip its own
+    // pull only when `pullsApplied > entry`: a pull that started after the caller's entry has been
+    // applied while the caller waited, so it fetched everything the caller asked for. A pull that was
+    // already in flight at entry may predate the caller's request, so it never counts. A failed pull
+    // records nothing, so a caller queued behind it pulls for itself.
+    const pullLock = yield* Semaphore.make(1);
+    const pullsStarted = yield* Ref.make(0);
+    const pullsApplied = yield* Ref.make(0);
+    const pullOnce = withVersionLatch(
       Effect.gen(function* () {
         yield* emitEngineEvent({ _tag: "PullStarted" });
         const cookie = yield* store.getCookie;
@@ -2367,29 +2352,18 @@ export const make = (
         });
       })
     );
-    // The worker: one pull serves every request queued when it starts, and each request then
-    // receives that pull's outcome. Interrupted with the scope, it interrupts the requests it
-    // was serving.
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.gen(function* () {
-          const waiters = [yield* Queue.take(pullWaiters), ...(yield* takeQueuedPulls)];
-          const exit = yield* Effect.exit(pullOnce).pipe(
-            Effect.onInterrupt(() =>
-              Effect.forEach(waiters, (waiter) => Deferred.interrupt(waiter), { discard: true })
-            )
-          );
-          yield* Effect.forEach(waiters, (waiter) => Deferred.done(waiter, exit), {
-            discard: true,
-          });
-        })
-      )
-    );
 
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
-      const waiter: PullWaiter = yield* Deferred.make<void, PullError>();
-      if (!(yield* Queue.offer(pullWaiters, waiter))) return yield* Effect.interrupt;
-      return yield* Deferred.await(waiter);
+      const entry = yield* Ref.get(pullsStarted);
+      yield* Semaphore.withPermit(
+        pullLock,
+        Effect.gen(function* () {
+          if ((yield* Ref.get(pullsApplied)) > entry) return;
+          const number = yield* Ref.updateAndGet(pullsStarted, (started) => started + 1);
+          yield* pullOnce;
+          yield* Ref.set(pullsApplied, number);
+        })
+      );
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
@@ -2590,15 +2564,23 @@ export const make = (
       // Pull on every poke; re-establish the poke stream with backoff, and
       // surface if it stays down (the replay-1 hub covers the resubscribe race).
       yield* Effect.forkScoped(
-        Stream.runForEach(transport.pokes.pipe(Stream.retry(pokePolicy)), (poke) =>
-          emitEngineEvent({
-            _tag: "PokeReceived",
-            ...(poke.reason !== undefined ? { reason: poke.reason } : {}),
-          }).pipe(
-            // Forked, so the poke stream keeps reading while a pull is in flight: pokes that
-            // arrive meanwhile queue behind it and share one follow-up pull (#412).
-            Effect.andThen(Effect.forkScoped(attemptPull))
-          )
+        Stream.runForEach(
+          transport.pokes.pipe(
+            Stream.retry(pokePolicy),
+            Stream.mapEffect((poke) =>
+              emitEngineEvent({
+                _tag: "PokeReceived",
+                ...(poke.reason !== undefined ? { reason: poke.reason } : {}),
+              }).pipe(Effect.as(poke))
+            ),
+            // While a pull is in flight the consumer below does not take the next poke, so pokes
+            // wait here. The buffer keeps only the newest, so a burst costs one follow-up pull
+            // (#412). That is sound: a dropped poke arrived before the newer one was taken, and the
+            // pull the consumer runs next starts after that, so it covers the dropped poke too.
+            // Nothing is forked per poke.
+            Stream.buffer({ capacity: 1, strategy: "sliding" })
+          ),
+          () => attemptPull
         ).pipe(Effect.catch((error) => surfaceFailure("pokes", error)))
       );
       // Push + pull on (re)connect.

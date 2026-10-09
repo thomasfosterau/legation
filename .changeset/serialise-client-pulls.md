@@ -2,11 +2,4 @@
 "@thomasfosterau/legation-effect": patch
 ---
 
-`ClientEngine` now runs pulls one at a time. Before, a pull issued while another
-was in flight did not wait for it: two pulls could leave with the same cookie,
-and their responses could be applied in either order, so an older response
-applied last reverted the rows and the cookie. Now a poke that arrives during a
-pull, and any pull requested in the meantime, share one follow-up pull, and an
-explicit `pull` resolves only after a pull started after the call has been
-applied. A pull requested when the engine's scope closes is interrupted rather
-than left waiting.
+`ClientEngine` runs pulls one at a time. Before, a pull issued while another was in flight did not wait for it, so two pulls could leave with the same cookie and an older response applied last could revert rows and the cookie. Now a pull waits for the pull in flight, and an explicit `pull` resolves once a pull that started after the call has been applied, so a call is never answered from data older than itself. Pokes that arrive during a pull share one follow-up pull. Pulls still run in the caller's fibre, so the caller's context and interruption behave as before.
