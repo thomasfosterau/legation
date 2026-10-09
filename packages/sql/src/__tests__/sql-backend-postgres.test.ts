@@ -726,7 +726,7 @@ describePostgres("SqlBackend on PostgreSQL: rejection memory (#366)", () => {
             expect(error.message).toContain(
               "ALTER TABLE sync_mutations ADD COLUMN rejections TEXT"
             );
-            expect(error.message).toContain("Migrating to 0.2.0");
+            expect(error.message).toContain("Ledger without the `rejections` column");
             expect(yield* applicationsOf(sql, "1")).toBe(0);
           }),
         DDL_BEFORE_366

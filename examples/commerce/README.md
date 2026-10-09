@@ -136,6 +136,8 @@ server (calls degrade WS→HTTP first, then queue); a no-JS browser; DevTools
 offline, then a plain `fetch("/jsonapi/products?page[limit]=4&sort=id", { headers: { accept: "application/vnd.api+json" } })`
 in the console — the response carries `x-legation-served-at`.
 
+An existing database (`COMMERCE_DB`, default `commerce.db`) keeps the ledger table it was created with: `CREATE TABLE IF NOT EXISTS` does not add the `rejections` column, so its first push fails with the migration error. Add the column as described in the [SQL README](../../packages/sql/README.md#ledger-without-the-rejections-column), or delete the file to start over.
+
 A production build (`bun run build`, adapter-node) needs `BETTER_AUTH_SECRET`
 set, and serves the read proxy itself; put a reverse proxy in front that
 routes `/sync*` to the sync server, as the dev server and the browser test's

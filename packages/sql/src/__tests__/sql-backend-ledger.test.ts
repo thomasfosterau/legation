@@ -502,7 +502,7 @@ describe("SqlBackend rejection memory on SQLite (#366)", () => {
             const error = yield* backend.applyMutations(context, [mutation(1)]).pipe(Effect.flip);
             expect(error).toBeInstanceOf(BackendError);
             expect(error.message).toContain("ALTER TABLE sync_mutations ADD COLUMN rejections");
-            expect(error.message).toContain("Migrating to 0.2.0");
+            expect(error.message).toContain("Ledger without the `rejections` column");
             expect(yield* countOf(sql, "effects")).toBe(0);
             expect(yield* ledgerOf(sql)).toBe(0);
           }),

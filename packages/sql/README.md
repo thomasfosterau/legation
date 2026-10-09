@@ -34,6 +34,10 @@ transaction at `SERIALIZABLE` (a handler whose reads went stale is refused
 with a serialization failure, which the client retries). An executor without
 transactions sets `transactional: false` and bumps after the handler instead
 (D1), and D1 does not isolate handlers, so it does not meet that guarantee.
+A permanent rejection is remembered in the client's ledger row, and a replayed
+copy reports it. A copy that a concurrent call committed first is dropped
+differently by dialect: on SQLite it lists its rejection directly, and on
+PostgreSQL it is refused with a transient `BackendError`, and its retry lists it.
 
 > **PostgreSQL apps must pass `dialect: Sql.postgres` to `SqlBackend.make`.**
 > That dialect is what sets `SERIALIZABLE` on each mutation transaction. Leave it
@@ -46,26 +50,39 @@ transactions sets `transactional: false` and bumps after the handler instead
 > nested in another: PostgreSQL refuses `SET TRANSACTION` there, and the batch
 > fails with a `BackendError` instead of running weaker.
 
-## Migrating to 0.2.0
+## Ledger without the `rejections` column
 
-**Action required before upgrading.** `SqlBackend` now remembers each permanent
-rejection in the client's ledger row, in a new `rejections` column, so a replayed
-copy of a rejected mutation reports the committed rejection and its reason. Run
-the `ALTER TABLE` for your database on the ledger table (`sync_mutations`, or the
-`mutationsTable` you configured) before you upgrade:
+**Action required before upgrading.** `SqlBackend` remembers each permanent
+rejection in the client's ledger row, in a `rejections` column, so a replayed
+copy of a rejected mutation reports the committed rejection and its reason. A
+ledger created without that column fails each push with a `BackendError` that
+names this migration, and that push writes nothing. Whatever version created your
+ledger table (`sync_mutations`, or the `mutationsTable` you configured), check
+whether it has the column, and add it only if it does not:
 
 ```sql
--- SQLite
-ALTER TABLE sync_mutations ADD COLUMN rejections TEXT;
+-- PostgreSQL: returns a row only when the column is already there
+SELECT 1 FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'sync_mutations' AND column_name = 'rejections';
 
--- PostgreSQL
-ALTER TABLE sync_mutations ADD COLUMN IF NOT EXISTS rejections TEXT;
+-- SQLite: returns a row only when the column is already there
+SELECT 1 FROM pragma_table_info('sync_mutations') WHERE name = 'rejections';
 ```
+
+If the check returns no row, add the column:
+
+```sql
+ALTER TABLE sync_mutations ADD COLUMN rejections TEXT;
+```
+
+On PostgreSQL, `ALTER TABLE sync_mutations ADD COLUMN IF NOT EXISTS rejections TEXT;`
+does the check and the change in one statement, and is safe to repeat. SQLite has
+no `IF NOT EXISTS` for columns, so run the check first: the plain `ALTER TABLE`
+fails with "duplicate column" on a ledger that already has the column.
 
 The column is nullable and has no default, so existing rows are unchanged. It is
 a metadata-only change on both databases, with a brief lock on the ledger table.
-A ledger without the column fails each push with a `BackendError` that names this
-migration, and that push writes nothing.
 
 A new install creates the ledger with the column:
 
