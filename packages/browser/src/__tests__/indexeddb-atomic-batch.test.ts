@@ -19,6 +19,9 @@ import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
  */
 const failure = { armed: false, puts: 0, failAt: 2 };
 
+/** What the proxied factory saw: each readwrite transaction opened, and each key a put wrote. */
+const tally = { readwrite: 0, putKeys: [] as Array<string> };
+
 const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
   new Proxy(store, {
     get(target, prop) {
@@ -27,6 +30,8 @@ const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
           if (failure.armed && ++failure.puts === failure.failAt) {
             throw new DOMException("simulated write failure", "DataError");
           }
+          const key = (value as { key?: unknown } | undefined)?.key;
+          if (typeof key === "string") tally.putKeys.push(key);
           return target.put(value as never);
         };
       }
@@ -52,7 +57,9 @@ const wrapDatabase = (db: IDBDatabase): IDBDatabase =>
       if (prop === "transaction") {
         return (names: string | string[], mode?: IDBTransactionMode) => {
           const tx = target.transaction(names, mode);
-          return mode === "readwrite" ? wrapTransaction(tx) : tx;
+          if (mode !== "readwrite") return tx;
+          tally.readwrite += 1;
+          return wrapTransaction(tx);
         };
       }
       const value = Reflect.get(target, prop, target) as unknown;
@@ -101,6 +108,45 @@ const put = (id: string, n: number) =>
 
 const rowKey = (id: string) => `legation/row/counters/${id}`;
 const RECORD = "legation/releaseIntent";
+
+/** Creates `database` at version 2, with the entries store when `withEntries`, as a later version would. */
+const createAtVersion2 = (database: string, withEntries: boolean) =>
+  new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(database, 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore(withEntries ? "entries" : "other", { keyPath: "key" });
+    };
+    request.onsuccess = () => {
+      request.result.close();
+      resolve();
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+/** The version `database` is at, read by opening it without one. */
+const versionOf = (database: string) =>
+  new Promise<number>((resolve, reject) => {
+    const request = indexedDB.open(database);
+    request.onsuccess = () => {
+      const version = request.result.version;
+      request.result.close();
+      resolve(version);
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+/** Asks for `database` at `version`, resolving "upgraded", or "blocked" when an open connection holds it. */
+const upgradeTo = (database: string, version: number) =>
+  new Promise<"upgraded" | "blocked">((resolve, reject) => {
+    const request = indexedDB.open(database, version);
+    request.onblocked = () => resolve("blocked");
+    request.onsuccess = () => {
+      request.result.close();
+      resolve("upgraded");
+    };
+    request.onerror = () => reject(request.error);
+  });
 
 describe("IndexedDbClientStore's atomic batch (#393)", () => {
   it.effect(
@@ -179,6 +225,77 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           expect(yield* store.getCookie).toBeUndefined();
         }).pipe(Effect.provide(storeLayer(database)));
       })
+  );
+
+  it.effect("a durable pull is one readwrite transaction, and writes each key once", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        yield* store.commitPull!({ lastMutationIds: {}, cookie: "cookie-0", patch: [put("a", 0)] });
+      }).pipe(Effect.provide(storeLayer("atomic-tally")));
+
+      tally.readwrite = 0;
+      tally.putKeys.length = 0;
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        // Row a is patched twice: one put for it, as the staged batch holds one value per key.
+        yield* store.commitPull!({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [put("a", 1), put("b", 2), put("a", 3)],
+        });
+      }).pipe(Effect.provide(storeLayer("atomic-tally", failingIndexedDb)));
+
+      expect(tally.readwrite).toBe(1);
+      expect(tally.putKeys).toContain(rowKey("a"));
+      expect(tally.putKeys).toHaveLength(new Set(tally.putKeys).size);
+      expect(tally.putKeys.filter((key) => key === rowKey("a"))).toHaveLength(1);
+    })
+  );
+
+  it.effect("the store builds and commits over a database a later version created at v2", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => createAtVersion2("atomic-v2", true));
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        yield* store.commitPull!({
+          lastMutationIds: {},
+          cookie: "cookie-v2",
+          patch: [put("a", 3)],
+        });
+        expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { n: 3 } });
+        expect(yield* store.getCookie).toBe("cookie-v2");
+      }).pipe(Effect.provide(storeLayer("atomic-v2")));
+      // The store opened the database at the version it had: nothing was downgraded or upgraded.
+      expect(yield* Effect.promise(() => versionOf("atomic-v2"))).toBe(2);
+    })
+  );
+
+  it.effect(
+    "a database without the entries store builds the layer, and its calls name the store",
+    () =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => createAtVersion2("atomic-no-entries", false));
+        yield* Effect.gen(function* () {
+          // The layer builds. The store then seals at open, since its first read of the release record
+          // has no entries store to read, so each call refuses with the missing store in its cause.
+          const store = yield* ClientStore.ClientStore;
+          const read = yield* Effect.exit(store.getCookie);
+          expect(Exit.isFailure(read)).toBe(true);
+          expect(String(read)).toContain('has no "entries" object store');
+        }).pipe(Effect.provide(storeLayer("atomic-no-entries")));
+      })
+  );
+
+  it.effect("an open connection yields to a later version, so the upgrade is not blocked", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        // The layer holds its connections open for the scope.
+        yield* ClientStore.ClientStore;
+        const outcome = yield* Effect.promise(() => upgradeTo("atomic-upgrade", 2));
+        expect(outcome).toBe("upgraded");
+      }).pipe(Effect.provide(storeLayer("atomic-upgrade")));
+    })
   );
 
   it.effect(

@@ -2277,15 +2277,25 @@ export const make = (
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
             // With an atomic batch in the store (#393), the release is one commit: the rows, the cookie,
-            // the journal trim and the tail release, with no record. Nothing reached the store if it fails,
-            // so there is nothing to roll forward and the copy below is left as it was. The in-memory
-            // steps follow the commit, in the order the record path runs them.
+            // the journal trim and the tail release, with no record. A failure before the commit point
+            // leaves the store as it was; a failure reported after it may still have committed, so the
+            // outcome is unknown. Either way the copy is re-read and the view rebuilt, as the record path
+            // does on a failed section (rollForwardPullLocked). The in-memory steps follow the commit, in
+            // the order the record path runs them.
             if (store.commitPull !== undefined) {
-              yield* store.commitPull({
-                lastMutationIds: response.lastMutationIds,
-                cookie: response.cookie,
-                patch: response.patch,
-              });
+              yield* store
+                .commitPull({
+                  lastMutationIds: response.lastMutationIds,
+                  cookie: response.cookie,
+                  patch: response.patch,
+                })
+                .pipe(
+                  Effect.onExit((exit) =>
+                    Exit.isSuccess(exit)
+                      ? Effect.void
+                      : rollForwardPullLocked(response.lastMutationIds)
+                  )
+                );
               yield* updateIndexes(response.patch);
               yield* settleOwnApplied(response.lastMutationIds);
               yield* Ref.update(unpulled, (tail) =>

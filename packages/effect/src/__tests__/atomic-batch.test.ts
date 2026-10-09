@@ -27,12 +27,24 @@ import { ClientTransport, makeInMemory } from "../Transport.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
-/** An in-memory `KeyValueStore` that records every write, as `set`/`remove` plus the key. */
+/**
+ * An in-memory `KeyValueStore` that records every write, as `set`/`remove` plus the key. `failGets`
+ * holds keys whose next `get` fails once, so a test can make one read fail and nothing else.
+ */
 const recordingKeyValue = () => {
   const data = new Map<string, string>();
   const writes: Array<string> = [];
+  const failGets = new Set<string>();
   const kv = KeyValueStore.make({
-    get: (key: string) => Effect.sync(() => data.get(key)),
+    get: (key: string) =>
+      Effect.suspend(() => {
+        if (failGets.delete(key)) {
+          return Effect.fail(
+            new KeyValueStore.KeyValueStoreError({ method: "get", message: `get "${key}" failed` })
+          );
+        }
+        return Effect.sync(() => data.get(key));
+      }),
     getUint8Array: () => Effect.succeed(undefined),
     set: (key: string, value: string | Uint8Array) =>
       Effect.sync(() => {
@@ -47,7 +59,7 @@ const recordingKeyValue = () => {
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
   });
-  return { kv, data, writes };
+  return { kv, data, writes, failGets };
 };
 
 /** A store's full contents, sorted, for comparing two stores write for write. */
@@ -60,9 +72,16 @@ const contents = (data: ReadonlyMap<string, string>) =>
  */
 interface BatchState {
   abortNext: boolean;
+  /** The next batch commits, then reports a failure: an outcome the caller cannot tell from an abort. */
+  commitThenFailNext: boolean;
+  /** Each call's operations, in the order the calls were made. */
   readonly batches: Array<ReadonlyArray<KeyValueOp>>;
 }
-const newBatchState = (): BatchState => ({ abortNext: false, batches: [] });
+const newBatchState = (): BatchState => ({
+  abortNext: false,
+  commitThenFailNext: false,
+  batches: [],
+});
 
 const batchOver = (
   data: Map<string, string>,
@@ -77,13 +96,20 @@ const batchOver = (
           state.abortNext = false;
           return Effect.fail(new StoreError({ message: "batch aborted" }));
         }
-        return Effect.sync(() => {
+        const commit = Effect.sync(() => {
           for (const op of ops) {
             writes.push(op.key);
             if (op._tag === "Set") data.set(op.key, op.value);
             else data.delete(op.key);
           }
         });
+        if (state.commitThenFailNext) {
+          state.commitThenFailNext = false;
+          return commit.pipe(
+            Effect.andThen(Effect.fail(new StoreError({ message: "batch failed after commit" })))
+          );
+        }
+        return commit;
       }),
   });
 
@@ -187,6 +213,8 @@ describe("the atomic batch on the key-value store (#393)", () => {
       expect(state.batches).toHaveLength(1);
       const ops = state.batches.flat();
       const keys = ops.map((op) => op.key);
+      // Three patch ops touch two rows, and the batch carries one operation per distinct key.
+      expect(keys).toHaveLength(new Set(keys).size);
       expect(keys.filter((key) => key === ROW_A)).toHaveLength(1);
       expect(keys.filter((key) => key === ROW_B)).toHaveLength(1);
       expect(keys).not.toContain(RECORD);
@@ -204,7 +232,7 @@ describe("the atomic batch on the key-value store (#393)", () => {
     })
   );
 
-  it.effect("the batch and the record path leave the same store, write for write", () =>
+  it.effect("the batch and the record path leave the same final contents", () =>
     Effect.gen(function* () {
       // Two stores fed the same history: one commits each step as a batch, the other runs the record
       // path. Their contents must match exactly once the history is done.
@@ -329,6 +357,103 @@ describe("the atomic batch on the key-value store (#393)", () => {
       })
   );
 
+  it.effect(
+    "a batch pull finishes an outstanding release record, so a later write cannot replay it",
+    () =>
+      Effect.gen(function* () {
+        const { kv, data, writes, failGets } = recordingKeyValue();
+        const state = newBatchState();
+        const store = yield* openStore(kv, batchOver(data, writes, state));
+        // A record-path pull begins and is never finished: its record stays outstanding.
+        yield* store.beginRelease({ lastMutationIds: {}, cookie: "k1", patch: [put("a", 1)] });
+        expect(data.has(RECORD)).toBe(true);
+        // The next read of the record fails, so the row write that would finish it fails too.
+        failGets.add(RECORD);
+        const failed = yield* Effect.exit(
+          store.putRow("counters", { id: "b", version: 1, value: { id: "b", n: 0 } })
+        );
+        expect(Exit.isFailure(failed)).toBe(true);
+        expect(data.has(RECORD)).toBe(true);
+
+        // A newer pull commits. It finishes the stale record before it writes, so the record is not
+        // left to replay over the batch's rows and cookie.
+        yield* store.commitPull!({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] });
+        // A later row write finishes whatever is still outstanding.
+        yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
+
+        expect(JSON.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
+        expect(data.get("legation/cookie")).toBe("k2");
+        expect(data.has(RECORD)).toBe(false);
+      })
+  );
+
+  // Each batch member finishes an outstanding record before it writes. The record's read is made to
+  // fail, so the batch must fail with nothing written: a finish that cannot read the record is not
+  // skipped. Each member writes something here, so a member that skipped the finish would show it.
+  const batchMemberCalls: ReadonlyArray<
+    readonly [string, (store: ClientStore) => Effect.Effect<void, unknown>]
+  > = [
+    [
+      "commitPull",
+      (store) => store.commitPull!({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] }),
+    ],
+    ["commitAcknowledgement", (store) => store.commitAcknowledgement!([mutation("c", 2)], {})],
+    ["commitTailRelease", (store) => store.commitTailRelease!({ c: 1 })],
+  ];
+  for (const [member, call] of batchMemberCalls) {
+    it.effect(
+      `${member} finishes an outstanding release record first, or fails with nothing written`,
+      () =>
+        Effect.gen(function* () {
+          const { kv, data, writes, failGets } = recordingKeyValue();
+          const state = newBatchState();
+          const store = yield* openStore(kv, batchOver(data, writes, state));
+          // An entry on the tail for the release to trim, then a record-path release left outstanding.
+          yield* store.parkUnpulled([mutation("c", 1)]);
+          yield* store.beginRelease({ lastMutationIds: {}, cookie: "k1", patch: [put("a", 1)] });
+          const before = contents(data);
+          failGets.add(RECORD);
+
+          const attempt = yield* Effect.exit(call(store));
+          expect(Exit.isFailure(attempt)).toBe(true);
+          expect(contents(data)).toEqual(before);
+          expect(state.batches).toHaveLength(0);
+          expect(data.has(RECORD)).toBe(true);
+        })
+    );
+  }
+
+  it.effect("a store written through the batch reads back on the record path", () =>
+    Effect.gen(function* () {
+      const { kv, data, writes } = recordingKeyValue();
+      const state = newBatchState();
+      const batched = yield* openStore(kv, batchOver(data, writes, state));
+      const m1 = yield* batched.appendNext({
+        clientId: "c",
+        mutator: "counter/inc",
+        args: {},
+        createdAt: 0,
+      });
+      yield* batched.commitAcknowledgement!([m1], { c: 1 });
+      yield* batched.commitPull!({ lastMutationIds: { c: 1 }, cookie: "k1", patch: [put("a", 4)] });
+
+      // Reopened without the seam, the record path reads what the batch wrote and keeps working.
+      const recordPath = yield* openStore(kv);
+      expect(yield* recordPath.getCookie).toBe("k1");
+      expect(yield* recordPath.getRow("counters", "a")).toMatchObject({ value: { n: 4 } });
+      expect(yield* recordPath.unpulled).toEqual([]);
+      expect(yield* recordPath.pendingMutations).toEqual([]);
+      yield* pullOnRecordPath(recordPath, {
+        lastMutationIds: {},
+        cookie: "k2",
+        patch: [put("a", 9)],
+      });
+      expect(yield* recordPath.getCookie).toBe("k2");
+      expect(yield* recordPath.getRow("counters", "a")).toMatchObject({ value: { n: 9 } });
+      expect(data.has(RECORD)).toBe(false);
+    })
+  );
+
   it.effect("the engine's pull writes each row once through the batch, with no record", () =>
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
@@ -345,12 +470,52 @@ describe("the atomic batch on the key-value store (#393)", () => {
       yield* engine.pull;
 
       const rowKey = "legation/row/counters/c";
+      // One batch for the whole pull, and within it one operation per key, so no row is written twice.
+      expect(state.batches).toHaveLength(1);
       const keys = state.batches.flat().map((op) => op.key);
+      expect(keys).toHaveLength(new Set(keys).size);
       expect(keys.filter((key) => key === rowKey)).toHaveLength(1);
       expect(keys).not.toContain(RECORD);
       expect(writes).not.toContain(RECORD);
       expect(yield* counterValue(engine)).toBe(1);
     })
+  );
+
+  it.effect(
+    "a pull whose batch commits and then reports a failure leaves the engine's view as the store holds it",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const { kv, data, writes } = recordingKeyValue();
+        const state = newBatchState();
+        const store = yield* openStore(kv, batchOver(data, writes, state));
+        const engine = yield* makeCounterEngine(server, store);
+        yield* engine.subscribe(countersSubset);
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        expect(yield* tailOf(store)).toEqual(["client-a#1"]);
+
+        // A second client's increment reaches the server too, so the pull that follows carries a row
+        // the first client's tail does not account for.
+        const other = yield* makeCounterEngine(server, yield* openStore(recordingKeyValue().kv), {
+          clientId: "client-b",
+          group: "group-b",
+        });
+        yield* other.subscribe(countersSubset);
+        yield* other.mutate("counter/inc", { id: "c" });
+        yield* other.push;
+
+        // The pull's batch commits, then reports a failure: the store holds the pull, and the caller
+        // cannot tell that from a failed batch.
+        state.commitThenFailNext = true;
+        expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
+
+        const row = yield* store.getRow("counters", "c");
+        expect(row).toMatchObject({ value: { id: "c", n: 2 } });
+        expect(yield* tailOf(store)).toEqual([]);
+        // The engine's view is the store's: the released tail is not replayed over the committed row.
+        expect(yield* counterValue(engine)).toBe(2);
+      })
   );
 
   it.effect(
@@ -427,12 +592,19 @@ const serverOver = (backend: Backend) =>
     );
   });
 
-const makeCounterEngine = (handler: Parameters<typeof makeInMemory>[0], store: ClientStore) =>
+const makeCounterEngine = (
+  handler: Parameters<typeof makeInMemory>[0],
+  store: ClientStore,
+  who: { readonly clientId: string; readonly group: string } = {
+    clientId: "client-a",
+    group: "group-a",
+  }
+) =>
   Effect.gen(function* () {
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, who.group);
     return yield* ClientEngineModule.make({
-      clientId: "client-a",
-      clientGroupId: "group-a",
+      clientId: who.clientId,
+      clientGroupId: who.group,
       mutators: counterMutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

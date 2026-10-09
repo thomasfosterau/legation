@@ -305,8 +305,9 @@ export interface ClientStore {
    * Write a pull's whole release as one atomic batch: its rows, its cookie, the journal trim and the
    * tail release that {@link ClientStore.beginRelease}, the patch, the cookie, the acknowledgement and
    * {@link ClientStore.releaseUnpulled} would make in turn. Nothing is recorded, so a crash or a
-   * failed batch leaves the store at its state before the pull, and the tail still shows the effects
-   * the pull would have released.
+   * batch that fails before its commit point leaves the store at its state before the pull, and the
+   * tail still shows the effects the pull would have released. A failure reported after the commit
+   * point may still have committed: the caller re-reads the store.
    */
   readonly commitPull?: ((release: PullRelease) => Effect.Effect<void, StoreError>) | undefined;
   /**
@@ -1883,6 +1884,9 @@ export const makeKeyValue = (
         return ops.length === 0 ? Effect.void : atomicSeam.apply(ops);
       });
 
+    // Each member first finishes an outstanding release record, as a row write does (#387). A record
+    // left by a failed record-path write would otherwise replay over the batch's newer state on a later
+    // finish; the finish reads the record, so a failure there fails the batch with nothing written.
     const batchMembers: Pick<
       ClientStore,
       "commitPull" | "commitAcknowledgement" | "commitTailRelease"
@@ -1893,6 +1897,7 @@ export const makeKeyValue = (
             commitPull: (release) =>
               locked(
                 Effect.gen(function* () {
+                  yield* finishOrSeal;
                   yield* settleCompaction;
                   const b = stageBatch();
                   yield* stagedRows(b, release.patch);
@@ -1905,6 +1910,7 @@ export const makeKeyValue = (
             commitAcknowledgement: (parked, lastMutationIds) =>
               locked(
                 Effect.gen(function* () {
+                  yield* finishOrSeal;
                   yield* settleCompaction;
                   const b = stageBatch();
                   yield* stagedPark(b, parked);
@@ -1915,6 +1921,7 @@ export const makeKeyValue = (
             commitTailRelease: (lastMutationIds) =>
               locked(
                 Effect.gen(function* () {
+                  yield* finishOrSeal;
                   const b = stageBatch();
                   yield* stagedReleaseTail(b, lastMutationIds);
                   yield* commitStaged(atomic, b);

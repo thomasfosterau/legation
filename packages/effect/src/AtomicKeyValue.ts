@@ -29,10 +29,12 @@ export type KeyValueOp =
 /** The {@link AtomicKeyValue} service: an atomic batch over the store's keys. */
 export interface AtomicKeyValue {
   /**
-   * Commit `ops` in order as one all-or-nothing step: on success every operation
-   * is durable, and on failure, including an interruption before the commit
-   * point, none is. A later operation on a key replaces an earlier one in the
-   * same batch.
+   * Commit `ops` in order as one all-or-nothing step. Up to the commit point, a
+   * failure or an interruption leaves none of the operations durable. A failure
+   * reported after the commit point may still have committed, so a caller must
+   * treat that outcome as unknown and re-read the store before relying on it. On
+   * success every operation is durable. A later operation on a key replaces an
+   * earlier one in the same batch.
    */
   readonly apply: (ops: ReadonlyArray<KeyValueOp>) => Effect.Effect<void, StoreError>;
 }

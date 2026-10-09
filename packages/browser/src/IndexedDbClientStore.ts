@@ -28,10 +28,11 @@
  * where accumulating a replica per visitor is the worse trade.
  */
 
-import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
+import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Identity, StoreError } from "@thomasfosterau/legation-effect";
 import { AtomicKeyValue } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Layer } from "effect";
+import { KeyValueStore } from "effect/persistence";
 
 /** Options for the IndexedDB-backed `ClientStore` layers. */
 export interface IndexedDbClientStoreOptions {
@@ -59,18 +60,29 @@ const keyValueOptions = (
 });
 
 /**
- * The database, version and object store that platform-browser's
- * `BrowserKeyValueStore.layerIndexedDb` (4.0.2) writes: the database defaults
- * to `effect_key_value_store`, version 1, with an `entries` store keyed by
- * `key` whose records are `{ key, value }`. The atomic batch opens the same
- * database in the same layout, so it and the `KeyValueStore` read one store.
+ * The database and object store this module reads and writes: the database
+ * platform-browser's `BrowserKeyValueStore.layerIndexedDb` (4.0.2) also uses,
+ * by default `effect_key_value_store`, with an `entries` store keyed by `key`
+ * whose records are `{ key, value }`. Both are written here in the same layout,
+ * so the store and the atomic batch read one database.
+ *
+ * The database is opened without a version (#393). The platform's layer opens
+ * at version 1, which fails with a `VersionError` on a database a later version
+ * created, and that failure kills the layer. Opening at whatever version exists
+ * keeps the layer alive. A database without the `entries` store cannot be fixed
+ * from here (creating it needs a version upgrade), so its reads and its batch
+ * fail with an error that names it.
  */
 const PLATFORM_DATABASE = "effect_key_value_store";
-const PLATFORM_DATABASE_VERSION = 1;
-const PLATFORM_ENTRIES_STORE = "entries";
+const ENTRIES_STORE = "entries";
 
-/** Open the platform's database, creating its entries store as the platform does on first open. */
-const openPlatformDatabase = (
+/**
+ * Open the platform's database at the version it has, creating the entries
+ * store only when the database is new. The connection closes itself when
+ * another connection asks for a newer version, rather than blocking that
+ * connection's upgrade (`onversionchange`).
+ */
+const openDatabase = (
   database: string
 ): Effect.Effect<IDBDatabase, StoreError, IndexedDb.IndexedDb> =>
   Effect.gen(function* () {
@@ -82,26 +94,157 @@ const openPlatformDatabase = (
         );
       let request: IDBOpenDBRequest;
       try {
-        request = idb.open(database, PLATFORM_DATABASE_VERSION);
+        request = idb.open(database);
       } catch (cause) {
         fail(cause);
         return;
       }
       request.onupgradeneeded = () => {
         const db = request.result;
-        if (!db.objectStoreNames.contains(PLATFORM_ENTRIES_STORE)) {
-          db.createObjectStore(PLATFORM_ENTRIES_STORE, { keyPath: "key" });
+        if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+          db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
         }
       };
-      request.onsuccess = () => resume(Effect.succeed(request.result));
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => db.close();
+        resume(Effect.succeed(db));
+      };
       request.onerror = () => fail(request.error);
     });
   });
 
+/** A clear error for a database that lacks the entries store (see the module note above). */
+const missingEntriesStore = (db: IDBDatabase, method: string, key?: string) =>
+  new KeyValueStore.KeyValueStoreError({
+    method,
+    message: `IndexedDB database "${db.name}" has no "${ENTRIES_STORE}" object store`,
+    ...(key === undefined ? {} : { key }),
+  });
+
 /**
- * Commit `ops` in one `readwrite` transaction on the platform's entries store:
- * IndexedDB commits a transaction whole or not at all, so a failed or
- * interrupted batch leaves the store as it was.
+ * One request in its own transaction, resolved when the transaction completes,
+ * so a write is durable before the caller continues. A failed or aborted
+ * transaction fails the call.
+ */
+const runRequest = <A>(
+  db: IDBDatabase,
+  mode: IDBTransactionMode,
+  failure: { readonly method: string; readonly message: string; readonly key?: string },
+  evaluate: (store: IDBObjectStore) => IDBRequest<A>
+): Effect.Effect<A, KeyValueStore.KeyValueStoreError> =>
+  Effect.callback<A, KeyValueStore.KeyValueStoreError>((resume) => {
+    let settled = false;
+    let result: A | undefined;
+    const finish = (effect: Effect.Effect<A, KeyValueStore.KeyValueStoreError>) => {
+      if (settled) return;
+      settled = true;
+      resume(effect);
+    };
+    const fail = (cause: unknown) =>
+      finish(Effect.fail(new KeyValueStore.KeyValueStoreError({ ...failure, cause })));
+    if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+      finish(Effect.fail(missingEntriesStore(db, failure.method, failure.key)));
+      return;
+    }
+    let transaction: IDBTransaction;
+    try {
+      transaction = db.transaction(ENTRIES_STORE, mode);
+    } catch (cause) {
+      fail(cause);
+      return;
+    }
+    transaction.oncomplete = () => finish(Effect.succeed(result as A));
+    transaction.onerror = () => fail(transaction.error);
+    transaction.onabort = () => fail(transaction.error);
+    try {
+      const request = evaluate(transaction.objectStore(ENTRIES_STORE));
+      request.onsuccess = () => {
+        result = request.result;
+      };
+      request.onerror = () => fail(request.error);
+    } catch (cause) {
+      fail(cause);
+      try {
+        transaction.abort();
+      } catch {
+        // Already finished: nothing left to abort.
+      }
+    }
+    return Effect.sync(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        transaction.abort();
+      } catch {
+        // Already finished: nothing left to abort.
+      }
+    });
+  });
+
+/**
+ * The platform's `KeyValueStore` semantics over the database {@link openDatabase}
+ * opened: a string value reads back as a string, a `Uint8Array` as bytes, and
+ * every call is its own transaction, as the platform's store makes them.
+ */
+const keyValueOver = (db: IDBDatabase): KeyValueStore.KeyValueStore => {
+  /** A stored record: the `{ key, value }` the platform writes. */
+  type StoredRecord = { readonly key: string; readonly value: unknown } | undefined;
+  return KeyValueStore.make({
+    get: (key) =>
+      runRequest<StoredRecord>(
+        db,
+        "readonly",
+        { method: "get", message: "Failed to get value from backing store", key },
+        (store) => store.get(key)
+      ).pipe(Effect.map((found) => (typeof found?.value === "string" ? found.value : undefined))),
+    getUint8Array: (key) =>
+      runRequest<StoredRecord>(
+        db,
+        "readonly",
+        { method: "getUint8Array", message: "Failed to get value from backing store", key },
+        (store) => store.get(key)
+      ).pipe(Effect.map((found) => (found?.value instanceof Uint8Array ? found.value : undefined))),
+    has: (key) =>
+      runRequest(
+        db,
+        "readonly",
+        { method: "has", message: "Failed to check key in backing store", key },
+        (store) => store.count(key)
+      ).pipe(Effect.map((count) => count > 0)),
+    set: (key, value) =>
+      runRequest(
+        db,
+        "readwrite",
+        { method: "set", message: "Failed to set value in backing store", key },
+        (store) => store.put({ key, value })
+      ).pipe(Effect.asVoid),
+    remove: (key) =>
+      runRequest(
+        db,
+        "readwrite",
+        { method: "remove", message: "Failed to remove value from backing store", key },
+        (store) => store.delete(key)
+      ).pipe(Effect.asVoid),
+    clear: runRequest(
+      db,
+      "readwrite",
+      { method: "clear", message: "Failed to clear backing store" },
+      (store) => store.clear()
+    ).pipe(Effect.asVoid),
+    size: runRequest(
+      db,
+      "readonly",
+      { method: "size", message: "Failed to get backing store size" },
+      (store) => store.count()
+    ),
+  });
+};
+
+/**
+ * Commit `ops` in one `readwrite` transaction on the entries store: IndexedDB
+ * commits a transaction whole or not at all, so a failed or interrupted batch
+ * leaves the store as it was.
  */
 const commitOps = (
   db: IDBDatabase,
@@ -120,9 +263,19 @@ const commitOps = (
           new StoreError({ message: "Failed to commit an atomic batch to IndexedDB", cause })
         )
       );
+    if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+      finish(
+        Effect.fail(
+          new StoreError({
+            message: `Cannot commit an atomic batch: IndexedDB database "${db.name}" has no "${ENTRIES_STORE}" object store`,
+          })
+        )
+      );
+      return;
+    }
     let transaction: IDBTransaction;
     try {
-      transaction = db.transaction(PLATFORM_ENTRIES_STORE, "readwrite");
+      transaction = db.transaction(ENTRIES_STORE, "readwrite");
     } catch (cause) {
       fail(cause);
       return;
@@ -138,7 +291,7 @@ const commitOps = (
     transaction.onerror = () => fail(transaction.error);
     transaction.onabort = () => fail(transaction.error);
     try {
-      const entries = transaction.objectStore(PLATFORM_ENTRIES_STORE);
+      const entries = transaction.objectStore(ENTRIES_STORE);
       // Every request is issued synchronously here: IndexedDB commits a transaction once control
       // returns to the event loop with no request pending, so nothing may await between them.
       for (const op of ops) {
@@ -159,9 +312,26 @@ const commitOps = (
   });
 
 /**
- * The atomic batch over the same IndexedDB database as the platform
- * `KeyValueStore` (#393). Keys arrive in full, namespace prefix included, as
- * the store holds them, so the batch needs no knowledge of the prefix.
+ * The platform `KeyValueStore` over IndexedDB, opened without a version (see
+ * the module note above). Keys are the full keys the store holds.
+ */
+const keyValueLayer = (
+  database: string | undefined
+): Layer.Layer<KeyValueStore.KeyValueStore, never, IndexedDb.IndexedDb> =>
+  Layer.effect(KeyValueStore.KeyValueStore)(
+    Effect.gen(function* () {
+      const db = yield* Effect.acquireRelease(
+        openDatabase(database ?? PLATFORM_DATABASE),
+        (opened) => Effect.sync(() => opened.close())
+      ).pipe(Effect.orDie);
+      return keyValueOver(db);
+    })
+  );
+
+/**
+ * The atomic batch over the same IndexedDB database as the `KeyValueStore`
+ * (#393). Keys arrive in full, namespace prefix included, as the store holds
+ * them, so the batch needs no knowledge of the prefix.
  */
 const atomicKeyValueLayer = (
   database: string | undefined
@@ -169,7 +339,7 @@ const atomicKeyValueLayer = (
   Layer.effect(AtomicKeyValue.AtomicKeyValue)(
     Effect.gen(function* () {
       const db = yield* Effect.acquireRelease(
-        openPlatformDatabase(database ?? PLATFORM_DATABASE),
+        openDatabase(database ?? PLATFORM_DATABASE),
         (opened) => Effect.sync(() => opened.close())
       ).pipe(Effect.orDie);
       return AtomicKeyValue.AtomicKeyValue.of({
@@ -191,12 +361,7 @@ export const layer = (
 ): Layer.Layer<ClientStore.ClientStore, never, IndexedDb.IndexedDb> =>
   ClientStore.layerKeyValue(keyValueOptions(options)).pipe(
     Layer.provide(
-      Layer.merge(
-        BrowserKeyValueStore.layerIndexedDb(
-          options?.database === undefined ? {} : { database: options.database }
-        ),
-        atomicKeyValueLayer(options?.database)
-      )
+      Layer.merge(keyValueLayer(options?.database), atomicKeyValueLayer(options?.database))
     )
   );
 

@@ -14,4 +14,7 @@ and an open still finishes a leftover record either way.
 
 `@thomasfosterau/legation-browser` supplies the service over IndexedDB: one
 `readwrite` transaction on the database and object store the platform
-`KeyValueStore` already uses, so existing databases need no migration.
+`KeyValueStore` already uses, so existing databases need no migration. The
+database is opened without a version, so one a later version created still
+opens; the browser store's `KeyValueStore` opens it the same way, in place of
+the platform's, which pins version 1 and fails on a newer database.
