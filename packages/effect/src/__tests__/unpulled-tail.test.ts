@@ -713,12 +713,12 @@ describe("the tail's crash windows and interleavings (#387)", () => {
       const refuseNext = yield* Ref.make(true);
       const store: ClientStore = {
         ...inner,
-        releaseUnpulled: (lastMutationIds) =>
+        commitTailRelease: (lastMutationIds) =>
           Ref.getAndSet(refuseNext, false).pipe(
             Effect.flatMap((refuse) =>
               refuse
                 ? Effect.fail(new StoreError({ message: "release refused" }))
-                : inner.releaseUnpulled(lastMutationIds)
+                : inner.commitTailRelease!(lastMutationIds)
             )
           ),
       };
@@ -727,13 +727,13 @@ describe("the tail's crash windows and interleavings (#387)", () => {
       // One more than the bound, so the push's park overflows and releases the oldest entry.
       for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
-      // The refused release is finished in this process from its record (#387), so the store and
-      // the copy both hold the released tail, one entry shorter.
-      expect(yield* inner.unpulled).toHaveLength(SMALL_LIMIT);
+      // The refused batch writes nothing (#411), so the store and the copy both still hold the whole
+      // tail, and nothing reverts: the next overflow or pull releases it.
+      expect(yield* inner.unpulled).toHaveLength(SMALL_LIMIT + 1);
 
       // A forced overlay rebuild reads the copy: it must still hold every entry the store holds.
       yield* engine.seed([]);
-      expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      expect(yield* counterValue(engine)).toBe(SMALL_LIMIT + 1);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -812,23 +812,22 @@ describe("the tail's crash windows and interleavings (#387)", () => {
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const inner = yield* ClientStoreModule.makeMemory;
-      // The push parks its entry, then stops until the test resumes it: the window before its trim.
+      // The push's store write (the park and the trim, one batch) completes, then the push stops until
+      // the test resumes it: the window in which the push still holds the overlay lock.
       const holdNext = yield* Ref.make(false);
       const parked = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
       const store: ClientStore = {
         ...inner,
-        parkUnpulled: (mutations) =>
+        commitAcknowledgement: (parkedNow, lastMutationIds) =>
           Ref.getAndSet(holdNext, false).pipe(
             Effect.flatMap((hold) =>
               hold
-                ? inner
-                    .parkUnpulled(mutations)
-                    .pipe(
-                      Effect.andThen(Deferred.succeed(parked, undefined)),
-                      Effect.andThen(Deferred.await(resume))
-                    )
-                : inner.parkUnpulled(mutations)
+                ? inner.commitAcknowledgement!(parkedNow, lastMutationIds).pipe(
+                    Effect.andThen(Deferred.succeed(parked, undefined)),
+                    Effect.andThen(Deferred.await(resume))
+                  )
+                : inner.commitAcknowledgement!(parkedNow, lastMutationIds)
             )
           ),
       };
@@ -1292,6 +1291,86 @@ describe("a release record's guarantees across both stores (#387 review)", () =>
       const reopened = yield* ClientStoreModule.makeKeyValue();
       expect((yield* reopened.pendingMutations).map((m) => m.mutationId)).toEqual([2]);
       expect(yield* tailOf(reopened)).toEqual(["c1#1"]);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+// The same three steps through the atomic batch members (#411): the memory store takes them as the
+// engine does on a store that has them. The record-path counterpart runs the same steps on the
+// key-value store, which has no AtomicKeyValue here and so takes the record path.
+const stateOf = (store: ClientStore) =>
+  Effect.gen(function* () {
+    return {
+      row: yield* rowCount(store, "c"),
+      cookie: yield* store.getCookie,
+      tail: yield* tailOf(store),
+      pending: (yield* store.pendingMutations).map((m) => `${m.clientId}#${m.mutationId}`),
+    };
+  });
+
+const appendFour = (store: ClientStore) =>
+  Effect.forEach(
+    [mutation("c1", 1), mutation("c1", 2), mutation("c1", 3), mutation("c2", 1)],
+    (m) => store.appendMutation(m),
+    { discard: true }
+  );
+
+const batchMembersScenario = (store: ClientStore) =>
+  Effect.gen(function* () {
+    yield* appendFour(store);
+    yield* store.commitAcknowledgement!([mutation("c1", 1), mutation("c1", 2)], { c1: 1 });
+    const afterAck = yield* stateOf(store);
+    yield* store.commitTailRelease!({ c1: 1 });
+    const afterRelease = yield* stateOf(store);
+    yield* store.commitPull!({
+      lastMutationIds: { c1: 2 },
+      cookie: "cookie-2",
+      patch: [
+        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+      ],
+    });
+    return { afterAck, afterRelease, final: yield* stateOf(store) };
+  });
+
+const recordMembersScenario = (store: ClientStore) =>
+  Effect.gen(function* () {
+    yield* appendFour(store);
+    yield* store.parkUnpulled([mutation("c1", 1), mutation("c1", 2)]);
+    yield* store.acknowledge("c1", 1);
+    const afterAck = yield* stateOf(store);
+    yield* store.beginRelease({ lastMutationIds: { c1: 1 }, patch: [] });
+    yield* store.releaseUnpulled({ c1: 1 });
+    const afterRelease = yield* stateOf(store);
+    yield* store.beginRelease({
+      lastMutationIds: { c1: 2 },
+      cookie: "cookie-2",
+      patch: [
+        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+      ],
+    });
+    yield* store.finishRelease;
+    return { afterAck, afterRelease, final: yield* stateOf(store) };
+  });
+
+describe("the memory store's atomic batch members (#411)", () => {
+  it.effect("the batch members reach the state the key-value record path reaches", () =>
+    Effect.gen(function* () {
+      const batched = yield* batchMembersScenario(yield* ClientStoreModule.makeMemory);
+      const recorded = yield* recordMembersScenario(yield* ClientStoreModule.makeKeyValue());
+      expect(batched.afterAck).toEqual({
+        row: undefined,
+        cookie: undefined,
+        tail: ["c1#1", "c1#2"],
+        pending: ["c1#2", "c1#3", "c2#1"],
+      });
+      expect(batched.afterRelease.tail).toEqual(["c1#2"]);
+      expect(batched.final).toEqual({
+        row: 2,
+        cookie: "cookie-2",
+        tail: [],
+        pending: ["c1#3", "c2#1"],
+      });
+      expect(recorded).toEqual(batched);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 });

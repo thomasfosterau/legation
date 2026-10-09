@@ -561,16 +561,17 @@ describe("a push that commits during a pull never double-counts (#286)", () => {
 });
 
 describe("a pull's reveal is atomic with its tail release (#286)", () => {
-  it.effect("a read between the pull's row write and its tail release sees the true count", () =>
+  it.effect("a read between the pull's store commit and its copy update sees the true count", () =>
     Effect.gen(function* () {
       const parking = yield* makeParking;
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const inner = yield* ClientStoreModule.makeMemory;
-      // The pull parks after its confirmed rows are written, before the
-      // acknowledged tail is released.
+      // The pull parks after the store has committed its confirmed rows and released the acknowledged
+      // tail (one batch on the memory store, #411), before the engine updates its own copy.
       const store: ClientStore = {
         ...inner,
-        applyRowOps: (ops) => inner.applyRowOps(ops).pipe(Effect.andThen(parkIfArmed(parking))),
+        commitPull: (release) =>
+          inner.commitPull!(release).pipe(Effect.andThen(parkIfArmed(parking))),
       };
       const engine = yield* makeCounterEngine(server, store);
       yield* engine.subscribe(countersSubset);

@@ -299,8 +299,9 @@ export interface ClientStore {
    */
   readonly clearUnpulled: Effect.Effect<void, StoreError>;
 
-  // Atomic batches (#393). Present only when the store has an {@link AtomicKeyValue} in context;
-  // the engine takes its release-record path, through the members above, when they are absent.
+  // Atomic batches (#393, #411). Present on the in-memory store, and on the key-value store when it has
+  // an {@link AtomicKeyValue} in context; the engine takes its release-record path, through the members
+  // above, when they are absent.
   /**
    * Write a pull's whole release as one atomic batch: its rows, its cookie, the journal trim and the
    * tail release that {@link ClientStore.beginRelease}, the patch, the cookie, the acknowledgement and
@@ -474,6 +475,22 @@ export interface PullRelease {
   readonly patch: ReadonlyArray<PatchOp>;
 }
 
+/**
+ * `current` with each client raised to the highest id among `entries`, never lowered (#411). The
+ * pure form of the counter raise the record path makes one entry at a time, over the memory store's
+ * `Map` counters.
+ */
+const raisedCounterMap = (
+  current: ReadonlyMap<string, number>,
+  entries: ReadonlyArray<Mutation>
+): Map<string, number> => {
+  const next = new Map(current);
+  for (const m of entries) {
+    if (m.mutationId > (next.get(m.clientId) ?? 0)) next.set(m.clientId, m.mutationId);
+  }
+  return next;
+};
+
 /** In-memory implementation (tests, SSR, ephemeral clients). */
 export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const rows = yield* Ref.make(new Map<string, Map<RowId, StoredRow>>());
@@ -494,9 +511,9 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // `appendMutation`, `appendNext`, `acknowledge`, `compactPending`,
   // `nextMutationId`, `quarantinePending`, `releaseQuarantine`,
   // `discardQuarantine`, and the tail writers `parkUnpulled`,
-  // `releaseUnpulled` and `clearUnpulled`. A read-then-write holder is only safe if every other
-  // writer is also excluded; a writer that skipped the permit could land
-  // between the read and the set and be overwritten (the lost-append and
+  // `releaseUnpulled`, `clearUnpulled` and the atomic batch members (#411). A read-then-write
+  // holder is only safe if every other writer is also excluded; a writer that skipped the permit
+  // could land between the read and the set and be overwritten (the lost-append and
   // lost-release races). Pure reads stay unlocked: each is one `Ref.get`.
   // Chosen over folding all three into one Ref because the existing
   // operations stay readable and `compactPending`'s two-step commit keeps its
@@ -563,7 +580,78 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     yield* Ref.update(journal, (entries) => entries.filter((m) => !parked.has(entryKey(m))));
   });
 
+  // ─── Atomic batch members (#411) ─────────────────────────────────────────
+  // The batch form of each record-path step, so the engine takes the batch path on this store as it
+  // does on the key-value store. Each member is one step under `lock`: it finishes an outstanding
+  // record first, as a row write does (#387), computes every new value from the current state, then
+  // writes them together. Nothing is recorded, so the memory store cannot be left mid-release. The
+  // writes run uninterruptible, so an interrupt cannot land between them.
+  const finishOutstanding = Effect.gen(function* () {
+    if ((yield* Ref.get(outstanding)) !== undefined) yield* finishInner;
+  });
+
+  const commitPull = (release: PullRelease) =>
+    locked(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* finishOutstanding;
+          const currentJournal = yield* Ref.get(journal);
+          const nextRows = applyOpsTo(yield* Ref.get(rows), release.patch);
+          const nextCounters = raisedCounterMap(
+            yield* Ref.get(counters),
+            currentJournal.filter((m) => coveredBy(release.lastMutationIds, m))
+          );
+          const nextJournal = currentJournal.filter((m) => !coveredBy(release.lastMutationIds, m));
+          const nextTail = (yield* Ref.get(tail)).filter(
+            (m) => !coveredBy(release.lastMutationIds, m)
+          );
+          yield* Ref.set(rows, nextRows);
+          if (release.cookie !== undefined) yield* Ref.set(cookie, release.cookie);
+          yield* Ref.set(counters, nextCounters);
+          yield* Ref.set(journal, nextJournal);
+          yield* Ref.set(tail, nextTail);
+        })
+      )
+    );
+
+  const commitAcknowledgement = (
+    parked: ReadonlyArray<Mutation>,
+    lastMutationIds: Readonly<Record<string, number>>
+  ) =>
+    locked(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* finishOutstanding;
+          const currentJournal = yield* Ref.get(journal);
+          const nextTail = appendMissing(yield* Ref.get(tail), parked);
+          // The parked entries and the trimmed ones both keep the counters at their high-water mark.
+          const nextCounters = raisedCounterMap(
+            raisedCounterMap(yield* Ref.get(counters), parked),
+            currentJournal.filter((m) => coveredBy(lastMutationIds, m))
+          );
+          const nextJournal = currentJournal.filter((m) => !coveredBy(lastMutationIds, m));
+          yield* Ref.set(tail, nextTail);
+          yield* Ref.set(counters, nextCounters);
+          yield* Ref.set(journal, nextJournal);
+        })
+      )
+    );
+
+  const commitTailRelease = (lastMutationIds: Readonly<Record<string, number>>) =>
+    locked(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* finishOutstanding;
+          const nextTail = (yield* Ref.get(tail)).filter((m) => !coveredBy(lastMutationIds, m));
+          yield* Ref.set(tail, nextTail);
+        })
+      )
+    );
+
   return ClientStore.of({
+    commitPull,
+    commitAcknowledgement,
+    commitTailRelease,
     getRow: (collection, id) => Ref.get(rows).pipe(Effect.map((m) => m.get(collection)?.get(id))),
     listRows: (collection) =>
       Ref.get(rows).pipe(Effect.map((m) => Array.from(collectionMap(m, collection).values()))),
@@ -703,6 +791,11 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           Effect.andThen(raiseCountersTo(mutations))
         )
       ),
+    // The record-path methods (`beginRelease`, `releaseUnpulled`) stay on this store for the
+    // interface and the record-path contract tests, which run over both stores. The engine never
+    // reaches them here now that the batch members are present (#411): the key-value store over a
+    // plain KeyValueStore, with no AtomicKeyValue in context, is the store that still needs them.
+    //
     // An outstanding release is finished first, as an open would finish it (#387), so a second
     // release begins rather than being refused. The finish cannot fail here: nothing is stored.
     beginRelease: (release) =>
