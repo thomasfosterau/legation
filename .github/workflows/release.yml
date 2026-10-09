@@ -34,6 +34,24 @@ jobs:
       contents: write # push the version commit/tag and the "Version Packages" PR branch
       pull-requests: write # open/update the "Version Packages" PR
       id-token: write # OIDC: prove this workflow's identity to npm (no token needed)
+    # Verify runs the suite, including the PostgreSQL overlap test
+    # (packages/sql/src/__tests__/sql-backend-postgres.test.ts, #360), which
+    # fails, not skips, when DATABASE_URL is unset in CI. This is the same
+    # server as ci.yml's two suite jobs; keep the digest and health check in sync.
+    services:
+      postgres:
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - name: Checkout
         # The Changesets action pushes the version branch, so it needs the
