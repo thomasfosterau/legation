@@ -21,6 +21,12 @@
  *   derives the key prefix, so two principals never share a keyspace and
  *   nothing needs resetting.
  *
+ * A version change from another connection (a newer app build upgrading the
+ * database, or a deletion) closes this store's connections, since they would
+ * otherwise block it. From then on every call fails with an error that says
+ * the database was upgraded by another connection and asks for a reload. The
+ * store never reopens itself, so a reload is the way back.
+ *
  * Which to choose: namespace when the device has a small number of regular
  * users who switch back and forth (each keeps a warm replica, so switching
  * back costs no re-pull, at the price of holding both on disk); reset when
@@ -28,9 +34,10 @@
  * where accumulating a replica per visitor is the worse trade.
  */
 
-import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
+import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Identity } from "@thomasfosterau/legation-effect";
 import { Layer } from "effect";
+import { atomicKeyValueLayer, keyValueLayer } from "./internal/IndexedDbKeyValue.js";
 
 /** Options for the IndexedDB-backed `ClientStore` layers. */
 export interface IndexedDbClientStoreOptions {
@@ -61,15 +68,16 @@ const keyValueOptions = (
  * ClientStore over IndexedDB. Requires the `IndexedDb` primitives service;
  * use {@link layerWindow} where browser globals are available, or provide
  * `IndexedDb` yourself (tests use fake-indexeddb).
+ *
+ * A pull and a push acknowledgement commit as one IndexedDB transaction (#393),
+ * so a durable pull writes its rows once and writes no release record.
  */
 export const layer = (
   options?: IndexedDbClientStoreOptions
 ): Layer.Layer<ClientStore.ClientStore, never, IndexedDb.IndexedDb> =>
   ClientStore.layerKeyValue(keyValueOptions(options)).pipe(
     Layer.provide(
-      BrowserKeyValueStore.layerIndexedDb(
-        options?.database === undefined ? {} : { database: options.database }
-      )
+      Layer.merge(keyValueLayer(options?.database), atomicKeyValueLayer(options?.database))
     )
   );
 

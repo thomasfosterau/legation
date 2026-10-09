@@ -232,6 +232,8 @@ export const perUserReplica = (fingerprint: Identity.Fingerprint) =>
 
 Choose by how sign-ins behave on the device. Namespace when a few regular users switch back and forth, since each keeps a warm replica on disk. Reset when sign-ins are one-off or unbounded, such as a kiosk or a shared library machine, where a replica per visitor is the worse trade. Layers that take an `identity` (`layer`, `layerWindow`) turn the identity boundary on. `layerWindow` expects the page's own `indexedDB`. In a worker, provide `IndexedDb` yourself, as the service worker example does.
 
+The store opens its database without a version, so a database a later app build already upgraded still opens. If another connection later upgrades the database, or deletes it, this store's connections close, since they would block that change. Every call after that fails with "the IndexedDB database was upgraded by another connection; reload to continue". The store does not reopen itself, so the app should reload to pick up the new schema. Writes that were committed before the upgrade are kept.
+
 ### HTTP cache
 
 `CacheApiHttpCache` keeps responses in a named Cache API cache, and its `fetchHandler` serves them stale-while-revalidate under a per-request policy. A policy returning `undefined` bypasses the cache. `HttpCacheInvalidation` evicts entries by tag as the engine's collections change: a response tagged `collection:todos` is dropped when `todos` changes.
