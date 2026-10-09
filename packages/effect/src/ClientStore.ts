@@ -17,8 +17,9 @@
  * are neither discarded nor adopted by the next principal.
  */
 
-import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect";
+import { Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/persistence";
+import { AtomicKeyValue, type KeyValueOp } from "./AtomicKeyValue.js";
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
@@ -297,6 +298,35 @@ export interface ClientStore {
    * step, since the tail's effects belong to the rows the reset clears.
    */
   readonly clearUnpulled: Effect.Effect<void, StoreError>;
+
+  // Atomic batches (#393). Present only when the store has an {@link AtomicKeyValue} in context;
+  // the engine takes its release-record path, through the members above, when they are absent.
+  /**
+   * Write a pull's whole release as one atomic batch: its rows, its cookie, the journal trim and the
+   * tail release that {@link ClientStore.beginRelease}, the patch, the cookie, the acknowledgement and
+   * {@link ClientStore.releaseUnpulled} would make in turn. Nothing is recorded, so a crash or a
+   * failed batch leaves the store at its state before the pull, and the tail still shows the effects
+   * the pull would have released.
+   */
+  readonly commitPull?: ((release: PullRelease) => Effect.Effect<void, StoreError>) | undefined;
+  /**
+   * Park `parked` at the end of the tail and trim the journal to `lastMutationIds`, as one atomic
+   * batch. The batch form of {@link ClientStore.parkUnpulled} followed by
+   * {@link ClientStore.acknowledge} for each client.
+   */
+  readonly commitAcknowledgement?:
+    | ((
+        parked: ReadonlyArray<Mutation>,
+        lastMutationIds: Readonly<Record<string, number>>
+      ) => Effect.Effect<void, StoreError>)
+    | undefined;
+  /**
+   * Release the tail entries `lastMutationIds` covers as one atomic batch, with no record: the batch
+   * form of {@link ClientStore.releaseUnpulled} for an overflow release that carries no rows.
+   */
+  readonly commitTailRelease?:
+    | ((lastMutationIds: Readonly<Record<string, number>>) => Effect.Effect<void, StoreError>)
+    | undefined;
 
   // Sync bookkeeping
   readonly getCookie: Effect.Effect<string | undefined, StoreError>;
@@ -985,6 +1015,34 @@ const appendDistinct = (
   return [...held, ...incoming.filter((m) => !seen.has(`${m.clientId}/${m.mutationId}`))];
 };
 
+/** The highest mutation id per client among `ids` (empty when none is positive). */
+const highestIds = (ids: ReadonlyArray<JournalIndexEntry>): Record<string, number> => {
+  const highest: Record<string, number> = {};
+  for (const { clientId, mutationId } of ids) {
+    if (mutationId > (highest[clientId] ?? 0)) highest[clientId] = mutationId;
+  }
+  return highest;
+};
+
+/**
+ * `counters` with each client raised to at least its id in `highest`, or `undefined` when no counter
+ * rises. The one rule both the record path and the atomic batch apply (#249, #258).
+ */
+const raisedCounters = (
+  counters: Readonly<Record<string, number>>,
+  highest: Readonly<Record<string, number>>
+): Record<string, number> | undefined => {
+  const raised: Record<string, number> = { ...counters };
+  let changed = false;
+  for (const [clientId, id] of Object.entries(highest)) {
+    if ((raised[clientId] ?? 0) < id) {
+      raised[clientId] = id;
+      changed = true;
+    }
+  }
+  return changed ? raised : undefined;
+};
+
 /** A batch of row ops grouped by collection: `null` marks a deletion. */
 type RowChanges = Map<string, StoredRow | null>;
 interface RowOpPlan {
@@ -1037,6 +1095,13 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
  * makes one store instance safe for concurrent fibers — not for concurrent
  * processes (the service-worker host is the per-origin singleton, ADR-0010).
  *
+ * Two paths write a pull's release (#387, #393). With an {@link AtomicKeyValue}
+ * in context, the release (`commitPull`, `commitAcknowledgement`,
+ * `commitTailRelease`) is one batch and no release record is written. Without
+ * it, the release goes through the record `beginRelease` writes first, which
+ * an open finishes if a crash interrupted it. Both paths settle a leftover
+ * record on open.
+ *
  * Reads decode each persisted value through a `Schema` codec, so a corrupt or
  * format-drifted value on a rehydrating host fails as a `StoreError` instead
  * of a silent `as A` cast. Only the *envelopes* are validated — row values
@@ -1046,10 +1111,8 @@ export const makeKeyValue = (
   options?: KeyValueOptions
 ): Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> =>
   Effect.gen(function* () {
-    const store = KeyValueStore.prefix(
-      yield* KeyValueStore.KeyValueStore,
-      options?.prefix ?? "legation/"
-    );
+    const namespace = options?.prefix ?? "legation/";
+    const store = KeyValueStore.prefix(yield* KeyValueStore.KeyValueStore, namespace);
     const highWater = options?.journalHighWater;
     const lock = yield* Semaphore.make(1);
     // Set when an outstanding release could not be finished in this process. Every member checks it
@@ -1117,21 +1180,11 @@ export const makeKeyValue = (
       ids: ReadonlyArray<JournalIndexEntry>
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
-        const highest: Record<string, number> = {};
-        for (const { clientId, mutationId } of ids) {
-          if (mutationId > (highest[clientId] ?? 0)) highest[clientId] = mutationId;
-        }
+        const highest = highestIds(ids);
         if (Object.keys(highest).length === 0) return;
         const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-        const raised: Record<string, number> = { ...counters };
-        let changed = false;
-        for (const [clientId, id] of Object.entries(highest)) {
-          if ((raised[clientId] ?? 0) < id) {
-            raised[clientId] = id;
-            changed = true;
-          }
-        }
-        if (changed) yield* writeJson("counters", raised);
+        const raised = raisedCounters(counters, highest);
+        if (raised !== undefined) yield* writeJson("counters", raised);
       });
 
     // ─── Compaction (unlocked inner forms; #249) ───────────────────────────
@@ -1682,7 +1735,195 @@ export const makeKeyValue = (
     );
     if (boundaryFailure !== undefined) return sealed(boundaryFailure);
 
+    // ─── Atomic batches (unlocked staged forms; #393) ──────────────────────
+    //
+    // With an AtomicKeyValue in context, a pull's release and a push ack's park-then-trim commit as ONE
+    // batch, with no release record. Each batch stages every write the record path would make, reading
+    // through its own staged values, and hands the whole set to the seam once. So the batch writes what
+    // the record path writes, each row and index once, and a failed or interrupted batch leaves the store
+    // at its state before the operation: nothing reached the store. Keys are staged unprefixed and given
+    // the namespace when they are handed to the seam. Every batch runs under `lock`, after settling any
+    // compaction an interrupted run left, as the journal operations do.
+    const atomic = Option.getOrUndefined(yield* Effect.serviceOption(AtomicKeyValue));
+    const stageBatch = () => {
+      // A staged value: the text to write, or `undefined` for a removal.
+      const staged = new Map<string, string | undefined>();
+      // Decided when the read runs, not when it is built: a read built before a write must see it.
+      const read = <A>(
+        key: string,
+        codec: Schema.Codec<A, string>
+      ): Effect.Effect<A | undefined, StoreError> =>
+        Effect.suspend(() => {
+          if (!staged.has(key)) return readDecoded(key, codec);
+          const raw = staged.get(key);
+          return raw === undefined
+            ? Effect.succeed(undefined)
+            : Schema.decodeUnknownEffect(codec)(raw).pipe(
+                Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
+              );
+        });
+      return {
+        read,
+        /** A JSON value, as the record path's `writeJson` writes it. */
+        putJson: (key: string, value: unknown) => {
+          staged.set(key, JSON.stringify(value));
+        },
+        /** A value written verbatim, as the cookie is (`setCookie`). */
+        putRaw: (key: string, raw: string) => {
+          staged.set(key, raw);
+        },
+        drop: (key: string) => {
+          staged.set(key, undefined);
+        },
+        ops: (): ReadonlyArray<KeyValueOp> =>
+          Array.from(staged, ([key, raw]) =>
+            raw === undefined
+              ? ({ _tag: "Remove", key: `${namespace}${key}` } as const)
+              : ({ _tag: "Set", key: `${namespace}${key}`, value: raw } as const)
+          ),
+      };
+    };
+    type Stage = ReturnType<typeof stageBatch>;
+
+    // `raiseCounters`, staged.
+    const stagedRaiseCounters = (b: Stage, ids: ReadonlyArray<JournalIndexEntry>) =>
+      Effect.gen(function* () {
+        const highest = highestIds(ids);
+        if (Object.keys(highest).length === 0) return;
+        const counters = (yield* b.read("counters", CountersFromJson)) ?? {};
+        const raised = raisedCounters(counters, highest);
+        if (raised !== undefined) b.putJson("counters", raised);
+      });
+
+    // `trimJournal`, staged: the same index rewrite, bodies removed before it, and the ids reserved.
+    const stagedTrimJournal = (b: Stage, drop: (entry: JournalIndexEntry) => boolean) =>
+      Effect.gen(function* () {
+        const index = yield* b.read("journalIndex", JournalIndexFromJson);
+        if (index === undefined) return;
+        const dropped = index.filter(drop);
+        if (dropped.length === 0) return;
+        yield* stagedRaiseCounters(b, dropped);
+        for (const entry of dropped) b.drop(journalBodyKey(entry.clientId, entry.mutationId));
+        b.putJson(
+          "journalIndex",
+          index.filter((entry) => !drop(entry))
+        );
+      });
+
+    // `releaseUnpulledInner`, staged, without the record's removal: a batch writes no record.
+    const stagedReleaseTail = (b: Stage, lastMutationIds: Readonly<Record<string, number>>) =>
+      Effect.gen(function* () {
+        const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+        const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
+        for (const entry of released) b.drop(unpulledBodyKey(entry.clientId, entry.mutationId));
+        if (released.length > 0) {
+          b.putJson(
+            UNPULLED_INDEX_KEY,
+            index.filter((entry) => !coveredBy(lastMutationIds, entry))
+          );
+        }
+      });
+
+    // `parkUnpulledInner`, staged.
+    const stagedPark = (b: Stage, mutations: ReadonlyArray<Mutation>) =>
+      Effect.gen(function* () {
+        if (mutations.length === 0) return;
+        for (const m of mutations) b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m);
+        const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+        const next = appendMissing(
+          index,
+          mutations.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
+        );
+        if (next.length !== index.length) b.putJson(UNPULLED_INDEX_KEY, next);
+        yield* stagedRaiseCounters(b, mutations);
+      });
+
+    // `applyRowOpsInner`, staged: the same per-row writes, one id-index per touched collection, and the
+    // collection list kept current, as the record path keeps it.
+    const stagedRows = (b: Stage, ops: ReadonlyArray<PatchOp>) =>
+      Effect.gen(function* () {
+        const plan = planRowOps(ops);
+        const collectionList = b
+          .read("collections", CollectionsFromJson)
+          .pipe(Effect.map((list) => list ?? []));
+        const rowIdsOf = (collection: string) =>
+          b.read(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
+        if (plan.clear) {
+          for (const collection of yield* collectionList) {
+            for (const id of yield* rowIdsOf(collection)) b.drop(rowKey(collection, id));
+            b.drop(rowIndexKey(collection));
+            b.drop(legacyRowsKey(collection));
+          }
+          b.putJson("collections", []);
+        }
+        for (const [collection, changes] of plan.groups) {
+          const ids = new Set(yield* rowIdsOf(collection));
+          for (const [id, row] of changes) {
+            if (row === null) {
+              b.drop(rowKey(collection, id));
+              ids.delete(id);
+            } else {
+              b.putJson(rowKey(collection, id), row);
+              ids.add(id);
+            }
+          }
+          b.putJson(rowIndexKey(collection), [...ids]);
+          const list = yield* collectionList;
+          if (!list.includes(collection)) b.putJson("collections", [...list, collection]);
+        }
+      });
+
+    // Commit a staged batch as one seam call. Nothing is written for an empty batch.
+    const commitStaged = (
+      atomicSeam: NonNullable<typeof atomic>,
+      b: Stage
+    ): Effect.Effect<void, StoreError> =>
+      Effect.suspend(() => {
+        const ops = b.ops();
+        return ops.length === 0 ? Effect.void : atomicSeam.apply(ops);
+      });
+
+    const batchMembers: Pick<
+      ClientStore,
+      "commitPull" | "commitAcknowledgement" | "commitTailRelease"
+    > =
+      atomic === undefined
+        ? {}
+        : {
+            commitPull: (release) =>
+              locked(
+                Effect.gen(function* () {
+                  yield* settleCompaction;
+                  const b = stageBatch();
+                  yield* stagedRows(b, release.patch);
+                  if (release.cookie !== undefined) b.putRaw("cookie", release.cookie);
+                  yield* stagedTrimJournal(b, (entry) => coveredBy(release.lastMutationIds, entry));
+                  yield* stagedReleaseTail(b, release.lastMutationIds);
+                  yield* commitStaged(atomic, b);
+                })
+              ),
+            commitAcknowledgement: (parked, lastMutationIds) =>
+              locked(
+                Effect.gen(function* () {
+                  yield* settleCompaction;
+                  const b = stageBatch();
+                  yield* stagedPark(b, parked);
+                  yield* stagedTrimJournal(b, (entry) => coveredBy(lastMutationIds, entry));
+                  yield* commitStaged(atomic, b);
+                })
+              ),
+            commitTailRelease: (lastMutationIds) =>
+              locked(
+                Effect.gen(function* () {
+                  const b = stageBatch();
+                  yield* stagedReleaseTail(b, lastMutationIds);
+                  yield* commitStaged(atomic, b);
+                })
+              ),
+          };
+
     return ClientStore.of({
+      ...batchMembers,
       getRow: (collection, id) => unsealed(readDecoded(rowKey(collection, id), RowFromJson)),
       listRows: (collection) => unsealed(listRowsOf(collection)),
       listCollections: unsealed(collections),

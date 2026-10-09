@@ -29,8 +29,9 @@
  */
 
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Identity } from "@thomasfosterau/legation-effect";
-import { Layer } from "effect";
+import { ClientStore, Identity, StoreError } from "@thomasfosterau/legation-effect";
+import { AtomicKeyValue } from "@thomasfosterau/legation-effect/internal";
+import { Effect, Layer } from "effect";
 
 /** Options for the IndexedDB-backed `ClientStore` layers. */
 export interface IndexedDbClientStoreOptions {
@@ -58,17 +59,143 @@ const keyValueOptions = (
 });
 
 /**
+ * The database, version and object store that platform-browser's
+ * `BrowserKeyValueStore.layerIndexedDb` (4.0.2) writes: the database defaults
+ * to `effect_key_value_store`, version 1, with an `entries` store keyed by
+ * `key` whose records are `{ key, value }`. The atomic batch opens the same
+ * database in the same layout, so it and the `KeyValueStore` read one store.
+ */
+const PLATFORM_DATABASE = "effect_key_value_store";
+const PLATFORM_DATABASE_VERSION = 1;
+const PLATFORM_ENTRIES_STORE = "entries";
+
+/** Open the platform's database, creating its entries store as the platform does on first open. */
+const openPlatformDatabase = (
+  database: string
+): Effect.Effect<IDBDatabase, StoreError, IndexedDb.IndexedDb> =>
+  Effect.gen(function* () {
+    const idb = (yield* IndexedDb.IndexedDb).indexedDB;
+    return yield* Effect.callback<IDBDatabase, StoreError>((resume) => {
+      const fail = (cause: unknown) =>
+        resume(
+          Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause }))
+        );
+      let request: IDBOpenDBRequest;
+      try {
+        request = idb.open(database, PLATFORM_DATABASE_VERSION);
+      } catch (cause) {
+        fail(cause);
+        return;
+      }
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(PLATFORM_ENTRIES_STORE)) {
+          db.createObjectStore(PLATFORM_ENTRIES_STORE, { keyPath: "key" });
+        }
+      };
+      request.onsuccess = () => resume(Effect.succeed(request.result));
+      request.onerror = () => fail(request.error);
+    });
+  });
+
+/**
+ * Commit `ops` in one `readwrite` transaction on the platform's entries store:
+ * IndexedDB commits a transaction whole or not at all, so a failed or
+ * interrupted batch leaves the store as it was.
+ */
+const commitOps = (
+  db: IDBDatabase,
+  ops: ReadonlyArray<AtomicKeyValue.KeyValueOp>
+): Effect.Effect<void, StoreError> =>
+  Effect.callback<void, StoreError>((resume) => {
+    let settled = false;
+    const finish = (effect: Effect.Effect<void, StoreError>) => {
+      if (settled) return;
+      settled = true;
+      resume(effect);
+    };
+    const fail = (cause: unknown) =>
+      finish(
+        Effect.fail(
+          new StoreError({ message: "Failed to commit an atomic batch to IndexedDB", cause })
+        )
+      );
+    let transaction: IDBTransaction;
+    try {
+      transaction = db.transaction(PLATFORM_ENTRIES_STORE, "readwrite");
+    } catch (cause) {
+      fail(cause);
+      return;
+    }
+    const abort = () => {
+      try {
+        transaction.abort();
+      } catch {
+        // Already finished: nothing left to abort.
+      }
+    };
+    transaction.oncomplete = () => finish(Effect.void);
+    transaction.onerror = () => fail(transaction.error);
+    transaction.onabort = () => fail(transaction.error);
+    try {
+      const entries = transaction.objectStore(PLATFORM_ENTRIES_STORE);
+      // Every request is issued synchronously here: IndexedDB commits a transaction once control
+      // returns to the event loop with no request pending, so nothing may await between them.
+      for (const op of ops) {
+        if (op._tag === "Set") entries.put({ key: op.key, value: op.value });
+        else entries.delete(op.key);
+      }
+    } catch (cause) {
+      fail(cause);
+      abort();
+    }
+    // Interrupted before the commit point: abort, so none of the batch lands.
+    return Effect.sync(() => {
+      if (!settled) {
+        settled = true;
+        abort();
+      }
+    });
+  });
+
+/**
+ * The atomic batch over the same IndexedDB database as the platform
+ * `KeyValueStore` (#393). Keys arrive in full, namespace prefix included, as
+ * the store holds them, so the batch needs no knowledge of the prefix.
+ */
+const atomicKeyValueLayer = (
+  database: string | undefined
+): Layer.Layer<AtomicKeyValue.AtomicKeyValue, never, IndexedDb.IndexedDb> =>
+  Layer.effect(AtomicKeyValue.AtomicKeyValue)(
+    Effect.gen(function* () {
+      const db = yield* Effect.acquireRelease(
+        openPlatformDatabase(database ?? PLATFORM_DATABASE),
+        (opened) => Effect.sync(() => opened.close())
+      ).pipe(Effect.orDie);
+      return AtomicKeyValue.AtomicKeyValue.of({
+        apply: (ops) => (ops.length === 0 ? Effect.void : commitOps(db, ops)),
+      });
+    })
+  );
+
+/**
  * ClientStore over IndexedDB. Requires the `IndexedDb` primitives service;
  * use {@link layerWindow} where browser globals are available, or provide
  * `IndexedDb` yourself (tests use fake-indexeddb).
+ *
+ * A pull and a push acknowledgement commit as one IndexedDB transaction (#393),
+ * so a durable pull writes its rows once and writes no release record.
  */
 export const layer = (
   options?: IndexedDbClientStoreOptions
 ): Layer.Layer<ClientStore.ClientStore, never, IndexedDb.IndexedDb> =>
   ClientStore.layerKeyValue(keyValueOptions(options)).pipe(
     Layer.provide(
-      BrowserKeyValueStore.layerIndexedDb(
-        options?.database === undefined ? {} : { database: options.database }
+      Layer.merge(
+        BrowserKeyValueStore.layerIndexedDb(
+          options?.database === undefined ? {} : { database: options.database }
+        ),
+        atomicKeyValueLayer(options?.database)
       )
     )
   );

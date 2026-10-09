@@ -1868,14 +1868,25 @@ export const make = (
           // Read before the park, so a reload of a stale copy cannot already hold the
           // entries about to be added.
           const held = yield* tailLocked;
-          yield* store.parkUnpulled(applied);
-          // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
-          // that in process, as an open does, and the copy re-reads the tail on its next use (#336).
-          yield* Effect.gen(function* () {
-            for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
-              yield* store.acknowledge(clientId, upTo);
-            }
-          }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail)));
+          if (store.commitAcknowledgement !== undefined) {
+            // The park and the trim are one atomic batch (#393): a failure leaves neither written.
+            yield* store
+              .commitAcknowledgement(applied, response.lastMutationIds)
+              .pipe(
+                Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail))
+              );
+          } else {
+            yield* store.parkUnpulled(applied);
+            // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
+            // that in process, as an open does, and the copy re-reads the tail on its next use (#336).
+            yield* Effect.gen(function* () {
+              for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
+                yield* store.acknowledge(clientId, upTo);
+              }
+            }).pipe(
+              Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail))
+            );
+          }
           // The store now holds the full tail. The copy takes it before the overflow release below
           // can fail, so a failed release leaves the copy and the store agreeing (#387).
           const tail = [...held, ...applied];
@@ -1898,8 +1909,13 @@ export const make = (
             // written inside the scope whose failure is finished below: a `beginRelease` that
             // reports failure may still have written it (#387).
             yield* Effect.gen(function* () {
-              yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
-              yield* store.releaseUnpulled(watermark);
+              if (store.commitTailRelease !== undefined) {
+                // One atomic batch with no record (#393).
+                yield* store.commitTailRelease(watermark);
+              } else {
+                yield* store.beginRelease({ lastMutationIds: watermark, patch: [] });
+                yield* store.releaseUnpulled(watermark);
+              }
               yield* Ref.set(unpulled, tail.slice(released));
               yield* Ref.set(overlayCache, undefined);
             }).pipe(
@@ -2260,6 +2276,25 @@ export const make = (
           overlayLock,
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
+            // With an atomic batch in the store (#393), the release is one commit: the rows, the cookie,
+            // the journal trim and the tail release, with no record. Nothing reached the store if it fails,
+            // so there is nothing to roll forward and the copy below is left as it was. The in-memory
+            // steps follow the commit, in the order the record path runs them.
+            if (store.commitPull !== undefined) {
+              yield* store.commitPull({
+                lastMutationIds: response.lastMutationIds,
+                cookie: response.cookie,
+                patch: response.patch,
+              });
+              yield* updateIndexes(response.patch);
+              yield* settleOwnApplied(response.lastMutationIds);
+              yield* Ref.update(unpulled, (tail) =>
+                tail.filter((m) => !isCoveredBy(response.lastMutationIds, m))
+              );
+              yield* Ref.set(overlayCache, undefined);
+              yield* sampleJournalDepth;
+              return before;
+            }
             // A failure in this scope is rolled forward here, from the same record, as the open does.
             // If that fails too, the store finishes the record on its next write or pull. It seals itself
             // only when the failure came after its read of the record, so no later write runs over a
