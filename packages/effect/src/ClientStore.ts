@@ -324,7 +324,9 @@ export interface ClientStore {
     | undefined;
   /**
    * Release the tail entries `lastMutationIds` covers as one atomic batch, with no record: the batch
-   * form of {@link ClientStore.releaseUnpulled} for an overflow release that carries no rows.
+   * form of {@link ClientStore.releaseUnpulled} for an overflow release that carries no rows. A refused
+   * batch writes nothing, so the tail keeps the entries and can stay above the engine's bound until a
+   * later push acknowledgement or pull releases them.
    */
   readonly commitTailRelease?:
     | ((lastMutationIds: Readonly<Record<string, number>>) => Effect.Effect<void, StoreError>)

@@ -497,6 +497,75 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
   );
 
+  // The batch pull member (#411) writes the journal, the counters and the tail under the same permit,
+  // so it takes the same races as the single-step writers above.
+  it.live("commitPull never loses a concurrent appendNext", () =>
+    Effect.gen(function* () {
+      let lost = 0;
+      for (let round = 0; round < rounds; round++) {
+        const store = yield* ClientStoreModule.makeMemory;
+        yield* store.appendMutation(m(1));
+        yield* race(
+          store.commitPull!({ lastMutationIds: { c: 1 }, patch: [] }),
+          store.appendNext(d()).pipe(Effect.asVoid)
+        );
+        if (!(yield* store.pendingMutations).map(key).includes("c:2")) lost++;
+      }
+      expect(lost).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
+  it.live("commitPull never resurrects an entry a concurrent acknowledge trimmed", () =>
+    Effect.gen(function* () {
+      let resurrected = 0;
+      for (let round = 0; round < rounds; round++) {
+        const store = yield* ClientStoreModule.makeMemory;
+        yield* store.appendMutation(m(1));
+        yield* store.appendMutation(m(1, "other"));
+        yield* race(
+          store.acknowledge("c", 1),
+          store.commitPull!({ lastMutationIds: { other: 1 }, patch: [] })
+        );
+        const pending = (yield* store.pendingMutations).map(key);
+        if (pending.includes("c:1") || pending.includes("other:1")) resurrected++;
+      }
+      expect(resurrected).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
+  // An interrupt at each step of a batch pull: the commit is uninterruptible, so the interrupt lands
+  // before the commit writes anything or after it has written all of it, never between its writes.
+  it.live(
+    "an interrupt of commitPull never leaves its rows, cookie and journal trim half applied",
+    () =>
+      Effect.gen(function* () {
+        let torn = 0;
+        for (let round = 0; round < rounds; round++) {
+          for (let yields = 0; yields < 12; yields++) {
+            const store = yield* ClientStoreModule.makeMemory;
+            yield* store.appendMutation(m(1));
+            const pulling = yield* Effect.forkChild(
+              store.commitPull!({
+                lastMutationIds: { c: 1 },
+                cookie: "cookie-1",
+                patch: [
+                  { _tag: "Put", collection: "counters", id: "x", version: 1, value: { n: 1 } },
+                ],
+              })
+            );
+            for (let i = 0; i < yields; i++) yield* Effect.yieldNow;
+            yield* Fiber.interrupt(pulling);
+            const trimmed = !(yield* store.pendingMutations).map(key).includes("c:1");
+            const written =
+              (yield* store.getCookie) === "cookie-1" &&
+              (yield* store.getRow("counters", "x")) !== undefined;
+            if (trimmed !== written) torn++;
+          }
+        }
+        expect(torn).toBe(0);
+      }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
+  );
+
   it.effect("nextMutationId heals from the journal on both stores", () =>
     Effect.gen(function* () {
       const memory = yield* ClientStoreModule.makeMemory;

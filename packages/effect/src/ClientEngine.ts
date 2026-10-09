@@ -434,8 +434,9 @@ export interface ClientEngineOptions {
   readonly changeHubCapacity?: number;
   /**
    * Most acknowledged-but-unpulled mutations the overlay keeps before the oldest are released early, with
-   * a `logWarning` (#286). Defaults to 1024. An internal seam: a test lowers it to reach the bound with a
-   * few mutations. Must be a positive integer; any other value is a defect when the engine is made.
+   * a `logWarning` (#286). Defaults to 1024. A refused release can leave the tail above this bound, until
+   * the next push acknowledgement or pull releases the excess. An internal seam: a test lowers it to reach
+   * the bound with a few mutations. Must be a positive integer; any other value is a defect when the engine is made.
    */
   readonly unpulledLimit?: number;
   /**

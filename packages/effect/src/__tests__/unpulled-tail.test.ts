@@ -361,6 +361,20 @@ describe("ClientStore's unpulled tail (#336)", () => {
         expect(yield* store.unpulled).toEqual([]);
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
+
+    it.effect(
+      `${name}: a release that covers journal entries raises their counters, so no id is reused`,
+      () =>
+        Effect.gen(function* () {
+          const store = yield* open;
+          // Journaled directly, so nothing has raised the counter past them.
+          yield* store.appendMutation(mutation("c1", 1));
+          yield* store.appendMutation(mutation("c1", 2));
+          yield* releaseCovering(store, { c1: 2 });
+          expect(yield* store.pendingMutations).toEqual([]);
+          expect(yield* store.nextMutationId("c1")).toBe(3);
+        }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
   }
 
   it.effect("key-value: the tail survives reopening the store over the same KeyValueStore", () =>
@@ -737,6 +751,44 @@ describe("the tail's crash windows and interleavings (#387)", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
+  it.effect(
+    "the next push acknowledgement after a refused overflow brings the tail back to the bound",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const inner = yield* ClientStoreModule.makeMemory;
+        // The first tail release refused, as a store error would.
+        const refuseNext = yield* Ref.make(true);
+        const store: ClientStore = {
+          ...inner,
+          commitTailRelease: (lastMutationIds) =>
+            Ref.getAndSet(refuseNext, false).pipe(
+              Effect.flatMap((refuse) =>
+                refuse
+                  ? Effect.fail(new StoreError({ message: "release refused" }))
+                  : inner.commitTailRelease!(lastMutationIds)
+              )
+            ),
+        };
+        const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT);
+        yield* engine.subscribe(countersSubset);
+        for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        // The refused release left the tail one above the bound.
+        expect(yield* tailOf(inner)).toHaveLength(SMALL_LIMIT + 1);
+
+        // One more mutation, pushed: its acknowledgement parks it, and the tail is now over the bound by
+        // two, so this release (no longer refused) takes the two oldest entries.
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        const bounded = Array.from({ length: SMALL_LIMIT }, (_, i) => `client-a#${i + 3}`);
+        expect(yield* tailOf(inner)).toEqual(bounded);
+        // The two released entries left the overlay (no pull had revealed them), so the view shows the
+        // bound's worth of effects.
+        expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      })
+  );
+
   it.effect("a boot read of the tail that fails is repaired by the next push", () =>
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
@@ -1043,6 +1095,13 @@ describe("a pull release that fails part-way (#387)", () => {
   );
 });
 
+// A release that covers `lastMutationIds` and carries no rows: the atomic batch where the store has
+// one (#411), else the record path it stands for.
+const releaseCovering = (store: ClientStore, lastMutationIds: Readonly<Record<string, number>>) =>
+  store.commitPull !== undefined
+    ? store.commitPull({ lastMutationIds, patch: [] })
+    : store.beginRelease({ lastMutationIds, patch: [] }).pipe(Effect.andThen(store.finishRelease));
+
 // The release scenario of the two-store test: two parked entries, one of them covered by the release.
 const releaseScenario = (store: ClientStore) =>
   Effect.gen(function* () {
@@ -1329,7 +1388,12 @@ const batchMembersScenario = (store: ClientStore) =>
         { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
       ],
     });
-    return { afterAck, afterRelease, final: yield* stateOf(store) };
+    return {
+      afterAck,
+      afterRelease,
+      final: yield* stateOf(store),
+      nextId: yield* store.nextMutationId("c1"),
+    };
   });
 
 const recordMembersScenario = (store: ClientStore) =>
@@ -1349,7 +1413,12 @@ const recordMembersScenario = (store: ClientStore) =>
       ],
     });
     yield* store.finishRelease;
-    return { afterAck, afterRelease, final: yield* stateOf(store) };
+    return {
+      afterAck,
+      afterRelease,
+      final: yield* stateOf(store),
+      nextId: yield* store.nextMutationId("c1"),
+    };
   });
 
 describe("the memory store's atomic batch members (#411)", () => {
@@ -1370,8 +1439,45 @@ describe("the memory store's atomic batch members (#411)", () => {
         tail: [],
         pending: ["c1#3", "c2#1"],
       });
+      // The counters agree too: c1's next id continues after its highest journaled entry.
+      expect(batched.nextId).toBe(4);
       expect(recorded).toEqual(batched);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "a batch pull's commit after a begun release finishes the release first, then writes its own patch",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ClientStoreModule.makeMemory;
+        // A record whose patch sets `c` and `d`, begun but not finished.
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+            { _tag: "Put", collection: "counters", id: "d", version: 1, value: { id: "d", n: 1 } },
+          ],
+        });
+        // The batch commit's own patch sets `c` to a later value and leaves `d` alone.
+        yield* store.commitPull!({
+          lastMutationIds: {},
+          cookie: "cookie-2",
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+          ],
+        });
+        // The record's `d` landed (it was finished first), and the commit's `c` came after it.
+        expect(yield* rowCount(store, "c")).toBe(2);
+        expect(yield* rowCount(store, "d")).toBe(1);
+        expect(yield* store.getCookie).toBe("cookie-2");
+
+        // Nothing is left to re-apply: a later finish does not put the record's values back.
+        yield* store.finishRelease;
+        expect(yield* rowCount(store, "c")).toBe(2);
+        expect(yield* rowCount(store, "d")).toBe(1);
+        expect(yield* store.getCookie).toBe("cookie-2");
+      })
   );
 });
 
