@@ -30,13 +30,15 @@
  *
  * A permanent rejection is remembered in the client's ledger row, in the same
  * transaction as the claim (#366), in a `rejections` column that holds a JSON
- * object of mutation id → reason. A replayed copy, or a copy dropped because a
- * concurrent call committed first, lists its mutation in `rejected` with the
- * stored reason, so every copy reports the committed outcome (guarantee 1). A
- * push forgets the rejections below its lowest id per client. The memory is
- * bounded per client: a client that never pushes again keeps its last push's
- * rejections. It assumes one journal per `clientId`, which backend contiguity
- * already requires.
+ * object of mutation id → reason. A replayed copy lists its mutation in
+ * `rejected` with the stored reason, so every copy reports the committed outcome
+ * (guarantee 1). A copy that a concurrent call committed first is dropped on
+ * each dialect: on SQLite it lists its mutation in `rejected` directly; on
+ * PostgreSQL it is refused with a transient `BackendError` (SQLSTATE 40001), and
+ * its retry, a replay, lists it. A push forgets the rejections below its lowest
+ * id per client. The memory is bounded per client: a client that never pushes
+ * again keeps its last push's rejections. It assumes one journal per `clientId`,
+ * which backend contiguity already requires.
  *
  * Mutations from different client groups are serialisable (guarantee 1, #353),
  * per dialect:
@@ -68,11 +70,12 @@
  *   handler's writes commit before the bump, so a pull between the two carries
  *   the effect without the watermark; a crash after the writes and before the
  *   bump makes the retry run the handler again; and a transient failure leaves
- *   the writes committed for the retry to repeat. Nothing isolates a handler's
- *   reads from another group's writes, so a lost update is possible. The
- *   claim order is not used on D1 because a claim committed on its own would
- *   leave a crash between the claim and the handler's commit claimed and
- *   unapplied, so a retry would skip the mutation (#359).
+ *   the writes committed for the retry to repeat. A rejection recorded before a
+ *   failed bump is forgotten when the retry applies the id (#425). Nothing
+ *   isolates a handler's reads from another group's writes, so a lost update is
+ *   possible. The claim order is not used on D1 because a claim committed on its
+ *   own would leave a crash between the claim and the handler's commit claimed
+ *   and unapplied, so a retry would skip the mutation (#359).
  *
  * An executor on another database must provide the same isolation, or the
  * handlers' reads must be version-checked, before it can claim guarantee 1.
@@ -524,8 +527,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             new BackendError({
               message:
                 `The mutation ledger "${mutationsTable}" could not be read with its "rejections" column. ` +
-                `If the column is missing, run \`ALTER TABLE ${mutationsTable} ADD COLUMN rejections TEXT\` ` +
-                `before upgrading (the sql README's "Migrating to 0.2.0" section).`,
+                `If the column is missing, check for it, then run \`ALTER TABLE ${mutationsTable} ADD COLUMN rejections TEXT\` ` +
+                `(the sql README's "Ledger without the \`rejections\` column" section).`,
               cause,
             })
         ),
@@ -771,6 +774,15 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           mutation.mutationId,
           outcome.reason
         );
+      } else if (row?.rejections.has(mutation.mutationId)) {
+        // An earlier copy was rejected and recorded it, but its bump failed, so the
+        // id was never acknowledged and this copy applies it. The stale rejection
+        // goes before the bump: a bump that then fails leaves the id unacknowledged
+        // with no rejection to report, and a replay after the bump must not report
+        // one for an applied mutation (#425).
+        const rejections = new Map(row.rejections);
+        rejections.delete(mutation.mutationId);
+        yield* writeRejections(context.clientGroupId, mutation.clientId, rejections);
       }
       yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
       return outcome;

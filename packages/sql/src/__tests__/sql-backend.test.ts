@@ -1009,4 +1009,60 @@ describe("SqlBackend rejection memory over the mock ledger (#366)", () => {
       });
     });
   }
+
+  // D1's order (#419 follow-up): the rejection is recorded before the bump, so a
+  // bump that fails leaves the rejection stored while the id stays unacknowledged.
+  // The client retries, and the retry applies: the remembered rejection must go,
+  // or every later replay reports a rejection for a mutation that was applied.
+  it.effect(
+    "a rejection left by a failed bump is forgotten once the retry applies, without transactions",
+    () => {
+      const mock = makeMock({ transactional: false });
+      let rejecting = true;
+      let failBump = true;
+      const executor: SqlBackend.SqlExecutor = {
+        ...mock.executor,
+        run: (fragment) => {
+          if (failBump && /DO UPDATE SET "last_mutation_id" = MAX/.test(fragment.text)) {
+            failBump = false;
+            return Effect.fail(new BackendError({ message: "transient: bump failed" }));
+          }
+          return mock.executor.run(fragment);
+        },
+      };
+      const backend = SqlBackend.make({
+        executor,
+        tables,
+        mutators: new Map<string, Mutator.AnyMutator>([
+          [setTodo.name, setTodo],
+          [rejectMutator.name, rejectMutator],
+        ]),
+        handlers: {
+          "todo/set": () => Effect.succeed([]),
+          "todo/reject": (raw) =>
+            rejecting
+              ? Effect.fail(
+                  new MutationRejected({ reason: `forbidden ${(raw as { id: string }).id}` })
+                )
+              : Effect.succeed<ReadonlyArray<Backend.ChangeHint>>([]),
+        },
+      });
+      return Effect.gen(function* () {
+        const group = { clientGroupId: "g" };
+        const failed = yield* backend.applyMutations(group, [rejectedAt(1)]).pipe(Effect.flip);
+        expect(failed).toBeInstanceOf(BackendError);
+
+        // The client retries. The handler now applies, so nothing is rejected.
+        rejecting = false;
+        const retry = yield* backend.applyMutations(group, [rejectedAt(1)]);
+        expect(retry.rejected).toBeUndefined();
+        expect(retry.lastMutationIds).toEqual({ c1: 1 });
+
+        // A later replay reports the applied outcome, not the stale rejection.
+        const replay = yield* backend.applyMutations(group, [rejectedAt(1)]);
+        expect(replay.rejected).toBeUndefined();
+        expect(replay.lastMutationIds).toEqual({ c1: 1 });
+      });
+    }
+  );
 });
