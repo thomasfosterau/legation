@@ -27,8 +27,8 @@ export interface RedisBrokerOptions {
   readonly stream?: string;
   /**
    * XREAD BLOCK timeout before re-issuing. Defaults to 5 seconds. A reader XREAD with no reply
-   * within this plus 2 seconds is a failed step. `0` parks until an entry arrives, so it is
-   * not bounded.
+   * within this plus a fixed 2-second margin is a failed step. `0` disables that hang detection:
+   * the reader parks until an entry arrives, so a dead connection parks it silently, as before.
    */
   readonly block?: Duration.Input;
   /**
@@ -114,10 +114,16 @@ const backoffMs = (failures: number): number =>
  * capped at 5 s) until Redis answers. While Redis is unreachable, a publish that
  * races the start can be missed: it lands after `subscribe` returns but before
  * the reader resolves its start position. Delivery is best-effort (ADR-0009).
- * Each reader XREAD is bounded at its `block` time plus 2 seconds. A call with no
- * reply by then is a failed step: it is logged, backed off and retried from the
- * last ID seen, as a failed start lookup is, so no entry is skipped. A reply of
- * null (a normal BLOCK timeout) is a success.
+ * Each reader XREAD is bounded at its `block` time plus the margin described on
+ * `block`. A call with no reply by then is a failed step: it is logged, backed off
+ * and retried from the last ID seen, as a failed start lookup is, so no entry is
+ * skipped. A reply of null (a normal BLOCK timeout) is a success.
+ *
+ * The `Redis` service's `send` must meet two properties that this bound relies on.
+ * It must be interruptible: the bound interrupts a read that never replies. And
+ * after an aborted `send`, it must keep replies in order on its connection, so a
+ * late reply to an abandoned XREAD is never read as the answer to the next command.
+ *
  * Known limit: after a `DEL` and recreate of the stream, or a Redis clock
  * stepping backwards, new IDs can fall at or below the sticky cursor and be
  * skipped until the subscriber resubscribes.

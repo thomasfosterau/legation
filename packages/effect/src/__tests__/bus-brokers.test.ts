@@ -564,6 +564,34 @@ describe("makeRedisBroker (Redis Streams)", () => {
     );
   });
 
+  // A publish that lands while the reader's XREAD is hung must survive the
+  // abandonment: the retry resumes from the last ID seen, so the entry is read.
+  // Re-resolving the start position on failure would move the cursor past it.
+  it.effect(
+    "a publish during a hung XREAD is delivered once the read is abandoned and retried",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakeRedis;
+        yield* fake.setXreadHung(true);
+        const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
+          Effect.provideService(Redis.Redis, fake.redis)
+        );
+        const busA = InvalidationBus.makeSerialized(yield* make);
+        const busB = InvalidationBus.makeSerialized(yield* make);
+
+        const subscription = yield* busB.subscribe;
+        expect(yield* Queue.take(fake.events)).toBe("hung");
+        yield* busA.publish([hint]);
+        yield* fake.setXreadHung(false);
+        yield* TestClock.adjust("2200 millis");
+        expect(yield* Queue.take(fake.events)).toBe("abandoned");
+        // The first failed step backs off for 200 ms, then the XREAD is re-issued.
+        yield* TestClock.adjust("200 millis");
+        expect(yield* Queue.take(fake.events)).toBe("delivered");
+        expect(yield* subscription.take).toEqual([hint]);
+      }).pipe(Effect.scoped)
+  );
+
   // A BLOCK that ends with Redis's null reply is a normal idle timeout: it is a
   // success, so it neither warns nor logs a recovery.
   it.effect("a normal BLOCK timeout (null reply) does not count as an outage", () => {
