@@ -2281,28 +2281,31 @@ export const make = (
             // leaves the store as it was; a failure reported after it may still have committed, so the
             // outcome is unknown. Either way the copy is re-read and the view rebuilt, as the record path
             // does on a failed section (rollForwardPullLocked). The in-memory steps follow the commit, in
-            // the order the record path runs them.
-            if (store.commitPull !== undefined) {
-              yield* store
-                .commitPull({
+            // the order the record path runs them, and sit under the same exit handler: a pull that dies
+            // or is interrupted after the commit point rolls forward too, rather than leaving the tail
+            // replayed over the committed rows.
+            const commitPull = store.commitPull;
+            if (commitPull !== undefined) {
+              yield* Effect.gen(function* () {
+                yield* commitPull({
                   lastMutationIds: response.lastMutationIds,
                   cookie: response.cookie,
                   patch: response.patch,
-                })
-                .pipe(
-                  Effect.onExit((exit) =>
-                    Exit.isSuccess(exit)
-                      ? Effect.void
-                      : rollForwardPullLocked(response.lastMutationIds)
-                  )
+                });
+                yield* updateIndexes(response.patch);
+                yield* settleOwnApplied(response.lastMutationIds);
+                yield* Ref.update(unpulled, (tail) =>
+                  tail.filter((m) => !isCoveredBy(response.lastMutationIds, m))
                 );
-              yield* updateIndexes(response.patch);
-              yield* settleOwnApplied(response.lastMutationIds);
-              yield* Ref.update(unpulled, (tail) =>
-                tail.filter((m) => !isCoveredBy(response.lastMutationIds, m))
+                yield* Ref.set(overlayCache, undefined);
+                yield* sampleJournalDepth;
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : rollForwardPullLocked(response.lastMutationIds)
+                )
               );
-              yield* Ref.set(overlayCache, undefined);
-              yield* sampleJournalDepth;
               return before;
             }
             // A failure in this scope is rolled forward here, from the same record, as the open does.

@@ -278,11 +278,15 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         yield* Effect.promise(() => createAtVersion2("atomic-no-entries", false));
         yield* Effect.gen(function* () {
           // The layer builds. The store then seals at open, since its first read of the release record
-          // has no entries store to read, so each call refuses with the missing store in its cause.
+          // has no entries store to read. The sealed message names the missing store itself, not only
+          // its cause, so the reason is not lost behind the generic wording.
           const store = yield* ClientStore.ClientStore;
-          const read = yield* Effect.exit(store.getCookie);
-          expect(Exit.isFailure(read)).toBe(true);
-          expect(String(read)).toContain('has no "entries" object store');
+          const error = yield* store.getCookie.pipe(Effect.flip);
+          expect(error.message).toContain('has no "entries" object store');
+          expect(error.message).not.toContain(
+            "identity boundary could not be established on open,"
+          );
+          expect(String(error)).toContain('has no "entries" object store');
         }).pipe(Effect.provide(storeLayer("atomic-no-entries")));
       })
   );
@@ -296,6 +300,34 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(outcome).toBe("upgraded");
       }).pipe(Effect.provide(storeLayer("atomic-upgrade")));
     })
+  );
+
+  it.effect(
+    "a store whose database another connection upgraded fails each later call with a reload message",
+    () =>
+      Effect.gen(function* () {
+        const database = "atomic-upgraded";
+        yield* Effect.gen(function* () {
+          const store = yield* ClientStore.ClientStore;
+          yield* store.setCookie("cookie-before");
+          // Another connection asks for a newer version. The store's connections close themselves,
+          // and nothing reopens them, so every call from here on fails with the reload message.
+          expect(yield* Effect.promise(() => upgradeTo(database, 2))).toBe("upgraded");
+
+          const read = yield* Effect.exit(store.getCookie);
+          const write = yield* Effect.exit(store.setCookie("cookie-after"));
+          const batch = yield* Effect.exit(
+            store.commitPull!({ lastMutationIds: {}, cookie: "cookie-after", patch: [put("a", 1)] })
+          );
+          const attempts: ReadonlyArray<Exit.Exit<unknown, unknown>> = [read, write, batch];
+          for (const attempt of attempts) {
+            expect(Exit.isFailure(attempt)).toBe(true);
+            expect(String(attempt)).toContain(
+              "the IndexedDB database was upgraded by another connection; reload to continue"
+            );
+          }
+        }).pipe(Effect.provide(storeLayer(database)));
+      })
   );
 
   it.effect(

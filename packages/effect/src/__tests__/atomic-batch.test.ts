@@ -8,7 +8,7 @@
  * (unpulled-tail.test.ts).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Schema } from "effect";
+import { Clock, Effect, Exit, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -74,6 +74,8 @@ interface BatchState {
   abortNext: boolean;
   /** The next batch commits, then reports a failure: an outcome the caller cannot tell from an abort. */
   commitThenFailNext: boolean;
+  /** Runs after each batch commits, before it reports success. */
+  afterCommit?: (() => void) | undefined;
   /** Each call's operations, in the order the calls were made. */
   readonly batches: Array<ReadonlyArray<KeyValueOp>>;
 }
@@ -102,6 +104,7 @@ const batchOver = (
             if (op._tag === "Set") data.set(op.key, op.value);
             else data.delete(op.key);
           }
+          state.afterCommit?.();
         });
         if (state.commitThenFailNext) {
           state.commitThenFailNext = false;
@@ -514,6 +517,62 @@ describe("the atomic batch on the key-value store (#393)", () => {
         expect(row).toMatchObject({ value: { id: "c", n: 2 } });
         expect(yield* tailOf(store)).toEqual([]);
         // The engine's view is the store's: the released tail is not replayed over the committed row.
+        expect(yield* counterValue(engine)).toBe(2);
+      })
+  );
+
+  it.effect(
+    "a pull that dies after its batch commits, in the engine's own steps, leaves the view as the store holds it",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const { kv, data, writes } = recordingKeyValue();
+        const state = newBatchState();
+        const store = yield* openStore(kv, batchOver(data, writes, state));
+        const engine = yield* makeCounterEngine(server, store);
+        yield* engine.subscribe(countersSubset);
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        expect(yield* tailOf(store)).toEqual(["client-a#1"]);
+
+        // A second client's increment reaches the server too, so the pull carries a row the first
+        // client's tail does not account for.
+        const other = yield* makeCounterEngine(server, yield* openStore(recordingKeyValue().kv), {
+          clientId: "client-b",
+          group: "group-b",
+        });
+        yield* other.subscribe(countersSubset);
+        yield* other.mutate("counter/inc", { id: "c" });
+        yield* other.push;
+
+        // Once the batch has committed, the engine's first wall-clock read is the settle of its own
+        // mutations, a step that runs after the commit in the engine itself. That read dies once. The
+        // commit is durable, so the view must end on the store's row, not on the tail replayed over it.
+        const died = { count: 0 };
+        let armed = false;
+        state.afterCommit = () => {
+          armed = true;
+        };
+        const dieOnceAfterCommit = yield* Effect.clockWith((real) =>
+          Effect.succeed<Clock.Clock>({
+            ...real,
+            currentTimeMillis: Effect.suspend(() => {
+              if (!armed) return real.currentTimeMillis;
+              armed = false;
+              died.count += 1;
+              return Effect.die(new Error("the pull died after its commit"));
+            }),
+          })
+        );
+        const pull = yield* Effect.exit(
+          engine.pull.pipe(Effect.provideService(Clock.Clock, dieOnceAfterCommit))
+        );
+
+        expect(died.count).toBe(1);
+        expect(Exit.isFailure(pull)).toBe(true);
+        const row = yield* store.getRow("counters", "c");
+        expect(row).toMatchObject({ value: { id: "c", n: 2 } });
+        expect(yield* tailOf(store)).toEqual([]);
         expect(yield* counterValue(engine)).toBe(2);
       })
   );

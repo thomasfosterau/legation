@@ -18,3 +18,10 @@ and an open still finishes a leftover record either way.
 database is opened without a version, so one a later version created still
 opens; the browser store's `KeyValueStore` opens it the same way, in place of
 the platform's, which pins version 1 and fails on a newer database.
+
+If another connection upgrades that database, or deletes it, the store's
+connections close, since they would otherwise block the change. From then on
+every call fails with "the IndexedDB database was upgraded by another
+connection; reload to continue", and the store does not reopen itself. A
+database without the `entries` store fails its calls with a message that names
+that store, and a sealed store's message now carries the reason from its cause.

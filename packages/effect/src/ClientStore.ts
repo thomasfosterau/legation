@@ -789,12 +789,16 @@ export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(m
  * untouched and the next open retries the whole transition.
  */
 const sealed = (cause: StoreError): ClientStore => {
+  // The reason is named in the message itself, so a backend's specific failure (a missing object
+  // store, say) is not lost behind the generic wording (#393).
+  const detail = causeDetail(cause);
   const refuse = <A>(): Effect.Effect<A, StoreError> =>
     Effect.fail(
       new StoreError({
         message:
-          "ClientStore is sealed: the identity boundary could not be established on open, " +
-          "so this replica cannot safely be read or written. The durable state is intact; " +
+          "ClientStore is sealed: the identity boundary could not be established on open" +
+          (detail === "" ? "" : ` (${detail})`) +
+          ", so this replica cannot safely be read or written. The durable state is intact; " +
           "retry by reopening the store.",
         cause,
       })
@@ -832,6 +836,21 @@ const sealed = (cause: StoreError): ClientStore => {
     releaseQuarantine: () => refuse(),
     discardQuarantine: () => refuse(),
   });
+};
+
+/**
+ * The messages down a cause chain, outermost first, joined with `: `: the reason a store failure
+ * carries, for a sealed store's message. The walk stops at a non-object or after a few links.
+ */
+const causeDetail = (error: unknown): string => {
+  const messages: Array<string> = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+    const link = current as { readonly message?: unknown; readonly cause?: unknown };
+    if (typeof link.message === "string" && link.message !== "") messages.push(link.message);
+    current = link.cause;
+  }
+  return messages.join(": ");
 };
 
 /**
