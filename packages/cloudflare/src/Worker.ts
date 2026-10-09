@@ -37,7 +37,12 @@ export interface RouterConfig<Env> {
   readonly basePath?: string;
 }
 
-const ROOM_ROUTES: ReadonlyArray<string> = [routes.push, routes.pull, routes.read, routes.socket];
+const ROOM_ROUTES: ReadonlySet<string> = new Set([
+  routes.push,
+  routes.pull,
+  routes.read,
+  routes.socket,
+]);
 
 /** Build the router. Returns `undefined` for paths outside the base. */
 export const routeSync =
@@ -47,7 +52,7 @@ export const routeSync =
     const url = new URL(request.url);
     if (!url.pathname.startsWith(`${base}/`)) return undefined;
     const route = url.pathname.slice(base.length);
-    if (!ROOM_ROUTES.includes(route)) return new Response("not found", { status: 404 });
+    if (!ROOM_ROUTES.has(route)) return new Response("not found", { status: 404 });
 
     const roomId = await config.roomIdOf(request, env);
     if (roomId === undefined) return new Response("unauthorized", { status: 401 });

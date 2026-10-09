@@ -71,7 +71,8 @@ describe("@thomasfosterau/legation-node without redis", () => {
       throw new Error(
         `tsc --build of packages/node failed:\n${failure.stdout?.toString() ?? ""}${
           failure.stderr?.toString() ?? ""
-        }${failure.message}`
+        }${failure.message}`,
+        { cause: error }
       );
     }
   }, 120_000);
