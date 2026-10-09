@@ -79,11 +79,13 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
  *
  * `events` logs the reader's steps in order, so a test can sequence against
  * them: "refused" when a command fails because `setDown(true)` is in effect,
- * "hung" when a command is held by `setHung(true)`, "parked" once an XREAD
- * blocks (its bound is armed), "timedOut" when a BLOCK returns null,
- * "delivered" when an XREAD returns entries. A timed-out reply is held until
- * `releaseTimeoutReply` completes, which lets a test publish after the BLOCK
- * times out, before the re-issue.
+ * "hung" when a command is held by `setHung(true)` (or an XREAD by
+ * `setXreadHung(true)`), "abandoned" when a held XREAD is interrupted by the
+ * reader, "parked" once an XREAD blocks (its bound is armed), "timedOut" when
+ * a BLOCK returns null, "delivered" when an XREAD returns entries. A timed-out
+ * reply is held until `releaseTimeoutReply` completes, which lets a test
+ * publish after the BLOCK times out, before the re-issue. A BLOCK of 0 has no
+ * timer: it parks until an entry arrives, as Redis does.
  */
 // Entry IDs are `<seq>-0`, so the sequence number orders them.
 const seqOf = (id: string) => Number(id.split("-")[0]);
@@ -98,6 +100,7 @@ const makeFakeRedis = Effect.gen(function* () {
   let seq = 0;
   let down = false;
   let hung = false;
+  let xreadHung = false;
 
   // XADD <stream> * p <payload>
   const xadd = (payload: string): Effect.Effect<unknown> => {
@@ -127,9 +130,10 @@ const makeFakeRedis = Effect.gen(function* () {
         const after = lastId === "$" ? seq : seqOf(lastId);
         // The bound is armed before "parked" is announced, so a test that
         // advances the clock after "parked" always fires it.
-        const deadline = yield* Effect.forkScoped(Effect.sleep(Duration.millis(blockMs)), {
-          startImmediately: true,
-        });
+        const deadline = yield* Effect.forkScoped(
+          blockMs > 0 ? Effect.sleep(Duration.millis(blockMs)) : Effect.never,
+          { startImmediately: true }
+        );
         const loop = (): Effect.Effect<unknown> =>
           Effect.gen(function* () {
             const slice = (yield* Ref.get(entries)).filter((e) => seqOf(e.id) > after);
@@ -161,6 +165,12 @@ const makeFakeRedis = Effect.gen(function* () {
   ): Effect.Effect<A, Redis.RedisError> =>
     Effect.suspend((): Effect.Effect<unknown, Redis.RedisError> => {
       if (hung) return Queue.offer(events, "hung").pipe(Effect.andThen(Effect.never));
+      if (xreadHung && command === "XREAD") {
+        return Queue.offer(events, "hung").pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Queue.offer(events, "abandoned"))
+        );
+      }
       if (down) {
         return Clock.currentTimeMillis.pipe(
           Effect.tap((now) => Ref.update(refusedAt, (times) => [...times, now])),
@@ -185,6 +195,10 @@ const makeFakeRedis = Effect.gen(function* () {
   // Makes every command hang (until `setHung(false)`), as if Redis never answered.
   const setHung = (value: boolean) => Effect.sync(() => void (hung = value));
 
+  // Makes every XREAD hang (until `setXreadHung(false)`), as if a connection
+  // accepted the read and never replied. Other commands still answer.
+  const setXreadHung = (value: boolean) => Effect.sync(() => void (xreadHung = value));
+
   // `Redis.make` requires pub/sub too; the Streams broker only ever sends
   // commands, so a subscribe here is a test bug, not a code path.
   const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
@@ -197,6 +211,7 @@ const makeFakeRedis = Effect.gen(function* () {
     refusedAt,
     setDown,
     setHung,
+    setXreadHung,
   };
 });
 
@@ -494,6 +509,125 @@ describe("makeRedisBroker (Redis Streams)", () => {
       );
     }
   );
+
+  // The reader's XREAD is bounded at its BLOCK time plus a 2 s margin (200 ms + 2 s
+  // here). A read that never replies is abandoned at that bound, logged as one
+  // outage, backed off, and retried from the last ID seen, so a publish after the
+  // recovery is delivered.
+  it.effect("an XREAD that never replies is abandoned at its bound, logged, and retried", () => {
+    const lines: Array<{ readonly level: string; readonly message: string }> = [];
+    const collector = Logger.make((options) => {
+      lines.push({ level: options.logLevel, message: String(options.message) });
+    });
+    return Effect.gen(function* () {
+      const fake = yield* makeFakeRedis;
+      yield* fake.setXreadHung(true);
+      const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
+        Effect.provideService(Redis.Redis, fake.redis)
+      );
+      const busA = InvalidationBus.makeSerialized(yield* make);
+      const busB = InvalidationBus.makeSerialized(yield* make);
+
+      // The start lookup answers; the reader's first XREAD is the one that hangs.
+      const subscription = yield* busB.subscribe;
+      expect(yield* Queue.take(fake.events)).toBe("hung");
+      yield* fake.setXreadHung(false);
+      yield* TestClock.adjust("2200 millis");
+      expect(yield* Queue.take(fake.events)).toBe("abandoned");
+      // The first failed step backs off for 200 ms, then the XREAD is re-issued and parks.
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+
+      yield* busA.publish([hint]);
+      expect(yield* Queue.take(fake.events)).toBe("delivered");
+      expect(yield* subscription.take).toEqual([hint]);
+
+      const broker = lines.filter((line) => line.message.includes("Redis broker"));
+      expect(
+        broker.filter(
+          (line) =>
+            line.level === "Warn" &&
+            line.message.includes("reader step failed; retrying with back-off")
+        )
+      ).toHaveLength(1);
+      expect(
+        broker.filter(
+          (line) =>
+            line.level === "Info" &&
+            line.message.includes("reader recovered after 1 failed step(s)")
+        )
+      ).toHaveLength(1);
+    }).pipe(
+      Effect.scoped,
+      Effect.withLogger(collector),
+      Effect.provideService(References.MinimumLogLevel, "Debug")
+    );
+  });
+
+  // A BLOCK that ends with Redis's null reply is a normal idle timeout: it is a
+  // success, so it neither warns nor logs a recovery.
+  it.effect("a normal BLOCK timeout (null reply) does not count as an outage", () => {
+    const lines: Array<{ readonly level: string; readonly message: string }> = [];
+    const collector = Logger.make((options) => {
+      lines.push({ level: options.logLevel, message: String(options.message) });
+    });
+    return Effect.gen(function* () {
+      const fake = yield* makeFakeRedis;
+      const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
+        Effect.provideService(Redis.Redis, fake.redis)
+      );
+      const busA = InvalidationBus.makeSerialized(yield* make);
+      const busB = InvalidationBus.makeSerialized(yield* make);
+
+      const subscription = yield* busB.subscribe;
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Queue.take(fake.events)).toBe("timedOut");
+      yield* Deferred.succeed(fake.releaseTimeoutReply, undefined);
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+
+      yield* busA.publish([hint]);
+      expect(yield* Queue.take(fake.events)).toBe("delivered");
+      expect(yield* subscription.take).toEqual([hint]);
+
+      const broker = lines.filter((line) => line.message.includes("Redis broker"));
+      expect(broker).toHaveLength(0);
+    }).pipe(
+      Effect.scoped,
+      Effect.withLogger(collector),
+      Effect.provideService(References.MinimumLogLevel, "Debug")
+    );
+  });
+
+  // BLOCK 0 makes Redis park until an entry arrives, so no bound applies: an idle
+  // reader past the 2 s margin is not abandoned.
+  it.effect("a BLOCK of 0 is never abandoned while idle", () => {
+    const lines: Array<{ readonly level: string; readonly message: string }> = [];
+    const collector = Logger.make((options) => {
+      lines.push({ level: options.logLevel, message: String(options.message) });
+    });
+    return Effect.gen(function* () {
+      const fake = yield* makeFakeRedis;
+      const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: 0 }).pipe(
+        Effect.provideService(Redis.Redis, fake.redis)
+      );
+      const busA = InvalidationBus.makeSerialized(yield* make);
+      const busB = InvalidationBus.makeSerialized(yield* make);
+
+      const subscription = yield* busB.subscribe;
+      expect(yield* Queue.take(fake.events)).toBe("parked");
+      yield* TestClock.adjust("1 hour");
+
+      yield* busA.publish([hint]);
+      expect(yield* Queue.take(fake.events)).toBe("delivered");
+      expect(yield* subscription.take).toEqual([hint]);
+      expect(lines.filter((line) => line.message.includes("Redis broker"))).toHaveLength(0);
+    }).pipe(
+      Effect.scoped,
+      Effect.withLogger(collector),
+      Effect.provideService(References.MinimumLogLevel, "Debug")
+    );
+  });
 
   // The publish runs inside the sync server's uninterruptible region, so a hung
   // XADD must be dropped at its bound. TestClock moves the bound, not wall time.

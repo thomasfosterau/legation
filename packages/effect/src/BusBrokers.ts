@@ -25,7 +25,11 @@ import type { BusBroker } from "./InvalidationBus.js";
 export interface RedisBrokerOptions {
   /** Stream key all instances share. Defaults to `"legation:hints"`. */
   readonly stream?: string;
-  /** XREAD BLOCK timeout before re-issuing. Defaults to 5 seconds. */
+  /**
+   * XREAD BLOCK timeout before re-issuing. Defaults to 5 seconds. A reader XREAD with no reply
+   * within this plus 2 seconds is a failed step. `0` parks until an entry arrives, so it is
+   * not bounded.
+   */
   readonly block?: Duration.Input;
   /**
    * Where a new subscriber starts reading. `"$"` (default) delivers only
@@ -78,6 +82,16 @@ const START_LOOKUP_BOUND = Duration.millis(500);
 /** The reader's start-position lookup did not answer within {@link START_LOOKUP_BOUND}. */
 class StartLookupTimeout extends Data.TaggedError("StartLookupTimeout") {}
 
+/**
+ * The margin added to the XREAD BLOCK time to bound one reader XREAD. Redis ends a healthy idle
+ * block at BLOCK, so a reply still missing at BLOCK plus this margin is a dead read (a half-open
+ * connection, say), not a quiet stream.
+ */
+const XREAD_MARGIN_MS = 2_000;
+
+/** A reader XREAD got no reply within its bound (see {@link XREAD_MARGIN_MS}). */
+class XReadTimeout extends Data.TaggedError("XReadTimeout") {}
+
 /** The reader's first back-off after a failed step; it doubles on each consecutive failure. */
 const RETRY_BASE_MS = 200;
 
@@ -100,6 +114,10 @@ const backoffMs = (failures: number): number =>
  * capped at 5 s) until Redis answers. While Redis is unreachable, a publish that
  * races the start can be missed: it lands after `subscribe` returns but before
  * the reader resolves its start position. Delivery is best-effort (ADR-0009).
+ * Each reader XREAD is bounded at its `block` time plus 2 seconds. A call with no
+ * reply by then is a failed step: it is logged, backed off and retried from the
+ * last ID seen, as a failed start lookup is, so no entry is skipped. A reply of
+ * null (a normal BLOCK timeout) is a success.
  * Known limit: after a `DEL` and recreate of the stream, or a Redis clock
  * stepping backwards, new IDs can fall at or below the sticky cursor and be
  * skipped until the subscriber resubscribes.
@@ -110,9 +128,24 @@ export const makeRedisBroker = (
   Effect.gen(function* () {
     const redis = yield* Redis.Redis;
     const stream = options?.stream ?? "legation:hints";
-    const blockMs = String(Math.trunc(Duration.toMillis(options?.block ?? "5 seconds")));
+    const blockMillis = Math.trunc(Duration.toMillis(options?.block ?? "5 seconds"));
+    const blockMs = String(blockMillis);
     const from = options?.from ?? "$";
     const timeout = options?.timeout ?? "5 seconds";
+
+    // Bounds one reader XREAD (see XREAD_MARGIN_MS). BLOCK 0 parks until an entry
+    // arrives, so no bound can tell a dead read from a quiet stream and none applies.
+    const boundRead = <A>(
+      read: Effect.Effect<A, Redis.RedisError>
+    ): Effect.Effect<A, Redis.RedisError | XReadTimeout> =>
+      blockMillis > 0
+        ? read.pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(blockMillis + XREAD_MARGIN_MS),
+              orElse: () => Effect.fail(new XReadTimeout()),
+            })
+          )
+        : read;
 
     // The start position of a subscription, read before the first XREAD. XREAD's
     // "$" re-resolves on each call, so a BLOCK timeout followed by a publish would
@@ -185,9 +218,9 @@ export const makeRedisBroker = (
               Effect.tap(() => answered)
             );
           }
-          const reply = yield* redis
-            .send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor.id)
-            .pipe(Effect.tap(() => answered));
+          const reply = yield* boundRead(
+            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor.id)
+          ).pipe(Effect.tap(() => answered));
           if (reply === null) return;
           for (const [, entries] of reply) {
             for (const [id, fields] of entries) {
@@ -197,8 +230,9 @@ export const makeRedisBroker = (
             }
           }
         }).pipe(
-          // A transient Redis error (or an unresolved start position) must not kill
-          // the subscription: log it, back off, and run the step again.
+          // A transient Redis error, a read with no reply (XReadTimeout), or an
+          // unresolved start position must not kill the subscription: log it, back
+          // off, and run the step again from the last ID seen.
           Effect.catch(failed)
         );
         yield* Effect.forkScoped(Effect.forever(readOnce));
