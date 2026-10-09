@@ -322,4 +322,64 @@ describe("pull serialisation (#412)", () => {
       expect(yield* snapshot(client)).toEqual({ cookie: "c2", titles: ["new"] });
     })
   );
+
+  it.effect("a queued caller is skipped when a pull that started after its entry is applied", () =>
+    Effect.gen(function* () {
+      const client = yield* makeClient;
+      const { issued, answers, count } = client.gated;
+
+      const first = yield* Effect.forkChild(client.engine.pull);
+      yield* Deferred.await(issued[0]!);
+      // B and C both enter while the first pull is in flight.
+      const second = yield* Effect.forkChild(client.engine.pull);
+      yield* settle;
+      const third = yield* Effect.forkChild(client.engine.pull);
+      yield* settle;
+      expect(yield* count).toBe(1);
+
+      yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
+      yield* Fiber.join(first);
+      // B's pull starts after C entered, so it serves C too.
+      const secondRequest = yield* Deferred.await(issued[1]!);
+      expect(secondRequest.cookie).toBe("c1");
+      yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+      yield* Fiber.join(second);
+      yield* settle;
+      expect(yield* count).toBe(2);
+      yield* Fiber.join(third);
+      expect(yield* snapshot(client)).toEqual({ cookie: "c2", titles: ["new"] });
+    })
+  );
+
+  it.effect(
+    "a queued caller does not skip on a failed pull, and pulls for itself after the next one fails",
+    () =>
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+        const { issued, answers, count } = client.gated;
+
+        const first = yield* Effect.forkChild(client.engine.pull);
+        yield* Deferred.await(issued[0]!);
+        const second = yield* Effect.forkChild(client.engine.pull);
+        yield* settle;
+        const third = yield* Effect.forkChild(client.engine.pull);
+        yield* settle;
+        expect(yield* count).toBe(1);
+
+        // The first pull fails and applies nothing, so B pulls #2 and that fails too.
+        yield* Deferred.fail(answers[0]!, new TransportError({ message: "offline" }));
+        expect(Exit.isFailure(yield* Fiber.await(first))).toBe(true);
+        yield* Deferred.await(issued[1]!);
+        yield* Deferred.fail(answers[1]!, new TransportError({ message: "offline" }));
+        expect(Exit.isFailure(yield* Fiber.await(second))).toBe(true);
+
+        // Neither failure applied anything, so C pulls #3 itself rather than skipping.
+        yield* settle;
+        expect(yield* count).toBe(3);
+        yield* Deferred.await(issued[2]!);
+        yield* Deferred.succeed(answers[2]!, respond("c3", "new"));
+        expect(Exit.isSuccess(yield* Fiber.await(third))).toBe(true);
+        expect(yield* snapshot(client)).toEqual({ cookie: "c3", titles: ["new"] });
+      })
+  );
 });
