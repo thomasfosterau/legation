@@ -138,6 +138,48 @@ describe("verifyBackendContract", () => {
     })
   );
 
+  it.effect("catches a backend whose count-up read escapes the commit's validation", () =>
+    Effect.gen(function* () {
+      // The handler reads the counter from a snapshot the wrapper takes when the
+      // call starts, not through the stage. MemoryBackend's read validation never
+      // sees that read, so a peer group's commit between the read and the write is
+      // overwritten: a lost update across client groups (rule 11).
+      const snapshots = new Map<string, number>();
+      const staleCount: MemoryBackend.BackendHandler = (raw, writer, context) => {
+        const args = raw as {
+          readonly collection: string;
+          readonly id: string;
+          readonly gate: string;
+        };
+        return Effect.gen(function* () {
+          const seen = snapshots.get(context.clientGroupId) ?? 0;
+          yield* BackendContract.park(args.gate);
+          yield* writer.put(args.collection, args.id, { n: seen + 1 });
+        });
+      };
+      const inner = yield* MemoryBackend.make({
+        ...BackendContract.memoryHandlers,
+        [BackendContract.countUp.name]: staleCount,
+      });
+      const broken: Backend = {
+        ...inner,
+        applyMutations: (context, mutations) =>
+          Effect.gen(function* () {
+            const [row] = yield* inner.getRows(context, "__contract", ["race"]);
+            snapshots.set(
+              context.clientGroupId,
+              Number((row?.value as { readonly n?: number } | undefined)?.n ?? 0)
+            );
+            return yield* inner.applyMutations(context, mutations);
+          }),
+      };
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
+      expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("guarantee 1");
+      expect(failure.message).toContain("lost");
+    })
+  );
+
   it.effect("falls back to the message for a backend that carries no typed cause", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));

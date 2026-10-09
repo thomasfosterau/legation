@@ -9,8 +9,9 @@
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Exit, Layer, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Redacted, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
+import { PgClient } from "@effect/sql-pg";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   Authorization,
@@ -30,6 +31,7 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation-effect/internal";
+import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
@@ -84,6 +86,7 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
   [BackendContract.failAlways.name, BackendContract.failAlways],
   [BackendContract.rejectAlways.name, BackendContract.rejectAlways],
   [BackendContract.writeThenFail.name, BackendContract.writeThenFail],
+  [BackendContract.countUp.name, BackendContract.countUp],
 ]);
 
 /**
@@ -130,6 +133,24 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
       return yield* Effect.fail(
         new BackendError({ message: "contract/write-then-fail fails after writing" })
       );
+    }),
+  [BackendContract.countUp.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string; gate: string };
+      const table = yield* tableFor(args.collection);
+      // Read the counter, park between the read and the write (rule 11), then
+      // write the increment. The write is a plain UPDATE: the isolation under
+      // test is the executor's, not the statement's.
+      const rows = yield* tx.query({
+        text: `SELECT n FROM ${table} WHERE id = ?`,
+        params: [args.id],
+      });
+      yield* BackendContract.park(args.gate);
+      yield* tx.run({
+        text: `UPDATE ${table} SET n = ? WHERE id = ?`,
+        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+      });
+      return [{ collection: args.collection, ids: [args.id] }];
     }),
   [BackendContract.rejectAlways.name]: (raw, tx) =>
     Effect.gen(function* () {
@@ -296,6 +317,162 @@ describe("paced compaction against SqlBackend (#249)", () => {
         expect(yield* backend.lastMutationIds({ clientGroupId: "group-sql" })).toEqual({
           "client-sql": 2,
         });
+      })
+    )
+  );
+});
+
+// ─── PostgreSQL ──────────────────────────────────────────────────────────────
+
+/**
+ * The same contract over `SqlBackend` on a real PostgreSQL server (guarantee 1,
+ * #353): each `applyMutations` runs at SERIALIZABLE, so rule 11's peer and parked
+ * calls run on two real transactions. Needs `DATABASE_URL` for a database this
+ * test may reset. Its tables and ledger are its own, so it runs beside the
+ * overlap suite (`sql-backend-postgres.test.ts`) on one database. Without the
+ * variable the suite is skipped locally; in CI that file's guard fails instead.
+ */
+const databaseUrl = process.env.DATABASE_URL;
+
+const PG_TABLES = `DROP TABLE IF EXISTS __contract, __contract_eval, contract_sync_mutations`;
+
+const PG_DDL: ReadonlyArray<string> = [
+  PG_TABLES,
+  `CREATE TABLE __contract (id TEXT COLLATE "C" PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT COLLATE "C")`,
+  `CREATE TABLE __contract_eval (id TEXT COLLATE "C" PRIMARY KEY, n INTEGER, rank INTEGER, tag TEXT COLLATE "C")`,
+  `CREATE TABLE contract_sync_mutations (
+    client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
+    PRIMARY KEY (client_group_id, client_id)
+  )`,
+];
+
+const pgBackendError = (message: string) => (cause: unknown) =>
+  new BackendError({ message, cause });
+
+/** A `SqlExecutor` over the PostgreSQL client: real transactions, unprepared statements. */
+const pgExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
+  return {
+    query: (fragment) =>
+      sql
+        .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)
+        .unprepared.pipe(Effect.mapError(pgBackendError(`query failed: ${fragment.text}`))),
+    run: (fragment) =>
+      sql
+        .unsafe(fragment.text, fragment.params)
+        .unprepared.pipe(
+          Effect.asVoid,
+          Effect.mapError(pgBackendError(`statement failed: ${fragment.text}`))
+        ),
+    transaction: (effect) =>
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.catchTag("SqlError", (error) =>
+            Effect.fail(new BackendError({ message: "transaction failed", cause: error }))
+          )
+        ),
+  };
+};
+
+/** The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts). */
+const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
+  [BackendContract.putRow.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as {
+        collection: string;
+        id: string;
+        value: { n?: number; rank?: number; tag?: string };
+      };
+      const table = yield* tableFor(args.collection);
+      yield* tx.run({
+        text: `INSERT INTO ${table} (id, n, rank, tag) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n, rank = EXCLUDED.rank, tag = EXCLUDED.tag`,
+        params: [args.id, args.value?.n ?? null, args.value?.rank ?? null, args.value?.tag ?? null],
+      });
+      return [{ collection: args.collection, ids: [args.id] }];
+    }),
+  [BackendContract.delRow.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string };
+      const table = yield* tableFor(args.collection);
+      yield* tx.run({ text: `DELETE FROM ${table} WHERE id = $1`, params: [args.id] });
+      return [{ collection: args.collection, ids: [args.id] }];
+    }),
+  [BackendContract.failAlways.name]: () =>
+    Effect.fail(new BackendError({ message: "contract/fail always fails" })),
+  [BackendContract.countUp.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string; gate: string };
+      const table = yield* tableFor(args.collection);
+      const rows = yield* tx.query({
+        text: `SELECT n FROM ${table} WHERE id = $1`,
+        params: [args.id],
+      });
+      yield* BackendContract.park(args.gate);
+      yield* tx.run({
+        text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
+        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+      });
+      return [{ collection: args.collection, ids: [args.id] }];
+    }),
+  [BackendContract.rejectAlways.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string };
+      const table = yield* tableFor(args.collection);
+      yield* tx.run({
+        text: `INSERT INTO ${table} (id, n) VALUES ($1, -1) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
+        params: [args.id],
+      });
+      return yield* new MutationRejected({ reason: "contract/reject always rejects" });
+    }),
+  [BackendContract.writeThenFail.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string };
+      const table = yield* tableFor(args.collection);
+      yield* tx.run({
+        text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
+        params: [args.id],
+      });
+      return yield* Effect.fail(
+        new BackendError({ message: "contract/write-then-fail fails after writing" })
+      );
+    }),
+};
+
+/** Runs `use` on a pooled PostgreSQL client against a freshly created contract schema. */
+const withPgContract = <A>(url: string, use: (sql: SqlClient) => Effect.Effect<A, unknown>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // Two concurrent transactions (the parked call and its peer) plus a spare.
+      const built = yield* Layer.build(
+        PgClient.layer({ url: Redacted.make(url), maxConnections: 4 })
+      );
+      const sql = Context.get(built, SqlClient);
+      for (const statement of PG_DDL) yield* sql.unsafe(statement).unprepared;
+      return yield* use(sql).pipe(
+        Effect.ensuring(sql.unsafe(PG_TABLES).unprepared.pipe(Effect.ignore))
+      );
+    })
+  ).pipe(Effect.orDie);
+
+const describePostgres = databaseUrl === undefined ? describe.skip : describe;
+
+describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () => {
+  // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
+  it.live("passes verifyBackendContract at SERIALIZABLE, rule 11 included", () =>
+    withPgContract(databaseUrl ?? "", (sql) =>
+      Effect.gen(function* () {
+        const backend = SqlBackend.make({
+          executor: pgExecutor(sql),
+          tables: {
+            __contract: { table: "__contract", kinds: { rank: "integer", tag: "text" } },
+            __contract_eval: { table: "__contract_eval", kinds: { rank: "integer", tag: "text" } },
+          },
+          mutators: contractMutators,
+          handlers: pgHandlers,
+          dialect: Sql.postgres,
+          mutationsTable: "contract_sync_mutations",
+        });
+        yield* BackendContract.verifyBackendContract(backend);
       })
     )
   );

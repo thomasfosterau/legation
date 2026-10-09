@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema, Semaphore } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -51,6 +51,11 @@ const attributes = {
   poison: Schema.optionalKey(Schema.Boolean),
   /** A row that makes the server fall over: a transient failure (500). */
   crash: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The count-up probe (rule 11): the server reads `n`, parks at the named gate,
+   * then stores `n + 1`. Never stored: it names the gate for this one update.
+   */
+  increment: Schema.optionalKey(Schema.String),
 };
 const Row = Resource.make(COLLECTION, { attributes });
 const EvalRow = Resource.make(EVAL_COLLECTION, { attributes });
@@ -200,7 +205,12 @@ const applyAdd = (
   return Effect.succeed({ data: resourceOf(row) });
 };
 
-/** `update`: merge attributes over an existing row. */
+/**
+ * `update`: merge attributes over an existing row. An `increment` attribute
+ * instead reads `n` from the staged row, parks at the gate it names, and stores
+ * `n + 1` (the count-up probe, rule 11). The gate sits between the read and the
+ * write, as a backend's own handler would park.
+ */
 const applyUpdate = (
   staged: Store,
   index: number,
@@ -211,12 +221,19 @@ const applyUpdate = (
   if (id === undefined || current === undefined) {
     return Effect.fail(rejection(index, "no such row to update"));
   }
-  const row: Stored = {
-    ...current,
-    attributes: { ...current.attributes, ...operation.data.attributes },
-  };
-  tableOf(staged, row.type).set(id, row);
-  return Effect.succeed({ data: resourceOf(row) });
+  const { increment, ...merge } = operation.data.attributes ?? {};
+  if (increment === undefined) {
+    const row: Stored = { ...current, attributes: { ...current.attributes, ...merge } };
+    tableOf(staged, row.type).set(id, row);
+    return Effect.succeed({ data: resourceOf(row) });
+  }
+  return Effect.gen(function* () {
+    const read = Number(current.attributes.n ?? 0);
+    yield* BackendContract.park(increment);
+    const row: Stored = { ...current, attributes: { ...current.attributes, n: read + 1 } };
+    tableOf(staged, row.type).set(id, row);
+    return { data: resourceOf(row) };
+  });
 };
 
 /** `remove`: by id only. */
@@ -248,7 +265,12 @@ const applyOperation = (
   }
 };
 
-const operationsLive = (store: Store) =>
+/**
+ * `lock` serialises whole batches: a batch copies the store, runs, and commits
+ * over it, so two overlapping batches would lose the first one's writes. One
+ * batch at a time is the store-wide lock that meets guarantee 1 (#353).
+ */
+const operationsLive = (store: Store, lock: Semaphore.Semaphore) =>
   HttpApiBuilder.group(api, "operations", (handlers) =>
     handlers.handle("operations", ({ payload, request }) =>
       Effect.gen(function* () {
@@ -266,20 +288,21 @@ const operationsLive = (store: Store) =>
         store.clear();
         for (const [type, rows] of staged) store.set(type, rows);
         return Atomic.results(entries);
-      })
+      }).pipe(Semaphore.withPermits(lock, 1))
     )
   );
 
 /** The whole api as a web handler, and an `HttpClient` that calls it in-process. */
 const makeInProcessClient = (store: Store) =>
   Effect.gen(function* () {
+    const lock = yield* Semaphore.make(1);
     const middleware = Middleware.layerWith({ extensions: [Atomic.EXTENSION_URI] });
     // effect-jsonapi 0.12's `:id` endpoint declarations leak an `unknown`
     // requirement into their handlers (see examples/commerce/server/client.ts);
     // the runtime carries nothing, so narrow it here.
     const app = HttpApiBuilder.layer(api).pipe(
       Layer.provide(
-        Layer.mergeAll(rowsLive(store), evalRowsLive(store), operationsLive(store)).pipe(
+        Layer.mergeAll(rowsLive(store), evalRowsLive(store), operationsLive(store, lock)).pipe(
           Layer.provide(middleware)
         )
       ),
@@ -312,6 +335,7 @@ const mutators = new Map<string, Mutator.AnyMutator>(
     BackendContract.failAlways,
     BackendContract.rejectAlways,
     BackendContract.writeThenFail,
+    BackendContract.countUp,
   ].map((mutator) => [mutator.name, mutator])
 );
 
@@ -349,6 +373,19 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
     (args) => {
       const a = args as { collection: string; id: string };
       return { operation: "create", type: a.collection, id: a.id, attributes: { poison: true } };
+    },
+  ],
+  [
+    BackendContract.countUp.name,
+    (args) => {
+      const a = args as { collection: string; id: string; gate: string };
+      // An update the server turns into the increment (see applyUpdate).
+      return {
+        operation: "update",
+        type: a.collection,
+        id: a.id,
+        attributes: { increment: a.gate },
+      };
     },
   ],
   [

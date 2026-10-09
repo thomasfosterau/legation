@@ -47,6 +47,7 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
   [BackendContract.failAlways.name, BackendContract.failAlways],
   [BackendContract.rejectAlways.name, BackendContract.rejectAlways],
   [BackendContract.writeThenFail.name, BackendContract.writeThenFail],
+  [BackendContract.countUp.name, BackendContract.countUp],
 ]);
 
 const handlers: Record<string, SqlBackend.SqlHandler> = {
@@ -73,6 +74,19 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
   [BackendContract.failAlways.name]: () =>
     Effect.fail(new BackendError({ message: "contract/fail always fails" })),
+  [BackendContract.countUp.name]: (raw, tx) =>
+    Effect.gen(function* () {
+      const args = raw as { collection: string; id: string; gate: string };
+      const table = yield* tableFor(args.collection);
+      // Read, park between the read and the write (rule 11), then write the increment.
+      const rows = yield* tx.query({ text: `SELECT n FROM ${table} WHERE id = ?`, params: [args.id] });
+      yield* BackendContract.park(args.gate);
+      yield* tx.run({
+        text: `UPDATE ${table} SET n = ? WHERE id = ?`,
+        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+      });
+      return [{ collection: args.collection, ids: [args.id] }];
+    }),
   [BackendContract.rejectAlways.name]: (raw, tx) =>
     Effect.gen(function* () {
       const args = raw as { collection: string; id: string };

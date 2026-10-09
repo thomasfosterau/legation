@@ -26,9 +26,16 @@
  * Neither has a test that a read sees neither the handler's writes nor the bump
  * while the handler is parked. That gap is tracked in #381. A new backend must
  * add its own mid-flight test before it can claim guarantee 1.
+ *
+ * Serialisability across client groups (guarantee 1, #353) is a rule: rule 11
+ * parks a handler after its read, lets another group commit a write to the same
+ * row, then resumes the handler and checks that no write was lost. Its handler
+ * parks through {@link park}, the one seam a backend's own counter handler needs
+ * to expose the read-then-write window. The gate is named by a string in the
+ * mutator's args, so the mutation stays serialisable like any other.
  */
 
-import { Data, Effect, Exit, Option, Schema } from "effect";
+import { Data, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
 import type { Backend, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
@@ -44,6 +51,33 @@ export class ContractViolation extends Data.TaggedError("ContractViolation")<{
   readonly rule: string;
   readonly message: string;
 }> {}
+
+// ─── Park gates (rule 11) ────────────────────────────────────────────────────
+
+/** A park gate the harness holds: `entered` once the handler is parked, `release` lets it resume. */
+interface ParkGate {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
+/** The gates the harness has registered, by name. Args carry the name, never the gate. */
+const parkGates = new Map<string, ParkGate>();
+
+/**
+ * The park a `contract/count-up` handler takes between its read and its write.
+ * When the harness has registered `gate`, it signals that the handler is parked
+ * and waits until the harness releases it; for any other name it does nothing.
+ * A backend calls it from its own handler, so the handler parks at the same
+ * point whatever its storage is.
+ */
+export const park = (gate: string): Effect.Effect<void> => {
+  const registered = parkGates.get(gate);
+  return registered === undefined
+    ? Effect.void
+    : Deferred.succeed(registered.entered, undefined).pipe(
+        Effect.andThen(Deferred.await(registered.release))
+      );
+};
 
 // ─── Contract mutators ───────────────────────────────────────────────────────
 
@@ -89,6 +123,16 @@ export const writeThenFail = Mutator.make(
   Schema.Struct({ collection: Schema.String, id: Schema.String })
 );
 
+/**
+ * Reads a counter row, parks after the read (see {@link park}), then writes the
+ * counter plus one. Two client groups running it on one row must both count
+ * (rule 11). `gate` names a park gate the harness registered, or matches none.
+ */
+export const countUp = Mutator.make(
+  "contract/count-up",
+  Schema.Struct({ collection: Schema.String, id: Schema.String, gate: Schema.String })
+);
+
 /** Ready-made authoritative handlers for MemoryBackend-style registration. */
 export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
   MemoryBackend.validatedHandlers([
@@ -118,6 +162,14 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
             )
           )
         )
+    ),
+    MemoryBackend.handler(countUp, (args, writer) =>
+      Effect.gen(function* () {
+        const current = (yield* writer.get(args.collection, args.id)) as
+          { readonly n?: number } | undefined;
+        yield* park(args.gate);
+        yield* writer.put(args.collection, args.id, { n: (current?.n ?? 0) + 1 });
+      })
     ),
   ]);
 
@@ -642,6 +694,143 @@ const rule10WriteThenFail: Rule = (h) =>
     );
   });
 
+/** How many times a transient `BackendError` is retried, as the client's own retry would. */
+const TRANSIENT_RETRIES = 3;
+
+/**
+ * Scheduler turns the rule gives the peer to commit while the parked handler
+ * waits. A backend that runs the peer at once commits it within a few turns. One
+ * that serialises it behind the parked call (SQLite's writer lock, a server lock)
+ * keeps it waiting, and the rule then releases the handler anyway. Counted in
+ * turns, not time, so the rule never reads the wall clock.
+ */
+const PEER_TURNS = 1000;
+
+/** The rule's own gate names are unique per run, so two verifications in one process cannot collide. */
+let gateRuns = 0;
+
+/** The gate name for a mutation that parks at nothing: no registered gate has this name. */
+const NO_GATE = "";
+
+const retryTransient = <A>(effect: Effect.Effect<A, BackendError>) =>
+  effect.pipe(
+    Effect.retry({ times: TRANSIENT_RETRIES, while: (error) => error._tag === "BackendError" })
+  );
+
+/** Runs the scheduler until `done` is set, or `PEER_TURNS` turns have passed. */
+const settle = (done: Deferred.Deferred<void>) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < PEER_TURNS; turn++) {
+      if (yield* Deferred.isDone(done)) return;
+      yield* Effect.yieldNow;
+    }
+  });
+
+/**
+ * 11. Serialisable across client groups (guarantee 1, #353). Group X reads a
+ *     counter and parks after the read. Group Y increments the same counter and
+ *     commits while X is parked. Then X resumes and increments. Both increments
+ *     must land, so the counter reads 2. A backend whose handler read is not
+ *     validated at commit writes X's stale count over Y's and reads 1. A backend
+ *     that serialises the two (a lock, or serialisable isolation) either orders
+ *     them or refuses one with a transient `BackendError`, which the harness
+ *     retries. Y waits behind X on a backend that serialises by lock, so the rule
+ *     releases X after `PEER_TURNS` and does not deadlock. D1 does not meet
+ *     guarantee 1 (#342): it has no transaction to isolate the read from another
+ *     group's commit, so it is not run through this contract, and this rule
+ *     does not claim it.
+ */
+const rule11CrossGroupLostUpdate: Rule = (h) =>
+  Effect.gen(function* () {
+    const rule =
+      "keeps a read-modify-write across client groups from losing an update (guarantee 1)";
+    const startId = yield* h.lastIdOf(rule);
+    const row = "race";
+    yield* h.expectOk(
+      rule,
+      h.backend.applyMutations(h.context, [h.put(startId + 1, h.rows, row, { n: 0 })])
+    );
+
+    gateRuns += 1;
+    const gate = `${h.context.clientGroupId}/race-${gateRuns}`;
+    const parked: ParkGate = {
+      entered: yield* Deferred.make<void>(),
+      release: yield* Deferred.make<void>(),
+    };
+    parkGates.set(gate, parked);
+    const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
+    const increment = (mutationId: number, gateName: string) =>
+      h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
+
+    const run = Effect.gen(function* () {
+      const first = yield* Effect.forkChild(
+        retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, gate)]))
+      );
+      // Either X has parked after its read, or X finished without parking.
+      const firstEarly = yield* Effect.raceFirst(
+        Deferred.await(parked.entered).pipe(Effect.as(undefined)),
+        Effect.exit(Fiber.join(first))
+      );
+      if (firstEarly !== undefined) {
+        const failure = Exit.findErrorOption(firstEarly);
+        if (Option.isSome(failure) && isUnregisteredFailure(failure.value, countUp.name)) {
+          return yield* h.check(
+            rule,
+            false,
+            `${countUp.name} is not registered: register BackendContract.countUp`
+          );
+        }
+        return yield* h.check(
+          rule,
+          false,
+          Option.isSome(failure)
+            ? `Backend failed unexpectedly: ${failure.value.message}`
+            : `${countUp.name} finished without reaching park(): its handler must call BackendContract.park between its read and its write`
+        );
+      }
+
+      const peerDone = yield* Deferred.make<void>();
+      const second = yield* Effect.forkChild(
+        retryTransient(h.backend.applyMutations(peer, [increment(1, NO_GATE)])).pipe(
+          Effect.ensuring(Deferred.succeed(peerDone, undefined))
+        )
+      );
+      yield* settle(peerDone);
+      yield* Deferred.succeed(parked.release, undefined);
+      const firstExit = yield* Effect.exit(Fiber.join(first));
+      const peerExit = yield* Effect.exit(Fiber.join(second));
+      for (const [label, exit] of [
+        ["first", firstExit],
+        ["peer", peerExit],
+      ] as const) {
+        const failure = Exit.findErrorOption(exit);
+        if (Option.isSome(failure)) {
+          return yield* h.check(
+            rule,
+            false,
+            `The ${label} increment failed: ${failure.value.message}`
+          );
+        }
+      }
+
+      const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
+      const count = (stored?.value as { readonly n?: number } | undefined)?.n;
+      yield* h.check(
+        rule,
+        count === 2,
+        `Two increments of "${row}" from two client groups must leave it at 2, got ${count}: a committed write was lost to the other group's concurrent commit`
+      );
+    });
+
+    yield* run.pipe(
+      Effect.ensuring(
+        Effect.sync(() => parkGates.delete(gate)).pipe(
+          Effect.andThen(Deferred.succeed(parked.release, undefined))
+        )
+      )
+    );
+  });
+
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [
   rule1InOrderApplication,
@@ -654,6 +843,7 @@ const rules: ReadonlyArray<Rule> = [
   rule8ClientGroupIsolation,
   rule9PermanentRejection,
   rule10WriteThenFail,
+  rule11CrossGroupLostUpdate,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────
