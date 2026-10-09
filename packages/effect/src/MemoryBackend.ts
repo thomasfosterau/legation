@@ -36,7 +36,10 @@
  * race, or a later replay, lists it in `rejected` just as the copy that
  * committed it did. The client's outcome therefore does not depend on which
  * response arrives first. A remembered rejection is forgotten once the client's
- * next push starts past it (see {@link forgetRejectionsBelow}).
+ * next push starts past it (see {@link forgetRejectionsBelow}). The memory is
+ * bounded per client: a client that never pushes again keeps its last push's
+ * rejections. It assumes one journal per `clientId`, which backend contiguity
+ * already requires.
  */
 
 import { Effect, Layer, Ref, Schema } from "effect";

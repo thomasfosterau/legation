@@ -1402,3 +1402,108 @@ describe("JsonApiSync.layer atomic detection", () => {
     }).pipe(Effect.scoped)
   );
 });
+
+/**
+ * Rejection memory (#366, as MemoryBackend's #355): a replayed copy of a push
+ * whose mutations were committed as rejected reports those rejections again,
+ * with their reasons, and a push that starts past them forgets them. Both
+ * delivery paths are covered. The server rejects the update of row 2 and the
+ * delete of row 3, so one push carries two rejections.
+ */
+const rejectingOps = (mode: HintMode) => {
+  // The atomic path rejects operations 1 and 2 of its first request, then
+  // accepts the resend. The per-resource path rejects the update and the delete.
+  const script = (request: Recorded, index: number): Response => {
+    if (mode === "atomic") {
+      if (index === 0)
+        return respond(422, {
+          errors: [
+            {
+              title: "Gone",
+              detail: "title taken",
+              source: { pointer: Atomic.operationPointer(1) },
+            },
+            {
+              title: "Gone",
+              detail: "not allowed",
+              source: { pointer: Atomic.operationPointer(2) },
+            },
+          ],
+        });
+      return respond(200, resultsFor(request.body["atomic:operations"]));
+    }
+    return request.method === "PATCH" || request.method === "DELETE"
+      ? respond(422, { errors: [{ title: "Refused", detail: "no" }] }, jsonHeaders)
+      : empty(204);
+  };
+  return makeServer(script, { rows: threeRows });
+};
+
+const makeRejectingBackend = (mode: HintMode, server: ReturnType<typeof rejectingOps>) =>
+  JsonApiBackend.make({
+    baseUrl: "http://api.test",
+    resources,
+    mutators: registry.mutators,
+    operations,
+    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+  }).pipe(Effect.provide(server.layer));
+
+const createFour = mutation(4, "todos/create", {
+  type: "todos",
+  id: "4",
+  attributes: { title: "fourth" },
+});
+
+for (const mode of ["atomic", "per-resource"] as const) {
+  describe(`JsonApiBackend rejection memory, ${mode} path (#366)`, () => {
+    it.effect(
+      "a replayed push reports the committed rejections and their reasons, sending nothing",
+      () =>
+        Effect.gen(function* () {
+          const server = rejectingOps(mode);
+          const backend = yield* makeRejectingBackend(mode, server);
+
+          const first = yield* backend.applyMutations(context, three);
+          expect(first.rejected?.map((entry) => entry.mutationId)).toEqual([2, 3]);
+          const writesAfterFirst = writesOf(server).length;
+
+          // A retry after a lost response: every id is acknowledged, so nothing is
+          // sent, and the response reports the same two rejections.
+          const replay = yield* backend.applyMutations(context, three);
+          expect(writesOf(server)).toHaveLength(writesAfterFirst);
+          expect(replay.rejected).toEqual(first.rejected);
+          expect(replay.hints).toEqual([]);
+          expect(replay.lastMutationIds).toEqual({ "client-1": 3 });
+        })
+    );
+
+    it.effect(
+      "a rejection is forgotten once a push starts past it, and kept while a push still carries it",
+      () =>
+        Effect.gen(function* () {
+          const server = rejectingOps(mode);
+          const backend = yield* makeRejectingBackend(mode, server);
+          const first = yield* backend.applyMutations(context, three);
+          expect(first.rejected).toHaveLength(2);
+
+          // A push that still carries 2 and 3 keeps their rejections.
+          const kept = yield* backend.applyMutations(context, [...three, createFour]);
+          expect(kept.rejected).toEqual(first.rejected);
+          expect(kept.lastMutationIds).toEqual({ "client-1": 4 });
+
+          // The next push starts at 5, so the client has seen the outcome of 1 to 4.
+          const late = yield* backend.applyMutations(context, [
+            mutation(5, "todos/create", {
+              type: "todos",
+              id: "5",
+              attributes: { title: "fifth" },
+            }),
+          ]);
+          expect(late.lastMutationIds).toEqual({ "client-1": 5 });
+          const replay = yield* backend.applyMutations(context, three);
+          expect(replay.rejected).toBeUndefined();
+          expect(replay.lastMutationIds).toEqual({ "client-1": 5 });
+        })
+    );
+  });
+}
