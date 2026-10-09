@@ -361,6 +361,20 @@ describe("ClientStore's unpulled tail (#336)", () => {
         expect(yield* store.unpulled).toEqual([]);
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
+
+    it.effect(
+      `${name}: a release that covers journal entries raises their counters, so no id is reused`,
+      () =>
+        Effect.gen(function* () {
+          const store = yield* open;
+          // Journaled directly, so nothing has raised the counter past them.
+          yield* store.appendMutation(mutation("c1", 1));
+          yield* store.appendMutation(mutation("c1", 2));
+          yield* releaseCovering(store, { c1: 2 });
+          expect(yield* store.pendingMutations).toEqual([]);
+          expect(yield* store.nextMutationId("c1")).toBe(3);
+        }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
   }
 
   it.effect("key-value: the tail survives reopening the store over the same KeyValueStore", () =>
@@ -713,12 +727,12 @@ describe("the tail's crash windows and interleavings (#387)", () => {
       const refuseNext = yield* Ref.make(true);
       const store: ClientStore = {
         ...inner,
-        releaseUnpulled: (lastMutationIds) =>
+        commitTailRelease: (lastMutationIds) =>
           Ref.getAndSet(refuseNext, false).pipe(
             Effect.flatMap((refuse) =>
               refuse
                 ? Effect.fail(new StoreError({ message: "release refused" }))
-                : inner.releaseUnpulled(lastMutationIds)
+                : inner.commitTailRelease!(lastMutationIds)
             )
           ),
       };
@@ -727,14 +741,52 @@ describe("the tail's crash windows and interleavings (#387)", () => {
       // One more than the bound, so the push's park overflows and releases the oldest entry.
       for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
-      // The refused release is finished in this process from its record (#387), so the store and
-      // the copy both hold the released tail, one entry shorter.
-      expect(yield* inner.unpulled).toHaveLength(SMALL_LIMIT);
+      // The refused batch writes nothing (#411), so the store and the copy both still hold the whole
+      // tail, and nothing reverts: the next overflow or pull releases it.
+      expect(yield* inner.unpulled).toHaveLength(SMALL_LIMIT + 1);
 
       // A forced overlay rebuild reads the copy: it must still hold every entry the store holds.
       yield* engine.seed([]);
-      expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      expect(yield* counterValue(engine)).toBe(SMALL_LIMIT + 1);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "the next push acknowledgement after a refused overflow brings the tail back to the bound",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const inner = yield* ClientStoreModule.makeMemory;
+        // The first tail release refused, as a store error would.
+        const refuseNext = yield* Ref.make(true);
+        const store: ClientStore = {
+          ...inner,
+          commitTailRelease: (lastMutationIds) =>
+            Ref.getAndSet(refuseNext, false).pipe(
+              Effect.flatMap((refuse) =>
+                refuse
+                  ? Effect.fail(new StoreError({ message: "release refused" }))
+                  : inner.commitTailRelease!(lastMutationIds)
+              )
+            ),
+        };
+        const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT);
+        yield* engine.subscribe(countersSubset);
+        for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        // The refused release left the tail one above the bound.
+        expect(yield* tailOf(inner)).toHaveLength(SMALL_LIMIT + 1);
+
+        // One more mutation, pushed: its acknowledgement parks it, and the tail is now over the bound by
+        // two, so this release (no longer refused) takes the two oldest entries.
+        yield* engine.mutate("counter/inc", { id: "c" });
+        yield* engine.push;
+        const bounded = Array.from({ length: SMALL_LIMIT }, (_, i) => `client-a#${i + 3}`);
+        expect(yield* tailOf(inner)).toEqual(bounded);
+        // The two released entries left the overlay (no pull had revealed them), so the view shows the
+        // bound's worth of effects.
+        expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      })
   );
 
   it.effect("a boot read of the tail that fails is repaired by the next push", () =>
@@ -812,23 +864,22 @@ describe("the tail's crash windows and interleavings (#387)", () => {
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const inner = yield* ClientStoreModule.makeMemory;
-      // The push parks its entry, then stops until the test resumes it: the window before its trim.
+      // The push's store write (the park and the trim, one batch) completes, then the push stops until
+      // the test resumes it: the window in which the push still holds the overlay lock.
       const holdNext = yield* Ref.make(false);
       const parked = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
       const store: ClientStore = {
         ...inner,
-        parkUnpulled: (mutations) =>
+        commitAcknowledgement: (parkedNow, lastMutationIds) =>
           Ref.getAndSet(holdNext, false).pipe(
             Effect.flatMap((hold) =>
               hold
-                ? inner
-                    .parkUnpulled(mutations)
-                    .pipe(
-                      Effect.andThen(Deferred.succeed(parked, undefined)),
-                      Effect.andThen(Deferred.await(resume))
-                    )
-                : inner.parkUnpulled(mutations)
+                ? inner.commitAcknowledgement!(parkedNow, lastMutationIds).pipe(
+                    Effect.andThen(Deferred.succeed(parked, undefined)),
+                    Effect.andThen(Deferred.await(resume))
+                  )
+                : inner.commitAcknowledgement!(parkedNow, lastMutationIds)
             )
           ),
       };
@@ -1043,6 +1094,13 @@ describe("a pull release that fails part-way (#387)", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 });
+
+// A release that covers `lastMutationIds` and carries no rows: the atomic batch where the store has
+// one (#411), else the record path it stands for.
+const releaseCovering = (store: ClientStore, lastMutationIds: Readonly<Record<string, number>>) =>
+  store.commitPull !== undefined
+    ? store.commitPull({ lastMutationIds, patch: [] })
+    : store.beginRelease({ lastMutationIds, patch: [] }).pipe(Effect.andThen(store.finishRelease));
 
 // The release scenario of the two-store test: two parked entries, one of them covered by the release.
 const releaseScenario = (store: ClientStore) =>
@@ -1293,6 +1351,133 @@ describe("a release record's guarantees across both stores (#387 review)", () =>
       expect((yield* reopened.pendingMutations).map((m) => m.mutationId)).toEqual([2]);
       expect(yield* tailOf(reopened)).toEqual(["c1#1"]);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+// The same three steps through the atomic batch members (#411): the memory store takes them as the
+// engine does on a store that has them. The record-path counterpart runs the same steps on the
+// key-value store, which has no AtomicKeyValue here and so takes the record path.
+const stateOf = (store: ClientStore) =>
+  Effect.gen(function* () {
+    return {
+      row: yield* rowCount(store, "c"),
+      cookie: yield* store.getCookie,
+      tail: yield* tailOf(store),
+      pending: (yield* store.pendingMutations).map((m) => `${m.clientId}#${m.mutationId}`),
+    };
+  });
+
+const appendFour = (store: ClientStore) =>
+  Effect.forEach(
+    [mutation("c1", 1), mutation("c1", 2), mutation("c1", 3), mutation("c2", 1)],
+    (m) => store.appendMutation(m),
+    { discard: true }
+  );
+
+const batchMembersScenario = (store: ClientStore) =>
+  Effect.gen(function* () {
+    yield* appendFour(store);
+    yield* store.commitAcknowledgement!([mutation("c1", 1), mutation("c1", 2)], { c1: 1 });
+    const afterAck = yield* stateOf(store);
+    yield* store.commitTailRelease!({ c1: 1 });
+    const afterRelease = yield* stateOf(store);
+    yield* store.commitPull!({
+      lastMutationIds: { c1: 2 },
+      cookie: "cookie-2",
+      patch: [
+        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+      ],
+    });
+    return {
+      afterAck,
+      afterRelease,
+      final: yield* stateOf(store),
+      nextId: yield* store.nextMutationId("c1"),
+    };
+  });
+
+const recordMembersScenario = (store: ClientStore) =>
+  Effect.gen(function* () {
+    yield* appendFour(store);
+    yield* store.parkUnpulled([mutation("c1", 1), mutation("c1", 2)]);
+    yield* store.acknowledge("c1", 1);
+    const afterAck = yield* stateOf(store);
+    yield* store.beginRelease({ lastMutationIds: { c1: 1 }, patch: [] });
+    yield* store.releaseUnpulled({ c1: 1 });
+    const afterRelease = yield* stateOf(store);
+    yield* store.beginRelease({
+      lastMutationIds: { c1: 2 },
+      cookie: "cookie-2",
+      patch: [
+        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+      ],
+    });
+    yield* store.finishRelease;
+    return {
+      afterAck,
+      afterRelease,
+      final: yield* stateOf(store),
+      nextId: yield* store.nextMutationId("c1"),
+    };
+  });
+
+describe("the memory store's atomic batch members (#411)", () => {
+  it.effect("the batch members reach the state the key-value record path reaches", () =>
+    Effect.gen(function* () {
+      const batched = yield* batchMembersScenario(yield* ClientStoreModule.makeMemory);
+      const recorded = yield* recordMembersScenario(yield* ClientStoreModule.makeKeyValue());
+      expect(batched.afterAck).toEqual({
+        row: undefined,
+        cookie: undefined,
+        tail: ["c1#1", "c1#2"],
+        pending: ["c1#2", "c1#3", "c2#1"],
+      });
+      expect(batched.afterRelease.tail).toEqual(["c1#2"]);
+      expect(batched.final).toEqual({
+        row: 2,
+        cookie: "cookie-2",
+        tail: [],
+        pending: ["c1#3", "c2#1"],
+      });
+      // The counters agree too: c1's next id continues after its highest journaled entry.
+      expect(batched.nextId).toBe(4);
+      expect(recorded).toEqual(batched);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "a batch pull's commit after a begun release finishes the release first, then writes its own patch",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ClientStoreModule.makeMemory;
+        // A record whose patch sets `c` and `d`, begun but not finished.
+        yield* store.beginRelease({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+            { _tag: "Put", collection: "counters", id: "d", version: 1, value: { id: "d", n: 1 } },
+          ],
+        });
+        // The batch commit's own patch sets `c` to a later value and leaves `d` alone.
+        yield* store.commitPull!({
+          lastMutationIds: {},
+          cookie: "cookie-2",
+          patch: [
+            { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+          ],
+        });
+        // The record's `d` landed (it was finished first), and the commit's `c` came after it.
+        expect(yield* rowCount(store, "c")).toBe(2);
+        expect(yield* rowCount(store, "d")).toBe(1);
+        expect(yield* store.getCookie).toBe("cookie-2");
+
+        // Nothing is left to re-apply: a later finish does not put the record's values back.
+        yield* store.finishRelease;
+        expect(yield* rowCount(store, "c")).toBe(2);
+        expect(yield* rowCount(store, "d")).toBe(1);
+        expect(yield* store.getCookie).toBe("cookie-2");
+      })
   );
 });
 
