@@ -9,8 +9,9 @@
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Exit, Layer, Redacted, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Redacted, Ref, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
+import * as SqlError from "effect/sql/SqlError";
 import { PgClient } from "@effect/sql-pg";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
@@ -459,24 +460,120 @@ const withPgContract = <A>(url: string, use: (sql: SqlClient) => Effect.Effect<A
 
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
+// Always runs, so a CI job without the service fails here instead of skipping the
+// suite below in silence (the same guard as sql-backend-postgres.test.ts).
+it("has DATABASE_URL in CI, so the PostgreSQL contract run cannot skip silently", () => {
+  const ciWithoutDatabase = process.env.CI !== undefined && databaseUrl === undefined;
+  expect(
+    ciWithoutDatabase,
+    "DATABASE_URL is not set in CI: the PostgreSQL contract run (#353) needs the PostgreSQL service container in .github/workflows/ci.yml"
+  ).toBe(false);
+});
+
+/** A serialization refusal (SQLSTATE 40001): the transient `BackendError` the executor makes of a `SerializationError`. */
+const isSerializationRefusal = (error: BackendError): boolean =>
+  SqlError.isSqlError(error.cause) && error.cause.reason._tag === "SerializationError";
+
+/** `executor` with each transaction it refuses as a serialization failure counted into `refusals`. */
+const countingRefusals = (
+  executor: SqlBackend.SqlExecutor,
+  refusals: Ref.Ref<number>
+): SqlBackend.SqlExecutor => ({
+  ...executor,
+  transaction: (effect) =>
+    executor
+      .transaction(effect)
+      .pipe(
+        Effect.tapError((error) =>
+          isSerializationRefusal(error) ? Ref.update(refusals, (n) => n + 1) : Effect.void
+        )
+      ),
+});
+
+/** Whether any backend in the database is waiting on a lock: a `pg_stat_activity` check, not a sleep. */
+const peerBlockedOnLock = (sql: SqlClient) =>
+  sql
+    .unsafe<{ waiting: number }>(
+      `SELECT 1 AS waiting FROM pg_stat_activity WHERE datname = current_database() ` +
+        `AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' LIMIT 1`
+    )
+    .unprepared.pipe(
+      Effect.map((rows) => rows.length > 0),
+      Effect.orDie
+    );
+
+/**
+ * PostgreSQL's `awaitPeer` (#416): the peer's statements are real I/O, so a turn
+ * count cannot reach the overlap. Rule 11 holds the parked call until the peer has
+ * finished, or is blocked on a lock (only the parked call can hold it). Both are
+ * observed conditions, polled every few milliseconds, with no deadline of the
+ * harness's own: a hang is the test's timeout.
+ */
+const awaitPeerOn =
+  (sql: SqlClient): BackendContract.PeerSettle =>
+  (peerSettled) =>
+    Effect.gen(function* () {
+      if (yield* peerSettled) return;
+      if (yield* peerBlockedOnLock(sql)) return;
+      return yield* Effect.fail("pending" as const);
+    }).pipe(
+      Effect.retry({
+        schedule: Schedule.spaced("5 millis"),
+        while: (state) => state === "pending",
+      }),
+      Effect.orDie
+    );
+
+/** The PostgreSQL contract backend over `executor` and `dialect`. */
+const backendOver = (executor: SqlBackend.SqlExecutor, dialect: Sql.Dialect) =>
+  SqlBackend.make({
+    executor,
+    tables: {
+      __contract: { table: "__contract", kinds: { rank: "integer", tag: "text" } },
+      __contract_eval: { table: "__contract_eval", kinds: { rank: "integer", tag: "text" } },
+    },
+    mutators: contractMutators,
+    handlers: pgHandlers,
+    dialect,
+    mutationsTable: "contract_sync_mutations",
+  });
+
 describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () => {
   // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
-  it.live("passes verifyBackendContract at SERIALIZABLE, rule 11 included", () =>
-    withPgContract(databaseUrl ?? "", (sql) =>
-      Effect.gen(function* () {
-        const backend = SqlBackend.make({
-          executor: pgExecutor(sql),
-          tables: {
-            __contract: { table: "__contract", kinds: { rank: "integer", tag: "text" } },
-            __contract_eval: { table: "__contract_eval", kinds: { rank: "integer", tag: "text" } },
-          },
-          mutators: contractMutators,
-          handlers: pgHandlers,
-          dialect: Sql.postgres,
-          mutationsTable: "contract_sync_mutations",
-        });
-        yield* BackendContract.verifyBackendContract(backend);
-      })
-    )
+  it.live(
+    "passes verifyBackendContract at SERIALIZABLE, rule 11 included, and sees the overlap refused with 40001",
+    () =>
+      withPgContract(databaseUrl ?? "", (sql) =>
+        Effect.gen(function* () {
+          const refusals = yield* Ref.make(0);
+          const backend = backendOver(countingRefusals(pgExecutor(sql), refusals), Sql.postgres);
+          yield* BackendContract.verifyBackendContract(backend, { awaitPeer: awaitPeerOn(sql) });
+          // Rule 11's parked call read before the peer committed, so its write is refused.
+          expect(yield* Ref.get(refusals)).toBeGreaterThan(0);
+        })
+      ),
+    60_000
+  );
+
+  // The READ COMMITTED mutant: the same backend without the SERIALIZABLE statement.
+  // The peer commits while the parked call is held, and the call then writes its
+  // stale count over the peer's increment. Rule 11 must fail on every run.
+  it.live(
+    "fails rule 11 for a READ COMMITTED executor on every run",
+    () =>
+      withPgContract(databaseUrl ?? "", (sql) =>
+        Effect.gen(function* () {
+          const backend = backendOver(pgExecutor(sql), {
+            ...Sql.postgres,
+            serializable: undefined,
+          });
+          const failure = yield* Effect.flip(
+            BackendContract.verifyBackendContract(backend, { awaitPeer: awaitPeerOn(sql) })
+          );
+          expect(failure.rule).toContain("across client groups");
+          expect(failure.message).toContain("got 1");
+        })
+      ),
+    60_000
   );
 });

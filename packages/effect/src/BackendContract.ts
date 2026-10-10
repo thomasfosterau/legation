@@ -67,8 +67,7 @@ const parkGates = new Map<string, ParkGate>();
  * The park a `contract/count-up` handler takes between its read and its write.
  * When the harness has registered `gate`, it signals that the handler is parked
  * and waits until the harness releases it; for any other name it does nothing.
- * A backend calls it from its own handler, so the handler parks at the same
- * point whatever its storage is.
+ * Only the contract's `countUp` handler calls it, so no production handler should.
  */
 export const park = (gate: string): Effect.Effect<void> => {
   const registered = parkGates.get(gate);
@@ -127,6 +126,11 @@ export const writeThenFail = Mutator.make(
  * Reads a counter row, parks after the read (see {@link park}), then writes the
  * counter plus one. Two client groups running it on one row must both count
  * (rule 11). `gate` names a park gate the harness registered, or matches none.
+ *
+ * A third-party backend registers its handler for this mutator under
+ * `BackendContract.countUp.name` (`contract/count-up`), passes `gate` unchanged
+ * to `park` between its read and its write, and writes the counter plus one. A
+ * handler that omits `park` fails rule 11 with "finished without reaching park()".
  */
 export const countUp = Mutator.make(
   "contract/count-up",
@@ -175,11 +179,28 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
 
 // ─── Verification harness ────────────────────────────────────────────────────
 
+/**
+ * Waits, while rule 11 holds a parked call, for the peer call the harness started. `peerSettled`
+ * reads true once the peer's call has finished. The returned effect must complete once the peer has
+ * settled, or once the backend observes the peer blocked on a lock the parked call holds (the peer
+ * can then finish only after the parked call is released). It decides on that observed state, never
+ * on elapsed time.
+ */
+export type PeerSettle = (peerSettled: Effect.Effect<boolean>) => Effect.Effect<void>;
+
 /** Options for {@link verifyBackendContract}. */
 export interface VerifyOptions {
   /** Base name for the collections written during verification. */
   readonly collection?: string;
   readonly clientGroupId?: string;
+  /**
+   * How rule 11 waits for the peer while the parked call is held. Absent, the
+   * harness gives the peer a bounded number of scheduler turns, which suits a backend
+   * whose peer runs at once or waits on a lock. A backend whose peer does real I/O
+   * (PostgreSQL) cannot reach the overlap that way, so it observes the peer instead
+   * (#416).
+   */
+  readonly awaitPeer?: PeerSettle | undefined;
 }
 
 interface EvalRow {
@@ -238,6 +259,8 @@ interface Harness {
   readonly mutation: (mutationId: number, mutator: string, args: unknown) => Mutation;
   readonly put: (mutationId: number, collection: string, id: string, value: unknown) => Mutation;
   readonly reject: (mutationId: number, collection: string, id: string) => Mutation;
+  /** The backend's own peer wait for rule 11, when it supplies one. */
+  readonly awaitPeer: PeerSettle | undefined;
 }
 
 /**
@@ -311,6 +334,7 @@ const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harn
       mutation(mutationId, putRow.name, { collection, id, value }),
     reject: (mutationId, collection, id) =>
       mutation(mutationId, rejectAlways.name, { collection, id }),
+    awaitPeer: options?.awaitPeer,
   };
 };
 
@@ -699,10 +723,13 @@ const TRANSIENT_RETRIES = 3;
 
 /**
  * Scheduler turns the rule gives the peer to commit while the parked handler
- * waits. A backend that runs the peer at once commits it within a few turns. One
- * that serialises it behind the parked call (SQLite's writer lock, a server lock)
- * keeps it waiting, and the rule then releases the handler anyway. Counted in
- * turns, not time, so the rule never reads the wall clock.
+ * waits, when the backend supplies no `awaitPeer`. A backend that runs the peer
+ * at once commits it within a few turns. One that serialises it behind the parked
+ * call (SQLite's writer lock, a server lock) keeps it waiting, and the rule then
+ * releases the handler anyway. Counted in turns, not time, so the rule never reads
+ * the wall clock. On PostgreSQL the peer's statements are real I/O, so this turn
+ * count does not reach the overlap: that backend observes the peer through
+ * `awaitPeer` instead (#416).
  */
 const PEER_TURNS = 1000;
 
@@ -717,11 +744,11 @@ const retryTransient = <A>(effect: Effect.Effect<A, BackendError>) =>
     Effect.retry({ times: TRANSIENT_RETRIES, while: (error) => error._tag === "BackendError" })
   );
 
-/** Runs the scheduler until `done` is set, or `PEER_TURNS` turns have passed. */
-const settle = (done: Deferred.Deferred<void>) =>
+/** Runs the scheduler until `peerSettled` reads true, or `PEER_TURNS` turns have passed. */
+const settleByTurns = (peerSettled: Effect.Effect<boolean>) =>
   Effect.gen(function* () {
     for (let turn = 0; turn < PEER_TURNS; turn++) {
-      if (yield* Deferred.isDone(done)) return;
+      if (yield* peerSettled) return;
       yield* Effect.yieldNow;
     }
   });
@@ -735,10 +762,12 @@ const settle = (done: Deferred.Deferred<void>) =>
  *     that serialises the two (a lock, or serialisable isolation) either orders
  *     them or refuses one with a transient `BackendError`, which the harness
  *     retries. Y waits behind X on a backend that serialises by lock, so the rule
- *     releases X after `PEER_TURNS` and does not deadlock. D1 does not meet
- *     guarantee 1 (#342): it has no transaction to isolate the read from another
- *     group's commit, so it is not run through this contract, and this rule
- *     does not claim it.
+ *     releases X once the peer has settled, or blocked on X's lock, and does not
+ *     deadlock. That wait is the backend's `awaitPeer`, or `PEER_TURNS` turns when
+ *     it supplies none. A PostgreSQL run needs `awaitPeer` to reach the overlap at
+ *     all (#416). D1 does not meet guarantee 1 (#342): it has no transaction to
+ *     isolate the read from another group's commit, so it is not run through this
+ *     contract, and this rule does not claim it.
  */
 const rule11CrossGroupLostUpdate: Rule = (h) =>
   Effect.gen(function* () {
@@ -795,7 +824,8 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
           Effect.ensuring(Deferred.succeed(peerDone, undefined))
         )
       );
-      yield* settle(peerDone);
+      const peerSettled = Deferred.isDone(peerDone);
+      yield* (h.awaitPeer ?? settleByTurns)(peerSettled);
       yield* Deferred.succeed(parked.release, undefined);
       const firstExit = yield* Effect.exit(Fiber.join(first));
       const peerExit = yield* Effect.exit(Fiber.join(second));
