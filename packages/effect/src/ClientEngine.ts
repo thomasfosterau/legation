@@ -434,9 +434,11 @@ export interface ClientEngineOptions {
   readonly changeHubCapacity?: number;
   /**
    * Most acknowledged-but-unpulled mutations the overlay keeps before the oldest are released early, with
-   * a `logWarning` (#286). Defaults to 1024. A refused release can leave the tail above this bound, until
-   * the next push acknowledgement or pull releases the excess. An internal seam: a test lowers it to reach
-   * the bound with a few mutations. Must be a positive integer; any other value is a defect when the engine is made.
+   * a `logWarning` (#286). Defaults to 1024. A push that takes the tail to half this bound starts a pull
+   * ahead of the overflow (#337), so a healthy transport never reaches it, with or without pokes. A refused
+   * release can leave the tail above this bound, until the next push acknowledgement or pull releases the
+   * excess. An internal seam: a test lowers it to reach the bound with a few mutations. Must be a positive
+   * integer; any other value is a defect when the engine is made.
    */
   readonly unpulledLimit?: number;
   /**
@@ -2183,6 +2185,9 @@ export const make = (
         if (rejected.length > 0) {
           yield* publishChange(rebuildFor(yield* collectionsTouchedByMutations(rejected)));
         }
+        // A tail that has reached half the bound starts a pull ahead of the overflow release (#337).
+        // The push does not wait for it.
+        if ((yield* Ref.get(unpulled)).length >= pullAheadAt) yield* pullAhead;
         yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
         yield* Metric.update(Telemetry.pushesTotal, 1);
         yield* Metric.update(Telemetry.pushMutations, pending.length);
@@ -2596,6 +2601,33 @@ export const make = (
       Effect.retry({ schedule: pullPolicy, while: isTransient }),
       Effect.catchTag("VersionNotSupportedError", () => Effect.void),
       Effect.catch((error) => surfaceFailure("pull", error))
+    );
+
+    // Pull ahead of the bound (#337). With no pokes and no `pullInterval`, nothing else pulls, so a long
+    // run of pushes could fill the tail and overflow it. A push that takes the tail to half the bound
+    // starts one `attemptPull` in the engine's scope, and the push does not wait for it. The flag
+    // admits one such pull at a time and is cleared when it ends, failed or not, so a burst of pushes
+    // past the threshold starts at most one pull in flight and a failed pull never blocks a later one.
+    // Why half: the pull must land before the tail reaches the bound, and the headroom above the
+    // threshold (the other half) has to absorb the pushes acknowledged while that pull is in flight.
+    // A lower threshold pulls more often than a healthy transport needs; a higher one leaves too little
+    // headroom for a slow pull.
+    const pullAheadAt = Math.ceil(unpulledLimit / 2);
+    const pullAheadPending = yield* Ref.make(false);
+    const pullAheadScope = yield* Effect.scope;
+    const pullAhead: Effect.Effect<void> = Ref.modify(
+      pullAheadPending,
+      (pending) => [!pending, true] as const
+    ).pipe(
+      Effect.flatMap((claimed) =>
+        claimed
+          ? attemptPull.pipe(
+              Effect.ensuring(Ref.set(pullAheadPending, false)),
+              Effect.forkIn(pullAheadScope),
+              Effect.asVoid
+            )
+          : Effect.void
+      )
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {

@@ -6,7 +6,7 @@
  * windows are exercised by failing the store at each step and reopening it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Logger, Ref, Schedule, Schema, Tracer } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -14,7 +14,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
-import { StoreError } from "../Errors.js";
+import { StoreError, TransportError } from "../Errors.js";
 import * as Hydration from "../Hydration.js";
 import * as Identity from "../Identity.js";
 import * as InvalidationBus from "../InvalidationBus.js";
@@ -23,6 +23,7 @@ import * as Mutator from "../Mutator.js";
 import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
+import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 
 interface Counter {
@@ -1803,5 +1804,231 @@ describe("the engine's overflow release and clears (#387 review)", () => {
       yield* Fiber.join(clearing);
       expect(yield* Fiber.join(reading)).toBeUndefined();
     })
+  );
+});
+
+/**
+ * Yields until `condition` holds, and says whether it did. The explicit wait for a background pull
+ * (#337): bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
+ */
+const settles = <E>(condition: Effect.Effect<boolean, E>): Effect.Effect<boolean, E> =>
+  Effect.gen(function* () {
+    for (let i = 0; i < 2000; i++) {
+      if (yield* condition) return true;
+      yield* Effect.yieldNow;
+    }
+    return false;
+  });
+
+/**
+ * The in-memory transport with its pulls counted. `failing` makes each pull fail as a dropped
+ * connection does (`failed` counts those), and `gate`, when set, holds each pull until the test
+ * releases it, so a test can keep a background pull in flight while pushes run.
+ */
+const probedTransport = (inner: ClientTransport) =>
+  Effect.gen(function* () {
+    const pulls = yield* Ref.make(0);
+    const failed = yield* Ref.make(0);
+    const failing = yield* Ref.make(false);
+    const gate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+    const transport: ClientTransport = {
+      ...inner,
+      pull: (request) =>
+        Ref.update(pulls, (n) => n + 1).pipe(
+          Effect.andThen(Ref.get(gate)),
+          Effect.flatMap((held) => (held === undefined ? Effect.void : Deferred.await(held))),
+          Effect.andThen(Ref.get(failing)),
+          Effect.flatMap((down) =>
+            down
+              ? Ref.update(failed, (n) => n + 1).pipe(
+                  Effect.andThen(Effect.fail(new TransportError({ message: "connection dropped" })))
+                )
+              : inner.pull(request)
+          )
+        ),
+    };
+    return { transport, pulls, failed, failing, gate };
+  });
+
+/** The counter client over `transport`, with `unpulledLimit` and an optional pull retry policy. */
+const engineWith = (
+  transport: ClientTransport,
+  store: ClientStore,
+  unpulledLimit: number,
+  retry?: ClientEngineModule.RetryOptions
+) =>
+  ClientEngineModule.make({
+    clientId: "client-a",
+    clientGroupId: "group-a",
+    mutators: counterMutators,
+    unpulledLimit,
+    ...(retry === undefined ? {} : { retry }),
+  }).pipe(
+    Effect.provideService(ClientStore, store),
+    Effect.provideService(ClientTransport, transport)
+  );
+
+/** Runs `body` with the warnings it and the engine it starts log, so an overflow release shows. */
+/**
+ * Runs `body` with the warnings the engine logs, and the names of the spans it opens. A background pull
+ * opens its `clientPull` span when its fibre starts, before it queues for the pull lock, so counting those
+ * spans counts the pull fibres a burst forked, including the ones the pull lock makes skip (#337).
+ */
+const observed = <A, E, R>(
+  body: (warnings: Array<string>, spans: Array<string>) => Effect.Effect<A, E, R>
+) => {
+  const warnings: Array<string> = [];
+  const spans: Array<string> = [];
+  const logger = Logger.make(({ logLevel, message }) => {
+    if (logLevel === "Warn") warnings.push(String(message));
+  });
+  const tracer = Tracer.make({
+    span(options) {
+      spans.push(options.name);
+      return Tracer.nativeTracer.span(options);
+    },
+  });
+  return body(warnings, spans).pipe(
+    Effect.withLogger(logger),
+    Effect.provideService(Tracer.Tracer, tracer)
+  );
+};
+
+// Pull ahead of the bound (#337). With no pokes and no `pullInterval` nothing pulls on its own, so a
+// run of pushes used to reach the bound and overflow, reverting the view. A push that takes the tail
+// to half the bound now starts one pull in the background, which the push does not wait for.
+describe("a push that takes the tail to half the bound pulls ahead of it (#337)", () => {
+  // The tail length at which a push starts the pull, as the engine sets it.
+  const pullAheadAt = Math.ceil(SMALL_LIMIT / 2);
+  // A bound large enough that a burst stays under it while one pull is held.
+  const BURST_LIMIT = 64;
+  const pullFibres = (spans: ReadonlyArray<string>) =>
+    spans.filter((name) => name === Telemetry.span.clientPull).length;
+
+  it.effect(
+    "with pokes off and no pullInterval, a run of pushes past the bound never overflows",
+    () =>
+      observed((warnings) =>
+        Effect.gen(function* () {
+          const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+          const store = yield* ClientStoreModule.makeMemory;
+          const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+          const engine = yield* engineWith(probe.transport, store, SMALL_LIMIT);
+          yield* engine.subscribe(countersSubset);
+
+          let widest = 0;
+          for (let i = 1; i <= 3 * SMALL_LIMIT; i++) {
+            yield* engine.mutate("counter/inc", { id: "c" });
+            yield* engine.push;
+            const depth = (yield* store.unpulled).length;
+            widest = Math.max(widest, depth);
+            // A crossing starts a pull that releases the whole tail. Wait for it, so the next push
+            // sees the pull's effect; without the trigger the wait gives up and the tail overflows.
+            if (depth >= pullAheadAt) {
+              yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0)));
+            }
+          }
+
+          // An overflow release logs a warning, so no warning means the bound was never reached.
+          expect(warnings, "an overflow release logs a warning").toEqual([]);
+          expect(widest).toBeLessThanOrEqual(SMALL_LIMIT);
+          expect(yield* counterValue(engine)).toBe(3 * SMALL_LIMIT);
+        })
+      )
+  );
+
+  it.effect(
+    "a burst of pushes past the threshold starts one pull, and the pushes do not wait for it",
+    () =>
+      observed((warnings, spans) =>
+        Effect.gen(function* () {
+          const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+          const store = yield* ClientStoreModule.makeMemory;
+          const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+          const engine = yield* engineWith(probe.transport, store, BURST_LIMIT);
+          yield* engine.subscribe(countersSubset);
+
+          // The first pull the burst starts is held at the gate; every push below must still complete.
+          const release = yield* Deferred.make<void>();
+          yield* Ref.set(probe.gate, release);
+          const burst = 40;
+          for (let i = 0; i < burst; i++) {
+            yield* engine.mutate("counter/inc", { id: "c" });
+            yield* engine.push;
+          }
+          expect((yield* store.unpulled).length).toBe(burst);
+
+          expect(
+            yield* settles(Ref.get(probe.pulls).pipe(Effect.map((n) => n === 1))),
+            "the pull the burst starts"
+          ).toBe(true);
+          // Give any second pull the burst might start its chance to run: none may, while one is held.
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          expect(yield* Ref.get(probe.pulls), "pulls while one is held").toBe(1);
+          // The pull lock would skip a second fibre's pull, so only the fibres themselves show a leak.
+          expect(pullFibres(spans), "pull fibres forked while one is held").toBe(1);
+
+          yield* Deferred.succeed(release, undefined);
+          expect(
+            yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0))),
+            "the held pull to release the tail"
+          ).toBe(true);
+          expect(yield* Ref.get(probe.pulls), "pulls after the held one ends").toBe(1);
+          expect(pullFibres(spans), "pull fibres forked by the burst").toBe(1);
+          expect(yield* counterValue(engine)).toBe(burst);
+          expect(warnings).toEqual([]);
+        })
+      )
+  );
+
+  it.effect("a pull that fails does not wedge later pushes, and a later crossing pulls again", () =>
+    observed((warnings) =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const store = yield* ClientStoreModule.makeMemory;
+        const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+        // No retries: the failing pull ends at once, so the test does not wait out a backoff.
+        const engine = yield* engineWith(probe.transport, store, BURST_LIMIT, {
+          pull: Schedule.recurs(0),
+        });
+        yield* engine.subscribe(countersSubset);
+        yield* Ref.set(probe.failing, true);
+
+        let total = 0;
+        const pushOne = Effect.gen(function* () {
+          yield* engine.mutate("counter/inc", { id: "c" });
+          yield* engine.push;
+          total += 1;
+        });
+
+        // Crossing the threshold starts a pull, and it fails.
+        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne;
+        expect(
+          yield* settles(Ref.get(probe.failed).pipe(Effect.map((n) => n >= 1))),
+          "the pull ahead to fail"
+        ).toBe(true);
+        // Pushes carry on while the pull is down: each is acknowledged and the journal drains.
+        for (let i = 0; i < 8; i++) {
+          yield* pushOne;
+          expect(yield* store.pendingMutations).toEqual([]);
+        }
+
+        // The connection returns. A push that starts a pull after the failed one has ended releases the
+        // tail; a push that lands while it is still ending starts none, so keep pushing until one does.
+        yield* Ref.set(probe.failing, false);
+        for (let i = 0; i < 16 && (yield* store.unpulled).length > 0; i++) {
+          yield* pushOne;
+          yield* Effect.yieldNow;
+        }
+        expect(
+          yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0))),
+          "a later pull to release the tail"
+        ).toBe(true);
+
+        expect(yield* Ref.get(probe.failed)).toBeGreaterThanOrEqual(1);
+        expect(yield* counterValue(engine)).toBe(total);
+        expect(warnings).toEqual([]);
+      })
+    )
   );
 });
