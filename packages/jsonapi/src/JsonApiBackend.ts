@@ -20,8 +20,10 @@
  * - `getRows` serves row values from the cache `evaluate` populates and this
  *   backend's own writes keep current (the sync server always evaluates before
  *   fetching put rows in the same pull), falling back to `GET /{type}/{id}`.
- *   The cache reflects this instance's own writes only: a write another
- *   instance makes goes unseen, so `getRows` can serve a superseded row (#447).
+ *   The cache reflects this instance's own writes only, so a deployment runs
+ *   one JsonApiBackend per server and writes the server only through it
+ *   (#447): another writer's changes go unseen, and `getRows` can serve a
+ *   superseded row.
  * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
  *   JSON:API write (`Write`: a create, update or delete of one resource —
  *   derived CRUD mutators map directly, and `writes` expresses custom

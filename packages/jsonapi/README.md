@@ -202,10 +202,12 @@ that only receives creates needs no `getOne` route.
 takes the rows a listing (`evaluate`) returns, and the value each write this
 instance applies leaves a row with; a write the server rejects or fails leaves
 its row as it was. A delete this instance applies removes its row from the
-cache. The cache reflects this instance's own writes only: a write another
-instance makes goes unseen, so `getRows` can serve a row another instance has
-since changed or deleted (#447). A row not in the cache is fetched with
-`GET /{type}/{id}`, which needs a `getOne` route.
+cache. The cache reflects this instance's own writes only, and nothing tells it
+about writes made elsewhere. So run one `JsonApiBackend` per JSON:API server,
+and write that server only through it: with a second instance, or another
+writer, `getRows` can serve a row that has since been changed or deleted. A row
+not in the cache is fetched with `GET /{type}/{id}`, which needs a `getOne`
+route.
 
 ## Standalone collection loading
 
