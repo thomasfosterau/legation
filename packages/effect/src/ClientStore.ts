@@ -1232,38 +1232,6 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
   return { clear, groups };
 };
 
-/**
- * The durable implementation (ADR-0007): ClientStore over
- * `effect/persistence` KeyValueStore, so any platform KVS —
- * browser IndexedDB/localStorage, Node file system, SQL — persists the
- * engine.
- *
- * Layout 2 (#47) stores state per row and per mutation, because the KVS has no
- * key enumeration: each confirmed row is a `row/{collection}/{id}` value with a
- * per-collection `rowIndex/{collection}` id-array; each pending mutation is a
- * `journal/{clientId}/{mutationId}` body with a compact ordered `journalIndex`.
- * A single `putRow`/`appendMutation` rewrites one value plus a small index —
- * never the whole collection or journal — and `acknowledge` drops acked bodies
- * without rewriting the survivors. `collections`, `counters`, and `cookie`
- * carry over unchanged. A store opened at an earlier layout is migrated forward
- * once, transparently.
- *
- * Read-modify-write operations are serialized through a semaphore, which
- * makes one store instance safe for concurrent fibers — not for concurrent
- * processes (the service-worker host is the per-origin singleton, ADR-0010).
- *
- * Two paths write a pull's release (#387, #393). With an {@link AtomicKeyValue}
- * in context, the release (`commitPull`, `commitAcknowledgement`,
- * `commitTailRelease`) is one batch and no release record is written. Without
- * it, the release goes through the record `beginRelease` writes first, which
- * an open finishes if a crash interrupted it. Both paths settle a leftover
- * record on open.
- *
- * Reads decode each persisted value through a `Schema` codec, so a corrupt or
- * format-drifted value on a rehydrating host fails as a `StoreError` instead
- * of a silent `as A` cast. Only the *envelopes* are validated — row values
- * and mutation args stay `Unknown` and round-trip untouched (ADR-0014).
- */
 /** A typed read of one key: the value decoded through `codec`, or `undefined` when absent. */
 type KeyReader = <A>(
   key: string,
@@ -1349,6 +1317,38 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
     };
   });
 
+/**
+ * The durable implementation (ADR-0007): ClientStore over
+ * `effect/persistence` KeyValueStore, so any platform KVS —
+ * browser IndexedDB/localStorage, Node file system, SQL — persists the
+ * engine.
+ *
+ * Layout 2 (#47) stores state per row and per mutation, because the KVS has no
+ * key enumeration: each confirmed row is a `row/{collection}/{id}` value with a
+ * per-collection `rowIndex/{collection}` id-array; each pending mutation is a
+ * `journal/{clientId}/{mutationId}` body with a compact ordered `journalIndex`.
+ * A single `putRow`/`appendMutation` rewrites one value plus a small index —
+ * never the whole collection or journal — and `acknowledge` drops acked bodies
+ * without rewriting the survivors. `collections`, `counters`, and `cookie`
+ * carry over unchanged. A store opened at an earlier layout is migrated forward
+ * once, transparently.
+ *
+ * Read-modify-write operations are serialized through a semaphore, which
+ * makes one store instance safe for concurrent fibers — not for concurrent
+ * processes (the service-worker host is the per-origin singleton, ADR-0010).
+ *
+ * Two paths write a pull's release (#387, #393). With an {@link AtomicKeyValue}
+ * in context, the release (`commitPull`, `commitAcknowledgement`,
+ * `commitTailRelease`) is one batch and no release record is written. Without
+ * it, the release goes through the record `beginRelease` writes first, which
+ * an open finishes if a crash interrupted it. Both paths settle a leftover
+ * record on open.
+ *
+ * Reads decode each persisted value through a `Schema` codec, so a corrupt or
+ * format-drifted value on a rehydrating host fails as a `StoreError` instead
+ * of a silent `as A` cast. Only the *envelopes* are validated — row values
+ * and mutation args stay `Unknown` and round-trip untouched (ADR-0014).
+ */
 export const makeKeyValue = (
   options?: KeyValueOptions
 ): Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> =>
