@@ -1507,3 +1507,62 @@ for (const mode of ["atomic", "per-resource"] as const) {
     );
   });
 }
+
+/** A server whose listing answers one row, `1`, and which takes the push's writes. */
+const listingServer = (mode: HintMode) =>
+  makeServer(
+    (request) => {
+      if (request.method === "GET")
+        return respond(
+          200,
+          { data: [{ type: "todos", id: "1", attributes: before.attributes }] },
+          jsonHeaders
+        );
+      return mode === "atomic"
+        ? respond(200, resultsFor(request.body["atomic:operations"]))
+        : empty(204);
+    },
+    { rows: { "1": before } }
+  );
+
+/**
+ * A listing caches its rows, and `getRows` serves a cached row without a read.
+ * The backend's own writes must keep that cache current (#395): a row the push
+ * updates or deletes is not served at its pre-push value afterwards.
+ */
+describe("JsonApiBackend getRows after its own writes (#395)", () => {
+  for (const mode of ["atomic", "per-resource"] as const) {
+    it.effect(`getRows returns a row's post-update value without a re-list, ${mode} path`, () =>
+      Effect.gen(function* () {
+        const server = listingServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+        yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+        yield* backend.applyMutations(context, [
+          mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "second" } }),
+        ]);
+
+        const [row] = yield* backend.getRows(context, "todos", ["1"]);
+        expect((row?.value as { title?: string } | undefined)?.title).toBe("second");
+        // Only the listing and the read before the write reached the server.
+        expect(readsOf(server, "/todos")).toHaveLength(1);
+        expect(readsOf(server, "/todos/1")).toHaveLength(1);
+      })
+    );
+
+    it.effect(`getRows omits a row a listing cached once a push deletes it, ${mode} path`, () =>
+      Effect.gen(function* () {
+        const server = listingServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+        yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+        yield* backend.applyMutations(context, [
+          mutation(1, "todos/delete", { type: "todos", id: "1" }),
+        ]);
+
+        // The row is gone from the cache, so the server answers the read: its 404 omits it.
+        expect(yield* backend.getRows(context, "todos", ["1"])).toEqual([]);
+      })
+    );
+  }
+});

@@ -17,9 +17,9 @@
  *   filter is redundancy over an exact server answer, not correction.
  *   With `includes`, it adds `?include=...` and harvests the compound document's
  *   related rows, serving auto-subscribed `id IN (...)` subsets from that cache.
- * - `getRows` serves row values from the cache `evaluate` populates (the sync
- *   server always evaluates before fetching put rows in the same pull),
- *   falling back to `GET /{type}/{id}`.
+ * - `getRows` serves row values from the cache `evaluate` populates and this
+ *   backend's own writes keep current (the sync server always evaluates before
+ *   fetching put rows in the same pull), falling back to `GET /{type}/{id}`.
  * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
  *   JSON:API write (`Write`: a create, update or delete of one resource —
  *   derived CRUD mutators map directly, and `writes` expresses custom
@@ -36,8 +36,8 @@
  * `oldValues`, as MemoryBackend's do, so topic-derived fan-out (ADR-0023) pokes
  * the windows a row moved away from. A REST API keeps no change token, and
  * nothing here says whether a cached row is still current (a write made
- * elsewhere goes unseen, and this backend's own writes do not refresh its
- * cache), so the old value is always read: each update or delete does one
+ * elsewhere goes unseen; this backend's own writes do keep its cache current,
+ * #395), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
  * creates was absent before the push, so it is not read (`enterBatchCreate`),
  * unless the server refuses the create and a later write of the row needs its
@@ -557,7 +557,7 @@ export const make = (
     const client = yield* HttpClient.HttpClient;
     const encoder = config.query ?? defaultEncoder;
     const includes = config.includes ?? {};
-    // collection → id → most-recently-listed row (warms getRows).
+    // collection → id → the latest value this backend listed or wrote (warms getRows).
     const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
     // collection → ids known complete in cache via a compound `included` harvest.
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
@@ -627,10 +627,9 @@ export const make = (
      * per-resource path the writes before the failed read have already applied,
      * and their hints are lost (see the module header's delivery note).
      *
-     * A cache-hit path would plug in here, returning the cached row without the
-     * GET, once the cache has a freshness signal (a version token, or
-     * invalidation by this backend's own writes). Until then the cache is never
-     * consulted for an old value; see #395.
+     * The cache is never consulted here: it has no freshness signal for a write
+     * made elsewhere (a version token would be needed), and this backend's own
+     * writes keep it current for `getRows` only (#395). So each push reads the row.
      */
     const readBefore = (type: string, id: string): Effect.Effect<JsonApiRow, BackendError> =>
       Effect.gen(function* () {
@@ -736,6 +735,23 @@ export const make = (
         next.set(collection, map);
         return next;
       });
+
+    /**
+     * Bring the cache into line with a write the server has applied (#395): the
+     * row's value after the push's writes so far, or no row once a delete has
+     * applied, so `getRows` never serves a value the push has superseded.
+     */
+    const cacheApplied = (acc: WriteAccumulator, write: Write) => {
+      const current = entryOf(acc, write.type, write.id)?.current ?? Option.none<JsonApiRow>();
+      return Ref.update(cache, (rows) => {
+        const next = new Map(rows);
+        const map = new Map(next.get(write.type) ?? []);
+        if (Option.isSome(current)) map.set(write.id, current.value);
+        else map.delete(write.id);
+        next.set(write.type, map);
+        return next;
+      });
+    };
 
     /** Harvest a compound document's `included` rows; record their ids complete. */
     const harvestIncluded = (
@@ -1091,8 +1107,10 @@ export const make = (
               Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
             )
           );
-          if (outcome._tag === "applied") recordApplied(acc, write, outcome.document);
-          else {
+          if (outcome._tag === "applied") {
+            recordApplied(acc, write, outcome.document);
+            yield* cacheApplied(acc, write);
+          } else {
             const rejection = {
               clientId: mutation.clientId,
               mutationId: mutation.mutationId,
@@ -1201,9 +1219,10 @@ export const make = (
         // Hints from what applied, in push order: each row's value from the
         // result document where the server returned one, else as merged or
         // written. A delete drops an earlier write's value for the row (#369).
-        pending.forEach(({ write }, position) =>
-          recordApplied(acc, write, resultRow(results[position]))
-        );
+        for (const [position, { write }] of pending.entries()) {
+          recordApplied(acc, write, resultRow(results[position]));
+          yield* cacheApplied(acc, write);
+        }
 
         const rejected = [...rejectedAt]
           .toSorted(([a], [b]) => a - b)
