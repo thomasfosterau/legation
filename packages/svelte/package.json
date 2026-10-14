@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@thomasfosterau/legation-effect": "workspace:^",
-    "@thomasfosterau/effect-svelte": "^0.4.1"
+    "@thomasfosterau/effect-svelte": "^0.4.2"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.118",

@@ -234,7 +234,7 @@
       "name": "@thomasfosterau/legation-svelte",
       "version": "0.1.0",
       "dependencies": {
-        "@thomasfosterau/effect-svelte": "^0.4.1",
+        "@thomasfosterau/effect-svelte": "^0.4.2",
         "@thomasfosterau/legation-effect": "workspace:^",
       },
       "devDependencies": {
@@ -607,7 +607,7 @@
 
     "@thomasfosterau/effect-jsonapi": ["@thomasfosterau/effect-jsonapi@0.16.3", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118" } }, "sha512-Nr5rdA/MMLMqwel8XZkruVYkVgzI/pBjkjyV9Lz0ERJcL/7bvQRdsJ0QW1CFiArcRIeNvXk24SiWBe1i1guTMw=="],
 
-    "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.4.1", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118", "svelte": "^5.40.0" } }, "sha512-+Cr1dDFD69S4cdgK+tyQgpKmIOfuar+JGsuD+tqPjw6VnXMfdgXRLC4Lr4jSeVzk0GRHx7WSQLQ85VFqk1v+WA=="],
+    "@thomasfosterau/effect-svelte": ["@thomasfosterau/effect-svelte@0.4.2", "", { "peerDependencies": { "effect": ">=4.0.0-rc.118", "svelte": "^5.40.0" } }, "sha512-coefxy37BNEEEG4sHJM0Q0Akyz3VLKyaS9He5Cm2+Lh11p1GjLtq53eIvVW2P7UnPfd2gySR37AwgezL58ZChA=="],
 
     "@thomasfosterau/legation-browser": ["@thomasfosterau/legation-browser@workspace:packages/browser"],
 
