@@ -5,7 +5,7 @@
  * the browser's, so an abort here is a real one.
  */
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore } from "@thomasfosterau/legation-effect";
+import { ClientStore, Hydration } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -19,8 +19,8 @@ import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
  */
 const failure = { armed: false, puts: 0, failAt: 2 };
 
-/** What the proxied factory saw: each readwrite transaction opened, and each key a put wrote. */
-const tally = { readwrite: 0, putKeys: [] as Array<string> };
+/** What the proxied factory saw: each readwrite and readonly transaction opened, and each key a put wrote. */
+const tally = { readwrite: 0, readonly: 0, putKeys: [] as Array<string> };
 
 const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
   new Proxy(store, {
@@ -57,6 +57,7 @@ const wrapDatabase = (db: IDBDatabase): IDBDatabase =>
       if (prop === "transaction") {
         return (names: string | string[], mode?: IDBTransactionMode) => {
           const tx = target.transaction(names, mode);
+          if (mode === "readonly") tally.readonly += 1;
           if (mode !== "readwrite") return tx;
           tally.readwrite += 1;
           return wrapTransaction(tx);
@@ -365,5 +366,45 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           expect(yield* kv.has(RECORD)).toBe(false);
         }).pipe(Effect.provide(Layer.mergeAll(storeLayer(database), platformLayer(database))));
       })
+  );
+
+  it.effect("a snapshot is one readonly transaction, and reads every part of the replica", () =>
+    Effect.gen(function* () {
+      const database = "atomic-snapshot";
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        yield* store.commitPull!({ lastMutationIds: {}, cookie: "cookie-1", patch: [put("a", 1)] });
+        // One entry parked in the tail by an acknowledgement, one still in the journal.
+        const first = yield* store.appendNext({
+          clientId: "c",
+          mutator: "counter/inc",
+          args: {},
+          createdAt: 0,
+        });
+        yield* store.commitAcknowledgement!([first], { c: first.mutationId });
+        yield* store.appendNext({ clientId: "c", mutator: "counter/inc", args: {}, createdAt: 0 });
+      }).pipe(Effect.provide(storeLayer(database)));
+
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        tally.readonly = 0;
+        tally.readwrite = 0;
+        const state = yield* store.snapshot!;
+        // The whole read is one transaction, and it writes nothing.
+        expect(tally.readonly).toBe(1);
+        expect(tally.readwrite).toBe(0);
+        expect(state.rows.map((entry) => entry.row.id)).toEqual(["a"]);
+        expect(state.cookie).toBe("cookie-1");
+        expect(state.journal.map((m) => m.mutationId)).toEqual([2]);
+        expect(state.unpulled.map((m) => m.mutationId)).toEqual([1]);
+
+        // Dehydrate takes the same single read, so the snapshot it returns is the same state.
+        tally.readonly = 0;
+        const snapshot = yield* Hydration.dehydrate(store);
+        expect(tally.readonly).toBe(1);
+        expect(snapshot.journal.map((m) => m.mutationId)).toEqual([2]);
+        expect(snapshot.unpulled?.map((m) => m.mutationId)).toEqual([1]);
+      }).pipe(Effect.provide(storeLayer(database, failingIndexedDb)));
+    })
   );
 });

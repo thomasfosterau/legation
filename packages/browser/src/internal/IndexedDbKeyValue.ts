@@ -332,9 +332,33 @@ export const keyValueLayer = (
   );
 
 /**
+ * Every string entry in the entries store, read in one `readonly` transaction (#392): a single
+ * request, so the records are one state of the database and a batch another connection commits is
+ * either wholly in them or wholly absent. The platform store writes only strings for the keys this
+ * layer reads, so other values are left out.
+ */
+const readEntries = (
+  connection: Connection
+): Effect.Effect<ReadonlyArray<AtomicKeyValue.KeyValueEntry>, StoreError> =>
+  runRequest<Array<{ readonly key: string; readonly value: unknown }>>(
+    connection,
+    "readonly",
+    { method: "getAll", message: "Failed to read the IndexedDB store" },
+    (store) => store.getAll()
+  ).pipe(
+    Effect.map((records) =>
+      records.flatMap((record) =>
+        typeof record.value === "string" ? [{ key: record.key, value: record.value }] : []
+      )
+    ),
+    Effect.mapError((error) => new StoreError({ message: error.message, cause: error }))
+  );
+
+/**
  * The atomic batch over the same IndexedDB database as the `KeyValueStore`
- * (#393). Keys arrive in full, namespace prefix included, as the store holds
- * them, so the batch needs no knowledge of the prefix.
+ * (#393), with its one-transaction read of the entries (#392). Keys arrive in
+ * full, namespace prefix included, as the store holds them, so the batch needs
+ * no knowledge of the prefix.
  */
 export const atomicKeyValueLayer = (
   database: string | undefined
@@ -347,6 +371,7 @@ export const atomicKeyValueLayer = (
       ).pipe(Effect.orDie);
       return AtomicKeyValue.AtomicKeyValue.of({
         apply: (ops) => (ops.length === 0 ? Effect.void : commitOps(connection, ops)),
+        readAll: readEntries(connection),
       });
     })
   );

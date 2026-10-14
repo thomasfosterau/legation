@@ -26,6 +26,12 @@ export type KeyValueOp =
   | { readonly _tag: "Set"; readonly key: string; readonly value: string }
   | { readonly _tag: "Remove"; readonly key: string };
 
+/** One string entry the backing store holds: its full key and its value. */
+export interface KeyValueEntry {
+  readonly key: string;
+  readonly value: string;
+}
+
 /** The {@link AtomicKeyValue} service: an atomic batch over the store's keys. */
 export interface AtomicKeyValue {
   /**
@@ -37,6 +43,13 @@ export interface AtomicKeyValue {
    * earlier one in the same batch.
    */
   readonly apply: (ops: ReadonlyArray<KeyValueOp>) => Effect.Effect<void, StoreError>;
+  /**
+   * Every string entry the backing store holds, read in one read transaction, so the
+   * result is one state of the store: a batch committed by another connection is
+   * either wholly in it or wholly absent (#392). Optional: a store without it reads
+   * its keys one at a time, which a concurrent connection can straddle.
+   */
+  readonly readAll?: Effect.Effect<ReadonlyArray<KeyValueEntry>, StoreError> | undefined;
 }
 
 /**
