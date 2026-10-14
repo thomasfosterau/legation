@@ -20,6 +20,8 @@
  * - `getRows` serves row values from the cache `evaluate` populates and this
  *   backend's own writes keep current (the sync server always evaluates before
  *   fetching put rows in the same pull), falling back to `GET /{type}/{id}`.
+ *   The cache reflects this instance's own writes only: a write another
+ *   instance makes goes unseen, so `getRows` can serve a superseded row (#447).
  * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
  *   JSON:API write (`Write`: a create, update or delete of one resource —
  *   derived CRUD mutators map directly, and `writes` expresses custom
@@ -36,8 +38,8 @@
  * `oldValues`, as MemoryBackend's do, so topic-derived fan-out (ADR-0023) pokes
  * the windows a row moved away from. A REST API keeps no change token, and
  * nothing here says whether a cached row is still current (a write made
- * elsewhere goes unseen; this backend's own writes do keep its cache current,
- * #395), so the old value is always read: each update or delete does one
+ * elsewhere goes unseen, #447; this backend's own writes do keep its cache
+ * current, #395), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
  * creates was absent before the push, so it is not read (`enterBatchCreate`),
  * unless the server refuses the create and a later write of the row needs its

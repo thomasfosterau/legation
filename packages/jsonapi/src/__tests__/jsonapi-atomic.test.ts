@@ -1566,3 +1566,120 @@ describe("JsonApiBackend getRows after its own writes (#395)", () => {
     );
   }
 });
+
+/** A listing answers rows 1 and 2, both `before`; `write` answers the push's writes, by arrival index. */
+const twoRowServer = (write: (request: Recorded, index: number) => Response) =>
+  makeServer(
+    (request, index) =>
+      request.method === "GET"
+        ? respond(
+            200,
+            {
+              data: ["1", "2"].map((id) => ({ type: "todos", id, attributes: before.attributes })),
+            },
+            jsonHeaders
+          )
+        : write(request, index),
+    { rows: { "1": before, "2": before } }
+  );
+
+/** Updates of rows 1 and 2, each to "second". */
+const updateRowOne = mutation(1, "todos/update", {
+  type: "todos",
+  id: "1",
+  attributes: { title: "second" },
+});
+const updateRowTwo = mutation(2, "todos/update", {
+  type: "todos",
+  id: "2",
+  attributes: { title: "second" },
+});
+const twoUpdates = [updateRowOne, updateRowTwo];
+
+/** The title `getRows` serves for each row, by id. */
+const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
+  Object.fromEntries(
+    rows.map((row) => [row.id, (row.value as { title?: string } | undefined)?.title])
+  );
+
+/**
+ * The cache is updated only by writes the server applied (#395): a rejected or
+ * failed write leaves the row at its pre-push value, and a write that applied
+ * before a failure keeps its new value.
+ */
+describe("JsonApiBackend getRows after rejected and failed writes (#395)", () => {
+  it.effect(
+    "a per-resource update the server rejects with 409 leaves getRows at the pre-push value",
+    () =>
+      Effect.gen(function* () {
+        const server = twoRowServer((request) =>
+          request.path === "/todos/1" && request.method === "PATCH"
+            ? respond(409, { errors: [{ title: "Conflict", detail: "stale" }] }, jsonHeaders)
+            : empty(204)
+        );
+        const backend = yield* makeModeBackend("per-resource", server);
+        yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+        const result = yield* backend.applyMutations(context, [updateRowOne]);
+        expect(result.rejected?.map((entry) => entry.mutationId)).toEqual([1]);
+        expect(titlesOf(yield* backend.getRows(context, "todos", ["1"]))).toEqual({
+          "1": "before",
+        });
+      })
+  );
+
+  it.effect(
+    "an atomic 422 on operation 1 of 2 applies row 1 and leaves row 2 at its pre-push value",
+    () =>
+      Effect.gen(function* () {
+        const server = twoRowServer((request, index) =>
+          index === 0
+            ? rejectionAt(1, "stale")
+            : respond(200, resultsFor(request.body["atomic:operations"]))
+        );
+        const backend = yield* makeModeBackend("atomic", server);
+        yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+        const result = yield* backend.applyMutations(context, twoUpdates);
+        expect(result.rejected?.map((entry) => entry.mutationId)).toEqual([2]);
+        expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+          "1": "second",
+          "2": "before",
+        });
+      })
+  );
+
+  it.effect("a transient 500 on the atomic request leaves both rows at their pre-push value", () =>
+    Effect.gen(function* () {
+      const server = twoRowServer(() => respond(500, { errors: [{ title: "Down" }] }, jsonHeaders));
+      const backend = yield* makeModeBackend("atomic", server);
+      yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+      const failure = yield* Effect.flip(backend.applyMutations(context, twoUpdates));
+      expect(failure._tag).toBe("BackendError");
+      expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+        "1": "before",
+        "2": "before",
+      });
+    })
+  );
+
+  it.effect(
+    "a per-resource write applied before a 500 keeps its value, and the failed row stays at its pre-push value",
+    () =>
+      Effect.gen(function* () {
+        const server = twoRowServer((_request, index) =>
+          index === 0 ? empty(204) : respond(500, { errors: [{ title: "Down" }] }, jsonHeaders)
+        );
+        const backend = yield* makeModeBackend("per-resource", server);
+        yield* backend.evaluate(context, Subset.make({ collection: "todos" }));
+
+        const failure = yield* Effect.flip(backend.applyMutations(context, twoUpdates));
+        expect(failure._tag).toBe("BackendError");
+        expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+          "1": "second",
+          "2": "before",
+        });
+      })
+  );
+});
