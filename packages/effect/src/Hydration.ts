@@ -50,7 +50,14 @@
 
 import { Effect, Schema } from "effect";
 import * as ClientEngineModule from "./ClientEngine.js";
-import { ClientStore, freezePending, makeMemory, StoredRowSchema } from "./ClientStore.js";
+import {
+  ClientStore,
+  freezePending,
+  makeMemory,
+  type ReplicaState,
+  type StoredRow,
+  StoredRowSchema,
+} from "./ClientStore.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
@@ -99,27 +106,46 @@ export const SnapshotFromJson = Schema.fromJsonString(SnapshotSchema);
 const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 
 /**
+ * The replica read member by member: the path for a store without `snapshot`. Its reads are not one
+ * state, so a pull or a push acknowledgement can land between them (#392).
+ */
+const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError> =>
+  Effect.gen(function* () {
+    const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
+    for (const collection of yield* store.listCollections) {
+      for (const row of yield* store.listRows(collection)) rows.push({ collection, row });
+    }
+    return {
+      rows,
+      cookie: yield* store.getCookie,
+      journal: yield* store.pendingMutations,
+      unpulled: yield* store.unpulled,
+    };
+  });
+
+/**
  * Read a {@link ClientStore} into a {@link Snapshot}: enumerate the collections,
  * gather their confirmed rows (flattened with the collection), the cookie, the
  * journal, and the unpulled tail. The tail is left out when empty, so a
  * snapshot without one keeps its previous shape.
+ *
+ * The four parts are one state when the store offers {@link ClientStore.snapshot}
+ * (the memory and key-value stores do): a pull or a push acknowledgement lands wholly
+ * before or wholly after the read (#392). A store without it is read member by member.
  */
 export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreError> =>
   Effect.gen(function* () {
-    const rows: Array<SnapshotRow> = [];
-    for (const collection of yield* store.listCollections) {
-      for (const row of yield* store.listRows(collection)) {
-        rows.push({ collection, id: row.id, version: row.version, value: row.value });
-      }
-    }
-    const cookie = yield* store.getCookie;
-    const journal = yield* store.pendingMutations;
-    const unpulled = yield* store.unpulled;
+    const state = yield* store.snapshot ?? readMembers(store);
     return {
-      rows,
-      ...(cookie !== undefined ? { cookie } : {}),
-      journal,
-      ...(unpulled.length > 0 ? { unpulled } : {}),
+      rows: state.rows.map(({ collection, row }) => ({
+        collection,
+        id: row.id,
+        version: row.version,
+        value: row.value,
+      })),
+      ...(state.cookie !== undefined ? { cookie: state.cookie } : {}),
+      journal: state.journal,
+      ...(state.unpulled.length > 0 ? { unpulled: state.unpulled } : {}),
     };
   });
 
@@ -165,10 +191,10 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
       // The tail's effects are already in the rows, and the next pull releases it (#336).
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
-      // `dehydrate` reads the journal and the tail in two calls, so a push acknowledgement
-      // between them puts an entry in both. The tail copy wins: it is not journaled again (#387).
-      // The store's tail is read too, since an entry the store already parked can sit in a snapshot's
-      // journal; `appendMutation` refuses such an entry, so it must be skipped here.
+      // A snapshot read member by member (a store without `snapshot`) can hold a push acknowledgement's
+      // entry in both its journal and its tail, since the two reads are not one state. The tail copy wins:
+      // it is not journaled again (#387). The store's tail is read too, since an entry the store already
+      // parked can sit in a snapshot's journal; `appendMutation` refuses such an entry, so it must be skipped.
       const parked = new Set(
         (yield* store.unpulled).map((m) => `${m.clientId}\u0000${m.mutationId}`)
       );

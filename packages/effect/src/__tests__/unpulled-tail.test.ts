@@ -6,7 +6,18 @@
  * windows are exercised by failing the store at each step and reopening it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Logger, Ref, Schedule, Schema, Tracer } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Ref,
+  Schedule,
+  Schema,
+  Tracer,
+} from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -916,8 +927,10 @@ describe("the tail's crash windows and interleavings (#387)", () => {
 
       // The acknowledgement lands between dehydrate's journal read and its tail read.
       const acked = yield* Ref.make(false);
+      // The member-by-member path (a store without `snapshot`): the race is between its reads.
       const racing: ClientStore = {
         ...source,
+        snapshot: undefined,
         unpulled: Effect.suspend(() => Ref.getAndSet(acked, true)).pipe(
           Effect.flatMap((already) =>
             already
@@ -2030,5 +2043,147 @@ describe("a push that takes the tail to half the bound pulls ahead of it (#337)"
         expect(warnings).toEqual([]);
       })
     )
+  );
+});
+
+describe("dehydrate reads one state of the store (#392)", () => {
+  // A KeyValueStore whose first read of `parkKey` after `armed` is set signals `reached` and waits on
+  // `release`. The cookie is read between the rows and the journal, and unlocked, so parking there
+  // leaves the snapshot's earlier reads behind and its later ones ahead of whatever the test lands.
+  const parkedAt = (
+    base: KeyValueStore.KeyValueStore,
+    parkKey: string,
+    armed: Ref.Ref<boolean>,
+    reached: Deferred.Deferred<void>,
+    release: Deferred.Deferred<void>
+  ) =>
+    KeyValueStore.KeyValueStore.of({
+      ...base,
+      get: (key) =>
+        Effect.gen(function* () {
+          if (key === parkKey && (yield* Ref.getAndSet(armed, false))) {
+            yield* Deferred.succeed(reached, undefined);
+            yield* Deferred.await(release);
+          }
+          return yield* base.get(key);
+        }),
+    });
+
+  it.effect("a pull that lands between the snapshot's reads is seen whole or not at all", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const base = yield* KeyValueStore.KeyValueStore;
+      const armed = yield* Ref.make(false);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const source = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(
+          KeyValueStore.KeyValueStore,
+          parkedAt(base, "legation/cookie", armed, reached, release)
+        )
+      );
+      const engine = yield* makeCounterEngine(server, source);
+      yield* engine.subscribe(countersSubset);
+      yield* engine.mutate("counter/inc", { id: "c" });
+      // Acknowledged and parked in the tail: the effect is shown by the overlay, and no row holds it yet.
+      yield* engine.push;
+      expect(yield* tailOf(source)).toEqual(["client-a#1"]);
+
+      yield* Ref.set(armed, true);
+      const snapshotting = yield* Effect.forkChild(Hydration.dehydrate(source));
+      yield* Deferred.await(reached);
+      // The pull lands now, if nothing holds it off: it writes the row, the cookie and the release.
+      const pulling = yield* Effect.forkChild(engine.pull);
+      for (let i = 0; i < 200; i++) yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      const snapshot = yield* Fiber.join(snapshotting);
+      yield* Fiber.join(pulling);
+      expect(yield* counterValue(engine)).toBe(1);
+
+      // Hydrated into a fresh store with no pull, the view shows the same count as the source.
+      // A fresh backing store: the target shares nothing with the source.
+      const target = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provide(Layer.fresh(KeyValueStore.layerMemory))
+      );
+      yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+      const viewer = yield* makeCounterEngine(server, target);
+      yield* viewer.subscribe(countersSubset);
+      expect(yield* counterValue(viewer)).toBe(1);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("a push acknowledgement that lands between the snapshot's reads is seen whole", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const base = yield* KeyValueStore.KeyValueStore;
+      const armed = yield* Ref.make(false);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const source = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provideService(
+          KeyValueStore.KeyValueStore,
+          parkedAt(base, "legation/cookie", armed, reached, release)
+        )
+      );
+      const engine = yield* makeCounterEngine(server, source);
+      yield* engine.subscribe(countersSubset);
+      // Journaled, not yet pushed: the acknowledgement is what moves it from the journal to the tail.
+      yield* engine.mutate("counter/inc", { id: "c" });
+
+      yield* Ref.set(armed, true);
+      const snapshotting = yield* Effect.forkChild(Hydration.dehydrate(source));
+      yield* Deferred.await(reached);
+      const pushing = yield* Effect.forkChild(engine.push);
+      for (let i = 0; i < 200; i++) yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      const snapshot = yield* Fiber.join(snapshotting);
+      yield* Fiber.join(pushing);
+      expect(yield* tailOf(source)).toEqual(["client-a#1"]);
+      // The entry is in the snapshot exactly once, in the journal or in the tail, never both.
+      expect(snapshot.journal.length + (snapshot.unpulled?.length ?? 0)).toBe(1);
+
+      // A fresh backing store: the target shares nothing with the source.
+      const target = yield* ClientStoreModule.makeKeyValue().pipe(
+        Effect.provide(Layer.fresh(KeyValueStore.layerMemory))
+      );
+      yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+      const viewer = yield* makeCounterEngine(server, target);
+      yield* viewer.subscribe(countersSubset);
+      expect(yield* counterValue(viewer)).toBe(1);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  // Every part of the snapshot is the member's read, in a state with rows, a cookie, a tail and a journal.
+  const expectSnapshotIsTheMembers = (store: ClientStore) =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const engine = yield* makeCounterEngine(server, store);
+      yield* engine.subscribe(countersSubset);
+      yield* engine.mutate("counter/inc", { id: "c" });
+      yield* engine.push;
+      yield* engine.pull;
+      yield* engine.mutate("counter/inc", { id: "c" });
+      yield* engine.push;
+      yield* engine.mutate("counter/inc", { id: "c" });
+
+      const state = yield* store.snapshot!;
+      expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
+      expect(state.cookie).toBe(yield* store.getCookie);
+      expect(state.journal).toEqual(yield* store.pendingMutations);
+      expect(state.unpulled).toEqual(yield* store.unpulled);
+      expect(state.unpulled).toHaveLength(1);
+      expect(state.journal).toHaveLength(1);
+    });
+
+  it.effect("the memory store's snapshot is the state its members read", () =>
+    Effect.gen(function* () {
+      yield* expectSnapshotIsTheMembers(yield* ClientStoreModule.makeMemory);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("the key-value store's snapshot is the state its members read", () =>
+    Effect.gen(function* () {
+      yield* expectSnapshotIsTheMembers(yield* ClientStoreModule.makeKeyValue());
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 });

@@ -19,7 +19,7 @@
 
 import { Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/persistence";
-import { AtomicKeyValue, type KeyValueOp } from "./AtomicKeyValue.js";
+import { AtomicKeyValue, type KeyValueEntry, type KeyValueOp } from "./AtomicKeyValue.js";
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
@@ -119,6 +119,18 @@ const planCompaction = <T extends Numbered>(
   }
   return { result: { dropped, renumbered }, journal: after, counter: next };
 };
+
+/** A replica read as one state: the rows, the cookie, the journal and the unpulled tail (see {@link ClientStore.snapshot}, #392). */
+export interface ReplicaState {
+  /** Every confirmed row, tagged with the collection it belongs to. */
+  readonly rows: ReadonlyArray<{ readonly collection: string; readonly row: StoredRow }>;
+  /** The pull cookie, or `undefined` when none is stored. */
+  readonly cookie: string | undefined;
+  /** The pending-mutation journal, in order. */
+  readonly journal: ReadonlyArray<Mutation>;
+  /** The acknowledged-but-unpulled tail, oldest first. */
+  readonly unpulled: ReadonlyArray<Mutation>;
+}
 
 /** A client's durable state: confirmed rows, the pending-mutation journal and the sync cookie. */
 export interface ClientStore {
@@ -331,6 +343,18 @@ export interface ClientStore {
   readonly commitTailRelease?:
     | ((lastMutationIds: Readonly<Record<string, number>>) => Effect.Effect<void, StoreError>)
     | undefined;
+
+  // Whole-replica read (#392)
+  /**
+   * The replica read as one state: the confirmed rows, the pull cookie, the journal and the unpulled
+   * tail, with nothing landing between the reads, so the result is the state at one moment. A pull or a
+   * push acknowledgement is either wholly before it or wholly after it. Optional: a store without it is
+   * read member by member, and that read can straddle a pull or an acknowledgement.
+   *
+   * The memory store reads under its lock. The key-value store reads under its lock as well, and in one
+   * read transaction when its {@link AtomicKeyValue} offers `readAll`, as the browser's IndexedDB binding does.
+   */
+  readonly snapshot?: Effect.Effect<ReplicaState, StoreError> | undefined;
 
   // Sync bookkeeping
   readonly getCookie: Effect.Effect<string | undefined, StoreError>;
@@ -817,9 +841,27 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     // Drops the release record with the tail, as the key-value store removes its record (#387).
     clearUnpulled: locked(Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, undefined)))),
 
+    // One read under the lock: every writer below takes the same lock, so the four reads see one state (#392).
+    snapshot: locked(
+      Effect.gen(function* () {
+        const byCollection = yield* Ref.get(rows);
+        const flat: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
+        for (const [collection, collectionRows] of byCollection) {
+          for (const row of collectionRows.values()) flat.push({ collection, row });
+        }
+        return {
+          rows: flat,
+          cookie: yield* Ref.get(cookie),
+          journal: yield* Ref.get(journal),
+          unpulled: yield* Ref.get(tail),
+        };
+      })
+    ),
+
     getCookie: Ref.get(cookie),
-    setCookie: (value) => Ref.set(cookie, value),
-    clearCookie: Ref.set(cookie, undefined),
+    // Under the lock, so a snapshot's read of the cookie is one state with its rows and journal (#392).
+    setCookie: (value) => locked(Ref.set(cookie, value)),
+    clearCookie: locked(Ref.set(cookie, undefined)),
 
     getIdentity: Ref.get(identity),
     setIdentity: (fingerprint) => Ref.set(identity, fingerprint),
@@ -1222,6 +1264,91 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
  * of a silent `as A` cast. Only the *envelopes* are validated — row values
  * and mutation args stay `Unknown` and round-trip untouched (ADR-0014).
  */
+/** A typed read of one key: the value decoded through `codec`, or `undefined` when absent. */
+type KeyReader = <A>(
+  key: string,
+  codec: Schema.Codec<A, string>
+) => Effect.Effect<A | undefined, StoreError>;
+
+/** A {@link KeyReader} over one read of the entries, decoding each value as the store reads it. */
+const readerOver =
+  (entries: ReadonlyMap<string, string>): KeyReader =>
+  <A>(key: string, codec: Schema.Codec<A, string>) => {
+    const raw = entries.get(key);
+    return raw === undefined
+      ? Effect.succeed(undefined)
+      : Schema.decodeUnknownEffect(codec)(raw).pipe(
+          Effect.mapError(
+            (cause) => new StoreError({ message: `Corrupt persisted state at "${key}"`, cause })
+          )
+        );
+  };
+
+// The reads of a replica's state, through `read`: the store's own keys, or one read of every entry (#392).
+const collectionsWith = (read: KeyReader) =>
+  read("collections", CollectionsFromJson).pipe(Effect.map((list) => list ?? []));
+
+const listRowsWith = (
+  read: KeyReader,
+  collection: string
+): Effect.Effect<ReadonlyArray<StoredRow>, StoreError> =>
+  Effect.gen(function* () {
+    const ids = yield* read(rowIndexKey(collection), IdsFromJson);
+    if (ids === undefined) {
+      const legacy = yield* read(legacyRowsKey(collection), RowMapFromJson);
+      return legacy === undefined ? [] : Object.values(legacy);
+    }
+    const rows: Array<StoredRow> = [];
+    for (const id of ids) {
+      const row = yield* read(rowKey(collection, id), RowFromJson);
+      if (row !== undefined) rows.push(row);
+    }
+    return rows;
+  });
+
+const pendingMutationsWith = (
+  read: KeyReader
+): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
+  Effect.gen(function* () {
+    const index = yield* read("journalIndex", JournalIndexFromJson);
+    if (index === undefined) {
+      const legacy = yield* read(LEGACY_JOURNAL_KEY, JournalFromJson);
+      return legacy ?? [];
+    }
+    const mutations: Array<Mutation> = [];
+    for (const entry of index) {
+      const body = yield* read(journalBodyKey(entry.clientId, entry.mutationId), MutationFromJson);
+      if (body !== undefined) mutations.push(body);
+    }
+    return mutations;
+  });
+
+const unpulledWith = (read: KeyReader): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
+  Effect.gen(function* () {
+    const index = (yield* read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+    const mutations: Array<Mutation> = [];
+    for (const entry of index) {
+      const body = yield* read(unpulledBodyKey(entry.clientId, entry.mutationId), MutationFromJson);
+      if (body !== undefined) mutations.push(body);
+    }
+    return mutations;
+  });
+
+// The whole replica, read through `read`: the same reads the members make, in one order (#392).
+const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreError> =>
+  Effect.gen(function* () {
+    const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
+    for (const collection of yield* collectionsWith(read)) {
+      for (const row of yield* listRowsWith(read, collection)) rows.push({ collection, row });
+    }
+    return {
+      rows,
+      cookie: yield* read("cookie", Schema.String),
+      journal: yield* pendingMutationsWith(read),
+      unpulled: yield* unpulledWith(read),
+    };
+  });
+
 export const makeKeyValue = (
   options?: KeyValueOptions
 ): Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> =>
@@ -1272,9 +1399,7 @@ export const makeKeyValue = (
 
     const rowIndex = (collection: string): Effect.Effect<ReadonlyArray<string>, StoreError> =>
       readDecoded(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
-    const collections = readDecoded("collections", CollectionsFromJson).pipe(
-      Effect.map((list) => list ?? [])
-    );
+    const collections = collectionsWith(readDecoded);
     const trackCollection = (collection: string) =>
       collections.pipe(
         Effect.flatMap((list) =>
@@ -1345,39 +1470,9 @@ export const makeKeyValue = (
     // fails as a StoreError (envelope-validated). When no index exists, fall
     // back to a legacy blob at `rows/{collection}` — the read side of the
     // transparent migration, so a store not yet split still reads correctly.
-    const listRowsOf = (collection: string): Effect.Effect<ReadonlyArray<StoredRow>, StoreError> =>
-      Effect.gen(function* () {
-        const ids = yield* readDecoded(rowIndexKey(collection), IdsFromJson);
-        if (ids === undefined) {
-          const legacy = yield* readDecoded(legacyRowsKey(collection), RowMapFromJson);
-          return legacy === undefined ? [] : Object.values(legacy);
-        }
-        const rows: Array<StoredRow> = [];
-        for (const id of ids) {
-          const row = yield* readDecoded(rowKey(collection, id), RowFromJson);
-          if (row !== undefined) rows.push(row);
-        }
-        return rows;
-      });
+    const listRowsOf = (collection: string) => listRowsWith(readDecoded, collection);
 
-    const pendingMutationsOf: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
-      function* () {
-        const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
-        if (index === undefined) {
-          const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
-          return legacy ?? [];
-        }
-        const mutations: Array<Mutation> = [];
-        for (const entry of index) {
-          const body = yield* readDecoded(
-            journalBodyKey(entry.clientId, entry.mutationId),
-            MutationFromJson
-          );
-          if (body !== undefined) mutations.push(body);
-        }
-        return mutations;
-      }
-    );
+    const pendingMutationsOf = pendingMutationsWith(readDecoded);
 
     // `pendingMutationsOf`'s count from the index alone: one read, no bodies
     // (#260). A store not yet migrated holds the legacy blob instead.
@@ -1407,17 +1502,7 @@ export const makeKeyValue = (
     const unpulledIndexOf = readDecoded(UNPULLED_INDEX_KEY, JournalIndexFromJson).pipe(
       Effect.map((entries) => entries ?? [])
     );
-    const unpulledOf: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(function* () {
-      const mutations: Array<Mutation> = [];
-      for (const entry of yield* unpulledIndexOf) {
-        const body = yield* readDecoded(
-          unpulledBodyKey(entry.clientId, entry.mutationId),
-          MutationFromJson
-        );
-        if (body !== undefined) mutations.push(body);
-      }
-      return mutations;
-    });
+    const unpulledOf = unpulledWith(readDecoded);
 
     const parkUnpulledInner = (
       mutations: ReadonlyArray<Mutation>
@@ -2043,8 +2128,29 @@ export const makeKeyValue = (
               ),
           };
 
+    // The snapshot (#392). Under `locked`, which excludes this store's writers. With an AtomicKeyValue that
+    // reads every entry in one transaction, the state is decoded from that one read, so a batch another
+    // connection commits cannot land between the reads either.
+    const readAll = atomic?.readAll;
+    const replicaState: Effect.Effect<ReplicaState, StoreError> =
+      readAll === undefined
+        ? replicaStateWith(readDecoded)
+        : readAll.pipe(
+            Effect.map((entries: ReadonlyArray<KeyValueEntry>) =>
+              readerOver(
+                new Map(
+                  entries
+                    .filter((entry) => entry.key.startsWith(namespace))
+                    .map((entry) => [entry.key.slice(namespace.length), entry.value] as const)
+                )
+              )
+            ),
+            Effect.flatMap(replicaStateWith)
+          );
+
     return ClientStore.of({
       ...batchMembers,
+      snapshot: locked(settleCompaction.pipe(Effect.andThen(replicaState))),
       getRow: (collection, id) => unsealed(readDecoded(rowKey(collection, id), RowFromJson)),
       listRows: (collection) => unsealed(listRowsOf(collection)),
       listCollections: unsealed(collections),
