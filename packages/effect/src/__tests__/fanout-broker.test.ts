@@ -126,7 +126,12 @@ describe("FanoutTopics", () => {
 const waitingPoke = (pokes: FanoutBroker.TopicPokes) =>
   Effect.gen(function* () {
     const taker = yield* Effect.forkChild(pokes.take);
-    yield* TestClock.adjust("0 millis");
+    // Zero-length turns, not one: a routed batch is handed over within a few
+    // scheduler turns however the taker is queued, and the clock does not move,
+    // so a batch still missing after the bound is genuinely not routed.
+    for (let turn = 0; turn < 50 && taker.pollUnsafe() === undefined; turn++) {
+      yield* TestClock.adjust("0 millis");
+    }
     const exit = taker.pollUnsafe();
     yield* Fiber.interrupt(taker);
     return exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;

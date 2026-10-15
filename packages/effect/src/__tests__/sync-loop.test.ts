@@ -121,6 +121,16 @@ const advanceUntil = <E>(
     return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
   });
 
+// Wait for a condition without moving the clock. Each step is a zero-length
+// `TestClock.adjust`, which only yields to the forked fibres, so a leg that
+// needs several scheduler turns to finish (its own yields, or forked children)
+// is waited on for as long as it takes, while the virtual time stays put. The
+// test then asserts the window's edge on the clock, so "not a millisecond
+// later" is still checked: a push that starts late never satisfies the
+// condition, and the bound fails.
+const settle = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
+  advanceUntil(condition, Duration.millis(0), maxSteps);
+
 const atLeast = (counter: Ref.Ref<number>, n: number) =>
   Effect.map(Ref.get(counter), (count) => count >= n);
 
@@ -149,6 +159,7 @@ describe("sync-loop scheduling (#33)", () => {
       // The window closes on the next millisecond: the journal drains without
       // an app push, and not a millisecond later.
       yield* TestClock.adjust(Duration.millis(1));
+      yield* settle(atLeast(push, 1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
@@ -187,6 +198,7 @@ describe("sync-loop scheduling (#33)", () => {
             // the mutation triggered), the journal drains once the window has
             // elapsed.
             yield* TestClock.adjust(Duration.millis(30));
+            yield* settle(atLeast(push, 1));
             expect(yield* store.pendingMutations).toEqual([]);
             expect(yield* Ref.get(push)).toBe(1);
           })
@@ -247,6 +259,7 @@ describe("sync-loop scheduling (#33)", () => {
       // The window closes on the next millisecond: exactly one push drains all
       // three, and not a millisecond later.
       yield* TestClock.adjust(Duration.millis(1));
+      yield* settle(atLeast(push, 1));
       expect(yield* Ref.get(push)).toBe(1);
       expect(yield* store.pendingMutations).toEqual([]);
     })
