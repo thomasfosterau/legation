@@ -23,6 +23,7 @@ import {
   MemoryBackend,
   Mutator,
   Node,
+  Query,
   QueryError,
   Server,
   Transport,
@@ -171,6 +172,9 @@ interface Facade {
 }
 
 /** A façade over the replica, with the shell's pins applied and pulled. */
+/** The relational pin of the fixture: products with their variants. */
+const variantsOfProducts: Query.Read = { collection: "products", include: { variants: true } };
+
 const makeFacade = (
   pins: ReadonlyArray<string>,
   options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl">> = {}
@@ -178,7 +182,14 @@ const makeFacade = (
   Effect.gen(function* () {
     const { client, engine, store } = yield* makeReplica;
     for (const url of pins) yield* client.subscribe(url);
-    yield* engine.pull;
+    // A relational pin registers its edge windows once its rows are observed, and a pull marks
+    // them (#426): pull until the relational pin of the fixture is covered, so the replica holds
+    // the rows a covered read links to. Each pull is in memory, so no time passes between them.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      yield* engine.pull;
+      yield* Effect.yieldNow;
+      if ((yield* client.coverageOf(variantsOfProducts))._tag === "Covered") break;
+    }
     const online = { current: true };
     const handler = JsonApiFacade.fetchHandler({
       nodes,
@@ -388,6 +399,25 @@ describe("JsonApiFacade", () => {
         // needs the variants collection whole, which this shell never pinned.
         const { handler } = yield* makeFacade(["/jsonapi/products"]);
         expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toBeUndefined();
+      })
+    )
+  );
+
+  it.effect("a registered but unpulled covered read is a 503 offline when offline (#426)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { handler, client, online } = yield* makeFacade(["/jsonapi/products"]);
+        // The variants pin is registered after the last pull: it covers its read, but its rows are not
+        // in the replica yet, so the façade must not answer from the replica.
+        yield* client.subscribe("/jsonapi/variants");
+        const request = jsonApi("/jsonapi/variants");
+        online.current = false;
+        const response = yield* handler.handle(request);
+        expect(response!.status).toBe(503);
+        expect(yield* body(response!)).toEqual(JsonApiFacade.offlineDocument);
+        // Online, the same read is forwarded to the server rather than answered locally.
+        online.current = true;
+        expect(yield* handler.handle(request)).toBeUndefined();
       })
     )
   );

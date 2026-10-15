@@ -87,10 +87,11 @@ export interface ClientView {
   /**
    * The pulled summary of a registration (#426): the registration under `key`
    * (the subset hash, or the relational key of {@link MirrorProtocol.relatedKey})
-   * has its root window and each edge collection's windows in the replica. A
-   * Client answers a covered read from the replica only when this answers for
-   * the read's collections (`Coverage.pulledFor`). Over an engine the marks
-   * are kept here; a `Mirror` has the host's answer, sent over the channel.
+   * with each window it holds and whether that window's rows are in the
+   * replica. A Client answers a covered read from the replica only when the
+   * windows the read's rows link to are pulled (`Coverage.pulledFor`). Over an
+   * engine the marks are kept here; a `Mirror` has the host's answer, sent over
+   * the channel.
    */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
   /** Register/release a subscription (synced by the engine host). */
@@ -204,7 +205,14 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     pulled: (key) => marks.pulled(key),
     subscribe: (subset) => {
       const key = Subset.hash(subset);
-      return marks.open(key, subset).pipe(Effect.andThen(marks.wrap(key).subscribe(subset)));
+      return marks.open(key, subset).pipe(
+        Effect.andThen(
+          marks
+            .wrap(key)
+            .subscribe(subset)
+            .pipe(Effect.tapError(() => marks.close(key)))
+        )
+      );
     },
     unsubscribe: (subset) => {
       const key = Subset.hash(subset);
