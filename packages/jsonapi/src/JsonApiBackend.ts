@@ -187,6 +187,12 @@ export const versionOf = Hash.contentHash;
 
 const backendError = (message: string) => (cause: unknown) => new BackendError({ message, cause });
 
+/** The refusal for a mutation past its client's next expected id (Backend.ts guarantee 1). */
+const mutationGap = (clientId: string, expected: number, got: number) =>
+  new BackendError({
+    message: `Mutation-id gap for client "${clientId}": expected ${expected}, got ${got}`,
+  });
+
 /** Append `?`/`&`-joined params to an existing query string. */
 const appendQuery = (query: string, extra: string): string =>
   extra === "" ? query : query === "" ? `?${extra}` : `${query}&${extra}`;
@@ -1034,9 +1040,7 @@ export const make = (
           const last = expected.get(mutation.clientId) ?? 0;
           if (mutation.mutationId <= last) continue; // idempotent (in-session)
           if (strict && mutation.mutationId > last + 1)
-            return yield* new BackendError({
-              message: `Mutation-id gap for client "${mutation.clientId}": expected ${last + 1}, got ${mutation.mutationId}`,
-            });
+            return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
           expected.set(mutation.clientId, mutation.mutationId);
           batch.push({ mutation, write: yield* writeFor(mutation) });
         }
@@ -1046,13 +1050,16 @@ export const make = (
     /**
      * The mutations a per-resource push still has to send, in order. A mutation
      * at or below its client's acknowledged id was already applied, so it is
-     * skipped (idempotent, in-session). Unlike `unacknowledged`, nothing is
-     * decoded and no gap is refused here: the send loop does both, in order.
+     * skipped (idempotent, in-session). A mutation past the next expected id is a
+     * gap, refused with a `BackendError` before any write of the push is sent, as
+     * the atomic path refuses it (`unacknowledged`, strict). Unlike
+     * `unacknowledged`, nothing is decoded here: the send loop decodes each write
+     * in turn, so an undecodable mutation still fails at its own place in the push.
      */
     const pendingEach = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<PushedMutation>
-    ): Effect.Effect<ReadonlyArray<PushedMutation>> =>
+    ): Effect.Effect<ReadonlyArray<PushedMutation>, BackendError> =>
       Effect.gen(function* () {
         const expected = new Map<string, number>(
           (yield* Ref.get(ledger)).get(context.clientGroupId) ?? []
@@ -1061,6 +1068,8 @@ export const make = (
         for (const mutation of mutations) {
           const last = expected.get(mutation.clientId) ?? 0;
           if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          if (mutation.mutationId > last + 1)
+            return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
           expected.set(mutation.clientId, mutation.mutationId);
           pending.push(mutation);
         }

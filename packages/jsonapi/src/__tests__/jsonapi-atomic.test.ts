@@ -1319,6 +1319,37 @@ describe("JsonApiBackend and a mutation whose args do not decode", () => {
   );
 });
 
+/**
+ * A mutation-id gap is refused before the push sends anything, on both paths
+ * (Backend.ts guarantee 1). The per-resource path used to acknowledge a later
+ * mutation while the skipped one was never applied.
+ */
+describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
+  for (const mode of ["atomic", "per-resource"] as const) {
+    it.effect(`a push that skips an id is refused and sends nothing, ${mode} path`, () =>
+      Effect.gen(function* () {
+        const server = modeServer(mode);
+        const backend = yield* makeModeBackend(mode, server);
+        yield* backend.applyMutations(context, [
+          mutation(1, "todos/create", { type: "todos", id: "2", attributes: { title: "one" } }),
+        ]);
+        const writesBefore = writesOf(server).length;
+
+        const failure = yield* Effect.flip(
+          backend.applyMutations(context, [
+            mutation(3, "todos/create", { type: "todos", id: "3", attributes: { title: "three" } }),
+            mutation(4, "todos/create", { type: "todos", id: "4", attributes: { title: "four" } }),
+          ])
+        );
+        expect(failure._tag).toBe("BackendError");
+        expect(failure.message).toBe('Mutation-id gap for client "client-1": expected 2, got 3');
+        expect(writesOf(server)).toHaveLength(writesBefore);
+        expect(yield* backend.lastMutationIds(context)).toEqual({ "client-1": 1 });
+      })
+    );
+  }
+});
+
 describe("JsonApiSync.layer atomic detection", () => {
   /** A stateful server answering both the per-resource and the atomic routes. */
   const makeStatefulServer = () => {
