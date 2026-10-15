@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-node",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Node-runtime adapters for the legation engine: serving the default RPC sync transport over HTTP and WebSocket",
   "type": "module",
   "main": "./dist/index.js",

@@ -121,7 +121,7 @@
     },
     "packages/browser": {
       "name": "@thomasfosterau/legation-browser",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/legation-effect": "workspace:^",
       },
@@ -138,7 +138,7 @@
     },
     "packages/cloudflare": {
       "name": "@thomasfosterau/legation-cloudflare",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/legation-effect": "workspace:^",
         "@thomasfosterau/legation-sql": "workspace:^",
@@ -154,7 +154,7 @@
     },
     "packages/devtools": {
       "name": "@thomasfosterau/legation-devtools",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/legation-effect": "workspace:^",
       },
@@ -173,7 +173,7 @@
     },
     "packages/effect": {
       "name": "@thomasfosterau/legation-effect",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
@@ -184,7 +184,7 @@
     },
     "packages/jsonapi": {
       "name": "@thomasfosterau/legation-jsonapi",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/effect-jsonapi": "^0.16.3",
         "@thomasfosterau/legation-effect": "workspace:^",
@@ -199,7 +199,7 @@
     },
     "packages/node": {
       "name": "@thomasfosterau/legation-node",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/legation-effect": "workspace:^",
       },
@@ -216,7 +216,7 @@
     },
     "packages/sql": {
       "name": "@thomasfosterau/legation-sql",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/legation-effect": "workspace:^",
       },
@@ -232,7 +232,7 @@
     },
     "packages/svelte": {
       "name": "@thomasfosterau/legation-svelte",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@thomasfosterau/effect-svelte": "^0.4.2",
         "@thomasfosterau/legation-effect": "workspace:^",
