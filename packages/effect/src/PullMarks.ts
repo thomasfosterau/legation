@@ -13,10 +13,10 @@
  *
  * A registration (its ledger key: the subset hash, or the relational key of
  * {@link MirrorProtocol.relatedKey}) reports a {@link Coverage.Pulled}
- * summary: whether its root window is pulled, and, per edge collection,
- * whether every edge window of that collection is. A read is covered only
- * when the summary answers for the collections the read reads through
- * (`Coverage.pulledFor`).
+ * summary: each window it holds, root included, with its mark. A read is
+ * covered only when the windows its rows link to are pulled
+ * (`Coverage.pulledFor`); an edge window the registration does not hold is
+ * not pulled, so a root that is pulled alone never covers a relational read.
  *
  * Marks are recomputed on every construction, never persisted: after a
  * restart nothing is pulled and a covered read is forwarded until a pull
@@ -32,7 +32,11 @@ import * as Subset from "./Subset.js";
 interface Window {
   readonly subset: Subset.Subset;
   readonly holds: number;
-  /** The engine's `started` count when the window was first held; absent until then. */
+  /**
+   * The engine's `started` count when the window was first held; absent until then.
+   * A window held by several registrations keeps the mark of its first hold: it is
+   * one engine window, so one pull marks it for all of them (N1, #426).
+   */
   readonly since: number | undefined;
 }
 
@@ -81,22 +85,13 @@ const summarize = (state: State, key: string, applied: number): Coverage.Pulled 
     .map((window) => window.subset);
   const pulled = (window: Window): boolean =>
     ownPulled(window) || pulledSubsets.some((subset) => Coverage.covers(subset, window.subset));
-  const rootKey = Subset.hash(owner.root);
-  const rootWindow = state.windows.get(rootKey);
-  const collections = new Map<string, boolean>();
-  for (const member of [...owner.members.keys()].toSorted()) {
-    if (member === rootKey) continue;
+  // Every window the registration holds, root included, with its own mark: a read
+  // is judged only by the windows its rows link to (`Coverage.pulledFor`).
+  const windows = [...owner.members.keys()].toSorted().flatMap((member) => {
     const window = state.windows.get(member);
-    if (window === undefined) continue;
-    const collection = window.subset.collection;
-    collections.set(collection, (collections.get(collection) ?? true) && pulled(window));
-  }
-  return {
-    root: rootWindow !== undefined && pulled(rootWindow),
-    collections: Object.fromEntries(
-      [...collections].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    ),
-  };
+    return window === undefined ? [] : [{ subset: window.subset, pulled: pulled(window) }];
+  });
+  return { windows };
 };
 
 const withOwner = (

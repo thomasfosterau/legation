@@ -276,11 +276,11 @@ export type HostMessage =
   /**
    * The pulled summaries of the host's registrations (#426): per key (a
    * `Subscribe`'s subset hash, or a `SubscribeRelated`'s {@link relatedKey}),
-   * whether its root window is in the replica and, per edge collection,
-   * whether its edge windows are. A mirror answers a covered read locally only
-   * when the summary covers the read (`Coverage.pulledFor`). Replaces the
-   * previous list; sent whenever it changes and on `HostReady`. A mirror that
-   * predates it ignores the message (foreign traffic).
+   * each window the registration holds with whether its rows are in the
+   * replica. A mirror answers a covered read locally only when the windows
+   * the read's rows link to are pulled (`Coverage.pulledFor`). Sent whenever it
+   * changes and on `HostReady`. A mirror that predates it ignores the message
+   * (foreign traffic), and forwards covered reads, which is safe.
    */
   | {
       readonly _tag: "PulledRegistrations";
@@ -346,8 +346,12 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
       Schema.Struct({
         key: Schema.String,
         pulled: Schema.Struct({
-          root: Schema.Boolean,
-          collections: Schema.Record(Schema.String, Schema.Boolean),
+          windows: Schema.Array(
+            Schema.Struct({
+              subset: Subset.SubsetSchema,
+              pulled: Schema.Boolean,
+            })
+          ),
         }),
       })
     ),

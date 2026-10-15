@@ -517,7 +517,7 @@ total count, hence `links.first`/`links.last`) is out of scope here — #210
 — so an offset document says only what it can today: whether a further
 page (`next`) or a prior one (`prev`) exists, never how many there are.
 
-## Amendment (#426): a covered answer requires its registrations to have been pulled
+## Amendment (#426): a covered answer requires the windows it depends on to have been pulled
 
 **Context.** Coverage (section 3) was decided from registrations alone. A
 subscription registered but not yet pulled counted as covering, so a covered
@@ -532,55 +532,65 @@ the derived REST handler (#422, #423).
    applied.** A registration is a root window (`Subscribe`, a `Client`
    subscription of a plain read) or a relational registration (`SubscribeRelated`,
    a read with `include`, with its edge windows). The engine numbers each pull
-   as it starts (`ClientEngine.pullCounts`). A registration made when `started`
+   as it starts (`ClientEngine.pullCounts`). A window made when `started`
    reads `n` is pulled once `applied` exceeds `n`. A pull already in flight
-   when the registration is made never counts: it may have read the
-   subscriptions before the registration existed.
+   when the window is made never counts: it may have read the subscriptions
+   before the window existed.
 2. **Coverage uses only pulled windows, everywhere it is decided.** That
    is the `EngineHost`'s registrations (the façade's ledger,
    `EngineHost.Host.registrations`), the in-process `Client` ledger (the
    verdict of `Client.coverageOf` and the local-versus-server choice of
    `Client.query`), and tab mirrors. A mirror has no counters of its own: the
-   host sends each registration's pulled summary (`PulledRegistrations`,
-   whenever the summaries change and on `HostReady`), and `ClientView.pulled`
-   answers from that.
-3. **Each window is marked on its own (owner decision, 2026-10-15).** A
-   relational registration holds a root window and one window per edge its
-   reconcile registers (ADR-0024). Each window takes its mark when it is first
-   held, so a new edge window does not reset the marks of the windows before
-   it. A window is pulled once its own mark is pulled, or once another pulled
-   window covers it under section 3's rules: its rows are then in the replica
-   already. The owner's 2026-10-14 rule (one mark per relational registration,
-   moved by every edge window) is superseded; it made an offline cart add
-   uncovered for every read of its cart pin.
+   host sends each registration's window summaries (`PulledRegistrations`,
+   whenever they change and on `HostReady`), and `ClientView.pulled` answers
+   from that.
+3. **Each window is marked on its own (owner decisions, 2026-10-10, 2026-10-14
+   and 2026-10-15).** A relational registration holds a root window and one
+   window per edge its reconcile registers (ADR-0024). Each window takes its
+   mark when it is first held, so a new window does not reset the marks of
+   those before it. A window is pulled once its own mark is pulled, or once
+   another pulled window covers it under section 3's rules: its rows are then
+   in the replica already. Windows are identified by their canonical form
+   (collection, predicate, order, limit and cursor), not by the key order of
+   their JSON, so a window a mirror decoded matches the one a read builds.
 4. **Nothing is persisted.** Marks are recomputed in memory. After a restart
-   every registration starts unpulled, so a covered read is forwarded until
-   one successful pull lands. Offline, no pull lands: the façade answers the
-   `503` `offline` document of section 4 rather than replica data. A `Client`
-   keeps its offline-first local answer (ADR-0025), which is no longer
-   `Covered` for a registration that was never pulled.
+   every window starts unpulled, so a covered read is forwarded until one
+   successful pull lands. Offline, no pull lands: the façade answers the `503`
+   `offline` document of section 4 rather than replica data. A `Client` keeps
+   its offline-first local answer (ADR-0025) for an uncovered read.
 5. **A registration subscribed by the host pulls promptly.** A host pulls
    after a plain `Subscribe`, as it already did for named queries, so a
    registration made from a tab is pulled soon after it is made. The pull is
    forked, so the host's message loop does not wait on the network. At most one
    such pull fibre runs at a time: a subscribe that lands while one runs makes
    it pull once more when it ends, so a burst of subscribes costs one extra
-   pull, not one fibre or pull per subscribe.
-6. **A read needs only the windows it depends on (owner decision, 2026-10-15).**
-   A registration covers a read when the section 3 rules hold and its root
-   window is pulled, and every edge window of each collection the read's
-   edges read through is pulled. A collection the registration holds no edge
-   window on needs nothing pulled. So a read needing one edge is not held up
-   by the windows of another edge, and an offline optimistic write on a
-   relational pin keeps the pin covered for the reads it already had.
+   pull, not one fibre or pull per subscribe. Offline, each such burst costs one
+   failing pull, with no back-off: the engine's own sync loop has the same
+   behaviour, and a failed pull only delays rows.
+6. **A read needs only the edge windows its rows link to (owner decision,
+   2026-10-15).** The read's root rows are read from the replica, and the edge
+   windows they link to are the ones `Related`'s reconcile holds for them: one
+   `field IN (...)` window per unwindowed edge over the linked keys, and one
+   `(field = key, order, limit)` window per key for a paginated edge. A read is
+   covered when its registration's root window is pulled and every linked edge
+   window is pulled. A linked window is pulled when the registration holds it
+   pulled, when a pulled window covers it under section 3, or, for an unwindowed
+   window, when pulled unwindowed windows of its collection and field pin every
+   key it names. So an unpulled window of a sibling key (a `p-2` reviews window,
+   when the read links only `p-1`) never uncovers the read, while a linked
+   window the registration does not hold does. A read that links to no edge
+   window needs only its root window pulled, and a relational registration
+   whose root is pulled but whose linked windows are not held covers nothing.
+7. **A read whose root rows cannot be read is uncovered.** The read then goes
+   to the network (online) or gets the `503` (offline, for the façade).
 
-**Section 4 and section 6 now read:** a covered answer means every
-registration it depends on has been pulled at least once since the registration
-was made. Before that, the request is uncovered and goes to the network
-(online) or gets the 503 (offline, for the façade).
+**Section 4 and section 6 now read:** a covered answer means that every
+window the read's rows link to has been pulled at least once since it was
+made. Before that, the request is uncovered and goes to the network (online)
+or gets the 503 (offline).
 
-**Versioning.** `PulledRegistrations` is a new host message. A mirror that
-predates it ignores it, as it ignores any foreign message. A mirror that meets
-a host that predates it never sees a registration pulled, so it forwards
-covered reads to the host's read path until the host is upgraded: correct,
-slower.
+**Versioning.** `PulledRegistrations` is a new host message; it replaces no
+earlier one. A mirror that predates it ignores it, as it ignores any foreign
+message. A mirror that meets a host that predates it never sees a window
+pulled, so it forwards covered reads to the host's read path until the host is
+upgraded: correct, slower.

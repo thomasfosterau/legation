@@ -29,6 +29,7 @@ import {
   Subset,
   SyncServer,
   Mirror,
+  ClientView,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import { Clock, Effect, Exit, Fiber, Ref, Schema } from "effect";
@@ -481,6 +482,11 @@ const stubUrls: Client.UrlReads = {
 const hashes = (engine: ClientEngine.ClientEngine) =>
   Effect.map(engine.activeSubscriptions, (subs) => subs.map(Subset.hash));
 const todosRoot = Subset.hash(allTodos);
+/** Whether a pulled summary holds the root window of `allTodos` pulled. */
+const rootPulled = (pulled: Coverage.Pulled): boolean =>
+  pulled.windows.some(
+    (window) => window.pulled && Coverage.windowKey(window.subset) === Coverage.windowKey(allTodos)
+  );
 const authorWindow = Subset.hash(
   Subset.make({ collection: "users", where: Predicate.isIn("id", ["u1"]) })
 );
@@ -575,7 +581,6 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
           // The host holds the root once for both pins, plus the author window.
           const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
           expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
-          yield* sleepReal(50);
           yield* engine.pull.pipe(Effect.orDie);
           expect(
             (yield* eventually(
@@ -619,7 +624,11 @@ describe("EngineHost.Host.registrations", () => {
             nodes,
             urls: stubUrls,
           });
-          const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+          const coverageOf = Coverage.coverageOf(
+            nodes,
+            ClientView.fromEngine(engine).query,
+            host.registrations
+          );
           const client = yield* Client.connect({
             nodes,
             mutations: mutators,
@@ -638,7 +647,6 @@ describe("EngineHost.Host.registrations", () => {
           // identity of that pin lives in the Client's own ledger, not here.
           yield* client.subscribe("/todos?include=author");
           yield* eventually(hashes(engine), (current) => current.includes(todosRoot));
-          yield* sleepReal(50);
           // Each is listed with its pulled summary; covered once a pull started after it has applied (#426).
           yield* engine.pull.pipe(Effect.orDie);
           const held = yield* eventually(host.registrations, (current) => current.length === 2);
@@ -664,7 +672,6 @@ describe("EngineHost.Host.registrations", () => {
           // way, and the host knows its canonical URL.
           yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/api/users" });
           yield* eventually(hashes(engine), (current) => current.length === 2);
-          yield* sleepReal(50);
           yield* engine.pull.pipe(Effect.orDie);
           const withPage = yield* eventually(host.registrations, (current) => current.length === 3);
           expect(withPage.find((entry) => entry.root.collection === "users")?.url).toBe("/users");
@@ -686,7 +693,11 @@ describe("EngineHost.Host.registrations", () => {
       const { engine } = yield* makeEngine;
       const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes });
-      const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+      const coverageOf = Coverage.coverageOf(
+        nodes,
+        ClientView.fromEngine(engine).query,
+        host.registrations
+      );
       // An edge the registry does not declare: `Related` would ignore it and
       // register the root alone, so the host refuses the registration
       // outright — nothing held, nothing credited, the root not even subscribed.
@@ -697,9 +708,15 @@ describe("EngineHost.Host.registrations", () => {
         subset: allTodos,
         edges: [{ name: "nope" }],
       });
-      yield* sleepReal(50);
-      expect(yield* host.registrations).toEqual([]);
-      expect(yield* hashes(engine)).toEqual([]);
+      // Messages are handled in order, so a plain subscribe sent after the refused one is
+      // registered only once the refusal has been handled: the barrier is observable.
+      const barrier = Subset.make({ collection: "users" });
+      yield* channel.post({ _tag: "Subscribe", mirrorId: "page", subset: barrier });
+      yield* eventually(hashes(engine), (current) => current.includes(Subset.hash(barrier)));
+      expect(yield* host.registrations).toMatchObject([{ root: barrier }]);
+      expect(yield* hashes(engine)).toEqual([Subset.hash(barrier)]);
+      yield* channel.post({ _tag: "Unsubscribe", mirrorId: "page", subset: barrier });
+      yield* eventually(hashes(engine), (current) => current.length === 0);
       // A declared edge is held with its root and edge windows registered
       // before it is listed.
       yield* channel.post({
@@ -712,9 +729,7 @@ describe("EngineHost.Host.registrations", () => {
       const held = yield* eventually(
         host.registrations,
         (current) =>
-          current.length === 1 &&
-          current[0]!.pulled.root &&
-          Object.values(current[0]!.pulled.collections).every((pulled) => pulled)
+          current.length === 1 && current[0]!.pulled.windows.every((window) => window.pulled)
       );
       expect(held).toMatchObject([{ root: allTodos, edges: [{ name: "author" }] }]);
       expect(yield* hashes(engine)).toContain(todosRoot);
@@ -740,7 +755,11 @@ describe("EngineHost.Host.registrations", () => {
         const { engine } = yield* makeEngine;
         const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
         const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes, urls: stubUrls });
-        const coverageOf = Coverage.coverageOf(nodes, host.registrations);
+        const coverageOf = Coverage.coverageOf(
+          nodes,
+          ClientView.fromEngine(engine).query,
+          host.registrations
+        );
         const mirror = yield* Mirror.make({ channel, mutators });
         // A tab's plain pin and a page's URL pin share one root window: the
         // entry carries the page's URL while the page holds it...
@@ -776,13 +795,13 @@ describe("EngineHost.Host.registrations", () => {
         const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: hostChannel, engine });
         const mirror = yield* Mirror.make({ channel, mutators });
-        expect((yield* mirror.pulled(todosRoot)).root).toBe(false);
+        expect(rootPulled(yield* mirror.pulled(todosRoot))).toBe(false);
         yield* mirror.subscribe(allTodos);
         // The host pulls after registering and sends `PulledRegistrations` once that pull has applied.
-        yield* eventually(mirror.pulled(todosRoot), (pulled) => pulled.root);
+        yield* eventually(mirror.pulled(todosRoot), (pulled) => rootPulled(pulled));
         // Released, the mirror no longer holds it pulled.
         yield* mirror.unsubscribe(allTodos);
-        yield* eventually(mirror.pulled(todosRoot), (pulled) => !pulled.root);
+        yield* eventually(mirror.pulled(todosRoot), (pulled) => !rootPulled(pulled));
       })
     )
   );
