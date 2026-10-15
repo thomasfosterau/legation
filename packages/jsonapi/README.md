@@ -180,7 +180,17 @@ overrides the default ledger. If you pass both `store` and `keyValueStore`, buil
 `store` over the same key/value store: the layer cannot check that, because
 `store` is an opaque layer. Pass `ledger: Ledger.keyValue(keyValueStore)` yourself
 to name a store the client store does not use, and `JsonApiBackend.make` takes the
-same `ledger` option for a server built by hand. A store is a
+same `ledger` option for a server built by hand.
+
+The client store and the ledger must be durable together. A durable `ledger`
+with the in-memory client store loses writes silently: a reload restarts the
+client's mutation ids at 1, the ledger already acknowledges them, and the
+backend skips the new writes as already applied. A durable `store` with the
+in-memory ledger stalls instead: a reload forgets the acknowledged ids, and the
+backend refuses every later push with a mutation-id gap. Passing
+`keyValueStore` covers both.
+
+A ledger store is a
 `Ledger.LedgerStore` with two operations, `read` and `write`, for one client
 group's ledger. Write your own to keep the ledger somewhere else.
 
@@ -200,11 +210,17 @@ const syncLayer = Layer.unwrap(
     return JsonApiSync.layer(api, { ...options, keyValueStore });
   })
 ).pipe(
-  Layer.provide(BrowserKeyValueStore.layerIndexedDb().pipe(Layer.provide(IndexedDb.layerWindow)))
+  Layer.provide(
+    BrowserKeyValueStore.layerIndexedDb({ database: "legation-jsonapi" }).pipe(
+      Layer.provide(IndexedDb.layerWindow)
+    )
+  )
 );
 ```
 
-This store is durable, but it is not `IndexedDbClientStore`: it has no atomic
+Name its `database`: the platform default, `effect_key_value_store`, is the
+database `IndexedDbClientStore` uses by default. This store is durable, but it
+is not `IndexedDbClientStore`: it has no atomic
 batch, so the client store commits a pull's release through a release record
 that is finished on the next open if a crash interrupts it, rather than in one
 IndexedDB transaction (#393). It also opens its database at version 1, so it
@@ -212,9 +228,12 @@ cannot open a database another version has upgraded.
 
 The ledger is keyed by `clientGroupId` under one prefix. If one key/value store
 holds more than one identity's ledgers on a device, give each identity its own
-prefix, as `IndexedDbClientStore.layerNamespaced` does for the client store, and
-use that prefix for both `store` and `keyValueStore`:
-``KeyValueStore.prefix(kv, `legation/identity/${Identity.keySegment(identity)}/`)``.
+prefix (`IndexedDbClientStore.layerNamespaced` does the same for its own client
+store), and pass the prefixed store as `keyValueStore` so the client store and
+the ledger share it:
+``KeyValueStore.prefix(kv, `legation/identity/${Identity.keySegment(identity)}/`)``,
+with `Identity` from `@thomasfosterau/legation-effect` and `KeyValueStore` from
+`effect/persistence`.
 Otherwise identities that share a `clientId` and `clientGroupId` share one
 ledger, and one identity's mutations can be skipped as already applied.
 

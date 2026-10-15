@@ -63,7 +63,10 @@ export interface JsonApiSyncOptions {
    * Where the backend keeps its ledger (acknowledged mutation ids and remembered
    * rejections) across restarts (#468). Unset, it is `Ledger.keyValue` over
    * `keyValueStore` when that is given, and otherwise in memory, where a restart
-   * of the backend forgets it.
+   * of the backend forgets it. A durable ledger needs a durable client store too
+   * (`keyValueStore` or `store`): with the in-memory store, a reload restarts the
+   * client's mutation ids at 1, the ledger already acknowledges them, and the
+   * backend skips the new writes as already applied, with no error.
    */
   readonly ledger?: Ledger.LedgerStore | undefined;
   /**
@@ -101,7 +104,11 @@ export interface JsonApiSyncOptions {
    * over `keyValueStore` when that is given, and otherwise to the in-memory store.
    * A durable store (e.g. `IndexedDbClientStore.layerWindow()` from
    * `@thomasfosterau/legation-browser`, or `ClientStore.layerKeyValue` over localStorage)
-   * keeps the journal and confirmed rows across reloads (offline-first).
+   * keeps the journal and confirmed rows across reloads (offline-first). It needs
+   * a durable ledger too: pass `keyValueStore` (the key/value store it is built
+   * over) or `ledger`. With the in-memory ledger, a reload forgets the
+   * acknowledged ids, and the backend refuses every later push with a
+   * mutation-id gap.
    */
   readonly store?: Layer.Layer<ClientStore.ClientStore> | undefined;
 }
@@ -129,7 +136,7 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
  * ready `ClientEngine`. CVR store and invalidation bus are in-process; the
  * client store defaults to in-memory, or to the durable store over
  * `keyValueStore` (pass it for offline persistence and a durable ledger across
- * reloads, or pass `store` for another durable store).
+ * reloads, or pass `store` and `ledger` for another durable store).
  */
 export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
