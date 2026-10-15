@@ -490,12 +490,16 @@ const countingRefusals = (
       ),
 });
 
-/** Whether any backend in the database is waiting on a lock: a `pg_stat_activity` check, not a sleep. */
+/**
+ * Whether a contract statement is waiting on a lock: a `pg_stat_activity` check, not a sleep.
+ * It matches only statements on the contract tables, since the overlap suite shares this database.
+ */
 const peerBlockedOnLock = (sql: SqlClient) =>
   sql
     .unsafe<{ waiting: number }>(
       `SELECT 1 AS waiting FROM pg_stat_activity WHERE datname = current_database() ` +
-        `AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' LIMIT 1`
+        `AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' ` +
+        `AND strpos(query, '__contract') > 0 LIMIT 1`
     )
     .unprepared.pipe(
       Effect.map((rows) => rows.length > 0),
@@ -524,8 +528,36 @@ const awaitPeerOn =
       Effect.orDie
     );
 
-/** The PostgreSQL contract backend over `executor` and `dialect`. */
-const backendOver = (executor: SqlBackend.SqlExecutor, dialect: Sql.Dialect) =>
+/**
+ * The `countUp` handler for the lock-wait test (#431). It takes the counter row's
+ * lock before it parks (a no-op `SET n = n`), so the peer group blocks on that lock
+ * instead of running to completion. It then reads, parks, and writes the increment
+ * exactly as `pgHandlers`' `countUp` does, so rule 11 checks the same thing. It is
+ * registered only in that test; the shared `countUp` above does not change.
+ */
+const lockingCountUp: SqlBackend.SqlHandler = (raw, tx) =>
+  Effect.gen(function* () {
+    const args = raw as { collection: string; id: string; gate: string };
+    const table = yield* tableFor(args.collection);
+    yield* tx.run({ text: `UPDATE ${table} SET n = n WHERE id = $1`, params: [args.id] });
+    const rows = yield* tx.query({
+      text: `SELECT n FROM ${table} WHERE id = $1`,
+      params: [args.id],
+    });
+    yield* BackendContract.park(args.gate);
+    yield* tx.run({
+      text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
+      params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+    });
+    return [{ collection: args.collection, ids: [args.id] }];
+  });
+
+/** The PostgreSQL contract backend over `executor` and `dialect`, with `handlerMap` (default `pgHandlers`). */
+const backendOver = (
+  executor: SqlBackend.SqlExecutor,
+  dialect: Sql.Dialect,
+  handlerMap: Record<string, SqlBackend.SqlHandler> = pgHandlers
+) =>
   SqlBackend.make({
     executor,
     tables: {
@@ -533,10 +565,25 @@ const backendOver = (executor: SqlBackend.SqlExecutor, dialect: Sql.Dialect) =>
       __contract_eval: { table: "__contract_eval", kinds: { rank: "integer", tag: "text" } },
     },
     mutators: contractMutators,
-    handlers: pgHandlers,
+    handlers: handlerMap,
     dialect,
     mutationsTable: "contract_sync_mutations",
   });
+
+/**
+ * `awaitPeerOn`, recording into `returnedOnLock` when it returns while the peer has
+ * not settled, which only the lock branch does.
+ */
+const awaitPeerRecording =
+  (sql: SqlClient, returnedOnLock: Ref.Ref<boolean>): BackendContract.PeerSettle =>
+  (peerSettled) =>
+    awaitPeerOn(sql)(peerSettled).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          if (!(yield* peerSettled)) yield* Ref.set(returnedOnLock, true);
+        })
+      )
+    );
 
 describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () => {
   // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
@@ -572,6 +619,37 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
           );
           expect(failure.rule).toContain("across client groups");
           expect(failure.message).toContain("got 1");
+        })
+      ),
+    60_000
+  );
+
+  // The lock-wait branch of `awaitPeerOn` (#431). The parked call locks the row
+  // before it parks, so the peer blocks on that lock and cannot finish until the
+  // parked call is released. `awaitPeer` must return on that observation (it is
+  // recorded), and rule 11 must then reach a verdict. Removing the lock branch
+  // leaves `awaitPeer` waiting on a peer that waits on the parked call: a hang the
+  // test timeout reports.
+  it.live(
+    "returns awaitPeer on the peer's lock wait and still reaches a verdict (#431)",
+    () =>
+      withPgContract(databaseUrl ?? "", (sql) =>
+        Effect.gen(function* () {
+          const refusals = yield* Ref.make(0);
+          const returnedOnLock = yield* Ref.make(false);
+          const backend = backendOver(countingRefusals(pgExecutor(sql), refusals), Sql.postgres, {
+            ...pgHandlers,
+            [BackendContract.countUp.name]: lockingCountUp,
+          });
+          yield* BackendContract.verifyBackendContract(backend, {
+            awaitPeer: awaitPeerRecording(sql, returnedOnLock),
+          });
+          expect(
+            yield* Ref.get(returnedOnLock),
+            "awaitPeer returned while the peer was unsettled, so the lock-wait branch ran"
+          ).toBe(true);
+          // The peer blocked on the parked row, then failed to serialise when it committed.
+          expect(yield* Ref.get(refusals)).toBeGreaterThan(0);
         })
       ),
     60_000
