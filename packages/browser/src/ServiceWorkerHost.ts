@@ -87,7 +87,7 @@ export interface Host {
    * (`EngineHost.Host.registrations`): the ledger a façade's coverage check
    * scans, `Coverage.coverageOf(nodes, host.registrations)`.
    */
-  readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Subscription>>;
+  readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Entry>>;
 }
 
 /**

@@ -333,19 +333,64 @@ export const covering = <S extends Registration>(
   return undefined;
 };
 
+// ─── Pulled windows (#426) ───────────────────────────────────────────────────
+
+/**
+ * What a registration's windows hold in the replica (ADR-0029 section 3,
+ * #426): whether its root window is pulled, and, per edge collection,
+ * whether every edge window of that collection is. A collection the
+ * registration has no edge window on needs nothing pulled. Marked per window
+ * by `PullMarks`, so a window added later does not move the others.
+ */
+export interface Pulled {
+  readonly root: boolean;
+  readonly collections: Readonly<Record<string, boolean>>;
+}
+
+/** A registration none of whose windows is pulled. */
+export const NOT_PULLED: Pulled = { root: false, collections: {} };
+
+/**
+ * A request as the coverage scan takes it: its registration, plus the
+ * collections its edges read through, which name the edge windows it depends
+ * on.
+ */
+export interface Requested extends Registration {
+  readonly targets: ReadonlyArray<string>;
+}
+
+/** A compiled read's request: its registration and the collections its edges read. */
+export const requestedOf = (plan: Query.Plan): Requested => ({
+  ...ofPlan(plan),
+  targets: plan.edges.map((edge) => edge.target),
+});
+
+/** A ledger entry as the scan takes it: a subscription with its pulled summary. */
+export interface Entry extends Subscription {
+  readonly pulled: Pulled;
+}
+
+/**
+ * Whether the windows a request depends on are pulled (#426): the root
+ * window, and the edge windows of each collection the request's edges read.
+ * A read needing only some edges is not held up by the windows of the rest.
+ */
+export const pulledFor = (pulled: Pulled, requested: Requested): boolean =>
+  pulled.root && requested.targets.every((collection) => pulled.collections[collection] ?? true);
+
 // ─── The verdict ─────────────────────────────────────────────────────────────
 
 /**
- * The verdict of one scan: the first subscription, in iteration order,
+ * The verdict of one scan: the first pulled entry, in iteration order,
  * covering the request — named by registration, subset hash and canonical
  * URL when it has one — or `Uncovered`. `Client.coverageOf` and a façade's
  * coverage check over a host's registrations both answer with this.
  */
-export const verdictOf = (
-  subscriptions: Iterable<Subscription>,
-  requested: Registration
-): Verdict => {
-  const by = covering(subscriptions, requested);
+export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdict => {
+  const by = covering(
+    [...entries].filter((entry) => pulledFor(entry.pulled, requested)),
+    requested
+  );
   return by === undefined
     ? { _tag: "Uncovered" }
     : {
@@ -359,12 +404,12 @@ export const verdictOf = (
 /**
  * A coverage check in `Client.coverageOf`'s shape over any ledger: the read
  * is compiled against the graph and its registration scanned against the
- * subscriptions the ledger holds at that moment. A façade in a service
- * worker builds its check from the host's registrations
+ * entries the ledger holds at that moment. A façade in a service worker
+ * builds its check from the host's registrations
  * (`EngineHost.Host.registrations`), where no Client's ledger sees the
  * mirrors' pins.
  */
 export const coverageOf =
-  (nodes: Node.NodeRegistry, subscriptions: Effect.Effect<Iterable<Subscription>>) =>
+  (nodes: Node.NodeRegistry, entries: Effect.Effect<Iterable<Entry>>) =>
   (read: Query.Read): Effect.Effect<Verdict> =>
-    Effect.map(subscriptions, (held) => verdictOf(held, ofPlan(Query.plan(nodes, read))));
+    Effect.map(entries, (held) => verdictOf(held, requestedOf(Query.plan(nodes, read))));

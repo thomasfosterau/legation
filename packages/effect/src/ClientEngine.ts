@@ -551,6 +551,14 @@ export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
 
+/** The pull counters {@link ClientEngine.pullCounts} reports (#426). */
+export interface PullCounts {
+  /** The number of the last pull to start; a pull is numbered as it takes the pull lock. */
+  readonly started: number;
+  /** The number of the last pull applied to the replica. */
+  readonly applied: number;
+}
+
 /**
  * The client-side engine: the journal, the materialized view (confirmed rows plus the optimistic
  * overlay), subscriptions and the push/pull sync loop. Apps reach it through a `Client`.
@@ -878,6 +886,13 @@ export interface ClientEngine {
     void,
     TransportError | StoreError | MutatorError | VersionNotSupportedError
   >;
+  /**
+   * The pull counters, read-only (#426): `started` numbers the pulls that have
+   * begun, `applied` the last pull whose rows and cookie are in the replica. A
+   * registration made when `started` reads `n` is pulled once `applied`
+   * exceeds `n`: a pull already in flight at that moment may predate it.
+   */
+  readonly pullCounts: Effect.Effect<PullCounts>;
   /**
    * Point-in-time fallthrough read over the transport (ADR-0025): the
    * server evaluates the subsets under its auth filters, with no CVR
@@ -2378,34 +2393,40 @@ export const make = (
     const pullLock = yield* Semaphore.make(1);
     const pullsStarted = yield* Ref.make(0);
     const pullsApplied = yield* Ref.make(0);
-    const pullOnce = withVersionLatch(
-      Effect.gen(function* () {
-        yield* emitEngineEvent({ _tag: "PullStarted" });
-        const cookie = yield* store.getCookie;
-        const subsets = yield* Ref.get(subscriptions);
-        const named = yield* Ref.get(namedSubs);
-        const namedSubscriptions: ReadonlyArray<NamedSubscription> = named.map((entry) => ({
-          name: entry.name,
-          args: entry.argsEncoded,
-        }));
-        const response = yield* transport.pull({
-          clientGroupId: options.clientGroupId,
-          cookie,
-          subscriptions: subsets,
-          ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
-          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
-        });
-        const touched = yield* applyPull(response);
-        yield* Metric.update(Telemetry.pullsTotal, 1);
-        yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
-        yield* emitEngineEvent({
-          _tag: "PullCompleted",
-          ops: response.patch.length,
-          collections: touched.collections,
-          rows: touched.rows,
-        });
-      })
-    );
+    // `pullsApplied` moves to this pull's number as soon as its rows are applied, before
+    // `PullCompleted` is published, so an observer of that event reads the new count.
+    const pullOnce = (number: number) =>
+      withVersionLatch(
+        Effect.gen(function* () {
+          yield* emitEngineEvent({ _tag: "PullStarted" });
+          const cookie = yield* store.getCookie;
+          const subsets = yield* Ref.get(subscriptions);
+          const named = yield* Ref.get(namedSubs);
+          const namedSubscriptions: ReadonlyArray<NamedSubscription> = named.map((entry) => ({
+            name: entry.name,
+            args: entry.argsEncoded,
+          }));
+          const response = yield* transport.pull({
+            clientGroupId: options.clientGroupId,
+            cookie,
+            subscriptions: subsets,
+            ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
+            ...(options.schemaVersion !== undefined
+              ? { schemaVersion: options.schemaVersion }
+              : {}),
+          });
+          const touched = yield* applyPull(response);
+          yield* Ref.set(pullsApplied, number);
+          yield* Metric.update(Telemetry.pullsTotal, 1);
+          yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
+          yield* emitEngineEvent({
+            _tag: "PullCompleted",
+            ops: response.patch.length,
+            collections: touched.collections,
+            rows: touched.rows,
+          });
+        })
+      );
 
     const pull: ClientEngine["pull"] = Effect.gen(function* () {
       const entry = yield* Ref.get(pullsStarted);
@@ -2414,11 +2435,15 @@ export const make = (
         Effect.gen(function* () {
           if ((yield* Ref.get(pullsApplied)) > entry) return;
           const number = yield* Ref.updateAndGet(pullsStarted, (started) => started + 1);
-          yield* pullOnce;
-          yield* Ref.set(pullsApplied, number);
+          yield* pullOnce(number);
         })
       );
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
+
+    const pullCounts: Effect.Effect<PullCounts> = Effect.all({
+      started: Ref.get(pullsStarted),
+      applied: Ref.get(pullsApplied),
+    });
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
       Ref.update(subscriptions, (current) =>
@@ -3311,6 +3336,7 @@ export const make = (
         Stream.unwrap(localSubsetOf(name, args).pipe(Effect.map(observeSubset))),
       push,
       pull,
+      pullCounts,
       dropIfPending,
       reset,
       identity: store.getIdentity,

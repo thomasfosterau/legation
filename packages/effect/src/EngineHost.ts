@@ -61,6 +61,7 @@ import * as Coverage from "./Coverage.js";
 import { QueryError, TransportError } from "./Errors.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
+import * as PullMarks from "./PullMarks.js";
 import * as Query from "./Query.js";
 import * as Related from "./Related.js";
 import * as Subscriptions from "./Subscriptions.js";
@@ -101,15 +102,17 @@ export interface EngineHostOptions {
 /** The running host: what a worker can consult about the mirrors it serves. */
 export interface Host {
   /**
-   * The registrations the host holds on mirrors' behalf at this moment:
-   * root windows (`Subscribe`), relational registrations with their edge
-   * selects (`SubscribeRelated`) and both halves of a `SubscribeUrl`, the
-   * latter carrying its canonical URL for as long as some party holds it
-   * by that URL. Named-query and mutation-state registrations cover no
-   * read and are not listed. The ledger a coverage check scans:
-   * `Coverage.coverageOf(nodes, host.registrations)`.
+   * The registrations the host holds on mirrors' behalf at this moment, each
+   * with its pulled summary (#426): root windows (`Subscribe`), relational
+   * registrations with their edge selects (`SubscribeRelated`) and both
+   * halves of a `SubscribeUrl`, the latter carrying its canonical URL for as
+   * long as some party holds it by that URL. A registration's windows are
+   * pulled once a pull started after each was made has applied; a coverage
+   * check counts only the windows a read depends on. Named-query and
+   * mutation-state registrations cover no read and are not listed. The ledger
+   * a coverage check scans: `Coverage.coverageOf(nodes, host.registrations)`.
    */
-  readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Subscription>>;
+  readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Entry>>;
 }
 
 /** What a read's registration covers, and the URL identity a `SubscribeUrl` gave it. */
@@ -178,6 +181,40 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const inbox = yield* channel.subscribe;
     const active = yield* Ref.make(new Map<string, Active>());
     const lastSeen = yield* Ref.make(new Map<string, number>());
+    // Each registration's pull mark (#426): pulled once a pull started after it has applied.
+    const marks = PullMarks.make(engine);
+    // The pulled summaries last sent to mirrors, so `PulledRegistrations` goes out only when they change.
+    const announced = yield* Ref.make<string | undefined>(undefined);
+    const announce = Effect.gen(function* () {
+      const registrations = yield* marks.registrations;
+      const serialised = JSON.stringify(registrations);
+      if (serialised === (yield* Ref.get(announced))) return;
+      yield* Ref.set(announced, serialised);
+      yield* channel.post({ _tag: "PulledRegistrations", registrations }).pipe(Effect.ignore);
+    });
+
+    // Pulls that sync new registrations, at most one fibre at a time (#426). A
+    // registration made while one runs sets `again`, and the running fibre pulls
+    // once more after it ends, so the pull that makes the registration pulled
+    // starts after it. A burst of subscribes therefore costs one extra pull, not
+    // one fibre per subscribe.
+    const syncState = yield* Ref.make<"idle" | "running" | "again">("idle");
+    const syncUntilSettled: Effect.Effect<void, never, Scope.Scope> = engine.pull.pipe(
+      Effect.ignore,
+      Effect.andThen(
+        Ref.modify(syncState, (state) =>
+          state === "again" ? ([true, "running"] as const) : ([false, "idle"] as const)
+        )
+      ),
+      Effect.flatMap((again) => (again ? syncUntilSettled : Effect.void))
+    );
+    const syncRegistrations: Effect.Effect<void, never, Scope.Scope> = Ref.modify(
+      syncState,
+      (state) => (state === "idle" ? ([true, "running"] as const) : ([false, "again"] as const))
+    ).pipe(
+      Effect.flatMap((started) => (started ? Effect.forkScoped(syncUntilSettled) : Effect.void)),
+      Effect.asVoid
+    );
 
     const touch = (mirrorId: string) =>
       Clock.currentTimeMillis.pipe(
@@ -257,6 +294,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             ...(registered === undefined ? {} : { registered }),
           })
         );
+        yield* announce;
       });
 
     /** Drop one mirror from one registration; tear it down if it was the last. */
@@ -282,6 +320,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           next.delete(key);
           return next;
         });
+        yield* announce;
       });
 
     const handleSubscribe = (mirrorId: string, subset: Subset.Subset, url?: string) => {
@@ -290,13 +329,24 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         mirrorId,
         key,
         Effect.gen(function* () {
-          yield* engine.subscribe(subset);
+          yield* marks.open(key, subset);
+          yield* marks
+            .wrap(key)
+            .subscribe(subset)
+            .pipe(Effect.tapError(() => marks.close(key)));
+          // Sync the registration promptly, as a named query's is (#426): the rows
+          // a covered read needs arrive on a pull that starts after this one. Forked,
+          // so the message loop does not wait on the network.
+          yield* syncRegistrations;
           return {
             // `observe` emits the current rows first, hydrating the subscriber.
             loop: Stream.runForEach(engine.observe(subset), (rows) => broadcast(key, rows)).pipe(
               Effect.asVoid
             ),
-            teardown: engine.unsubscribe(subset).pipe(Effect.ignore),
+            teardown: marks
+              .wrap(key)
+              .unsubscribe(subset)
+              .pipe(Effect.ignore, Effect.andThen(marks.close(key))),
             hydrate: engine.query(subset).pipe(
               Effect.flatMap((rows) => broadcast(key, rows)),
               Effect.ignore
@@ -366,12 +416,20 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           // its own under the host's, closed by the teardown; the broadcast
           // loop merely drains its stream.
           const scope = yield* Scope.fork(yield* Effect.scope);
-          const stream = yield* Related.related(engine, registry, collection, subset, edges).pipe(
-            Scope.provide(scope)
+          yield* marks.open(key, subset);
+          const stream = yield* Related.related(
+            marks.wrap(key),
+            registry,
+            collection,
+            subset,
+            edges
+          ).pipe(
+            Scope.provide(scope),
+            Effect.tapError(() => marks.close(key))
           );
           return {
             loop: Stream.runForEach(stream, (rows) => broadcastRelated(key, rows)),
-            teardown: Scope.close(scope, Exit.void),
+            teardown: Scope.close(scope, Exit.void).pipe(Effect.andThen(marks.close(key))),
             hydrate: Related.query(engine, registry, collection, subset, edges).pipe(
               Effect.flatMap((rows) => broadcastRelated(key, rows)),
               Effect.ignore
@@ -612,6 +670,25 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       Effect.forever(sweep.pipe(Effect.andThen(Effect.sleep(sweepInterval))))
     );
 
+    // A pull that applies may make a registration pulled: tell the mirrors. The
+    // stream is opened here, before anything is forked: `engineEvents` subscribes
+    // when it is first pulled, so a `PullCompleted` published before a forked
+    // reader ran would be missed (#426).
+    const pullEvents = yield* Stream.toPull(engine.engineEvents);
+    yield* Effect.forkScoped(
+      Effect.forever(
+        pullEvents.pipe(
+          Effect.flatMap((events) =>
+            Effect.forEach(
+              events,
+              (event) => (event._tag === "PullCompleted" ? announce : Effect.void),
+              { discard: true }
+            )
+          )
+        )
+      ).pipe(Effect.ignore)
+    );
+
     yield* Effect.forkScoped(
       Effect.forever(
         inbox.take.pipe(
@@ -623,18 +700,23 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       )
     );
 
-    // Announce readiness LAST: mirrors that raced this host's boot (or survived
-    // a previous host) answer by re-posting their registrations.
+    // The pulled set first (empty at boot), then readiness LAST: mirrors that
+    // raced this host's boot (or survived a previous host) answer by re-posting
+    // their registrations.
+    yield* announce;
     yield* channel.post({ _tag: "HostReady" }).pipe(Effect.ignore);
 
     return {
-      registrations: Ref.get(active).pipe(
-        Effect.map((entries) =>
-          [...entries.values()].flatMap((entry) => {
+      registrations: Effect.all({ entries: Ref.get(active), pulled: marks.registrations }).pipe(
+        Effect.map(({ entries, pulled }) => {
+          const summaries = new Map(pulled.map((entry) => [entry.key, entry.pulled]));
+          return [...entries].flatMap(([key, entry]) => {
             const subscription = subscriptionOf(entry);
-            return subscription === undefined ? [] : [subscription];
-          })
-        )
+            return subscription === undefined
+              ? []
+              : [{ ...subscription, pulled: summaries.get(key) ?? Coverage.NOT_PULLED }];
+          });
+        })
       ),
     };
   });

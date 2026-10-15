@@ -844,8 +844,10 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", ()
         yield* client.subscribe(products);
         yield* client.subscribe(read);
         expect(yield* client.subscriptions).toEqual([products]);
-        const verdict = yield* client.coverageOf(read);
-        expect(verdict._tag === "Covered" ? verdict.url : verdict).toBe(products);
+        // Offline no pull lands, so the pin covers nothing yet (#426); the
+        // covered verdict and its URL are checked over a pulled engine in
+        // packages/effect's client tests.
+        expect((yield* client.coverageOf(read))._tag).toBe("Uncovered");
         // Both pins release one at a time; the entry lives until the last.
         yield* client.unsubscribe(read);
         expect(yield* client.subscriptions).toEqual([products]);

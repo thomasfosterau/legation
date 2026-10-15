@@ -410,8 +410,14 @@ describe("ServiceWorkerHost.start", () => {
             mutators,
           });
           yield* mirror.subscribe(allTodos);
+          // Listed once a pull started after the pin has applied (#426).
+          yield* eventually(
+            Effect.map(engine.activeSubscriptions, (subs) => subs.length),
+            (count) => count === 1
+          );
+          yield* engine.pull.pipe(Effect.orDie);
           const held = yield* eventually(host.registrations, (current) => current.length === 1);
-          expect(held).toEqual([{ root: allTodos, edges: [] }]);
+          expect(held).toMatchObject([{ root: allTodos, edges: [] }]);
           yield* mirror.unsubscribe(allTodos);
           yield* eventually(host.registrations, (current) => current.length === 0);
         })

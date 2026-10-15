@@ -391,7 +391,8 @@ export const fromView = (
       const current = map.get(key);
       const known = url ?? current?.url;
       const next = new Map(map).set(key, {
-        ...registration,
+        root: registration.root,
+        edges: registration.edges,
         observers: oneMore(current?.observers, kind, "observer"),
         pins: oneMore(current?.pins, kind, "explicit"),
         ...(known === undefined ? {} : { url: known }),
@@ -484,7 +485,7 @@ export const fromView = (
       : Effect.gen(function* () {
           const read = yield* urls.parse(url);
           const plan = yield* Query.tryPlan(nodes, read);
-          return { registration: Coverage.ofPlan(plan), url: yield* urls.canonical(read) };
+          return { registration: Coverage.requestedOf(plan), url: yield* urls.canonical(read) };
         });
 
   // A read given by value keeps its URL identity when it has one; a read
@@ -496,7 +497,7 @@ export const fromView = (
         urls === undefined
           ? undefined
           : Option.getOrUndefined(yield* Effect.option(urls.canonical(read)));
-      return { registration: Coverage.ofPlan(plan), url };
+      return { registration: Coverage.requestedOf(plan), url };
     });
 
   const targetOf = (input: QueryModule.Read | string): Effect.Effect<Target, QueryError> =>
@@ -504,12 +505,20 @@ export const fromView = (
 
   // ─── Coverage ────────────────────────────────────────────────────────────
 
-  // One rule, one scan: the first ledger entry (in registration order)
+  // One rule, one scan: the first pulled ledger entry (in registration order)
   // that covers the read, under `Coverage`. A subset covers itself, so an
-  // exact hash hit needs no separate path.
-  const verdictOf = (requested: Coverage.Registration): Effect.Effect<Coverage.Verdict> =>
+  // exact hash hit needs no separate path. An entry whose rows the replica
+  // does not hold yet (#426) covers nothing: the read goes to the server.
+  const verdictOf = (requested: Coverage.Requested): Effect.Effect<Coverage.Verdict> =>
     Ref.get(ledger).pipe(
-      Effect.map((interests) => Coverage.verdictOf(interests.values(), requested))
+      Effect.flatMap((interests) =>
+        Effect.forEach(interests.values(), (interest) =>
+          view
+            .pulled(keyOf(interest))
+            .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled })))
+        )
+      ),
+      Effect.map((entries) => Coverage.verdictOf(entries, requested))
     );
 
   // The three-tier read (ADR-0025): replica when a ledger subscription
@@ -525,7 +534,7 @@ export const fromView = (
     const readThrough = view.read;
     if (readThrough === undefined) return local;
     const compiled = Query.plan(nodes, read);
-    return verdictOf(Coverage.ofPlan(compiled)).pipe(
+    return verdictOf(Coverage.requestedOf(compiled)).pipe(
       Effect.flatMap((verdict) =>
         verdict._tag === "Covered"
           ? local
@@ -581,7 +590,7 @@ export const fromView = (
         )
       )
     ),
-    coverageOf: (read) => verdictOf(Coverage.ofPlan(Query.plan(nodes, read))),
+    coverageOf: (read) => verdictOf(Coverage.requestedOf(Query.plan(nodes, read))),
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

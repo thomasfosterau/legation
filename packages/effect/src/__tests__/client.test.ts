@@ -256,6 +256,9 @@ const productPage = (categoryId?: string) => ({
 /** The commerce shell's products pin (`shellReads`): windowed, ordered by id. */
 const shellProducts = { collection: "products", order: ["id"], first: 100 };
 
+/** A pull that starts after the registrations above, so they are pulled (ADR-0029 section 3, #426). */
+const pulled = (engine: ClientEngine.ClientEngine) => engine.pull.pipe(Effect.orDie);
+
 const rootHashes = (engine: ClientEngine.ClientEngine) =>
   Effect.map(engine.activeSubscriptions, (subsets) => subsets.map(Subset.hash));
 
@@ -270,6 +273,9 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* engine.push.pipe(Effect.orDie);
 
         yield* client.subscribe(shellProducts);
+        // Registered but not yet pulled: the rows are not in the replica, so nothing covers (#426).
+        expect((yield* client.coverageOf(productPage()))._tag).toBe("Uncovered");
+        yield* pulled(engine);
         // Row 1 of the windowed table: a prefix of the same window — local.
         const whole = yield* client.coverageOf(productPage());
         expect(whole._tag).toBe("Covered");
@@ -296,6 +302,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const whole = { collection: "products" };
         yield* client.subscribe(whole);
+        yield* pulled(engine);
         // Optimistic rows only: a fallthrough would return the server's (none).
         yield* client.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-audio" });
         yield* client.mutate("product/set", { id: "p-2", name: "Lamp", categoryId: "c-light" });
@@ -331,6 +338,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
           const { engine } = yield* makeCountingEngine;
           const client = Client.fromView(nodes, ClientView.fromEngine(engine));
           yield* client.subscribe({ collection: "products", after: "p-50" });
+          yield* pulled(engine);
           expect((yield* client.coverageOf({ collection: "products" }))._tag).toBe("Uncovered");
           expect(
             (yield* client.coverageOf({ collection: "products", after: "p-50", first: 5 }))._tag
@@ -368,6 +376,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         expect(new Set(registered)).toEqual(
           new Set([Subset.hash(root), perParent("p-1"), perParent("p-2")])
         );
+        yield* pulled(engine);
 
         // The ledger records the edge selects, so rule 4 holds ...
         expect(yield* client.coverageOf({ collection: "products" })).toEqual({
@@ -405,9 +414,11 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const pinned: Query.Read = { collection: "products", include: { reviews: true } };
         yield* client.subscribe(pinned);
+        // Offline no pull ever lands, so the pin covers nothing: the read is
+        // forwarded (here, answered locally), never Covered (#426).
         expect(
           (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
-        ).toBe("Covered");
+        ).toBe("Uncovered");
         yield* client.unsubscribe(pinned);
         expect((yield* client.coverageOf({ collection: "products" }))._tag).toBe("Uncovered");
       })
@@ -426,6 +437,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* client.subscribe(plain);
         yield* client.subscribe(withInclude);
         yield* eventually(rootHashes(engine), (hashes) => hashes.length === 2);
+        yield* pulled(engine);
 
         // The relational registration subscribed the root too; releasing it
         // must leave the plain pin's root with the engine (counted voice).
@@ -500,6 +512,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* client.subscribe(plain);
         yield* client.subscribe(withInclude);
         expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+        yield* pulled(engine);
 
         // Releasing one pin keeps the other's coverage and its window in the view.
         yield* client.unsubscribe(plain);
@@ -596,6 +609,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
         ]);
         const root = Query.plan(nodes, read).root;
         expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
+        yield* pulled(engine);
         expect(yield* client.coverageOf(read)).toEqual({
           _tag: "Covered",
           by: { root, edges: [{ name: "reviews" }] },
@@ -663,6 +677,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
 
         yield* client.subscribe("/products");
         expect(yield* client.subscriptions).toEqual(["/products"]);
+        yield* pulled(engine);
         const pinned = yield* client.coverageOf(read);
         expect(pinned._tag === "Covered" ? pinned.url : pinned).toBe("/products");
 
@@ -684,10 +699,12 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("a pin whose read has no URL form is held but not listed", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const client = yield* Client.make({ nodes, mutations, urls: stubUrls });
+        const { engine } = yield* makeCountingEngine;
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
         yield* client.subscribe({ collection: "products", include: { reviews: { first: 2 } } });
         yield* client.subscribe({ collection: "products" });
         expect(yield* client.subscriptions).toEqual(["/products"]);
+        yield* pulled(engine);
         const verdict = yield* client.coverageOf({
           collection: "products",
           include: { reviews: { first: 1 } },

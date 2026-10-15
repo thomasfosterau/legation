@@ -500,7 +500,11 @@ self.addEventListener("fetch", (event) => {
 - **What it answers.** A covered request: `200`, the document the one writer
   produces (byte-equal in content to the derived REST handler's for the same
   declarations), `Cache-Control: no-store`, and `x-legation-served-at` set to
-  the replica's CVR cookie (empty until the first pull). A URL the grammar
+  the replica's CVR cookie. A covered request is answered only once every
+  registration it depends on has been pulled (a pull started after the
+  registration applied). Until then, online, it is forwarded; after a restart
+  nothing is pulled until the first pull lands, so offline it gets the `503`
+  below. A URL the grammar
   rejects: the codec's `400` document, which the server would return
   identically — except an `include` the graph does not declare, which the
   server rules on. Uncovered and offline (`navigator.onLine === false`, or
@@ -516,7 +520,8 @@ self.addEventListener("fetch", (event) => {
   Client, or `Coverage.coverageOf(nodes, host.registrations)` over the
   registrations an `EngineHost` holds on its mirrors' behalf — the only
   ledger in a worker that knows what the tabs pinned; a registration is
-  listed only once the engine holds its windows. Every read
+  listed with the pulled state of its windows, and a covered read needs the windows
+  it depends on pulled (ADR-0029 amendment #426). Every read
   `ReplicaDocuments.toCover` names must be covered; the façade never
   subscribes on a request's behalf.
 - **The overlay.** A covered response sees pending optimistic mutations as
