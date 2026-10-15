@@ -56,7 +56,13 @@ export interface ClientTransport {
   /** Pokes from the server; may be empty for pull-only carriers. */
   readonly pokes: Stream.Stream<Poke, TransportError>;
   readonly status: Effect.Effect<ConnectionStatus>;
-  /** Emits the current status first, then changes. */
+  /**
+   * Emits the current status first, then changes. It is an edge trigger for the
+   * sync loop, not a mirror of `status`: a wrapper may emit `connected` to
+   * start a push and pull while `status` still reads `disconnected` (as
+   * `BrowserConnectivity` does on a navigator reconnect), so a label should
+   * read `status`.
+   */
   readonly statusChanges: Stream.Stream<ConnectionStatus>;
 }
 
