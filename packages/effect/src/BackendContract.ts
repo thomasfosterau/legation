@@ -206,6 +206,17 @@ export interface VerifyOptions {
    * (#416).
    */
   readonly awaitPeer?: PeerSettle | undefined;
+  /**
+   * The contract client's ledger a restarted run expects: the id the backend reported for it before the
+   * restart. Absent, the run is a fresh group and expects 0. The contract fails first when the backend
+   * reports another id, naming a forgotten or differing ledger, then numbers its mutations from it (#483).
+   */
+  readonly restoredLedger?: number | undefined;
+  /**
+   * The ledger rule 11's peer group expects on a restarted run, as `restoredLedger` is for the
+   * contract client. Absent, the peer group is fresh and expects 0 (#483).
+   */
+  readonly restoredPeerLedger?: number | undefined;
 }
 
 interface EvalRow {
@@ -230,10 +241,12 @@ interface Harness {
   readonly clientId: string;
   /**
    * The contract client's last acknowledged id when the contract begins: 0 on a
-   * fresh group, the restored id on a backend restarted over its ledger (#477).
+   * fresh group, the restored id on a backend restarted over its ledger (#477, #483).
    * Every rule numbers its mutations from here, so expectations are relative to it.
    */
   readonly start: number;
+  /** Rule 11's peer group's last acknowledged id when the contract begins (#483). */
+  readonly peerStart: number;
   /** The collection the write rules target. */
   readonly rows: string;
   /** The collection rule 6 evaluates subsets over. */
@@ -286,10 +299,37 @@ const isUnregisteredFailure = (error: BackendError, mutator: string): boolean =>
 /** The client id every contract mutation is sent under. */
 const CONTRACT_CLIENT = "contract-client";
 
+/**
+ * The rule that checks, before any other rule runs, that the backend reports the
+ * ledger the run expects (#483).
+ */
+const restoredLedgerRule = "reports the ledger the run expects";
+
+/**
+ * The message for a backend whose ledger for `clientId` in the named group is not the one the run
+ * expects. A fresh group must report 0. A restored group that reports 0 has forgotten its ledger.
+ */
+const ledgerMismatch = (
+  group: string,
+  clientId: string,
+  expected: number,
+  reported: number
+): string => {
+  const ledger = `lastMutationIds["${clientId}"]`;
+  if (expected === 0) {
+    return `A fresh ${group} must report ${ledger} = 0, got ${reported}`;
+  }
+  if (reported === 0) {
+    return `Expected the restored ${group} ${ledger} = ${expected}, got 0: the backend forgot its ledger on restart`;
+  }
+  return `Expected the restored ${group} ${ledger} = ${expected}, got ${reported}: the restored ledger differs`;
+};
+
 const makeHarness = (
   backend: Backend,
   options: VerifyOptions | undefined,
-  start: number
+  start: number,
+  peerStart: number
 ): Harness => {
   const rows = options?.collection ?? "__contract";
   const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
@@ -338,6 +378,7 @@ const makeHarness = (
     context,
     clientId,
     start,
+    peerStart,
     rows,
     evalRows: `${rows}_eval`,
     check,
@@ -814,6 +855,16 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       h.backend.applyMutations(h.context, [h.put(startId + 1, h.rows, row, { n: 0 })])
     );
 
+    // The peer group has its own ledger. A restarted run expects the one it left (#477, #483), and
+    // the check runs before the gate is registered, so a failure leaves no parked handler behind.
+    const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
+    const peerLedger = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
+    yield* h.check(
+      rule,
+      peerLedger === h.peerStart,
+      ledgerMismatch("peer group", h.clientId, h.peerStart, peerLedger)
+    );
+
     gateRuns += 1;
     const gate = `${h.context.clientGroupId}/race-${gateRuns}`;
     const parked: ParkGate = {
@@ -821,9 +872,6 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       release: yield* Deferred.make<void>(),
     };
     parkGates.set(gate, parked);
-    const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
-    // The peer group has its own ledger, which a restarted run finds already acknowledged (#477).
-    const peerStart = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
     const increment = (mutationId: number, gateName: string) =>
       h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
 
@@ -856,7 +904,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
 
       const peerDone = yield* Deferred.make<void>();
       const second = yield* Effect.forkChild(
-        retryTransient(h.backend.applyMutations(peer, [increment(peerStart + 1, NO_GATE)])).pipe(
+        retryTransient(h.backend.applyMutations(peer, [increment(h.peerStart + 1, NO_GATE)])).pipe(
           Effect.ensuring(Deferred.succeed(peerDone, undefined))
         )
       );
@@ -1012,28 +1060,37 @@ const rules: ReadonlyArray<Rule> = [
 
 /**
  * Verify a backend against the contract. The backend must have the contract
- * mutators registered and the contract collections empty. Its ledger for the
- * contract's client may already be acknowledged (a restarted backend): the rules
- * number their mutations from the id the backend reports, not from zero.
+ * mutators registered and the contract collections empty. On a fresh client group
+ * the contract expects the backend to report a ledger of 0 for its client. A run
+ * over a restarted backend passes the ledger it expects as `restoredLedger`: the
+ * contract first checks the backend reports exactly that, failing a backend that
+ * forgot its ledger, and then numbers its mutations from it (#483).
  */
 export const verifyBackendContract = (
   backend: Backend,
   options?: VerifyOptions
 ): Effect.Effect<void, ContractViolation> => {
   const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
-  // The contract starts from the ledger the backend reports for its client, so a
-  // backend restarted over a ledger that already acknowledges the client runs too (#477).
-  // On a fresh group that id is 0 and every expectation is unchanged.
+  const expected = options?.restoredLedger ?? 0;
   return backend.lastMutationIds(context).pipe(
     Effect.mapError(
       (error) =>
         new ContractViolation({
-          rule: "reports the ledger it starts from",
+          rule: restoredLedgerRule,
           message: `Backend failed unexpectedly: ${error.message}`,
         })
     ),
     Effect.flatMap((ids) => {
-      const harness = makeHarness(backend, options, ids[CONTRACT_CLIENT] ?? 0);
+      const reported = ids[CONTRACT_CLIENT] ?? 0;
+      if (reported !== expected) {
+        return Effect.fail(
+          new ContractViolation({
+            rule: restoredLedgerRule,
+            message: ledgerMismatch("contract group", CONTRACT_CLIENT, expected, reported),
+          })
+        );
+      }
+      const harness = makeHarness(backend, options, expected, options?.restoredPeerLedger ?? 0);
       return Effect.forEach(rules, (rule) => rule(harness), { discard: true });
     })
   );
