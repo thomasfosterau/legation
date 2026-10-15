@@ -1,8 +1,9 @@
 /**
  * The forgetting bound for a backend's rejection memory (#355, #366, #468): the
  * per-client rule that drops a remembered rejection once the client's next push
- * has moved past it. MemoryBackend, JsonApiBackend and SqlBackend all bound
- * their memory with these, so the rule lives once.
+ * has moved past it. MemoryBackend and JsonApiBackend bound their memory with
+ * `forgetBelow`; SqlBackend shares only `floorsOf` and keeps its own forgetting
+ * loop over its ledger rows.
  */
 
 /**
