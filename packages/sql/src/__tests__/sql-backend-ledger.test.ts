@@ -476,6 +476,36 @@ describe("SqlBackend rejection memory on SQLite (#366)", () => {
       )
   );
 
+  it.effect(
+    "a rejection at exactly the push's floor is kept, and one below the floor is forgotten",
+    () =>
+      withDatabase((sql) =>
+        Effect.gen(function* () {
+          const backend = backendWith(sql, rejectingHandlers);
+          const first = yield* backend.applyMutations(context, [
+            mutation(1),
+            mutation(2, "todo/reject"),
+          ]);
+          expect(first.rejected).toEqual([rejected(2)]);
+
+          // The next push's lowest id is 2, the rejection's own id: the push does not
+          // start past 2, so the rejection is still reported.
+          const resent = yield* backend.applyMutations(context, [
+            mutation(2, "todo/reject"),
+            mutation(3),
+          ]);
+          expect(resent.rejected).toEqual([rejected(2)]);
+          expect(resent.lastMutationIds).toEqual({ [CLIENT]: 3 });
+
+          // A push whose lowest id is 4 passes 2, so a copy of 2 is no longer reported.
+          yield* backend.applyMutations(context, [mutation(4)]);
+          const late = yield* backend.applyMutations(context, [mutation(2, "todo/reject")]);
+          expect(late.rejected).toBeUndefined();
+          expect(late.lastMutationIds).toEqual({ [CLIENT]: 4 });
+        })
+      )
+  );
+
   it.effect("several rejections of one client are remembered together, in push order", () =>
     withDatabase((sql) =>
       Effect.gen(function* () {

@@ -54,6 +54,7 @@ import { BackendError, MutationRejected } from "./Errors.js";
 import type { Mutator } from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
+import * as RejectionMemory from "./RejectionMemory.js";
 import * as Subset from "./Subset.js";
 import * as UnknownMutator from "./UnknownMutator.js";
 
@@ -301,29 +302,9 @@ const withRejection = (
   return { ...s, rejections: groups };
 };
 
-/** The lowest mutation id a push carries, per client (the push's floors, #355). */
-const lowestIdPerClient = (mutations: ReadonlyArray<Mutation>): Map<string, number> => {
-  const floors = new Map<string, number>();
-  for (const { clientId, mutationId } of mutations) {
-    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
-  }
-  return floors;
-};
-
 /**
- * Forget the rejections a client has moved past (#355). `floors` maps each
- * client in a push to the lowest mutation id that push carries. A client
- * resends only ids it has not had acknowledged, and it trims an id only when a
- * response covering it reaches it. A push response carries its own
- * `lastMutationIds`, and a pull response carries its watermark along with the
- * rejections that watermark covers (#365), so either way the id's outcome has
- * reached the client. So a push whose lowest id is `f` proves the client has
- * already seen the outcome of every id below `f`. Those rejections are dropped;
- * the ones at or above `f` are kept. So a client's remembered rejections stay
- * within its unacknowledged journal as of its latest push, plus any rejection
- * committed since. A pull never forgets: it only reports. A client that never
- * pushes again keeps its last push's rejections, so the held state is bounded
- * by the client's journal.
+ * Forget the rejections a client has moved past (#355). The rule, with its
+ * floors, is {@link RejectionMemory.forgetBelow}.
  */
 const forgetRejectionsBelow = (
   s: MemoryState,
@@ -332,18 +313,8 @@ const forgetRejectionsBelow = (
 ): MemoryState => {
   const clients = s.rejections.get(clientGroupId);
   if (clients === undefined) return s;
-  const kept = new Map(clients);
-  let changed = false;
-  for (const [clientId, floor] of floors) {
-    const ids = clients.get(clientId);
-    if (ids === undefined) continue;
-    const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
-    if (remaining.size === ids.size) continue;
-    changed = true;
-    if (remaining.size === 0) kept.delete(clientId);
-    else kept.set(clientId, remaining);
-  }
-  if (!changed) return s;
+  const kept = RejectionMemory.forgetBelow(clients, floors);
+  if (kept === clients) return s;
   const groups = new Map(s.rejections);
   if (kept.size === 0) groups.delete(clientGroupId);
   else groups.set(clientGroupId, kept);
@@ -567,7 +538,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       Effect.gen(function* () {
         // The rejections below this push's floors are ones each client has
         // already seen the outcome of (#355).
-        const floors = lowestIdPerClient(mutations);
+        const floors = RejectionMemory.floorsOf(mutations);
         yield* Ref.update(state, (s) => forgetRejectionsBelow(s, context.clientGroupId, floors));
 
         // Pre-batch snapshot: the old values fine-grained fan-out derives

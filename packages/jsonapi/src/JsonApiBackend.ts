@@ -116,7 +116,12 @@ import {
   MutationRejected,
   Predicate,
 } from "@thomasfosterau/legation-effect";
-import { Hash, Protocol, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
+import {
+  Hash,
+  Protocol,
+  RejectionMemory,
+  UnknownMutator,
+} from "@thomasfosterau/legation-effect/internal";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import type { Mutator } from "@thomasfosterau/legation-effect";
 import {
@@ -578,40 +583,6 @@ const ledgerOf = (group: Group): Ledger.GroupLedger => ({
   ),
 });
 
-/**
- * The rejections a client's push has moved past, forgotten (#355, as MemoryBackend).
- * `floors` maps each client in the push to the lowest mutation id the push carries
- * for it: a client resends only ids it has not had acknowledged, so the rejections
- * below that floor are ones it has seen. Returns `clients` itself when nothing goes.
- */
-const forgetBelow = (
-  clients: ReadonlyMap<string, ReadonlyMap<number, string>>,
-  floors: ReadonlyMap<string, number>
-): ReadonlyMap<string, ReadonlyMap<number, string>> => {
-  let kept: Map<string, ReadonlyMap<number, string>> | undefined;
-  for (const [clientId, floor] of floors) {
-    const ids = clients.get(clientId);
-    if (ids === undefined) continue;
-    const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
-    if (remaining.size === ids.size) continue;
-    kept ??= new Map(clients);
-    if (remaining.size === 0) kept.delete(clientId);
-    else kept.set(clientId, remaining);
-  }
-  return kept ?? clients;
-};
-
-/** The lowest mutation id a push carries, per client. */
-const floorsOf = (
-  mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
-): Map<string, number> => {
-  const floors = new Map<string, number>();
-  for (const { clientId, mutationId } of mutations) {
-    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
-  }
-  return floors;
-};
-
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
   config: JsonApiBackendConfig
@@ -1065,7 +1036,10 @@ export const make = (
       mutations: ReadonlyArray<PushedMutation>
     ) =>
       updateGroup(context.clientGroupId, (group) => {
-        const rejections = forgetBelow(group.rejections, floorsOf(mutations));
+        const rejections = RejectionMemory.forgetBelow(
+          group.rejections,
+          RejectionMemory.floorsOf(mutations)
+        );
         return rejections === group.rejections ? group : { ...group, rejections };
       });
 
