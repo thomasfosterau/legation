@@ -184,7 +184,6 @@ describe("the atomic batch on the key-value store (#393)", () => {
       const without = yield* openStore(plain.kv);
       expect(without.commitPull).toBeUndefined();
       expect(without.commitAcknowledgement).toBeUndefined();
-      expect(without.commitTailRelease).toBeUndefined();
 
       const batched = recordingKeyValue();
       const withBatch = yield* openStore(
@@ -193,7 +192,6 @@ describe("the atomic batch on the key-value store (#393)", () => {
       );
       expect(withBatch.commitPull).toBeDefined();
       expect(withBatch.commitAcknowledgement).toBeDefined();
-      expect(withBatch.commitTailRelease).toBeDefined();
     })
   );
 
@@ -256,8 +254,8 @@ describe("the atomic batch on the key-value store (#393)", () => {
         yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
       }
 
-      // Acknowledge the first two, then release them with a pull; then release the last one by
-      // overflow; then a pull that clears the rows.
+      // Acknowledge the first two, then release them with a pull; then release the last one with a
+      // pull; then a pull that clears the rows.
       yield* batchStore.commitAcknowledgement!(history.slice(0, 2), { c: 2 });
       yield* acknowledgeOnRecordPath(recordStore, history.slice(0, 2), { c: 2 });
       yield* batchStore.commitPull!({
@@ -270,7 +268,7 @@ describe("the atomic batch on the key-value store (#393)", () => {
         cookie: "k1",
         patch: [put("a", 1), put("b", 2)],
       });
-      yield* batchStore.commitTailRelease!({ c: 2 });
+      yield* batchStore.commitPull!({ lastMutationIds: { c: 2 }, patch: [] });
       yield* recordStore.beginRelease({ lastMutationIds: { c: 2 }, patch: [] });
       yield* recordStore.releaseUnpulled({ c: 2 });
       yield* batchStore.commitPull!({
@@ -401,7 +399,6 @@ describe("the atomic batch on the key-value store (#393)", () => {
       (store) => store.commitPull!({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] }),
     ],
     ["commitAcknowledgement", (store) => store.commitAcknowledgement!([mutation("c", 2)], {})],
-    ["commitTailRelease", (store) => store.commitTailRelease!({ c: 1 })],
   ];
   for (const [member, call] of batchMemberCalls) {
     it.effect(
