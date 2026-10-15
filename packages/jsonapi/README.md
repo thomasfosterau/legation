@@ -196,6 +196,19 @@ that push is sent, on both paths, which stalls that client's queue until the
 route exists. A resource
 that only receives creates needs no `getOne` route.
 
+### Row cache
+
+`getRows` serves a row from the backend's cache when it holds one. The cache
+takes the rows a listing (`evaluate`) returns, and the value each write this
+instance applies leaves a row with; a write the server rejects or fails leaves
+its row as it was. A delete this instance applies removes its row from the
+cache. The cache reflects this instance's own writes only, and nothing tells it
+about writes made elsewhere. So run one `JsonApiBackend` per JSON:API server,
+and write that server only through it: with a second instance, or another
+writer, `getRows` can serve a row that has since been changed or deleted. A row
+not in the cache is fetched with `GET /{type}/{id}`, which needs a `getOne`
+route.
+
 ## Standalone collection loading
 
 `CollectionLoader` reads JSON:API endpoints into rows directly. Every helper is
