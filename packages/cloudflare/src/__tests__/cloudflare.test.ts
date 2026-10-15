@@ -8,12 +8,13 @@
  * silent.
  *
  * The headline test waits for specific events (a lease written at a shard, a
- * publish answered, a window updated), never for a fixed time, and pins
- * `Date` (which the shards read for lease expiry) so a loaded machine cannot
- * age a lease out between its heartbeat and the write it must route (#282).
+ * publish answered, a window updated), never for a fixed time. Its room's
+ * heartbeat runs on a TestClock, so a beat happens only when the test advances
+ * time, and its leases outlive any real run (see the headline test), so a
+ * loaded machine cannot age a lease out between its beat and the write it must
+ * route (#282).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vitest";
 import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import type {
@@ -238,12 +239,14 @@ const roomTransport = (room: { fetch: (request: Request) => Promise<Response> })
 
 describe("rooms + shards, end to end", () => {
   it("a cross-room write pokes the fine-registered room's sockets and window", async () => {
-    // Shards stamp and check leases with `Date.now()`. Pinning it means a
-    // lease cannot expire mid-test however late a heartbeat runs; expiry has
-    // its own unit test above. Timers stay real, so heartbeats still fire.
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const scope = Effect.runSync(Scope.make());
     try {
+      // The room's heartbeat sleeps on this clock, so it beats only when the test
+      // advances time. Shards stamp leases with the real `Date.now()`; a 10 minute
+      // beat gives a 30 minute TTL, which no run of this test can outlive. (A
+      // 150 ms TTL on real time expired under event-loop starvation; expiry has
+      // its own unit test above.)
+      const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(scope)));
       const backend = await Effect.runPromise(
         MemoryBackend.make(
           MemoryBackend.validatedHandlers([
@@ -283,7 +286,8 @@ describe("rooms + shards, end to end", () => {
             reviews: Authorization.allowAll,
           }),
         shards: () => shardsNs,
-        heartbeat: "50 millis",
+        heartbeat: "10 minutes",
+        clock,
       });
 
       const roomA = makeState("room-a");
@@ -341,7 +345,9 @@ describe("rooms + shards, end to end", () => {
       void observing;
       await isSubscribed;
       await Effect.runPromise(reader.pull.pipe(Effect.orDie));
-      // A heartbeat leases the fine topic at its shard.
+      // The first pull boots the room; one beat (on the room's clock) leases the
+      // fine topic at its shard.
+      await Effect.runPromise(clock.adjust("10 minutes"));
       await shardCalls.next(
         (call) =>
           call.shard === "reviews/productId=p-1" &&
@@ -411,7 +417,6 @@ describe("rooms + shards, end to end", () => {
       await Effect.runPromise(Scope.close(readerScope, Exit.void));
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void));
-      vi.useRealTimers();
     }
   }, 20_000);
 });
