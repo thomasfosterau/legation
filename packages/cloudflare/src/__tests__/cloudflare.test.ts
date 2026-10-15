@@ -12,8 +12,10 @@
  * `Date` (which the shards read for lease expiry) so a loaded machine cannot
  * age a lease out between its heartbeat and the write it must route (#282).
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
 import { Effect, Exit, Schema, Scope, Stream } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import type {
   D1Database,
   DurableObjectNamespace,
@@ -414,73 +416,214 @@ describe("rooms + shards, end to end", () => {
   }, 20_000);
 });
 
+// The room's boot, heartbeat and request handling run on the TestClock (the
+// `clock` seam), so the bound is crossed by advancing virtual time. The writer
+// and reader engines stay on the real clock. The hung shards record each
+// request, and `arrived` resolves once the room has made that many.
+const makeHungShards = () => {
+  const received: Array<{ readonly shard: string; readonly path: string }> = [];
+  const waiters: Array<{ readonly count: number; readonly done: () => void }> = [];
+  const namespace = makeNamespace((name, request) => {
+    received.push({ shard: name, path: new URL(request.url).pathname });
+    for (const waiter of waiters.filter((w) => received.length >= w.count)) waiter.done();
+    return new Promise<Response>(() => undefined);
+  });
+  return {
+    namespace,
+    received,
+    arrived: (count: number): Promise<void> =>
+      received.length >= count
+        ? Promise.resolve()
+        : new Promise<void>((done) => waiters.push({ count, done })),
+  };
+};
+
+const publishPolicy = () =>
+  Authorization.policy({
+    products: Authorization.allowAll,
+    reviews: Authorization.allowAll,
+  });
+
+/** A client engine on the real clock, talking to `room` over the room transport. */
+const makeClient = (
+  room: { fetch: (request: Request) => Promise<Response> },
+  scope: Scope.Scope,
+  clientId: string,
+  clientGroupId: string,
+  syncLoop?: ClientEngine.SyncLoopOptions
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* ClientStore.makeMemory;
+      const options = { clientId, clientGroupId, mutators: mutations };
+      return yield* ClientEngine.make(
+        syncLoop === undefined ? options : { ...options, syncLoop }
+      ).pipe(
+        Effect.provideService(ClientStore.ClientStore, store),
+        Effect.provideService(Transport.ClientTransport, roomTransport(room))
+      );
+    }).pipe(Scope.provide(scope))
+  );
+
+const backendOf = () =>
+  MemoryBackend.make(
+    MemoryBackend.validatedHandlers([
+      MemoryBackend.handler(reviewSet, (args, writer) =>
+        writer.put("reviews", (args as { id: string }).id, args)
+      ),
+    ])
+  );
+
 describe("Room publishTimeout", () => {
-  it("bounds the shard calls a push makes, so a hung shard cannot hold the push open", async () => {
-    // The room boots and bounds its shard calls on the real clock (Effect's
-    // timeout here runs on real timers, as Room boot does), so a TestClock is
-    // not usable: the 200 ms bound is what lets the push finish quickly.
-    const scope = Effect.runSync(Scope.make());
-    try {
-      const backend = await Effect.runPromise(
-        MemoryBackend.make(
-          MemoryBackend.validatedHandlers([
-            MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", (args as { id: string }).id, args)
-            ),
-          ])
-        ).pipe(Scope.provide(scope))
-      );
-      // Every shard call hangs, so the room's publish finishes only by timing
-      // out (a register with no subsets makes no shard call at boot).
-      const hungShards = makeNamespace(() => new Promise<Response>(() => undefined));
-      const RoomClass = makeRoomClass<unknown>({
-        nodes,
-        backend: () => backend,
-        policy: () =>
-          Authorization.policy({
-            products: Authorization.allowAll,
-            reviews: Authorization.allowAll,
-          }),
-        shards: () => hungShards,
-        publishTimeout: "200 millis",
-      });
-      const room = new RoomClass(makeState("room-hung").state, {});
+  it.effect(
+    "a hung shard call is dropped at publishTimeout, not at the 5 second default",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const scope = yield* Scope.Scope;
+        const backend = yield* backendOf();
+        const hung = makeHungShards();
+        const RoomClass = makeRoomClass<unknown>({
+          nodes,
+          backend: () => backend,
+          policy: publishPolicy,
+          shards: () => hung.namespace,
+          publishTimeout: "200 millis",
+          clock,
+        });
+        const room = new RoomClass(makeState("room-hung").state, {});
+        const writer = yield* Effect.promise(() =>
+          makeClient(room, scope, "client-hung", "group-hung")
+        );
+        yield* Effect.promise(() =>
+          Effect.runPromise(
+            writer.mutate("review/set", {
+              id: "r-1",
+              body: "hung shard",
+              createdAt: "2026-01-01",
+              productId: "p-1",
+            })
+          )
+        );
 
-      const writerScope = Effect.runSync(Scope.make());
-      const writer = await Effect.runPromise(
-        Effect.gen(function* () {
-          const store = yield* ClientStore.makeMemory;
-          return yield* ClientEngine.make({
-            clientId: "client-hung",
-            clientGroupId: "group-hung",
-            mutators: mutations,
-          }).pipe(
-            Effect.provideService(ClientStore.ClientStore, store),
-            Effect.provideService(Transport.ClientTransport, roomTransport(room))
+        // The push's change hint publishes to the hung shards, so it cannot finish
+        // until the bound drops them.
+        let pushed = false;
+        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
+          pushed = true;
+        });
+        yield* Effect.promise(() => hung.arrived(1));
+        yield* clock.adjust("199 millis");
+        expect(pushed).toBe(false);
+        yield* clock.adjust("1 millis");
+        yield* Effect.promise(() => push);
+        expect(hung.received.map((call) => call.path)).toEqual(["/publish", "/publish"]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
+
+  it.effect(
+    "a publish fanning out past the shard concurrency is bounded as a whole, not per wave",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const scope = yield* Scope.Scope;
+        const backend = yield* backendOf();
+        const hung = makeHungShards();
+        const RoomClass = makeRoomClass<unknown>({
+          nodes,
+          backend: () => backend,
+          policy: publishPolicy,
+          shards: () => hung.namespace,
+          publishTimeout: "200 millis",
+          clock,
+        });
+        const room = new RoomClass(makeState("room-wide").state, {});
+        const writer = yield* Effect.promise(() =>
+          makeClient(room, scope, "client-wide", "group-wide")
+        );
+        // Nine products in one push: the coarse topic plus nine fine ones, ten shard
+        // calls. The broker runs eight at a time, so a second wave waits on the first.
+        for (let product = 1; product <= 9; product++) {
+          yield* Effect.promise(() =>
+            Effect.runPromise(
+              writer.mutate("review/set", {
+                id: `r-${product}`,
+                body: "wide",
+                createdAt: "2026-01-01",
+                productId: `p-${product}`,
+              })
+            )
           );
-        }).pipe(Scope.provide(writerScope))
-      );
-      await Effect.runPromise(
-        writer.mutate("review/set", {
-          id: "r-1",
-          body: "hung shard",
-          createdAt: "2026-01-01",
-          productId: "p-1",
-        })
-      );
+        }
 
-      // The push's change hint publishes to the hung shards. Unbounded, the push
-      // would wait out the 5 second default; bounded, it finishes after roughly
-      // the 200 ms publish timeout.
-      const started = performance.now();
-      await Effect.runPromise(writer.push.pipe(Effect.orDie));
-      expect(performance.now() - started).toBeLessThan(3000);
+        let pushed = false;
+        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
+          pushed = true;
+        });
+        yield* Effect.promise(() => hung.arrived(8));
+        yield* clock.adjust("199 millis");
+        expect(pushed).toBe(false);
+        // One bound covers the whole publish: the second wave is dropped with the first.
+        yield* clock.adjust("1 millis");
+        yield* Effect.promise(() => push);
+      }).pipe(Effect.scoped),
+    20_000
+  );
 
-      await Effect.runPromise(Scope.close(writerScope, Exit.void));
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-  }, 20_000);
+  it.effect(
+    "a hung lease registration at a heartbeat is dropped at publishTimeout, and the heartbeat goes on",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const scope = yield* Scope.Scope;
+        const backend = yield* backendOf();
+        const hung = makeHungShards();
+        const RoomClass = makeRoomClass<unknown>({
+          nodes,
+          backend: () => backend,
+          policy: publishPolicy,
+          shards: () => hung.namespace,
+          heartbeat: "1 second",
+          publishTimeout: "200 millis",
+          clock,
+        });
+        const room = new RoomClass(makeState("room-lease").state, {});
+        const reader = yield* Effect.promise(() =>
+          makeClient(room, scope, "client-lease", "group-lease", {
+            pullInterval: "10 minutes",
+            pushDebounce: "10 millis",
+          })
+        );
+        // A client observing p-1's reviews gives the room a window to lease.
+        const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
+        let subscribed!: () => void;
+        const isSubscribed = new Promise<void>((resolve) => (subscribed = resolve));
+        const observing = Effect.runPromise(
+          Stream.runForEach(
+            readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
+            () => Effect.sync(() => subscribed())
+          ).pipe(Scope.provide(scope), Effect.ignore)
+        );
+        void observing;
+        yield* Effect.promise(() => isSubscribed);
+        yield* Effect.promise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
+
+        // t = 1 s: the first heartbeat registers the window and hangs.
+        yield* clock.adjust("1 second");
+        yield* Effect.promise(() => hung.arrived(1));
+        expect(hung.received[0]).toEqual({ shard: "reviews/productId=p-1", path: "/register" });
+        // The bound drops it at t = 1.2 s; the next heartbeat is one interval later, at
+        // t = 2.2 s. With the 5 second default that second registration would not start
+        // until t = 6 s.
+        yield* clock.adjust("199 millis");
+        yield* clock.adjust("1 millis");
+        yield* clock.adjust("1 second");
+        yield* Effect.promise(() => hung.arrived(2));
+        expect(hung.received.map((call) => call.path)).toEqual(["/register", "/register"]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
 });
 
 describe("D1Executor", () => {

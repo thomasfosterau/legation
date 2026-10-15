@@ -22,7 +22,7 @@
  */
 
 import type { DurableObjectNamespace, DurableObjectState } from "@cloudflare/workers-types";
-import { type Duration, Effect, Ref, Scope } from "effect";
+import { Clock, type Duration, Effect, Ref, Scope } from "effect";
 import {
   Authorization,
   Backend,
@@ -69,6 +69,12 @@ export interface RoomConfig<Env> {
    * logged and dropped, so a hung shard cannot hold a push's publish open. Default 5 seconds.
    */
   readonly publishTimeout?: Duration.Input | undefined;
+  /**
+   * Test seam: the clock the room's boot, heartbeat and request handling run on. Unset in
+   * production (the real clock); a test passes its `TestClock` so `publishTimeout` and the
+   * heartbeat move with virtual time.
+   */
+  readonly clock?: Clock.Clock | undefined;
 }
 
 interface RoomRuntime {
@@ -76,6 +82,13 @@ interface RoomRuntime {
   /** Feed an inbound shard poke to the bus (the local matcher pokes groups). */
   readonly notify: (topics: ReadonlyArray<string>) => Effect.Effect<void>;
 }
+
+/** Run an effect on the room's clock: the configured one, or the real clock when none is set. */
+const onRoomClock = <A, E, R>(
+  clock: Clock.Clock | undefined,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  clock === undefined ? effect : effect.pipe(Effect.provideService(Clock.Clock, clock));
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -90,61 +103,70 @@ const boot = <Env>(
   env: Env
 ): Promise<RoomRuntime> =>
   Effect.runPromise(
-    Effect.gen(function* () {
-      // The scope lives as long as this in-memory instance; eviction tears
-      // the whole isolate down, so no explicit close is needed.
-      const scope = yield* Scope.make();
-      return yield* Effect.gen(function* () {
-        const roomId = state.id.name ?? state.id.toString();
-        const durable = yield* DurableFanoutBroker.make({
-          shards: config.shards(env),
-          timeout: config.publishTimeout,
-        });
-        // Late binding: the bus leases the room's windows, which the
-        // handler's introspection provides once built.
-        const subsetsRef = yield* Ref.make<Effect.Effect<ReadonlyArray<Subset.Subset>>>(
-          Effect.succeed([])
-        );
-        const bus = yield* FanoutBus.make({
-          roomId,
-          broker: durable.broker,
-          nodes: config.nodes,
-          subsets: Ref.get(subsetsRef).pipe(Effect.flatten),
-          heartbeat: config.heartbeat ?? "30 seconds",
-          timeout: config.publishTimeout,
-        });
-        let build = SyncServer.makeWithIntrospection.pipe(
-          Effect.provideService(Backend.Backend, config.backend(env)),
-          Effect.provideService(Authorization.AuthPolicy, config.policy(env)),
-          Effect.provideService(Cvr.CvrStore, DurableCvrStore.make(state.storage)),
-          Effect.provideService(InvalidationBus.InvalidationBus, bus)
-        );
-        if (config.identity !== undefined) {
-          build = build.pipe(
-            Effect.provideService(Authorization.IdentityResolver, config.identity(env))
+    onRoomClock(
+      config.clock,
+      Effect.gen(function* () {
+        // The scope lives as long as this in-memory instance; eviction tears
+        // the whole isolate down, so no explicit close is needed.
+        const scope = yield* Scope.make();
+        return yield* Effect.gen(function* () {
+          const roomId = state.id.name ?? state.id.toString();
+          const durable = yield* DurableFanoutBroker.make({
+            shards: config.shards(env),
+            timeout: config.publishTimeout,
+          });
+          // Late binding: the bus leases the room's windows, which the
+          // handler's introspection provides once built.
+          const subsetsRef = yield* Ref.make<Effect.Effect<ReadonlyArray<Subset.Subset>>>(
+            Effect.succeed([])
           );
-        }
-        if (config.queries !== undefined) {
-          build = build.pipe(Effect.provideService(Query.QueryResolver, config.queries(env)));
-        }
-        const { handler, introspection } = yield* build;
-        yield* Ref.set(
-          subsetsRef,
-          introspection.groups.pipe(
-            Effect.map((groups) => groups.flatMap((group) => group.subsets))
-          )
-        );
-        return { handler, notify: durable.notify };
-      }).pipe(Scope.provide(scope));
-    })
+          const bus = yield* FanoutBus.make({
+            roomId,
+            broker: durable.broker,
+            nodes: config.nodes,
+            subsets: Ref.get(subsetsRef).pipe(Effect.flatten),
+            heartbeat: config.heartbeat ?? "30 seconds",
+            timeout: config.publishTimeout,
+          });
+          let build = SyncServer.makeWithIntrospection.pipe(
+            Effect.provideService(Backend.Backend, config.backend(env)),
+            Effect.provideService(Authorization.AuthPolicy, config.policy(env)),
+            Effect.provideService(Cvr.CvrStore, DurableCvrStore.make(state.storage)),
+            Effect.provideService(InvalidationBus.InvalidationBus, bus)
+          );
+          if (config.identity !== undefined) {
+            build = build.pipe(
+              Effect.provideService(Authorization.IdentityResolver, config.identity(env))
+            );
+          }
+          if (config.queries !== undefined) {
+            build = build.pipe(Effect.provideService(Query.QueryResolver, config.queries(env)));
+          }
+          const { handler, introspection } = yield* build;
+          yield* Ref.set(
+            subsetsRef,
+            introspection.groups.pipe(
+              Effect.map((groups) => groups.flatMap((group) => group.subsets))
+            )
+          );
+          return { handler, notify: durable.notify };
+        }).pipe(Scope.provide(scope));
+      })
+    )
   );
 
 /** Answer one JSON protocol request with the matching handler operation. */
-const answer = (handle: Effect.Effect<unknown, { readonly message: string }>): Promise<Response> =>
+const answer = (
+  clock: Clock.Clock | undefined,
+  handle: Effect.Effect<unknown, { readonly message: string }>
+): Promise<Response> =>
   Effect.runPromise(
-    handle.pipe(
-      Effect.map((response) => json(response)),
-      Effect.catch((error) => Effect.succeed(json({ error: error.message }, 400)))
+    onRoomClock(
+      clock,
+      handle.pipe(
+        Effect.map((response) => json(response)),
+        Effect.catch((error) => Effect.succeed(json({ error: error.message }, 400)))
+      )
     )
   );
 
@@ -208,18 +230,21 @@ export const makeRoomClass = <Env>(
       if (url.pathname === routes.push) {
         const body: unknown = await request.json();
         return answer(
+          config.clock,
           Effect.flatMap(decodePushRequest(body), (decoded) => runtime.handler.handlePush(decoded))
         );
       }
       if (url.pathname === routes.pull) {
         const body: unknown = await request.json();
         return answer(
+          config.clock,
           Effect.flatMap(decodePullRequest(body), (decoded) => runtime.handler.handlePull(decoded))
         );
       }
       if (url.pathname === routes.read) {
         const body: unknown = await request.json();
         return answer(
+          config.clock,
           Effect.flatMap(decodeReadRequest(body), (decoded) => runtime.handler.handleRead(decoded))
         );
       }
