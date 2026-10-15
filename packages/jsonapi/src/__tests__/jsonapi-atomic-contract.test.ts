@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Semaphore } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -578,17 +578,17 @@ describe("JsonApiBackend visibility before the bump (guarantee 1, #381)", () => 
     })
   );
 
-  // Mutation: a server that publishes each staged row at once. The same
-  // assertions as above must fail on it.
-  it.effect("fails the same assertions on a server that publishes before commit (mutation)", () =>
-    Effect.gen(function* () {
-      const exit = yield* probeBatch(true).pipe(
-        Effect.flatMap((observed) =>
-          Effect.sync(() => expectInvisibleWhileParked(observed.parked))
-        ),
-        Effect.exit
-      );
-      expect(Exit.isFailure(exit)).toBe(true);
-    })
+  // Mutation: a server that publishes each staged row at once. The probe must
+  // see the row (and so the subset) while the batch is parked. The ledger stays
+  // empty: the client acknowledges only after the server's response.
+  it.effect(
+    "leaks the staged row, and only the row, from a server that publishes before commit (mutation)",
+    () =>
+      Effect.gen(function* () {
+        const observed = yield* probeBatch(true);
+        expect(observed.parked.rows).toEqual([expect.objectContaining({ n: 1 })]);
+        expect(observed.parked.entries).toEqual([expect.objectContaining({ id: heldRow })]);
+        expect(observed.parked.ledger).toEqual({});
+      })
   );
 });

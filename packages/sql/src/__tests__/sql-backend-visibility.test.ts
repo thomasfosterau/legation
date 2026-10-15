@@ -13,7 +13,7 @@
  * same probe.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -205,16 +205,14 @@ describe("SqlBackend visibility before the bump (guarantee 1, #381)", () => {
 
   // Mutation: no transaction around the push. The claim (the bump) then commits
   // before the handler runs. The handler's own SAVEPOINT still holds its write
-  // until RELEASE, so the leak is the bump alone, and the same assertions must fail.
-  it.effect("fails the same assertions on a bump that commits before its write (mutation)", () =>
+  // until RELEASE, so the leak is the bump alone: the probe must see the ledger
+  // at 1 while the row and the subset are still empty.
+  it.effect("leaks the bump, and only the bump, when the push has no transaction (mutation)", () =>
     Effect.gen(function* () {
-      const exit = yield* probe(withoutTransactions).pipe(
-        Effect.flatMap((observed) =>
-          Effect.sync(() => expectInvisibleWhileParked(observed.parked))
-        ),
-        Effect.exit
-      );
-      expect(Exit.isFailure(exit)).toBe(true);
+      const observed = yield* probe(withoutTransactions);
+      expect(observed.parked.rows).toEqual([]);
+      expect(observed.parked.entries).toEqual([]);
+      expect(observed.parked.ledger).toEqual({ [clientId]: 1 });
     })
   );
 });
