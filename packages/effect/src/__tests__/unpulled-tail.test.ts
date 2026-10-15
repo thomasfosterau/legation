@@ -14,6 +14,7 @@ import {
   Layer,
   Logger,
   Ref,
+  References,
   Schedule,
   Schema,
   Tracer,
@@ -2048,8 +2049,9 @@ describe("a push that takes the tail to half the bound pulls ahead of it (#337)"
 
 describe("dehydrate reads one state of the store (#392)", () => {
   // A KeyValueStore whose first read of `parkKey` after `armed` is set signals `reached` and waits on
-  // `release`. The cookie is read between the rows and the journal, and unlocked, so parking there
-  // leaves the snapshot's earlier reads behind and its later ones ahead of whatever the test lands.
+  // `release`. Parking on the cookie leaves the snapshot's row reads behind and its journal and tail
+  // reads ahead of whatever the test lands. Parking on the unpulled index leaves the journal read behind
+  // and the tail read ahead, so an acknowledgement that lands there is seen by the tail alone.
   const parkedAt = (
     base: KeyValueStore.KeyValueStore,
     parkKey: string,
@@ -2112,17 +2114,19 @@ describe("dehydrate reads one state of the store (#392)", () => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
-  it.effect("a push acknowledgement that lands between the snapshot's reads is seen whole", () =>
+  it.effect("a push acknowledgement between the journal and tail reads is seen whole", () =>
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const base = yield* KeyValueStore.KeyValueStore;
       const armed = yield* Ref.make(false);
       const reached = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      // The first read of the unpulled index is the tail's first read: the journal has been read by then,
+      // and the acknowledgement moves the entry from the journal into the tail before the tail is read.
       const source = yield* ClientStoreModule.makeKeyValue().pipe(
         Effect.provideService(
           KeyValueStore.KeyValueStore,
-          parkedAt(base, "legation/cookie", armed, reached, release)
+          parkedAt(base, "legation/unpulledIndex", armed, reached, release)
         )
       );
       const engine = yield* makeCounterEngine(server, source);
@@ -2185,5 +2189,40 @@ describe("dehydrate reads one state of the store (#392)", () => {
     Effect.gen(function* () {
       yield* expectSnapshotIsTheMembers(yield* ClientStoreModule.makeKeyValue());
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  // A pull writes the rows, then the cookie, under the memory store's lock. A snapshot reads the rows
+  // first and the cookie after them, so unlocked it can pair the rows of one pull with the cookie of a
+  // later one, a pairing no serial order produces. `MaxOpsBeforeYield` of 5, the house value
+  // (journal-append-gap.test.ts), makes the two fibers yield often enough that a pull lands between the
+  // snapshot's reads on the unlocked code (#392). A budget of 1 starves the pull and never finishes.
+  it.live("a memory snapshot never pairs one pull's rows with another pull's cookie", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const rounds = 200;
+      let torn = 0;
+      const pulls = Effect.gen(function* () {
+        for (let k = 1; k <= rounds; k++) {
+          yield* store.commitPull!({
+            lastMutationIds: {},
+            cookie: `c${k}`,
+            patch: [{ _tag: "Put", collection: "counters", id: "a", version: k, value: { n: k } }],
+          });
+        }
+      });
+      const reads = Effect.gen(function* () {
+        for (let i = 0; i < rounds * 2; i++) {
+          const state = yield* store.snapshot!;
+          const row = state.rows.find((entry) => entry.row.id === "a")?.row;
+          const n = row === undefined ? undefined : (row.value as { readonly n: number }).n;
+          if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
+        }
+      });
+      const pulling = yield* Effect.forkChild(pulls);
+      const reading = yield* Effect.forkChild(reads);
+      yield* Fiber.join(pulling);
+      yield* Fiber.join(reading);
+      expect(torn).toBe(0);
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
   );
 });

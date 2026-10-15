@@ -110,6 +110,26 @@ const put = (id: string, n: number) =>
 const rowKey = (id: string) => `legation/row/counters/${id}`;
 const RECORD = "legation/releaseIntent";
 
+/** Writes `record` into the entries store of `database` as IndexedDB holds it, whatever its value's type. */
+const putRawRecord = (
+  database: string,
+  record: { readonly key: string; readonly value: unknown }
+) =>
+  new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(database);
+    request.addEventListener("success", () => {
+      const db = request.result;
+      const tx = db.transaction("entries", "readwrite");
+      tx.objectStore("entries").put(record);
+      tx.addEventListener("complete", () => {
+        db.close();
+        resolve();
+      });
+      tx.addEventListener("error", () => reject(tx.error));
+    });
+    request.addEventListener("error", () => reject(request.error));
+  });
+
 /** Creates `database` at version 2, with the entries store when `withEntries`, as a later version would. */
 const createAtVersion2 = (database: string, withEntries: boolean) =>
   new Promise<void>((resolve, reject) => {
@@ -405,6 +425,32 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(snapshot.journal.map((m) => m.mutationId)).toEqual([2]);
         expect(snapshot.unpulled?.map((m) => m.mutationId)).toEqual([1]);
       }).pipe(Effect.provide(storeLayer(database, failingIndexedDb)));
+    })
+  );
+
+  it.effect("a snapshot skips a non-string record, as the member reads do", () =>
+    Effect.gen(function* () {
+      const database = "atomic-snapshot-non-string";
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        yield* store.commitPull!({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [put("a", 1)],
+        });
+      }).pipe(Effect.provide(storeLayer(database)));
+      // A number where the cookie belongs: IndexedDB stores it, the platform store reads it as absent.
+      yield* Effect.promise(() => putRawRecord(database, { key: "legation/cookie", value: 7 }));
+
+      yield* Effect.gen(function* () {
+        const store = yield* ClientStore.ClientStore;
+        const state = yield* store.snapshot!;
+        expect(state.cookie).toBeUndefined();
+        expect(state.cookie).toBe(yield* store.getCookie);
+        expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
+        expect(state.journal).toEqual(yield* store.pendingMutations);
+        expect(state.unpulled).toEqual(yield* store.unpulled);
+      }).pipe(Effect.provide(storeLayer(database)));
     })
   );
 });
