@@ -14,6 +14,7 @@ import { Backend } from "../Backend.js";
 import * as Client from "../Client.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
+import * as ClientView from "../ClientView.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
@@ -278,22 +279,26 @@ describe("Undo (#46)", () => {
       const handler = yield* makeServer;
       const transport = yield* makeInMemory(handler, "group-client");
       const store = yield* ClientStoreModule.makeMemory;
-      const client = yield* Client.make({
-        nodes,
-        mutations: setTodo,
+      // The engine is held here only to pull: a pinned read answers locally
+      // once a pull has landed (ADR-0029 section 3, #426). `Undo.make` takes
+      // the Client itself, not the engine, and infers its error type from
+      // `Client.mutate`.
+      const engine = yield* ClientEngineModule.make({
         clientId: "client-client",
         clientGroupId: "group-client",
+        mutators: setTodo,
       }).pipe(
         Effect.provideService(ClientStore, store),
         Effect.provideService(ClientTransport, transport)
       );
-      // No `ClientEngine` in scope at all — `Undo.make` accepts the Client
-      // directly, and infers its error type from `Client.mutate`.
+      const client = Client.fromView(nodes, ClientView.fromEngine(engine));
       const manager = yield* Undo.make(client);
       const allTodosRead = { collection: "todos" };
       // Pin the read so `query` answers locally instead of falling through
-      // to the (unrelated) server tier — ADR-0025.
+      // to the (unrelated) server tier — ADR-0025 — and pull it so the pin
+      // covers (#426).
       yield* client.subscribe(allTodosRead);
+      yield* engine.pull.pipe(Effect.orDie);
 
       yield* manager.run({
         execute: { mutator: "todo/set", args: { id: "1", title: "a", done: false } },

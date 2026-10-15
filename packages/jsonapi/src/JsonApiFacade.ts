@@ -38,7 +38,7 @@
  *    (ADR-0029 §6). The response is `200` `application/vnd.api+json` with
  *    `Cache-Control: no-store` (the replica is the cache) and
  *    `x-legation-served-at: <cookie>`, the replica's CVR cookie at the time
- *    of the answer (empty until the first pull), so devtools and tests can
+ *    of the answer, so devtools and tests can
  *    tell a local answer from a network one.
  * 5. **Offline.** An uncovered request while the network is unreachable —
  *    `navigator.onLine === false` here, or a forwarded fetch that rejected

@@ -13,6 +13,7 @@
 import type * as ClientEngine from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
 import type * as Collection from "./Collection.js";
+import * as Coverage from "./Coverage.js";
 import { MutatorError, TransportError } from "./Errors.js";
 import type * as Mutator from "./Mutator.js";
 import type * as MutationState from "./MutationState.js";
@@ -152,6 +153,8 @@ export interface Mirror {
   ) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
   /** Emits the current rows now and on every mirror update for the subset. */
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
+  /** The host's pulled summary of the registration under `key` (#426); see {@link ClientView.ClientView.pulled}. */
+  readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
   /**
    * Row-level deltas of a subset's live window (#115) — see
    * {@link ClientEngine.ClientEngine.observeChanges}. The mirror has no
@@ -318,6 +321,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // it is a singleton (one map, not one per subset/named-query key) whose
     // shape differs from `LocalRow`.
     const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
+    // The host's pulled summaries of its registrations (#426); see `PulledRegistrations`.
+    const pulledKeys = yield* Ref.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -453,6 +458,11 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                     ])
                   )
                 ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)));
+              case "PulledRegistrations":
+                return Ref.set(
+                  pulledKeys,
+                  new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
+                );
               case "MutateAck":
                 return resolveIn(pending, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, undefined)
@@ -681,6 +691,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
+      pulled: (key: string) =>
+        Ref.get(pulledKeys).pipe(Effect.map((map) => map.get(key) ?? Coverage.NOT_PULLED)),
       // Observing auto-registers with the host for the stream's lifetime:
       // the mirror only carries keys someone subscribed, so a live read IS a
       // subscription intent (refcounted; an explicit `subscribe` still pins a

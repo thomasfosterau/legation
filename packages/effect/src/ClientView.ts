@@ -26,14 +26,17 @@ import { Context, Effect, Layer, Scope, Stream } from "effect";
 import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
 import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
+import type * as Coverage from "./Coverage.js";
 import { TransportError } from "./Errors.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import type * as Identity from "./Identity.js";
 import type * as MutationState from "./MutationState.js";
 import type { Mutation } from "./Protocol.js";
+import * as MirrorProtocol from "./MirrorProtocol.js";
+import * as PullMarks from "./PullMarks.js";
 import * as Related from "./Related.js";
 import type { RowChange } from "./RowChange.js";
-import type * as Subset from "./Subset.js";
+import * as Subset from "./Subset.js";
 import * as Subscriptions from "./Subscriptions.js";
 
 /**
@@ -81,6 +84,15 @@ export interface ClientView {
     subset: Subset.Subset,
     options?: ClientEngineModule.ObserveChangesOptions
   ) => Stream.Stream<ReadonlyArray<RowChange<LocalRow>>, ClientViewError>;
+  /**
+   * The pulled summary of a registration (#426): the registration under `key`
+   * (the subset hash, or the relational key of {@link MirrorProtocol.relatedKey})
+   * has its root window and each edge collection's windows in the replica. A
+   * Client answers a covered read from the replica only when this answers for
+   * the read's collections (`Coverage.pulledFor`). Over an engine the marks
+   * are kept here; a `Mirror` has the host's answer, sent over the channel.
+   */
+  readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
   /** Register/release a subscription (synced by the engine host). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
@@ -183,21 +195,36 @@ export const ClientView = Context.Service<ClientView>("@thomasfosterau/legation-
  */
 export const fromEngine = (raw: ClientEngine): ClientView => {
   const engine = Subscriptions.counted(raw);
+  const marks = PullMarks.make(engine);
   return {
     query: (subset) => engine.query(subset),
     observe: (subset) => engine.observe(subset),
     observeWindow: (subset) => engine.observeWindow(subset),
     observeChanges: (subset, options) => engine.observeChanges(subset, options),
-    subscribe: (subset) => engine.subscribe(subset),
-    unsubscribe: (subset) => engine.unsubscribe(subset),
+    pulled: (key) => marks.pulled(key),
+    subscribe: (subset) => {
+      const key = Subset.hash(subset);
+      return marks.open(key, subset).pipe(Effect.andThen(marks.wrap(key).subscribe(subset)));
+    },
+    unsubscribe: (subset) => {
+      const key = Subset.hash(subset);
+      return marks
+        .wrap(key)
+        .unsubscribe(subset)
+        .pipe(Effect.andThen(marks.close(key)));
+    },
     subscribeQuery: (name, args) => engine.subscribeQuery(name, args),
     unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
     queryNamed: (name, args) => engine.queryNamed(name, args),
     observeNamed: (name, args) => engine.observeNamed(name, args),
     related: (registry, collectionName, subset, edges) =>
       Related.related(engine, registry, collectionName, subset, edges),
-    pinEdges: (registry, collectionName, subset, edges) =>
-      Related.trackEdges(engine, registry, collectionName, subset, edges),
+    pinEdges: (registry, collectionName, subset, edges) => {
+      const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
+      return Effect.acquireRelease(marks.open(key, subset), () => marks.close(key)).pipe(
+        Effect.andThen(Related.trackEdges(marks.wrap(key), registry, collectionName, subset, edges))
+      );
+    },
     ...(engine.readThrough === undefined
       ? {}
       : {

@@ -29,6 +29,7 @@
  */
 
 import type * as ClientEngine from "./ClientEngine.js";
+import type * as Coverage from "./Coverage.js";
 import * as Hash from "./Hash.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
@@ -271,7 +272,26 @@ export type HostMessage =
   | {
       readonly _tag: "MutationStatesUpdate";
       readonly states: ReadonlyArray<MutationState.MutationState>;
+    }
+  /**
+   * The pulled summaries of the host's registrations (#426): per key (a
+   * `Subscribe`'s subset hash, or a `SubscribeRelated`'s {@link relatedKey}),
+   * whether its root window is in the replica and, per edge collection,
+   * whether its edge windows are. A mirror answers a covered read locally only
+   * when the summary covers the read (`Coverage.pulledFor`). Replaces the
+   * previous list; sent whenever it changes and on `HostReady`. A mirror that
+   * predates it ignores the message (foreign traffic).
+   */
+  | {
+      readonly _tag: "PulledRegistrations";
+      readonly registrations: ReadonlyArray<PulledRegistration>;
     };
+
+/** One registration's pulled summary, keyed as the host keys it. */
+export interface PulledRegistration {
+  readonly key: string;
+  readonly pulled: Coverage.Pulled;
+}
 
 /** Wire codec for {@link HostMessage}. */
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
@@ -319,6 +339,18 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("MutationStatesUpdate"),
     states: Schema.Array(MutationStateSchema),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("PulledRegistrations"),
+    registrations: Schema.Array(
+      Schema.Struct({
+        key: Schema.String,
+        pulled: Schema.Struct({
+          root: Schema.Boolean,
+          collections: Schema.Record(Schema.String, Schema.Boolean),
+        }),
+      })
+    ),
   }),
 ]) as Schema.Codec<HostMessage>;
 

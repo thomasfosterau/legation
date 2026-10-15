@@ -191,14 +191,15 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     expect((JSON.parse(keyboards.body) as Json).data.map((p: Json) => p.id)).toEqual(["p-03", "p-04"]);
 
     // The first page: the engine boots on the tab's handshake and pins the
-    // shell; a pin's rows land on the next pull (a poke, or the 15-second
-    // backstop) — until then a covered URL is served from a replica that
-    // holds nothing for it, header and all. From then on the façade
-    // answers it locally, online.
+    // shell; a pin's rows land on a later pull (a poke, or the 15-second
+    // backstop). Until a pull has landed for every registration the page
+    // needs, the façade forwards the request (ADR-0029 section 3, #426), so
+    // the network answers; the wait ends on a served answer whose body is
+    // the network's, byte for byte.
     firstPageFromNetwork = (await fromNetwork(context, app.origin, firstPage)).body;
     const local = await until(
       () => fetched(page, firstPage),
-      (result) => served(result) && (JSON.parse(result.body) as Json).data.length > 0,
+      (result) => served(result) && content(result.body) === content(firstPageFromNetwork),
       { timeout: 40_000 }
     );
     expect(local.status).toBe(200);

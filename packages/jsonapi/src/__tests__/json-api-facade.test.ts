@@ -521,10 +521,10 @@ describe("JsonApiFacade", () => {
     )
   );
 
-  it.effect("carries an empty served-at header until the replica has pulled", () =>
+  it.effect("forwards a read the replica has registered but not pulled, then serves it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client, store } = yield* makeReplica;
+        const { client, engine, store } = yield* makeReplica;
         yield* client.subscribe("/jsonapi/categories");
         const handler = JsonApiFacade.fetchHandler({
           nodes,
@@ -534,13 +534,60 @@ describe("JsonApiFacade", () => {
           cookie: store.getCookie,
           online: () => true,
         });
+        // Registered, not yet pulled: nothing is covered, so the request goes
+        // to the network rather than being answered from an empty replica (#426).
+        expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toBeUndefined();
+        yield* engine.pull.pipe(Effect.orDie);
         const response = yield* handler.handle(jsonApi("/jsonapi/categories"));
         expect(response!.status).toBe(200);
-        expect(response!.headers.get(JsonApiFacade.servedAtHeader)).toBe("");
+        expect(response!.headers.get(JsonApiFacade.servedAtHeader)).not.toBe("");
         expect((yield* body(response!)) as { data: unknown }).toEqual({
-          data: [],
+          data: [
+            { type: "categories", id: "c-audio", attributes: { name: "Audio" } },
+            { type: "categories", id: "c-desk", attributes: { name: "Desk" } },
+          ],
           links: { self: "/jsonapi/categories" },
         });
+      })
+    )
+  );
+
+  // The unit reproduction of #422 (the commerce browser test's first page): the
+  // products pin is pulled, then the variants pin is registered without a pull.
+  // Before #426 the first page was answered from the replica with empty linkage.
+  it.effect("does not answer a first page before its variants pin has been pulled (#426)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, engine, store } = yield* makeReplica;
+        yield* client.subscribe("/jsonapi/products");
+        yield* engine.pull.pipe(Effect.orDie);
+        yield* client.subscribe("/jsonapi/variants");
+        const handler = JsonApiFacade.fetchHandler({
+          nodes,
+          api,
+          view: client.view,
+          coverageOf: client.coverageOf,
+          cookie: store.getCookie,
+          online: () => true,
+        });
+        expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toBeUndefined();
+        yield* engine.pull.pipe(Effect.orDie);
+        const response = yield* handler.handle(jsonApi("/jsonapi/products"));
+        expect(response!.status).toBe(200);
+        const document = (yield* body(response!)) as {
+          readonly data: ReadonlyArray<{
+            readonly id: string;
+            readonly relationships: {
+              readonly variants: { readonly data: ReadonlyArray<unknown> };
+            };
+          }>;
+        };
+        const linkage = Object.fromEntries(
+          document.data.map((product) => [product.id, product.relationships.variants.data.length])
+        );
+        expect(linkage["p-1"]).toBe(2);
+        expect(linkage["p-2"]).toBe(1);
+        expect(linkage["p-3"]).toBe(0);
       })
     )
   );
