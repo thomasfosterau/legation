@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -29,8 +29,8 @@ import {
   Middleware,
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
-import type { Mutator } from "@thomasfosterau/legation-effect";
-import { BackendContract } from "@thomasfosterau/legation-effect/internal";
+import type { Backend, Mutator } from "@thomasfosterau/legation-effect";
+import { BackendContract, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 
@@ -183,9 +183,27 @@ const evalRowsLive = (store: Store) =>
 type Entry = { readonly data?: AnyResource };
 type BatchOperation = Atomic.Operation<typeof Row | typeof EvalRow>["Type"];
 
+/**
+ * Test-only server behaviour for the visibility probe (#381). `holds` parks a
+ * batch after it has staged the row with that id, until the probe releases it.
+ * `publishEarly` is the broken server the probe must catch: it copies a staged
+ * row into the committed store at once, instead of at the batch's commit.
+ */
+interface Hold {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+interface ServerProbe {
+  readonly holds: ReadonlyMap<string, Hold>;
+  readonly publishEarly: boolean;
+}
+const noProbe: ServerProbe = { holds: new Map(), publishEarly: false };
+
 /** `add`: honour the client id recovered from the raw document; apply the two server rules. */
 const applyAdd = (
   staged: Store,
+  committed: Store,
+  probe: ServerProbe,
   index: number,
   operation: Extract<BatchOperation, { readonly op: "add" }>,
   id: string | undefined
@@ -202,7 +220,15 @@ const applyAdd = (
   // discarded with the batch, not leaked into the committed store.
   tableOf(staged, row.type).set(id, row);
   if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
-  return Effect.succeed({ data: resourceOf(row) });
+  return Effect.gen(function* () {
+    if (probe.publishEarly) tableOf(committed, row.type).set(id, row);
+    const hold = probe.holds.get(id);
+    if (hold !== undefined) {
+      yield* Deferred.succeed(hold.entered, undefined);
+      yield* Deferred.await(hold.release);
+    }
+    return { data: resourceOf(row) };
+  });
 };
 
 /**
@@ -251,13 +277,15 @@ const applyRemove = (
 
 const applyOperation = (
   staged: Store,
+  committed: Store,
+  probe: ServerProbe,
   index: number,
   operation: BatchOperation,
   clientId: string | undefined
 ): Effect.Effect<Entry, Rejection> => {
   switch (operation.op) {
     case "add":
-      return applyAdd(staged, index, operation, clientId);
+      return applyAdd(staged, committed, probe, index, operation, clientId);
     case "update":
       return applyUpdate(staged, index, operation);
     case "remove":
@@ -270,7 +298,7 @@ const applyOperation = (
  * over it, so two overlapping batches would lose the first one's writes. One
  * batch at a time is the store-wide lock that meets guarantee 1 (#353).
  */
-const operationsLive = (store: Store, lock: Semaphore.Semaphore) =>
+const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerProbe) =>
   HttpApiBuilder.group(api, "operations", (handlers) =>
     handlers.handle("operations", ({ payload, request }) =>
       Effect.gen(function* () {
@@ -282,7 +310,7 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore) =>
         const entries: Array<Entry> = [];
         for (const [index, operation] of payload["atomic:operations"].entries()) {
           const clientId = raw["atomic:operations"][index]?.data?.id;
-          entries.push(yield* applyOperation(staged, index, operation, clientId));
+          entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
         }
         // Commit.
         store.clear();
@@ -293,7 +321,7 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore) =>
   );
 
 /** The whole api as a web handler, and an `HttpClient` that calls it in-process. */
-const makeInProcessClient = (store: Store) =>
+const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
     const middleware = Middleware.layerWith({ extensions: [Atomic.EXTENSION_URI] });
@@ -302,9 +330,11 @@ const makeInProcessClient = (store: Store) =>
     // the runtime carries nothing, so narrow it here.
     const app = HttpApiBuilder.layer(api).pipe(
       Layer.provide(
-        Layer.mergeAll(rowsLive(store), evalRowsLive(store), operationsLive(store, lock)).pipe(
-          Layer.provide(middleware)
-        )
+        Layer.mergeAll(
+          rowsLive(store),
+          evalRowsLive(store),
+          operationsLive(store, lock, probe)
+        ).pipe(Layer.provide(middleware))
       ),
       Layer.provide(middleware),
       Layer.provide(HttpServer.layerServices)
@@ -412,10 +442,10 @@ const without = <V>(map: ReadonlyMap<string, V>, key: string) =>
  * The JSON:API backend under test. `omitted` leaves one contract mutator out of
  * both the decode and the write maps, as a backend that never registered it.
  */
-const makeBackend = (omitted?: string) =>
+const makeBackend = (omitted?: string, probe: ServerProbe = noProbe) =>
   Effect.gen(function* () {
     const store: Store = new Map();
-    const { client, requests } = yield* makeInProcessClient(store);
+    const { client, requests } = yield* makeInProcessClient(store, probe);
     const atomic = Convention.reflectAtomic(api);
     // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
     expect(atomic).toEqual({
@@ -468,4 +498,97 @@ describe("JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operat
     expect(resources.get(COLLECTION)?.getOne?.path).toBe(`/${COLLECTION}/:id`);
     expect(resources.get(COLLECTION)?.create).toBeUndefined();
   });
+});
+
+// ─── Visibility before the bump (guarantee 1, #381) ──────────────────────────
+
+const probeContext = { clientGroupId: "visibility-group" };
+const probeClient = "visibility-client";
+const heldRow = "held";
+
+/** What a concurrent reader sees: the row, the evaluated subset and the ledger. */
+const readView = (backend: Backend.Backend) =>
+  Effect.gen(function* () {
+    const rows = (yield* backend.getRows(probeContext, COLLECTION, [heldRow])).map(
+      (row) => row.value
+    );
+    const entries = yield* backend.evaluate(probeContext, Subset.make({ collection: COLLECTION }));
+    const ledger = yield* backend.lastMutationIds(probeContext);
+    return { rows, entries, ledger };
+  });
+
+/**
+ * Pushes one create whose server batch parks after staging its row. A concurrent
+ * read is taken while it is parked (the server's lock is held, but reads are not
+ * behind it), then the batch is released and read again.
+ */
+const probeBatch = (publishEarly: boolean) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const { backend } = yield* makeBackend(undefined, {
+      holds: new Map([[heldRow, { entered, release }]]),
+      publishEarly,
+    });
+    const push = yield* Effect.forkChild(
+      backend.applyMutations(probeContext, [
+        {
+          clientId: probeClient,
+          mutationId: 1,
+          mutator: BackendContract.putRow.name,
+          args: { collection: COLLECTION, id: heldRow, value: { n: 1 } },
+          createdAt: 0,
+        },
+      ])
+    );
+    yield* Deferred.await(entered);
+    const parked = yield* readView(backend).pipe(
+      Effect.ensuring(Deferred.succeed(release, undefined).pipe(Effect.ignore))
+    );
+    const result = yield* Fiber.join(push);
+    return { parked, committed: yield* readView(backend), reported: result.lastMutationIds };
+  }).pipe(Effect.scoped);
+
+/** The guarantee: a parked batch's row and bump are invisible to a concurrent reader. */
+const expectInvisibleWhileParked = (parked: {
+  readonly rows: ReadonlyArray<unknown>;
+  readonly entries: ReadonlyArray<unknown>;
+  readonly ledger: Readonly<Record<string, number>>;
+}) => {
+  expect(parked.rows).toEqual([]);
+  expect(parked.entries).toEqual([]);
+  expect(parked.ledger).toEqual({});
+};
+
+describe("JsonApiBackend visibility before the bump (guarantee 1, #381)", () => {
+  it.effect("a concurrent read sees neither a parked batch's row nor its bump", () =>
+    Effect.gen(function* () {
+      const observed = yield* probeBatch(false);
+      expectInvisibleWhileParked(observed.parked);
+    })
+  );
+
+  it.effect("the row and the bump are both visible once the batch commits", () =>
+    Effect.gen(function* () {
+      const observed = yield* probeBatch(false);
+      expect(observed.reported).toEqual({ [probeClient]: 1 });
+      expect(observed.committed.rows).toEqual([expect.objectContaining({ n: 1 })]);
+      expect(observed.committed.entries).toEqual([expect.objectContaining({ id: heldRow })]);
+      expect(observed.committed.ledger).toEqual({ [probeClient]: 1 });
+    })
+  );
+
+  // Mutation: a server that publishes each staged row at once. The same
+  // assertions as above must fail on it.
+  it.effect("fails the same assertions on a server that publishes before commit (mutation)", () =>
+    Effect.gen(function* () {
+      const exit = yield* probeBatch(true).pipe(
+        Effect.flatMap((observed) =>
+          Effect.sync(() => expectInvisibleWhileParked(observed.parked))
+        ),
+        Effect.exit
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+    })
+  );
 });
