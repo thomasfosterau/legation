@@ -197,6 +197,7 @@ const switchingView = (
           return next;
         }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
       queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
+      pulled: (key) => withCurrent((view) => view.pulled(key)),
       observeNamed: (name, args) =>
         SubscriptionRef.changes(viewRef).pipe(
           Stream.switchMap((view) => view.observeNamed(name, args))

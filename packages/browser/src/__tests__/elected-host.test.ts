@@ -279,9 +279,15 @@ describe("ElectedHost (#119)", () => {
           // Tab B wins the now-released lock and takes over hosting.
           yield* eventually(currentRole(survivor.role), (role) => role === "host");
 
-          // Resumed from the SAME durable store: the old leader's row is
-          // still there without tab B ever having journaled it itself.
-          const rows = yield* survivor.client.query({ collection: "todos" }).pipe(Effect.orDie);
+          // Resumed from the SAME durable store: the old leader's row reaches
+          // the successor without tab B ever having journaled it itself. The
+          // successor's registration is not pulled (#426), so its read goes to
+          // the server, which has the row once the leader's (or the successor's
+          // own journal) push lands: converge rather than read once.
+          const rows = yield* eventually(
+            survivor.client.query({ collection: "todos" }).pipe(Effect.orDie),
+            (current) => current.length === 1
+          );
           expect(rows.map((row) => (row.value as Todo).title)).toEqual(["written by the leader"]);
 
           // And tab B, now the host, can journal new mutations itself.
