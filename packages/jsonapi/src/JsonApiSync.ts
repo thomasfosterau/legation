@@ -22,7 +22,7 @@ import { Duration, Effect, Layer, Scope } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import type { KeyValueStore } from "effect/persistence";
+import { KeyValueStore } from "effect/persistence";
 import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation-effect";
 import { ClientEngine, SyncRoom } from "@thomasfosterau/legation-effect/internal";
 import {
@@ -67,12 +67,12 @@ export interface JsonApiSyncOptions {
    */
   readonly ledger?: Ledger.LedgerStore | undefined;
   /**
-   * The durable Effect `KeyValueStore` behind the client store (#468). When it is
-   * set and `ledger` is not, the ledger defaults to `Ledger.keyValue` over it, so
-   * a durable client store keeps its ledger and rejection memory across a reload.
-   * `store` is an opaque layer, so the layer cannot check that it is built over
-   * this key/value store: pass the same one to both, e.g.
-   * `ClientStore.layerKeyValue()` provided with it.
+   * The durable Effect `KeyValueStore` the client store is built over (#468). When
+   * it is set, the client store defaults to `ClientStore.layerKeyValue()` over it
+   * (unless `store` is given), and the ledger defaults to `Ledger.keyValue` over it
+   * (unless `ledger` is given), so one key/value store keeps the journal and the
+   * ledger across a reload. A `store` given with it must be built over this same
+   * key/value store: `store` is an opaque layer, so the layer cannot check that.
    */
   readonly keyValueStore?: KeyValueStore.KeyValueStore | undefined;
   /**
@@ -97,10 +97,11 @@ export interface JsonApiSyncOptions {
    */
   readonly pushDebounce?: Duration.Input | undefined;
   /**
-   * The client store backing the engine. Defaults to the in-memory store —
-   * supply a durable one (e.g. `IndexedDbClientStore.layerWindow()` from
-   * `@thomasfosterau/legation-browser`, or `ClientStore.layerKeyValue` over localStorage) so
-   * the journal and confirmed rows survive reloads (offline-first).
+   * The client store backing the engine. Defaults to `ClientStore.layerKeyValue()`
+   * over `keyValueStore` when that is given, and otherwise to the in-memory store.
+   * A durable store (e.g. `IndexedDbClientStore.layerWindow()` from
+   * `@thomasfosterau/legation-browser`, or `ClientStore.layerKeyValue` over localStorage)
+   * keeps the journal and confirmed rows across reloads (offline-first).
    */
   readonly store?: Layer.Layer<ClientStore.ClientStore> | undefined;
 }
@@ -126,9 +127,9 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
 /**
  * The full client-direct stack as a layer: provide an `HttpClient`, get a
  * ready `ClientEngine`. CVR store and invalidation bus are in-process; the
- * client store defaults to in-memory (pass `store` for durable offline
- * persistence across reloads, and `keyValueStore` with it to keep the ledger
- * durable too).
+ * client store defaults to in-memory, or to the durable store over
+ * `keyValueStore` (pass it for offline persistence and a durable ledger across
+ * reloads, or pass `store` for another durable store).
  */
 export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
@@ -143,6 +144,14 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
   const ledger =
     options.ledger ??
     (options.keyValueStore !== undefined ? Ledger.keyValue(options.keyValueStore) : undefined);
+  // The durable client store over the same key/value store, unless the app names one.
+  const clientStore =
+    options.store ??
+    (options.keyValueStore !== undefined
+      ? ClientStore.layerKeyValue().pipe(
+          Layer.provide(Layer.succeed(KeyValueStore.KeyValueStore)(options.keyValueStore))
+        )
+      : ClientStore.layerMemory);
 
   const backendLayer = Layer.effect(Backend.Backend)(
     JsonApiBackend.make({
@@ -177,7 +186,7 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
     clientGroupId: options.clientGroupId,
     mutators: registry,
     syncLoop,
-  }).pipe(Layer.provide(transportLayer), Layer.provide(options.store ?? ClientStore.layerMemory));
+  }).pipe(Layer.provide(transportLayer), Layer.provide(clientStore));
 };
 
 /**
