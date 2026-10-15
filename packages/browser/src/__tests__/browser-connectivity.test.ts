@@ -240,6 +240,7 @@ describe("BrowserConnectivity (#33)", () => {
           // A worker has no `offline` event: the flip is found by the probe.
           navigatorStub.onLine = false;
           yield* advanceUntil(hasSeen(["connected", "disconnected"]));
+          expect(yield* Ref.get(pushes)).toBe(0);
           expect(yield* store.pendingMutations).toHaveLength(1);
 
           // The probe sees the return; the reconnect leg pushes, then pulls.

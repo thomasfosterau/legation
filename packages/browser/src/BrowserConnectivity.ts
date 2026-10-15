@@ -24,11 +24,14 @@
  *
  * `statusChanges` has one addition to the combination above: the reconnect
  * edge. Each navigator `disconnected` → `connected` flip emits `connected`
- * once, even while the carrier still reports `disconnected` (#328). The sync
+ * once, whatever the carrier reports, in a worker or a window (#328). The sync
  * loop's push and pull therefore run at once, and a carrier that really is
  * down fails that push and backs off as usual. The next change then emits the
  * combined value again, which may read `disconnected`. `status` is not
- * affected: it always reads the worst of the two signals.
+ * affected: it always reads the worst of the two signals. So `statusChanges` is
+ * an edge trigger for the sync loop, not a mirror of `status`: after a
+ * reconnect edge it can read `connected` while `status` reads `disconnected`.
+ * A connection label should read `status`.
  *
  * Auto-push does not consult this status, by design (#328). A push attempted
  * while `disconnected` goes out anyway: `navigator.onLine` is a hint and can be
