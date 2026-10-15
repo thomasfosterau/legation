@@ -511,14 +511,18 @@ const peerBlockedOnLock = (sql: SqlClient) =>
  * count cannot reach the overlap. Rule 11 holds the parked call until the peer has
  * finished, or is blocked on a lock (only the parked call can hold it). Both are
  * observed conditions, polled every few milliseconds, with no deadline of the
- * harness's own: a hang is the test's timeout.
+ * harness's own: a hang is the test's timeout. `onLockWait` runs only in the lock-wait
+ * branch, just before `awaitPeer` returns there.
  */
 const awaitPeerOn =
-  (sql: SqlClient): BackendContract.PeerSettle =>
+  (sql: SqlClient, onLockWait: Effect.Effect<void> = Effect.void): BackendContract.PeerSettle =>
   (peerSettled) =>
     Effect.gen(function* () {
       if (yield* peerSettled) return;
-      if (yield* peerBlockedOnLock(sql)) return;
+      if (yield* peerBlockedOnLock(sql)) {
+        yield* onLockWait;
+        return;
+      }
       return yield* Effect.fail("pending" as const);
     }).pipe(
       Effect.retry({
@@ -571,19 +575,13 @@ const backendOver = (
   });
 
 /**
- * `awaitPeerOn`, recording into `returnedOnLock` when it returns while the peer has
- * not settled, which only the lock branch does.
+ * `awaitPeerOn`, setting `returnedOnLock` only when it returns through its lock-wait
+ * branch (#431). A return by the peer settling leaves the flag unset.
  */
-const awaitPeerRecording =
-  (sql: SqlClient, returnedOnLock: Ref.Ref<boolean>): BackendContract.PeerSettle =>
-  (peerSettled) =>
-    awaitPeerOn(sql)(peerSettled).pipe(
-      Effect.andThen(
-        Effect.gen(function* () {
-          if (!(yield* peerSettled)) yield* Ref.set(returnedOnLock, true);
-        })
-      )
-    );
+const awaitPeerRecording = (
+  sql: SqlClient,
+  returnedOnLock: Ref.Ref<boolean>
+): BackendContract.PeerSettle => awaitPeerOn(sql, Ref.set(returnedOnLock, true));
 
 describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () => {
   // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
@@ -628,8 +626,8 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
   // before it parks, so the peer blocks on that lock and cannot finish until the
   // parked call is released. `awaitPeer` must return on that observation (it is
   // recorded), and rule 11 must then reach a verdict. Removing the lock branch
-  // leaves `awaitPeer` waiting on a peer that waits on the parked call: a hang the
-  // test timeout reports.
+  // leaves `awaitPeer` waiting on a peer that waits on the parked call: a hang that
+  // the 20 s timeout reports, well inside the 60 s test backstop.
   it.live(
     "returns awaitPeer on the peer's lock wait and still reaches a verdict (#431)",
     () =>
@@ -643,7 +641,13 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
           });
           yield* BackendContract.verifyBackendContract(backend, {
             awaitPeer: awaitPeerRecording(sql, returnedOnLock),
-          });
+          }).pipe(
+            Effect.timeoutOrElse({
+              duration: "20 seconds",
+              orElse: () =>
+                Effect.die(new Error("awaitPeer did not return on the peer's lock wait")),
+            })
+          );
           expect(
             yield* Ref.get(returnedOnLock),
             "awaitPeer returned while the peer was unsettled, so the lock-wait branch ran"
