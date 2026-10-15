@@ -9,6 +9,10 @@
  * engine seeing a status), advancing the `TestClock` only to yield to those
  * fibres. Nothing waits on wall-clock time, so a loaded machine cannot reorder
  * a step (#282).
+ *
+ * The worker case (#328) has no `window`: its `navigator.onLine` is a stub the
+ * test flips, and the probe that BrowserConnectivity runs in its place is
+ * driven by the same TestClock.
  */
 import {
   Authorization,
@@ -28,6 +32,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Ref, Schema, Scope, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
+import { vi } from "vitest";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 
 interface Todo {
@@ -93,6 +98,18 @@ const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =
     if (yield* condition) return;
     return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
   });
+
+// A service worker's globals: no `window` or `document`, and a `navigator`
+// whose `onLine` the test flips. Restored when the enclosing scope closes.
+const stubWorkerGlobals = (navigatorStub: { onLine: boolean }) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      vi.stubGlobal("window", undefined);
+      vi.stubGlobal("document", undefined);
+      vi.stubGlobal("navigator", navigatorStub);
+    }),
+    () => Effect.sync(() => vi.unstubAllGlobals())
+  );
 
 // Transport legs are counted once they have completed, so a count the test
 // waits on means the leg's effects (a drained journal) are visible.
@@ -170,5 +187,69 @@ describe("BrowserConnectivity (#33)", () => {
       expect(yield* Ref.get(pulls)).toBe(pullsBefore + 1);
       expect(yield* Ref.get(pushes)).toBe(1);
     })
+  );
+
+  it.effect(
+    "worker (no window): probed navigator.onLine flips drive status and the reconnect push (#328)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const navigatorStub = { onLine: true };
+          yield* stubWorkerGlobals(navigatorStub);
+          const handler = yield* makeServer;
+          const store = yield* ClientStore.makeMemory;
+          const base = yield* Transport.makeInMemory(handler, "group-a");
+
+          const pushes = yield* Ref.make(0);
+          const pulls = yield* Ref.make(0);
+          const counted: Transport.ClientTransport = {
+            push: (request) => base.push(request).pipe(Effect.tap(() => count(pushes))),
+            pull: (request) => base.pull(request).pipe(Effect.tap(() => count(pulls))),
+            pokes: Stream.empty,
+            status: base.status,
+            statusChanges: base.statusChanges,
+          };
+          // A 100 ms probe keeps each flip within the advanceUntil step budget.
+          const connectivity = yield* BrowserConnectivity.withBrowserConnectivity(counted, {
+            pollInterval: "100 millis",
+          });
+          const seen = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
+          const transport: Transport.ClientTransport = {
+            ...connectivity,
+            statusChanges: connectivity.statusChanges.pipe(
+              Stream.tap((status) => Ref.update(seen, (all) => [...all, status]))
+            ),
+          };
+          const hasSeen = (statuses: ReadonlyArray<Transport.ConnectionStatus>) =>
+            Effect.map(Ref.get(seen), (all) => statuses.every((status, i) => all[i] === status));
+
+          const engine = yield* ClientEngine.make({
+            clientId: "client-a",
+            clientGroupId: "group-a",
+            mutators: setTodo,
+          }).pipe(
+            Effect.provideService(ClientStore.ClientStore, store),
+            Effect.provideService(Transport.ClientTransport, transport)
+          );
+          yield* engine.subscribe(allTodos);
+          yield* engine.runSync;
+          yield* advanceUntil(atLeast(pulls, 1));
+          expect(yield* Ref.get(pushes)).toBe(0);
+
+          yield* engine.mutate("todo/set", { id: "1", title: "offline edit", done: false });
+          // A worker has no `offline` event: the flip is found by the probe.
+          navigatorStub.onLine = false;
+          yield* advanceUntil(hasSeen(["connected", "disconnected"]));
+          expect(yield* Ref.get(pushes)).toBe(0);
+          expect(yield* store.pendingMutations).toHaveLength(1);
+
+          // The probe sees the return; the reconnect leg pushes, then pulls.
+          navigatorStub.onLine = true;
+          yield* advanceUntil(atLeast(pulls, 2));
+          expect(yield* Ref.get(seen)).toEqual(["connected", "disconnected", "connected"]);
+          expect(yield* Ref.get(pushes)).toBe(1);
+          expect(yield* store.pendingMutations).toEqual([]);
+        })
+      )
   );
 });

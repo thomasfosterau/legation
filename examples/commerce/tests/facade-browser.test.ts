@@ -43,9 +43,10 @@
  * in one call, and it is what a Chromium user sees under DevTools'
  * offline toggle — the page's fetches fail, and `navigator.onLine` reads
  * false in the page and in the worker. That is the browser's offline
- * signal, not the transport's: the worker's engine never hears the
- * `online`/`offline` events (#328), and its sync WebSocket stays open
- * under the emulation, so a push goes out over it whatever
+ * signal, not the transport's. The worker has no `online`/`offline` events,
+ * so its engine learns of the flip by probing `navigator.onLine` (#328), but
+ * auto-push does not consult that status, and the worker's sync WebSocket
+ * stays open under the emulation, so a push goes out over it whatever
  * `navigator.onLine` says. The transport half of §4 is therefore exercised
  * by the harness instead: `app.blackout` drops the app's own requests (the
  * browser stays "online"), and `app.carriers` cuts the sync carriers —

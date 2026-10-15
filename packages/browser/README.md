@@ -273,7 +273,11 @@ export const evictOnChanges = (engine: ClientEngine.ClientEngine) =>
 
 ### BrowserConnectivity
 
-`BrowserConnectivity.withBrowserConnectivity(transport)` wraps a `ClientTransport` so its status combines `navigator.onLine` with the transport's own signal. A return to the visible tab counts as a poke, so the sync loop catches up. The service worker and elected host examples above both use it. It is scoped: its listeners are removed when the scope closes.
+`BrowserConnectivity.withBrowserConnectivity(transport, options?)` wraps a `ClientTransport` so its status combines `navigator.onLine` with the transport's own signal. A return to the visible tab counts as a poke, so the sync loop catches up. The service worker and elected host examples above both use it. It is scoped: its listeners and probes are removed when the scope closes.
+
+Where there is a `window`, the `online` and `offline` events drive the navigator signal. A service worker has no `window` and no such events, so there `navigator.onLine` is read every `pollInterval` (default `"5 seconds"`, set through `options`) and a change is emitted when it flips. The reconnect edge then runs the sync loop's push and pull at once, instead of waiting on the push retry backoff.
+
+Auto-push does not consult this status. A push attempted while the status is `disconnected` goes out anyway. `navigator.onLine` is a hint and can read `false` while the transport still works, and a failed push already backs off on its own retry policy. The reconnect edge is what drains a journal that a failed push left behind.
 
 ### BroadcastMirrorChannel
 
