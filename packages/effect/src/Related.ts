@@ -294,6 +294,20 @@ export const queryWith = (
 ): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
   Effect.gen(function* () {
     const base = yield* view.query(subset).pipe(Effect.orDie);
+    return yield* joinRowsWith(view, strategy, base);
+  });
+
+/**
+ * The join of base rows already read: the foreign collections the rows pin
+ * are read from the view, and the rows hydrated. {@link queryWith} is this
+ * over a fresh read of the subset.
+ */
+const joinRowsWith = (
+  view: ClientView.Reader,
+  strategy: Strategy,
+  base: ReadonlyArray<LocalRow>
+): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+  Effect.gen(function* () {
     const index = yield* primeIndex(view, strategy.targets(base));
     return hydrate(strategy, base, index);
   });
@@ -916,6 +930,25 @@ export const query = (
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
     subset
+  );
+
+/**
+ * {@link query} over base rows the caller has already read from the view:
+ * the same join, judged and answered from one snapshot of the root (#426).
+ * Never reads the subset itself, so a caller that judged coverage over
+ * `base` answers from exactly those rows.
+ */
+export const queryRows = (
+  view: ClientView.Reader,
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  base: ReadonlyArray<LocalRow>,
+  edges: ReadonlyArray<string | EdgeSelect>
+): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+  joinRowsWith(
+    view,
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
+    base
   );
 
 /** Live, incrementally-maintained join over a subset's declared relationships. */

@@ -591,6 +591,9 @@ or gets the 503 (offline).
 
 **Versioning.** `PulledRegistrations` is a new host message; it replaces no
 earlier one. A mirror that predates it ignores it, as it ignores any foreign
-message. A mirror that meets a host that predates it never sees a window
+message, and so judges coverage from its registrations alone, as before #426:
+it answers covered reads locally, and the #422 race (a covered answer served
+before its linked windows are pulled) persists for that mirror until it is
+upgraded. A mirror that meets a host that predates it never sees a window
 pulled, so it forwards covered reads to the host's read path until the host is
 upgraded: correct, slower.

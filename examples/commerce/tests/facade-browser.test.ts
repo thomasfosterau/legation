@@ -279,7 +279,11 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     await page.locator("button", { hasText: "Add to cart" }).first().click();
     const pending = await until(
       () => fetched(page, cartPath),
-      (result) => served(result) && (JSON.parse(result.body) as Json).data.length === 1,
+      // A transient 503 offline document has no `data`: the predicate polls through it.
+      (result) =>
+        result.status === 200 &&
+        served(result) &&
+        (JSON.parse(result.body) as Json).data?.length === 1,
       { timeout: 10_000 }
     );
     expect(served(pending)).toBe(true);

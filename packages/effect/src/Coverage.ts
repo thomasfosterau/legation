@@ -423,6 +423,38 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
 };
 
 /**
+ * The root rows a caller read once for a request, with the subset they are of. A
+ * verdict judged over `rows` is judged over exactly the rows the caller answers from,
+ * not a second read that a pull may have moved (#426).
+ */
+export interface Snapshot {
+  readonly subset: Subset.Subset;
+  readonly rows: ReadonlyArray<LocalRow>;
+}
+
+/**
+ * How a coverage check is judged. `snapshot` is used only for the subset it names:
+ * any other subset is read through the ledger's own rows, so a snapshot of another
+ * collection cannot under-judge a read. An options bag rather than a positional
+ * argument, so a caller that passes the check to `Effect.forEach` (which passes an
+ * index second) gets no snapshot instead of a wrong one.
+ */
+export interface JudgeOptions {
+  readonly snapshot?: Snapshot | undefined;
+}
+
+/**
+ * The rows of a snapshot as a {@link RowsOf}: the snapshot's rows for the subset it
+ * is of (#426), and `rowsOf` for any other subset.
+ */
+export const snapshotOf =
+  <E>(snapshot: Snapshot, rowsOf: RowsOf<E>): RowsOf<E> =>
+  (subset) =>
+    Subset.hash(subset) === Subset.hash(snapshot.subset)
+      ? Effect.succeed(snapshot.rows)
+      : rowsOf(subset);
+
+/**
  * A request as the coverage scan takes it: its registration, plus the edge
  * windows its rows link to (`Related.windowsFor` over the root rows it reads).
  * A read whose rows link to no edge window needs only its root pulled.
@@ -501,12 +533,16 @@ export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdi
  * façade in a service worker builds its check from the host's registrations
  * (`EngineHost.Host.registrations`), where no Client's ledger sees the
  * mirrors' pins. A failed read of the rows is uncovered: the read goes to the
- * server.
+ * server. `options.snapshot`, when given, is judged over for the subset it names (see {@link JudgeOptions}).
  */
 export const coverageOf =
   <E>(nodes: Node.NodeRegistry, rowsOf: RowsOf<E>, entries: Effect.Effect<Iterable<Entry>>) =>
-  (read: Query.Read): Effect.Effect<Verdict> =>
-    requestedOf(nodes.collections, Query.plan(nodes, read), rowsOf).pipe(
+  (read: Query.Read, options?: JudgeOptions): Effect.Effect<Verdict> =>
+    requestedOf(
+      nodes.collections,
+      Query.plan(nodes, read),
+      options?.snapshot === undefined ? rowsOf : snapshotOf(options.snapshot, rowsOf)
+    ).pipe(
       Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
       Effect.catch(() => Effect.succeed<Verdict>({ _tag: "Uncovered" }))
     );

@@ -111,8 +111,17 @@ export interface Client {
    * check {@link Client.query} makes before answering locally, exposed for
    * devtools (ADR-0029 section 4: "which subscription covered the request
    * is recorded beside it").
+   *
+   * `options.snapshot`, when given, is the root rows the caller already read for
+   * this read (with the subset they are of): the verdict is judged over those rows
+   * instead of a fresh read, so a caller that answers from the same rows judges
+   * exactly what it answers (#426). A snapshot of any other subset is not used; the
+   * verdict then reads its root as usual. Omit it to judge a fresh read.
    */
-  readonly coverageOf: (read: QueryModule.Read) => Effect.Effect<Coverage.Verdict>;
+  readonly coverageOf: (
+    read: QueryModule.Read,
+    options?: Coverage.JudgeOptions
+  ) => Effect.Effect<Coverage.Verdict>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (
     mutation: string,
@@ -510,8 +519,11 @@ export const fromView = (
   // the view, so the edge windows it links to are the ones judged (#426). An
   // entry whose windows the read needs and the replica does not hold yet covers
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
-  const verdictOf = (plan: Query.Plan): Effect.Effect<Coverage.Verdict> =>
-    Coverage.requestedOf(nodes.collections, plan, view.query).pipe(
+  const verdictOf = (
+    plan: Query.Plan,
+    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query
+  ): Effect.Effect<Coverage.Verdict> =>
+    Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
       Effect.flatMap((requested) =>
         Ref.get(ledger).pipe(
           Effect.flatMap((interests) =>
@@ -533,18 +545,33 @@ export const fromView = (
   // the derived REST handlers run server-side — with the plan compiled once,
   // for the coverage verdict and the run); local again when fallthrough is
   // unavailable or fails (offline-first — local is always an answer).
+  // One snapshot of the root rows, read once: the verdict is judged over them
+  // and a covered answer is joined from them, so a pull between the judgment
+  // and the answer cannot add a root row whose edge windows are not pulled
+  // (#426). A failed read of the root is uncovered, as a failed read of the
+  // rows is.
   const queryOnce = (
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
-    const local = Query.run(view, nodes, read);
     const readThrough = view.read;
-    if (readThrough === undefined) return local;
+    if (readThrough === undefined) return Query.run(view, nodes, read);
     const compiled = Query.plan(nodes, read);
-    return verdictOf(compiled).pipe(
-      Effect.flatMap((verdict) =>
-        verdict._tag === "Covered"
-          ? local
-          : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+    const local = Effect.suspend(() => Query.run(view, nodes, read));
+    return view.query(compiled.root).pipe(
+      Effect.orElseSucceed(() => undefined),
+      Effect.flatMap((snapshot) =>
+        snapshot === undefined
+          ? Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+          : verdictOf(
+              compiled,
+              Coverage.snapshotOf({ subset: compiled.root, rows: snapshot }, view.query)
+            ).pipe(
+              Effect.flatMap((verdict) =>
+                verdict._tag === "Covered"
+                  ? Query.runRows(view, nodes, read, snapshot)
+                  : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+              )
+            )
       )
     );
   };
@@ -596,7 +623,15 @@ export const fromView = (
         )
       )
     ),
-    coverageOf: (read) => verdictOf(Query.plan(nodes, read)),
+    coverageOf: (read, options) => {
+      const plan = Query.plan(nodes, read);
+      return verdictOf(
+        plan,
+        options?.snapshot === undefined
+          ? view.query
+          : Coverage.snapshotOf(options.snapshot, view.query)
+      );
+    },
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

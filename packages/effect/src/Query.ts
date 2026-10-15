@@ -32,6 +32,7 @@
 
 import { Context, Effect, Schema, Stream } from "effect";
 import type { SyncContext } from "./Backend.js";
+import type { LocalRow } from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
 import { AuthorizationError, DuplicateNameError, QueryError } from "./Errors.js";
 import type * as Node from "./Node.js";
@@ -288,6 +289,30 @@ export const run = (
     compiled.root,
     edgeSelects(compiled)
   ).pipe(Effect.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
+};
+
+/**
+ * {@link run} over the root rows already read from the view: the same
+ * edges and windows, joined from `rows` rather than a fresh read of the root,
+ * so a caller that judged coverage over `rows` answers from those rows (#426).
+ */
+export const runRows = (
+  view: ClientView.Reader,
+  nodes: Node.NodeRegistry,
+  read: Read,
+  rows: ReadonlyArray<LocalRow>
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, never> => {
+  const compiled = plan(nodes, read);
+  if (compiled.edges.length === 0) {
+    return Effect.succeed(rows.map((row) => ({ ...row, related: {} })));
+  }
+  return Related.queryRows(
+    view,
+    nodes.collections,
+    read.collection,
+    rows,
+    edgeSelects(compiled)
+  ).pipe(Effect.map((joined) => joined.map((row) => windowRow(row, compiled.edges))));
 };
 
 /**

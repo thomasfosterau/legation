@@ -280,7 +280,10 @@ export type HostMessage =
    * replica. A mirror answers a covered read locally only when the windows
    * the read's rows link to are pulled (`Coverage.pulledFor`). Sent whenever it
    * changes and on `HostReady`. A mirror that predates it ignores the message
-   * (foreign traffic), and forwards covered reads, which is safe.
+   * (foreign traffic) and judges coverage from its registrations alone, as it
+   * did before #426: it answers covered reads locally, so the #422 race (a
+   * covered answer before its linked windows are pulled) persists for it until
+   * it is upgraded.
    */
   | {
       readonly _tag: "PulledRegistrations";

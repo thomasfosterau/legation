@@ -11,7 +11,7 @@
  * `GET` on a reflected route is not the façade's business.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema, type Scope } from "effect";
+import { Effect, Ref, Schema, type Scope } from "effect";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -28,7 +28,7 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation-effect";
-import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
+import { ClientEngine, ClientView, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
@@ -118,7 +118,13 @@ const mutators = Mutator.registry([
 
 const GROUP = "group-a";
 
-/** The seed behind a `Server`, synced into an owned engine read through a `Client`. */
+/**
+ * The seed behind a `Server`, synced into an owned engine read through a `Client`.
+ * `arm` runs `race` once, before the second read of the products' root subset
+ * returns (#426): a covered answer reads that root once, so the race lands only
+ * where a second read would. `racePut` writes a row to the server and pulls it, as
+ * another client's write does.
+ */
 const makeReplica = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
@@ -158,9 +164,46 @@ const makeReplica = Effect.gen(function* () {
     Effect.provideService(ClientStore.ClientStore, store),
     Effect.provideService(Transport.ClientTransport, transport)
   );
-  const view = ClientView.fromEngine(engine);
+  const base = ClientView.fromEngine(engine);
+  const rootHash = Subset.hash(Query.plan(nodes, { collection: "products" }).root);
+  const armed = yield* Ref.make<
+    { readonly race: Effect.Effect<void>; readonly seen: number } | undefined
+  >(undefined);
+  const rootReads = yield* Ref.make(0);
+  const view: ClientView.ClientView = {
+    ...base,
+    query: (subset) =>
+      Effect.gen(function* () {
+        if (Subset.hash(subset) === rootHash) {
+          yield* Ref.update(rootReads, (count) => count + 1);
+          const state = yield* Ref.get(armed);
+          if (state !== undefined) {
+            const seen = state.seen + 1;
+            yield* Ref.set(armed, { ...state, seen });
+            if (seen === 2) yield* state.race;
+          }
+        }
+        return yield* base.query(subset);
+      }),
+  };
+  const arm = (race: Effect.Effect<void>): Effect.Effect<void> =>
+    Effect.andThen(Ref.set(rootReads, 0), Ref.set(armed, { race, seen: 0 }));
+  const racePut = (collection: string, value: SeedRow): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* backend.applyMutations({ clientGroupId: "seed" }, [
+        {
+          clientId: "seed",
+          // The next id in the seed's contiguous run (the backend refuses a gap).
+          mutationId: Object.values(seed).reduce((count, rows) => count + rows.length, 0) + 1,
+          mutator: "seed/put",
+          args: { collection, value },
+          createdAt: 0,
+        },
+      ]);
+      yield* engine.pull;
+    }).pipe(Effect.orDie);
   const client = Client.fromView(nodes, view, { urls: JsonApiQuery.urlReads(nodes) });
-  return { client, engine, store };
+  return { client, engine, store, arm, rootReads, racePut };
 });
 
 interface Facade {
@@ -169,18 +212,25 @@ interface Facade {
   readonly engine: ClientEngine.ClientEngine;
   readonly docs: ReplicaDocuments.ReplicaDocuments;
   readonly online: { current: boolean };
+  /** Arm a race on the second read of the products' root (see `makeReplica`). */
+  readonly arm: (race: Effect.Effect<void>) => Effect.Effect<void>;
+  /** The reads of the products' root since it was armed. */
+  readonly rootReads: Ref.Ref<number>;
+  /** Write a row to the server and pull it into the replica: the pull a race lands. */
+  readonly racePut: (collection: string, value: SeedRow) => Effect.Effect<void>;
 }
 
-/** A façade over the replica, with the shell's pins applied and pulled. */
 /** The relational pin of the fixture: products with their variants. */
 const variantsOfProducts: Query.Read = { collection: "products", include: { variants: true } };
+const RELATIONAL_PIN = "/jsonapi/products?include=variants";
 
+/** A façade over the replica, with the shell's pins applied and pulled. */
 const makeFacade = (
   pins: ReadonlyArray<string>,
   options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl">> = {}
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { client, engine, store } = yield* makeReplica;
+    const { client, engine, store, arm, rootReads, racePut } = yield* makeReplica;
     for (const url of pins) yield* client.subscribe(url);
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them (#426): pull until the relational pin of the fixture is covered, so the replica holds
@@ -189,6 +239,11 @@ const makeFacade = (
       yield* engine.pull;
       yield* Effect.yieldNow;
       if ((yield* client.coverageOf(variantsOfProducts))._tag === "Covered") break;
+    }
+    // A pinned relational read must be covered once the loop has pulled: a silent fall-through
+    // here would make the covered-answer tests below pass or fail for the wrong reason.
+    if (pins.includes(RELATIONAL_PIN)) {
+      expect((yield* client.coverageOf(variantsOfProducts))._tag).toBe("Covered");
     }
     const online = { current: true };
     const handler = JsonApiFacade.fetchHandler({
@@ -201,7 +256,7 @@ const makeFacade = (
       ...options,
     });
     const docs = ReplicaDocuments.make({ nodes, prefix: "/jsonapi" });
-    return { handler, client, engine, docs, online };
+    return { handler, client, engine, docs, online, arm, rootReads, racePut };
   }).pipe(Effect.orDie);
 
 const jsonApi = (url: string, init: RequestInit = {}): Request =>
@@ -243,6 +298,31 @@ describe("JsonApiFacade", () => {
         expect(document.data.map((row) => row.id)).toEqual(["p-2", "p-3"]);
       })
     )
+  );
+
+  it.effect(
+    "a pull that lands mid-request cannot put an unpulled product into a covered document (#426)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler, arm, rootReads, racePut } = yield* makeFacade([
+            "/jsonapi/products?include=variants",
+            "/jsonapi/variants",
+          ]);
+          // A pull of a product whose variants window is not pulled lands before the second read
+          // of the root. The request reads the root once, so the race never lands: the document is
+          // written from the rows judged, the new product is not in it, and the answer is covered.
+          yield* arm(
+            racePut("products", { id: "p-4", categoryId: "c-audio", name: "Stool", priceCents: 50 })
+          );
+          const response = yield* handler.handle(jsonApi("/jsonapi/products?include=variants"));
+          expect(yield* Ref.get(rootReads)).toBe(1);
+          expect(response).toBeDefined();
+          expect(response!.status).toBe(200);
+          const document = (yield* body(response!)) as { data: ReadonlyArray<{ id: string }> };
+          expect(document.data.map((row) => row.id).sort()).toEqual(["p-1", "p-2", "p-3"]);
+        })
+      )
   );
 
   it.effect("serves a single resource by path, and forwards one the replica does not hold", () =>
