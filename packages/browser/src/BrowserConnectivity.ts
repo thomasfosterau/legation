@@ -22,13 +22,21 @@
  * push/pull pass straight through; only `status`, `statusChanges`, and `pokes`
  * are augmented. All listeners and probes are torn down when the scope closes.
  *
+ * `statusChanges` has one addition to the combination above: the reconnect
+ * edge. Each navigator `disconnected` → `connected` flip emits `connected`
+ * once, even while the carrier still reports `disconnected` (#328). The sync
+ * loop's push and pull therefore run at once, and a carrier that really is
+ * down fails that push and backs off as usual. The next change then emits the
+ * combined value again, which may read `disconnected`. `status` is not
+ * affected: it always reads the worst of the two signals.
+ *
  * Auto-push does not consult this status, by design (#328). A push attempted
  * while `disconnected` goes out anyway: `navigator.onLine` is a hint and can be
  * wrong (in #315 it read `false` while the worker's WebSocket still worked),
  * and a failed push already backs off on its own retry policy. The reconnect
- * edge (`connected`) runs an immediate push and pull, so a journal that a
- * failed push left behind drains as soon as the signal says so, without
- * waiting on the backoff.
+ * edge runs an immediate push and pull, so a journal that a failed push left
+ * behind drains as soon as the navigator reports the return, without waiting on
+ * the backoff.
  */
 
 import { Transport } from "@thomasfosterau/legation-effect";
@@ -102,8 +110,11 @@ export const withBrowserConnectivity = (
     const doc: (EventTarget & { readonly visibilityState?: string }) | undefined =
       typeof document !== "undefined" ? document : undefined;
 
+    // Read once, at construction: the initial status and the probe's baseline
+    // are the same reading.
+    const initialOnline = navigatorOnline();
     const status = yield* SubscriptionRef.make<Transport.ConnectionStatus>(
-      navigatorOnline() ? "connected" : "disconnected"
+      initialOnline ? "connected" : "disconnected"
     );
     // DOM callbacks are synchronous; bridge them into Effect via unsafe offers.
     const statusEvents = yield* Queue.unbounded<Transport.ConnectionStatus>();
@@ -122,7 +133,7 @@ export const withBrowserConnectivity = (
       // No window, so no online/offline events: probe the navigator for a flip.
       // The last reading is compared, not the status ref, so a flip is emitted
       // once and an unchanged reading emits nothing.
-      let lastOnline = navigatorOnline();
+      let lastOnline = initialOnline;
       yield* Effect.forkScoped(
         Effect.repeat(
           Effect.sync(() => {
@@ -149,11 +160,21 @@ export const withBrowserConnectivity = (
       status: Effect.zipWith(SubscriptionRef.get(status), transport.status, worst),
       // Both sources emit their current value first (the seam's contract), so
       // the combination emits promptly; dedup keeps reconnect triggers calm.
+      // The reconnect edge: a navigator flip from `disconnected` to `connected`
+      // emits `connected` even if the carrier reads `disconnected` (#328).
       statusChanges: Stream.zipLatest(
         SubscriptionRef.changes(status),
         transport.statusChanges
       ).pipe(
-        Stream.map(([navigatorStatus, transportStatus]) => worst(navigatorStatus, transportStatus)),
+        Stream.mapAccum(
+          (): Transport.ConnectionStatus | undefined => undefined,
+          (previousNavigator, [navigatorStatus, transportStatus]) => {
+            const reconnect =
+              previousNavigator === "disconnected" && navigatorStatus === "connected";
+            const emitted = reconnect ? "connected" : worst(navigatorStatus, transportStatus);
+            return [navigatorStatus, [emitted]] as const;
+          }
+        ),
         Stream.changesWith((a, b) => a === b)
       ),
     };

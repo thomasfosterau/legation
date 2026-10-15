@@ -240,7 +240,6 @@ describe("BrowserConnectivity (#33)", () => {
           // A worker has no `offline` event: the flip is found by the probe.
           navigatorStub.onLine = false;
           yield* advanceUntil(hasSeen(["connected", "disconnected"]));
-          expect(yield* Ref.get(pushes)).toBe(0);
           expect(yield* store.pendingMutations).toHaveLength(1);
 
           // The probe sees the return; the reconnect leg pushes, then pulls.
@@ -251,5 +250,112 @@ describe("BrowserConnectivity (#33)", () => {
           expect(yield* store.pendingMutations).toEqual([]);
         })
       )
+  );
+
+  it.effect(
+    "worker: a navigator reconnect edge emits connected and pushes at once, even when the carrier reports disconnected (#328)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const navigatorStub = { onLine: true };
+          yield* stubWorkerGlobals(navigatorStub);
+          const handler = yield* makeServer;
+          const store = yield* ClientStore.makeMemory;
+          const base = yield* Transport.makeInMemory(handler, "group-a");
+
+          const pushes = yield* Ref.make(0);
+          const pulls = yield* Ref.make(0);
+          // A carrier whose own signal reads "disconnected" throughout, as
+          // `Transport.withFallback` does after both legs have failed. Its
+          // requests still reach the in-memory server, so a push that goes out
+          // is observable.
+          const carrier: Transport.ClientTransport = {
+            push: (request) => base.push(request).pipe(Effect.tap(() => count(pushes))),
+            pull: (request) => base.pull(request).pipe(Effect.tap(() => count(pulls))),
+            pokes: Stream.empty,
+            status: Effect.succeed("disconnected"),
+            statusChanges: Stream.concat(Stream.make("disconnected" as const), Stream.never),
+          };
+          const connectivity = yield* BrowserConnectivity.withBrowserConnectivity(carrier, {
+            pollInterval: "100 millis",
+          });
+          const seen = yield* Ref.make<ReadonlyArray<Transport.ConnectionStatus>>([]);
+          const transport: Transport.ClientTransport = {
+            ...connectivity,
+            statusChanges: connectivity.statusChanges.pipe(
+              Stream.tap((status) => Ref.update(seen, (all) => [...all, status]))
+            ),
+          };
+
+          const engine = yield* ClientEngine.make({
+            clientId: "client-a",
+            clientGroupId: "group-a",
+            mutators: setTodo,
+          }).pipe(
+            Effect.provideService(ClientStore.ClientStore, store),
+            Effect.provideService(Transport.ClientTransport, transport)
+          );
+          yield* engine.subscribe(allTodos);
+          yield* engine.runSync;
+          yield* engine.mutate("todo/set", { id: "1", title: "offline edit", done: false });
+
+          // Going offline is seen by the probe; the carrier stays "disconnected",
+          // so the combined status does not change and nothing is pushed.
+          navigatorStub.onLine = false;
+          yield* TestClock.adjust(Duration.millis(200));
+          // The probe sees the return. The edge must reach the sync loop as
+          // "connected" even though the carrier still reads "disconnected".
+          navigatorStub.onLine = true;
+          yield* advanceUntil(atLeast(pulls, 1));
+          expect(yield* Ref.get(seen)).toEqual(["disconnected", "connected"]);
+          expect(yield* Ref.get(pushes)).toBe(1);
+          expect(yield* store.pendingMutations).toEqual([]);
+        })
+      )
+  );
+
+  it.effect("worker: an auto-push goes out while status is disconnected, by design (#328)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Offline from the start: the combined status is "disconnected".
+        const navigatorStub = { onLine: false };
+        yield* stubWorkerGlobals(navigatorStub);
+        const handler = yield* makeServer;
+        const store = yield* ClientStore.makeMemory;
+        const base = yield* Transport.makeInMemory(handler, "group-a");
+
+        const pushes = yield* Ref.make(0);
+        const counted: Transport.ClientTransport = {
+          push: (request) => base.push(request).pipe(Effect.tap(() => count(pushes))),
+          pull: base.pull,
+          pokes: Stream.empty,
+          status: base.status,
+          statusChanges: base.statusChanges,
+        };
+        const connectivity = yield* BrowserConnectivity.withBrowserConnectivity(counted, {
+          pollInterval: "100 millis",
+        });
+
+        // Auto-push is armed. Status is not consulted, so the debounced push
+        // goes out even though the navigator reads offline.
+        const engine = yield* ClientEngine.make({
+          clientId: "client-a",
+          clientGroupId: "group-a",
+          mutators: setTodo,
+          syncLoop: { pushDebounce: "10 millis" },
+        }).pipe(
+          Effect.provideService(ClientStore.ClientStore, store),
+          Effect.provideService(Transport.ClientTransport, connectivity)
+        );
+        yield* engine.subscribe(allTodos);
+        yield* engine.runSync;
+        expect(yield* Ref.get(pushes)).toBe(0);
+
+        yield* engine.mutate("todo/set", { id: "1", title: "offline edit", done: false });
+        yield* advanceUntil(atLeast(pushes, 1));
+        expect(yield* Ref.get(pushes)).toBe(1);
+        expect(yield* store.pendingMutations).toEqual([]);
+      })
+    )
   );
 });
