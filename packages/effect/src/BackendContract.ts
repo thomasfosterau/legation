@@ -33,6 +33,12 @@
  * parks through {@link park}, the one seam a backend's own counter handler needs
  * to expose the read-then-write window. The gate is named by a string in the
  * mutator's args, so the mutation stays serialisable like any other.
+ *
+ * A backend that caches the rows a listing returns must keep that cache in line
+ * with its own writes: rule 12 lists a collection, applies an update and a delete
+ * to listed rows through the backend, and checks that `getRows` returns the
+ * post-write value and omits the deleted row, without a re-list (#444). It uses
+ * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  */
 
 import { Data, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
@@ -861,6 +867,63 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
     );
   });
 
+/**
+ * 12. Own writes reach getRows (#444). A listing (`evaluate`) may cache a row, and a
+ *     later write of that row through the same backend must show in `getRows` with no
+ *     re-list: an update reads back the post-write value, and a delete makes `getRows`
+ *     omit the row. A backend that caches listed rows and does not bring its cache into
+ *     line with its own writes passes rules 1 to 11 and fails here.
+ */
+const rule12OwnWritesReachGetRows: Rule = (h) =>
+  Effect.gen(function* () {
+    const { backend, context, check, expectOk, put } = h;
+    const rule = "getRows reflects this backend's own writes to rows a listing has cached";
+    const collection = h.evalRows;
+    const kept = "cached-kept";
+    const gone = "cached-gone";
+    const startId = yield* h.lastIdOf(rule);
+    yield* expectOk(
+      rule,
+      backend.applyMutations(context, [
+        put(startId + 1, collection, kept, { n: 1 }),
+        put(startId + 2, collection, gone, { n: 1 }),
+      ])
+    );
+    const listed = (yield* expectOk(
+      rule,
+      backend.evaluate(context, Subset.make({ collection }))
+    )).map((entry) => entry.id);
+    yield* check(
+      rule,
+      listed.includes(kept) && listed.includes(gone),
+      `The listing must return both seeded rows so the backend can cache them, got ${JSON.stringify(listed)}`
+    );
+
+    yield* expectOk(
+      rule,
+      backend.applyMutations(context, [put(startId + 3, collection, kept, { n: 2 })])
+    );
+    const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
+    yield* check(
+      rule,
+      (updated?.value as { readonly n?: number } | undefined)?.n === 2,
+      `An update must show in getRows without a re-list: row "${kept}" reads ${JSON.stringify(updated?.value)}`
+    );
+
+    yield* expectOk(
+      rule,
+      backend.applyMutations(context, [
+        h.mutation(startId + 4, delRow.name, { collection, id: gone }),
+      ])
+    );
+    const removed = yield* expectOk(rule, backend.getRows(context, collection, [gone]));
+    yield* check(
+      rule,
+      removed.length === 0,
+      `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${JSON.stringify(removed[0]?.value)}`
+    );
+  });
+
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [
   rule1InOrderApplication,
@@ -874,6 +937,7 @@ const rules: ReadonlyArray<Rule> = [
   rule9PermanentRejection,
   rule10WriteThenFail,
   rule11CrossGroupLostUpdate,
+  rule12OwnWritesReachGetRows,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────
