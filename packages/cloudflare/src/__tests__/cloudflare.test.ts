@@ -624,6 +624,55 @@ describe("Room publishTimeout", () => {
       }).pipe(Effect.scoped),
     20_000
   );
+
+  it.effect(
+    "a publishTimeout above the broker's 5 second default bounds a hung shard call at publishTimeout",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const scope = yield* Scope.Scope;
+        const backend = yield* backendOf();
+        const hung = makeHungShards();
+        const RoomClass = makeRoomClass<unknown>({
+          nodes,
+          backend: () => backend,
+          policy: publishPolicy,
+          shards: () => hung.namespace,
+          publishTimeout: "8 seconds",
+          clock,
+        });
+        const room = new RoomClass(makeState("room-long").state, {});
+        const writer = yield* Effect.promise(() =>
+          makeClient(room, scope, "client-long", "group-long")
+        );
+        yield* Effect.promise(() =>
+          Effect.runPromise(
+            writer.mutate("review/set", {
+              id: "r-1",
+              body: "long bound",
+              createdAt: "2026-01-01",
+              productId: "p-1",
+            })
+          )
+        );
+
+        let pushed = false;
+        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
+          pushed = true;
+        });
+        yield* Effect.promise(() => hung.arrived(2));
+        // Past the broker's 5 second default the hung calls are still pending: were the broker
+        // bounded at its default, the push would have finished here.
+        yield* clock.adjust("5 seconds");
+        expect(pushed).toBe(false);
+        yield* clock.adjust("2999 millis");
+        expect(pushed).toBe(false);
+        yield* clock.adjust("1 millis");
+        yield* Effect.promise(() => push);
+        expect(hung.received.map((call) => call.path)).toEqual(["/publish", "/publish"]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
 });
 
 describe("D1Executor", () => {
