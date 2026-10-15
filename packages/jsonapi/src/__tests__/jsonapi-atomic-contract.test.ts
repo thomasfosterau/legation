@@ -772,19 +772,31 @@ describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
   );
 
   it.effect(
-    "satisfies verifyBackendContract for a backend restarted over the same durable store",
+    "restarts over the same durable store with the first group's ledger, and runs the contract in a fresh group",
     () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-        // The contract's rule 1 pins its client's ids to 1 and 2, so each run needs a
-        // group its ledger has not acknowledged yet. The first run uses one group; the
-        // restarted backend, over the same durable store, runs the contract in another.
+        // The contract's rule 1 pins its client's ids to 1 and 2, so the contract cannot
+        // run over a group its ledger has already acknowledged. The first run uses one
+        // group, and its ledger is what a restart must bring back. Running the full
+        // contract over a restart is #477.
+        const firstContext = { clientGroupId: "contract-first" };
         const first = yield* makeBackend(undefined, noProbe, { ledger });
         yield* BackendContract.verifyBackendContract(first.backend, {
           collection: COLLECTION,
-          clientGroupId: "contract-first",
+          clientGroupId: firstContext.clientGroupId,
         });
+        const acknowledged = yield* first.backend.lastMutationIds(firstContext);
+        const rejected = yield* first.backend.rejections(firstContext);
+        expect(Object.keys(acknowledged)).not.toHaveLength(0);
+        expect(rejected).not.toHaveLength(0);
+
+        // The restart: a new backend over the same durable store reports the group it left.
         const restarted = yield* makeBackend(undefined, noProbe, { ledger });
+        expect(yield* restarted.backend.lastMutationIds(firstContext)).toEqual(acknowledged);
+        expect(yield* restarted.backend.rejections(firstContext)).toEqual(rejected);
+
+        // The restarted backend then runs the contract in another group.
         yield* BackendContract.verifyBackendContract(restarted.backend, {
           collection: COLLECTION,
           clientGroupId: "contract-restarted",

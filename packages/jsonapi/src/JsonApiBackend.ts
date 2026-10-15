@@ -71,11 +71,14 @@
  * (`ledger`, e.g. `Ledger.keyValue` over an Effect `KeyValueStore`) to keep
  * both across restarts (#468). Each ledger change is written after the server
  * has applied its writes and before the ids are acknowledged, in the order the
- * push already uses. If that ledger write fails after the server write has
- * succeeded, the push fails with a `BackendError` and nothing is acknowledged, so
- * the client's resend re-applies those writes. That is the same window as a
- * crash between the two writes, and with or without a store the server's own
- * idempotency is what guards it.
+ * push already uses. If that ledger write fails after the server write
+ * succeeded, the push fails with a `BackendError`. Mutations acknowledged earlier
+ * in the same push keep their acknowledgement; the failed one and the rest of the
+ * push are not acknowledged, so the client's resend re-applies them. On the atomic
+ * path a rejection recorded before the failing write stays remembered, and the
+ * resend records it again. That is the same window as a crash between the two
+ * writes, and with or without a store the server's own idempotency is what guards
+ * it.
  *
  * Over an atomic operations endpoint (`atomic` set) a push is all-or-nothing
  * per batch: one request, and the ledger advances only once the server has

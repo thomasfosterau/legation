@@ -159,40 +159,74 @@ pull can report it.
 
 The ledger is durable when its store is. `Ledger.keyValue` keeps each group's
 ledger in an Effect `KeyValueStore`, which survives a restart when that store
-does, such as a file system, SQL or browser storage layer. `JsonApiSync.layer`
-uses it by default when you pass the durable key/value store behind your client
-store as `keyValueStore`:
+does, such as a file system, SQL or browser storage layer. Pass the durable
+key/value store your client store is built over as `keyValueStore`, and
+`JsonApiSync.layer` uses it for both: the client store defaults to
+`ClientStore.layerKeyValue()` over it, and the ledger defaults to
+`Ledger.keyValue` over it, so the journal and the ledger survive a reload together:
 
 ```ts
-import { Layer } from "effect";
-import { ClientStore } from "@thomasfosterau/legation-effect";
-import { KeyValueStore } from "effect/persistence";
 import { JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 
 JsonApiSync.layer(api, {
   ...options,
-  // The durable key/value store (e.g. IndexedDB) the client store is built over.
+  // The durable key/value store (e.g. the one from the browser wiring below).
   keyValueStore,
-  store: ClientStore.layerKeyValue().pipe(
-    Layer.provide(Layer.succeed(KeyValueStore.KeyValueStore)(keyValueStore))
-  ),
 });
 ```
 
-The layer cannot check that `store` is built over `keyValueStore`, so pass the
-same store to both. An explicit `ledger` overrides the default. Pass
-`ledger: Ledger.keyValue(keyValueStore)` yourself to name a store the client
-store does not use, and `JsonApiBackend.make` takes the same `ledger` option for
-a server built by hand. A store is a `Ledger.LedgerStore` with two operations,
-`read` and `write`, for one client group's ledger. Write your own to keep the
-ledger somewhere else.
+An explicit `store` replaces the default client store, and an explicit `ledger`
+overrides the default ledger. If you pass both `store` and `keyValueStore`, build
+`store` over the same key/value store: the layer cannot check that, because
+`store` is an opaque layer. Pass `ledger: Ledger.keyValue(keyValueStore)` yourself
+to name a store the client store does not use, and `JsonApiBackend.make` takes the
+same `ledger` option for a server built by hand. A store is a
+`Ledger.LedgerStore` with two operations, `read` and `write`, for one client
+group's ledger. Write your own to keep the ledger somewhere else.
+
+In the browser, `IndexedDbClientStore` keeps its key/value store internal to
+`@thomasfosterau/legation-browser`, so take one from `@effect/platform-browser`
+instead and provide it to the layer:
+
+```ts
+import { Effect, Layer } from "effect";
+import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
+import { KeyValueStore } from "effect/persistence";
+import { JsonApiSync } from "@thomasfosterau/legation-jsonapi";
+
+const syncLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const keyValueStore = yield* KeyValueStore.KeyValueStore;
+    return JsonApiSync.layer(api, { ...options, keyValueStore });
+  })
+).pipe(
+  Layer.provide(BrowserKeyValueStore.layerIndexedDb().pipe(Layer.provide(IndexedDb.layerWindow)))
+);
+```
+
+This store is durable, but it is not `IndexedDbClientStore`: it has no atomic
+batch, so the client store commits a pull's release through a release record
+that is finished on the next open if a crash interrupts it, rather than in one
+IndexedDB transaction (#393). It also opens its database at version 1, so it
+cannot open a database another version has upgraded.
+
+The ledger is keyed by `clientGroupId` under one prefix. If one key/value store
+holds more than one identity's ledgers on a device, give each identity its own
+prefix, as `IndexedDbClientStore.layerNamespaced` does for the client store, and
+use that prefix for both `store` and `keyValueStore`:
+``KeyValueStore.prefix(kv, `legation/identity/${Identity.keySegment(identity)}/`)``.
+Otherwise identities that share a `clientId` and `clientGroupId` share one
+ledger, and one identity's mutations can be skipped as already applied.
 
 Each ledger change is written after the server has applied the writes it
 acknowledges and before the ids are acknowledged. If that ledger write fails
-after the server write succeeded, the push fails with a `BackendError` and
-nothing is acknowledged, so the client's resend re-applies those writes. That is
-the same window as a crash between the two writes, with or without a store, and
-the server's own idempotency is what guards it. A store that fails to read also
+after the server write succeeded, the push fails with a `BackendError`.
+Mutations acknowledged earlier in the same push keep their acknowledgement; the
+failed one and the rest of the push are not acknowledged, so the client's resend
+re-applies them. On the atomic path a rejection recorded before the failing write
+stays remembered, and the resend records it again. That is the same window as a
+crash between the two writes, with or without a store, and the server's own
+idempotency is what guards it. A store that fails to read also
 fails the push with a `BackendError`, and fills no cache. A stored value that does
 not decode fails it too, so a corrupt store is never read as an empty ledger. Run
 one backend instance per server (see [Row cache](#row-cache)), so one store is

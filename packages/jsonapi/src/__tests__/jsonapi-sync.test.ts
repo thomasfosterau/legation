@@ -292,35 +292,64 @@ describe("JsonApiSync.layer ledger default (#468)", () => {
     attributes: { title: "queued" },
   };
 
-  it.effect(
-    "keeps the ledger in the durable key/value store the client store is built over",
-    () => {
-      const server = makeServer();
-      return Effect.gen(function* () {
-        const kv = yield* KeyValueStore.KeyValueStore;
-        yield* Effect.gen(function* () {
-          const engine = yield* ClientEngine.ClientEngine;
-          yield* engine.mutate("todos/create", todoCreate);
-          yield* engine.push;
-        }).pipe(
-          Effect.provide(
-            JsonApiSync.layer(api, {
-              baseUrl: "http://api.test",
-              clientId: "client-1",
-              clientGroupId: "group-1",
-              keyValueStore: kv,
-            }).pipe(Layer.provide(server.layer))
-          ),
-          Effect.scoped
-        );
-        // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
-        expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
-          lastMutationIds: { "client-1": 1 },
-          rejections: [],
-        });
-      }).pipe(Effect.provide(KeyValueStore.layerMemory));
-    }
-  );
+  it.effect("writes the ledger to keyValueStore when no ledger is given", () => {
+    const server = makeServer();
+    return Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      yield* Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        yield* engine.mutate("todos/create", todoCreate);
+        yield* engine.push;
+      }).pipe(
+        Effect.provide(
+          JsonApiSync.layer(api, {
+            baseUrl: "http://api.test",
+            clientId: "client-1",
+            clientGroupId: "group-1",
+            keyValueStore: kv,
+          }).pipe(Layer.provide(server.layer))
+        ),
+        Effect.scoped
+      );
+      // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
+      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+        lastMutationIds: { "client-1": 1 },
+        rejections: [],
+      });
+    }).pipe(Effect.provide(KeyValueStore.layerMemory));
+  });
+
+  it.effect("a reload with keyValueStore alone reaches the server with its next mutation", () => {
+    const server = makeServer();
+    const mutate = (kv: KeyValueStore.KeyValueStore, id: string, title: string) =>
+      Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        yield* engine.mutate("todos/create", { type: "todos", id, attributes: { title } });
+        yield* engine.push;
+      }).pipe(
+        Effect.provide(
+          JsonApiSync.layer(api, {
+            baseUrl: "http://api.test",
+            clientId: "client-1",
+            clientGroupId: "group-1",
+            keyValueStore: kv,
+          }).pipe(Layer.provide(server.layer))
+        ),
+        Effect.scoped
+      );
+    return Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      yield* mutate(kv, "1", "first");
+      // A reload: a new layer over the same key/value store, with no `store` given. The
+      // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
+      yield* mutate(kv, "2", "second");
+      expect(server.store.get("2")?.attributes.title).toBe("second");
+      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+        lastMutationIds: { "client-1": 2 },
+        rejections: [],
+      });
+    }).pipe(Effect.provide(KeyValueStore.layerMemory));
+  });
 
   it.effect("an explicit ledger overrides the key/value store", () => {
     const server = makeServer();
