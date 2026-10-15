@@ -313,7 +313,8 @@ export interface ClientStore {
 
   // Atomic batches (#393, #411). Present on the in-memory store, and on the key-value store when it has
   // an {@link AtomicKeyValue} in context; the engine takes its release-record path, through the members
-  // above, when they are absent.
+  // above, when they are absent. A push acknowledgement's park and trim are the batch; the tail never
+  // takes an overflow release, so there is no batch for one (#429).
   /**
    * Write a pull's whole release as one atomic batch: its rows, its cookie, the journal trim and the
    * tail release that {@link ClientStore.beginRelease}, the patch, the cookie, the acknowledgement and
@@ -333,15 +334,6 @@ export interface ClientStore {
         parked: ReadonlyArray<Mutation>,
         lastMutationIds: Readonly<Record<string, number>>
       ) => Effect.Effect<void, StoreError>)
-    | undefined;
-  /**
-   * Release the tail entries `lastMutationIds` covers as one atomic batch, with no record: the batch
-   * form of {@link ClientStore.releaseUnpulled} for an overflow release that carries no rows. A refused
-   * batch writes nothing, so the tail keeps the entries and can stay above the engine's bound until a
-   * later push acknowledgement or pull releases them.
-   */
-  readonly commitTailRelease?:
-    | ((lastMutationIds: Readonly<Record<string, number>>) => Effect.Effect<void, StoreError>)
     | undefined;
 
   // Whole-replica read (#392)
@@ -663,21 +655,9 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       )
     );
 
-  const commitTailRelease = (lastMutationIds: Readonly<Record<string, number>>) =>
-    locked(
-      Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* finishOutstanding;
-          const nextTail = (yield* Ref.get(tail)).filter((m) => !coveredBy(lastMutationIds, m));
-          yield* Ref.set(tail, nextTail);
-        })
-      )
-    );
-
   return ClientStore.of({
     commitPull,
     commitAcknowledgement,
-    commitTailRelease,
     getRow: (collection, id) => Ref.get(rows).pipe(Effect.map((m) => m.get(collection)?.get(id))),
     listRows: (collection) =>
       Ref.get(rows).pipe(Effect.map((m) => Array.from(collectionMap(m, collection).values()))),
@@ -1338,8 +1318,8 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
  * processes (the service-worker host is the per-origin singleton, ADR-0010).
  *
  * Two paths write a pull's release (#387, #393). With an {@link AtomicKeyValue}
- * in context, the release (`commitPull`, `commitAcknowledgement`,
- * `commitTailRelease`) is one batch and no release record is written. Without
+ * in context, the release (`commitPull`, `commitAcknowledgement`) is one batch
+ * and no release record is written. Without
  * it, the release goes through the record `beginRelease` writes first, which
  * an open finishes if a crash interrupted it. Both paths settle a leftover
  * record on open.
@@ -2086,10 +2066,7 @@ export const makeKeyValue = (
     // Each member first finishes an outstanding release record, as a row write does (#387). A record
     // left by a failed record-path write would otherwise replay over the batch's newer state on a later
     // finish; the finish reads the record, so a failure there fails the batch with nothing written.
-    const batchMembers: Pick<
-      ClientStore,
-      "commitPull" | "commitAcknowledgement" | "commitTailRelease"
-    > =
+    const batchMembers: Pick<ClientStore, "commitPull" | "commitAcknowledgement"> =
       atomic === undefined
         ? {}
         : {
@@ -2114,15 +2091,6 @@ export const makeKeyValue = (
                   const b = stageBatch();
                   yield* stagedPark(b, parked);
                   yield* stagedTrimJournal(b, (entry) => coveredBy(lastMutationIds, entry));
-                  yield* commitStaged(atomic, b);
-                })
-              ),
-            commitTailRelease: (lastMutationIds) =>
-              locked(
-                Effect.gen(function* () {
-                  yield* finishOrSeal;
-                  const b = stageBatch();
-                  yield* stagedReleaseTail(b, lastMutationIds);
                   yield* commitStaged(atomic, b);
                 })
               ),

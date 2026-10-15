@@ -65,6 +65,20 @@ const serverOver = (backend: Backend) =>
     );
   });
 
+// A transport whose pulls are refused while `refusing` is set: a version rejection, which the engine does
+// not retry. Pushes are not affected.
+const refusingPulls = (inner: ClientTransport, refusing: Ref.Ref<boolean>): ClientTransport => ({
+  ...inner,
+  pull: (request) =>
+    Ref.get(refusing).pipe(
+      Effect.flatMap((on) =>
+        on
+          ? Effect.fail(new VersionNotSupportedError({ message: "pulls refused by the test" }))
+          : inner.pull(request)
+      )
+    ),
+});
+
 // Logs each push request, with the mutation ids it carries and the tail the request found, and each
 // pull, in the order they happen.
 const logged = (
@@ -264,8 +278,10 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
       yield* engine.subscribe(countersSubset);
       for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
 
-      // The push returns without failing: the pull's failure is surfaced as a pull, and the push stops.
-      expect(Exit.isSuccess(yield* Effect.exit(engine.push))).toBe(true);
+      // The failed pull between the chunks fails the push with a transport error, and the push stops: the
+      // unsent mutations stay journaled.
+      const failure = yield* Effect.flip(engine.push);
+      expect(failure._tag).toBe("TransportError");
       expect(pushIds(log)).toEqual([`push ${range(1, 4)}`]);
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4]);
       expect(yield* journalIds(store)).toEqual([5, 6, 7, 8, 9]);
@@ -282,20 +298,25 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
   it.effect("an odd bound: a push into a tail at the threshold never takes it past the bound", () =>
     Effect.gen(function* () {
       // Bound 9, threshold 5. The first push's acknowledged tail reaches the threshold, where a pull ahead
-      // would start (#337); pulls are refused until it has failed, so the tail stays at 5. The second push
-      // then has 4 entries of room, not a whole chunk of 5 (#429).
+      // would start (#337); pulls are refused until that pull has reached the refusal, so the tail stays at
+      // 5. The second push then has 4 entries of room, not a whole chunk of 5 (#429).
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
       const inner = yield* makeInMemory(server, "group-a");
       const pullsRefused = yield* Ref.make(true);
+      const refusedCalled = yield* Deferred.make<void>();
       const refusedPulls: ClientTransport = {
         ...inner,
         pull: (request) =>
           Ref.get(pullsRefused).pipe(
             Effect.flatMap((refused) =>
               refused
-                ? Effect.fail(
-                    new VersionNotSupportedError({ message: "pulls refused by the test" })
+                ? Deferred.succeed(refusedCalled, undefined).pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new VersionNotSupportedError({ message: "pulls refused by the test" })
+                      )
+                    )
                   )
                 : inner.pull(request)
             )
@@ -312,8 +333,8 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
       yield* engine.subscribe(countersSubset);
       for (let i = 0; i < 5; i++) yield* engine.mutate("counter/inc", { id: "c" });
       yield* engine.push;
-      // Let the pull ahead that the push started fail under the refusal, then accept pulls again.
-      for (let i = 0; i < 3; i++) yield* Effect.yieldNow;
+      // The pull ahead the push started (#337) has reached the refusal, so it has failed; accept pulls again.
+      yield* Deferred.await(refusedCalled);
       yield* Ref.set(pullsRefused, false);
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5]);
 
@@ -327,6 +348,100 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
       ]);
       expect(warnings).toEqual([]);
       expect(yield* counterValue(engine)).toBe(14);
+      expect(yield* journalIds(store)).toEqual([]);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("a full tail waits for a pull, and a failed pull sends nothing over the bound", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const store = yield* ClientStoreModule.makeMemory;
+      const inner = yield* makeInMemory(server, "group-a");
+      const pullsDown = yield* Ref.make(true);
+      const downPulls: ClientTransport = {
+        ...inner,
+        pull: (request) =>
+          Ref.get(pullsDown).pipe(
+            Effect.flatMap((down) =>
+              down ? Effect.fail(new TransportError({ message: "pull down" })) : inner.pull(request)
+            )
+          ),
+      };
+      const log: Array<string> = [];
+      const engine = yield* engineOver(logged(downPulls, store, log), store, {
+        unpulledLimit: SMALL_LIMIT,
+        retry: { pull: Schedule.recurs(0), push: Schedule.recurs(0) },
+      });
+      yield* engine.subscribe(countersSubset);
+      for (let i = 0; i < 8; i++) yield* engine.mutate("counter/inc", { id: "c" });
+
+      // The first chunk (four) is acknowledged; the pull before the second fails, so the push fails.
+      expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+      // The next push's first chunk fills the tail to the bound, and no pull is needed for that.
+      yield* engine.push;
+      expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(yield* journalIds(store)).toEqual([]);
+
+      for (let i = 9; i <= 12; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      // The tail has no room and the pull fails: the push stops before it sends anything, and the
+      // one-entry fallback that a full tail used to take is gone (#429).
+      expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+      expect(pushIds(log)).toEqual([`push ${range(1, 4)}`, `push ${range(5, 8)}`]);
+      expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(yield* journalIds(store)).toEqual([9, 10, 11, 12]);
+
+      // Once pulls work, the pull releases the tail, and the rest goes out.
+      yield* Ref.set(pullsDown, false);
+      yield* engine.push;
+      expect(pushIds(log)).toEqual([
+        `push ${range(1, 4)}`,
+        `push ${range(5, 8)}`,
+        `push ${range(9, 12)}`,
+      ]);
+      expect(yield* journalIds(store)).toEqual([]);
+      expect(yield* counterValue(engine)).toBe(12);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("a pull between chunks that releases nothing fails the push, and the bound holds", () =>
+    Effect.gen(function* () {
+      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+      const store = yield* ClientStoreModule.makeMemory;
+      const inner = yield* makeInMemory(server, "group-a");
+      // While `silent`, pulls succeed but acknowledge nothing, so no pull releases the tail.
+      const silent = yield* Ref.make(false);
+      const releasesNothing: ClientTransport = {
+        ...inner,
+        pull: (request) =>
+          Ref.get(silent).pipe(
+            Effect.flatMap((on) =>
+              inner
+                .pull(request)
+                .pipe(
+                  Effect.map((response) => (on ? { ...response, lastMutationIds: {} } : response))
+                )
+            )
+          ),
+      };
+      const log: Array<string> = [];
+      const engine = yield* engineOver(logged(releasesNothing, store, log), store, {
+        unpulledLimit: SMALL_LIMIT,
+      });
+      yield* engine.subscribe(countersSubset);
+      for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+
+      yield* Ref.set(silent, true);
+      const failure = yield* Effect.flip(engine.push);
+      expect(failure._tag).toBe("TransportError");
+      // The tail filled to the bound and stopped there: the ninth mutation was never sent over it.
+      expect(pushIds(log)).toEqual([`push ${range(1, 4)}`, `push ${range(5, 8)}`]);
+      expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(yield* journalIds(store)).toEqual([9]);
+
+      // The view is not checked here: a pull that reports effects it does not cover is the double application
+      // ADR-0008 describes, so only the tail and the journal are. Once a pull releases the tail, the ninth goes out.
+      yield* Ref.set(silent, false);
+      yield* engine.push;
       expect(yield* journalIds(store)).toEqual([]);
     }).pipe(Effect.scoped)
   );
@@ -371,6 +486,99 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
         yield* engine.pull;
         expect(yield* tailIds(store)).toEqual([]);
         expect(yield* counterValue(engine)).toBe(9);
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "overlapping pushes share the bound: the tail and the chunks in flight never pass it",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const store = yield* ClientStoreModule.makeMemory;
+        const inner = yield* makeInMemory(server, "group-a");
+        // Pulls are refused, so nothing releases the tail: the bound is only what the pushes leave.
+        const refusing = yield* Ref.make(true);
+        // Mutations in requests that have not returned yet, and the widest the tail could grow to: the tail
+        // as a request finds it, plus everything in flight, since each of those may be acknowledged.
+        const inFlight = yield* Ref.make(0);
+        const widest = yield* Ref.make(0);
+        // Each request waits at the gate, so a push that is not held back would send alongside the others.
+        const gate = yield* Deferred.make<void>();
+        const gated: ClientTransport = {
+          ...refusingPulls(inner, refusing),
+          push: (request) =>
+            Effect.gen(function* () {
+              const size = request.mutations.length;
+              const tail = (yield* store.unpulled.pipe(Effect.orDie)).length;
+              const now = yield* Ref.updateAndGet(inFlight, (n) => n + size);
+              yield* Ref.update(widest, (w) => Math.max(w, tail + now));
+              yield* Deferred.await(gate);
+              const response = yield* inner.push(request);
+              yield* Ref.update(inFlight, (n) => n - size);
+              return response;
+            }),
+        };
+        const engine = yield* engineOver(gated, store, { unpulledLimit: SMALL_LIMIT });
+        yield* engine.subscribe(countersSubset);
+        for (let i = 0; i < 4 * SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+
+        const pushes = yield* Effect.forEach([1, 2, 3], () =>
+          Effect.forkScoped(Effect.exit(engine.push))
+        );
+        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        yield* Deferred.succeed(gate, undefined);
+        const exits = yield* Effect.forEach(pushes, Fiber.join);
+
+        // Every push stops at the pull between its chunks, as nothing is released.
+        expect(exits.every(Exit.isFailure)).toBe(true);
+        expect(yield* Ref.get(widest), "the tail plus the chunks in flight").toBeLessThanOrEqual(
+          SMALL_LIMIT
+        );
+        expect(yield* tailIds(store)).toEqual(
+          Array.from({ length: SMALL_LIMIT / 2 }, (_, i) => i + 1)
+        );
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "a tail persisted above a lowered bound: a push pulls first, and fails if the pull fails",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const store = yield* ClientStoreModule.makeMemory;
+        const inner = yield* makeInMemory(server, "group-a");
+        const refusing = yield* Ref.make(true);
+        // Written under a bound of 16: eight pushed and acknowledged, then four more, the tail at 12.
+        const wide = yield* engineOver(refusingPulls(inner, refusing), store, {
+          unpulledLimit: 16,
+        });
+        yield* wide.subscribe(countersSubset);
+        for (let i = 0; i < 8; i++) yield* wide.mutate("counter/inc", { id: "c" });
+        yield* wide.push;
+        for (let i = 0; i < 4; i++) yield* wide.mutate("counter/inc", { id: "c" });
+        yield* wide.push;
+        expect(yield* tailIds(store)).toHaveLength(12);
+
+        // A lower bound, opened over the same store: the tail is already above it.
+        const narrow = yield* engineOver(refusingPulls(inner, refusing), store, {
+          unpulledLimit: SMALL_LIMIT,
+        });
+        yield* narrow.subscribe(countersSubset);
+        yield* narrow.mutate("counter/inc", { id: "c" });
+        const failed = yield* Effect.exit(narrow.push);
+        expect(Exit.isFailure(failed)).toBe(true);
+        // The push waited for a pull that was refused: nothing was sent, released or overflowed.
+        expect(yield* tailIds(store)).toHaveLength(12);
+        expect(yield* journalIds(store)).toEqual([13]);
+
+        // Pulls accepted again: the pull drains the tail, and the push sends the journaled mutation.
+        yield* Ref.set(refusing, false);
+        yield* narrow.push;
+        expect(yield* journalIds(store)).toEqual([]);
+        expect(yield* counterValue(narrow)).toBe(13);
+        expect(yield* tailIds(store).pipe(Effect.map((ids) => ids.length <= SMALL_LIMIT))).toBe(
+          true
+        );
       }).pipe(Effect.scoped)
   );
 });

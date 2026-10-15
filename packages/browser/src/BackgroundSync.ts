@@ -336,9 +336,13 @@ export interface FlushOptions {
 
 /**
  * Flush `engine`'s journal through the ordinary push path, behind the
- * identity check. Fails — so the `sync` event rejects and the browser
- * reschedules — only on a transport or store failure, with the journal
- * intact.
+ * identity check. A journal larger than half the engine's unpulled bound goes
+ * in chunks with a pull before each chunk after the first, so a flush may
+ * pull (#429); a smaller journal is pushed without pulling. Fails — so the
+ * `sync` event rejects and the browser reschedules — on a transport or store
+ * failure, with the journal intact. A pull between chunks that fails is a
+ * transport failure of the same kind, so the flush never reports `Flushed`
+ * over a journal it stopped short of.
  */
 export const flush = (
   engine: ClientEngine.ClientEngine,

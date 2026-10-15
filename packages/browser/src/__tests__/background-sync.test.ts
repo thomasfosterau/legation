@@ -182,7 +182,9 @@ type Failure = "none" | "transport" | "version";
  */
 const makeEngine = (
   store: ClientStore.ClientStore,
-  options: Partial<Pick<ClientEngine.ClientEngineOptions, "syncLoop" | "retry">> = {}
+  options: Partial<
+    Pick<ClientEngine.ClientEngineOptions, "syncLoop" | "retry" | "unpulledLimit">
+  > = {}
 ) =>
   Effect.gen(function* () {
     const handler = yield* makeServer;
@@ -190,8 +192,15 @@ const makeEngine = (
     yield* inner.setStatus("disconnected");
     const pushes = yield* Ref.make<ReadonlyArray<Protocol.PushRequest>>([]);
     const failure = yield* Ref.make<Failure>("none");
+    const pullsDown = yield* Ref.make(false);
     const transport: Transport.ClientTransport = {
       ...inner,
+      pull: (request) =>
+        Ref.get(pullsDown).pipe(
+          Effect.flatMap((down) =>
+            down ? Effect.fail(new TransportError({ message: "pull down" })) : inner.pull(request)
+          )
+        ),
       push: (request) =>
         Ref.get(failure).pipe(
           Effect.flatMap((mode) =>
@@ -215,7 +224,7 @@ const makeEngine = (
       Effect.provideService(Transport.ClientTransport, transport)
     );
     yield* engine.subscribe(allTodos);
-    return { engine, store, pushes, failure };
+    return { engine, store, pushes, failure, pullsDown };
   });
 
 /** Every log line at `Warn` or above, with the minimum level lowered to `All`. */
@@ -367,6 +376,38 @@ describe("BackgroundSync (#213)", () => {
       expect(retried).toEqual({ ok: true, value: "Flushed" });
       expect(yield* store.pendingMutations).toEqual([]);
     }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "a flush whose pull between chunks fails rejects, never reports Flushed, and the journal waits",
+    () =>
+      Effect.gen(function* () {
+        const self = fakeScope();
+        const listener = listenOn(self);
+        // A bound of 8 splits nine mutations into chunks of four, with a pull before the second (#429).
+        const { engine, store, pushes, pullsDown } = yield* makeEngine(
+          yield* ClientStore.makeMemory,
+          { unpulledLimit: 8, retry: { pull: Schedule.recurs(0) } }
+        );
+        yield* listener.serve(engine);
+        for (let i = 1; i <= 9; i++) {
+          yield* engine.mutate("todo/set", { id: String(i), title: `title ${i}` });
+        }
+
+        yield* Ref.set(pullsDown, true);
+        const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag, true).held[0]);
+        expect(failed.ok).toBe(false);
+        // The first chunk went; the pull before the second failed, so the flush stopped there.
+        expect((yield* Ref.get(pushes)).map((request) => request.mutations.length)).toEqual([4]);
+        expect(yield* store.pendingMutations).toHaveLength(5);
+
+        // The browser's next wake, with pulls back, sends the rest and settles as Flushed.
+        yield* Ref.set(pullsDown, false);
+        const retried = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+        expect(retried).toEqual({ ok: true, value: "Flushed" });
+        expect(yield* store.pendingMutations).toEqual([]);
+      }).pipe(Effect.scoped),
+    20_000
   );
 
   it.live("a schema-version rejection settles as UpdateNeeded and keeps the journal", () =>

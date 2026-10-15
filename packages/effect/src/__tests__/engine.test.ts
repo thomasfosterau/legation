@@ -392,26 +392,29 @@ describe("a push acknowledgement keeps the overlay until a pull reports it (#286
     })
   );
 
-  it.effect("with no pull, the unpulled tail is bounded and the next pull restores every row", () =>
-    Effect.gen(function* () {
-      const count = 1100;
-      const handler = yield* makeServer;
-      const { engine } = yield* makeClient(handler, "a");
-      yield* engine.subscribe(allTodos);
-      for (let i = 0; i < count; i++) {
-        yield* engine.mutate("todo/set", { id: String(i), title: `t${i}`, done: false });
-      }
+  it.effect(
+    "a push past the bound never passes it, nothing reverts, and the next pull restores every row",
+    () =>
+      Effect.gen(function* () {
+        const count = 1100;
+        const handler = yield* makeServer;
+        const { engine, store } = yield* makeClient(handler, "a");
+        yield* engine.subscribe(allTodos);
+        for (let i = 0; i < count; i++) {
+          yield* engine.mutate("todo/set", { id: String(i), title: `t${i}`, done: false });
+        }
 
-      yield* engine.push;
-      const overlaid = yield* engine.query(allTodos);
-      // The push goes in chunks with a pull between them (#429), so the tail is released as it builds and
-      // nothing reverts: every acknowledged effect is still in the view.
-      expect(overlaid).toHaveLength(count);
-      expect(overlaid.map((row) => row.id)).toContain(String(count - 1));
+        yield* engine.push;
+        // The push goes in chunks with a pull between them (#429): the tail is released as it builds, so it
+        // never passes the bound, and nothing reverts: every acknowledged effect is still in the view.
+        expect((yield* store.unpulled).length).toBeLessThanOrEqual(1024);
+        const overlaid = yield* engine.query(allTodos);
+        expect(overlaid).toHaveLength(count);
+        expect(overlaid.map((row) => row.id)).toContain(String(count - 1));
 
-      yield* engine.pull;
-      expect(yield* engine.query(allTodos)).toHaveLength(count);
-    })
+        yield* engine.pull;
+        expect(yield* engine.query(allTodos)).toHaveLength(count);
+      })
   );
 });
 
