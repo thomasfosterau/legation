@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Semaphore } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -804,51 +804,72 @@ describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
   );
 });
 
-// ─── The contract across a restart in the same client group (#477) ──────────
+// ─── The contract across a restart in the same client group (#477, #483) ───
 
 const sameGroup = "contract-same-group";
+const CONTRACT_CLIENT = "contract-client";
 
 /**
- * The full contract, run twice in one client group with a restart between the
- * runs. The first run acknowledges the contract's client. The restarted backend
- * is a new instance over `restartWith(ledger)` with its own server tables, since
- * the contract needs empty collections. It must report the ledger the first run
- * left, and then the contract runs over it.
+ * Runs the full contract in one client group, then restarts a backend over the
+ * ledger the first run left: `restartWith` picks the store the restart reads. The
+ * restarted backend has its own server tables, since the contract needs them empty.
+ * The restarted run is verified with the ledgers the first run left, returned as
+ * `outcome` (the restored ledger is what a restart expects, #483), together with what
+ * the restarted backend reports before the contract runs.
  */
-const contractAcrossRestart = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.LedgerStore) =>
+const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.LedgerStore) =>
   Effect.gen(function* () {
     const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
     const context = { clientGroupId: sameGroup };
+    const peerContext = { clientGroupId: `${sameGroup}-peer` };
     const first = yield* makeBackend(undefined, noProbe, { ledger });
     yield* BackendContract.verifyBackendContract(first.backend, {
       collection: COLLECTION,
       clientGroupId: sameGroup,
     });
     const acknowledged = yield* first.backend.lastMutationIds(context);
-    expect(Math.max(0, ...Object.values(acknowledged))).toBeGreaterThan(0);
+    const peerAcknowledged = yield* first.backend.lastMutationIds(peerContext);
+    const rejected = yield* first.backend.rejections(context);
+    expect(acknowledged[CONTRACT_CLIENT]).toBeGreaterThan(0);
+    expect(peerAcknowledged[CONTRACT_CLIENT]).toBeGreaterThan(0);
 
     const restarted = yield* makeBackend(undefined, noProbe, { ledger: restartWith(ledger) });
-    expect(yield* restarted.backend.lastMutationIds(context)).toEqual(acknowledged);
-    expect(yield* restarted.backend.rejections(context)).toEqual(
-      yield* first.backend.rejections(context)
+    const restartedLedger = yield* restarted.backend.lastMutationIds(context);
+    const restartedRejected = yield* restarted.backend.rejections(context);
+    const outcome = yield* Effect.exit(
+      BackendContract.verifyBackendContract(restarted.backend, {
+        collection: COLLECTION,
+        clientGroupId: sameGroup,
+        restoredLedger: acknowledged[CONTRACT_CLIENT] ?? 0,
+        restoredPeerLedger: peerAcknowledged[CONTRACT_CLIENT] ?? 0,
+      })
     );
-    yield* BackendContract.verifyBackendContract(restarted.backend, {
-      collection: COLLECTION,
-      clientGroupId: sameGroup,
-    });
+    return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
   }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory));
 
-describe("JsonApiBackend restarted on the same ledger in the same group (#477), atomic mode", () => {
+describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), atomic mode", () => {
   it.effect("runs the full contract over a backend restarted on the same durable ledger", () =>
-    contractAcrossRestart((ledger) => ledger)
+    Effect.gen(function* () {
+      const run = yield* restartInSameGroup((ledger) => ledger);
+      expect(run.restartedLedger).toEqual(run.acknowledged);
+      expect(run.restartedRejected).toEqual(run.rejected);
+      expect(Exit.isSuccess(run.outcome)).toBe(true);
+    })
   );
 
-  it.effect("fails a backend that forgets its ledger on restart", () =>
-    Effect.gen(function* () {
-      // Ledger.memory reads an empty group, so the restarted backend forgets the ids
-      // the first run acknowledged; the restart check reports it before the contract runs.
-      const exit = yield* Effect.exit(contractAcrossRestart(() => Ledger.memory));
-      expect(exit._tag).toBe("Failure");
-    })
+  it.effect(
+    "fails a backend that forgets its ledger on restart through the restored-ledger rule",
+    () =>
+      Effect.gen(function* () {
+        // Ledger.memory reads an empty group: the restarted backend reports {} where the
+        // restored run expects the ids the first run acknowledged, so the contract fails
+        // its first rule and never reaches the mutations.
+        const run = yield* restartInSameGroup(() => Ledger.memory);
+        expect(run.restartedLedger).toEqual({});
+        const violation = Option.getOrUndefined(Exit.findErrorOption(run.outcome));
+        expect(violation).toBeInstanceOf(BackendContract.ContractViolation);
+        expect(violation?.rule).toBe("reports the ledger the run expects");
+        expect(violation?.message).toContain("the backend forgot its ledger on restart");
+      })
   );
 });
