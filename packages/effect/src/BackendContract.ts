@@ -20,12 +20,12 @@
  * handler can express, and its concurrency differs per backend. Each backend
  * therefore discharges it itself: `MemoryBackend` by its stage (covered by
  * `memory-backend-atomicity.test.ts`, "keeps a handler's writes and its bump
- * invisible until the mutation commits"). `SqlBackend` (a transaction) has
- * parked-handler tests (#352) that check the ledger watermark and how often the
- * handler runs; `JsonApiBackend` (the server's all-or-nothing batch) has none.
- * Neither has a test that a read sees neither the handler's writes nor the bump
- * while the handler is parked. That gap is tracked in #381. A new backend must
- * add its own mid-flight test before it can claim guarantee 1.
+ * invisible until the mutation commits"). `SqlBackend` by its transaction
+ * (`sql-backend-visibility.test.ts`: a second connection reads nothing of a
+ * parked handler's write or bump). `JsonApiBackend` by the server's
+ * all-or-nothing batch (`jsonapi-atomic-contract.test.ts`, "JsonApiBackend
+ * visibility before the bump"). A new backend must add its own mid-flight test
+ * before it can claim guarantee 1.
  *
  * Serialisability across client groups (guarantee 1, #353) is a rule: rule 11
  * parks a handler after its read, lets another group commit a write to the same
