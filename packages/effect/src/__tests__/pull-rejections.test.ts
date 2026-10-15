@@ -160,10 +160,10 @@ describe("ClientEngine settles a pull-carried rejection (#365)", () => {
   );
 });
 
-describe("SyncServer pull carries the rejections its watermark covers (#365)", () => {
-  const push = (handler: ServerHandler, group: string, mutations: PushRequest["mutations"]) =>
-    handler.handlePush({ clientGroupId: group, mutations }) as Effect.Effect<PushResponse>;
+const push = (handler: ServerHandler, group: string, mutations: PushRequest["mutations"]) =>
+  handler.handlePush({ clientGroupId: group, mutations }) as Effect.Effect<PushResponse>;
 
+describe("SyncServer pull carries the rejections its watermark covers (#365)", () => {
   it.effect("lists each rejection the watermark covers, with its reason", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make(handlers);
@@ -179,6 +179,28 @@ describe("SyncServer pull carries the rejections its watermark covers (#365)", (
       });
       expect(pulled.lastMutationIds).toEqual({ [clientId]: 2 });
       expect(pulled.rejected).toEqual([{ clientId, mutationId: 1, reason: "permission revoked" }]);
+    })
+  );
+
+  it.effect("leaves out a rejection above the pull's watermark", () =>
+    Effect.gen(function* () {
+      const backend = yield* MemoryBackend.make(handlers);
+      // The group remembers a rejection for id 5, which this pull's watermark (id 1) does not cover yet.
+      const ahead: Backend = {
+        ...backend,
+        rejections: () => Effect.succeed([{ clientId, mutationId: 5, reason: "not yet covered" }]),
+      };
+      const handler = yield* serverFor(ahead);
+      yield* push(handler, groupId, [
+        { clientId, mutationId: 1, mutator: "todo/set", args: { id: "y" }, createdAt: 0 },
+      ]);
+
+      const pulled = yield* handler.handlePull({
+        clientGroupId: groupId,
+        subscriptions: [allTodos],
+      });
+      expect(pulled.lastMutationIds).toEqual({ [clientId]: 1 });
+      expect(pulled.rejected).toBeUndefined();
     })
   );
 
@@ -248,6 +270,74 @@ describe("SyncServer pull carries the rejections its watermark covers (#365)", (
         subscriptions: [allTodos],
       });
       expect(later.rejected).toBeUndefined();
+    })
+  );
+});
+
+describe("a pull settles only its own client's rejections in a group (#365)", () => {
+  it.effect("a pull lists another client's covered rejection, and this client ignores it", () =>
+    Effect.gen(function* () {
+      const backend = yield* MemoryBackend.make(handlers);
+      const handler = yield* serverFor(backend);
+      const otherClient = "client-b";
+      const reason = "permission revoked";
+
+      // Client B's rejected push: its own response reports the rejection.
+      const storeB = yield* ClientStoreModule.makeMemory;
+      const transportB = yield* makeInMemory(handler, groupId);
+      const engineB = yield* ClientEngineModule.make({
+        clientId: otherClient,
+        clientGroupId: groupId,
+        mutators,
+      }).pipe(
+        Effect.provideService(ClientStore, storeB),
+        Effect.provideService(ClientTransport, transportB)
+      );
+      yield* engineB.subscribe(allTodos);
+      const handleB = yield* engineB.mutateWithAck("todo/forbidden", {
+        id: "x",
+        title: "doomed",
+        done: false,
+      });
+      yield* engineB.push;
+      expect(yield* handleB.acknowledged).toEqual({ _tag: "rejected", reason });
+
+      // Client A (id 1 is its own, applied) loses the push response, so it stays pending.
+      const storeA = yield* ClientStoreModule.makeMemory;
+      const lose = yield* Ref.make(false);
+      const transportA = yield* makeInMemory(handler, groupId);
+      const engineA = yield* ClientEngineModule.make({
+        clientId,
+        clientGroupId: groupId,
+        mutators,
+      }).pipe(
+        Effect.provideService(ClientStore, storeA),
+        Effect.provideService(ClientTransport, lossyPush(transportA, lose))
+      );
+      yield* engineA.subscribe(allTodos);
+      const handleA = yield* engineA.mutateWithAck("todo/set", {
+        id: "y",
+        title: "kept",
+        done: false,
+      });
+      yield* Ref.set(lose, true);
+      expect(Exit.isFailure(yield* Effect.exit(engineA.push))).toBe(true);
+      expect(yield* stateOf(engineA, 1)).toMatchObject({ phase: "pending" });
+
+      // The pull from A lists B's rejection, since the group's watermark covers it.
+      const pulled = yield* handler.handlePull({
+        clientGroupId: groupId,
+        subscriptions: [allTodos],
+      });
+      expect(pulled.lastMutationIds).toEqual({ [clientId]: 1, [otherClient]: 1 });
+      expect(pulled.rejected).toEqual([{ clientId: otherClient, mutationId: 1, reason }]);
+
+      // A settles its own id 1 as applied, and B's entry leaves A's states alone.
+      yield* Ref.set(lose, false);
+      yield* engineA.pull;
+      expect(yield* handleA.acknowledged).toEqual({ _tag: "applied" });
+      expect(yield* stateOf(engineA, 1)).toMatchObject({ phase: "acknowledged" });
+      expect(yield* storeA.pendingMutations).toEqual([]);
     })
   );
 });

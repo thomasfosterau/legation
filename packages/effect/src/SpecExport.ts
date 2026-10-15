@@ -36,6 +36,7 @@ import {
   PatchOpSchema,
   PokeSchema,
   PushResponseSchema,
+  RejectedMutationSchema,
 } from "./Protocol.js";
 import type * as Query from "./Query.js";
 import { SubsetSchema } from "./Subset.js";
@@ -231,15 +232,7 @@ const specialize = (api: SyncApi) => {
       cookie: Schema.String,
       patch: Schema.Array(patchOp),
       lastMutationIds: Schema.Record(Schema.String, Schema.Number),
-      rejected: Schema.optional(
-        Schema.Array(
-          Schema.Struct({
-            clientId: Schema.String,
-            mutationId: Schema.Number,
-            reason: Schema.String,
-          })
-        )
-      ),
+      rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
     }),
     "PullResponse"
   );
