@@ -191,7 +191,8 @@ backend refuses every later push with a mutation-id gap. Passing
 `keyValueStore` covers both.
 
 A ledger store is a `Ledger.LedgerStore` with two operations, `read` and
-`write`, for one client group's ledger. Write your own to keep the ledger somewhere else.
+`write`, for one client group's ledger. Write your own to keep the ledger
+somewhere else.
 
 In the browser, `IndexedDbClientStore` keeps its key/value store internal to
 `@thomasfosterau/legation-browser`, so take one from `@effect/platform-browser`
@@ -221,8 +222,9 @@ Name its `database`: the platform default, `effect_key_value_store`, is the
 database `IndexedDbClientStore` uses by default. This store is durable, but it
 is not `IndexedDbClientStore`: it has no atomic batch, so the client store
 commits a pull's release through a release record that is finished on the next
-open if a crash interrupts it, rather than in one IndexedDB transaction (#393). It also opens its database at version 1, so it
-cannot open a database another version has upgraded.
+open if a crash interrupts it, rather than in one IndexedDB transaction (#393).
+It also opens its database at version 1, so it cannot open a database another
+version has upgraded.
 
 The ledger is keyed by `clientGroupId` under one prefix. If one key/value store
 holds more than one identity's ledgers on a device, give each identity its own
