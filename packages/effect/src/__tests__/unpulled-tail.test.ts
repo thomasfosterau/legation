@@ -26,7 +26,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
-import { StoreError, TransportError } from "../Errors.js";
+import { StoreError, TransportError, VersionNotSupportedError } from "../Errors.js";
 import * as Hydration from "../Hydration.js";
 import * as Identity from "../Identity.js";
 import * as InvalidationBus from "../InvalidationBus.js";
@@ -84,15 +84,32 @@ const serverOver = (backend: Backend) =>
     );
   });
 
+// A transport whose pulls are refused while `refusing` is set. The refusal is a version rejection, which
+// the engine does not retry, so it is immediate. Pushes are not affected.
+const refusingPulls = (inner: ClientTransport, refusing: Ref.Ref<boolean>): ClientTransport => ({
+  ...inner,
+  pull: (request) =>
+    Ref.get(refusing).pipe(
+      Effect.flatMap((on) =>
+        on
+          ? Effect.fail(new VersionNotSupportedError({ message: "pulls refused by the test" }))
+          : inner.pull(request)
+      )
+    ),
+});
+
 // The counter client "client-a" in group "group-a", over `handler` and `store`. `unpulledLimit`
 // lowers the overflow bound, so a test pushes a few mutations past it instead of a thousand.
+// `refusing` makes the engine's pulls refusable (see `refusingPulls`).
 const makeCounterEngine = (
   handler: Parameters<typeof makeInMemory>[0],
   store: ClientStore,
-  unpulledLimit?: number
+  unpulledLimit?: number,
+  refusing?: Ref.Ref<boolean>
 ) =>
   Effect.gen(function* () {
-    const transport = yield* makeInMemory(handler, "group-a");
+    const inner = yield* makeInMemory(handler, "group-a");
+    const transport = refusing === undefined ? inner : refusingPulls(inner, refusing);
     return yield* ClientEngineModule.make({
       clientId: "client-a",
       clientGroupId: "group-a",
@@ -114,6 +131,30 @@ const counterValue = (engine: ClientEngineModule.ClientEngine) =>
 /** The tail's entries as `client#id`, in tail order. */
 const tailOf = (store: ClientStore) =>
   store.unpulled.pipe(Effect.map((entries) => entries.map((m) => `${m.clientId}#${m.mutationId}`)));
+
+// Mutates `count` times, then pushes until the journal is empty or a push fails, with pulls refused, so
+// no pull releases the tail between chunks (#429). Each push acknowledges at most half the bound, and
+// the push that takes the tail past the bound is the one that overflows. Returns the exit of the push
+// that failed, or of the last push. Pulls are accepted again on return.
+const pushUnpulled = (
+  engine: ClientEngineModule.ClientEngine,
+  store: ClientStore,
+  refusing: Ref.Ref<boolean>,
+  count: number
+) =>
+  Effect.gen(function* () {
+    yield* Ref.set(refusing, true);
+    for (let i = 0; i < count; i++) yield* engine.mutate("counter/inc", { id: "c" });
+    let exit: Exit.Exit<void, unknown> = Exit.void;
+    while ((yield* store.pendingMutations).length > 0) {
+      exit = yield* Effect.exit(engine.push);
+      if (Exit.isFailure(exit)) break;
+    }
+    // Let the pull ahead that the last push may have started finish while pulls are still refused.
+    for (let i = 0; i < 3; i++) yield* Effect.yieldNow;
+    yield* Ref.set(refusing, false);
+    return exit;
+  });
 
 const mutation = (clientId: string, mutationId: number): Mutation => ({
   clientId,
@@ -244,12 +285,13 @@ const counterSetUp = (ids: ReadonlyArray<string>, unpulledLimit?: number) =>
     const store = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, flaky)
     );
-    const engine = yield* makeCounterEngine(server, store, unpulledLimit);
+    const pullsRefused = yield* Ref.make(false);
+    const engine = yield* makeCounterEngine(server, store, unpulledLimit, pullsRefused);
     yield* engine.subscribe(countersSubset);
     yield* engine.pull;
     for (const id of ids) yield* engine.mutate("counter/inc", { id });
     yield* engine.push;
-    return { server, refused, removals, store, engine };
+    return { server, refused, removals, store, engine, pullsRefused };
   });
 
 // A KeyValueStore that counts the reads of `key`, and whose next read of it fails when `failNext` is
@@ -671,10 +713,11 @@ describe("the tail in an engine (#336)", () => {
       const count = 1100;
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
-      const engine = yield* makeCounterEngine(server, store);
+      const refusing = yield* Ref.make(false);
+      const engine = yield* makeCounterEngine(server, store, undefined, refusing);
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < count; i++) yield* engine.mutate("counter/inc", { id: "c" });
-      yield* engine.push;
+      // Pulls are refused, so the tail builds across the pushes: the third takes it past the bound.
+      yield* pushUnpulled(engine, store, refusing, count);
       const stored = yield* store.unpulled;
       expect(stored.length).toBe(1024);
       expect(stored.at(-1)?.mutationId).toBe(count);
@@ -749,11 +792,13 @@ describe("the tail's crash windows and interleavings (#387)", () => {
             )
           ),
       };
-      const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT);
+      const refusing = yield* Ref.make(false);
+      const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT, refusing);
       yield* engine.subscribe(countersSubset);
-      // One more than the bound, so the push's park overflows and releases the oldest entry.
-      for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
-      expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+      // One more than the bound, so the push that parks it overflows and releases the oldest entry.
+      expect(Exit.isFailure(yield* pushUnpulled(engine, store, refusing, SMALL_LIMIT + 1))).toBe(
+        true
+      );
       // The refused batch writes nothing (#411), so the store and the copy both still hold the whole
       // tail, and nothing reverts: the next overflow or pull releases it.
       expect(yield* inner.unpulled).toHaveLength(SMALL_LIMIT + 1);
@@ -783,17 +828,22 @@ describe("the tail's crash windows and interleavings (#387)", () => {
               )
             ),
         };
-        const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT);
+        const refusing = yield* Ref.make(false);
+        const engine = yield* makeCounterEngine(server, store, SMALL_LIMIT, refusing);
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
-        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        expect(Exit.isFailure(yield* pushUnpulled(engine, store, refusing, SMALL_LIMIT + 1))).toBe(
+          true
+        );
         // The refused release left the tail one above the bound.
         expect(yield* tailOf(inner)).toHaveLength(SMALL_LIMIT + 1);
 
         // One more mutation, pushed: its acknowledgement parks it, and the tail is now over the bound by
         // two, so this release (no longer refused) takes the two oldest entries.
         yield* engine.mutate("counter/inc", { id: "c" });
+        // Pulls stay refused for this push, so no pull releases the tail before its acknowledgement (#429).
+        yield* Ref.set(refusing, true);
         yield* engine.push;
+        yield* Ref.set(refusing, false);
         const bounded = Array.from({ length: SMALL_LIMIT }, (_, i) => `client-a#${i + 3}`);
         expect(yield* tailOf(inner)).toEqual(bounded);
         // The two released entries left the overlay (no pull had revealed them), so the view shows the
@@ -992,12 +1042,15 @@ describe("a pull release that fails part-way (#387)", () => {
     "a pull whose second row write fails, then an overflow push, keeps the post-pull state across a reopen",
     () =>
       Effect.gen(function* () {
-        const { server, refused, store, engine } = yield* counterSetUp(["c", "d"], SMALL_LIMIT);
+        const { server, refused, store, engine, pullsRefused } = yield* counterSetUp(
+          ["c", "d"],
+          SMALL_LIMIT
+        );
         // The pull's second row write fails once; the roll-forward writes it.
         yield* refuse(refused, [rowKeyOf("d")], true);
         expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
-        // An overflow: one more than the bound of increments, pushed, so the push releases the oldest entry.
-        for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        // An overflow: one more than the bound of increments, pushed, so the pushes release the oldest entries.
+        yield* pushUnpulled(engine, store, pullsRefused, SMALL_LIMIT + 1);
         yield* engine.push;
 
         // Reopen: the rows are the pull's, each written once, with no stale patch re-applied.
@@ -1764,11 +1817,17 @@ describe("the engine's overflow release and clears (#387 review)", () => {
     "an overflow release whose record lands but reports failure is finished, so the next pull succeeds",
     () =>
       Effect.gen(function* () {
-        const { refused, store, engine } = yield* counterSetUp(["c", "d"], SMALL_LIMIT);
+        const { refused, store, engine, pullsRefused } = yield* counterSetUp(
+          ["c", "d"],
+          SMALL_LIMIT
+        );
         // The overflow's release record is the next write of the key: it lands, then reports failure.
         yield* refuse(refused, ["legation/releaseIntent"], true, true);
-        for (let i = 0; i <= SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
-        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        expect(
+          Exit.isFailure(yield* pushUnpulled(engine, store, pullsRefused, SMALL_LIMIT + 1))
+        ).toBe(true);
+        // The push that failed left one mutation journaled; the next push sends it.
+        yield* engine.push;
 
         // The failed record was finished in this process, so the next pull is not refused. The row
         // holds the setup's increment and every pushed one.

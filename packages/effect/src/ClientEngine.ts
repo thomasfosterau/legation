@@ -435,10 +435,12 @@ export interface ClientEngineOptions {
   /**
    * Most acknowledged-but-unpulled mutations the overlay keeps before the oldest are released early, with
    * a `logWarning` (#286). Defaults to 1024. A push that takes the tail to half this bound starts a pull
-   * ahead of the overflow (#337), so a healthy transport never reaches it, with or without pokes. A refused
-   * release can leave the tail above this bound, until the next push acknowledgement or pull releases the
-   * excess. An internal seam: a test lowers it to reach the bound with a few mutations. Must be a positive
-   * integer; any other value is a defect when the engine is made.
+   * ahead of the overflow (#337), so a healthy transport never reaches it, with or without pokes. A push
+   * larger than half the bound goes in chunks of half the bound, with a pull between them (#429), and a
+   * chunk never takes the tail past the bound, so one push does not reach it either. A refused release can
+   * leave the tail above this bound, until the next push acknowledgement or pull releases the excess. An
+   * internal seam: a test lowers it to reach the bound with a few mutations. Must be a positive integer;
+   * any other value is a defect when the engine is made.
    */
   readonly unpulledLimit?: number;
   /**
@@ -797,9 +799,10 @@ export interface ClientEngine {
     groupBy: string
   ) => Stream.Stream<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
   /**
-   * Push pending mutations now. Fails with `VersionNotSupportedError` when the
-   * server rejects this build's `schemaVersion` (#48) — the journal is retained,
-   * and `onUpdateNeeded` fires (deduped) as a side effect.
+   * Push pending mutations now, in chunks of at most half the unpulled bound, with a pull between
+   * chunks (#429). A pull that fails for good ends the push and leaves the rest journaled. Fails with
+   * `VersionNotSupportedError` when the server rejects this build's `schemaVersion` (#48) — the journal
+   * is retained, and `onUpdateNeeded` fires (deduped) as a side effect.
    */
   readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
   /**
@@ -934,6 +937,10 @@ export const make = (
         new Error(`ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`)
       );
     }
+    // The pull-ahead threshold (#337), and the most mutations one push request carries (#429). A push
+    // that takes the tail to this many starts a pull ahead of the bound; a push larger than this goes
+    // in chunks of this size, with a pull between them.
+    const pullAheadAt = Math.ceil(unpulledLimit / 2);
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
     // The keyed mutation-state map (#116), seeded from the journal so a
@@ -2182,31 +2189,56 @@ export const make = (
     const pushClaimed = (pending: ReadonlyArray<Mutation>) =>
       Effect.gen(function* () {
         yield* emitEngineEvent({ _tag: "PushStarted" });
-        const response = yield* transport.push({
-          clientGroupId: options.clientGroupId,
-          mutations: pending,
-          ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
-        });
-        // Settle permanently-rejected mutations before the ack sweep, so a
-        // rejected id reports `rejected` rather than `applied`.
-        yield* settleRejected(response);
-        // The applied entries keep their overlay effects in the unpulled tail
-        // until a pull reports them (#286), so the view does not change here.
-        // Only a permanent rejection leaves the overlay now; reveal just those
-        // collections.
-        const rejected = yield* acknowledgePushed(response);
-        yield* settleOwnApplied(response.lastMutationIds);
-        yield* sampleJournalDepth; // the trim changed journal depth
-        if (rejected.length > 0) {
-          yield* publishChange(rebuildFor(yield* collectionsTouchedByMutations(rejected)));
+        // The claimed journal goes out in chunks of at most the pull-ahead threshold (#429), in id order,
+        // one request at a time. A chunk never takes the tail past the bound: it is sized to the room the
+        // tail leaves (an odd bound leaves a pull-ahead's tail at the threshold, with less room than a
+        // whole chunk), and a tail with no room waits for a pull first. A pull between two chunks releases
+        // the tail the first one left, so an oversized push never takes the tail past the bound on a
+        // healthy transport. A chunk that fails ends the push: the error propagates, and the unsent entries
+        // stay in the journal for the next push (`push` retries the transient ones). Nothing is forked per
+        // chunk.
+        let sent = 0;
+        while (sent < pending.length) {
+          // A pull between chunks that fails or reports a version rejection ends the push too, so the
+          // rest of the journal is left for the next one (see `pullBetweenChunks`).
+          if (sent > 0 && !(yield* pullBetweenChunks)) break;
+          let room = unpulledLimit - (yield* Ref.get(unpulled)).length;
+          if (room < 1) {
+            // No pull has released a tail at the bound: wait for one. If it fails, the chunk goes as one
+            // entry, which the overflow release below takes from the tail as it always has.
+            yield* pullBetweenChunks;
+            room = Math.max(1, unpulledLimit - (yield* Ref.get(unpulled)).length);
+          }
+          const chunk = pending.slice(sent, sent + Math.min(pullAheadAt, room));
+          const response = yield* transport.push({
+            clientGroupId: options.clientGroupId,
+            mutations: chunk,
+            ...(options.schemaVersion !== undefined
+              ? { schemaVersion: options.schemaVersion }
+              : {}),
+          });
+          // Settle permanently-rejected mutations before the ack sweep, so a
+          // rejected id reports `rejected` rather than `applied`.
+          yield* settleRejected(response);
+          // The applied entries keep their overlay effects in the unpulled tail
+          // until a pull reports them (#286), so the view does not change here.
+          // Only a permanent rejection leaves the overlay now; reveal just those
+          // collections.
+          const rejected = yield* acknowledgePushed(response);
+          yield* settleOwnApplied(response.lastMutationIds);
+          yield* sampleJournalDepth; // the trim changed journal depth
+          if (rejected.length > 0) {
+            yield* publishChange(rebuildFor(yield* collectionsTouchedByMutations(rejected)));
+          }
+          sent += chunk.length;
         }
         // A tail that has reached half the bound starts a pull ahead of the overflow release (#337).
-        // The push does not wait for it.
+        // The push does not wait for it. A push ended early still gets this check.
         if ((yield* Ref.get(unpulled)).length >= pullAheadAt) yield* pullAhead;
-        yield* Metric.update(Telemetry.mutationsPushedTotal, pending.length);
+        yield* Metric.update(Telemetry.mutationsPushedTotal, sent);
         yield* Metric.update(Telemetry.pushesTotal, 1);
-        yield* Metric.update(Telemetry.pushMutations, pending.length);
-        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: pending.length });
+        yield* Metric.update(Telemetry.pushMutations, sent);
+        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: sent });
       });
 
     // The claim is held for the whole round trip (through the ack sweep) and
@@ -2637,7 +2669,6 @@ export const make = (
     // threshold (the other half) has to absorb the pushes acknowledged while that pull is in flight.
     // A lower threshold pulls more often than a healthy transport needs; a higher one leaves too little
     // headroom for a slow pull.
-    const pullAheadAt = Math.ceil(unpulledLimit / 2);
     const pullAheadPending = yield* Ref.make(false);
     const pullAheadScope = yield* Effect.scope;
     const pullAhead: Effect.Effect<void> = Ref.modify(
@@ -2653,6 +2684,20 @@ export const make = (
             )
           : Effect.void
       )
+    );
+
+    // The pull a push runs between two chunks (#429). Unlike `attemptPull`, it reports its outcome, so
+    // the push can stop. It is awaited, so the next chunk waits for the tail to be released. It retries
+    // transient failures under `pullPolicy`. Once those are spent, the push stops, and the unsent
+    // entries stay in the journal for the next push: stopping is the safe choice, since sending on
+    // over a tail that no pull has released would overflow it. A non-transient failure is surfaced as
+    // a pull failure. A version rejection already reached `onUpdateNeeded`, so it stops silently.
+    // Returns whether the pull completed.
+    const pullBetweenChunks: Effect.Effect<boolean> = pull.pipe(
+      Effect.retry({ schedule: pullPolicy, while: isTransient }),
+      Effect.as(true),
+      Effect.catchTag("VersionNotSupportedError", () => Effect.succeed(false)),
+      Effect.catch((error) => surfaceFailure("pull", error).pipe(Effect.as(false)))
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {

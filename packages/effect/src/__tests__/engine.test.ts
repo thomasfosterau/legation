@@ -404,10 +404,9 @@ describe("a push acknowledgement keeps the overlay until a pull reports it (#286
 
       yield* engine.push;
       const overlaid = yield* engine.query(allTodos);
-      // Past the limit the oldest acknowledged effects leave the overlay; the
-      // newest stay, so the tail cannot grow without bound.
-      expect(overlaid.length).toBeGreaterThan(0);
-      expect(overlaid.length).toBeLessThan(count);
+      // The push goes in chunks with a pull between them (#429), so the tail is released as it builds and
+      // nothing reverts: every acknowledged effect is still in the view.
+      expect(overlaid).toHaveLength(count);
       expect(overlaid.map((row) => row.id)).toContain(String(count - 1));
 
       yield* engine.pull;
