@@ -54,6 +54,16 @@ export interface StartedHost extends ServiceWorkerHost.Host {
   readonly cookie: Effect.Effect<string | undefined, StoreError>;
 }
 
+/**
+ * What the worker relays to its client pages, as the engine finishes each step: a pull has
+ * applied (`cookie` is the replica's, after it), a write has been journaled locally, or a push
+ * has been acknowledged by the server. The page-side harness waits on these instead of polling.
+ */
+export type PageSignal =
+  | { readonly type: "legation:pull-landed"; readonly cookie: string | undefined }
+  | { readonly type: "legation:mutation-journaled"; readonly mutationId: number }
+  | { readonly type: "legation:push-completed"; readonly mutations: number };
+
 export interface HostOptions {
   readonly clientGroupId: string;
   /** e.g. `https://sync.example.com` — defaults to the page's own origin. */
@@ -62,6 +72,8 @@ export interface HostOptions {
   readonly indexedDb: Layer.Layer<IndexedDb.IndexedDb>;
   /** Called once the host serves: the worker installs the façade here. */
   readonly onStart?: (host: StartedHost) => void;
+  /** Called for each {@link PageSignal} the engine's events produce, in the order they happen. */
+  readonly onSignal?: (signal: PageSignal) => void;
 }
 
 /**
@@ -136,12 +148,46 @@ const storeLayer = (options: HostOptions): Layer.Layer<ClientStore.ClientStore> 
 /** Serve mirrors + run the sync loop until the scope closes, telling `onStart` what the façade needs. */
 export const runHost = (options: HostOptions): Effect.Effect<never> =>
   Effect.gen(function* () {
+    const engine = yield* ClientEngine.ClientEngine;
+    const store = yield* ClientStore.ClientStore;
+    if (options.onSignal !== undefined) {
+      const onSignal = options.onSignal;
+      const relay = (event: ClientEngine.EngineEvent): Effect.Effect<void, StoreError> => {
+        switch (event._tag) {
+          case "PullCompleted":
+            return store.getCookie.pipe(
+              Effect.map((cookie) => onSignal({ type: "legation:pull-landed", cookie }))
+            );
+          case "MutationJournaled":
+            return Effect.sync(() =>
+              onSignal({ type: "legation:mutation-journaled", mutationId: event.mutationId })
+            );
+          case "PushCompleted":
+            return Effect.sync(() =>
+              onSignal({ type: "legation:push-completed", mutations: event.mutations })
+            );
+          default:
+            return Effect.void;
+        }
+      };
+      // Opened before the host starts, so the sync loop's first events are not missed: an event
+      // published before the stream is opened is lost (#426, the reason EngineHost opens its own first).
+      const events = yield* Stream.toPull(engine.engineEvents);
+      yield* Effect.forkScoped(
+        Effect.forever(
+          events.pipe(
+            Effect.flatMap((batch) =>
+              Effect.forEach(batch, (event) => relay(event).pipe(Effect.ignore), { discard: true })
+            )
+          )
+        ).pipe(Effect.ignore)
+      );
+    }
     const host = yield* ServiceWorkerHost.start({
       registry,
       nodes,
       urls: JsonApiQuery.urlReads(nodes),
     });
-    const store = yield* ClientStore.ClientStore;
     options.onStart?.({ ...host, cookie: store.getCookie });
     return yield* Effect.never;
   }).pipe(

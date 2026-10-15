@@ -50,7 +50,16 @@
  * by the harness instead: `app.blackout` drops the app's own requests (the
  * browser stays "online"), and `app.carriers` cuts the sync carriers —
  * demonstration 4 cuts them for its offline window, so its pending write
- * cannot reach the server by any path.
+ * cannot reach the server by any write path.
+ *
+ * The waits are on the worker's signals, not on the clock. The worker relays
+ * each completed pull (`legation:pull-landed`), journaled write
+ * (`legation:mutation-journaled`) and acknowledged push
+ * (`legation:push-completed`) to its tabs (`PageSignal`, `src/lib/host.ts`),
+ * and `signals` records them here through a page binding. A wait starts from
+ * a mark taken before the step it awaits, so a signal that arrives first is
+ * found in the log, not missed. A wall-clock deadline on each wait only bounds
+ * a hang.
  *
  * Identity is the app's own: the test signs up through the account page's
  * form (Better Auth), the Kit process aligns the client-group binding, and
@@ -103,19 +112,57 @@ const fromNetwork = async (context: BrowserContext, origin: string, path: string
 /** Document content, whitespace aside (ADR-0029 §6 binds content, not framing). */
 const content = (body: string): string => JSON.stringify(JSON.parse(body));
 
-/** Poll until `predicate` holds for `probe`'s result; the last result on timeout. */
-const until = async <A>(
-  probe: () => Promise<A>,
-  predicate: (value: A) => boolean,
-  options: { readonly timeout: number; readonly interval?: number }
-): Promise<A> => {
-  const deadline = Date.now() + options.timeout;
-  let last = await probe();
-  while (!predicate(last) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, options.interval ?? 250));
-    last = await probe();
-  }
-  return last;
+/** A `legation:*` message the page relayed from the worker (a `PageSignal`). */
+type Signal = { readonly type: string } & Readonly<Record<string, unknown>>;
+
+/** The wall-clock instant `ms` from now: a safety bound for a wait, not a timing assumption. */
+const deadlineIn = (ms: number): number => Date.now() + ms;
+
+/**
+ * The worker's signals in arrival order. `mark` is the cursor a wait starts
+ * from; `next` returns the first matching signal at or after it, parking
+ * until one is recorded, and rejects at `deadline`.
+ */
+const makeSignals = () => {
+  const log: Array<Signal> = [];
+  let parked: Array<() => void> = [];
+
+  const record = (signal: Signal): void => {
+    log.push(signal);
+    const woken = parked;
+    parked = [];
+    for (const wake of woken) wake();
+  };
+
+  const arrival = (awaiting: string, deadline: number): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`no ${awaiting} from the worker before the safety deadline`)),
+        Math.max(deadline - Date.now(), 0)
+      );
+      parked.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+  const next = async (
+    from: number,
+    type: string,
+    deadline: number,
+    match: (signal: Signal) => boolean = () => true
+  ): Promise<{ readonly index: number; readonly signal: Signal }> => {
+    let cursor = from;
+    for (;;) {
+      for (; cursor < log.length; cursor++) {
+        const signal = log[cursor]!;
+        if (signal.type === type && match(signal)) return { index: cursor, signal };
+      }
+      await arrival(type, deadline);
+    }
+  };
+
+  return { record, mark: () => log.length, next };
 };
 
 const served = (result: Fetched) => result.servedAt !== null && result.servedAt !== "";
@@ -129,6 +176,7 @@ let app: App;
 let browser: Browser;
 let context: BrowserContext;
 let page: Page;
+const signals = makeSignals();
 /** The signed-up user's id (Better Auth's), once known. */
 let userId: string;
 /** The network's document for the first catalog page, from demonstration 1. */
@@ -147,6 +195,17 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     app = await serveApp();
     browser = await chromium.launch({ executablePath });
     context = await browser.newContext();
+    await context.exposeBinding("legationSignal", (_source, signal: Signal) => {
+      signals.record(signal);
+    });
+    await context.addInitScript(() => {
+      navigator.serviceWorker?.addEventListener("message", (event: MessageEvent) => {
+        const data = event.data as { type?: unknown } | undefined;
+        if (typeof data?.type === "string" && data.type.startsWith("legation:")) {
+          (window as unknown as { legationSignal: (signal: unknown) => void }).legationSignal(data);
+        }
+      });
+    });
     page = await context.newPage();
   }, 120_000);
 
@@ -193,17 +252,21 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     expect((JSON.parse(keyboards.body) as Json).data.map((p: Json) => p.id)).toEqual(["p-03", "p-04"]);
 
     // The first page: the engine boots on the tab's handshake and pins the
-    // shell; a pin's rows land on a later pull (a poke, or the 15-second
-    // backstop). Until a pull has landed for every registration the page
-    // needs, the façade forwards the request (ADR-0029 section 3, #426), so
-    // the network answers; the wait ends on a served answer whose body is
-    // the network's, byte for byte.
+    // shell; a pin's rows land on a pull (a poke, or the 15-second backstop).
+    // Until a pull has landed for every registration the page needs, the
+    // façade forwards the request (ADR-0029 section 3, #426), so the network
+    // answers. Each pull the worker reports is the moment to read the replica:
+    // the read is kept once it is served with the network's body, byte for
+    // byte, and otherwise the next pull is awaited.
     firstPageFromNetwork = (await fromNetwork(context, app.origin, firstPage)).body;
-    const local = await until(
-      () => fetched(page, firstPage),
-      (result) => served(result) && content(result.body) === content(firstPageFromNetwork),
-      { timeout: 40_000 }
-    );
+    const deadline = deadlineIn(40_000);
+    let local: Fetched;
+    let cursor = 0;
+    do {
+      const landed = await signals.next(cursor, "legation:pull-landed", deadline);
+      cursor = landed.index + 1;
+      local = await fetched(page, firstPage);
+    } while (!(served(local) && content(local.body) === content(firstPageFromNetwork)));
     expect(local.status).toBe(200);
     expect(served(local), "x-legation-served-at carries the replica's cookie").toBe(true);
     expect(local.contentType).toBe(MEDIA_TYPE);
@@ -281,19 +344,17 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     // Add to cart offline: the product page comes from the worker's page
     // cache (visited online in demonstration 1); `cart/add` journals in
     // the worker's engine and renders in the optimistic overlay; with the
-    // carriers down the push cannot reach the server.
+    // carriers down the push cannot reach the server. The worker reports the
+    // journaled write after it is appended, and the overlay is applied under
+    // the same lock the façade's read takes, so the read after the signal
+    // sees the line.
     const navigation = await page.goto(`${app.origin}/product/p-01`);
     expect(navigation?.fromServiceWorker()).toBe(true);
+    const journaled = signals.mark();
     await page.locator("button", { hasText: "Add to cart" }).first().click();
-    const pending = await until(
-      () => fetched(page, cartPath),
-      // A transient 503 offline document has no `data`: the predicate polls through it.
-      (result) =>
-        result.status === 200 &&
-        served(result) &&
-        (JSON.parse(result.body) as Json).data?.length === 1,
-      { timeout: 10_000 }
-    );
+    await signals.next(journaled, "legation:mutation-journaled", deadlineIn(10_000));
+    const pending = await fetched(page, cartPath);
+    expect(pending.status).toBe(200);
     expect(served(pending)).toBe(true);
     const line = (JSON.parse(pending.body) as Json).data[0];
     expect(line.type).toBe("cartItems");
@@ -306,16 +367,19 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     expect(rows[0]!.n).toBe(0);
 
     // Back online the carriers come back, the journal pushes and the server
-    // catches up.
+    // catches up. The worker reports the acknowledged push once the server has
+    // answered it, so the server's table is read after that signal.
+    const pushed = signals.mark();
     app.carriers(true);
     await context.setOffline(false);
-    const converged = await until(
-      () =>
-        Effect.runPromise(
-          app.sql<{ id: string }>`SELECT id FROM cartItems WHERE userId = ${userId}`
-        ),
-      (result) => result.length === 1,
-      { timeout: 20_000 }
+    await signals.next(
+      pushed,
+      "legation:push-completed",
+      deadlineIn(20_000),
+      (signal) => typeof signal.mutations === "number" && signal.mutations >= 1
+    );
+    const converged = await Effect.runPromise(
+      app.sql<{ id: string }>`SELECT id FROM cartItems WHERE userId = ${userId}`
     );
     expect(converged.map((row) => row.id)).toEqual([line.id]);
   }, 45_000);
