@@ -11,7 +11,7 @@
  * `GET` on a reflected route is not the façade's business.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema, type Scope } from "effect";
+import { Effect, Ref, Schema, type Scope } from "effect";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -118,7 +118,13 @@ const mutators = Mutator.registry([
 
 const GROUP = "group-a";
 
-/** The seed behind a `Server`, synced into an owned engine read through a `Client`. */
+/**
+ * The seed behind a `Server`, synced into an owned engine read through a `Client`.
+ * `pending` arms a race for the next window judgment: it runs once, after the
+ * judgment has read a window's pull state and before the request is answered
+ * (#426). `racePut` writes a row to the server and pulls it, as another client's
+ * write does.
+ */
 const makeReplica = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
@@ -158,9 +164,35 @@ const makeReplica = Effect.gen(function* () {
     Effect.provideService(ClientStore.ClientStore, store),
     Effect.provideService(Transport.ClientTransport, transport)
   );
-  const view = ClientView.fromEngine(engine);
+  const base = ClientView.fromEngine(engine);
+  const pending = yield* Ref.make<Effect.Effect<void> | undefined>(undefined);
+  const view: ClientView.ClientView = {
+    ...base,
+    pulled: (key) =>
+      base
+        .pulled(key)
+        .pipe(
+          Effect.tap(() =>
+            Effect.flatMap(Ref.getAndSet(pending, undefined), (race) => race ?? Effect.void)
+          )
+        ),
+  };
+  const racePut = (collection: string, value: SeedRow): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* backend.applyMutations({ clientGroupId: "seed" }, [
+        {
+          clientId: "seed",
+          // The next id in the seed's contiguous run (the backend refuses a gap).
+          mutationId: Object.values(seed).reduce((count, rows) => count + rows.length, 0) + 1,
+          mutator: "seed/put",
+          args: { collection, value },
+          createdAt: 0,
+        },
+      ]);
+      yield* engine.pull;
+    }).pipe(Effect.orDie);
   const client = Client.fromView(nodes, view, { urls: JsonApiQuery.urlReads(nodes) });
-  return { client, engine, store };
+  return { client, engine, store, pending, racePut };
 });
 
 interface Facade {
@@ -169,18 +201,23 @@ interface Facade {
   readonly engine: ClientEngine.ClientEngine;
   readonly docs: ReplicaDocuments.ReplicaDocuments;
   readonly online: { current: boolean };
+  /** A race armed for the next products read (see `makeReplica`). */
+  readonly pending: Ref.Ref<Effect.Effect<void> | undefined>;
+  /** Write a row to the server and pull it into the replica: the pull a race lands. */
+  readonly racePut: (collection: string, value: SeedRow) => Effect.Effect<void>;
 }
 
-/** A façade over the replica, with the shell's pins applied and pulled. */
 /** The relational pin of the fixture: products with their variants. */
 const variantsOfProducts: Query.Read = { collection: "products", include: { variants: true } };
+const RELATIONAL_PIN = "/jsonapi/products?include=variants";
 
+/** A façade over the replica, with the shell's pins applied and pulled. */
 const makeFacade = (
   pins: ReadonlyArray<string>,
   options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl">> = {}
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { client, engine, store } = yield* makeReplica;
+    const { client, engine, store, pending, racePut } = yield* makeReplica;
     for (const url of pins) yield* client.subscribe(url);
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them (#426): pull until the relational pin of the fixture is covered, so the replica holds
@@ -189,6 +226,11 @@ const makeFacade = (
       yield* engine.pull;
       yield* Effect.yieldNow;
       if ((yield* client.coverageOf(variantsOfProducts))._tag === "Covered") break;
+    }
+    // A pinned relational read must be covered once the loop has pulled: a silent fall-through
+    // here would make the covered-answer tests below pass or fail for the wrong reason.
+    if (pins.includes(RELATIONAL_PIN)) {
+      expect((yield* client.coverageOf(variantsOfProducts))._tag).toBe("Covered");
     }
     const online = { current: true };
     const handler = JsonApiFacade.fetchHandler({
@@ -201,7 +243,7 @@ const makeFacade = (
       ...options,
     });
     const docs = ReplicaDocuments.make({ nodes, prefix: "/jsonapi" });
-    return { handler, client, engine, docs, online };
+    return { handler, client, engine, docs, online, pending, racePut };
   }).pipe(Effect.orDie);
 
 const jsonApi = (url: string, init: RequestInit = {}): Request =>
@@ -243,6 +285,32 @@ describe("JsonApiFacade", () => {
         expect(document.data.map((row) => row.id)).toEqual(["p-2", "p-3"]);
       })
     )
+  );
+
+  it.effect(
+    "a pull that lands mid-request cannot put an unpulled product into a covered document (#426)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler, pending, racePut } = yield* makeFacade([
+            "/jsonapi/products?include=variants",
+            "/jsonapi/variants",
+          ]);
+          // The first window judgment is made, then the pull below lands: a product whose variants
+          // window is not pulled. The document is written from the rows read before the judgment,
+          // so the new product is not in this answer, and the answer is still covered.
+          yield* Ref.set(
+            pending,
+            racePut("products", { id: "p-4", categoryId: "c-audio", name: "Stool", priceCents: 50 })
+          );
+          const response = yield* handler.handle(jsonApi("/jsonapi/products?include=variants"));
+          expect(yield* Ref.get(pending)).toBeUndefined();
+          expect(response).toBeDefined();
+          expect(response!.status).toBe(200);
+          const document = (yield* body(response!)) as { data: ReadonlyArray<{ id: string }> };
+          expect(document.data.map((row) => row.id).sort()).toEqual(["p-1", "p-2", "p-3"]);
+        })
+      )
   );
 
   it.effect("serves a single resource by path, and forwards one the replica does not hold", () =>

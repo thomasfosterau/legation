@@ -76,8 +76,10 @@ import { Effect, Schema } from "effect";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
-import type { Node, Query, QueryError } from "@thomasfosterau/legation-effect";
-import type { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import { Query } from "@thomasfosterau/legation-effect";
+import type { Node, QueryError } from "@thomasfosterau/legation-effect";
+import type { ClientEngine, ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import { Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "./Convention.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as ReplicaDocuments from "./ReplicaDocuments.js";
@@ -109,9 +111,14 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    * The ledger's verdict for a read — `client.coverageOf`, or
    * `Coverage.coverageOf(nodes, view.query, host.registrations)` over the registrations
    * an `EngineHost` holds on mirrors' behalf. A request is answered locally
-   * only when every read it needs is covered.
+   * only when every read it needs is covered. `options.snapshot` is the root
+   * rows the façade read for the request, which the verdict is judged over
+   * (#426); a read with no includes ignores it.
    */
-  readonly coverageOf: (read: Query.Read) => Effect.Effect<Coverage.Verdict>;
+  readonly coverageOf: (
+    read: Query.Read,
+    options?: Coverage.JudgeOptions
+  ) => Effect.Effect<Coverage.Verdict>;
   /**
    * The replica's CVR cookie, for `x-legation-served-at` — the store's
    * `getCookie`, read only when a response is synthesised. Absent, or
@@ -342,11 +349,25 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     return route === undefined ? undefined : { route, url };
   };
 
-  /** Rules 1 to 4 for every read the request needs: covered by the ledger, or not the façade's to answer. */
-  const covered = (reads: ReadonlyArray<Query.Read>): Effect.Effect<boolean> =>
-    Effect.forEach(reads, coverageOf).pipe(
+  /** Rules 1 to 4 for every read the request needs, judged over the request's root rows: covered by the ledger, or not the façade's to answer. */
+  const covered = (
+    reads: ReadonlyArray<Query.Read>,
+    snapshot: ReadonlyArray<ClientEngine.LocalRow>
+  ): Effect.Effect<boolean> =>
+    Effect.forEach(reads, (read) => coverageOf(read, { snapshot })).pipe(
       Effect.map((verdicts) => verdicts.every((verdict) => verdict._tag === "Covered"))
     );
+
+  /** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
+  const pinned = (
+    base: ClientView.Reader,
+    root: Subset.Subset,
+    rows: ReadonlyArray<ClientEngine.LocalRow>
+  ): ClientView.Reader => ({
+    query: (subset) =>
+      Subset.hash(subset) === Subset.hash(root) ? Effect.succeed(rows) : base.query(subset),
+    observe: base.observe,
+  });
 
   /** A rejection as an outcome, with the cookie read for the response it may carry. */
   const rejected = (error: QueryError): Effect.Effect<never, Outcome> =>
@@ -358,14 +379,24 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
-      if (!(yield* covered(needed))) {
+      // The request's root rows, read once: coverage is judged over them and the document is
+      // written from them, so a pull between the two cannot add a root row whose edge windows
+      // are not pulled yet (#426). A root that cannot be read is uncovered, as before.
+      const root = yield* Query.tryPlan(nodes, parsed.read).pipe(Effect.mapError(() => forward));
+      const rows = yield* view
+        .query(root.root)
+        .pipe(
+          Effect.orElseSucceed((): ReadonlyArray<ClientEngine.LocalRow> | undefined => undefined)
+        );
+      if (rows === undefined || !(yield* covered(needed, rows))) {
         if (online()) return yield* Effect.fail(forward);
         return yield* Effect.flatMap(cookie, (served) =>
           Effect.fail(respond(offlineResponse(served)))
         );
       }
+      const replica = pinned(view, root.root, rows);
       const write: Effect.Effect<ReplicaDocuments.Document, QueryError> =
-        parsed.id === undefined ? docs.collection(view, parsed) : docs.data(view, parsed);
+        parsed.id === undefined ? docs.collection(replica, parsed) : docs.data(replica, parsed);
       const document = yield* write.pipe(Effect.catch(rejected));
       // No such row in a faithful replica: the 404 is the endpoint's own.
       if (parsed.id !== undefined && document.data === null) return yield* Effect.fail(forward);

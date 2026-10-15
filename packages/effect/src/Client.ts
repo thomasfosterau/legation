@@ -112,7 +112,10 @@ export interface Client {
    * devtools (ADR-0029 section 4: "which subscription covered the request
    * is recorded beside it").
    */
-  readonly coverageOf: (read: QueryModule.Read) => Effect.Effect<Coverage.Verdict>;
+  readonly coverageOf: (
+    read: QueryModule.Read,
+    options?: Coverage.JudgeOptions
+  ) => Effect.Effect<Coverage.Verdict>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (
     mutation: string,
@@ -510,8 +513,15 @@ export const fromView = (
   // the view, so the edge windows it links to are the ones judged (#426). An
   // entry whose windows the read needs and the replica does not hold yet covers
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
-  const verdictOf = (plan: Query.Plan): Effect.Effect<Coverage.Verdict> =>
-    Coverage.requestedOf(nodes.collections, plan, view.query).pipe(
+  const verdictOf = (
+    plan: Query.Plan,
+    snapshot?: ReadonlyArray<ClientEngine.LocalRow>
+  ): Effect.Effect<Coverage.Verdict> =>
+    Coverage.requestedOf(
+      nodes.collections,
+      plan,
+      snapshot === undefined ? view.query : Coverage.snapshotOf(snapshot)
+    ).pipe(
       Effect.flatMap((requested) =>
         Ref.get(ledger).pipe(
           Effect.flatMap((interests) =>
@@ -533,18 +543,30 @@ export const fromView = (
   // the derived REST handlers run server-side — with the plan compiled once,
   // for the coverage verdict and the run); local again when fallthrough is
   // unavailable or fails (offline-first — local is always an answer).
+  // One snapshot of the root rows, read once: the verdict is judged over them
+  // and a covered answer is joined from them, so a pull between the judgment
+  // and the answer cannot add a root row whose edge windows are not pulled
+  // (#426). A failed read of the root is uncovered, as a failed read of the
+  // rows is.
   const queryOnce = (
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
-    const local = Query.run(view, nodes, read);
     const readThrough = view.read;
-    if (readThrough === undefined) return local;
+    if (readThrough === undefined) return Query.run(view, nodes, read);
     const compiled = Query.plan(nodes, read);
-    return verdictOf(compiled).pipe(
-      Effect.flatMap((verdict) =>
-        verdict._tag === "Covered"
-          ? local
-          : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+    const local = Effect.suspend(() => Query.run(view, nodes, read));
+    return view.query(compiled.root).pipe(
+      Effect.orElseSucceed(() => undefined),
+      Effect.flatMap((snapshot) =>
+        snapshot === undefined
+          ? Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+          : verdictOf(compiled, snapshot).pipe(
+              Effect.flatMap((verdict) =>
+                verdict._tag === "Covered"
+                  ? Query.runRows(view, nodes, read, snapshot)
+                  : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+              )
+            )
       )
     );
   };
@@ -596,7 +618,7 @@ export const fromView = (
         )
       )
     ),
-    coverageOf: (read) => verdictOf(Query.plan(nodes, read)),
+    coverageOf: (read, options) => verdictOf(Query.plan(nodes, read), options?.snapshot),
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

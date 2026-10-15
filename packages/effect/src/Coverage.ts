@@ -423,6 +423,27 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
 };
 
 /**
+ * How a coverage check is judged. `snapshot` is the root rows the caller already
+ * read for the request: the verdict is judged over exactly those rows, not a
+ * second read that a pull may have moved (#426). An options bag rather than a
+ * positional argument, so a caller that passes the check to `Effect.forEach`
+ * (which passes an index second) gets no snapshot instead of a wrong one.
+ */
+export interface JudgeOptions {
+  readonly snapshot?: ReadonlyArray<LocalRow> | undefined;
+}
+
+/**
+ * The root rows of one snapshot, as a {@link RowsOf}: a verdict judged over
+ * them is judged over exactly the rows a caller already read (#426), not a
+ * second read that a pull may have moved.
+ */
+export const snapshotOf =
+  (rows: ReadonlyArray<LocalRow>): RowsOf<never> =>
+  () =>
+    Effect.succeed(rows);
+
+/**
  * A request as the coverage scan takes it: its registration, plus the edge
  * windows its rows link to (`Related.windowsFor` over the root rows it reads).
  * A read whose rows link to no edge window needs only its root pulled.
@@ -501,12 +522,16 @@ export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdi
  * façade in a service worker builds its check from the host's registrations
  * (`EngineHost.Host.registrations`), where no Client's ledger sees the
  * mirrors' pins. A failed read of the rows is uncovered: the read goes to the
- * server.
+ * server. `options.snapshot`, when given, is judged over instead of a fresh read.
  */
 export const coverageOf =
   <E>(nodes: Node.NodeRegistry, rowsOf: RowsOf<E>, entries: Effect.Effect<Iterable<Entry>>) =>
-  (read: Query.Read): Effect.Effect<Verdict> =>
-    requestedOf(nodes.collections, Query.plan(nodes, read), rowsOf).pipe(
+  (read: Query.Read, options?: JudgeOptions): Effect.Effect<Verdict> =>
+    requestedOf(
+      nodes.collections,
+      Query.plan(nodes, read),
+      options?.snapshot === undefined ? rowsOf : snapshotOf(options.snapshot)
+    ).pipe(
       Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
       Effect.catch(() => Effect.succeed<Verdict>({ _tag: "Uncovered" }))
     );

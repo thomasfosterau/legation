@@ -830,3 +830,100 @@ describe("Client.connect over a hosted engine", () => {
     )
   );
 });
+
+// ─── #426: a read judges and answers from one snapshot of its root ───────────
+
+/** Two engines over one server: `reader` is the replica under test; `writer` puts rows it has not pulled. */
+const makeRacePair = Effect.gen(function* () {
+  const handler = yield* makeHandler;
+  const make = (clientId: string) =>
+    Effect.gen(function* () {
+      const store = yield* ClientStore.makeMemory;
+      const transport = yield* Transport.makeInMemory(handler, `group-${clientId}`);
+      return yield* ClientEngine.make({
+        clientId,
+        clientGroupId: `group-${clientId}`,
+        mutators: mutations,
+      }).pipe(
+        Effect.provideService(ClientStore.ClientStore, store),
+        Effect.provideService(Transport.ClientTransport, transport)
+      );
+    });
+  return { reader: yield* make("client-reader"), writer: yield* make("client-writer") };
+});
+
+describe("Client.query judges and answers from one snapshot (#426)", () => {
+  it.effect(
+    "a pull between the judgment and the answer cannot serve a root row with unpulled reviews",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { reader, writer } = yield* makeRacePair;
+          yield* writer.mutate("product/set", { id: "p-1", name: "Desk" });
+          yield* writer.mutate("product/set", { id: "p-2", name: "Lamp" });
+          yield* writer.mutate("review/set", {
+            id: "r-1",
+            productId: "p-1",
+            body: "Solid",
+            createdAt: "2026-01-01",
+          });
+          yield* writer.mutate("review/set", {
+            id: "r-2",
+            productId: "p-2",
+            body: "Bright",
+            createdAt: "2026-01-02",
+          });
+          yield* writer.push.pipe(Effect.orDie);
+
+          // Armed: the first window judgment after the arm returns, then another client's write lands
+          // and is pulled, before the read is answered. Without a snapshot the answer re-reads the root
+          // and serves p-3 with no reviews pulled.
+          const armed = yield* Ref.make(false);
+          const base = ClientView.fromEngine(reader);
+          const race = Effect.gen(function* () {
+            if (!(yield* Ref.getAndSet(armed, false))) return;
+            yield* writer.mutate("product/set", { id: "p-3", name: "Chair" });
+            yield* writer.mutate("review/set", {
+              id: "r-3",
+              productId: "p-3",
+              body: "Firm",
+              createdAt: "2026-01-03",
+            });
+            yield* writer.push.pipe(Effect.orDie);
+            yield* reader.pull.pipe(Effect.orDie);
+          }).pipe(Effect.orDie);
+          const view: ClientView.ClientView = {
+            ...base,
+            pulled: (key) => base.pulled(key).pipe(Effect.tap(() => race)),
+          };
+          const client = Client.fromView(nodes, view);
+
+          // Pin the reviewed products and pull until their root and review windows are pulled.
+          const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
+          yield* client.subscribe(reviewed);
+          for (let attempt = 0; attempt < 20; attempt++) {
+            yield* reader.pull.pipe(Effect.orDie);
+            yield* Effect.yieldNow;
+            if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
+          }
+          expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
+
+          yield* Ref.set(armed, true);
+          const rows = yield* client.query(reviewed);
+          expect(yield* Ref.get(armed)).toBe(false);
+          // The answer is the snapshot the verdict judged: p-1 and p-2, each with its reviews.
+          expect(
+            rows.map((row) => [
+              row.id,
+              ((row.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>).map(
+                (review) => review.id
+              ),
+            ])
+          ).toEqual([
+            ["p-1", ["r-1"]],
+            ["p-2", ["r-2"]],
+          ]);
+        })
+      )
+  );
+});
