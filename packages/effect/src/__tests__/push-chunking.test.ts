@@ -490,6 +490,107 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
   );
 
   it.effect(
+    "two pushes that fail their first chunk give the room back, and a healthy push still gets the whole bound",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const store = yield* ClientStoreModule.makeMemory;
+        const inner = yield* makeInMemory(server, "group-a");
+        // The first two requests are each a push's first chunk, and both are lost.
+        const requests = yield* Ref.make(0);
+        const lostFirstTwo: ClientTransport = {
+          ...inner,
+          push: (request) =>
+            Ref.updateAndGet(requests, (n) => n + 1).pipe(
+              Effect.flatMap((n) =>
+                n <= 2
+                  ? Effect.fail(new TransportError({ message: "chunk lost" }))
+                  : inner.push(request)
+              )
+            ),
+        };
+        const log: Array<string> = [];
+        // No retry, so each failed chunk ends its push at once.
+        const engine = yield* engineOver(logged(lostFirstTwo, store, log), store, {
+          unpulledLimit: SMALL_LIMIT,
+          retry: { push: Schedule.recurs(0) },
+        });
+        yield* engine.subscribe(countersSubset);
+        for (let i = 0; i < SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+
+        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
+        expect(yield* journalIds(store)).toEqual(range(1, SMALL_LIMIT).split(",").map(Number));
+
+        // The tail is empty and the room of both failed chunks is back: the healthy push sends the
+        // whole journal, four at a time, with the tail at four when the second chunk goes.
+        yield* engine.push;
+        expect(pushIds(log)).toEqual([
+          `push ${range(1, 4)}`,
+          `push ${range(1, 4)}`,
+          `push ${range(1, 4)}`,
+          `push ${range(5, 8)}`,
+        ]);
+        expect(yield* journalIds(store)).toEqual([]);
+        expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "interrupted pushes give the room back: after two are cut off mid-chunk, a healthy push gets the whole bound",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+        const store = yield* ClientStoreModule.makeMemory;
+        const inner = yield* makeInMemory(server, "group-a");
+        // Until `healthy` is set, a push's round trip never returns. The second one to park signals.
+        const healthy = yield* Ref.make(false);
+        const parked = yield* Ref.make(0);
+        const twoParked = yield* Deferred.make<void>();
+        const parkingPushes: ClientTransport = {
+          ...inner,
+          push: (request) =>
+            Ref.get(healthy).pipe(
+              Effect.flatMap((on) =>
+                on
+                  ? inner.push(request)
+                  : Ref.updateAndGet(parked, (n) => n + 1).pipe(
+                      Effect.flatMap((n) =>
+                        (n === 2 ? Deferred.succeed(twoParked, undefined) : Effect.void).pipe(
+                          Effect.andThen(Effect.never)
+                        )
+                      )
+                    )
+              )
+            ),
+        };
+        const log: Array<string> = [];
+        const engine = yield* engineOver(logged(parkingPushes, store, log), store, {
+          unpulledLimit: SMALL_LIMIT,
+        });
+        yield* engine.subscribe(countersSubset);
+        for (let i = 0; i < SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+
+        // Both pushes reserve a chunk of four, which fills the bound while they are in flight.
+        const first = yield* Effect.forkScoped(engine.push);
+        const second = yield* Effect.forkScoped(engine.push);
+        yield* Deferred.await(twoParked);
+        yield* Fiber.interrupt(first);
+        yield* Fiber.interrupt(second);
+
+        // Nothing was acknowledged, so the journal is intact. The interrupted chunks gave their room back.
+        expect(yield* tailIds(store)).toEqual([]);
+        expect(yield* journalIds(store)).toEqual(range(1, SMALL_LIMIT).split(",").map(Number));
+
+        yield* Ref.set(healthy, true);
+        yield* engine.push;
+        expect(pushIds(log).slice(-2)).toEqual([`push ${range(1, 4)}`, `push ${range(5, 8)}`]);
+        expect(yield* journalIds(store)).toEqual([]);
+        expect(yield* counterValue(engine)).toBe(SMALL_LIMIT);
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
     "overlapping pushes share the bound: the tail and the chunks in flight never pass it",
     () =>
       Effect.gen(function* () {

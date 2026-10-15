@@ -2169,8 +2169,9 @@ export const make = (
     // The room a chunk may take (#429). The bound less the acknowledged tail and the chunks other pushes
     // have sent and not yet settled. Overlapping pushes share it: a chunk reserves its room under
     // `overlayLock`, so the tail and the reservations together never exceed the bound, and the reservation
-    // is given back when the chunk's acknowledgement or failure has settled. The reservation takes no more
-    // than `pullAheadAt` and no more than the mutations left to send.
+    // is given back when the chunk's acknowledgement or failure has settled, or when the chunk is
+    // interrupted (`sendChunk`). The reservation takes no more than `pullAheadAt` and no more than the
+    // mutations left to send.
     const reservedRoom = yield* Ref.make(0);
     const reserveChunk = (remaining: number) =>
       Semaphore.withPermit(
@@ -2195,14 +2196,50 @@ export const make = (
         // the earlier chunks left; a push whose first chunk finds no room pulls first. That pull is awaited,
         // and if it fails the push fails with it, so the unsent entries stay journaled for the next push.
         // Nothing is forked per chunk.
+        // Reserve the room, send the chunk it sizes, and give the room back, as one acquire/use/release:
+        // the reservation is taken uninterruptibly and released on every exit, so an interrupt cannot
+        // leak it. Resolves to the mutations sent from `sent`, or 0 when the room is short.
+        const sendChunk = (remaining: number, sent: number) =>
+          Effect.acquireUseRelease(
+            reserveChunk(remaining),
+            (size) =>
+              size < 1
+                ? Effect.succeed(0)
+                : Effect.gen(function* () {
+                    const response = yield* transport.push({
+                      clientGroupId: options.clientGroupId,
+                      mutations: pending.slice(sent, sent + size),
+                      ...(options.schemaVersion !== undefined
+                        ? { schemaVersion: options.schemaVersion }
+                        : {}),
+                    });
+                    // Settle permanently-rejected mutations before the ack sweep, so a
+                    // rejected id reports `rejected` rather than `applied`.
+                    yield* settleRejected(response);
+                    // The applied entries keep their overlay effects in the unpulled tail
+                    // until a pull reports them (#286), so the view does not change here.
+                    // Only a permanent rejection leaves the overlay now; reveal just those
+                    // collections.
+                    const rejected = yield* acknowledgePushed(response);
+                    yield* settleOwnApplied(response.lastMutationIds);
+                    yield* sampleJournalDepth; // the trim changed journal depth
+                    if (rejected.length > 0) {
+                      yield* publishChange(
+                        rebuildFor(yield* collectionsTouchedByMutations(rejected))
+                      );
+                    }
+                    return size;
+                  }),
+            (size) => releaseChunk(size)
+          );
         let sent = 0;
         while (sent < pending.length) {
           const remaining = pending.length - sent;
           if (sent > 0) yield* pullBetweenChunks;
-          let size = yield* reserveChunk(remaining);
+          let size = yield* sendChunk(remaining, sent);
           if (size < 1 && sent === 0) {
             yield* pullBetweenChunks;
-            size = yield* reserveChunk(remaining);
+            size = yield* sendChunk(remaining, sent);
           }
           // A pull that succeeded but left no room has not released the tail. Sending over it would take
           // the tail past the bound, so the push stops here as it does on a failed pull.
@@ -2210,34 +2247,11 @@ export const make = (
             return yield* Effect.fail(
               new TransportError({
                 message:
-                  "A pull between chunks released no room: the unpulled tail is still at its bound; the unsent mutations stay journaled",
+                  "A pull released no room for the next chunk: the unpulled tail and the chunks other pushes have in flight still fill the bound; the unsent mutations stay journaled",
               })
             );
           }
-          const chunk = pending.slice(sent, sent + size);
-          yield* Effect.gen(function* () {
-            const response = yield* transport.push({
-              clientGroupId: options.clientGroupId,
-              mutations: chunk,
-              ...(options.schemaVersion !== undefined
-                ? { schemaVersion: options.schemaVersion }
-                : {}),
-            });
-            // Settle permanently-rejected mutations before the ack sweep, so a
-            // rejected id reports `rejected` rather than `applied`.
-            yield* settleRejected(response);
-            // The applied entries keep their overlay effects in the unpulled tail
-            // until a pull reports them (#286), so the view does not change here.
-            // Only a permanent rejection leaves the overlay now; reveal just those
-            // collections.
-            const rejected = yield* acknowledgePushed(response);
-            yield* settleOwnApplied(response.lastMutationIds);
-            yield* sampleJournalDepth; // the trim changed journal depth
-            if (rejected.length > 0) {
-              yield* publishChange(rebuildFor(yield* collectionsTouchedByMutations(rejected)));
-            }
-          }).pipe(Effect.ensuring(releaseChunk(size)));
-          sent += chunk.length;
+          sent += size;
         }
         // A tail that has reached half the bound starts a pull ahead of the bound (#337).
         // The push does not wait for it. A push ended early still gets this check.
