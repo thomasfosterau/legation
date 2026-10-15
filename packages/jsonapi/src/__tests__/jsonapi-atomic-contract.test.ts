@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Semaphore } from "effect";
+import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -33,6 +34,7 @@ import type { Backend, Mutator } from "@thomasfosterau/legation-effect";
 import { BackendContract, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
+import * as Ledger from "../Ledger.js";
 
 // ─── The api ─────────────────────────────────────────────────────────────────
 
@@ -439,12 +441,25 @@ const without = <V>(map: ReadonlyMap<string, V>, key: string) =>
   new Map([...map].filter(([name]) => name !== key));
 
 /**
+ * What a test may hand the backend besides the default: its ledger store (#468),
+ * and the server's tables, so a backend restarted over the same server keeps them.
+ */
+interface BackendOptions {
+  readonly ledger?: Ledger.LedgerStore;
+  readonly store?: Store;
+}
+
+/**
  * The JSON:API backend under test. `omitted` leaves one contract mutator out of
  * both the decode and the write maps, as a backend that never registered it.
  */
-const makeBackend = (omitted?: string, probe: ServerProbe = noProbe) =>
+const makeBackend = (
+  omitted?: string,
+  probe: ServerProbe = noProbe,
+  options: BackendOptions = {}
+) =>
   Effect.gen(function* () {
-    const store: Store = new Map();
+    const store: Store = options.store ?? new Map();
     const { client, requests } = yield* makeInProcessClient(store, probe);
     const atomic = Convention.reflectAtomic(api);
     // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
@@ -465,6 +480,7 @@ const makeBackend = (omitted?: string, probe: ServerProbe = noProbe) =>
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.
       query: { encode: () => Effect.succeed(Option.some("")) },
+      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests, store };
   });
@@ -590,5 +606,62 @@ describe("JsonApiBackend visibility before the bump (guarantee 1, #381)", () => 
         expect(observed.parked.entries).toEqual([expect.objectContaining({ id: heldRow })]);
         expect(observed.parked.ledger).toEqual({});
       })
+  );
+});
+
+// ─── The ledger store across a restart (#468) ────────────────────────────────
+
+const restartClient = "restart-client";
+const restartContext = { clientGroupId: "restart-group" };
+
+/** One applied create and one permanently rejected create, in order. */
+const restartPush = () => [
+  {
+    clientId: restartClient,
+    mutationId: 1,
+    mutator: BackendContract.putRow.name,
+    args: { collection: COLLECTION, id: "kept", value: { n: 1 } },
+    createdAt: 0,
+  },
+  {
+    clientId: restartClient,
+    mutationId: 2,
+    mutator: BackendContract.rejectAlways.name,
+    args: { collection: COLLECTION, id: "poisoned" },
+    createdAt: 0,
+  },
+];
+
+describe("JsonApiBackend ledger store (#468), atomic mode", () => {
+  it.effect("satisfies verifyBackendContract over a durable ledger store", () =>
+    Effect.gen(function* () {
+      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+      const { backend } = yield* makeBackend(undefined, noProbe, { ledger });
+      yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
+    Effect.gen(function* () {
+      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+      const server: Store = new Map();
+      const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+      const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
+      const rejected = pushed.rejected ?? [];
+      expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+
+      // A restart: a new backend over the same ledger store and the same server.
+      const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
+        [restartClient]: 2,
+      });
+      expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
+
+      // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
+      const replay = yield* second.backend.applyMutations(restartContext, restartPush());
+      expect(replay.rejected).toEqual(rejected);
+      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+      expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
   );
 });

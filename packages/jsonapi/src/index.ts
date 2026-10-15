@@ -43,6 +43,7 @@ export * as JsonApiBackend from "./JsonApiBackend.js";
 export * as JsonApiFacade from "./JsonApiFacade.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
+export * as Ledger from "./Ledger.js";
 export * as NodeBridge from "./NodeBridge.js";
 export * as Relationships from "./Relationships.js";
 export * as ReplicaDocuments from "./ReplicaDocuments.js";

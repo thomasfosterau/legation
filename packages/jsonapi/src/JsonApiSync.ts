@@ -33,6 +33,7 @@ import {
 import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";
 import type { QueryEncoder } from "./JsonApiQuery.js";
+import type * as Ledger from "./Ledger.js";
 
 /**
  * An app's JSON:API surface defined with Effect `HttpApi`, with its identifier
@@ -57,6 +58,12 @@ export interface JsonApiSyncOptions {
    * `Relationships.related` resolves them without extra round trips.
    */
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  /**
+   * Where the backend keeps its ledger (acknowledged mutation ids and remembered
+   * rejections) across restarts (#468). Unset, it is in memory and a restart of
+   * the backend forgets it; see `Ledger.keyValue`.
+   */
+  readonly ledger?: Ledger.LedgerStore;
   /**
    * Atomic operations. When the api advertises the JSON:API Atomic Operations
    * extension (an endpoint taking an `atomic:operations` document, e.g.
@@ -129,6 +136,7 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
       ...(atomicPath !== undefined ? { atomic: { path: atomicPath } } : {}),
       ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
       ...(options.includes !== undefined ? { includes: options.includes } : {}),
+      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
     })
   );
   const authLayer = Layer.succeed(Authorization.AuthPolicy)(authPolicy(resources));
