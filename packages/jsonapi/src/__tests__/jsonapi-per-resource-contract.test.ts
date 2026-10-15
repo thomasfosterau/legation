@@ -11,16 +11,17 @@
  * write. A `GET` or `DELETE` has no yield point, so it runs whole without it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Semaphore } from "effect";
+import { Effect, Option, Ref, Semaphore } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import type { Mutator } from "@thomasfosterau/legation-effect";
+import { BackendError, type Mutator } from "@thomasfosterau/legation-effect";
 import { BackendContract } from "@thomasfosterau/legation-effect/internal";
 import type { EndpointRef, ResourceEndpoints, ResourceMap } from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
+import { flakyLedger } from "./flaky-ledger.js";
 
 const COLLECTION = "contract";
 const EVAL_COLLECTION = `${COLLECTION}_eval`;
@@ -340,5 +341,40 @@ describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
       expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
       expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
     }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+describe("JsonApiBackend ledger store failures (#468), per-resource mode", () => {
+  it.effect(
+    "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
+    () =>
+      Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        const failWrites = yield* Ref.make(0);
+        const ledger = flakyLedger(Ledger.keyValue(kv), {
+          failWrites,
+          failReads: yield* Ref.make(0),
+        });
+        const server: Store = new Map();
+        const { backend } = yield* makeBackend({ ledger, store: server });
+
+        // The first mutation's write applies on the server; the ledger write that
+        // acknowledges it fails, so the push fails before the second mutation is sent.
+        yield* Ref.set(failWrites, 1);
+        const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
+        expect(failure).toBeInstanceOf(BackendError);
+        expect(server.get(COLLECTION)?.has("kept")).toBe(true);
+
+        // Nothing is acknowledged: the cache and the store both hold the group as it was.
+        expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
+        expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual(
+          Ledger.emptyGroup
+        );
+
+        // The resend re-applies the create (an upsert) and acknowledges both mutations.
+        const retried = yield* backend.applyMutations(restartContext, restartPush());
+        expect((retried.rejected ?? []).map((entry) => entry.mutationId)).toEqual([2]);
+        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
   );
 });

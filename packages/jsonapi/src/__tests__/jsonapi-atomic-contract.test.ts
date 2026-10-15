@@ -10,7 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Option, Schema, Semaphore } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Semaphore } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -30,11 +30,12 @@ import {
   Middleware,
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
-import type { Backend, Mutator } from "@thomasfosterau/legation-effect";
+import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation-effect";
 import { BackendContract, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
+import { flakyLedger } from "./flaky-ledger.js";
 
 // ─── The api ─────────────────────────────────────────────────────────────────
 
@@ -663,5 +664,131 @@ describe("JsonApiBackend ledger store (#468), atomic mode", () => {
       expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
       expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
     }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+// ─── Ledger store failures and the forgetting bound (#468) ───────────────────
+
+describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
+  it.effect(
+    "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
+    () =>
+      Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        const failWrites = yield* Ref.make(0);
+        const failReads = yield* Ref.make(0);
+        const ledger = flakyLedger(Ledger.keyValue(kv), { failWrites, failReads });
+        const server: Store = new Map();
+        const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+
+        // The batch's rejection is remembered by the first ledger write, which runs
+        // after the server has applied the batch's create.
+        yield* Ref.set(failWrites, 1);
+        const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
+        expect(failure).toBeInstanceOf(BackendError);
+        expect(tableOf(server, COLLECTION).has("kept")).toBe(true);
+
+        // Nothing is acknowledged: the cache and the store both hold the group as it was.
+        expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
+        expect(yield* backend.rejections(restartContext)).toEqual([]);
+        expect(yield* kv.has("legation-jsonapi:ledger:restart-group")).toBe(false);
+
+        // The resend re-applies the create (an upsert) and acknowledges both mutations.
+        const retried = yield* backend.applyMutations(restartContext, restartPush());
+        const rejected = retried.rejected ?? [];
+        expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+        expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual({
+          lastMutationIds: { [restartClient]: 2 },
+          rejections: rejected,
+        });
+        expect(yield* backend.rejections(restartContext)).toEqual(rejected);
+      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("a ledger read that fails is a BackendError and fills no cache", () =>
+    Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const durable = Ledger.keyValue(kv);
+      // Seed the store with a ledger that a backend over it must read back.
+      const seeded = yield* makeBackend(undefined, noProbe, { ledger: durable, store: new Map() });
+      yield* seeded.backend.applyMutations(restartContext, restartPush());
+
+      const failReads = yield* Ref.make(1);
+      const ledger = flakyLedger(durable, { failWrites: yield* Ref.make(0), failReads });
+      const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: new Map() });
+      const failure = yield* Effect.flip(backend.lastMutationIds(restartContext));
+      expect(failure).toBeInstanceOf(BackendError);
+      // The failed read cached nothing, so the next read reaches the store and sees its ledger.
+      expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 2 });
+      expect(yield* backend.rejections(restartContext)).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("the forgetting bound persists across a restart", () =>
+    Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      const ledger = Ledger.keyValue(kv);
+      const server: Store = new Map();
+      const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+      const mutation = (mutationId: number, mutator: string, args: unknown) => ({
+        clientId: restartClient,
+        mutationId,
+        mutator,
+        args,
+        createdAt: 0,
+      });
+      const putOne = mutation(1, BackendContract.putRow.name, {
+        collection: COLLECTION,
+        id: "first",
+        value: { n: 1 },
+      });
+      const rejectTwo = mutation(2, BackendContract.rejectAlways.name, {
+        collection: COLLECTION,
+        id: "poisoned",
+      });
+      const putThree = mutation(3, BackendContract.putRow.name, {
+        collection: COLLECTION,
+        id: "third",
+        value: { n: 3 },
+      });
+      // Mutation 2 is rejected and remembered; the push acknowledges up to 3.
+      yield* first.backend.applyMutations(restartContext, [putOne, rejectTwo, putThree]);
+      expect(yield* first.backend.rejections(restartContext)).toHaveLength(1);
+      // A replayed copy of 3 alone has floor 3, so it forgets the rejection of 2. Nothing
+      // else changes, so the forgetting is the only ledger write this push makes.
+      const replay = yield* first.backend.applyMutations(restartContext, [putThree]);
+      expect(replay.rejected).toBeUndefined();
+      expect(yield* first.backend.rejections(restartContext)).toEqual([]);
+
+      // After a restart the forgetting is kept, and a replayed copy of 2 is acknowledged, not reported.
+      const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+      expect(yield* second.backend.rejections(restartContext)).toEqual([]);
+      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 3 });
+      const replayRejected = yield* second.backend.applyMutations(restartContext, [rejectTwo]);
+      expect(replayRejected.rejected).toBeUndefined();
+      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "satisfies verifyBackendContract for a backend restarted over the same durable store",
+    () =>
+      Effect.gen(function* () {
+        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        // The contract's rule 1 pins its client's ids to 1 and 2, so each run needs a
+        // group its ledger has not acknowledged yet. The first run uses one group; the
+        // restarted backend, over the same durable store, runs the contract in another.
+        const first = yield* makeBackend(undefined, noProbe, { ledger });
+        yield* BackendContract.verifyBackendContract(first.backend, {
+          collection: COLLECTION,
+          clientGroupId: "contract-first",
+        });
+        const restarted = yield* makeBackend(undefined, noProbe, { ledger });
+        yield* BackendContract.verifyBackendContract(restarted.backend, {
+          collection: COLLECTION,
+          clientGroupId: "contract-restarted",
+        });
+      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
   );
 });

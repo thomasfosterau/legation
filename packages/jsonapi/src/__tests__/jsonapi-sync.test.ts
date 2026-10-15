@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
+import { KeyValueStore } from "effect/persistence";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -18,6 +19,7 @@ import { ClientStore } from "@thomasfosterau/legation-effect";
 import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
+import * as Ledger from "../Ledger.js";
 
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
@@ -280,5 +282,67 @@ describe("JsonApiSync.layer store option", () => {
       );
       expect((yield* appStore.pendingMutations).map((m) => m.mutator)).toEqual(["todos/create"]);
     }).pipe(Effect.scoped);
+  });
+});
+
+describe("JsonApiSync.layer ledger default (#468)", () => {
+  const todoCreate = {
+    type: "todos",
+    id: "1",
+    attributes: { title: "queued" },
+  };
+
+  it.effect(
+    "keeps the ledger in the durable key/value store the client store is built over",
+    () => {
+      const server = makeServer();
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", todoCreate);
+          yield* engine.push;
+        }).pipe(
+          Effect.provide(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+        // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
+        expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+          lastMutationIds: { "client-1": 1 },
+          rejections: [],
+        });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory));
+    }
+  );
+
+  it.effect("an explicit ledger overrides the key/value store", () => {
+    const server = makeServer();
+    return Effect.gen(function* () {
+      const kv = yield* KeyValueStore.KeyValueStore;
+      yield* Effect.gen(function* () {
+        const engine = yield* ClientEngine.ClientEngine;
+        yield* engine.mutate("todos/create", todoCreate);
+        yield* engine.push;
+      }).pipe(
+        Effect.provide(
+          JsonApiSync.layer(api, {
+            baseUrl: "http://api.test",
+            clientId: "client-1",
+            clientGroupId: "group-1",
+            keyValueStore: kv,
+            ledger: Ledger.memory,
+          }).pipe(Layer.provide(server.layer))
+        ),
+        Effect.scoped
+      );
+      expect(yield* kv.has("legation-jsonapi:ledger:group-1")).toBe(false);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory));
   });
 });

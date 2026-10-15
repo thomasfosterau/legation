@@ -22,6 +22,7 @@ import { Duration, Effect, Layer, Scope } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import type { KeyValueStore } from "effect/persistence";
 import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation-effect";
 import { ClientEngine, SyncRoom } from "@thomasfosterau/legation-effect/internal";
 import {
@@ -33,7 +34,7 @@ import {
 import { derive, type Derived } from "./Derive.js";
 import * as JsonApiBackend from "./JsonApiBackend.js";
 import type { QueryEncoder } from "./JsonApiQuery.js";
-import type * as Ledger from "./Ledger.js";
+import * as Ledger from "./Ledger.js";
 
 /**
  * An app's JSON:API surface defined with Effect `HttpApi`, with its identifier
@@ -52,18 +53,28 @@ export interface JsonApiSyncOptions {
   /** The client group this client belongs to (shared journal scope). */
   readonly clientGroupId: string;
   /** Override the Subset → JSON:API query encoding (e.g. your own package). */
-  readonly queryEncoder?: QueryEncoder;
+  readonly queryEncoder?: QueryEncoder | undefined;
   /**
    * Relationship names to compound-load per collection (`?include=...`), so
    * `Relationships.related` resolves them without extra round trips.
    */
-  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
   /**
    * Where the backend keeps its ledger (acknowledged mutation ids and remembered
-   * rejections) across restarts (#468). Unset, it is in memory and a restart of
-   * the backend forgets it; see `Ledger.keyValue`.
+   * rejections) across restarts (#468). Unset, it is `Ledger.keyValue` over
+   * `keyValueStore` when that is given, and otherwise in memory, where a restart
+   * of the backend forgets it.
    */
-  readonly ledger?: Ledger.LedgerStore;
+  readonly ledger?: Ledger.LedgerStore | undefined;
+  /**
+   * The durable Effect `KeyValueStore` behind the client store (#468). When it is
+   * set and `ledger` is not, the ledger defaults to `Ledger.keyValue` over it, so
+   * a durable client store keeps its ledger and rejection memory across a reload.
+   * `store` is an opaque layer, so the layer cannot check that it is built over
+   * this key/value store: pass the same one to both, e.g.
+   * `ClientStore.layerKeyValue()` provided with it.
+   */
+  readonly keyValueStore?: KeyValueStore.KeyValueStore | undefined;
   /**
    * Atomic operations. When the api advertises the JSON:API Atomic Operations
    * extension (an endpoint taking an `atomic:operations` document, e.g.
@@ -73,25 +84,25 @@ export interface JsonApiSyncOptions {
    * endpoint explicitly (an api that serves it outside the reflected
    * `HttpApi`).
    */
-  readonly atomic?: false | { readonly path: string };
+  readonly atomic?: false | { readonly path: string } | undefined;
   /**
    * Periodic pull interval — the correctness backstop that picks up changes
    * made elsewhere ("realtime" is periodic pull for client-direct deployment).
    * Defaults to 5 seconds; set to `null` to disable interval pulling.
    */
-  readonly pullInterval?: Duration.Input | null;
+  readonly pullInterval?: Duration.Input | null | undefined;
   /**
    * Auto-push debounce window. When set, mutations are pushed automatically
    * (coalesced) without an app-level `push` call.
    */
-  readonly pushDebounce?: Duration.Input;
+  readonly pushDebounce?: Duration.Input | undefined;
   /**
    * The client store backing the engine. Defaults to the in-memory store —
    * supply a durable one (e.g. `IndexedDbClientStore.layerWindow()` from
    * `@thomasfosterau/legation-browser`, or `ClientStore.layerKeyValue` over localStorage) so
    * the journal and confirmed rows survive reloads (offline-first).
    */
-  readonly store?: Layer.Layer<ClientStore.ClientStore>;
+  readonly store?: Layer.Layer<ClientStore.ClientStore> | undefined;
 }
 
 /**
@@ -116,7 +127,8 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
  * The full client-direct stack as a layer: provide an `HttpClient`, get a
  * ready `ClientEngine`. CVR store and invalidation bus are in-process; the
  * client store defaults to in-memory (pass `store` for durable offline
- * persistence across reloads).
+ * persistence across reloads, and `keyValueStore` with it to keep the ledger
+ * durable too).
  */
 export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
@@ -127,6 +139,11 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
   // an explicit path overrides what reflection found.
   const atomicPath = options.atomic === false ? undefined : (options.atomic?.path ?? atomic?.path);
 
+  // A durable key/value store makes the ledger durable too, unless the app names one.
+  const ledger =
+    options.ledger ??
+    (options.keyValueStore !== undefined ? Ledger.keyValue(options.keyValueStore) : undefined);
+
   const backendLayer = Layer.effect(Backend.Backend)(
     JsonApiBackend.make({
       baseUrl: options.baseUrl,
@@ -136,7 +153,7 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
       ...(atomicPath !== undefined ? { atomic: { path: atomicPath } } : {}),
       ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
       ...(options.includes !== undefined ? { includes: options.includes } : {}),
-      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
+      ...(ledger !== undefined ? { ledger } : {}),
     })
   );
   const authLayer = Layer.succeed(Authorization.AuthPolicy)(authPolicy(resources));

@@ -77,7 +77,7 @@ const decodeGroup = Schema.decodeUnknownEffect(GroupLedgerSchema);
  */
 export const keyValue = (
   store: KeyValueStore.KeyValueStore,
-  options: { readonly prefix?: string } = {}
+  options: { readonly prefix?: string | undefined } = {}
 ): LedgerStore => {
   const keyOf = (clientGroupId: string) =>
     `${options.prefix ?? "legation-jsonapi:ledger:"}${clientGroupId}`;
