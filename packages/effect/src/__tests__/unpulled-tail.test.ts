@@ -2201,6 +2201,7 @@ describe("dehydrate reads one state of the store (#392)", () => {
       const store = yield* ClientStoreModule.makeMemory;
       const rounds = 200;
       let torn = 0;
+      const seen = new Set<number | undefined>();
       const pulls = Effect.gen(function* () {
         for (let k = 1; k <= rounds; k++) {
           yield* store.commitPull!({
@@ -2215,6 +2216,7 @@ describe("dehydrate reads one state of the store (#392)", () => {
           const state = yield* store.snapshot!;
           const row = state.rows.find((entry) => entry.row.id === "a")?.row;
           const n = row === undefined ? undefined : (row.value as { readonly n: number }).n;
+          seen.add(n);
           if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
         }
       });
@@ -2222,6 +2224,8 @@ describe("dehydrate reads one state of the store (#392)", () => {
       const reading = yield* Effect.forkChild(reads);
       yield* Fiber.join(pulling);
       yield* Fiber.join(reading);
+      // The reads must interleave with the pulls, or the check above is vacuous.
+      expect(seen.size).toBeGreaterThan(1);
       expect(torn).toBe(0);
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
   );

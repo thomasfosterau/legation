@@ -859,7 +859,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     ),
 
     getCookie: Ref.get(cookie),
-    // Under the lock, so a snapshot's read of the cookie is one state with its rows and journal (#392).
+    // Locked so every writer takes the lock and the snapshot rule holds without case analysis (#392).
     setCookie: (value) => locked(Ref.set(cookie, value)),
     clearCookie: locked(Ref.set(cookie, undefined)),
 
