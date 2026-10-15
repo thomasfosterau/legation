@@ -111,6 +111,12 @@ export interface Client {
    * check {@link Client.query} makes before answering locally, exposed for
    * devtools (ADR-0029 section 4: "which subscription covered the request
    * is recorded beside it").
+   *
+   * `options.snapshot`, when given, is the root rows the caller already read for
+   * this read (with the subset they are of): the verdict is judged over those rows
+   * instead of a fresh read, so a caller that answers from the same rows judges
+   * exactly what it answers (#426). A snapshot of any other subset is not used; the
+   * verdict then reads its root as usual. Omit it to judge a fresh read.
    */
   readonly coverageOf: (
     read: QueryModule.Read,
@@ -515,13 +521,9 @@ export const fromView = (
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
   const verdictOf = (
     plan: Query.Plan,
-    snapshot?: ReadonlyArray<ClientEngine.LocalRow>
+    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query
   ): Effect.Effect<Coverage.Verdict> =>
-    Coverage.requestedOf(
-      nodes.collections,
-      plan,
-      snapshot === undefined ? view.query : Coverage.snapshotOf(snapshot)
-    ).pipe(
+    Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
       Effect.flatMap((requested) =>
         Ref.get(ledger).pipe(
           Effect.flatMap((interests) =>
@@ -560,7 +562,10 @@ export const fromView = (
       Effect.flatMap((snapshot) =>
         snapshot === undefined
           ? Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
-          : verdictOf(compiled, snapshot).pipe(
+          : verdictOf(
+              compiled,
+              Coverage.snapshotOf({ subset: compiled.root, rows: snapshot }, view.query)
+            ).pipe(
               Effect.flatMap((verdict) =>
                 verdict._tag === "Covered"
                   ? Query.runRows(view, nodes, read, snapshot)
@@ -618,7 +623,15 @@ export const fromView = (
         )
       )
     ),
-    coverageOf: (read, options) => verdictOf(Query.plan(nodes, read), options?.snapshot),
+    coverageOf: (read, options) => {
+      const plan = Query.plan(nodes, read);
+      return verdictOf(
+        plan,
+        options?.snapshot === undefined
+          ? view.query
+          : Coverage.snapshotOf(options.snapshot, view.query)
+      );
+    },
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

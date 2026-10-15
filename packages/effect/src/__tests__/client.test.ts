@@ -875,13 +875,14 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
           });
           yield* writer.push.pipe(Effect.orDie);
 
-          // Armed: the first window judgment after the arm returns, then another client's write lands
-          // and is pulled, before the read is answered. Without a snapshot the answer re-reads the root
-          // and serves p-3 with no reviews pulled.
+          // Armed: the second read of the root subset lands another client's write and its pull
+          // before it returns. A covered answer reads the root once (the snapshot), so the race
+          // never runs; a second read of the root would serve p-3 with no reviews pulled.
+          const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
+          const rootHash = Subset.hash(Query.plan(nodes, reviewed).root);
           const armed = yield* Ref.make(false);
-          const base = ClientView.fromEngine(reader);
+          const rootReads = yield* Ref.make(0);
           const race = Effect.gen(function* () {
-            if (!(yield* Ref.getAndSet(armed, false))) return;
             yield* writer.mutate("product/set", { id: "p-3", name: "Chair" });
             yield* writer.mutate("review/set", {
               id: "r-3",
@@ -892,14 +893,22 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
             yield* writer.push.pipe(Effect.orDie);
             yield* reader.pull.pipe(Effect.orDie);
           }).pipe(Effect.orDie);
+          const base = ClientView.fromEngine(reader);
           const view: ClientView.ClientView = {
             ...base,
-            pulled: (key) => base.pulled(key).pipe(Effect.tap(() => race)),
+            query: (subset) =>
+              Effect.gen(function* () {
+                if (Subset.hash(subset) === rootHash && (yield* Ref.get(armed))) {
+                  if ((yield* Ref.updateAndGet(rootReads, (count) => count + 1)) === 2) {
+                    yield* race;
+                  }
+                }
+                return yield* base.query(subset);
+              }),
           };
           const client = Client.fromView(nodes, view);
 
           // Pin the reviewed products and pull until their root and review windows are pulled.
-          const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
           yield* client.subscribe(reviewed);
           for (let attempt = 0; attempt < 20; attempt++) {
             yield* reader.pull.pipe(Effect.orDie);
@@ -910,7 +919,8 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
 
           yield* Ref.set(armed, true);
           const rows = yield* client.query(reviewed);
-          expect(yield* Ref.get(armed)).toBe(false);
+          // One read of the root for the whole answer: the verdict and the answer share it.
+          expect(yield* Ref.get(rootReads)).toBe(1);
           // The answer is the snapshot the verdict judged: p-1 and p-2, each with its reviews.
           expect(
             rows.map((row) => [
@@ -927,3 +937,43 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
       )
   );
 });
+
+it.effect("a snapshot of another subset is not judged over (#426)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { reader, writer } = yield* makeRacePair;
+      yield* writer.mutate("product/set", { id: "p-1", name: "Desk" });
+      yield* writer.mutate("review/set", {
+        id: "r-1",
+        productId: "p-1",
+        body: "Solid",
+        createdAt: "2026-01-01",
+      });
+      yield* writer.push.pipe(Effect.orDie);
+      const client = Client.fromView(nodes, ClientView.fromEngine(reader));
+      const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
+      yield* client.subscribe(reviewed);
+      for (let attempt = 0; attempt < 20; attempt++) {
+        yield* reader.pull.pipe(Effect.orDie);
+        yield* Effect.yieldNow;
+        if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
+      }
+      expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
+      // p-2 reaches the replica's products without its reviews window: the read now links to a
+      // window that is not pulled.
+      yield* writer.mutate("product/set", { id: "p-2", name: "Lamp" });
+      yield* writer.push.pipe(Effect.orDie);
+      yield* reader.pull.pipe(Effect.orDie);
+      expect((yield* client.query({ collection: "products" })).map((row) => row.id)).toContain(
+        "p-2"
+      );
+      expect((yield* client.coverageOf(reviewed))._tag).toBe("Uncovered");
+      // A snapshot of the reviews, with no rows, names another subset: it must not stand in for
+      // the products' rows, or the window p-2 links to would go unjudged and the read covered.
+      const reviews = Query.plan(nodes, { collection: "reviews" }).root;
+      expect(
+        (yield* client.coverageOf(reviewed, { snapshot: { subset: reviews, rows: [] } }))._tag
+      ).toBe("Uncovered");
+    })
+  )
+);

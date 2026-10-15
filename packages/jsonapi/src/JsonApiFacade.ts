@@ -112,8 +112,8 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    * `Coverage.coverageOf(nodes, view.query, host.registrations)` over the registrations
    * an `EngineHost` holds on mirrors' behalf. A request is answered locally
    * only when every read it needs is covered. `options.snapshot` is the root
-   * rows the façade read for the request, which the verdict is judged over
-   * (#426); a read with no includes ignores it.
+   * rows the façade read for the request, with their subset: the verdict is
+   * judged over them for that subset (#426), and any other read is judged as usual.
    */
   readonly coverageOf: (
     read: Query.Read,
@@ -352,7 +352,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   /** Rules 1 to 4 for every read the request needs, judged over the request's root rows: covered by the ledger, or not the façade's to answer. */
   const covered = (
     reads: ReadonlyArray<Query.Read>,
-    snapshot: ReadonlyArray<ClientEngine.LocalRow>
+    snapshot: Coverage.Snapshot
   ): Effect.Effect<boolean> =>
     Effect.forEach(reads, (read) => coverageOf(read, { snapshot })).pipe(
       Effect.map((verdicts) => verdicts.every((verdict) => verdict._tag === "Covered"))
@@ -388,7 +388,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
         .pipe(
           Effect.orElseSucceed((): ReadonlyArray<ClientEngine.LocalRow> | undefined => undefined)
         );
-      if (rows === undefined || !(yield* covered(needed, rows))) {
+      if (rows === undefined || !(yield* covered(needed, { subset: root.root, rows }))) {
         if (online()) return yield* Effect.fail(forward);
         return yield* Effect.flatMap(cookie, (served) =>
           Effect.fail(respond(offlineResponse(served)))
