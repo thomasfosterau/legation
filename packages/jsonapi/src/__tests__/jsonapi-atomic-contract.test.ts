@@ -853,7 +853,7 @@ describe("JsonApiBackend restarted on the same ledger in the same group (#477, #
       const run = yield* restartInSameGroup((ledger) => ledger);
       expect(run.restartedLedger).toEqual(run.acknowledged);
       expect(run.restartedRejected).toEqual(run.rejected);
-      expect(Option.getOrUndefined(Exit.findErrorOption(run.outcome))).toBeUndefined();
+      expect(Exit.isSuccess(run.outcome)).toBe(true);
     })
   );
 
