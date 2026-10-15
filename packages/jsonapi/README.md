@@ -144,6 +144,43 @@ Mutators beyond the derived CRUD ones can ride the same backend: give
 its decoded args as one JSON:API `Write` (a create, update or delete of one
 resource), and both delivery paths carry it.
 
+### The ledger across restarts
+
+The backend keeps a ledger for each client group: the highest acknowledged
+mutation id per client, so a resent mutation that was already applied is
+skipped, and the permanent rejections it has made, so a replayed copy and a
+pull can report them with their reasons.
+
+By default the ledger lives in the memory of the backend instance, and
+**a restart of the backend forgets it**. A resent mutation that was already
+applied then looks new, guarded only by the server's own idempotency if it has
+any, and a permanent rejection is forgotten, so neither a replayed copy nor a
+pull can report it.
+
+To keep the ledger across restarts, pass a durable store as `ledger`.
+`Ledger.keyValue` keeps each group's ledger in an Effect `KeyValueStore`, which
+survives a restart when that store does, such as a file system, SQL or browser
+storage layer:
+
+```ts
+import { Ledger, JsonApiSync } from "@thomasfosterau/legation-jsonapi";
+
+JsonApiSync.layer(api, { ...options, ledger: Ledger.keyValue(keyValueStore) });
+```
+
+`JsonApiBackend.make` takes the same `ledger` option for a server built by hand.
+A store is a `Ledger.LedgerStore` with two operations, `read` and `write`, for
+one client group's ledger. Write your own to keep the ledger somewhere else.
+
+Each ledger change is written after the server has applied the writes it
+acknowledges and before the ids are acknowledged, so a crash between the server
+write and the ledger write is the one window in which a resend applies a write
+again, with or without a store. A store that fails to read or write fails the
+push with a `BackendError`. A stored value that does not decode fails it too,
+so a corrupt store is never read as an empty ledger. Run one backend instance
+per server (see [Row cache](#row-cache)), so one store is written by one
+instance.
+
 ### Change hints
 
 Each push reports the rows it wrote as change hints, which fan-out uses to poke
@@ -185,9 +222,10 @@ client is reset. Two consequences follow:
   `operation: "push"` on `syncFailures`. The loop does not retry in a tight
   loop. With `syncLoop.pushDebounce` set, the next push comes with the next
   local mutation; otherwise it waits for a reconnect or an explicit `push`.
-- The in-session ledger belongs to one backend instance. After a restart, a
-  delete that had already applied is sent again, its read finds nothing, and the
-  queue stalls in the same way.
+- The ledger belongs to one backend instance unless it has a durable `ledger`
+  store (see [The ledger across restarts](#the-ledger-across-restarts)). After a
+  restart without one, a delete that had already applied is sent again, its read
+  finds nothing, and the queue stalls in the same way.
 
 A resource that receives updates or deletes must have a `getOne` route, since
 that is how its rows are read. A push that contains one of its updates or

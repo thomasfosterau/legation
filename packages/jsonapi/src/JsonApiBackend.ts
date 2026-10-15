@@ -61,7 +61,18 @@
  * the full row), else the written value.
  *
  * **Delivery semantics.** Without a cooperating server there is no
- * server-side mutation-id ledger, so this backend keeps an in-session ledger.
+ * server-side mutation-id ledger, so this backend keeps one per client group:
+ * the highest acknowledged id per client, and the rejections it remembers.
+ * The ledger lives in this instance's memory by default (`Ledger.memory`), so
+ * a restart of the backend forgets it: a resent mutation that was already
+ * applied looks new, guarded only by the server's own idempotency, if any, and
+ * a replayed copy or a pull can no longer report an earlier rejection. A
+ * deployment that restarts its backend passes a durable `Ledger.LedgerStore`
+ * (`ledger`, e.g. `Ledger.keyValue` over an Effect `KeyValueStore`) to keep
+ * both across restarts (#468). Each ledger change is written after the server
+ * has applied its writes and before the ids are acknowledged, in the order the
+ * push already uses; a crash after the server write and before the ledger write
+ * is the one window in which a resend applies a write again.
  *
  * Over an atomic operations endpoint (`atomic` set) a push is all-or-nothing
  * per batch: one request, and the ledger advances only once the server has
@@ -77,7 +88,7 @@
  * creates carry the client-generated `id`, and no mutator yet needs a
  * server-assigned one.
  *
- * The in-session ledger also remembers the rejections it has made (#366), so a
+ * The ledger also remembers the rejections it has made (#366), so a
  * replayed copy of a rejected mutation lists it in `rejected` with the same reason,
  * as MemoryBackend does. A push forgets the rejections below its lowest id per
  * client. The memory is bounded per client: a client that never pushes again keeps
@@ -89,7 +100,7 @@
  * naturally idempotent) and retries are safe.
  */
 
-import { Effect, Option, Ref, Schema } from "effect";
+import { Effect, Option, Ref, Schema, Semaphore } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
@@ -111,6 +122,7 @@ import {
 import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
+import * as Ledger from "./Ledger.js";
 import { ResourceObjectSchema } from "./schema.js";
 import type { ResourceObject } from "./types.js";
 
@@ -160,6 +172,13 @@ export interface JsonApiBackendConfig {
    * — no extra round trip. See `Relationships.related`.
    */
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  /**
+   * Where each client group's ledger (its acknowledged mutation ids and
+   * remembered rejections) is kept across restarts (#468). Unset, the ledger
+   * lives in this instance's memory (`Ledger.memory`), so a restart forgets it.
+   * `Ledger.keyValue` over a durable Effect `KeyValueStore` keeps it.
+   */
+  readonly ledger?: Ledger.LedgerStore;
 }
 
 /** A mutation as the sync server pushes it to a backend. */
@@ -526,16 +545,44 @@ const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
 };
 
 /**
+ * A client group's ledger as the backend holds it (#468): the highest acknowledged
+ * mutation id per client, and the rejections remembered per client, by mutation id.
+ */
+interface Group {
+  readonly acknowledged: ReadonlyMap<string, number>;
+  readonly rejections: ReadonlyMap<string, ReadonlyMap<number, string>>;
+}
+
+/** A stored group ledger, as the backend holds it. */
+const groupOf = (ledger: Ledger.GroupLedger): Group => {
+  const rejections = new Map<string, Map<number, string>>();
+  for (const entry of ledger.rejections) {
+    const ids = rejections.get(entry.clientId) ?? new Map<number, string>();
+    ids.set(entry.mutationId, entry.reason);
+    rejections.set(entry.clientId, ids);
+  }
+  return { acknowledged: new Map(Object.entries(ledger.lastMutationIds)), rejections };
+};
+
+/** A group as the store holds it. */
+const ledgerOf = (group: Group): Ledger.GroupLedger => ({
+  lastMutationIds: Object.fromEntries(group.acknowledged),
+  rejections: [...group.rejections].flatMap(([clientId, ids]) =>
+    [...ids].map(([mutationId, reason]) => ({ clientId, mutationId, reason }))
+  ),
+});
+
+/**
  * The rejections a client's push has moved past, forgotten (#355, as MemoryBackend).
  * `floors` maps each client in the push to the lowest mutation id the push carries
  * for it: a client resends only ids it has not had acknowledged, so the rejections
  * below that floor are ones it has seen. Returns `clients` itself when nothing goes.
  */
 const forgetBelow = (
-  clients: Map<string, Map<number, string>>,
+  clients: ReadonlyMap<string, ReadonlyMap<number, string>>,
   floors: ReadonlyMap<string, number>
-): Map<string, Map<number, string>> => {
-  let kept: Map<string, Map<number, string>> | undefined;
+): ReadonlyMap<string, ReadonlyMap<number, string>> => {
+  let kept: Map<string, ReadonlyMap<number, string>> | undefined;
   for (const [clientId, floor] of floors) {
     const ids = clients.get(clientId);
     if (ids === undefined) continue;
@@ -571,11 +618,13 @@ export const make = (
     const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
     // collection → ids known complete in cache via a compound `included` harvest.
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
-    // clientGroupId → clientId → highest applied mutation id (in-session).
-    const ledger = yield* Ref.make(new Map<string, Map<string, number>>());
-    // clientGroupId → clientId → mutation id → reason: the permanent rejections the
-    // in-session ledger still remembers, reported to a replayed copy (#366).
-    const rejectionMemory = yield* Ref.make(new Map<string, Map<string, Map<number, string>>>());
+    // clientGroupId → the group's ledger (#468): read from the store on first use,
+    // then kept current with each change written to it.
+    const groups = yield* Ref.make(new Map<string, Group>());
+    const ledgerStore = config.ledger ?? Ledger.memory;
+    // Every ledger read-modify-write runs under this lock, so the store is never
+    // written with a group that a concurrent change has already moved past.
+    const ledgerLock = yield* Semaphore.make(1);
 
     const getJson = (url: string) =>
       Effect.scoped(
@@ -938,35 +987,68 @@ export const make = (
         }
       });
 
-    /** Acknowledge mutations in the in-session ledger, in the order given, in one update. */
+    /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */
+    const fillGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
+      Effect.gen(function* () {
+        const cached = (yield* Ref.get(groups)).get(clientGroupId);
+        if (cached !== undefined) return cached;
+        const group = groupOf(yield* ledgerStore.read(clientGroupId));
+        yield* Ref.update(groups, (current) => new Map(current).set(clientGroupId, group));
+        return group;
+      });
+
+    /** A client group's ledger, read under `ledgerLock` so a first read cannot race an update. */
+    const readGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
+      Semaphore.withPermit(ledgerLock, fillGroup(clientGroupId));
+
+    /**
+     * Change a client group's ledger. `change` returns the group it becomes, or
+     * the group it was when nothing changes, and then nothing is written. The
+     * store is written before the new group is kept, so a failed write leaves the
+     * store and this instance agreeing on the old group.
+     */
+    const updateGroup = (clientGroupId: string, change: (group: Group) => Group) =>
+      Semaphore.withPermit(
+        ledgerLock,
+        Effect.gen(function* () {
+          const current = yield* fillGroup(clientGroupId);
+          const next = change(current);
+          if (next === current) return;
+          yield* ledgerStore.write(clientGroupId, ledgerOf(next));
+          yield* Ref.update(groups, (all) => new Map(all).set(clientGroupId, next));
+        })
+      );
+
+    /** Acknowledge mutations in the ledger, in the order given, in one update. */
     const bumpLedger = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
     ) =>
-      Ref.update(ledger, (current) => {
-        const next = new Map(current);
-        const groupIds = new Map(next.get(context.clientGroupId) ?? []);
-        for (const mutation of mutations) groupIds.set(mutation.clientId, mutation.mutationId);
-        next.set(context.clientGroupId, groupIds);
-        return next;
-      });
+      mutations.length === 0
+        ? Effect.void
+        : updateGroup(context.clientGroupId, (group) => {
+            const acknowledged = new Map(group.acknowledged);
+            for (const mutation of mutations)
+              acknowledged.set(mutation.clientId, mutation.mutationId);
+            return { ...group, acknowledged };
+          });
 
     /** Remember permanent rejections, so a replayed copy of them reports the same outcome (#366). */
     const rememberRejections = (
       context: Backend.SyncContext,
       rejected: ReadonlyArray<Backend.RejectedMutation>
     ) =>
-      Ref.update(rejectionMemory, (current) => {
-        const next = new Map(current);
-        const clients = new Map(next.get(context.clientGroupId) ?? []);
-        for (const entry of rejected) {
-          const ids = new Map(clients.get(entry.clientId) ?? []);
-          ids.set(entry.mutationId, entry.reason);
-          clients.set(entry.clientId, ids);
-        }
-        next.set(context.clientGroupId, clients);
-        return next;
-      });
+      rejected.length === 0
+        ? Effect.void
+        : updateGroup(context.clientGroupId, (group) => {
+            const rejections = new Map(group.rejections);
+            for (const entry of rejected) {
+              const ids = new Map(rejections.get(entry.clientId) ?? []);
+              ids.set(entry.mutationId, entry.reason);
+              rejections.set(entry.clientId, ids);
+            }
+            return { ...group, rejections };
+          });
 
     /**
      * Forget the rejections this push's floors have moved past (#355), so the
@@ -976,15 +1058,9 @@ export const make = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<PushedMutation>
     ) =>
-      Ref.update(rejectionMemory, (current) => {
-        const clients = current.get(context.clientGroupId);
-        if (clients === undefined) return current;
-        const kept = forgetBelow(clients, floorsOf(mutations));
-        if (kept === clients) return current;
-        const next = new Map(current);
-        if (kept.size === 0) next.delete(context.clientGroupId);
-        else next.set(context.clientGroupId, kept);
-        return next;
+      updateGroup(context.clientGroupId, (group) => {
+        const rejections = forgetBelow(group.rejections, floorsOf(mutations));
+        return rejections === group.rejections ? group : { ...group, rejections };
       });
 
     /**
@@ -994,14 +1070,13 @@ export const make = (
     const replayedRejections = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<PushedMutation>
-    ): Effect.Effect<Array<Backend.RejectedMutation>> =>
+    ): Effect.Effect<Array<Backend.RejectedMutation>, BackendError> =>
       Effect.gen(function* () {
-        const acknowledged = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
-        const remembered = (yield* Ref.get(rejectionMemory)).get(context.clientGroupId);
+        const group = yield* readGroup(context.clientGroupId);
         const replayed: Array<Backend.RejectedMutation> = [];
         for (const mutation of mutations) {
-          if (mutation.mutationId > (acknowledged.get(mutation.clientId) ?? 0)) continue;
-          const reason = remembered?.get(mutation.clientId)?.get(mutation.mutationId);
+          if (mutation.mutationId > (group.acknowledged.get(mutation.clientId) ?? 0)) continue;
+          const reason = group.rejections.get(mutation.clientId)?.get(mutation.mutationId);
           if (reason !== undefined) {
             replayed.push({
               clientId: mutation.clientId,
@@ -1014,16 +1089,16 @@ export const make = (
       });
 
     const lastMutationIdsOf = (context: Backend.SyncContext) =>
-      Ref.get(ledger).pipe(
-        Effect.map((current) => Object.fromEntries(current.get(context.clientGroupId) ?? new Map()))
+      readGroup(context.clientGroupId).pipe(
+        Effect.map((group) => Object.fromEntries(group.acknowledged))
       );
 
     /** The group's remembered rejections, each with its reason (#365). A pull reports those its watermark covers. */
     const rememberedRejections = (context: Backend.SyncContext) =>
-      Ref.get(rejectionMemory).pipe(
-        Effect.map((current) => {
+      readGroup(context.clientGroupId).pipe(
+        Effect.map((group) => {
           const rejected: Array<Backend.RejectedMutation> = [];
-          for (const [clientId, ids] of current.get(context.clientGroupId) ?? new Map()) {
+          for (const [clientId, ids] of group.rejections) {
             for (const [mutationId, reason] of ids) rejected.push({ clientId, mutationId, reason });
           }
           return rejected;
@@ -1033,7 +1108,7 @@ export const make = (
     /**
      * The mutations a push still has to send, in order, each with its write. A
      * mutation at or below its client's acknowledged id was already applied, so it
-     * is skipped (idempotent, in-session). With `strict`, a mutation past the next
+     * is skipped (idempotent, acknowledged). With `strict`, a mutation past the next
      * expected id is a gap the push cannot apply, so the push is refused.
      */
     const unacknowledged = (
@@ -1045,12 +1120,12 @@ export const make = (
       BackendError
     > =>
       Effect.gen(function* () {
-        const group = (yield* Ref.get(ledger)).get(context.clientGroupId) ?? new Map();
-        const expected = new Map<string, number>(group);
+        const group = yield* readGroup(context.clientGroupId);
+        const expected = new Map<string, number>(group.acknowledged);
         const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
         for (const mutation of mutations) {
           const last = expected.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          if (mutation.mutationId <= last) continue; // idempotent (acknowledged)
           if (strict && mutation.mutationId > last + 1)
             return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
           expected.set(mutation.clientId, mutation.mutationId);
@@ -1062,7 +1137,7 @@ export const make = (
     /**
      * The mutations a per-resource push still has to send, in order. A mutation
      * at or below its client's acknowledged id was already applied, so it is
-     * skipped (idempotent, in-session). A mutation past the next expected id is a
+     * skipped (idempotent, acknowledged). A mutation past the next expected id is a
      * gap, refused with a `BackendError` before any write of the push is sent, as
      * the atomic path refuses it (`unacknowledged`, strict). Unlike
      * `unacknowledged`, nothing is decoded here: the send loop decodes each write
@@ -1074,12 +1149,12 @@ export const make = (
     ): Effect.Effect<ReadonlyArray<PushedMutation>, BackendError> =>
       Effect.gen(function* () {
         const expected = new Map<string, number>(
-          (yield* Ref.get(ledger)).get(context.clientGroupId) ?? []
+          (yield* readGroup(context.clientGroupId)).acknowledged
         );
         const pending: Array<PushedMutation> = [];
         for (const mutation of mutations) {
           const last = expected.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (in-session)
+          if (mutation.mutationId <= last) continue; // idempotent (acknowledged)
           if (mutation.mutationId > last + 1)
             return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
           expected.set(mutation.clientId, mutation.mutationId);

@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Semaphore } from "effect";
+import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -19,6 +20,7 @@ import type { Mutator } from "@thomasfosterau/legation-effect";
 import { BackendContract } from "@thomasfosterau/legation-effect/internal";
 import type { EndpointRef, ResourceEndpoints, ResourceMap } from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
+import * as Ledger from "../Ledger.js";
 
 const COLLECTION = "contract";
 const EVAL_COLLECTION = `${COLLECTION}_eval`;
@@ -251,9 +253,11 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   ],
 ]);
 
-const makeBackend = () =>
+const makeBackend = (
+  options: { readonly ledger?: Ledger.LedgerStore; readonly store?: Store } = {}
+) =>
   Effect.gen(function* () {
-    const store: Store = new Map();
+    const store: Store = options.store ?? new Map();
     const { client, requests } = yield* makeInProcessClient(store);
     const backend = yield* JsonApiBackend.make({
       baseUrl: "http://contract.test",
@@ -264,6 +268,7 @@ const makeBackend = () =>
       // The server declares no filter or sort parameters, and the backend
       // re-applies the subset locally, so an empty query is exact over it.
       query: { encode: () => Effect.succeed(Option.some("")) },
+      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests };
   });
@@ -278,5 +283,62 @@ describe("JsonApiBackend in per-resource mode", () => {
       expect(writeRequests.length).toBeGreaterThan(0);
       expect(writeRequests.some((request) => request.path === "/operations")).toBe(false);
     })
+  );
+});
+
+// ─── The ledger store across a restart (#468) ────────────────────────────────
+
+const restartClient = "restart-client";
+const restartContext = { clientGroupId: "restart-group" };
+
+/** One applied create and one permanently rejected create, in order. */
+const restartPush = () => [
+  {
+    clientId: restartClient,
+    mutationId: 1,
+    mutator: BackendContract.putRow.name,
+    args: { collection: COLLECTION, id: "kept", value: { n: 1 } },
+    createdAt: 0,
+  },
+  {
+    clientId: restartClient,
+    mutationId: 2,
+    mutator: BackendContract.rejectAlways.name,
+    args: { collection: COLLECTION, id: "poisoned" },
+    createdAt: 0,
+  },
+];
+
+describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
+  it.effect("satisfies verifyBackendContract over a durable ledger store", () =>
+    Effect.gen(function* () {
+      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+      const { backend } = yield* makeBackend({ ledger });
+      yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
+    Effect.gen(function* () {
+      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+      const server: Store = new Map();
+      const first = yield* makeBackend({ ledger, store: server });
+      const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
+      const rejected = pushed.rejected ?? [];
+      expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+
+      // A restart: a new backend over the same ledger store and the same server.
+      const second = yield* makeBackend({ ledger, store: server });
+      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
+        [restartClient]: 2,
+      });
+      expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
+
+      // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
+      const replay = yield* second.backend.applyMutations(restartContext, restartPush());
+      expect(replay.rejected).toEqual(rejected);
+      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+      expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
+    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
   );
 });
