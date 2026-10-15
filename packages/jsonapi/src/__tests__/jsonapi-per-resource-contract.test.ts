@@ -6,8 +6,9 @@
  * to an in-process server that keeps the same two tables as the atomic contract
  * test (`jsonapi-atomic-contract.test.ts`). The server answers `POST` as an
  * upsert, as that test's atomic `add` does, so the contract's `put` (which
- * rewrites an existing row) works on this path too. Each request runs under one
- * store-wide lock, so a count-up update cannot interleave with another write.
+ * rewrites an existing row) works on this path too. Each `POST` and `PATCH` runs
+ * under one store-wide lock, so a count-up update cannot interleave with another
+ * write. A `GET` or `DELETE` has no yield point, so it runs whole without it.
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Semaphore } from "effect";
@@ -76,7 +77,7 @@ const respond = (status: number, document?: unknown) =>
   });
 
 /** One request as the server answers it. Reads never wait; writes run under the lock. */
-interface Request {
+interface ServerRequest {
   readonly method: string;
   readonly type: string;
   readonly id: string | undefined;
@@ -100,7 +101,7 @@ const answerGet = (table: Table, id: string | undefined): Response => {
 };
 
 /** A POST: an upsert of the row the body names, or the rejection or fault its marker asks for. */
-const answerPost = (table: Table, request: Request): Response => {
+const answerPost = (table: Table, request: ServerRequest): Response => {
   const id = request.body?.data?.id ?? "";
   const attributes = request.body?.data?.attributes ?? {};
   if (attributes[POISON] === true)
@@ -116,7 +117,7 @@ const answerPost = (table: Table, request: Request): Response => {
  * `n`, parks at the named gate, then stores `n + 1`. The store lock keeps the
  * read and the write together, as a backend's own handler would.
  */
-const answerPatch = (table: Table, row: Stored, request: Request): Effect.Effect<Response> =>
+const answerPatch = (table: Table, row: Stored, request: ServerRequest): Effect.Effect<Response> =>
   Effect.gen(function* () {
     const attributes = request.body?.data?.attributes ?? {};
     const { increment, ...merge } = attributes;
@@ -132,7 +133,7 @@ const answerPatch = (table: Table, row: Stored, request: Request): Effect.Effect
     return respond(200, documentOf(updated));
   });
 
-const serve = (store: Store, request: Request): Effect.Effect<Response> =>
+const serve = (store: Store, request: ServerRequest): Effect.Effect<Response> =>
   Effect.gen(function* () {
     const table = tableOf(store, request.type);
     if (request.method === "GET") return answerGet(table, request.id);
