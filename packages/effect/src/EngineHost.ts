@@ -110,7 +110,7 @@ export interface Host {
    * pulled once a pull started after each was made has applied; a coverage
    * check counts only the windows a read depends on. Named-query and
    * mutation-state registrations cover no read and are not listed. The ledger
-   * a coverage check scans: `Coverage.coverageOf(nodes, host.registrations)`.
+   * a coverage check scans: `Coverage.coverageOf(nodes, view.query, host.registrations)`.
    */
   readonly registrations: Effect.Effect<ReadonlyArray<Coverage.Entry>>;
 }

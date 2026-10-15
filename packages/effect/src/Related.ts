@@ -701,6 +701,23 @@ const desiredSubsets = (
   base: ReadonlyArray<LocalRow>
 ): ReadonlyArray<Subset.Subset> => subsetsForTargets(strategy.targets(base));
 
+/**
+ * The foreign windows a relational read holds for the root rows it reads: the
+ * windows {@link related}'s reconcile subscribes for `baseRows` under the
+ * declared edges (ADR-0024). A read whose rows link to them depends on exactly
+ * these windows, so coverage asks only for them (ADR-0029 section 3, #426).
+ */
+export const windowsFor = (
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  edges: ReadonlyArray<string | EdgeSelect>,
+  baseRows: ReadonlyArray<LocalRow>
+): ReadonlyArray<Subset.Subset> =>
+  desiredSubsets(
+    fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
+    baseRows
+  );
+
 /** The narrowed subsets a set of targets pins (see {@link desiredSubsets}). */
 const subsetsForTargets = (targets: ReadonlyMap<string, Target>): ReadonlyArray<Subset.Subset> =>
   [...targets]

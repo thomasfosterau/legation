@@ -153,9 +153,10 @@ config.addEventListener("message", (event) => {
       // The façade reads the served engine through the host's own
       // registrations: the tabs' pins, refcounted per mirror, are the ledger.
       onStart: (host) => {
+        const view = ClientView.fromEngine(host.engine);
         facade = makeFacade({
-          view: ClientView.fromEngine(host.engine),
-          coverageOf: Coverage.coverageOf(nodes, host.registrations),
+          view,
+          coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations),
           cookie: host.cookie,
         });
         void reportToClients("jsonapi façade serving covered GETs from the replica");

@@ -107,7 +107,7 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
   readonly view: ClientView.Reader;
   /**
    * The ledger's verdict for a read — `client.coverageOf`, or
-   * `Coverage.coverageOf(nodes, host.registrations)` over the registrations
+   * `Coverage.coverageOf(nodes, view.query, host.registrations)` over the registrations
    * an `EngineHost` holds on mirrors' behalf. A request is answered locally
    * only when every read it needs is covered.
    */

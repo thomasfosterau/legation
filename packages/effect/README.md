@@ -96,8 +96,9 @@ const program = Effect.gen(function* () {
 
   // 4. Reads: `subscribe` pins a read's windows (edges included) so the
   //    replica syncs them; `observe` subscribes for the stream's lifetime.
-  //    A read is answered from the replica only once its subscription has
-  //    been pulled: a pull that started after the subscribe has applied.
+  //    A read is answered from the replica only once the windows its rows
+  //    link to have been pulled: a pull that started after they were
+  //    subscribed has applied.
   yield* client.subscribe(projectsWithTodos);
   yield* Effect.forkScoped(
     client.observe(openTodos).pipe(Stream.runForEach((rows) => Effect.log(`${rows.length} open`)))

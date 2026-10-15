@@ -468,12 +468,13 @@ import { nodes } from "./my-domain";
 
 // In the worker, once the engine has booted:
 const host = yield * ServiceWorkerHost.start({ nodes, urls: JsonApiQuery.urlReads(nodes) });
+const view = ClientView.fromEngine(host.engine); // confirmed rows + optimistic overlay
 const facade = JsonApiFacade.fetchHandler({
   nodes,
   api, // its `list` / `getOne` routes, prefix included, are what is recognised
   resources, // so linkage matches the derived REST handler's
-  view: ClientView.fromEngine(host.engine), // confirmed rows + optimistic overlay
-  coverageOf: Coverage.coverageOf(nodes, host.registrations), // the mirrors' pins
+  view,
+  coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations), // the mirrors' pins
   cookie: store.getCookie, // `x-legation-served-at`
 });
 
@@ -501,8 +502,8 @@ self.addEventListener("fetch", (event) => {
   produces (byte-equal in content to the derived REST handler's for the same
   declarations), `Cache-Control: no-store`, and `x-legation-served-at` set to
   the replica's CVR cookie. A covered request is answered only once every
-  registration it depends on has been pulled (a pull started after the
-  registration applied). Until then, online, it is forwarded; after a restart
+  window its rows link to has been pulled (a pull started after the window was
+  made has applied). Until then, online, it is forwarded; after a restart
   nothing is pulled until the first pull lands, so offline it gets the `503`
   below. A URL the grammar
   rejects: the codec's `400` document, which the server would return
@@ -517,11 +518,11 @@ self.addEventListener("fetch", (event) => {
   `facade.offline` (the same document, with the replica's cookie) when
   `matches(request)` held.
 - **Coverage is the ledger's.** `coverageOf` is `Client.coverageOf` over a
-  Client, or `Coverage.coverageOf(nodes, host.registrations)` over the
-  registrations an `EngineHost` holds on its mirrors' behalf — the only
-  ledger in a worker that knows what the tabs pinned; a registration is
-  listed with the pulled state of its windows, and a covered read needs the windows
-  it depends on pulled (ADR-0029 amendment #426). Every read
+  Client, or `Coverage.coverageOf(nodes, view.query, host.registrations)` over
+  the registrations an `EngineHost` holds on its mirrors' behalf — the only
+  ledger in a worker that knows what the tabs pinned. A registration is listed
+  with the pulled state of its windows, and a covered read needs the windows its
+  rows link to pulled (ADR-0029 amendment #426). Every read
   `ReplicaDocuments.toCover` names must be covered; the façade never
   subscribes on a request's behalf.
 - **The overlay.** A covered response sees pending optimistic mutations as

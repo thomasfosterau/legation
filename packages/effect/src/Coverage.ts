@@ -44,10 +44,12 @@
  */
 
 import { Effect } from "effect";
+import type * as Collection from "./Collection.js";
+import type { LocalRow } from "./ClientEngine.js";
 import type * as Node from "./Node.js";
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
-import type * as Related from "./Related.js";
+import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 
 /**
@@ -336,34 +338,121 @@ export const covering = <S extends Registration>(
 // ─── Pulled windows (#426) ───────────────────────────────────────────────────
 
 /**
+ * One window a registration holds and whether its rows are in the replica:
+ * pulled once a pull that started after it was held has applied, or once an
+ * already-pulled window covers it (`PullMarks`).
+ */
+export interface PulledWindow {
+  readonly subset: Subset.Subset;
+  readonly pulled: boolean;
+}
+
+/**
  * What a registration's windows hold in the replica (ADR-0029 section 3,
- * #426): whether its root window is pulled, and, per edge collection,
- * whether every edge window of that collection is. A collection the
- * registration has no edge window on needs nothing pulled. Marked per window
- * by `PullMarks`, so a window added later does not move the others.
+ * #426): every window it holds, the root included, each with its own mark.
+ * Marked per window by `PullMarks`, so a window added later does not move
+ * the others, and a read is judged only by the windows its rows link to.
  */
 export interface Pulled {
-  readonly root: boolean;
-  readonly collections: Readonly<Record<string, boolean>>;
+  readonly windows: ReadonlyArray<PulledWindow>;
 }
 
 /** A registration none of whose windows is pulled. */
-export const NOT_PULLED: Pulled = { root: false, collections: {} };
+export const NOT_PULLED: Pulled = { windows: [] };
 
 /**
- * A request as the coverage scan takes it: its registration, plus the
- * collections its edges read through, which name the edge windows it depends
- * on.
+ * A window's identity: its collection, canonical predicate, order, limit and
+ * cursor. Unlike `Subset.hash`, key order does not matter, so a window a
+ * mirror decoded from a message matches the one a read builds locally.
+ */
+export const windowKey = (window: Subset.Subset): string =>
+  JSON.stringify([
+    window.collection,
+    structuralKey(window.where),
+    window.orderBy.map((term) => [term.field, term.direction]),
+    window.limit ?? null,
+    window.cursor ?? null,
+  ]);
+
+/** The field and the values an unwindowed window pins: `field IN (...)` or `field = value`. */
+const pinnedOf = (
+  where: Predicate.Predicate
+): { readonly field: string; readonly values: ReadonlyArray<string> } | undefined => {
+  if (where._tag === "In") return { field: where.field, values: where.values.map(literalKey) };
+  if (where._tag === "Compare" && where.op === "eq") {
+    return { field: where.field, values: [literalKey(where.value)] };
+  }
+  return undefined;
+};
+
+/** Whether a window is held and pulled exactly (its identity), with no covering: the root's check. */
+const heldPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset): boolean => {
+  const key = windowKey(window);
+  return held.some((entry) => entry.pulled && windowKey(entry.subset) === key);
+};
+
+/**
+ * Whether the rows of one window are in the replica. A pulled window that
+ * covers it under rules 1 to 3 is (the same window, or a prefix of it, or an
+ * unwindowed window over its predicate; ADR-0029 section 3). An unwindowed
+ * window (`field IN (...)` or `field = value`) is also, when pulled unwindowed
+ * windows of its collection pin every one of its values: their rows are the
+ * rows it reads.
+ */
+const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset): boolean => {
+  const key = windowKey(window);
+  if (
+    held.some(
+      (entry) => entry.pulled && (windowKey(entry.subset) === key || covers(entry.subset, window))
+    )
+  ) {
+    return true;
+  }
+  if (isWindowed(window)) return false;
+  const wanted = pinnedOf(window.where);
+  if (wanted === undefined) return false;
+  const have = new Set<string>();
+  for (const entry of held) {
+    if (!entry.pulled || isWindowed(entry.subset)) continue;
+    if (entry.subset.collection !== window.collection) continue;
+    const pinned = pinnedOf(entry.subset.where);
+    if (pinned === undefined || pinned.field !== wanted.field) continue;
+    for (const value of pinned.values) have.add(value);
+  }
+  return wanted.values.every((value) => have.has(value));
+};
+
+/**
+ * A request as the coverage scan takes it: its registration, plus the edge
+ * windows its rows link to (`Related.windowsFor` over the root rows it reads).
+ * A read whose rows link to no edge window needs only its root pulled.
  */
 export interface Requested extends Registration {
-  readonly targets: ReadonlyArray<string>;
+  readonly windows: ReadonlyArray<Subset.Subset>;
 }
 
-/** A compiled read's request: its registration and the collections its edges read. */
-export const requestedOf = (plan: Query.Plan): Requested => ({
-  ...ofPlan(plan),
-  targets: plan.edges.map((edge) => edge.target),
-});
+/** The replica's rows of a subset, as the coverage check reads them. */
+export type RowsOf<E> = (subset: Subset.Subset) => Effect.Effect<ReadonlyArray<LocalRow>, E>;
+
+/**
+ * A compiled read's request: its registration, and the edge windows its root
+ * rows link to, read from the replica through `rowsOf`. Fails with what
+ * `rowsOf` fails with; callers judge that as uncovered.
+ */
+export const requestedOf = <E>(
+  registry: Collection.CollectionRegistry,
+  plan: Query.Plan,
+  rowsOf: RowsOf<E>
+): Effect.Effect<Requested, E> => {
+  const registration = ofPlan(plan);
+  if (registration.edges.length === 0) return Effect.succeed({ ...registration, windows: [] });
+  return rowsOf(plan.root).pipe(
+    Effect.map((rows) => ({
+      ...registration,
+      windows: Related.windowsFor(registry, plan.root.collection, registration.edges, rows),
+    }))
+  );
+};
 
 /** A ledger entry as the scan takes it: a subscription with its pulled summary. */
 export interface Entry extends Subscription {
@@ -371,12 +460,15 @@ export interface Entry extends Subscription {
 }
 
 /**
- * Whether the windows a request depends on are pulled (#426): the root
- * window, and the edge windows of each collection the request's edges read.
- * A read needing only some edges is not held up by the windows of the rest.
+ * Whether a ledger entry's windows cover a request's: its root window is held
+ * and pulled, and every edge window the request's rows link to is pulled
+ * (`windowPulled`). An edge window the request needs and the entry does not
+ * hold is not pulled, so a read is never answered from the replica before the
+ * rows it links to have arrived (#426).
  */
-export const pulledFor = (pulled: Pulled, requested: Requested): boolean =>
-  pulled.root && requested.targets.every((collection) => pulled.collections[collection] ?? true);
+export const pulledFor = (entry: Entry, requested: Requested): boolean =>
+  heldPulled(entry.pulled.windows, entry.root) &&
+  requested.windows.every((window) => windowPulled(entry.pulled.windows, window));
 
 // ─── The verdict ─────────────────────────────────────────────────────────────
 
@@ -388,7 +480,7 @@ export const pulledFor = (pulled: Pulled, requested: Requested): boolean =>
  */
 export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdict => {
   const by = covering(
-    [...entries].filter((entry) => pulledFor(entry.pulled, requested)),
+    [...entries].filter((entry) => pulledFor(entry, requested)),
     requested
   );
   return by === undefined
@@ -403,13 +495,18 @@ export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdi
 
 /**
  * A coverage check in `Client.coverageOf`'s shape over any ledger: the read
- * is compiled against the graph and its registration scanned against the
- * entries the ledger holds at that moment. A façade in a service worker
- * builds its check from the host's registrations
+ * is compiled against the graph, its root rows read through `rowsOf` (the
+ * replica's `query`), and its
+ * registration scanned against the entries the ledger holds at that moment. A
+ * façade in a service worker builds its check from the host's registrations
  * (`EngineHost.Host.registrations`), where no Client's ledger sees the
- * mirrors' pins.
+ * mirrors' pins. A failed read of the rows is uncovered: the read goes to the
+ * server.
  */
 export const coverageOf =
-  (nodes: Node.NodeRegistry, entries: Effect.Effect<Iterable<Entry>>) =>
+  <E>(nodes: Node.NodeRegistry, rowsOf: RowsOf<E>, entries: Effect.Effect<Iterable<Entry>>) =>
   (read: Query.Read): Effect.Effect<Verdict> =>
-    Effect.map(entries, (held) => verdictOf(held, requestedOf(Query.plan(nodes, read))));
+    requestedOf(nodes.collections, Query.plan(nodes, read), rowsOf).pipe(
+      Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
+      Effect.catch(() => Effect.succeed<Verdict>({ _tag: "Uncovered" }))
+    );

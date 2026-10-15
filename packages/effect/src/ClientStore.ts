@@ -841,7 +841,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     // Drops the release record with the tail, as the key-value store removes its record (#387).
     clearUnpulled: locked(Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, undefined)))),
 
-    // One read under the lock: every writer below takes the same lock, so the four reads see one state (#392).
+    // One read under the lock: every writer of the snapshot's state below takes the same lock, so the four reads see one state (#392).
     snapshot: locked(
       Effect.gen(function* () {
         const byCollection = yield* Ref.get(rows);
@@ -859,7 +859,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     ),
 
     getCookie: Ref.get(cookie),
-    // Locked so every writer takes the lock and the snapshot rule holds without case analysis (#392).
+    // Locked so every writer of the snapshot's state takes the lock and the snapshot rule holds without case analysis (#392).
     setCookie: (value) => locked(Ref.set(cookie, value)),
     clearCookie: locked(Ref.set(cookie, undefined)),
 
