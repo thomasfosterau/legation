@@ -101,7 +101,12 @@ import {
   Predicate,
   type Mutator,
 } from "@thomasfosterau/legation-effect";
-import { Hash, Subset, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
+import {
+  Hash,
+  RejectionMemory,
+  Subset,
+  UnknownMutator,
+} from "@thomasfosterau/legation-effect/internal";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).
@@ -134,15 +139,6 @@ type Settlement =
   | { readonly _tag: "applied"; readonly hints: ReadonlyArray<Backend.ChangeHint> }
   | { readonly _tag: "rejected"; readonly reason: string }
   | { readonly _tag: "replayed"; readonly rejection: string | undefined };
-
-/** The lowest mutation id a push carries, per client: the push's floors (as MemoryBackend, #355). */
-const lowestIdPerClient = (mutations: ReadonlyArray<Mutation>): Map<string, number> => {
-  const floors = new Map<string, number>();
-  for (const { clientId, mutationId } of mutations) {
-    floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
-  }
-  return floors;
-};
 
 /** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
 const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
@@ -818,7 +814,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           );
         }
         // The rejections this push has moved past are forgotten first (#366).
-        yield* forgetRejections(context.clientGroupId, lowestIdPerClient(mutations));
+        yield* forgetRejections(context.clientGroupId, RejectionMemory.floorsOf(mutations));
         const hints: Array<Backend.ChangeHint> = [];
         const rejected: Array<Backend.RejectedMutation> = [];
         // Numbered per handler run, as trunk did: a replay runs no savepoint and

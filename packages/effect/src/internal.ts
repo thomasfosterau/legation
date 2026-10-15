@@ -54,6 +54,7 @@ export * as Mirror from "./Mirror.js";
 
 // ─── Server assembly ─────────────────────────────────────────────────────────
 export * as BackendContract from "./BackendContract.js";
+export * as RejectionMemory from "./RejectionMemory.js";
 export * as FilterCorpus from "./FilterCorpus.js";
 export * as Cvr from "./Cvr.js";
 export * as InvalidationBus from "./InvalidationBus.js";
