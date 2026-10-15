@@ -38,6 +38,12 @@
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write.
  * 3. `getRows` returns encoded row values for explicit ids.
+ * 4. `rejections` lists the permanent rejections a client group still remembers,
+ *    each with its reason (#365). A pull reports those its watermark covers, so
+ *    a client whose push response was lost settles the rejection as rejected
+ *    rather than applied. A rejection is remembered from the commit until a
+ *    later push moves past it (guarantee 1), so it is listed for as long as a
+ *    client could still need it.
  *
  * `MemoryBackend.ts` is the reference implementation;
  * `BackendContract.verifyBackendContract` checks these guarantees against
@@ -125,6 +131,17 @@ export interface Backend {
   readonly lastMutationIds: (
     context: SyncContext
   ) => Effect.Effect<Readonly<Record<string, number>>, BackendError>;
+
+  /**
+   * The permanent rejections the group's clients still remember, each with its
+   * reason (guarantee 4). The sync server filters them by the pull's watermark
+   * and returns them in the pull response (#365). Each entry's `mutationId` is
+   * covered by its client's `lastMutationIds`, since a rejection is committed
+   * with its id's bump.
+   */
+  readonly rejections: (
+    context: SyncContext
+  ) => Effect.Effect<ReadonlyArray<RejectedMutation>, BackendError>;
 
   /**
    * Evaluate an **already-authorized** subset (auth filters are AND-ed in

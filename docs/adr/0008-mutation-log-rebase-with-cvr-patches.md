@@ -61,3 +61,13 @@ The bounds bullet under Bounds and resets above describes an overflow release: p
 - The store's commit that released the tail with no rows (`commitTailRelease`, and its release record path) is removed with it. Pulls still release through `releaseUnpulled` and the pull's release record, unchanged.
 
 Consequence: a view can no longer revert because a push filled the tail. The price is a push that waits on a pull, or fails when pulls keep failing, instead of a view that reverts.
+
+## Amendment (2026-10-15, #365): a pull carries the rejections it covers
+
+A permanent rejection bumps its id into the client's watermark (Decision: a rejected entry is acknowledged and skipped). So a pull whose `lastMutationIds` covers that id acknowledges it too, and before this amendment it settled the entry as `applied`. The case that exposed it: the push's response was lost after the backend committed the rejection, the client held the entry `pending`, and the next pull settled it as applied and dropped its effect, with no way to learn the outcome later.
+
+`PullResponse` now carries `rejected`, the permanent rejections of the client group that its `lastMutationIds` covers, each with its reason, as the push response already does (#355). The client settles those entries as `rejected` at the start of applying the pull, before the watermark acknowledges anything, so the watermark's ack leaves them alone. The rejection is a committed server fact, so the settlement does not wait for the store write. A repeat is a no-op (#364).
+
+The field is additive and optional, so no protocol version changes. An older client ignores it and keeps the previous settlement, which is no worse than before. A new client with an older server finds no `rejected` and does nothing new. The server filters the list by the watermark it returns, so a rejection committed between the watermark read and the response is reported by a later pull, not this one.
+
+The rejection memory is forgotten only by a push, as before (#355). A pull reports what it covers and never forgets, so a rejection stays listed until a push's lowest id moves past it, and a client that has trimmed the id through a pull has received it. The pull's rejection list is group-wide, because `PullRequest` carries no `clientId`, so a group's clients see each other's rejection reasons, and a pull-only group resends the same list until a push moves past it.

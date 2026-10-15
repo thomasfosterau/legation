@@ -314,12 +314,16 @@ const lowestIdPerClient = (mutations: ReadonlyArray<Mutation>): Map<string, numb
  * Forget the rejections a client has moved past (#355). `floors` maps each
  * client in a push to the lowest mutation id that push carries. A client
  * resends only ids it has not had acknowledged, and it trims an id only when a
- * response covering it reaches it, so a push whose lowest id is `f` proves the
- * client has already seen the outcome of every id below `f`. Those rejections
- * are dropped; the ones at or above `f` are kept. So a client's remembered
- * rejections stay within its unacknowledged journal as of its latest push, plus
- * any rejection committed since. A client that never pushes again keeps its
- * last push's rejections, so the held state is bounded by the client's journal.
+ * response covering it reaches it. A push response carries its own
+ * `lastMutationIds`, and a pull response carries its watermark along with the
+ * rejections that watermark covers (#365), so either way the id's outcome has
+ * reached the client. So a push whose lowest id is `f` proves the client has
+ * already seen the outcome of every id below `f`. Those rejections are dropped;
+ * the ones at or above `f` are kept. So a client's remembered rejections stay
+ * within its unacknowledged journal as of its latest push, plus any rejection
+ * committed since. A pull never forgets: it only reports. A client that never
+ * pushes again keeps its last push's rejections, so the held state is bounded
+ * by the client's journal.
  */
 const forgetRejectionsBelow = (
   s: MemoryState,
@@ -604,6 +608,16 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           Effect.map((s) =>
             Object.fromEntries(s.lastMutationIds.get(context.clientGroupId) ?? new Map())
           )
+        ),
+      rejections: (context) =>
+        Ref.get(state).pipe(
+          Effect.map((s) => {
+            const result: Array<RejectedMutation> = [];
+            for (const [clientId, ids] of s.rejections.get(context.clientGroupId) ?? new Map()) {
+              for (const [mutationId, reason] of ids) result.push({ clientId, mutationId, reason });
+            }
+            return result;
+          })
         ),
       evaluate: (_context, subset) =>
         Effect.gen(function* () {

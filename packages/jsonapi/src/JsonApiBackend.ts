@@ -1018,6 +1018,18 @@ export const make = (
         Effect.map((current) => Object.fromEntries(current.get(context.clientGroupId) ?? new Map()))
       );
 
+    /** The group's remembered rejections, each with its reason (#365). A pull reports those its watermark covers. */
+    const rememberedRejections = (context: Backend.SyncContext) =>
+      Ref.get(rejectionMemory).pipe(
+        Effect.map((current) => {
+          const rejected: Array<Backend.RejectedMutation> = [];
+          for (const [clientId, ids] of current.get(context.clientGroupId) ?? new Map()) {
+            for (const [mutationId, reason] of ids) rejected.push({ clientId, mutationId, reason });
+          }
+          return rejected;
+        })
+      );
+
     /**
      * The mutations a push still has to send, in order, each with its write. A
      * mutation at or below its client's acknowledged id was already applied, so it
@@ -1272,6 +1284,7 @@ export const make = (
     return Backend.Backend.of({
       applyMutations,
       lastMutationIds: lastMutationIdsOf,
+      rejections: rememberedRejections,
       evaluate,
       getRows,
     });
