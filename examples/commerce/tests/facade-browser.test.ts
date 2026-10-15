@@ -30,8 +30,9 @@
  *    from the worker's page cache, visited once online in 1) "Add to
  *    cart" journals `cart/add`; the covered cart URL shows the pending
  *    line under the optimistic overlay while the server's table has none
- *    (§4, "the optimistic overlay"); back online the journal pushes and
- *    the server catches up.
+ *    (§4, "the optimistic overlay"), with the sync carriers down for the
+ *    offline window; back online the carriers return, the journal pushes
+ *    and the server catches up.
  *
  * Each demonstration sets the connectivity it needs at its start, so a
  * failure in one cannot leave the next in the wrong state.
@@ -40,15 +41,16 @@
  * target: Playwright applies the `Network.emulateNetworkConditions`
  * emulation to every page and every attached service worker of the context
  * in one call, and it is what a Chromium user sees under DevTools'
- * offline toggle — the page's fetches fail and `navigator.onLine` reads
- * false in the page and the worker alike. Observably it does not cut the
- * worker's own outbound fetches in this Chromium (an offline navigation to
- * an uncached page still comes back through the worker), so the transport
- * half of §4 is exercised by the harness's `blackout` instead: the front
- * drops every connection but the sync carriers', and the browser stays
- * "online". The app's transport honours `navigator.onLine`
- * (`BrowserConnectivity.withBrowserConnectivity`), which is why the
- * pending write of demonstration 4 stays pending under the emulation.
+ * offline toggle — the page's fetches fail, and `navigator.onLine` reads
+ * false in the page and in the worker. That is the browser's offline
+ * signal, not the transport's: the worker's engine never hears the
+ * `online`/`offline` events (#328), and its sync WebSocket stays open
+ * under the emulation, so a push goes out over it whatever
+ * `navigator.onLine` says. The transport half of §4 is therefore exercised
+ * by the harness instead: `app.blackout` drops the app's own requests (the
+ * browser stays "online"), and `app.carriers` cuts the sync carriers —
+ * demonstration 4 cuts them for its offline window, so its pending write
+ * cannot reach the server by any path.
  *
  * Identity is the app's own: the test signs up through the account page's
  * form (Better Auth), the Kit process aligns the client-group binding, and
@@ -262,6 +264,12 @@ describe("the façade in a browser: plain fetch over the service worker's replic
   }, 20_000);
 
   it("4. offline: a pending optimistic cart write is visible in the covered cart response", async () => {
+    // The carriers go down before the browser goes offline: the worker's
+    // engine keeps its WebSocket under the emulation and would push its
+    // optimistic write at the push debounce (300 ms after the journal
+    // write), so the write is kept off the server by the cut, not by the
+    // timing of the read below.
+    app.carriers(false);
     await context.setOffline(true);
     const cartPath = readPath(myCartItems(userId));
     // The cart is empty on both sides, and the cart URL is covered (the
@@ -272,8 +280,8 @@ describe("the façade in a browser: plain fetch over the service worker's replic
 
     // Add to cart offline: the product page comes from the worker's page
     // cache (visited online in demonstration 1); `cart/add` journals in
-    // the worker's engine and renders in the optimistic overlay; the push
-    // cannot reach the server.
+    // the worker's engine and renders in the optimistic overlay; with the
+    // carriers down the push cannot reach the server.
     const navigation = await page.goto(`${app.origin}/product/p-01`);
     expect(navigation?.fromServiceWorker()).toBe(true);
     await page.locator("button", { hasText: "Add to cart" }).first().click();
@@ -297,7 +305,9 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     );
     expect(rows[0]!.n).toBe(0);
 
-    // Back online the journal pushes and the server catches up.
+    // Back online the carriers come back, the journal pushes and the server
+    // catches up.
+    app.carriers(true);
     await context.setOffline(false);
     const converged = await until(
       () =>

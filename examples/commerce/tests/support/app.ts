@@ -56,6 +56,15 @@ export interface App {
   /** How many times the derived REST handlers asked the backend for rows so far. */
   readonly restCalls: () => number;
   /**
+   * Cut the sync carriers: while down, the carriers' requests and upgrades
+   * are dropped at the socket, and every tunnel and forwarded request
+   * already in flight is destroyed, so the worker's engine can neither push
+   * nor pull. The browser's own offline emulation does not reach the
+   * worker's WebSocket, which stays open under `context.setOffline` — this
+   * is the transport half of "offline" for the sync path.
+   */
+  readonly carriers: (up: boolean) => void;
+  /**
    * Cut the app's upstream: while on, every request but the carriers' is
    * dropped at the socket, so a forward from the worker rejects at the
    * transport while the browser still reads online — ADR-0029 §4's second
@@ -106,8 +115,13 @@ const syncServer = (dbPath: string, calls: Calls) => {
   ) as Layer.Layer<HttpServer.HttpServer | SqlClient, unknown>;
 };
 
+/** A connection the front holds open for a carrier, so a cut can destroy it. */
+interface Closable {
+  destroy(): void;
+}
+
 /** Forward a plain request to the sync server, response streamed back. */
-const forward = (req: IncomingMessage, res: ServerResponse, port: number) => {
+const forward = (req: IncomingMessage, res: ServerResponse, port: number, open: Set<Closable>) => {
   const upstream = httpRequest(
     { host: "127.0.0.1", port, method: req.method, path: req.url, headers: req.headers },
     (response) => {
@@ -115,6 +129,8 @@ const forward = (req: IncomingMessage, res: ServerResponse, port: number) => {
       response.pipe(res);
     }
   );
+  open.add(upstream);
+  upstream.on("close", () => open.delete(upstream));
   upstream.on("error", () => {
     res.statusCode = 502;
     res.end();
@@ -123,7 +139,15 @@ const forward = (req: IncomingMessage, res: ServerResponse, port: number) => {
 };
 
 /** Tunnel a WebSocket upgrade to the sync server: the raw request, then both sockets piped. */
-const tunnel = (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer, port: number) => {
+const tunnel = (
+  req: IncomingMessage,
+  socket: import("node:stream").Duplex,
+  head: Buffer,
+  port: number,
+  open: Set<Closable>
+) => {
+  open.add(socket);
+  socket.on("close", () => open.delete(socket));
   const upstream = connect(port, "127.0.0.1", () => {
     let raw = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
     for (let index = 0; index < req.rawHeaders.length; index += 2) {
@@ -133,6 +157,8 @@ const tunnel = (req: IncomingMessage, socket: import("node:stream").Duplex, head
     if (head.length > 0) upstream.write(head);
     socket.pipe(upstream).pipe(socket);
   });
+  open.add(upstream);
+  upstream.on("close", () => open.delete(upstream));
   upstream.on("error", () => socket.destroy());
   socket.on("error", () => upstream.destroy());
 };
@@ -163,8 +189,13 @@ export const serveApp = async (): Promise<App> => {
   // The front: the app's handler once loaded, the carriers proxied.
   let handler: KitHandler | undefined;
   let blackout = false;
+  let carriersUp = true;
+  const open = new Set<Closable>();
   const front = createServer((req, res) => {
-    if (req.url?.startsWith("/sync")) return forward(req, res, syncPort);
+    if (req.url?.startsWith("/sync")) {
+      if (!carriersUp) return req.socket.destroy();
+      return forward(req, res, syncPort, open);
+    }
     if (blackout) return req.socket.destroy();
     if (handler === undefined) {
       res.statusCode = 503;
@@ -177,7 +208,7 @@ export const serveApp = async (): Promise<App> => {
     });
   });
   front.on("upgrade", (req, socket, head) => {
-    if (req.url?.startsWith("/sync")) tunnel(req, socket, head, syncPort);
+    if (req.url?.startsWith("/sync") && carriersUp) tunnel(req, socket, head, syncPort, open);
     else socket.destroy();
   });
   const origin = `http://127.0.0.1:${await listen(front)}`;
@@ -197,6 +228,10 @@ export const serveApp = async (): Promise<App> => {
     origin,
     sql: Context.get(context, SqlClient),
     restCalls: () => calls.n,
+    carriers: (up) => {
+      carriersUp = up;
+      if (!up) for (const connection of open) connection.destroy();
+    },
     blackout: (on) => {
       blackout = on;
     },
