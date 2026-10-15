@@ -129,12 +129,15 @@ const indexedDbLayer = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB: self.indexedDB, IDBKeyRange })
 );
 
-/** A dead engine in a worker is undebuggable — relay failures to the tabs. */
-const reportToClients = (message: string) =>
+/** Post a message to every client page this worker controls. */
+const toClients = (message: unknown) =>
   self.clients
     .matchAll()
-    .then((clients) => clients.forEach((client) => client.postMessage({ legationInfo: message })))
+    .then((clients) => clients.forEach((client) => client.postMessage(message)))
     .catch(() => undefined);
+
+/** A dead engine in a worker is undebuggable — relay failures to the tabs. */
+const reportToClients = (message: string) => toClients({ legationInfo: message });
 
 // Boot on the first tab's config handshake; ignore repeats.
 let started = false;
@@ -150,6 +153,9 @@ config.addEventListener("message", (event) => {
       clientId: `sw-${clientGroupId}`,
       syncOrigin: self.location.origin,
       indexedDb: indexedDbLayer,
+      // Each completed pull, journaled write and acknowledged push, as a `legation:*` message to the
+      // tabs (`PageSignal`): the browser test waits on these rather than polling the replica.
+      onSignal: (signal) => void toClients(signal),
       // The façade reads the served engine through the host's own
       // registrations: the tabs' pins, refcounted per mirror, are the ledger.
       onStart: (host) => {
