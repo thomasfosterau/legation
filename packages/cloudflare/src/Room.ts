@@ -70,9 +70,9 @@ export interface RoomConfig<Env> {
    */
   readonly publishTimeout?: Duration.Input | undefined;
   /**
-   * Test seam: the clock the room's boot, heartbeat and request handling run on. Unset in
-   * production (the real clock); a test passes its `TestClock` so `publishTimeout` and the
-   * heartbeat move with virtual time.
+   * The clock the room's boot, heartbeat and request handling run on, as a test seam.
+   * Unset in production (the real clock); a test passes its `TestClock` so
+   * `publishTimeout` and the heartbeat move with virtual time.
    */
   readonly clock?: Clock.Clock | undefined;
 }
@@ -220,12 +220,12 @@ export const makeRoomClass = <Env>(
       }
       if (url.pathname === routes.poke) {
         const topics = await Effect.runPromise(
-          decodeShardPoke(await request.json()).pipe(Effect.orDie)
+          onRoomClock(config.clock, decodeShardPoke(await request.json()).pipe(Effect.orDie))
         );
         // Wake path: hand the topics to the bus (its matcher pokes the
         // affected client groups' pull loops) AND nudge every socket —
         // a contentless frame is all a hibernated client needs.
-        await Effect.runPromise(runtime.notify([...topics.topics]));
+        await Effect.runPromise(onRoomClock(config.clock, runtime.notify([...topics.topics])));
         for (const socket of this.state.getWebSockets()) {
           (socket as RoomSocket).send(JSON.stringify(pokeFrame));
         }

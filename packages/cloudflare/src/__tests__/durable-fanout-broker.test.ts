@@ -1,6 +1,7 @@
 /**
- * DurableFanoutBroker's shard calls (publishes and lease registrations) are bounded (#356 follow-up). A publish runs
- * inside the sync server's uninterruptible region, so a shard that never answers must
+ * DurableFanoutBroker's shard calls (publishes and lease registrations) are
+ * bounded (#356 follow-up). A publish runs inside the sync server's
+ * uninterruptible region, so a shard that never answers must
  * be aborted at the timeout rather than hold the region open. The fake shard settles
  * only when its request is aborted, and TestClock moves the bound, not wall time.
  */
