@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-sql",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Driver-agnostic SQL reference backend for the legation engine: Subset->WHERE translation and a Backend over a SqlExecutor seam",
   "type": "module",
   "main": "./dist/index.js",
