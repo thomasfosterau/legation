@@ -228,6 +228,12 @@ interface Harness {
   readonly backend: Backend;
   readonly context: SyncContext;
   readonly clientId: string;
+  /**
+   * The contract client's last acknowledged id when the contract begins: 0 on a
+   * fresh group, the restored id on a backend restarted over its ledger (#477).
+   * Every rule numbers its mutations from here, so expectations are relative to it.
+   */
+  readonly start: number;
   /** The collection the write rules target. */
   readonly rows: string;
   /** The collection rule 6 evaluates subsets over. */
@@ -277,10 +283,17 @@ interface Harness {
 const isUnregisteredFailure = (error: BackendError, mutator: string): boolean =>
   UnknownMutator.isError(error) || error.message === `Unknown mutator: ${mutator}`;
 
-const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harness => {
+/** The client id every contract mutation is sent under. */
+const CONTRACT_CLIENT = "contract-client";
+
+const makeHarness = (
+  backend: Backend,
+  options: VerifyOptions | undefined,
+  start: number
+): Harness => {
   const rows = options?.collection ?? "__contract";
   const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
-  const clientId = "contract-client";
+  const clientId = CONTRACT_CLIENT;
 
   const violation = (rule: string, message: string) => new ContractViolation({ rule, message });
   const check: Harness["check"] = (rule, condition, message) =>
@@ -324,6 +337,7 @@ const makeHarness = (backend: Backend, options: VerifyOptions | undefined): Harn
     backend,
     context,
     clientId,
+    start,
     rows,
     evalRows: `${rows}_eval`,
     check,
@@ -354,6 +368,7 @@ const rule1InOrderApplication: Rule = ({
   context,
   clientId,
   rows,
+  start,
   check,
   expectOk,
   put,
@@ -362,12 +377,15 @@ const rule1InOrderApplication: Rule = ({
     const rule = "applies mutations in order and bumps lastMutationIds";
     const result = yield* expectOk(
       rule,
-      backend.applyMutations(context, [put(1, rows, "a", { n: 1 }), put(2, rows, "b", { n: 2 })])
+      backend.applyMutations(context, [
+        put(start + 1, rows, "a", { n: 1 }),
+        put(start + 2, rows, "b", { n: 2 }),
+      ])
     );
     yield* check(
       rule,
-      result.lastMutationIds[clientId] === 2,
-      `Expected lastMutationIds["${clientId}"] = 2, got ${result.lastMutationIds[clientId]}`
+      result.lastMutationIds[clientId] === start + 2,
+      `Expected lastMutationIds["${clientId}"] = ${start + 2}, got ${result.lastMutationIds[clientId]}`
     );
     const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["a", "b"]));
     yield* check(rule, fetched.length === 2, `Expected 2 rows back, got ${fetched.length}`);
@@ -379,17 +397,26 @@ const rule1InOrderApplication: Rule = ({
   });
 
 /** 2. Idempotent skip: an already-applied mutation id has no effect. */
-const rule2IdempotentSkip: Rule = ({ backend, context, clientId, rows, check, expectOk, put }) =>
+const rule2IdempotentSkip: Rule = ({
+  backend,
+  context,
+  clientId,
+  rows,
+  start,
+  check,
+  expectOk,
+  put,
+}) =>
   Effect.gen(function* () {
     const rule = "skips already-applied mutation ids (idempotency)";
     const result = yield* expectOk(
       rule,
-      backend.applyMutations(context, [put(2, rows, "b", { n: 99 })])
+      backend.applyMutations(context, [put(start + 2, rows, "b", { n: 99 })])
     );
     yield* check(
       rule,
-      result.lastMutationIds[clientId] === 2,
-      `Replaying mutation 2 must keep lastMutationId at 2, got ${result.lastMutationIds[clientId]}`
+      result.lastMutationIds[clientId] === start + 2,
+      `Replaying mutation ${start + 2} must keep lastMutationId at ${start + 2}, got ${result.lastMutationIds[clientId]}`
     );
     const [b] = yield* expectOk(rule, backend.getRows(context, rows, ["b"]));
     // Field-level check, not exact value equality: how a backend encodes a
@@ -408,6 +435,7 @@ const rule3GapRejection: Rule = ({
   backend,
   context,
   rows,
+  start,
   check,
   expectOk,
   expectFail,
@@ -418,12 +446,12 @@ const rule3GapRejection: Rule = ({
     const rule = "rejects mutation-id gaps";
     yield* expectFail(
       rule,
-      backend.applyMutations(context, [put(4, rows, "c", { n: 4 })]),
-      "mutation id 4 after lastMutationId 2"
+      backend.applyMutations(context, [put(start + 4, rows, "c", { n: 4 })]),
+      `mutation id ${start + 4} after lastMutationId ${start + 2}`
     );
     yield* check(
       rule,
-      (yield* lastIdOf(rule)) === 2,
+      (yield* lastIdOf(rule)) === start + 2,
       "A rejected gap must not bump lastMutationId"
     );
     const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["c"]));
@@ -434,6 +462,7 @@ const rule3GapRejection: Rule = ({
 const rule4AtomicBump: Rule = ({
   backend,
   context,
+  start,
   check,
   expectRegisteredFailure,
   lastIdOf,
@@ -443,23 +472,23 @@ const rule4AtomicBump: Rule = ({
     const rule = "keeps the lastMutationId bump atomic with mutator effects";
     yield* expectRegisteredFailure(
       rule,
-      backend.applyMutations(context, [mutation(3, failAlways.name, {})]),
+      backend.applyMutations(context, [mutation(start + 3, failAlways.name, {})]),
       failAlways.name,
       "failAlways"
     );
     yield* check(
       rule,
-      (yield* lastIdOf(rule)) === 2,
+      (yield* lastIdOf(rule)) === start + 2,
       "A failed mutator must not bump lastMutationId"
     );
   });
 
 /** 5. Authoritative writes change row versions. */
-const rule5VersionBump: Rule = ({ backend, context, rows, check, expectOk, put }) =>
+const rule5VersionBump: Rule = ({ backend, context, rows, start, check, expectOk, put }) =>
   Effect.gen(function* () {
     const rule = "changes the row version on every authoritative write";
     const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
-    yield* expectOk(rule, backend.applyMutations(context, [put(3, rows, "a", { n: 3 })]));
+    yield* expectOk(rule, backend.applyMutations(context, [put(start + 3, rows, "a", { n: 3 })]));
     const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
     yield* check(
       rule,
@@ -575,7 +604,7 @@ const rule6ReferenceSemantics: Rule = (h) =>
       rule,
       h.backend.applyMutations(
         h.context,
-        evalSeed.map(([id, value], index) => h.put(4 + index, h.evalRows, id, value))
+        evalSeed.map(([id, value], index) => h.put(h.start + 4 + index, h.evalRows, id, value))
       )
     );
     const reference = evalSeed.map(([id, value]) => ({ id, value }));
@@ -611,7 +640,7 @@ const rule6ReferenceSemantics: Rule = (h) =>
         `cursor page: expected ${JSON.stringify(expected)}, got ${JSON.stringify(evaluated)}`
     );
 
-    yield* generatedCorpus(h, rule, reference, 4 + evalSeed.length);
+    yield* generatedCorpus(h, rule, reference, h.start + 4 + evalSeed.length);
   });
 
 /** 7. getRows omits missing ids. */
@@ -793,6 +822,8 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
     };
     parkGates.set(gate, parked);
     const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
+    // The peer group has its own ledger, which a restarted run finds already acknowledged (#477).
+    const peerStart = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
     const increment = (mutationId: number, gateName: string) =>
       h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
 
@@ -825,7 +856,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
 
       const peerDone = yield* Deferred.make<void>();
       const second = yield* Effect.forkChild(
-        retryTransient(h.backend.applyMutations(peer, [increment(1, NO_GATE)])).pipe(
+        retryTransient(h.backend.applyMutations(peer, [increment(peerStart + 1, NO_GATE)])).pipe(
           Effect.ensuring(Deferred.succeed(peerDone, undefined))
         )
       );
@@ -981,12 +1012,29 @@ const rules: ReadonlyArray<Rule> = [
 
 /**
  * Verify a backend against the contract. The backend must have the contract
- * mutators registered and the contract collections empty.
+ * mutators registered and the contract collections empty. Its ledger for the
+ * contract's client may already be acknowledged (a restarted backend): the rules
+ * number their mutations from the id the backend reports, not from zero.
  */
 export const verifyBackendContract = (
   backend: Backend,
   options?: VerifyOptions
 ): Effect.Effect<void, ContractViolation> => {
-  const harness = makeHarness(backend, options);
-  return Effect.forEach(rules, (rule) => rule(harness), { discard: true });
+  const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
+  // The contract starts from the ledger the backend reports for its client, so a
+  // backend restarted over a ledger that already acknowledges the client runs too (#477).
+  // On a fresh group that id is 0 and every expectation is unchanged.
+  return backend.lastMutationIds(context).pipe(
+    Effect.mapError(
+      (error) =>
+        new ContractViolation({
+          rule: "reports the ledger it starts from",
+          message: `Backend failed unexpectedly: ${error.message}`,
+        })
+    ),
+    Effect.flatMap((ids) => {
+      const harness = makeHarness(backend, options, ids[CONTRACT_CLIENT] ?? 0);
+      return Effect.forEach(rules, (rule) => rule(harness), { discard: true });
+    })
+  );
 };
