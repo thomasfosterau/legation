@@ -111,9 +111,11 @@ const boot = <Env>(
         const scope = yield* Scope.make();
         return yield* Effect.gen(function* () {
           const roomId = state.id.name ?? state.id.toString();
+          // No `timeout` here: the broker keeps its own default. FanoutBus's bound (below) wraps
+          // every broker call, including lease registration, with `publishTimeout`, so it is the
+          // one that applies. Forwarding the same value to the broker added nothing observable.
           const durable = yield* DurableFanoutBroker.make({
             shards: config.shards(env),
-            timeout: config.publishTimeout,
           });
           // Late binding: the bus leases the room's windows, which the
           // handler's introspection provides once built.
