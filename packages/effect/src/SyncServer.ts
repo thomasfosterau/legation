@@ -583,6 +583,16 @@ export const makeWithIntrospectionWith = (
               checked.cookie
             );
 
+            // The permanent rejections this pull's watermark covers (#365). A
+            // rejected id is bumped into the watermark, so the client must learn
+            // its outcome here, or it would settle the mutation as applied. Each
+            // rejection is committed with its id's bump, so it is covered once the
+            // watermark reaches the id; the filter keeps the response to that view,
+            // even when a push commits between the watermark read and this one.
+            const rejected = (yield* backend.rejections(context)).filter(
+              (entry) => entry.mutationId <= (lastMutationIds[entry.clientId] ?? 0)
+            );
+
             const cookie = yield* freshCookie;
             yield* cvrStore.set(cookie, { rows: next.rows });
             // Track this group's latest view so fan-out can match a delete against
@@ -592,7 +602,12 @@ export const makeWithIntrospectionWith = (
             );
             yield* Metric.update(Telemetry.patchOps, patch.length);
             yield* Metric.update(Telemetry.serverPullsTotal, 1);
-            return { cookie, patch, lastMutationIds };
+            return {
+              cookie,
+              patch,
+              lastMutationIds,
+              ...(rejected.length > 0 ? { rejected } : {}),
+            };
           }).pipe(Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPull)

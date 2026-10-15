@@ -1832,8 +1832,9 @@ export const make = (
         })
       );
 
-    // Resolve deferreds for the mutations this client had permanently rejected.
-    const settleRejected = (response: PushResponse): Effect.Effect<void> =>
+    // Resolve deferreds for the mutations this client had permanently rejected. A push
+    // response and a pull response both report them (#365).
+    const settleRejected = (response: Pick<PushResponse, "rejected">): Effect.Effect<void> =>
       Effect.gen(function* () {
         const mine = yield* currentClientId;
         for (const entry of response.rejected ?? []) {
@@ -2333,6 +2334,12 @@ export const make = (
 
     const applyPull = (response: PullResponse): Effect.Effect<PullTouched, StoreError> =>
       Effect.gen(function* () {
+        // Settle the entries the pull reports as rejected before its watermark acknowledges
+        // them. The watermark covers a rejected id (its bump is what rejects it), so
+        // `settleOwnApplied` below would otherwise fold it as applied (#365). The rejection
+        // is a fact the server committed, so it settles now, before the store is written. A
+        // failure after this point leaves the settlement in place: a repeat is a no-op (#364).
+        yield* settleRejected(response);
         // With an empty journal the patch ops are exactly the materialized-view
         // deltas, so observers maintain incrementally. With a pending overlay,
         // rebase (confirmed patch + replay of whatever mutations remain

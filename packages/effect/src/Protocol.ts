@@ -50,6 +50,19 @@ export const PushRequestSchema = Schema.Struct({
 export type PushRequest = typeof PushRequestSchema.Type;
 
 /**
+ * A mutation the backend permanently rejected: its id is acknowledged, but its
+ * effects were not applied, and `reason` is the backend's stated cause.
+ */
+export const RejectedMutationSchema = Schema.Struct({
+  clientId: Schema.String,
+  mutationId: Schema.Number,
+  reason: Schema.String,
+});
+
+/** {@inheritDoc RejectedMutationSchema} */
+export type RejectedMutation = typeof RejectedMutationSchema.Type;
+
+/**
  * Push response: the highest mutation id the backend has applied, per
  * client. Mutations at or below these ids are acknowledged; effects arrive
  * via the next pull's patch, which is when the optimistic overlay drops.
@@ -62,15 +75,7 @@ export const PushResponseSchema = Schema.Struct({
    * but their effects were not applied. Additive and optional, so older clients
    * ignore it; the per-mutation outcome surface (#36) reads it.
    */
-  rejected: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        clientId: Schema.String,
-        mutationId: Schema.Number,
-        reason: Schema.String,
-      })
-    )
-  ),
+  rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
 });
 
 /** {@inheritDoc PushResponseSchema} */
@@ -121,11 +126,27 @@ export const PullRequestSchema = Schema.Struct({
 /** {@inheritDoc PullRequestSchema} */
 export type PullRequest = typeof PullRequestSchema.Type;
 
-/** Pull response: patch to the new cookie, plus mutation acknowledgements. */
+/**
+ * Pull response: patch to the new cookie, plus mutation acknowledgements.
+ *
+ * A pull acknowledges every id its `lastMutationIds` covers, and a permanently
+ * rejected id is one of them (its bump is what makes it acknowledged). So the
+ * response also carries the rejections the watermark covers (#365): the client
+ * settles those entries as rejected, not applied, before it acknowledges the
+ * rest. The list is additive and optional, like the push response's: an older
+ * client ignores it and keeps its previous settlement, and a pull from an older
+ * server omits it, which the client reads as none. No protocol version bump
+ * is needed, since neither side fails to decode the other's response.
+ */
 export const PullResponseSchema = Schema.Struct({
   cookie: Schema.String,
   patch: Schema.Array(PatchOpSchema),
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+  /**
+   * The permanently rejected mutations of this client group that
+   * `lastMutationIds` covers, each with its reason. Omitted when none.
+   */
+  rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
 });
 
 /** {@inheritDoc PullResponseSchema} */

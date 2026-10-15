@@ -104,6 +104,9 @@ export const delRow = Mutator.make(
  */
 export const failAlways = Mutator.make("contract/fail", Schema.Struct({}));
 
+/** The reason `rejectAlways` gives for its permanent rejection. */
+const rejectReason = "contract/reject always rejects";
+
 /**
  * Writes a row and then rejects permanently — probes that a `MutationRejected`
  * bumps the id *without* leaving effects (the staged write must roll back).
@@ -156,11 +159,7 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     MemoryBackend.handler(rejectAlways, (args, writer) =>
       writer
         .put(args.collection, args.id, { poison: true })
-        .pipe(
-          Effect.andThen(
-            Effect.fail(new MutationRejected({ reason: "contract/reject always rejects" }))
-          )
-        )
+        .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: rejectReason }))))
     ),
     MemoryBackend.handler(writeThenFail, (args, writer) =>
       writer
@@ -924,6 +923,43 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     );
   });
 
+/**
+ * 13. Rejection memory: a permanent rejection is listed by `rejections`, with
+ *     the reason `applyMutations` reported for it, so a pull whose watermark
+ *     covers it can report it (#365). A client whose push response was lost
+ *     learns the outcome from that list.
+ */
+const rule13ListsRejections: Rule = (h) =>
+  Effect.gen(function* () {
+    const { backend, context, clientId, rows, check, expectOk } = h;
+    const rule =
+      "lists a permanent rejection, with the reason applyMutations reported, in rejections";
+    const startId = yield* h.lastIdOf(rule);
+    const result = yield* expectOk(
+      rule,
+      backend.applyMutations(context, [h.reject(startId + 1, rows, "listed")])
+    );
+    const reported = (result.rejected ?? []).find(
+      (entry) => entry.clientId === clientId && entry.mutationId === startId + 1
+    );
+    yield* check(
+      rule,
+      reported !== undefined,
+      "The rejected mutation must appear in the result's `rejected` list"
+    );
+    const listed = yield* expectOk(rule, backend.rejections(context));
+    yield* check(
+      rule,
+      listed.some(
+        (entry) =>
+          entry.clientId === clientId &&
+          entry.mutationId === startId + 1 &&
+          entry.reason === reported?.reason
+      ),
+      `A permanent rejection must be listed by rejections with the reason applyMutations reported (${JSON.stringify(reported?.reason)}), got ${JSON.stringify(listed)}`
+    );
+  });
+
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [
   rule1InOrderApplication,
@@ -938,6 +974,7 @@ const rules: ReadonlyArray<Rule> = [
   rule10WriteThenFail,
   rule11CrossGroupLostUpdate,
   rule12OwnWritesReachGetRows,
+  rule13ListsRejections,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────

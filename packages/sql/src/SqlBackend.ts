@@ -862,9 +862,23 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       })
     );
 
+  // The group's remembered rejections, from every client's ledger row (#365). A pull
+  // reports the ones its watermark covers.
+  const rememberedRejections = (
+    clientGroupId: string
+  ): Effect.Effect<ReadonlyArray<Backend.RejectedMutation>, BackendError> =>
+    readLedger(clientGroupId).pipe(
+      Effect.map((ledger) =>
+        [...ledger].flatMap(([clientId, row]) =>
+          [...row.rejections].map(([mutationId, reason]) => ({ clientId, mutationId, reason }))
+        )
+      )
+    );
+
   return Backend.Backend.of({
     applyMutations,
     lastMutationIds: (context) => readLastIds(context.clientGroupId),
+    rejections: (context) => rememberedRejections(context.clientGroupId),
     evaluate,
     getRows,
   });

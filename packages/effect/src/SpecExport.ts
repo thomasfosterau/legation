@@ -231,6 +231,15 @@ const specialize = (api: SyncApi) => {
       cookie: Schema.String,
       patch: Schema.Array(patchOp),
       lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+      rejected: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            clientId: Schema.String,
+            mutationId: Schema.Number,
+            reason: Schema.String,
+          })
+        )
+      ),
     }),
     "PullResponse"
   );

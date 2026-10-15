@@ -487,6 +487,7 @@ const recordingBackend = Effect.gen(function* () {
   const backend: Backend.Backend = {
     applyMutations: () => Effect.succeed({ lastMutationIds: {}, hints: [] }),
     lastMutationIds: () => Effect.succeed({}),
+    rejections: () => Effect.succeed([]),
     evaluate: () => Ref.update(evaluations, (n) => n + 1).pipe(Effect.as([])),
     getRows: () => Effect.succeed([]),
   };

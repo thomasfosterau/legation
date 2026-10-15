@@ -96,7 +96,9 @@ CREATE TABLE sync_mutations (
 
 The `rejections` value is a JSON object that maps each remembered mutation id to
 its reason. A push forgets the rejections below its lowest id per client, and a
-client that never pushes again keeps its last push's rejections.
+client that never pushes again keeps its last push's rejections. A pull reports
+the rejections its watermark covers, so a client whose push response was lost
+settles those mutations as rejected (#365).
 
 ## Install
 
