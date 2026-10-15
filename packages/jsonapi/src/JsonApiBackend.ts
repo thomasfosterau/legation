@@ -71,8 +71,11 @@
  * (`ledger`, e.g. `Ledger.keyValue` over an Effect `KeyValueStore`) to keep
  * both across restarts (#468). Each ledger change is written after the server
  * has applied its writes and before the ids are acknowledged, in the order the
- * push already uses; a crash after the server write and before the ledger write
- * is the one window in which a resend applies a write again.
+ * push already uses. If that ledger write fails after the server write has
+ * succeeded, the push fails with a `BackendError` and nothing is acknowledged, so
+ * the client's resend re-applies those writes. That is the same window as a
+ * crash between the two writes, and with or without a store the server's own
+ * idempotency is what guards it.
  *
  * Over an atomic operations endpoint (`atomic` set) a push is all-or-nothing
  * per batch: one request, and the ledger advances only once the server has
@@ -154,7 +157,7 @@ export interface JsonApiBackendConfig {
    * so an app can push its own named intents through this backend as long
    * as each is one create/update/delete of one resource.
    */
-  readonly writes?: ReadonlyMap<string, (args: unknown) => Write>;
+  readonly writes?: ReadonlyMap<string, (args: unknown) => Write> | undefined;
   /**
    * The server's JSON:API Atomic Operations endpoint (`POST {path}`), when it
    * has one. With it set, `applyMutations` pushes a whole batch as one
@@ -162,23 +165,23 @@ export interface JsonApiBackendConfig {
    * its own request. `JsonApiSync` fills this in from the reflected api
    * (`Convention.reflectAtomic`).
    */
-  readonly atomic?: { readonly path: string };
+  readonly atomic?: { readonly path: string } | undefined;
   /** Subset → JSON:API query string. Defaults to the exact filter-grammar encoder. */
-  readonly query?: QueryEncoder;
+  readonly query?: QueryEncoder | undefined;
   /**
    * Relationship names to compound-load per collection (`?include=...`). When a
    * listing pulls in related resources, they are harvested so an auto-subscribed
    * `id IN (...)` subset over those collections is served from the same response
    * — no extra round trip. See `Relationships.related`.
    */
-  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
   /**
    * Where each client group's ledger (its acknowledged mutation ids and
    * remembered rejections) is kept across restarts (#468). Unset, the ledger
    * lives in this instance's memory (`Ledger.memory`), so a restart forgets it.
    * `Ledger.keyValue` over a durable Effect `KeyValueStore` keeps it.
    */
-  readonly ledger?: Ledger.LedgerStore;
+  readonly ledger?: Ledger.LedgerStore | undefined;
 }
 
 /** A mutation as the sync server pushes it to a backend. */
