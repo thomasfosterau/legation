@@ -346,6 +346,63 @@ describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
 
 describe("JsonApiBackend ledger store failures (#468), per-resource mode", () => {
   it.effect(
+    "a ledger write that fails after the second write keeps the first acknowledged, and the resend re-applies the second",
+    () =>
+      Effect.gen(function* () {
+        const durable = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        // Each mutation's write applies on the server and is then acknowledged by one
+        // ledger write. The first ledger write goes through, and the second fails.
+        const ledgerWrites = yield* Ref.make(0);
+        const ledger: Ledger.LedgerStore = {
+          read: durable.read,
+          write: (clientGroupId, group) =>
+            Ref.updateAndGet(ledgerWrites, (n) => n + 1).pipe(
+              Effect.flatMap((n) =>
+                n === 2
+                  ? Effect.fail(new BackendError({ message: "Ledger write failed" }))
+                  : durable.write(clientGroupId, group)
+              )
+            ),
+        };
+        const server: Store = new Map();
+        const { backend, requests } = yield* makeBackend({ ledger, store: server });
+        const push = [1, 2].map((mutationId) => ({
+          clientId: restartClient,
+          mutationId,
+          mutator: BackendContract.putRow.name,
+          args: {
+            collection: COLLECTION,
+            id: mutationId === 1 ? "first" : "second",
+            value: { n: mutationId },
+          },
+          createdAt: 0,
+        }));
+
+        const failure = yield* Effect.flip(backend.applyMutations(restartContext, push));
+        expect(failure).toBeInstanceOf(BackendError);
+        // Both writes reached the server. Mutation 1 is acknowledged in the cache and the
+        // store; mutation 2 is not, because its acknowledgement write failed.
+        expect(server.get(COLLECTION)?.has("second")).toBe(true);
+        expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 1 });
+        expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
+          lastMutationIds: { [restartClient]: 1 },
+          rejections: [],
+        });
+
+        // The resend skips mutation 1, re-applies mutation 2 (one write), and acknowledges both.
+        const sentBefore = requests.filter((request) => request.method !== "GET").length;
+        const retried = yield* backend.applyMutations(restartContext, push);
+        const sentAfter = requests.filter((request) => request.method !== "GET").length;
+        expect(sentAfter - sentBefore).toBe(1);
+        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+        expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
+          lastMutationIds: { [restartClient]: 2 },
+          rejections: [],
+        });
+      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
     "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
     () =>
       Effect.gen(function* () {
