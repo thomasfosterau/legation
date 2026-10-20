@@ -30,7 +30,7 @@
       "oxlint": "^1.88.0",
       "prettier": "^3.9.10",
       "vite": "^8.3.4",
-      "@cloudflare/workers-types": "^5.20261011.1",
+      "@cloudflare/workers-types": "^5.20261016.1",
       "@types/better-sqlite3": "^9.6.0",
       "svelte-check": "^4.7.6",
       "tsx": "^4.23.15"
