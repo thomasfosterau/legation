@@ -32,6 +32,7 @@
  * residual conjuncts, evaluated by `Predicate.test` over the candidates.
  */
 
+import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 import * as Predicate from "./Predicate.js";
 
@@ -172,8 +173,8 @@ const unindexField = (fi: FieldIndex, id: RowId): void => {
       bucket.delete(id);
       if (bucket.size === 0) fi.byValue.delete(old);
     }
-    if (typeof old === "number") removeSorted(fi.numbers, { value: old, id });
-    else if (typeof old === "string") removeSorted(fi.strings, { value: old, id });
+    if (P.isNumber(old)) removeSorted(fi.numbers, { value: old, id });
+    else if (P.isString(old)) removeSorted(fi.strings, { value: old, id });
   }
   fi.current.delete(id);
 };
@@ -189,8 +190,8 @@ const indexField = (fi: FieldIndex, id: RowId, rowValue: unknown): void => {
   const bucket = fi.byValue.get(raw);
   if (bucket === undefined) fi.byValue.set(raw, new Set([id]));
   else bucket.add(id);
-  if (typeof raw === "number") insertSorted(fi.numbers, { value: raw, id });
-  else if (typeof raw === "string") insertSorted(fi.strings, { value: raw, id });
+  if (P.isNumber(raw)) insertSorted(fi.numbers, { value: raw, id });
+  else if (P.isString(raw)) insertSorted(fi.strings, { value: raw, id });
 };
 
 const clearField = (fi: FieldIndex): void => {
@@ -273,8 +274,8 @@ const compareIds = (fi: FieldIndex, conjunct: CompareNode): ReadonlySet<RowId> |
   if (conjunct.op === "ne") return undefined; // complement of a bucket isn't narrowing
   if (conjunct.value === null) return EMPTY_IDS; // unknown for every row (ADR-0028 §5)
   if (conjunct.op === "eq") return hashLookup(fi, conjunct.value);
-  if (typeof conjunct.value === "number") return rangeIds(fi.numbers, conjunct.op, conjunct.value);
-  if (typeof conjunct.value === "string") return rangeIds(fi.strings, conjunct.op, conjunct.value);
+  if (P.isNumber(conjunct.value)) return rangeIds(fi.numbers, conjunct.op, conjunct.value);
+  if (P.isString(conjunct.value)) return rangeIds(fi.strings, conjunct.op, conjunct.value);
   return booleanRangeIds(fi, conjunct.op, conjunct.value);
 };
 

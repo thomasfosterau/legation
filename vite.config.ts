@@ -9,6 +9,8 @@
  */
 import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { recommended } from "@effect/tsgo/oxlint-presets";
+import effect from "@mpsuesser/oxlint-plugin-effect";
 import { defineConfig } from "vite-plus";
 
 /** The published packages, by directory; each has a `build` task. */
@@ -89,6 +91,7 @@ export default defineConfig({
       // apply to them.
       "examples/**",
     ],
+    extends: [recommended, effect.configs.recommended],
     categories: {
       correctness: "error",
       suspicious: "warn",
@@ -98,8 +101,98 @@ export default defineConfig({
       "eslint/no-underscore-dangle": ["warn", { allow: ["_tag"] }],
       "typescript/no-explicit-any": "off",
       "vite-plus/prefer-vite-plus-imports": "error",
+      // Every `postMessage` here is a `BroadcastChannel` / `MessagePort` /
+      // worker post, none of which takes a `targetOrigin` (that argument
+      // exists only on `Window.postMessage`, which nothing here calls).
+      "unicorn/require-post-message-target-origin": "off",
+      // `casting-awareness` is an awareness prompt, not a defect rule: it
+      // fires on every `as`, including the narrowings the platform types
+      // (IndexedDB, Durable Objects, WebSocket) structurally require. Stays
+      // visible as a warning.
+      "effect/casting-awareness": "warn",
+
+      // ---- Effect preset: rules this workspace's conventions cut across ----
+      // `prefer-option-over-null` also fires on `?: T | undefined`, which is
+      // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
+      // lets a caller forward an optional of its own into (AGENTS.md), and on
+      // the `undefined`-returning lookups the engine's public API is written
+      // in. A bare `null` in a return type is still a finding to read.
+      "effect/prefer-option-over-null": "warn",
+      // `unknown` is the honest type at the boundaries this engine sits on:
+      // a row value before its collection's schema decodes it, a mutator's
+      // encoded args, a caught failure. Parsing them earlier would decode
+      // twice or change the wire shape.
+      "effect/no-unknown-parameters": "warn",
+      "effect/no-unsafe-dictionary-type": "warn",
+      "effect/no-runtime-typeof": "warn",
+
+      // ---- Effect preset: ported-code allowances ---------------------------
+      // The engine predates the Effect oxlint preset. The rules below sit at
+      // `warn` with the count left when it was adopted, so the code stays
+      // committable while each site stays reported; a new site is a defect,
+      // not headroom. Once a rule's count reaches zero its line is deleted,
+      // so it is back at the preset's `error`. The remaining sites are listed
+      // in the tracking issue (see AGENTS.md "Effect").
+      "effect/avoid-native-object-helpers": "warn",
+      "effect/require-safety-comment-for-type-assertion": "warn",
+      "effect/imperative-loops": "warn",
+      "effect/yield-in-for-loop": "warn",
+      "effect/avoid-non-null-assertion": "warn",
+      "effect/prefer-arr-match": "warn",
+      "effect/no-length-comparison": "warn",
+      "effect/avoid-direct-tag-checks": "warn",
+      "effect/avoid-direct-json": "warn",
+      "effect/no-conditional-empty-object-spread": "warn",
+      "effect/effect-run-in-body": "warn",
+      "effect/prefer-effect-fn": "warn",
+      "effect/no-known-value-widening": "warn",
+      "effect/avoid-untagged-errors": "warn",
+      "effect/require-effect-concurrency": "warn",
+      "effect/effect-promise-vs-trypromise": "warn",
+      "effect/prefer-match-over-switch": "warn",
+      "effect/avoid-schema-suffix": "warn",
+      "effect/require-schema-type-alias": "warn",
+      "effect/avoid-data-tagged-error": "warn",
     },
     overrides: [
+      // The Node runtime adapter (ADR-0006): `node:http` and the other
+      // `node:*` modules are what this package exists to bind. Its server is
+      // a server, so the HttpClient service the rule offers does not apply.
+      {
+        files: ["packages/node/src/**"],
+        rules: {
+          "effect/avoid-node-imports": "off",
+          "effect/use-http-client-service": "off",
+        },
+      },
+      // A benchmark's console output is its product: it prints the numbers
+      // it measured, outside any Effect runtime.
+      {
+        files: ["**/*.bench.ts"],
+        rules: {
+          "effect/use-console-service": "off",
+        },
+      },
+      // Type-level tests: each expect-error directive IS the assertion (a
+      // statement that must fail to compile), checked by the `check` task.
+      {
+        files: [
+          "packages/effect/src/__tests__/typed-query.test.ts",
+          "packages/effect/src/__tests__/node.test.ts",
+        ],
+        rules: {
+          "effect/avoid-ts-ignore": "off",
+        },
+      },
+      // Test fixtures read the environment at collection time, before any
+      // Effect runtime exists: `DATABASE_URL` selects the PostgreSQL suite and
+      // `CI` turns its skip into a failure. Stays visible as a warning.
+      {
+        files: ["packages/*/src/**/__tests__/**"],
+        rules: {
+          "effect/avoid-process-env": "warn",
+        },
+      },
       // Build/test configs and the release scripts are evaluated by Vite,
       // Vitest and Node directly, before any Effect runtime exists: there is
       // no `Config` provider to read and no `FileSystem` service to call, so
@@ -118,6 +211,14 @@ export default defineConfig({
           "effect/use-filesystem-service": "off",
           "effect/use-path-service": "off",
           "effect/use-command-executor-service": "off",
+          "effect/use-temp-file-scoped": "off",
+          // Plain Node build tooling (the pack checks, the publish step, the
+          // example typecheck runner): `try`/`catch`, `typeof` and `JSON` on a
+          // packed `package.json` are the idiom where no Effect runtime runs.
+          "effect/avoid-try-catch": "off",
+          "effect/prefer-effect-is": "off",
+          "effect/no-runtime-typeof": "off",
+          "effect/avoid-direct-json": "off",
           "effect/avoid-native-fetch": "off",
           "effect/effect-promise-vs-trypromise": "off",
           "effect/no-conditional-empty-object-spread": "off",
@@ -163,10 +264,7 @@ export default defineConfig({
       typeAware: false,
       typeCheck: false,
     },
-    jsPlugins: [
-      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
-      { name: "effect", specifier: "@mpsuesser/oxlint-plugin-effect" },
-    ],
+    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
   },
   run: {
     tasks: {

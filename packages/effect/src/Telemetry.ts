@@ -11,7 +11,8 @@
  * `legation.*` convention.
  */
 
-import { Effect, Metric } from "effect";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
 
 /** Pulls completed by a client (a patch applied + rebase). */
 export const pullsTotal = Metric.counter("legation_client_pulls_total", { incremental: true });

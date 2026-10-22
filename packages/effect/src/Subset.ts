@@ -11,7 +11,7 @@
  * subsets are for low-level protocol and backend work.
  */
 
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import type { AnyCollection, RowOf } from "./Collection.js";
 import * as Index from "./CollectionIndex.js";
 import * as Predicate from "./Predicate.js";

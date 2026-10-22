@@ -10,7 +10,8 @@
  * correct over pull alone. Pokes and streamed patches are optimizations.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { ProtocolError } from "./Errors.js";
 import { SubsetSchema } from "./Subset.js";
 

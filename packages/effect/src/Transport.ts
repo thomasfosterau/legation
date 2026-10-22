@@ -8,20 +8,18 @@
  * worker, bespoke) implement the same interfaces.
  */
 
-import {
-  Clock,
-  Context,
-  Duration,
-  Effect,
-  Layer,
-  PubSub,
-  Ref,
-  Result,
-  Scope,
-  Semaphore,
-  Stream,
-  SubscriptionRef,
-} from "effect";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { TransportError } from "./Errors.js";
 import type { VersionNotSupportedError } from "./Errors.js";
 import type {

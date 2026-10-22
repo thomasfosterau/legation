@@ -64,7 +64,7 @@
  * the façade routes the request to the network.
  */
 
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { type Node, type Query, QueryError } from "@thomasfosterau/legation-effect";
 import type { ClientView, Subset } from "@thomasfosterau/legation-effect/internal";

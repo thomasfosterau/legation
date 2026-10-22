@@ -11,7 +11,12 @@
  * `GET` on a reflected route is not the façade's business.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, type Scope } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -242,9 +247,10 @@ const makeFacade = (
     }
     // A pinned relational read must be covered once the loop has pulled: a silent fall-through
     // here would make the covered-answer tests below pass or fail for the wrong reason.
-    if (pins.includes(RELATIONAL_PIN)) {
-      expect((yield* client.coverageOf(variantsOfProducts))._tag).toBe("Covered");
-    }
+    const relationalCoverage = pins.includes(RELATIONAL_PIN)
+      ? (yield* client.coverageOf(variantsOfProducts))._tag
+      : "Covered";
+    expect(relationalCoverage).toBe("Covered");
     const online = { current: true };
     const handler = JsonApiFacade.fetchHandler({
       nodes,
@@ -320,7 +326,12 @@ describe("JsonApiFacade", () => {
           expect(response).toBeDefined();
           expect(response!.status).toBe(200);
           const document = (yield* body(response!)) as { data: ReadonlyArray<{ id: string }> };
-          expect(document.data.map((row) => row.id).sort()).toEqual(["p-1", "p-2", "p-3"]);
+          expect(
+            Arr.sort(
+              document.data.map((row) => row.id),
+              Order.String
+            )
+          ).toEqual(["p-1", "p-2", "p-3"]);
         })
       )
   );

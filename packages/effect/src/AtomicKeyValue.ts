@@ -14,7 +14,8 @@
  * `@thomasfosterau/legation-browser`'s `IndexedDbClientStore`.
  */
 
-import { Context, type Effect } from "effect";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 import type { StoreError } from "./Errors.js";
 
 /**

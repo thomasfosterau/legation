@@ -32,7 +32,8 @@
  * while later ADR-0022 program steps move onto them directly.
  */
 
-import { type Brand, Schema } from "effect";
+import type * as Brand from "effect/Brand";
+import * as Schema from "effect/Schema";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
 import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
@@ -161,6 +162,7 @@ export type RowOf<N extends AnyNode> = N["row"]["Type"];
 export const make = <
   const Type extends string,
   const Fields extends Schema.Struct.Fields,
+  // oxlint-disable-next-line effect/avoid-object-type -- public type parameter default of exported `Node.make`; `Record<string, never>` would change `keyof Edges` from `never` to `string` for nodes declared without edges.
   const Edges extends Record<string, Edge.Edge> = {},
   const IdField extends (keyof Fields & string) | undefined = undefined,
 >(
@@ -217,7 +219,7 @@ export const make = <
     ...(options.id === undefined ? { id } : {}),
     ...options.attributes,
     ...viaFields,
-  }) as unknown as Node<Type, Fields, Edges, IdField>["row"];
+  }) as Node<Type, Fields, Edges, IdField>["row"];
   return {
     type,
     id: identity as Node<Type, Fields, Edges, IdField>["id"],
@@ -348,6 +350,7 @@ const toCollection = (
   }
   return Collection.make({
     name: node.type,
+    // oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- `AnyNode` erases fields to the open `Schema.Struct.Fields`, whose services are `unknown`; `Collection.make` needs a service-free codec, which node rows are by construction but the exported types cannot state.
     schema: node.row as unknown as Schema.Codec<unknown, unknown>,
     id: (value) => (value as Record<string, string>)[node.id]!,
     identity: node.id,

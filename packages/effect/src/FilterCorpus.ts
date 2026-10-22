@@ -31,7 +31,8 @@
  * meaning.
  */
 
-import { Effect, Random } from "effect";
+import * as Effect from "effect/Effect";
+import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
 
@@ -195,16 +196,14 @@ const DOUBLES: ReadonlyArray<number> = [
 const FOREIGN_DOUBLES: ReadonlyArray<number> = [2.75, 1e-6];
 
 const INSTANTS: ReadonlyArray<string> = [
-  new Date(0),
-  new Date("1999-12-31T23:59:59.999Z"),
-  new Date("2000-01-01T00:00:00.001Z"),
-  new Date("2020-02-29T12:34:56.789Z"),
-  new Date("2024-01-01T00:00:00.000Z"),
-  new Date("2038-01-19T03:14:07.000Z"),
-].map((date) => date.toISOString());
-const FOREIGN_INSTANTS: ReadonlyArray<string> = [
-  new Date("2001-09-09T01:46:40.000Z").toISOString(),
+  "1970-01-01T00:00:00.000Z",
+  "1999-12-31T23:59:59.999Z",
+  "2000-01-01T00:00:00.001Z",
+  "2020-02-29T12:34:56.789Z",
+  "2024-01-01T00:00:00.000Z",
+  "2038-01-19T03:14:07.000Z",
 ];
+const FOREIGN_INSTANTS: ReadonlyArray<string> = ["2001-09-09T01:46:40.000Z"];
 
 const poolFor = (kind: Predicate.LiteralKind, options: ResolvedOptions): Pool => {
   switch (kind) {
@@ -483,14 +482,14 @@ export const generatePredicate = (
       if (remaining === 0 || (yield* chance(LEAF_RATE))) {
         return yield* generateLeaf(columns, resolved, coverage);
       }
-      const shape = yield* int(3);
-      if (shape === 2) {
+      const branch = yield* int(3);
+      if (branch === 2) {
         coverage.not++;
         return Predicate.not(yield* go(remaining - 1));
       }
       const width = 2 + (yield* int(2));
       const children = yield* go(remaining - 1).pipe(Effect.replicateEffect(width));
-      if (shape === 0) {
+      if (branch === 0) {
         coverage.and++;
         return Predicate.and(...children);
       }

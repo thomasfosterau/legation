@@ -41,7 +41,14 @@
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  */
 
-import { Data, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
+import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { Backend, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
@@ -371,7 +378,7 @@ const makeHarness = (
     mutationId,
     mutator,
     args,
-    createdAt: Date.now(),
+    createdAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
   });
 
   return {

@@ -55,8 +55,10 @@
  * down together — the same discipline as `Related`.
  */
 
-import type { Cause, Scope } from "effect";
-import { Effect, Stream } from "effect";
+import type * as Cause from "effect/Cause";
+import type * as Scope from "effect/Scope";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { Atom, type AsyncResult } from "effect/reactivity";
 import type * as ClientView from "./ClientView.js";
 import * as Hash from "./Hash.js";
@@ -93,10 +95,13 @@ const withChanges = <E>(
   changes: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>
 ): Source<E> => Object.assign(pages, { [CHANGES]: changes } satisfies ChangeTagged<E>);
 
+const isChangeTagged = <E>(source: Source<E>): source is Source<E> & ChangeTagged<E> =>
+  CHANGES in source;
+
 const changesOf = <E>(
   source: Source<E>
 ): Stream.Stream<ReadonlyArray<RowChange<Row>>, E> | undefined =>
-  (source as unknown as Partial<ChangeTagged<E>>)[CHANGES];
+  isChangeTagged(source) ? source[CHANGES] : undefined;
 
 // ─── Dedup ───────────────────────────────────────────────────────────────────
 
@@ -171,6 +176,7 @@ export const filter = <E>(source: Source<E>, predicate: (value: unknown) => bool
   maintain(source, () => Incremental.makeFilter(predicate));
 
 /** Project each row's value through an arbitrary JS function, keeping its id. */
+// oxlint-disable-next-line effect/no-unknown-returns -- exported combinator; `f` is an arbitrary user projection over untyped row values, so its result is genuinely `unknown`.
 export const map = <E>(source: Source<E>, f: (value: unknown) => unknown): Source<E> =>
   maintain(source, () => Incremental.makeMap(f));
 

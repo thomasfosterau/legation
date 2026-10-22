@@ -23,7 +23,8 @@
  * lands.
  */
 
-import { Effect, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import * as Coverage from "./Coverage.js";
 import type { ClientEngine } from "./ClientEngine.js";
 import * as Subset from "./Subset.js";

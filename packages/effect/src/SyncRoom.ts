@@ -8,7 +8,7 @@
  * room); distributed deployments swap the bus and CVR store layers.
  */
 
-import { Layer } from "effect";
+import * as Layer from "effect/Layer";
 import type { Backend } from "./Backend.js";
 import type { AuthPolicy } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";

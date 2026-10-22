@@ -19,7 +19,10 @@
  * predicate → SQL WHERE clause) live with the backends that need them.
  */
 
-import { Effect, Option, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 /**
  * A literal comparable value. `null` stays in the wire union for
@@ -292,8 +295,9 @@ export const holds = (op: Comparison, ordered: number): boolean => {
  * (`CollectionIndex.ts`) read fields with exactly this function so they bucket
  * the same way `evaluate` does.
  */
+// oxlint-disable-next-line effect/no-unknown-returns -- exported on the package root; a row's field is untyped JSON, and `undefined`/`null`/any literal are all meaningful results.
 export const fieldValue = (row: unknown, field: string): unknown =>
-  typeof row === "object" && row !== null ? (row as Record<string, unknown>)[field] : undefined;
+  P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
 
 /** Whether a field value is NULL for evaluation: an explicit `null` or absent. */
 export const isNullish = (value: unknown): value is null | undefined =>

@@ -14,7 +14,14 @@
  * implementing one tiny interface.
  */
 
-import { Context, Duration, Effect, Layer, Metric, PubSub, Schema, Scope } from "effect";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import type { ChangeHint } from "./Backend.js";
 import * as Telemetry from "./Telemetry.js";
 

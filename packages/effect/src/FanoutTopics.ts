@@ -16,6 +16,7 @@
  * path); under-poking is impossible.
  */
 
+import * as P from "effect/Predicate";
 import type * as Node from "./Node.js";
 import type * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
@@ -52,7 +53,7 @@ export const derivableSets = (
 };
 
 const isLiteral = (value: unknown): value is string | number | boolean =>
-  typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+  P.isString(value) || P.isNumber(value) || P.isBoolean(value);
 
 /** The equality conjuncts of a predicate (a bare Compare or an And of them). */
 const eqConjuncts = (
@@ -99,7 +100,7 @@ export const topicsForWrite = (
   const topics = new Set<Topic>([coarse(collection)]);
   if (derivable === undefined) return topics;
   for (const value of [values.oldValue, values.newValue]) {
-    if (typeof value !== "object" || value === null) continue;
+    if (!P.isObjectOrArray(value)) continue;
     for (const field of derivable) {
       const fieldValue = (value as Record<string, unknown>)[field];
       if (isLiteral(fieldValue)) topics.add(fine(collection, field, fieldValue));

@@ -18,7 +18,9 @@
  * room simply ages out shard-side.
  */
 
-import { Duration, Effect, Scope } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import type { ChangeHint } from "./Backend.js";
 import type { FanoutBroker } from "./FanoutBroker.js";
 import * as FanoutTopics from "./FanoutTopics.js";

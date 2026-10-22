@@ -10,7 +10,8 @@
  * in an Effect `KeyValueStore`, which survives a restart when that store does.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import { BackendError } from "@thomasfosterau/legation-effect";
 

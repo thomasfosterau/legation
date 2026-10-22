@@ -60,7 +60,8 @@
 
 import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
-import { Data, type Schema } from "effect";
+import * as Data from "effect/Data";
+import type * as Schema from "effect/Schema";
 
 /** A definition-time mismatch between a resource graph and the node model. */
 export class ResourceBridgeError extends Data.TaggedError("ResourceBridgeError")<{

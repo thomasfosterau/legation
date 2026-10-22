@@ -40,7 +40,15 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
-import { Context, Effect, Exit, Option, Ref, Scope, Semaphore, Stream } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as ClientEngine from "./ClientEngine.js";
 import * as ClientStore from "./ClientStore.js";
 import * as RpcTransport from "./RpcTransport.js";
@@ -510,7 +518,7 @@ export const fromView = (
     });
 
   const targetOf = (input: QueryModule.Read | string): Effect.Effect<Target, QueryError> =>
-    typeof input === "string" ? targetOfUrl(input) : targetOfRead(input);
+    P.isString(input) ? targetOfUrl(input) : targetOfRead(input);
 
   // ─── Coverage ────────────────────────────────────────────────────────────
 
@@ -536,7 +544,9 @@ export const fromView = (
           Effect.map((entries) => Coverage.verdictOf(entries, requested))
         )
       ),
-      Effect.catch(() => Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" }))
+      Effect.catchTag(["MutatorError", "StoreError", "TransportError", "QueryError"], () =>
+        Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" })
+      )
     );
 
   // The three-tier read (ADR-0025): replica when a ledger subscription

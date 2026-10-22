@@ -12,7 +12,10 @@
  * collection the resource does not declare.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -94,7 +97,7 @@ const scopedBy =
   (field: string): Authorization.AuthFilter =>
   (context) =>
     Effect.succeed(
-      typeof context.identity === "string"
+      P.isString(context.identity)
         ? Predicate.eq(field, context.identity)
         : Predicate.isIn(field, [])
     );
@@ -288,9 +291,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       context: (request) =>
         Effect.succeed({
           clientGroupId: "http",
-          ...(typeof request.headers["x-user"] === "string"
-            ? { identity: request.headers["x-user"] }
-            : {}),
+          ...(P.isString(request.headers["x-user"]) ? { identity: request.headers["x-user"] } : {}),
         }),
       prefix: "/api",
     });
@@ -319,7 +320,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
       ({ dispose }) => Effect.promise(dispose)
     );
-    const fetch = (path: string, user?: string) =>
+    const getDocument = (path: string, user?: string) =>
       Effect.promise(async () => {
         const response = await handler(
           new Request(`http://shop.test${path}`, {
@@ -329,9 +330,10 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
             },
           })
         );
+        // oxlint-disable-next-line effect/avoid-any -- the tests read the served JSON:API documents structurally (`data` a list or one resource, `errors`, `included`, `links.next`) across ~40 assertions; typing the body would mean rewriting each assertion, and the endpoint's own encoder already checks the document shape
         return { status: response.status, body: (await response.json()) as any };
       });
-    return { rest, fetch, calls: () => calls };
+    return { rest, getDocument, calls: () => calls };
   });
 
 const ids = (resources: ReadonlyArray<{ readonly id: string }>) =>
@@ -348,8 +350,8 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const { status, body } = yield* fetch("/api/products?sort=name");
+          const { getDocument } = yield* makeWorld();
+          const { status, body } = yield* getDocument("/api/products?sort=name");
           expect(status).toBe(200);
           expect(ids(body.data)).toEqual(["p-3", "p-1", "p-2"]);
           expect(body.data[1]).toEqual({
@@ -385,8 +387,8 @@ describe("RestHandlers over the read path", () => {
   it.effect("resolves includes in two phases and compounds them, filters through the grammar", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch } = yield* makeWorld();
-        const { status, body } = yield* fetch(
+        const { getDocument } = yield* makeWorld();
+        const { status, body } = yield* getDocument(
           "/api/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents"
         );
         expect(status).toBe(200);
@@ -406,9 +408,9 @@ describe("RestHandlers over the read path", () => {
   it.effect("gives included resources the linkage their own resource declares", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch } = yield* makeWorld();
+        const { getDocument } = yield* makeWorld();
         // An included variant declares `offers: many`, so it must carry it.
-        const cart = yield* fetch("/api/cartItems?include=variant", "u1");
+        const cart = yield* getDocument("/api/cartItems?include=variant", "u1");
         expect(cart.status).toBe(200);
         expect(cart.body.included).toEqual([
           {
@@ -426,7 +428,7 @@ describe("RestHandlers over the read path", () => {
           },
         ]);
         // A parent with no edge rows still carries the relationship, empty.
-        const bare = yield* fetch("/api/products/p-2?include=variants");
+        const bare = yield* getDocument("/api/products/p-2?include=variants");
         expect(bare.status).toBe(200);
         expect(bare.body.included[0].relationships.offers).toEqual({ data: [] });
       })
@@ -436,9 +438,9 @@ describe("RestHandlers over the read path", () => {
   it.effect("serves a paginated node edge under either declaration", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch } = yield* makeWorld();
+        const { getDocument } = yield* makeWorld();
         // `Relationship.many`: included in the edge's order, linkage beside the links.
-        const many = yield* fetch("/api/products/p-1?include=reviews");
+        const many = yield* getDocument("/api/products/p-1?include=reviews");
         expect(many.status).toBe(200);
         expect(many.body.data.relationships.reviews).toEqual({
           links: reviewLinks("p-1"),
@@ -449,16 +451,16 @@ describe("RestHandlers over the read path", () => {
         });
         expect(ids(many.body.included)).toEqual(["r-2", "r-1"]);
         // `Relationship.paginated`: links only on a plain list and get...
-        const paged = yield* fetch("/api/paged/products");
+        const paged = yield* getDocument("/api/paged/products");
         expect(paged.status).toBe(200);
         expect(paged.body.data.map((r: any) => r.relationships.reviews)).toEqual(
           ["p-1", "p-2", "p-3"].map((id) => ({ links: reviewLinks(id) }))
         );
-        const one = yield* fetch("/api/paged/products/p-1");
+        const one = yield* getDocument("/api/paged/products/p-1");
         expect(one.status).toBe(200);
         expect(one.body.data.relationships.reviews).toEqual({ links: reviewLinks("p-1") });
         // ...and `include=` refused by the endpoint's own codec.
-        const refused = yield* fetch("/api/paged/products?include=reviews");
+        const refused = yield* getDocument("/api/paged/products?include=reviews");
         expect(refused.status).toBe(400);
         expect(refused.body.errors[0].source).toEqual({ parameter: "include" });
       })
@@ -468,11 +470,11 @@ describe("RestHandlers over the read path", () => {
   it.effect("touches no collection the resource does not declare", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch, calls } = yield* makeWorld(narrowPolicy);
+        const { getDocument, calls } = yield* makeWorld(narrowPolicy);
         // `sellers` has a `contracts` edge and the policy knows no `contracts`:
         // the resource declares no relationships, so one phase and a 200.
         const before = calls();
-        const listed = yield* fetch("/api/sellers");
+        const listed = yield* getDocument("/api/sellers");
         expect(listed.status).toBe(200);
         expect(listed.body.data).toEqual([
           { type: "sellers", id: "s-1", attributes: { name: "Acme" } },
@@ -480,10 +482,10 @@ describe("RestHandlers over the read path", () => {
         expect(calls() - before).toBe(2);
         // `products` links to `categories` by key alone; the policy's silence
         // on `categories` costs nothing until a request names it.
-        const linked = yield* fetch("/api/products");
+        const linked = yield* getDocument("/api/products");
         expect(linked.status).toBe(200);
         expect(linked.body.data[0].relationships.category.data.id).toBe("c-audio");
-        const named = yield* fetch("/api/products?include=category");
+        const named = yield* getDocument("/api/products?include=category");
         expect(named.status).toBe(403);
         expect(named.body.errors[0].detail).toContain('"categories"');
       })
@@ -493,12 +495,12 @@ describe("RestHandlers over the read path", () => {
   it.effect("authorizes a whole batch before evaluating any of it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch, calls } = yield* makeWorld(narrowPolicy);
+        const { getDocument, calls } = yield* makeWorld(narrowPolicy);
         // Phase 2 is one batch: the declared `variants` and `reviews` linkage
         // subsets first, then the requested `categories`. The last is denied,
         // so the phase evaluates nothing — only phase 1's two calls happen.
         const before = calls();
-        const { status } = yield* fetch("/api/products?include=category");
+        const { status } = yield* getDocument("/api/products?include=category");
         expect(status).toBe(403);
         expect(calls() - before).toBe(2);
       })
@@ -510,13 +512,13 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const first = yield* fetch("/api/products?sort=name&page[limit]=2");
+          const { getDocument } = yield* makeWorld();
+          const first = yield* getDocument("/api/products?sort=name&page[limit]=2");
           expect(ids(first.body.data)).toEqual(["p-3", "p-1"]);
           expect(first.body.links.next).toBe(
             "/api/products?sort=name&page[limit]=2&page[after]=p-1"
           );
-          const second = yield* fetch(first.body.links.next);
+          const second = yield* getDocument(first.body.links.next);
           expect(ids(second.body.data)).toEqual(["p-2"]);
           expect(second.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[after]=p-1",
@@ -530,14 +532,14 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const first = yield* fetch("/api/products?sort=name&page[offset]=0&page[limit]=2");
+          const { getDocument } = yield* makeWorld();
+          const first = yield* getDocument("/api/products?sort=name&page[offset]=0&page[limit]=2");
           expect(ids(first.body.data)).toEqual(["p-3", "p-1"]);
           expect(first.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[offset]=0",
             next: "/api/products?sort=name&page[limit]=2&page[offset]=2",
           });
-          const second = yield* fetch(first.body.links.next);
+          const second = yield* getDocument(first.body.links.next);
           expect(ids(second.body.data)).toEqual(["p-2"]);
           expect(second.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[offset]=2",
@@ -545,7 +547,7 @@ describe("RestHandlers over the read path", () => {
           });
           // An offset past every row is a valid, empty page — never a fallthrough
           // or an error; the server has no coverage concept, only the façade does.
-          const empty = yield* fetch("/api/products?sort=name&page[offset]=50&page[limit]=2");
+          const empty = yield* getDocument("/api/products?sort=name&page[offset]=50&page[limit]=2");
           expect(empty.status).toBe(200);
           expect(empty.body.data).toEqual([]);
         })
@@ -555,8 +557,8 @@ describe("RestHandlers over the read path", () => {
   it.effect("rejects page[offset] and page[after] together", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { fetch } = yield* makeWorld();
-        const { status, body } = yield* fetch("/api/products?page[offset]=1&page[after]=p-1");
+        const { getDocument } = yield* makeWorld();
+        const { status, body } = yield* getDocument("/api/products?page[offset]=1&page[after]=p-1");
         expect(status).toBe(400);
         expect(body.errors[0].source).toEqual({ parameter: "page[offset]" });
       })
@@ -568,8 +570,8 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const { status, body } = yield* fetch(
+          const { getDocument } = yield* makeWorld();
+          const { status, body } = yield* getDocument(
             "/api/products?fields[products]=name&include=variants&fields[variants]="
           );
           expect(status).toBe(200);
@@ -590,15 +592,15 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const found = yield* fetch("/api/products/p-2?include=variants");
+          const { getDocument } = yield* makeWorld();
+          const found = yield* getDocument("/api/products/p-2?include=variants");
           expect(found.status).toBe(200);
           expect(found.body.data.id).toBe("p-2");
           expect(ids(found.body.included)).toEqual(["v-3"]);
           expect(found.body.links).toEqual({
             self: "/api/products?include=variants&filter[id]=p-2&page[limit]=1",
           });
-          const missing = yield* fetch("/api/products/p-9");
+          const missing = yield* getDocument("/api/products/p-9");
           expect(missing.status).toBe(404);
           expect(missing.body.errors[0]).toMatchObject({ status: "404", code: "not_found" });
         })
@@ -610,15 +612,15 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch } = yield* makeWorld();
-          const anonymous = yield* fetch("/api/cartItems");
+          const { getDocument } = yield* makeWorld();
+          const anonymous = yield* getDocument("/api/cartItems");
           expect(anonymous.status).toBe(200);
           expect(anonymous.body.data).toEqual([]);
-          const mine = yield* fetch("/api/cartItems?include=variant", "u1");
+          const mine = yield* getDocument("/api/cartItems?include=variant", "u1");
           expect(ids(mine.body.data)).toEqual(["ci-1"]);
           expect(ids(mine.body.included)).toEqual(["v-1"]);
           // A filter for someone else's rows only narrows what the policy allows.
-          const theirs = yield* fetch("/api/cartItems?filter[userId]=u2", "u1");
+          const theirs = yield* getDocument("/api/cartItems?filter[userId]=u2", "u1");
           expect(theirs.body.data).toEqual([]);
         })
       )
@@ -629,9 +631,9 @@ describe("RestHandlers over the read path", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { fetch, calls } = yield* makeWorld();
+          const { getDocument, calls } = yield* makeWorld();
           const before = calls();
-          const { status, body } = yield* fetch("/api/products?filter[name]=Desk");
+          const { status, body } = yield* getDocument("/api/products?filter[name]=Desk");
           expect(status).toBe(400);
           expect(body.errors[0]).toMatchObject({
             status: "400",
@@ -639,10 +641,10 @@ describe("RestHandlers over the read path", () => {
           });
           expect(calls()).toBe(before);
           // The graph checks before decoding name their parameter too.
-          const include = yield* fetch("/api/products?include=owner");
+          const include = yield* getDocument("/api/products?include=owner");
           expect(include.status).toBe(400);
           expect(include.body.errors[0].source).toEqual({ parameter: "include" });
-          const sorted = yield* fetch("/api/products/p-1?sort=name");
+          const sorted = yield* getDocument("/api/products/p-1?sort=name");
           expect(sorted.status).toBe(400);
           expect(sorted.body.errors[0].source).toEqual({ parameter: "sort" });
           expect(calls()).toBe(before);

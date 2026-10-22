@@ -77,7 +77,12 @@
  */
 
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Effect, Option, Result, Schema, SchemaIssue } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
 import {
   type Client,
   FilterPolicy,
@@ -299,6 +304,7 @@ export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predica
 /** A check that a decoded literal is a value of the kind (`FilterPolicy.matchesKind`). */
 const kindCheck = (kind: FilterPolicy.LiteralKind) =>
   Schema.makeFilter<Predicate.Literal>((value) => FilterPolicy.matchesKind(kind, value), {
+    identifier: `LiteralKind.${kind}`,
     title: kind,
     description: `a literal of kind "${kind}"`,
   });
@@ -457,10 +463,10 @@ const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
       sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
       page: PageWindow,
       filter: true,
-    }) as unknown as QueryCodec["schema"];
+    }) as QueryCodec["schema"];
     return {
       schema,
-      canonical: UrlQuery.canonical(schema as unknown as UrlQuery.FlatQuerySchema) as (
+      canonical: UrlQuery.canonical(schema as UrlQuery.FlatQuerySchema) as (
         decoded: DecodedQuery
       ) => string,
     };
@@ -530,7 +536,7 @@ export const singleRowSchema = (
       UrlQuery.schema(resourcesOf(nodes).get(node.type)!, {
         include: includeOption(node),
         fields: true,
-      }) as unknown as Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>
+      }) as Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>
   );
 };
 
@@ -562,7 +568,7 @@ const recordOf = (
     record[key] =
       existing === undefined
         ? value
-        : typeof existing === "string"
+        : P.isString(existing)
           ? [existing, value]
           : [...existing, value];
   }
@@ -605,7 +611,7 @@ const nodeOf = (
 const includeTokens = (value: string | ReadonlyArray<string> | undefined): ReadonlyArray<string> =>
   value === undefined
     ? []
-    : (typeof value === "string" ? [value] : value).flatMap((item) => item.split(","));
+    : (P.isString(value) ? [value] : value).flatMap((item) => item.split(","));
 
 /**
  * Check `include` before decoding: every path is one of the node's own
@@ -644,7 +650,7 @@ const checkInclude = (
 type PathSegment = PropertyKey | { readonly key: PropertyKey };
 
 const keyOf = (segment: PathSegment): PropertyKey =>
-  typeof segment === "object" ? segment.key : segment;
+  P.isObjectOrArray(segment) ? segment.key : segment;
 
 /** The types a read on the node can carry: its own and its edge targets'. */
 const carriedTypes = (node: Node.AnyNode): ReadonlySet<string> =>
@@ -703,10 +709,8 @@ const checkPage = (
 /** The query-string parameter an issue path names: the flat key itself, or `family[member]` for the nested families. */
 const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | undefined => {
   const [head, second] = (path ?? []).map(keyOf);
-  if (typeof head !== "string") return undefined;
-  return (head === "fields" || head === "page") && typeof second === "string"
-    ? `${head}[${second}]`
-    : head;
+  if (!P.isString(head)) return undefined;
+  return (head === "fields" || head === "page") && P.isString(second) ? `${head}[${second}]` : head;
 };
 
 /** A codec rejection as a `QueryError` naming the parameter (the issue's path is the flat key). */
@@ -858,7 +862,7 @@ export const parseRead = (
   url: string | URL
 ): Effect.Effect<ParsedRead, QueryError> =>
   Effect.gen(function* () {
-    const parsed = typeof url === "string" ? new URL(url, "http://localhost") : url;
+    const parsed = P.isString(url) ? new URL(url, "http://localhost") : url;
     const located = yield* locate(nodes, parsed);
     const params =
       located.id === undefined
@@ -923,7 +927,9 @@ const filterOf = (
     // scalar, so `literalOf` cannot reject it. Defect-by-contract for this
     // one call site; the module doc explains why the exported function
     // still returns a typed failure for its general contract.
-    const next = foldConstants(Result.getOrThrow(fromFilterAst(ast)));
+    const back = fromFilterAst(ast);
+    if (Result.isFailure(back)) throw back.failure;
+    const next = foldConstants(back.success);
     if (JSON.stringify(next) === JSON.stringify(predicate)) return ast;
     predicate = next;
   }
@@ -996,18 +1002,22 @@ export const canonical = (
     const error = projectionError(node, type);
     if (error !== undefined) throw error;
   }
-  let query: string;
-  try {
-    const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
-    query = codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
-  } catch (error) {
-    if (error instanceof QueryError) throw error;
-    throw new QueryError({
-      message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
-      query: read.collection,
-      cause: error,
-    });
-  }
+  const encoded = Result.try({
+    try: () => {
+      const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
+      return codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
+    },
+    catch: (error) =>
+      error instanceof QueryError
+        ? error
+        : new QueryError({
+            message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
+            query: read.collection,
+            cause: error,
+          }),
+  });
+  if (Result.isFailure(encoded)) throw encoded.failure;
+  const query = encoded.success;
   return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
 };
 
@@ -1017,11 +1027,11 @@ const tryCanonical = (
   read: Query.Read
 ): Effect.Effect<string, QueryError> =>
   Effect.suspend(() => {
-    try {
-      return Effect.succeed(canonical(nodes, read));
-    } catch (error) {
-      return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
-    }
+    const result = Result.try(() => canonical(nodes, read));
+    if (Result.isSuccess(result)) return Effect.succeed(result.success);
+    return result.failure instanceof QueryError
+      ? Effect.fail(result.failure)
+      : Effect.die(result.failure);
   });
 
 /**
@@ -1137,7 +1147,7 @@ const encodeSort = (terms: ReadonlyArray<SortTerm>): string => {
   const encoded = Schema.encodeSync(UrlQuery.Sort(terms.map((term) => term.field)))(
     terms.map((term) => ({ field: term.field, direction: term.direction }))
   );
-  return typeof encoded === "string" ? encoded : encoded.join(",");
+  return P.isString(encoded) ? encoded : encoded.join(",");
 };
 
 /**

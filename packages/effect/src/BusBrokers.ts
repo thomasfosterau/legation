@@ -15,7 +15,13 @@
  *   relay (each Worker isolate holds a socket to the DO; the DO rebroadcasts).
  */
 
-import { Data, Duration, Effect, Option, Queue, Scope } from "effect";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 import { Redis } from "effect/persistence";
 import type { BusBroker } from "./InvalidationBus.js";
 
@@ -274,7 +280,7 @@ export const makeWebSocketBroker = (socket: WebSocketLike): BusBroker => ({
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const listener = (event: { readonly data: unknown }) => {
-          if (typeof event.data === "string") Queue.offerUnsafe(queue, event.data);
+          if (P.isString(event.data)) Queue.offerUnsafe(queue, event.data);
         };
         socket.addEventListener("message", listener);
         return listener;
@@ -316,7 +322,7 @@ export const makeBroadcastChannelBroker = (
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const listener = (event: { readonly data: unknown }) => {
-          if (typeof event.data !== "string") return;
+          if (!P.isString(event.data)) return;
           for (const queue of queues) Queue.offerUnsafe(queue, event.data);
         };
         channel.addEventListener("message", listener);

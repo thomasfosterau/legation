@@ -34,7 +34,12 @@ import * as Hash from "./Hash.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
-import { Effect, HashMap, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 /** Wire codec for one selected edge of a `related` registration. */
 export const EdgeSelectSchema = Schema.Struct({
@@ -77,9 +82,9 @@ export const relatedKey = (
   edges: ReadonlyArray<string | Related.EdgeSelect>
 ): string => {
   const parts = edges
-    .map((input) => (typeof input === "string" ? { name: input } : input))
+    .map((input) => (P.isString(input) ? { name: input } : input))
     .map((select) => (select.first === undefined ? select.name : `${select.name}#${select.first}`));
-  return `related:${collection}:${Subset.hash(subset)}:${parts.sort().join("+")}`;
+  return `related:${collection}:${Subset.hash(subset)}:${Arr.sort(parts, Order.String).join("+")}`;
 };
 
 // ─── Mirror → host ────────────────────────────────────────────────────────────
@@ -352,6 +357,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
           windows: Schema.Array(
             Schema.Struct({
               subset: Subset.SubsetSchema,
+              // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- `pulled` is a wire field of the mirror protocol (and mirrors `Coverage.Window.pulled`); renaming it breaks the protocol.
               pulled: Schema.Boolean,
             })
           ),

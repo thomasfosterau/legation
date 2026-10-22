@@ -13,7 +13,8 @@
  * works on the main thread, in a worker, or against a mirror.
  */
 
-import type { Cause, Stream } from "effect";
+import type * as Cause from "effect/Cause";
+import type * as Stream from "effect/Stream";
 import { Atom, type AsyncResult } from "effect/reactivity";
 import type { LocalRow } from "./ClientEngine.js";
 import * as Subset from "./Subset.js";

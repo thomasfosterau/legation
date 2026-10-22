@@ -9,8 +9,12 @@
  * or the node graph's synthetic resources), `toCover`, the single-resource
  * shape of `/{type}/{id}`, and the grammar's rejection of a bad URL.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Data, Effect, Exit, Schema, Stream } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import {
@@ -344,8 +348,9 @@ describe("ReplicaDocuments over the replica", () => {
         // What the resource does declare passes; the synthetic resources declare every edge.
         expect((yield* docs.fromUrl(counting, "/products?include=variants")).data).toHaveLength(3);
         const synthetic = ReplicaDocuments.make({ nodes });
-        const served = (yield* synthetic.fromUrl(view, "/products/p-1?include=reviews")) as any;
-        expect(served.included.map((review: any) => review.id)).toEqual(["r-2", "r-1"]);
+        const served = yield* synthetic.fromUrl(view, "/products/p-1?include=reviews");
+        assert(served.included !== undefined);
+        expect(served.included.map((review) => review.id)).toEqual(["r-2", "r-1"]);
       })
   );
 
@@ -354,14 +359,12 @@ describe("ReplicaDocuments over the replica", () => {
       const docs = ReplicaDocuments.make({ nodes, resources: declared });
       const exit = yield* Effect.exit(docs.fromUrl(view, "/products?filter[name]=Desk"));
       expect(Exit.isFailure(exit)).toBe(true);
-      if (Exit.isFailure(exit)) {
-        const error = exit.cause.reasons[0]!;
-        expect(error._tag).toBe("Fail");
-        if (error._tag === "Fail") {
-          expect(error.error).toBeInstanceOf(QueryError);
-          expect((error.error as QueryError).parameter).toBe("filter[name]");
-        }
-      }
+      assert(Exit.isFailure(exit));
+      const error = exit.cause.reasons[0]!;
+      expect(error._tag).toBe("Fail");
+      assert(error._tag === "Fail");
+      expect(error.error).toBeInstanceOf(QueryError);
+      expect((error.error as QueryError).parameter).toBe("filter[name]");
     })
   );
 

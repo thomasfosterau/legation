@@ -13,7 +13,8 @@
  * what `CollectionLoader.documentToRows` produces on the read path.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { Collection, Mutator } from "@thomasfosterau/legation-effect";
 import type { RelationshipRef, ResourceValue } from "./CollectionLoader.js";
 import type { Operation, ResourceMap } from "./Convention.js";
@@ -38,6 +39,7 @@ export const toRow = (value: ResourceValue): JsonApiRow => ({
 });
 
 /** Permissive codec for a row (the engine never decodes rows through it). */
+// oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- deliberately permissive: the runtime codec is `Record<string, unknown>` (no `id`/`relationships` check), typed as the row it carries; the two types do not overlap, so no single assertion or schema change keeps both the runtime behaviour and the exported type
 export const RowSchema = Schema.Record(
   Schema.String,
   Schema.Unknown

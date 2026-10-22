@@ -50,8 +50,8 @@
  * any implementation.
  */
 
-import { Context } from "effect";
-import type { Effect } from "effect";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 import type { RowId, RowVersion } from "./Collection.js";
 import type { BackendError } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";

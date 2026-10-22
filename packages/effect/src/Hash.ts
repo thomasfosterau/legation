@@ -8,8 +8,10 @@
  * share one implementation here rather than each rolling their own.
  */
 
+import * as P from "effect/Predicate";
+
 const canonical = (value: unknown): string => {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (!P.isObjectOrArray(value)) return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record)

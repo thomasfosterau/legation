@@ -2,8 +2,9 @@
  * CollectionLoader tests: mapping JSON:API resources/documents into
  * collection rows, and loading them over a mocked HttpClient.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -146,9 +147,8 @@ describe("load / loadOne", () => {
     Effect.gen(function* () {
       const failure = yield* Effect.flip(CollectionLoader.load("todos"));
       expect(failure._tag).toBe("ApiError");
-      if (failure._tag === "ApiError") {
-        expect(failure.errors[0]?.title).toBe("Forbidden");
-      }
+      assert(failure._tag === "ApiError");
+      expect(failure.errors[0]?.title).toBe("Forbidden");
     }).pipe(
       Effect.provide(
         respondWith(403, { errors: [{ status: "403", title: "Forbidden" }] }).pipe(

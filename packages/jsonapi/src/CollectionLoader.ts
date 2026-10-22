@@ -14,7 +14,9 @@
  * from the upstream's own change token (ETag, `meta.version`, …).
  */
 
-import { Context, Effect } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -128,7 +130,7 @@ export const parseResponse = (
     if (response.status < 200 || response.status >= 300) {
       const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
       const errors =
-        typeof body === "object" && body !== null && Array.isArray((body as JsonApiDocument).errors)
+        P.isObjectOrArray(body) && Array.isArray((body as JsonApiDocument).errors)
           ? (body as JsonApiDocument).errors!
           : [];
       return yield* new ApiError({ message: `HTTP ${response.status}`, errors });

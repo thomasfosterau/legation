@@ -43,7 +43,9 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
-import { Effect } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
 import type * as Collection from "./Collection.js";
 import type { LocalRow } from "./ClientEngine.js";
 import type * as Node from "./Node.js";
@@ -102,7 +104,7 @@ const literalKey = (literal: Predicate.Literal): string =>
 
 /** Deduplicate and sort keys (plain string order; only determinism matters). */
 const sortedUnique = (keys: ReadonlyArray<string>): ReadonlyArray<string> =>
-  [...new Set(keys)].sort();
+  Arr.sort(new Set(keys), Order.String);
 
 type Junction = "And" | "Or";
 
@@ -184,7 +186,7 @@ export const canonicalConjuncts = (predicate: Predicate.Predicate): ReadonlyArra
     const key = structuralKey(member);
     if (key !== "True" && !byKey.has(key)) byKey.set(key, member);
   }
-  return [...byKey.keys()].sort().map((key) => ({ key, predicate: byKey.get(key)! }));
+  return Arr.sort(byKey.keys(), Order.String).map((key) => ({ key, predicate: byKey.get(key)! }));
 };
 
 const conjunctKeys = (predicate: Predicate.Predicate): ReadonlyArray<string> =>
@@ -544,5 +546,6 @@ export const coverageOf =
       options?.snapshot === undefined ? rowsOf : snapshotOf(options.snapshot, rowsOf)
     ).pipe(
       Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
+      // oxlint-disable-next-line effect/effect-catchall-default -- `E` is the caller's generic row-read error, so its tags are not known here; any failed read is uncovered by contract.
       Effect.catch(() => Effect.succeed<Verdict>({ _tag: "Uncovered" }))
     );

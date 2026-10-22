@@ -15,7 +15,14 @@
  * `facade.run(engine.mutateWithAck(m, a).pipe(Effect.flatMap((h) => h.acknowledged)))`.
  */
 
-import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime, Result, Stream } from "effect";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
 
 /**
  * A callback subscription handle.
@@ -66,7 +73,7 @@ export interface PromiseFacade<R> {
 export const make = <R, ER>(layer: Layer.Layer<R, ER, never>): PromiseFacade<R> => {
   // The error channel of the layer is surfaced when effects run, so the
   // facade itself treats the runtime as infallible for ergonomic typing.
-  const runtime = ManagedRuntime.make(layer) as unknown as ManagedRuntime.ManagedRuntime<R, never>;
+  const runtime = ManagedRuntime.make(layer) as ManagedRuntime.ManagedRuntime<R, never>;
 
   const run = <A, E>(effect: Effect.Effect<A, E, R>): Promise<A> => runtime.runPromise(effect);
 

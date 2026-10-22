@@ -22,7 +22,11 @@
  * thread). Engine-only capabilities that remain (explicit push/pull, undo
  * history) still require the full engine from context.
  */
-import { Context, Effect, Layer, Scope, Stream } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
 import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";

@@ -21,7 +21,8 @@
  * a client built before #155 may still send.
  */
 
-import { SchemaAST } from "effect";
+import * as P from "effect/Predicate";
+import * as SchemaAST from "effect/SchemaAST";
 import { AuthorizationError, FilterDeclarationError } from "./Errors.js";
 import type { Literal, Predicate } from "./Predicate.js";
 import type { OrderBy } from "./Subset.js";
@@ -304,20 +305,17 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 export const matchesKind = (kind: LiteralKind, value: Literal): boolean => {
   switch (kind) {
     case "text":
-      return typeof value === "string";
+      return P.isString(value);
     case "instant":
-      return typeof value === "string" && INSTANT.test(value);
+      return P.isString(value) && INSTANT.test(value);
     case "double":
-      return typeof value === "number" && Number.isFinite(value);
+      return P.isNumber(value) && Number.isFinite(value);
     case "integer":
       return (
-        typeof value === "number" &&
-        Number.isSafeInteger(value) &&
-        value >= INT4_MIN &&
-        value <= INT4_MAX
+        P.isNumber(value) && Number.isSafeInteger(value) && value >= INT4_MIN && value <= INT4_MAX
       );
     case "boolean":
-      return typeof value === "boolean";
+      return P.isBoolean(value);
   }
 };
 

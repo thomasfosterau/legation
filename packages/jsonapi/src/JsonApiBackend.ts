@@ -106,7 +106,12 @@
  * naturally idempotent) and retries are safe.
  */
 
-import { Effect, Option, Ref, Schema, Semaphore } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
@@ -500,9 +505,7 @@ const rejectionsOf = (
   fallbackReason: string
 ): ReadonlyArray<{ readonly index: number; readonly reason: string }> => {
   const errors =
-    typeof body === "object" &&
-    body !== null &&
-    Array.isArray((body as { errors?: unknown }).errors)
+    P.isObjectOrArray(body) && Array.isArray((body as { errors?: unknown }).errors)
       ? ((body as { errors: ReadonlyArray<unknown> }).errors as ReadonlyArray<{
           readonly title?: string;
           readonly detail?: string;
@@ -512,7 +515,7 @@ const rejectionsOf = (
   const byIndex = new Map<number, string>();
   for (const error of errors) {
     const pointer = error?.source?.pointer;
-    if (typeof pointer !== "string") continue;
+    if (!P.isString(pointer)) continue;
     const index = operationIndex(pointer, count);
     if (index === undefined || byIndex.has(index)) continue;
     byIndex.set(index, error.detail ?? error.title ?? fallbackReason);
@@ -528,8 +531,7 @@ interface BatchEntry {
 
 /** The row an `atomic:results` entry carries, if it returned a resource. */
 const resultRow = (result: unknown): JsonApiRow | undefined => {
-  const data =
-    typeof result === "object" && result !== null ? (result as { data?: unknown }).data : undefined;
+  const data = P.isObjectOrArray(result) ? (result as { data?: unknown }).data : undefined;
   const resource = Schema.decodeUnknownOption(ResourceObjectSchema)(data);
   return Option.isSome(resource) ? toRow(resourceToRow(resource.value).value) : undefined;
 };
@@ -1234,10 +1236,9 @@ export const make = (
         // A 204 (or an unparseable success body) still means every operation applied.
         const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
         if (status >= 200 && status < 300) {
-          const results =
-            typeof body === "object" && body !== null
-              ? (body as { readonly "atomic:results"?: unknown })["atomic:results"]
-              : undefined;
+          const results = P.isObjectOrArray(body)
+            ? (body as { readonly "atomic:results"?: unknown })["atomic:results"]
+            : undefined;
           return { _tag: "applied", results: Array.isArray(results) ? results : [] } as const;
         }
         if (isPermanentStatus(status)) {

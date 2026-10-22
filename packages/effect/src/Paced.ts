@@ -68,8 +68,11 @@
  * a single undo step too, matching what the user actually experiences as one
  * edit.
  */
-import { Effect, Fiber, Semaphore } from "effect";
-import type { Duration, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Semaphore from "effect/Semaphore";
+import type * as Duration from "effect/Duration";
+import type * as Scope from "effect/Scope";
 import type { ClientEngine } from "./ClientEngine.js";
 import type { MutatorError, StoreError } from "./Errors.js";
 

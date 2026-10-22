@@ -17,7 +17,14 @@
  * are neither discarded nor adopted by the next principal.
  */
 
-import { Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { KeyValueStore } from "effect/persistence";
 import { AtomicKeyValue, type KeyValueEntry, type KeyValueOp } from "./AtomicKeyValue.js";
 import type { RowId } from "./Collection.js";
@@ -962,9 +969,9 @@ const sealed = (cause: StoreError): ClientStore => {
 const causeDetail = (error: unknown): string => {
   const messages: Array<string> = [];
   let current: unknown = error;
-  for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+  for (let depth = 0; depth < 8 && P.isObjectOrArray(current); depth++) {
     const link = current as { readonly message?: unknown; readonly cause?: unknown };
-    if (typeof link.message === "string" && link.message !== "") messages.push(link.message);
+    if (P.isString(link.message) && link.message !== "") messages.push(link.message);
     current = link.cause;
   }
   return messages.join(": ");
@@ -1734,13 +1741,15 @@ export const makeKeyValue = (
         yield* locked(migrate.pipe(Effect.andThen(store.set(LAYOUT_KEY, CURRENT_LAYOUT))));
       }
     });
-    yield* openMigration.pipe(Effect.catch(() => Effect.void));
+    yield* openMigration.pipe(
+      Effect.catchTag(["KeyValueStoreError", "StoreError"], () => Effect.void)
+    );
 
     // Finish a compaction a previous run was interrupted in (#249). Kept
     // infallible at construction like the opens around it: if recovery fails
     // here the flag stays set, and the first journal operation retries it.
     yield* locked(recoverCompaction).pipe(
-      Effect.catch(() =>
+      Effect.catchTag("StoreError", () =>
         Effect.sync(() => {
           compactionPending = true;
         })
@@ -1820,7 +1829,7 @@ export const makeKeyValue = (
     });
     const tailFailure = yield* locked(settleTailInner).pipe(
       Effect.as<StoreError | undefined>(undefined),
-      Effect.catch((error) => Effect.succeed<StoreError | undefined>(error))
+      Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
     );
     if (tailFailure !== undefined) return sealed(tailFailure);
     yield* Ref.set(finishPending, false);
@@ -1911,7 +1920,7 @@ export const makeKeyValue = (
     // nothing destroyed, and the next open retries.
     const boundaryFailure = yield* openIdentity.pipe(
       Effect.as<StoreError | undefined>(undefined),
-      Effect.catch((error) => Effect.succeed<StoreError | undefined>(error))
+      Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
     );
     if (boundaryFailure !== undefined) return sealed(boundaryFailure);
 
@@ -2301,7 +2310,7 @@ export const makeKeyValue = (
               yield* writeJson(COMPACTION_KEY, intent).pipe(
                 Effect.catch((error) =>
                   readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
-                    Effect.catch(() => Effect.succeed(undefined)),
+                    Effect.catchTag("StoreError", () => Effect.succeed(undefined)),
                     Effect.flatMap((found) =>
                       found === undefined ? Effect.fail(error) : Effect.void
                     )

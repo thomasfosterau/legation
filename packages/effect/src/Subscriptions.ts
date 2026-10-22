@@ -14,7 +14,12 @@
  * acquires without ever releasing.
  */
 
-import { Duration, Effect, Fiber, Ref, Scope, Semaphore } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import type { ClientEngine, WindowObservation } from "./ClientEngine.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
 import * as Subset from "./Subset.js";
