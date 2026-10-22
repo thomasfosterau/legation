@@ -2,7 +2,34 @@
   "name": "@thomasfosterau/legation-sql",
   "version": "0.1.0",
   "description": "Driver-agnostic SQL reference backend for the legation engine: Subset->WHERE translation and a Backend over a SqlExecutor seam",
+  "keywords": [
+    "backend",
+    "effect",
+    "postgres",
+    "sql",
+    "sqlite",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/sql#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/sql"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,50 +39,20 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "sql",
-    "sqlite",
-    "postgres",
-    "sync-engine",
-    "backend",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
     "@thomasfosterau/legation-effect": "workspace:^"
   },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118"
-  },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/sql"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/sql#readme"
+  "peerDependencies": {
+    "effect": "catalog:peers"
+  }
 }

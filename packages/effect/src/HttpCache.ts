@@ -17,9 +17,9 @@
  * Cache API store land with the browser host.
  */
 
-import { Context } from "effect";
-import type { Effect } from "effect";
-import type { Duration } from "effect";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
+import type * as Duration from "effect/Duration";
 import type { StoreError } from "./Errors.js";
 
 /** Cache metadata kept alongside a stored Response. */

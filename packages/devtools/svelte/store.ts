@@ -13,7 +13,10 @@
  * same as the `.svelte` panel component alongside it.
  */
 import { readable, type Readable } from "svelte/store";
-import { Effect, Fiber, HashMap, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as Stream from "effect/Stream";
 import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation-effect/internal";
 import type * as Devtools from "@thomasfosterau/legation-devtools";
 

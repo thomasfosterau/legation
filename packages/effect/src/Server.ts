@@ -21,7 +21,8 @@
  * signature.
  */
 
-import { Effect, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import * as Authorization from "./Authorization.js";
 import { Backend, type Backend as BackendService } from "./Backend.js";
 import * as Cvr from "./Cvr.js";

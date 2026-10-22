@@ -103,8 +103,15 @@
 
 import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation-effect";
 import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
-import { Data, Duration, Effect, Option, Scope, Stream, SubscriptionRef } from "effect";
-import type { Context } from "effect";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import type * as Context from "effect/Context";
 
 /**
  * The tag the library registers and answers. Short on purpose: Chromium
@@ -135,16 +142,22 @@ export interface SyncManager {
  */
 export type SyncRegistration = object;
 
+/**
+ * The view of a {@link SyncRegistration} that {@link syncManagerOf} probes:
+ * any object may stand in, and `sync` is read without trusting its shape.
+ */
+interface ProbedRegistration {
+  readonly sync?: unknown;
+}
+
+/** Whether a probed `sync` member is a `SyncManager`: an object with a `register` method. */
+const isSyncManager = (sync: unknown): sync is SyncManager =>
+  P.isObjectOrArray(sync) && "register" in sync && P.isFunction(sync.register);
+
 /** The registration's `SyncManager`, if the browser gives it one. */
-const syncManagerOf = (registration: SyncRegistration | undefined): SyncManager | undefined => {
-  const sync: unknown =
-    registration !== undefined && "sync" in registration ? registration.sync : undefined;
-  return typeof sync === "object" &&
-    sync !== null &&
-    "register" in sync &&
-    typeof sync.register === "function"
-    ? (sync as SyncManager)
-    : undefined;
+const syncManagerOf = (registration: ProbedRegistration | undefined): SyncManager | undefined => {
+  const sync = registration?.sync;
+  return isSyncManager(sync) ? sync : undefined;
 };
 
 /** The slice of the worker's `SyncEvent` the listener reads. */
@@ -193,8 +206,7 @@ export interface RegisterOptions {
 
 /** The page's service-worker registration, or `undefined` where there is none. */
 const pageRegistration: Effect.Effect<SyncRegistration | undefined> = Effect.suspend(() => {
-  const container: ServiceWorkerContainer | undefined =
-    typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
+  const container: ServiceWorkerContainer | undefined = globalThis.navigator?.serviceWorker;
   return container === undefined
     ? Effect.undefined
     : Effect.tryPromise(() => container.getRegistration()).pipe(
@@ -235,7 +247,7 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
 
 /** Whether the worker's own view says the network is down. */
 const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
-  () => typeof navigator !== "undefined" && navigator.onLine === false
+  () => globalThis.navigator?.onLine === false
 );
 
 /** Options for {@link registerOnJournal}. */
@@ -326,7 +338,8 @@ export const identityUnchecked: unique symbol = Symbol.for(
  * {@link identityUnchecked}. See {@link ListenOptions.identity}.
  */
 export type IdentitySource =
-  Effect.Effect<Identity.Fingerprint | undefined> | typeof identityUnchecked;
+  | Effect.Effect<Identity.Fingerprint | undefined>
+  | typeof identityUnchecked;
 
 /** Options for {@link flush}. */
 export interface FlushOptions {
@@ -455,7 +468,7 @@ interface Attached {
  */
 export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
-  const scope = options.scope ?? (globalThis as unknown as Partial<SyncScope>);
+  const scope: Partial<SyncScope> = options.scope ?? globalThis;
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
   const attached = Effect.runSync(SubscriptionRef.make(Option.none<Attached>()));
 

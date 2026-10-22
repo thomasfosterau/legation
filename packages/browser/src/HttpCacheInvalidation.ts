@@ -33,8 +33,10 @@
 
 import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
 import { Telemetry } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Metric, Stream } from "effect";
-import type { Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Stream from "effect/Stream";
+import type * as Scope from "effect/Scope";
 
 /** The default coarse tag convention: `collection:{name}`. */
 export const defaultTagFor = (collection: string): string => `collection:${collection}`;

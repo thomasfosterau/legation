@@ -3,7 +3,9 @@
  * maintains its order in (issue #112) — insert/remove/rank/slice against a
  * plain-array reference, plus the "same reference on no-op" contract.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as OrderedTree from "../OrderedTree.js";
 
 const numberCompare = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -84,7 +86,7 @@ describe("OrderedTree", () => {
         if (!reference.includes(value)) {
           tree = OrderedTree.insert(tree, value, numberCompare);
           reference.push(value);
-          reference.sort((a, b) => a - b);
+          reference = Arr.sort(reference, Order.Number);
         }
       } else {
         const index = Math.floor(next() * reference.length);

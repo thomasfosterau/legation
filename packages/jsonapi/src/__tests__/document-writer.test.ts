@@ -6,7 +6,8 @@
  * from the cursor window.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
 import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as DocumentWriter from "../DocumentWriter.js";

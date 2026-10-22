@@ -20,7 +20,8 @@
  * push/pull handling.
  */
 
-import { Context, Effect } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";

@@ -2,7 +2,33 @@
   "name": "@thomasfosterau/legation-cloudflare",
   "version": "0.1.0",
   "description": "Cloudflare Workers reference topology for the legation sync engine: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
+  "keywords": [
+    "cloudflare",
+    "d1",
+    "durable-objects",
+    "effect",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/cloudflare#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/cloudflare"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,27 +38,6 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "cloudflare",
-    "durable-objects",
-    "d1",
-    "sync-engine",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
@@ -40,21 +45,12 @@
     "@thomasfosterau/legation-effect": "workspace:^",
     "@thomasfosterau/legation-sql": "workspace:^"
   },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118"
-  },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/cloudflare"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/cloudflare#readme"
+  "peerDependencies": {
+    "effect": "catalog:peers"
+  }
 }

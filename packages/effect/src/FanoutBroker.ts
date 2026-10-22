@@ -14,7 +14,13 @@
  * pull, never prevents convergence.
  */
 
-import { Clock, Context, Duration, Effect, PubSub, Ref, Scope } from "effect";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import type { Topic } from "./FanoutTopics.js";
 
 /** A live subscription to a room's topic pokes. */

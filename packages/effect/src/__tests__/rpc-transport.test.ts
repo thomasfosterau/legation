@@ -4,7 +4,11 @@
  * pokes, error mapping), with the byte-level carrier skipped.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { RpcTest } from "effect/rpc";
 import * as Authorization from "../Authorization.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -20,7 +24,7 @@ import { ClientTransport } from "../Transport.js";
 const TodoSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
 });
 type Todo = typeof TodoSchema.Type;
 
@@ -69,7 +73,7 @@ describe("RpcTransport", () => {
       const { engine, store } = yield* makeEngine("a");
       yield* engine.subscribe(allTodos);
 
-      yield* engine.mutate("todo/set", { id: "1", title: "over rpc", done: false });
+      yield* engine.mutate("todo/set", { id: "1", title: "over rpc", isDone: false });
       yield* engine.push;
       yield* engine.pull;
 
@@ -90,7 +94,7 @@ describe("RpcTransport", () => {
       const firstPoke = yield* Stream.runHead(Stream.take(b.transport.pokes, 1)).pipe(
         Effect.forkChild
       );
-      yield* a.engine.mutate("todo/set", { id: "1", title: "poke me", done: false });
+      yield* a.engine.mutate("todo/set", { id: "1", title: "poke me", isDone: false });
       yield* a.engine.push;
 
       expect((yield* Fiber.join(firstPoke))._tag).toBe("Some");

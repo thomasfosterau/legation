@@ -6,7 +6,7 @@
  * with `Effect.catchTag` / `Effect.catchTags`.
  */
 
-import { Data } from "effect";
+import * as Data from "effect/Data";
 
 /** A client or server storage operation failed. */
 export class StoreError extends Data.TaggedError("StoreError")<{

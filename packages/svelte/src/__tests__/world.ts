@@ -5,7 +5,11 @@
  * the Svelte context helpers expect.
  */
 import { flushSync } from "svelte";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Schema from "effect/Schema";
 import {
   Authorization,
   Backend,
@@ -224,16 +228,19 @@ export const run = <A, E, R = never>(
   f: (engine: ClientEngine.ClientEngine) => Effect.Effect<A, E>
 ): Promise<A> => runtime.runPromise(Effect.flatMap(ClientEngine.ClientEngine, f));
 
+/** The wall clock in epoch milliseconds: these polls run outside any Effect runtime. */
+const nowMillis = (): number => DateTime.toEpochMillis(DateTime.nowUnsafe());
+
 /**
  * Poll until a condition holds, flushing Svelte's pending effects between
  * checks so store emissions from engine fibers reach the DOM.
  */
 export const until = async (predicate: () => boolean, timeoutMs = 25_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = nowMillis() + timeoutMs;
   for (;;) {
     flushSync();
     if (predicate()) return;
-    if (Date.now() > deadline) throw new Error("until: timed out waiting for condition");
+    if (nowMillis() > deadline) throw new Error("until: timed out waiting for condition");
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -249,12 +256,12 @@ export const untilSubscriptions = async (
   predicate: (count: number) => boolean,
   timeoutMs = 5_000
 ): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = nowMillis() + timeoutMs;
   for (;;) {
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     const subs = await run(runtime, (engine) => engine.activeSubscriptions);
     if (predicate(subs.length)) return;
-    if (Date.now() > deadline) throw new Error("untilSubscriptions: timed out");
+    if (nowMillis() > deadline) throw new Error("untilSubscriptions: timed out");
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

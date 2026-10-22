@@ -8,7 +8,9 @@
  */
 import { TransportError } from "@thomasfosterau/legation-effect";
 import { MirrorChannel } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Queue, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 
 /** A {@link MirrorChannel.MirrorChannel} over a `BroadcastChannel` name. */
 export const make = (

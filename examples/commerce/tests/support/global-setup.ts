@@ -9,7 +9,7 @@
  * includes this project's tests, so an edit to the app is never tested
  * against the previous build.
  */
-import type { TestProject } from "vitest/node";
+import type { TestProject } from "vite-plus/test/node";
 import { buildApp } from "./build.js";
 
 export default function setup(project: TestProject): void {

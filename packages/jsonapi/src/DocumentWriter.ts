@@ -56,6 +56,7 @@
  */
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
+import * as P from "effect/Predicate";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
 import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
@@ -129,7 +130,7 @@ export interface Input {
 
 /** A row value as a record (a node row always is one). */
 const recordOf = (value: unknown): Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  P.isObjectOrArray(value) ? (value as Record<string, unknown>) : {};
 
 /** The row id a row value carries (node rows carry `id` in the value). */
 export const idOf = (value: unknown): string => String(recordOf(value)["id"]);

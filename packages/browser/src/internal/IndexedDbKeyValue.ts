@@ -10,7 +10,10 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { StoreError } from "@thomasfosterau/legation-effect";
 import { AtomicKeyValue } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
+import * as Result from "effect/Result";
 import { KeyValueStore } from "effect/persistence";
 
 /**
@@ -61,13 +64,12 @@ const openDatabase = (
         resume(
           Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause }))
         );
-      let request: IDBOpenDBRequest;
-      try {
-        request = idb.open(database);
-      } catch (cause) {
-        fail(cause);
+      const opened = Result.try(() => idb.open(database));
+      if (Result.isFailure(opened)) {
+        fail(opened.failure);
         return;
       }
+      const request = opened.success;
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
@@ -85,6 +87,14 @@ const openDatabase = (
       request.onerror = () => fail(request.error);
     });
   });
+
+/**
+ * Abort `transaction`, ignoring the `InvalidStateError` an already-finished
+ * transaction throws: there is nothing left to abort then.
+ */
+const abortQuietly = (transaction: IDBTransaction): void => {
+  Result.try(() => transaction.abort());
+};
 
 /** A clear error for a database that lacks the entries store (see the module note above). */
 const missingEntriesStore = (db: IDBDatabase, method: string, key?: string) =>
@@ -140,38 +150,30 @@ const runRequest = <A>(
       finish(Effect.fail(missingEntriesStore(db, failure.method, failure.key)));
       return;
     }
-    let transaction: IDBTransaction;
-    try {
-      transaction = db.transaction(ENTRIES_STORE, mode);
-    } catch (cause) {
-      fail(cause);
+    const began = Result.try(() => db.transaction(ENTRIES_STORE, mode));
+    if (Result.isFailure(began)) {
+      fail(began.failure);
       return;
     }
+    const transaction = began.success;
     transaction.oncomplete = () => finish(Effect.succeed(result as A));
     transaction.onerror = () => fail(transaction.error);
     transaction.onabort = () => fail(transaction.error);
-    try {
+    const issued = Result.try(() => {
       const request = evaluate(transaction.objectStore(ENTRIES_STORE));
       request.onsuccess = () => {
         result = request.result;
       };
       request.onerror = () => fail(request.error);
-    } catch (cause) {
-      fail(cause);
-      try {
-        transaction.abort();
-      } catch {
-        // Already finished: nothing left to abort.
-      }
+    });
+    if (Result.isFailure(issued)) {
+      fail(issued.failure);
+      abortQuietly(transaction);
     }
     return Effect.sync(() => {
       if (settled) return;
       settled = true;
-      try {
-        transaction.abort();
-      } catch {
-        // Already finished: nothing left to abort.
-      }
+      abortQuietly(transaction);
     });
   });
 
@@ -190,7 +192,7 @@ const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
         "readonly",
         { method: "get", message: "Failed to get value from backing store", key },
         (store) => store.get(key)
-      ).pipe(Effect.map((found) => (typeof found?.value === "string" ? found.value : undefined))),
+      ).pipe(Effect.map((found) => (P.isString(found?.value) ? found.value : undefined))),
     getUint8Array: (key) =>
       runRequest<StoredRecord>(
         connection,
@@ -276,24 +278,17 @@ const commitOps = (
       );
       return;
     }
-    let transaction: IDBTransaction;
-    try {
-      transaction = db.transaction(ENTRIES_STORE, "readwrite");
-    } catch (cause) {
-      fail(cause);
+    const began = Result.try(() => db.transaction(ENTRIES_STORE, "readwrite"));
+    if (Result.isFailure(began)) {
+      fail(began.failure);
       return;
     }
-    const abort = () => {
-      try {
-        transaction.abort();
-      } catch {
-        // Already finished: nothing left to abort.
-      }
-    };
+    const transaction = began.success;
+    const abort = () => abortQuietly(transaction);
     transaction.oncomplete = () => finish(Effect.void);
     transaction.onerror = () => fail(transaction.error);
     transaction.onabort = () => fail(transaction.error);
-    try {
+    const issued = Result.try(() => {
       const entries = transaction.objectStore(ENTRIES_STORE);
       // Every request is issued synchronously here: IndexedDB commits a transaction once control
       // returns to the event loop with no request pending, so nothing may await between them.
@@ -301,8 +296,9 @@ const commitOps = (
         if (op._tag === "Set") entries.put({ key: op.key, value: op.value });
         else entries.delete(op.key);
       }
-    } catch (cause) {
-      fail(cause);
+    });
+    if (Result.isFailure(issued)) {
+      fail(issued.failure);
       abort();
     }
     // Interrupted before the commit point: abort, so none of the batch lands.
@@ -348,7 +344,7 @@ const readEntries = (
   ).pipe(
     Effect.map((records) =>
       records.flatMap((record) =>
-        typeof record.value === "string" ? [{ key: record.key, value: record.value }] : []
+        P.isString(record.value) ? [{ key: record.key, value: record.value }] : []
       )
     ),
     Effect.mapError((error) => new StoreError({ message: error.message, cause: error }))

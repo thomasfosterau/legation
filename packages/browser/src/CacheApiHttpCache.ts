@@ -14,7 +14,10 @@
 
 import { StoreError, TransportError } from "@thomasfosterau/legation-effect";
 import { HttpCache } from "@thomasfosterau/legation-effect/internal";
-import { Clock, Duration, Effect } from "effect";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 /** The subset of the Cache API this store uses. */
 export interface CacheLike {
@@ -37,14 +40,15 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
 const tryCache = <A>(message: string, run: () => Promise<A>): Effect.Effect<A, StoreError> =>
   Effect.tryPromise({ try: run, catch: storeError(message) });
 
+/** Decode a stored meta header; `None` when it is malformed (foreign or corrupt). */
+const parseMeta = Option.liftThrowable(
+  (raw: string) => JSON.parse(decodeURIComponent(raw)) as HttpCache.CachedResponseMeta
+);
+
 const readMeta = (response: Response): HttpCache.CachedResponseMeta | undefined => {
   const raw = response.headers.get(metaHeader);
   if (raw === null) return undefined;
-  try {
-    return JSON.parse(decodeURIComponent(raw)) as HttpCache.CachedResponseMeta;
-  } catch {
-    return undefined;
-  }
+  return Option.getOrUndefined(parseMeta(raw));
 };
 
 /** ResponseCacheStore over one named Cache API cache. */

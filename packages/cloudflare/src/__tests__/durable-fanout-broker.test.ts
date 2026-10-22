@@ -6,17 +6,20 @@
  * only when its request is aborted, and TestClock moves the bound, not wall time.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Fiber } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { FanoutTopics } from "@thomasfosterau/legation-effect/internal";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
+import { fakeBinding } from "./fakes.js";
 
 describe("DurableFanoutBroker shard calls (#356)", () => {
   it.effect("a hung shard call is aborted at its timeout, so the publish returns", () =>
     Effect.gen(function* () {
       const aborted: Array<string> = [];
-      const shards = {
+      const shards = fakeBinding<DurableObjectNamespace>({
         idFromName: (name: string) => name,
         get: (id: string) => ({
           fetch: (_url: string, init: { readonly signal: AbortSignal }) =>
@@ -27,7 +30,7 @@ describe("DurableFanoutBroker shard calls (#356)", () => {
               });
             }),
         }),
-      } as unknown as DurableObjectNamespace;
+      });
       const { broker } = yield* DurableFanoutBroker.make({ shards, timeout: "3 seconds" });
       const publishing = yield* Effect.forkScoped(
         broker.publish([FanoutTopics.coarse("products")]),
@@ -45,7 +48,7 @@ describe("DurableFanoutBroker shard calls (#356)", () => {
     () =>
       Effect.gen(function* () {
         const aborted: Array<string> = [];
-        const shards = {
+        const shards = fakeBinding<DurableObjectNamespace>({
           idFromName: (name: string) => name,
           get: (id: string) => ({
             fetch: (_url: string, init: { readonly signal: AbortSignal }) =>
@@ -56,7 +59,7 @@ describe("DurableFanoutBroker shard calls (#356)", () => {
                 });
               }),
           }),
-        } as unknown as DurableObjectNamespace;
+        });
         const { broker } = yield* DurableFanoutBroker.make({ shards, timeout: "3 seconds" });
         const registering = yield* Effect.forkScoped(
           broker.register("room-a", new Set([FanoutTopics.coarse("products")]), "30 seconds"),

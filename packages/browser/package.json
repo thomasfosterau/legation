@@ -2,7 +2,35 @@
   "name": "@thomasfosterau/legation-browser",
   "version": "0.1.0",
   "description": "Browser-runtime adapters for the legation engine: service-worker engine host, IndexedDB client store, tab mirrors over BroadcastChannel, and a Cache API HTTP cache",
+  "keywords": [
+    "broadcastchannel",
+    "browser",
+    "effect",
+    "indexeddb",
+    "offline-first",
+    "service-worker",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/browser#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/browser"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,52 +40,20 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "sync-engine",
-    "browser",
-    "service-worker",
-    "indexeddb",
-    "broadcastchannel",
-    "offline-first",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
     "@thomasfosterau/legation-effect": "workspace:^"
   },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118",
-    "@effect/platform-browser": ">=4.0.0-rc.118"
-  },
   "devDependencies": {
     "@effect/platform-browser": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
-    "fake-indexeddb": "^6.2.6"
+    "fake-indexeddb": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/browser"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/browser#readme"
+  "peerDependencies": {
+    "@effect/platform-browser": "catalog:peers",
+    "effect": "catalog:peers"
+  }
 }

@@ -4,7 +4,9 @@
  * engine end to end like the memory store.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -321,9 +323,11 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
           // Once the intent is durable the compaction is committed: the caller
           // is told the renumbering even though applying it failed (#249 B1),
           // so it can move everything it keyed by the old ids.
-          if (Exit.isSuccess(exit)) expect(exit.value, `writes=${writes}`).toEqual(EXPECTED);
+          Exit.match(exit, {
+            onSuccess: (renumbering) => expect(renumbering, `writes=${writes}`).toEqual(EXPECTED),
+            onFailure: () => expect(intentLeft).toBe(false),
+          });
           if (Exit.isSuccess(exit) && intentLeft) committedButUnapplied += 1;
-          else if (Exit.isFailure(exit)) expect(intentLeft).toBe(false);
 
           // The same live store finishes the roll-forward before it appends...
           yield* expectWhole(yield* reopen(structuredCloneOf(kv)), `restart writes=${writes}`);

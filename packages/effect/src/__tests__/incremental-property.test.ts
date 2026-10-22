@@ -15,7 +15,7 @@
  * step, and values print. Uses a deterministic mulberry32 PRNG so a failure is
  * reproducible from its printed seed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
 import type { RowChange } from "../RowChange.js";
@@ -68,11 +68,11 @@ const divergence = (seed: number, step: number, actual: unknown, expected: unkno
   `  recompute:   ${JSON.stringify(expected)}`;
 
 /** Mutate ground truth by a random put/del and return the resulting delta. */
-const stepGround = (
+const stepGround = <V>(
   rng: () => number,
   ground: Map<string, Row>,
   ids: ReadonlyArray<string>,
-  makeValue: (rng: () => number) => unknown,
+  makeValue: (rng: () => number) => V,
   delChance: number
 ): Incremental.Delta => {
   const id = pick(rng, ids);
@@ -93,16 +93,18 @@ const stepGround = (
 
 // ─── Value generators / keys (module scope: shared, capture nothing) ─────────
 
-const doubleN = (v: unknown): unknown => ({ double: (v as { n: number }).n * 2 });
+const doubleN = (v: unknown): { readonly double: number } => ({
+  double: (v as { n: number }).n * 2,
+});
 const teamKey = (v: unknown): string => (v as { team: string }).team;
 const geFive = (v: unknown): boolean => (v as { n: number }).n >= 5;
 
 /** Drive a single-input operator against its from-scratch reference. */
-const runSingle = (options: {
+const runSingle = <V>(options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => unknown;
+  readonly makeValue: (rng: () => number) => V;
   readonly makeOperator: () => Incremental.Operator;
   readonly fromScratch: (rows: ReadonlyArray<Row>) => Map<string, Row>;
   readonly delChance?: number;
@@ -130,13 +132,13 @@ const runSingle = (options: {
   return null;
 };
 
-const runJoin = (options: {
+const runJoin = <L, R>(options: {
   readonly seeds: number;
   readonly steps: number;
   readonly leftIds: ReadonlyArray<string>;
   readonly rightIds: ReadonlyArray<string>;
-  readonly makeLeft: (rng: () => number) => unknown;
-  readonly makeRight: (rng: () => number) => unknown;
+  readonly makeLeft: (rng: () => number) => L;
+  readonly makeRight: (rng: () => number) => R;
   readonly joinOptions: Incremental.JoinOptions;
 }): Divergence => {
   for (let seed = 1; seed <= options.seeds; seed++) {
@@ -166,11 +168,11 @@ const runJoin = (options: {
   return null;
 };
 
-const runOrdered = (options: {
+const runOrdered = <V>(options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => unknown;
+  readonly makeValue: (rng: () => number) => V;
   readonly orderBy: ReadonlyArray<Subset.OrderBy>;
   readonly limit?: number;
 }): Divergence => {
@@ -259,8 +261,8 @@ const makeRight = (rng: () => number) => ({
   k: pick(rng, ["k0", "k1", "k2"]),
   rlbl: Math.floor(rng() * 100),
 });
-const leftKey = (v: unknown): unknown => (v as { fk: unknown }).fk;
-const rightKey = (v: unknown): unknown => (v as { k: unknown }).k;
+const leftKey = (v: unknown): string | null => (v as { fk: string | null }).fk;
+const rightKey = (v: unknown): string => (v as { k: string }).k;
 
 describe("Incremental.join — arbitrary key equality", () => {
   it("inner join matches recompute after every prefix", () => {

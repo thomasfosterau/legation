@@ -4,8 +4,12 @@
  * different collection changes. A read-only client (empty journal) pulls
  * collection-scoped changes; we count emissions per query.
  */
-import { describe, expect, it } from "vitest";
-import { Duration, Effect, Ref, Schema, Stream } from "effect";
+import { describe, expect, it } from "vite-plus/test";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

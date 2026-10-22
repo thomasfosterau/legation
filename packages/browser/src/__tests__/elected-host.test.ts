@@ -19,23 +19,32 @@ import {
 } from "@thomasfosterau/legation-effect";
 import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as ElectedHost from "../ElectedHost.js";
 import type { Role } from "../ElectedHost.js";
 
 interface Todo {
   readonly id: string;
   readonly title: string;
-  readonly done: boolean;
+  readonly isDone: boolean;
 }
 
-const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean });
+const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String, isDone: Schema.Boolean });
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutations = Mutator.registry([
   { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
 ]);
 
-const Todo = Node.make("todos", { attributes: { title: Schema.String, done: Schema.Boolean } });
+const Todo = Node.make("todos", { attributes: { title: Schema.String, isDone: Schema.Boolean } });
 const nodes = Node.registry([Todo]);
 
 /** Real timers, independent of the test clock. */
@@ -55,7 +64,10 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
 
 /** Every `role` stream's current value (re-reads live — see `SubscriptionRef.changes`). */
 const currentRole = (role: Stream.Stream<Role>) =>
-  Stream.runHead(role).pipe(Effect.map(Option.getOrThrow));
+  Stream.runHead(role).pipe(
+    Effect.flatMap((head) => Effect.fromOption(head)),
+    Effect.orDie
+  );
 
 const makeServer = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(
@@ -93,11 +105,11 @@ const makeFakeLockManager = (): LockManager => {
   };
 
   const request = ((name: string, optionsOrCallback: unknown, maybeCallback?: unknown) => {
-    const isOptions = typeof optionsOrCallback !== "function";
+    const isOptions = !P.isFunction(optionsOrCallback);
     const options = (isOptions ? optionsOrCallback : {}) as LockOptions;
-    const callback = (isOptions ? maybeCallback : optionsOrCallback) as (
-      lock: Lock | null
-    ) => unknown;
+    const callback = (
+      isOptions ? maybeCallback : optionsOrCallback
+    ) as LockGrantedCallback<unknown>;
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
       const attempt = () => {
@@ -161,8 +173,8 @@ describe("ElectedHost (#119)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const locks = makeFakeLockManager();
-          const clientGroupId = `group-voice-${Date.now()}`;
-          const channelName = `legation-elected-voice-${Date.now()}`;
+          const clientGroupId = `group-voice-${crypto.randomUUID()}`;
+          const channelName = `legation-elected-voice-${crypto.randomUUID()}`;
           const handler = yield* makeServer;
           const store = yield* ClientStoreModule.makeMemory;
           // The engine's subscription list is observable through what each
@@ -225,8 +237,8 @@ describe("ElectedHost (#119)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const locks = makeFakeLockManager();
-          const clientGroupId = `group-${Date.now()}`;
-          const channelName = `legation-elected-${Date.now()}`;
+          const clientGroupId = `group-${crypto.randomUUID()}`;
+          const channelName = `legation-elected-${crypto.randomUUID()}`;
           const handler = yield* makeServer;
           const store = yield* ClientStoreModule.makeMemory;
           const options = {
@@ -261,7 +273,7 @@ describe("ElectedHost (#119)", () => {
               yield* tabA.client.mutate("todo/set", {
                 id: "1",
                 title: "written by the leader",
-                done: false,
+                isDone: false,
               });
               // The mirror in tab B sees it over the broadcast channel.
               yield* eventually(
@@ -292,7 +304,7 @@ describe("ElectedHost (#119)", () => {
 
           // And tab B, now the host, can journal new mutations itself.
           yield* survivor.client
-            .mutate("todo/set", { id: "2", title: "written by the successor", done: false })
+            .mutate("todo/set", { id: "2", title: "written by the successor", isDone: false })
             .pipe(Effect.orDie);
           yield* eventually(
             survivor.client.query({ collection: "todos" }).pipe(
@@ -310,8 +322,8 @@ describe("ElectedHost (#119)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const locks = makeFakeLockManager();
-        const clientGroupId = `group-kill-${Date.now()}`;
-        const channelName = `legation-elected-kill-${Date.now()}`;
+        const clientGroupId = `group-kill-${crypto.randomUUID()}`;
+        const channelName = `legation-elected-kill-${crypto.randomUUID()}`;
         const handler = yield* makeServer;
         const store = yield* ClientStoreModule.makeMemory;
         const options = {
@@ -344,7 +356,7 @@ describe("ElectedHost (#119)", () => {
             // durably journaled it (not until it's acked) — then kill the
             // leader before the mirror ever learns the outcome.
             const fiber = yield* Effect.forkChild(
-              tabB.client.mutate("todo/set", { id: "orphan", title: "mid-flight", done: false })
+              tabB.client.mutate("todo/set", { id: "orphan", title: "mid-flight", isDone: false })
             );
             yield* eventually(
               store.pendingMutations.pipe(Effect.orDie),
@@ -386,8 +398,8 @@ describe("ElectedHost (#119)", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const clientGroupId = `group-nolocks-${Date.now()}`;
-          const channelName = `legation-elected-nolocks-${Date.now()}`;
+          const clientGroupId = `group-nolocks-${crypto.randomUUID()}`;
+          const channelName = `legation-elected-nolocks-${crypto.randomUUID()}`;
           const handler = yield* makeServer;
           const store = yield* ClientStoreModule.makeMemory;
           // No `locks` option: falls back to the ambient `navigator.locks`,

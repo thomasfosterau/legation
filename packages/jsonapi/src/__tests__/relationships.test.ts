@@ -2,8 +2,15 @@
  * Relationships tests: resolving JSON:API linkage against the local mirror
  * (to-one and to-many), and that resolution reads live synced state.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Schema, Scope, Stream, SubscriptionRef } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -150,7 +157,11 @@ const provide = <E>(
     Effect.scoped
   );
 
-const attr = (value: JsonApiRow | undefined, key: string): unknown => value?.[key];
+/** A row's string attribute; `undefined` when the row or the attribute is absent, or the attribute is not a string. */
+const attr = (value: JsonApiRow | undefined, key: string): string | undefined => {
+  const field = value?.[key];
+  return P.isString(field) ? field : undefined;
+};
 
 describe("Relationships", () => {
   const issues = Subset.make({ collection: "issues" });
@@ -271,11 +282,11 @@ describe("Relationships", () => {
           // ...and the observer re-emits it. Its emissions can lag the pull
           // (and a push ack briefly re-emits the pre-edit join, #286), so wait
           // for the latest one to match rather than reading a snapshot.
-          const emissions = Option.getOrThrow(
-            yield* emitted(
-              (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)
-            )
+          const latest = yield* emitted(
+            (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)
           );
+          assert(Option.isSome(latest));
+          const emissions = latest.value;
           expect(emissions[0]).toEqual(["first", "second"]);
           expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);
           expect(emissions.length).toBeGreaterThanOrEqual(2);

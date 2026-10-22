@@ -10,7 +10,7 @@
  * Uses a deterministic xorshift32 PRNG (not `Math.random`) so a failure is
  * reproducible from its seed alone.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
 

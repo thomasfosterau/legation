@@ -48,11 +48,13 @@
  * decode.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as ClientEngineModule from "./ClientEngine.js";
 import {
   ClientStore,
   freezePending,
+  // oxlint-disable-next-line effect/no-service-constructor-imports -- the SSR render deliberately builds a private, request-scoped in-memory store (`snapshot` needs nothing from context); providing it via a Layer would change the public `R` or share the memoized store across requests.
   makeMemory,
   type ReplicaState,
   type StoredRow,
@@ -65,6 +67,7 @@ import type * as Node from "./Node.js";
 import { MutationSchema } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
+// oxlint-disable-next-line effect/no-service-constructor-imports -- the in-process SSR path builds a private loop-back transport over the `ServerHandler` in context, per call; a Layer would change `snapshot`'s public requirements.
 import { ClientTransport, makeInMemory, ServerHandler } from "./Transport.js";
 
 /**

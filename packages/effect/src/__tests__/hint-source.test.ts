@@ -9,7 +9,10 @@
  * arrive first.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Queue, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import type { ChangeHint } from "../Backend.js";
 import * as HintSource from "../HintSource.js";
 import * as InvalidationBus from "../InvalidationBus.js";

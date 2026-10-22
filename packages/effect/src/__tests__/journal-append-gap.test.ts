@@ -8,7 +8,12 @@
  * push through `MemoryBackend`, which enforces that rule.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, References, Schema } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -526,8 +531,8 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
           store.acknowledge("c", 1),
           store.commitPull!({ lastMutationIds: { other: 1 }, patch: [] })
         );
-        const pending = (yield* store.pendingMutations).map(key);
-        if (pending.includes("c:1") || pending.includes("other:1")) resurrected++;
+        const pending = new Set((yield* store.pendingMutations).map(key));
+        if (pending.has("c:1") || pending.has("other:1")) resurrected++;
       }
       expect(resurrected).toBe(0);
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Cvr from "../Cvr.js";
 import * as Predicate from "../Predicate.js";
 import * as Protocol from "../Protocol.js";

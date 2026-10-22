@@ -13,7 +13,9 @@
  * same transport serves browsers, service workers, and Node 22+.
  */
 
-import { Effect, Queue, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import {
   TransportError,
   type Transport,
@@ -37,6 +39,7 @@ const post =
   (body: unknown): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
     Effect.tryPromise({
       try: async () => {
+        // oxlint-disable-next-line effect/avoid-native-fetch -- `make` returns a requirement-free ClientTransport (public API), and swapping in FetchHttpClient changes the wire request: it adds trace-propagation headers (a CORS preflight cross-origin) and aborts on interruption.
         const response = await fetch(`${options.url}${route}`, {
           method: "POST",
           body: JSON.stringify(body),

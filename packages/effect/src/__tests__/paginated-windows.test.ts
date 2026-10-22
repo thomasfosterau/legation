@@ -7,7 +7,12 @@
  * a hosted engine, windows crossing the mirror protocol.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Client,
@@ -178,7 +183,12 @@ describe("per-parent windowed subsets", () => {
         const local = yield* readerEngine
           .query(Subset.make({ collection: "reviews" }))
           .pipe(Effect.orDie);
-        expect(local.map((row) => row.id).sort()).toEqual(["r-4", "r-5"]);
+        expect(
+          Arr.sort(
+            local.map((row) => row.id),
+            Order.String
+          )
+        ).toEqual(["r-4", "r-5"]);
       })
     )
   );
@@ -228,7 +238,12 @@ describe("per-parent windowed subsets", () => {
         const local = yield* readerEngine
           .query(Subset.make({ collection: "reviews" }))
           .pipe(Effect.orDie);
-        expect(local.map((row) => row.id).sort()).toEqual(["r-2", "r-3"]);
+        expect(
+          Arr.sort(
+            local.map((row) => row.id),
+            Order.String
+          )
+        ).toEqual(["r-2", "r-3"]);
       })
     )
   );

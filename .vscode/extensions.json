@@ -1,4 +1,4 @@
 {
-  "recommendations": ["oxc.oxc-vscode", "esbenp.prettier-vscode", "svelte.svelte-vscode"],
-  "unwantedRecommendations": ["dbaeumer.vscode-eslint"]
+  "recommendations": ["oxc.oxc-vscode", "svelte.svelte-vscode"],
+  "unwantedRecommendations": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
 }

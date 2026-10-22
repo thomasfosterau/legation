@@ -36,7 +36,7 @@
  * `@thomasfosterau/legation-jsonapi` derives linkage.
  */
 
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation-effect";
 import { type Related, Subset } from "@thomasfosterau/legation-effect/internal";
@@ -264,19 +264,19 @@ const assignLinkage = (
  * exactly what {@link DocumentWriter} takes.
  */
 export const resolve = <E>(
-  fetch: Fetch<E>,
+  fetchRows: Fetch<E>,
   nodes: Node.NodeRegistry,
   node: Node.AnyNode,
   plan: Plan,
   read: Query.Read
 ): Effect.Effect<Resolved, E> =>
   Effect.gen(function* () {
-    const rows = yield* Query.runVia(fetch, nodes, withLinkage(plan, read));
+    const rows = yield* Query.runVia(fetchRows, nodes, withLinkage(plan, read));
     const queries = linkageQueries(nodes, plan, node, read, rows);
     const fetched =
       queries.length === 0
         ? []
-        : yield* fetch(
+        : yield* fetchRows(
             queries.map((query) =>
               Subset.make({
                 collection: query.collection,

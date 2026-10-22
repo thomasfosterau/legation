@@ -6,7 +6,11 @@
  * inferred status. Version rejections propagate without touching either.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Ref, Stream, SubscriptionRef } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
@@ -17,7 +21,7 @@ const pushResponse: PushResponse = { lastMutationIds: {} };
 const pullRequest: PullRequest = {
   clientGroupId: "g",
   subscriptions: [],
-} as unknown as PullRequest;
+};
 
 interface Fake {
   readonly transport: Transport.ClientTransport;

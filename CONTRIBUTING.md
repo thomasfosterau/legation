@@ -1,62 +1,75 @@
 # Contributing to legation
 
-legation is a bun-workspaces monorepo (bun, not the programme's pnpm + Vite+); every command below runs through bun.
+legation is a pnpm 11 + [Vite+](https://viteplus.dev) (`vp`) workspace on Node 22 or later. The command reference, the gate list, the package boundaries and the conventions live in [AGENTS.md](AGENTS.md) (the agent guidance, which applies to everyone): see [Commands](AGENTS.md#commands), [Verification](AGENTS.md#verification), [Common pitfalls](AGENTS.md#common-pitfalls) and [Conventions](AGENTS.md#conventions).
 
 ## Setup
 
 ```bash
 git clone https://github.com/thomasfosterau/legation.git
 cd legation
-bun ci
+corepack enable   # or any pnpm 10+, which switches itself to the pinned pnpm 11
+pnpm install
 ```
 
-## Commands and repository rules
+`pnpm install` also installs the Vite+ git hooks and runs `prepare`, which patches the native TypeScript compiler and Oxlint with `@effect/tsgo` so Effect diagnostics fail the type gate.
 
-The command reference, the pre-push gate list, the package boundaries and the
-conventions live in [CLAUDE.md](CLAUDE.md) (the agent guidance, which applies to
-everyone): see [Commands](CLAUDE.md#commands),
-[Verification](CLAUDE.md#verification), [Common pitfalls](CLAUDE.md#common-pitfalls)
-and [Conventions](CLAUDE.md#conventions). Two workspace mechanics it doesn't
-repeat:
+Two workspace mechanics AGENTS.md doesn't repeat:
 
-- Packages import each other by published name (`@thomasfosterau/legation-effect`); bun workspaces link them.
-- `tsc --build` (project references) handles build order; Vitest resolves workspace packages to source via aliases in `vitest.config.ts`, so tests never need a prior build.
+- Packages import each other by published name (`@thomasfosterau/legation-effect`); pnpm links the workspace packages, and `pnpm pack` rewrites the `workspace:` and `catalog:` specifiers when a package is published.
+- `vp run build` builds the packages in dependency order (`vp pack`, one task per package); the tests resolve the package names to `src/` through aliases in the root `vite.config.ts`, so tests never need a prior build. The example apps and the commerce browser test consume `dist/`, so `vp run test` builds first.
 
-## Development Workflow
+## Branches
 
-1. Create a feature branch.
-2. Make focused changes.
-3. Run the gates in [CLAUDE.md → Verification](CLAUDE.md#verification), in that order.
-4. Add or update tests for behavior changes.
-5. Add a changeset where [CLAUDE.md → Branches and pull requests](CLAUDE.md#branches-and-pull-requests) says one is needed (`bun run changeset`).
-6. Open a pull request.
+Branch off `trunk`, rebase rather than merge, squash-merge with a conventional prefix: see [AGENTS.md](AGENTS.md#branches-and-pull-requests).
+
+## Git hooks
+
+Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pre-commit) is committed. **pre-commit** runs `vp staged` (format + lint on the staged files). There is no pre-push hook: run the gates yourself.
+
+## CI expectations
+
+[ci.yml](.github/workflows/ci.yml) runs "Quality Gates", whose steps are the gate list in [AGENTS.md](AGENTS.md#verification), and "Tests (effect floor)" (below). [release.yml](.github/workflows/release.yml) runs changesets/action on `trunk`: it opens the version PR while unreleased changesets exist and publishes once it merges, via npm OIDC trusted publishing (see [PUBLISHING.md](PUBLISHING.md)).
+
+## Pre-PR checklist
+
+1. The gates in [AGENTS.md](AGENTS.md#verification), each with its final pass/fail.
+2. A changeset (`pnpm changeset`) where [AGENTS.md](AGENTS.md#branches-and-pull-requests) requires one.
+3. `git fetch origin trunk && git rebase origin/trunk`
+4. Docs: the package `README.md` for any exported change; the package `CLAUDE.md` for a new term or invariant.
+
+## Running individual checks
+
+```sh
+vp fmt                                     # Oxfmt (writes)
+vp lint                                    # Oxlint, with the Effect presets
+vp run build                               # every package's dist/
+vp run pack:check                          # pack + lint the publish tarballs
+vp run check                               # the type gate (packages and tests)
+vp run check:examples                      # each example app's own typecheck
+vp test run packages/sql                   # one package's tests (no build needed)
+vp test run --project svelte               # one Vitest project
+vp run test:coverage                       # the suite + coverage map for fallow
+vp run bench                               # the benchmarks
+fallow audit --base origin/trunk           # the fallow gate
+fallow dead-code                           # unused files, exports, dependencies
+```
 
 ## Tests
 
-Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest):
+Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest) (plain Vitest APIs come from `vite-plus/test`):
 
-- `it.effect("...", () => Effect.gen(function* () { ... }))` — runs under TestServices
-  (deterministic `TestClock`; advance time with `TestClock.adjust`). Use for pure logic and
-  anything whose timing you control.
-- `it.live("...", () => ...)` — real clock and services. Use for tests that need real
-  concurrency timing or do real I/O (WebSockets, IndexedDB).
-- `it.layer(layer)("suite", (it) => { ... })` — build a layer once and share it across the
-  tests inside; services are available directly in each test effect's context.
+- `it.effect("...", () => Effect.gen(function* () { ... }))` — runs under TestServices (deterministic `TestClock`; advance time with `TestClock.adjust`). Use for pure logic and anything whose timing you control.
+- `it.live("...", () => ...)` — real clock and services. Use for tests that need real concurrency timing or do real I/O (WebSockets, IndexedDB).
+- `it.layer(layer)("suite", (it) => { ... })` — build a layer once and share it across the tests inside; services are available directly in each test effect's context.
 - Assertions go inside the effect; never wrap tests in `Effect.runPromise`.
 
-**PostgreSQL test.** `packages/sql/src/__tests__/sql-backend-postgres.test.ts` runs the READ
-COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for
-a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and
-drops them again when it finishes. Without the variable the suite is skipped locally with a
-warning; in CI (where `CI` is set) it fails instead. For example:
-`DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch bunx vitest run packages/sql`.
+**Chromium.** The commerce façade's browser test (`examples/commerce/tests/facade-browser.test.ts`) fails, never skips, without Chromium. Install the revision `playwright-core` expects with `pnpm exec playwright-core install chromium`.
+
+**PostgreSQL test.** `packages/sql/src/__tests__/sql-backend-postgres.test.ts` runs the READ COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and drops them again when it finishes. Without the variable the suite is skipped locally with a warning; in CI (where `CI` is set) it fails instead. For example: `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch vp test run packages/sql`.
 
 ### Refreshing the postgres image digest
 
-Both `postgres` service containers in `.github/workflows/ci.yml` pin the image by digest
-(`postgres:16@sha256:…`). Dependabot does not update images under a workflow's `services:` key,
-so refresh the digest by hand when moving to a newer Postgres 16 build. Read the multi-arch index
-digest from Docker Hub's registry API:
+Both `postgres` service containers in `.github/workflows/ci.yml` pin the image by digest (`postgres:16@sha256:…`). Dependabot does not update images under a workflow's `services:` key, so refresh the digest by hand when moving to a newer Postgres 16 build. Read the multi-arch index digest from Docker Hub's registry API:
 
 ```sh
 TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
@@ -66,8 +79,7 @@ curl -sI -H "Authorization: Bearer $TOKEN" \
   https://registry-1.docker.io/v2/library/postgres/manifests/16 | grep -i '^docker-content-digest'
 ```
 
-Replace the digest in both `services.postgres.image` entries, keeping the `postgres:16` tag for
-readability, and let CI run the PostgreSQL test against the new image.
+Replace the digest in both `services.postgres.image` entries, keeping the `postgres:16` tag for readability, and let CI run the PostgreSQL test against the new image.
 
 ## Effect Code
 
@@ -82,158 +94,24 @@ Conventions:
 
 ## Effect version upgrades
 
-Two different numbers describe the Effect version, and they move separately
-(ADR-0003, update of 2026-09-27):
+Two different numbers describe the Effect version, and they move separately (ADR-0003, update of 2026-09-27):
 
-- **The exact dev pin** lives once in the root **Bun catalog**
-  (`package.json` → `workspaces.catalog`), together with every companion
-  `@effect/*` package at the same version, and is locked in `bun.lock`. Every
-  package references it as `effect: "catalog:"` in `devDependencies`. The root
-  `overrides` entry holds `@effect/platform-node-shared` (a transitive
-  dependency of `@effect/platform-node`, which it ranges with a caret) at the
-  same version, so the lockfile carries exactly one Effect line.
-- **The published floor** is the open range in each package's
-  `peerDependencies` (`"effect": ">=4.0.0-rc.118"`, and the same range on the
-  `@effect/platform-*` peers). It is written as a concrete string because
-  the release packs with `bun pm pack`, which would rewrite `catalog:` to the
-  exact dev pin. It is never an exact version: an exact published peer makes
-  the package impossible to install beside a library that needs a different
-  release.
+- **The exact dev pin** is the `effect` entry in the `pnpm-workspace.yaml` catalog, together with every companion `@effect/*` runtime package at the same version (including `@effect/platform-node-shared`, a transitive dependency of `@effect/platform-node` that `overrides` holds at the catalog version), and is locked in `pnpm-lock.yaml`. Every package references it as `effect: "catalog:"` in `devDependencies`, and `overrides` forces `effect` itself to the catalog singleton.
+- **The published floor** is the `effect` entry under `catalogs.peers` (`">=4.0.0-rc.118"`, and the same range on the `@effect/platform-*` peers), which each package's `peerDependencies` names as `catalog:peers`; `pnpm pack` writes the range into the published manifest. It is never an exact version: an exact published peer makes the package impossible to install beside a library that needs a different release (`vp run pack:check` fails on one).
 
 To bump the **dev pin**:
 
-1. In one PR, set the new version on every `effect` / `@effect/*` catalog
-   entry and on the `overrides` entry, then `bun install`, and check that
-   `bun.lock` lists a single version of `effect` and of each `@effect/*` package.
+1. In one PR, set the new version on every `effect` / `@effect/*` runtime entry in the catalog (not `@effect/tsgo` or `@effect/language-service`, which are on their own lines), then `pnpm install`, and check that `pnpm-lock.yaml` lists a single version of `effect` and of each `@effect/*` runtime package. Dependabot's `effect` group proposes exactly this set.
 2. Run all quality gates; fix any API breakage in the same PR.
-3. No changeset: the dev pin is not part of any published manifest (the peer
-   range is), so moving it releases nothing. Add a changeset only when the bump
-   changes our own API or behaviour, and then for the packages it changes.
+3. No changeset: the dev pin is not part of any published manifest (the peer range is), so moving it releases nothing. Add a changeset only when the bump changes our own API or behaviour, and then for the packages it changes.
 
-Raise the **floor** only when the code needs an API newer than it: re-run the
-gates with the catalog temporarily at the new floor, update the peer ranges and
-each package README's "Effect version" section, and agree the number with the
-sibling libraries first (effect-jsonapi, then effect-auth, then legation
-publish in that order). Moving the floor is a `minor` changeset for every
-package.
+Raise the **floor** only when the code needs an API newer than it: re-run the gates with the catalog temporarily at the new floor, update `catalogs.peers` and each package README's "Effect version" section, and agree the number with the sibling libraries first (effect-jsonapi, then effect-auth, then legation publish in that order). Moving the floor is a `minor` changeset for every package.
 
-CI's **Tests (effect floor)** job (`ci.yml`) runs the test suite on every PR
-against the published floor as well as the pin: it reads the floor from
-`@thomasfosterau/legation-effect`'s `peerDependencies.effect`, points the catalog entries
-versioned with effect (`effect`, the `@effect/*` runtime packages and the
-`@effect/platform-node-shared` override) at it in its own checkout, then
-installs, builds and runs `bun run test:run`. It never moves `typescript`,
-`@typescript/native` or `@effect/tsgo`, and runs only the tests (the other
-gates run at the pin in Quality Gates). It blocks the PR like any other job,
-so a change that breaks the floor has to raise it deliberately (above) rather
-than land silently.
+CI's **Tests (effect floor)** job (`ci.yml`) runs the test suite on every PR against the published floor as well as the pin: it reads the floor from `catalogs.peers.effect`, points the catalog entries versioned with effect (`effect` and the `@effect/*` runtime packages, `@effect/platform-node-shared` included) at it in its own checkout, then installs (`pnpm install --no-frozen-lockfile`) and runs `vp run test`. It never moves `typescript`, `@typescript/native`, `@effect/tsgo` or `@effect/language-service`, and runs only the tests (the other gates run at the pin in Quality Gates). It blocks the PR like any other job, so a change that breaks the floor has to raise it deliberately (above) rather than land silently.
 
 ## Releases
 
-Merges to `trunk` run the release workflow (`.github/workflows/release.yml`).
-It verifies the build, then runs `changesets/action`: if unreleased changesets
-exist it opens or updates a **Version Packages** PR (running `bun run
-version`: `changeset version`, then `bun install --lockfile-only` so `bun.lock`
-carries the bumped versions); when that PR is merged it runs `bun run release`
-(`scripts/release.ts`), which publishes and tags the release:
-
-1. `changeset pack` works out which packages have a version that isn't on npm
-   yet, in dependency order. Versions already on npm are skipped, so a re-run
-   after a partial failure publishes only what is missing. A re-run doesn't
-   tag the packages the failed run had already published, nor create their
-   GitHub releases: create those by hand.
-2. Each of those packages is packed with `bun pm pack`, which rewrites the
-   `workspace:^` dependencies on `@thomasfosterau/legation-effect` and `@thomasfosterau/legation-sql` and any
-   `catalog:` specifier to real ranges; `npm pack` copies both verbatim and
-   would ship uninstallable manifests
-   ([#267](https://github.com/thomasfosterau/legation/issues/267)). `bun pm
-pack` takes those ranges from `bun.lock`, not from `package.json`, so the
-   lockfile must carry the bumped versions; `bun run version` refreshes it,
-   and a hand-edited version needs `bun install --lockfile-only`. The run
-   stops if a packed `package.json` still has either protocol, or if an
-   internal range doesn't match that package's current version (a stale
-   `bun.lock`). It also stops on an exact `effect` / `@effect/*` peer (the
-   published floor is an open range, see "Effect version upgrades"), on a
-   `svelte` export condition naming a file that isn't in the tarball, and on
-   any finding from [publint](https://publint.dev) (strict, so warnings
-   count) or [arethetypeswrong](https://arethetypeswrong.github.io) on the
-   tarball. The attw check ignores the `node10` and `node16-cjs` resolution modes, the
-   ones its `esm-only` profile ignores: the packages are ESM-only by design.
-   A finding that isn't a real problem is suppressed in `attwSuppressions` in
-   `scripts/release.ts`, with its reason
-   ([#250](https://github.com/thomasfosterau/legation/issues/250)).
-3. `changeset publish --from-pack-dir` uploads each tarball with
-   `npm publish <tarball>` and creates the git tags. npm does the upload, not
-   `bun publish`, because `bun publish` has no OIDC trusted publishing.
-
-CI runs `bun run release:check` on every pull request, after the build: it
-packs every publishable package the same way and runs the same checks,
-without touching the registry. `bun run release:dry-run` does steps 1 and 2 against
-the real registry state and prints where it left the tarballs, without
-publishing.
-
-Publishing uses npm [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers):
-there is no `NPM_TOKEN` secret. The workflow proves its identity to npm with a
-short-lived, workflow-bound token (`id-token: write`), and provenance is
-left to npm, which attaches it only when allowed (a public source repository);
-it is never forced, because an explicit request fails from a private
-repository. The publish job
-runs in a protected `release` GitHub Environment so it pauses for manual
-approval, and never runs on forks.
-
-### Maintainer setup (one-time)
-
-1. **Allow Actions to open the Version Packages PR.** **Settings → Actions →
-   General → Workflow permissions** → enable **"Allow GitHub Actions to create
-   and approve pull requests"**. Without it the built-in `GITHUB_TOKEN` cannot
-   open pull requests even though the job grants `pull-requests: write`.
-2. **Configure the trusted publisher on every package.** A trusted publisher
-   can only be attached to a package that already exists on npm (see the first
-   release below). For each `@thomasfosterau/legation-*` package on npmjs.com, open
-   **Settings → Trusted Publisher** and add:
-   - Provider: **GitHub Actions**
-   - Repository: `thomasfosterau/legation`
-   - Workflow: `release.yml`
-   - Environment: `release`
-
-   Then remove any classic automation tokens for the package.
-
-3. **Protect the `release` environment.** **Settings → Environments →
-   `release`** → enable **Required reviewers** (yourself) and restrict
-   deployment to the `trunk` branch.
-4. **Protect `trunk`.** Require pull requests and passing CI before merge and
-   disallow direct pushes, so a release can only be triggered by merging the
-   reviewed Version Packages PR.
-
-### First release (manual, once per package)
-
-The packages publish under the `@thomasfosterau` user scope, which belongs to
-the npm account of the same name, so there is no organisation to create; but
-each package must exist on the registry before a trusted publisher can be
-attached to it. The initial publish is therefore done by hand, with your own
-npm login:
-
-1. Confirm you are logged in to npm as `thomasfosterau` (`npm whoami`): a user
-   scope only accepts publishes from its owner.
-2. From a clean checkout of `trunk`, logged in to npm (`npm login`), run
-   `bun ci`, then `bun run release:dry-run` and inspect the tarballs in the
-   directory it prints, then `bun run release`. It builds, packs and publishes every
-   package as the workflow does (see "Releases" above), with your login in
-   place of OIDC; npm's 2FA prompt appears in the terminal. It publishes with
-   `--access public` (`.changeset/config.json` → `access: "public"`), which
-   the scoped packages need, and creates a local git tag per package
-   (`@thomasfosterau/legation-effect@0.1.0`, …); push them with `git push origin --tags`.
-   Never use `npm publish` or `npm publish --workspaces` directly: npm copies
-   `workspace:^` and `catalog:` into the published `package.json` verbatim
-   ([#267](https://github.com/thomasfosterau/legation/issues/267)).
-
-3. Attach the trusted publisher to each published package (maintainer setup
-   step 2 above).
-
-Once every package has a published `0.1.0` and a trusted publisher, the
-workflow above takes over: land changesets on `trunk`, merge the Version
-Packages PR, approve the `release` environment, and releases publish
-automatically.
+The release pipeline, its checks and the owner's one-time setup are in [PUBLISHING.md](PUBLISHING.md).
 
 ## License
 

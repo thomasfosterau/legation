@@ -5,7 +5,9 @@
  * unsubscribed, the next pull removes the rows from the mirror.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Schema } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

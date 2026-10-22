@@ -3,7 +3,7 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
 
-// The sync server is its own process (`bun run dev:server`, port 3100); the
+// The sync server is its own process (`pnpm run dev:server`, port 3100); the
 // dev server proxies both sync carriers to it so the browser talks same-origin.
 export default defineConfig({
   plugins: [

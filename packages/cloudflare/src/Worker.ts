@@ -62,5 +62,6 @@ export const routeSync =
     const forwarded = new URL(request.url);
     forwarded.pathname = route;
     // Forward verbatim (WebSocket upgrades included — the stub carries them).
+    // oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- the stub answers with the runtime's one global `Response`, which workers-types and lib.dom declare twice, incompatibly; `routeSync`'s exported signature is lib.dom's.
     return stub.fetch(forwarded.toString(), request as never) as unknown as Promise<Response>;
   };

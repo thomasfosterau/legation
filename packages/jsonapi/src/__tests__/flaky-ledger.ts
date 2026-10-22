@@ -1,7 +1,8 @@
 /**
  * A ledger store that fails on demand, for the ledger-store failure tests (#468).
  */
-import { Effect, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { BackendError } from "@thomasfosterau/legation-effect";
 import type * as Ledger from "../Ledger.js";
 

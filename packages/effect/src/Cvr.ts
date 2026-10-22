@@ -11,7 +11,11 @@
  * reset patch (Clear + full Puts).
  */
 
-import { Context, Effect, Layer, Ref, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
 import { StoreError } from "./Errors.js";

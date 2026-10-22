@@ -11,7 +11,7 @@
  * that only checks the DOM would pass while the window stayed registered,
  * which is the entire bug (#141's northwind/realworld `?? ""` sentinels).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import OptOutQueryHarness from "./fixtures/OptOutQueryHarness.svelte";
 import OptOutConnectionHarness from "./fixtures/OptOutConnectionHarness.svelte";

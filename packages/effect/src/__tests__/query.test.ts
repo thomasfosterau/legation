@@ -4,7 +4,8 @@
  * the client renders from its own local subset over the rows it was sent.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -23,7 +24,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 interface Todo {
   readonly id: string;
   readonly title: string;
-  readonly archived: boolean;
+  readonly isArchived: boolean;
 }
 
 const setTodo = Mutator.make("todo/set", Schema.Unknown);
@@ -37,14 +38,14 @@ const handlers: Record<string, MemoryBackend.BackendHandler> = {
 // `visibleTodos`: the client renders *all* todos locally; the server narrows to
 // the non-archived ones. `todosByStatus`: shaped from client args.
 const visibleTodos = Query.make("visibleTodos", Schema.Struct({}));
-const todosByStatus = Query.make("todosByStatus", Schema.Struct({ archived: Schema.Boolean }));
+const todosByStatus = Query.make("todosByStatus", Schema.Struct({ isArchived: Schema.Boolean }));
 
 const queries = Query.registry([
   { query: visibleTodos, local: () => Subset.make({ collection: "todos" }) },
   {
     query: todosByStatus,
     local: (args) =>
-      Subset.make({ collection: "todos", where: Predicate.eq("archived", args.archived) }),
+      Subset.make({ collection: "todos", where: Predicate.eq("isArchived", args.isArchived) }),
   },
 ]);
 
@@ -52,13 +53,15 @@ const resolver = Query.resolver([
   {
     query: visibleTodos,
     server: () =>
-      Effect.succeed(Subset.make({ collection: "todos", where: Predicate.eq("archived", false) })),
+      Effect.succeed(
+        Subset.make({ collection: "todos", where: Predicate.eq("isArchived", false) })
+      ),
   },
   {
     query: todosByStatus,
     server: (args) =>
       Effect.succeed(
-        Subset.make({ collection: "todos", where: Predicate.eq("archived", args.archived) })
+        Subset.make({ collection: "todos", where: Predicate.eq("isArchived", args.isArchived) })
       ),
   },
 ]);
@@ -100,8 +103,8 @@ const makeClient = (handler: ServerHandler) =>
 
 const seed = (engine: ClientEngineModule.ClientEngine) =>
   Effect.gen(function* () {
-    yield* engine.mutate("todo/set", { id: "1", title: "keep", archived: false });
-    yield* engine.mutate("todo/set", { id: "2", title: "old", archived: true });
+    yield* engine.mutate("todo/set", { id: "1", title: "keep", isArchived: false });
+    yield* engine.mutate("todo/set", { id: "2", title: "old", isArchived: true });
     yield* engine.push;
   });
 
@@ -126,9 +129,9 @@ describe("named queries", () => {
       const engine = yield* makeClient(yield* withResolver);
       yield* seed(engine);
 
-      yield* engine.subscribeQuery("todosByStatus", { archived: true });
+      yield* engine.subscribeQuery("todosByStatus", { isArchived: true });
       yield* engine.pull;
-      expect(ids(yield* engine.queryNamed("todosByStatus", { archived: true }))).toEqual(["2"]);
+      expect(ids(yield* engine.queryNamed("todosByStatus", { isArchived: true }))).toEqual(["2"]);
     }).pipe(Effect.scoped)
   );
 

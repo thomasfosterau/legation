@@ -4,7 +4,7 @@
  * degenerate-looking cases (adjacent digits, no bound on one side) that
  * trip up naive lexicographic-string implementations (module doc).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as FractionalIndex from "../FractionalIndex.js";
 
 describe("FractionalIndex", () => {

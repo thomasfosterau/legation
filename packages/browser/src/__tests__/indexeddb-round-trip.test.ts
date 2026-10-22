@@ -6,7 +6,8 @@
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
 import { ClientStore } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { KeyValueStore } from "effect/persistence";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";

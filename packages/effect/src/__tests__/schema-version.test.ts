@@ -7,7 +7,10 @@
  * fleet cookie-namespace bump forces every old cookie to a reset patch.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

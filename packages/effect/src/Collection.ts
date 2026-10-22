@@ -14,7 +14,7 @@
  * deprecated; the graph is preferred when it applies.
  */
 
-import type { Schema } from "effect";
+import type * as Schema from "effect/Schema";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
 

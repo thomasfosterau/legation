@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Transport } from "@thomasfosterau/legation-effect";
 import { RpcTransport } from "@thomasfosterau/legation-effect/internal";
-import { Layer } from "effect";
+import * as Layer from "effect/Layer";
 import { HttpRouter } from "effect/http";
 import type { ServeError } from "effect/http/HttpServerError";
 import { RpcSerialization, RpcServer } from "effect/rpc";

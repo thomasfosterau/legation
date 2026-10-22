@@ -72,7 +72,8 @@
  * handler needs from the host.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
@@ -284,7 +285,8 @@ interface Candidate {
 
 /** How a candidate request leaves the façade short of a document: forwarded, or answered with an error. */
 type Outcome =
-  { readonly _tag: "Forward" } | { readonly _tag: "Respond"; readonly response: Response };
+  | { readonly _tag: "Forward" }
+  | { readonly _tag: "Respond"; readonly response: Response };
 
 const forward: Outcome = { _tag: "Forward" };
 const respond = (response: Response): Outcome => ({ _tag: "Respond", response });
@@ -407,9 +409,10 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     const candidate = candidateOf(request);
     if (candidate === undefined) return Effect.succeed(undefined);
     return answer(candidate).pipe(
-      Effect.catch((outcome) =>
-        Effect.succeed(outcome._tag === "Forward" ? undefined : outcome.response)
-      )
+      Effect.catchTags({
+        Forward: () => Effect.succeed(undefined),
+        Respond: (outcome) => Effect.succeed(outcome.response),
+      })
     );
   };
 

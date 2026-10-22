@@ -72,12 +72,12 @@ src/routes/       +layout.ts (builds the world once) + one folder per screen
 
 ```sh
 # from the repo root
-bun install
-bun run build
+pnpm install
+vp run build
 
 # then, in this example
 cd examples/realworld
-bun run dev      # open the printed http://localhost:5177
+pnpm run dev      # open the printed http://localhost:5177
 ```
 
 Sign in as `emma / demo` or `liang / demo`, or register a new user.
@@ -90,4 +90,4 @@ Sign in as `emma / demo` or `liang / demo`, or register a new user.
 - The example is a workspace member for dependency consistency. It is excluded
   from the root `tsc` project, oxlint, and prettier (it is illustrative, not a
   published package), but CI does run its `check` script via
-  `bun run typecheck:examples`.
+  `vp run check:examples`.

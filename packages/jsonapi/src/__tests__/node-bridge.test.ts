@@ -5,8 +5,13 @@
  * inverses discover across bridged one-edges, paginated order is required
  * — and the bridged registry drives a real Client read end to end.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { Filter, Relationship, Resource, Sort } from "@thomasfosterau/effect-jsonapi";
 import {
   Authorization,
@@ -94,7 +99,7 @@ describe("NodeBridge.fromResource", () => {
       via: "productId",
     });
     // The promoted attribute now lives on the edge, not in attributes.
-    expect(Object.keys(node.attributes).sort()).toEqual(["body", "createdAt"]);
+    expect(Arr.sort(Object.keys(node.attributes), Order.String)).toEqual(["body", "createdAt"]);
     expect([...Node.derivableSet(node)]).toEqual(["productId"]);
   });
 
@@ -103,7 +108,7 @@ describe("NodeBridge.fromResource", () => {
       ...bridgeOptions.reviews,
       hintKeys: ["tenantId"],
     });
-    expect([...Node.derivableSet(node)].sort()).toEqual(["productId", "tenantId"]);
+    expect(Arr.sort(Node.derivableSet(node), Order.String)).toEqual(["productId", "tenantId"]);
   });
 
   it("rejects a paginated relationship without an order", () => {
@@ -134,7 +139,11 @@ describe("NodeBridge.fromResource", () => {
 describe("NodeBridge.registry", () => {
   it("discovers inverses across bridged one-edges, declared ones included", () => {
     const nodes = NodeBridge.registry([Category, Product, Review], bridgeOptions);
-    expect([...nodes.nodes.keys()].sort()).toEqual(["categories", "products", "reviews"]);
+    expect(Arr.sort(nodes.nodes.keys(), Order.String)).toEqual([
+      "categories",
+      "products",
+      "reviews",
+    ]);
     expect(nodes.nodes.get("products")!.edges["reviews"]).toEqual({
       kind: "paginated",
       target: "reviews",
@@ -143,7 +152,13 @@ describe("NodeBridge.registry", () => {
     });
     // The engine registry carries the joins edge-for-edge.
     const product = nodes.collections.get("products");
-    expect(product?.relationships?.map((rel) => rel.name).sort()).toEqual(["category", "reviews"]);
+    assert(product?.relationships !== undefined);
+    expect(
+      Arr.sort(
+        product.relationships.map((rel) => rel.name),
+        Order.String
+      )
+    ).toEqual(["category", "reviews"]);
   });
 
   it("rejects an ambiguous inverse, naming the candidates", () => {

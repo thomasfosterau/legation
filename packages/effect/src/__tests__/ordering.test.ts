@@ -7,8 +7,9 @@
  * "C"`; this file pins the JS side on its own. Random strings come from
  * Effect's seeded `Random` service (`Random.withSeed`), the repo's idiom.
  */
-import { Effect, Random } from "effect";
-import { describe, expect, it } from "vitest";
+import * as Effect from "effect/Effect";
+import * as Random from "effect/Random";
+import { describe, expect, it } from "vite-plus/test";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 

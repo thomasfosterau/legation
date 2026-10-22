@@ -12,7 +12,13 @@
  * does not serialise.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";

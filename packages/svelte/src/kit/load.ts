@@ -16,7 +16,7 @@
  * is required from context.
  */
 import type { Cookies } from "@sveltejs/kit";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Hydration, type Transport } from "@thomasfosterau/legation-effect";
 import type {
   MutatorError,

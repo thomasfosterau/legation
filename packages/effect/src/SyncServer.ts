@@ -17,7 +17,12 @@
  * convergence, so anything a single row can't decide matches (ADR-0009).
  */
 
-import { Clock, Effect, Layer, Metric, Ref, Scope } from "effect";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import { Backend, type ChangeHint, type SyncContext } from "./Backend.js";
 import {
   AuthPolicy,
@@ -49,6 +54,7 @@ import type {
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
+// oxlint-disable-next-line effect/no-service-constructor-imports -- the poke hub is a private per-handler instance, not a service; exposing it as one would add a requirement to the public sync-server layers.
 import { ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
 

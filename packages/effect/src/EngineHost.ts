@@ -66,7 +66,16 @@ import * as Query from "./Query.js";
 import * as Related from "./Related.js";
 import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
-import { Clock, Duration, Effect, Exit, Fiber, HashMap, Option, Ref, Scope, Stream } from "effect";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 

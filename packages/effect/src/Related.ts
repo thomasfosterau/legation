@@ -19,7 +19,13 @@
  * same machinery via {@link queryWith}/{@link observeWith}/{@link relatedWith}.
  */
 
-import { Effect, Fiber, Queue, Ref, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as P from "effect/Predicate";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Collection from "./Collection.js";
 import type { ClientEngine, LocalRow } from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
@@ -69,7 +75,7 @@ export interface EdgeSelect {
 
 /** Normalize an edge selection input. */
 export const edgeSelect = (input: string | EdgeSelect): EdgeSelect =>
-  typeof input === "string" ? { name: input } : input;
+  P.isString(input) ? { name: input } : input;
 
 /**
  * The per-collection lookup the plumbing maintains: for each targeted
@@ -96,11 +102,6 @@ export interface Strategy {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-const fieldOf = (value: unknown, field: string): unknown =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)[field]
-    : undefined;
-
 /** Group a collection's rows by the value of one field (the pinned join key). */
 const groupByField = (
   rows: ReadonlyArray<LocalRow>,
@@ -108,7 +109,7 @@ const groupByField = (
 ): Map<Predicate.Literal, ReadonlyArray<LocalRow>> => {
   const map = new Map<Predicate.Literal, Array<LocalRow>>();
   for (const row of rows) {
-    const key = fieldOf(row.value, field) as Predicate.Literal;
+    const key = Predicate.fieldValue(row.value, field) as Predicate.Literal;
     const bucket = map.get(key);
     if (bucket === undefined) map.set(key, [row]);
     else bucket.push(row);
@@ -158,7 +159,7 @@ const pinIds = (
   localField: string
 ): void => {
   for (const row of baseRows) {
-    const value = fieldOf(row.value, localField);
+    const value = Predicate.fieldValue(row.value, localField);
     if (value !== undefined && value !== null) ids.add(value as Predicate.Literal);
   }
 };
@@ -213,7 +214,7 @@ export const fieldMappingStrategy = (
   resolveRow: (index, baseRow) => {
     const related: Record<string, RelatedValue> = {};
     for (const relationship of relationships) {
-      const key = fieldOf(baseRow.value, relationship.localField) as Predicate.Literal;
+      const key = Predicate.fieldValue(baseRow.value, relationship.localField) as Predicate.Literal;
       const bucket = index.get(relationship.collection)?.get(key);
       related[relationship.name] =
         relationship.kind === "one"
@@ -535,7 +536,8 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     rows: ReadonlyArray<LocalRow>
   ): ReadonlySet<Predicate.Literal> => {
     const changedKeys = new Set<Predicate.Literal>();
-    const keyOf = (row: LocalRow) => fieldOf(row.value, state.target.field) as Predicate.Literal;
+    const keyOf = (row: LocalRow) =>
+      Predicate.fieldValue(row.value, state.target.field) as Predicate.Literal;
     const putInto = (key: Predicate.Literal, row: LocalRow): void => {
       const bucket = state.buckets.get(key) ?? new Map<string, LocalRow>();
       bucket.set(row.id, row);
@@ -887,7 +889,7 @@ export interface SourcedRow {
  * and nothing enters the replica.
  */
 export const queryVia = <E>(
-  fetch: (subsets: ReadonlyArray<Subset.Subset>) => Effect.Effect<ReadonlyArray<SourcedRow>, E>,
+  fetchRows: (subsets: ReadonlyArray<Subset.Subset>) => Effect.Effect<ReadonlyArray<SourcedRow>, E>,
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
@@ -895,12 +897,12 @@ export const queryVia = <E>(
 ): Effect.Effect<ReadonlyArray<RelatedRow>, E> =>
   Effect.gen(function* () {
     const strategy = fieldMappingStrategy(selectRelationships(registry, collectionName, edges));
-    const base = (yield* fetch([subset]))
+    const base = (yield* fetchRows([subset]))
       .filter((row) => row.collection === subset.collection)
       .map(({ id, value }) => ({ id, value }));
     const targets = strategy.targets(base);
     const foreignSubsets = subsetsForTargets(targets);
-    const foreign = foreignSubsets.length === 0 ? [] : yield* fetch(foreignSubsets);
+    const foreign = foreignSubsets.length === 0 ? [] : yield* fetchRows(foreignSubsets);
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     for (const [collection, target] of targets) {
       index.set(

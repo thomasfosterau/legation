@@ -12,7 +12,9 @@
  * {@link compute} / {@link computeGrouped}.
  */
 
-import { Schema, Stream } from "effect";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Predicate from "./Predicate.js";
 
 /**
@@ -65,11 +67,8 @@ export type AggregateValue = number | undefined;
 
 /** A row's field as a finite number, or `undefined` if absent/non-numeric. */
 const numericField = (value: unknown, field: string): number | undefined => {
-  const raw =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)[field]
-      : undefined;
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  const raw = Predicate.fieldValue(value, field);
+  return P.isNumber(raw) && Number.isFinite(raw) ? raw : undefined;
 };
 
 /** The numeric values of `field` across `rows`, skipping absent/non-numeric ones. */
@@ -113,11 +112,7 @@ export const compute = (
 
 /** A row's group key: `String(row.value[groupBy])` (so `undefined` → `"undefined"`). */
 const groupKey = (value: unknown, groupBy: string): string =>
-  String(
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)[groupBy]
-      : undefined
-  );
+  String(Predicate.fieldValue(value, groupBy));
 
 /** Partition `rows` by {@link groupKey}, preserving each group's row order. */
 const bucketByGroup = <R extends { readonly value: unknown }>(

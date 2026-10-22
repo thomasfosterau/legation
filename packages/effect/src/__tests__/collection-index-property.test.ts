@@ -11,8 +11,8 @@
  * #153) with NULL, absent and astral text on — ADR-0028's acceptance
  * criterion for the index.
  */
-import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import * as Effect from "effect/Effect";
+import { describe, expect, it } from "vite-plus/test";
 import * as CollectionIndex from "../CollectionIndex.js";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
@@ -107,9 +107,9 @@ const randomPredicate = (rng: Rng): Predicate.Predicate => {
   const conjunctCount = 1 + int(rng, 4);
   const conjuncts = Array.from({ length: conjunctCount }, () => randomConjunct(rng));
   const base = Predicate.and(...conjuncts);
-  const shape = int(rng, 4);
-  if (shape === 0) return Predicate.not(base);
-  if (shape === 1) return Predicate.or(base, randomConjunct(rng));
+  const wrapper = int(rng, 4);
+  if (wrapper === 0) return Predicate.not(base);
+  if (wrapper === 1) return Predicate.or(base, randomConjunct(rng));
   return base;
 };
 

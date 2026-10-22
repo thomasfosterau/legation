@@ -36,7 +36,7 @@
 
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Identity } from "@thomasfosterau/legation-effect";
-import { Layer } from "effect";
+import * as Layer from "effect/Layer";
 import { atomicKeyValueLayer, keyValueLayer } from "./internal/IndexedDbKeyValue.js";
 
 /** Options for the IndexedDB-backed `ClientStore` layers. */

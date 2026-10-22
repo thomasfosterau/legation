@@ -9,7 +9,12 @@
  * test releases it, so the interleaving is staged with Deferreds and no wall-clock time.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Client from "../Client.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
@@ -28,7 +33,7 @@ import * as Predicate from "../Predicate.js";
 import type { PatchOp, PullRequest, PullResponse } from "../Protocol.js";
 import * as Query from "../Query.js";
 import * as Subset from "../Subset.js";
-import { ClientTransport, type ClientTransport as ClientTransportShape } from "../Transport.js";
+import { ClientTransport } from "../Transport.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, sellerId: Schema.String },
@@ -52,7 +57,7 @@ const makeGated = Effect.gen(function* () {
   const issued = yield* Deferred.make<PullRequest>();
   const release = yield* Deferred.make<PullResponse, TransportError>();
   let calls = 0;
-  const transport: ClientTransportShape = {
+  const transport: ClientTransport = {
     push: () => Effect.die(new Error("push is not part of this test")),
     pull: (request) => {
       calls += 1;
@@ -69,7 +74,7 @@ const makeGated = Effect.gen(function* () {
 });
 
 /** A transport whose n-th pull answers with the n-th patch of `patches`, and with nothing after them. */
-const scripted = (patches: ReadonlyArray<ReadonlyArray<PatchOp>>): ClientTransportShape => {
+const scripted = (patches: ReadonlyArray<ReadonlyArray<PatchOp>>): ClientTransport => {
   let calls = 0;
   return {
     push: () => Effect.die(new Error("push is not part of this test")),
@@ -88,7 +93,7 @@ const scripted = (patches: ReadonlyArray<ReadonlyArray<PatchOp>>): ClientTranspo
   };
 };
 
-const engineOver = (transport: ClientTransportShape) =>
+const engineOver = (transport: ClientTransport) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
     return yield* ClientEngineModule.make({

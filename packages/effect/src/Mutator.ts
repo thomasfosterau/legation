@@ -11,7 +11,8 @@
  * are supplied by the app inside its own transaction (Backend.ts).
  */
 
-import type { Effect, Schema } from "effect";
+import type * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 import type { RowId } from "./Collection.js";
 import { DuplicateNameError, type MutatorError, type StoreError } from "./Errors.js";
 

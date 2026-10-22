@@ -11,7 +11,11 @@
  * write. A `GET` or `DELETE` has no yield point, so it runs whole without it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Option, Ref, Semaphore } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";

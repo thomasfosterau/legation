@@ -4,7 +4,11 @@
  * push on instance A pokes a session registered on instance B.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Schema, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 const sleepReal = (millis: number) =>
   Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));

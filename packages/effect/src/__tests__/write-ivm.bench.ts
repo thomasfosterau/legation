@@ -7,14 +7,17 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { describe, test } from "vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import { describe, test } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
-import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { layerInMemory, ServerHandler } from "../Transport.js";
 
 const ROWS = 10_000;
 const MUTATIONS = 30;
@@ -52,14 +55,14 @@ const seed = (engine: ClientEngineModule.ClientEngine) =>
 
 const scenario = Effect.gen(function* () {
   const store = yield* ClientStoreModule.makeMemory;
-  const transport = yield* makeInMemory(noopHandler, "bench");
   const engine = yield* ClientEngineModule.make({
     clientId: "bench",
     clientGroupId: "bench",
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),
-    Effect.provideService(ClientTransport, transport)
+    Effect.provide(layerInMemory("bench")),
+    Effect.provideService(ServerHandler, noopHandler)
   );
   yield* seed(engine);
   const seen = yield* Ref.make(0);

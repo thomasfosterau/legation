@@ -4,7 +4,7 @@
  * A reference implementation of the core `Backend` contract (ADR-0009) over a
  * SQL database, addressing the audit's "turnkey backend" gap with a
  * driver-agnostic adapter: the app provides a tiny `SqlExecutor` (wrapping
- * `bun:sqlite`, `effect/sql`, `pg`, …) and per-collection table
+ * `better-sqlite3`, `effect/sql`, `pg`, …) and per-collection table
  * mappings, and this backend supplies subset evaluation, row fetching, and the
  * transactional mutation-id ledger.
  *
@@ -92,7 +92,9 @@
  * would be a bug: a soft-deleted row must never keep syncing as a put).
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import {
   Backend,
   BackendError,
@@ -152,7 +154,7 @@ const decodeRejections = (
   if (text === null || text === undefined) return Effect.succeed(new Map());
   return Effect.try({
     try: () => {
-      if (typeof text !== "string") throw new TypeError("not text");
+      if (!P.isString(text)) throw new TypeError("not text");
       return new Map(
         Object.entries(JSON.parse(text) as Record<string, string>).map(
           ([id, reason]) => [Number(id), String(reason)] as const

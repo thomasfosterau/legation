@@ -41,7 +41,14 @@
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  */
 
-import { Data, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
+import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { Backend, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
@@ -175,7 +182,8 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     MemoryBackend.handler(countUp, (args, writer) =>
       Effect.gen(function* () {
         const current = (yield* writer.get(args.collection, args.id)) as
-          { readonly n?: number } | undefined;
+          | { readonly n?: number }
+          | undefined;
         yield* park(args.gate);
         yield* writer.put(args.collection, args.id, { n: (current?.n ?? 0) + 1 });
       })
@@ -370,7 +378,7 @@ const makeHarness = (
     mutationId,
     mutator,
     args,
-    createdAt: Date.now(),
+    createdAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
   });
 
   return {

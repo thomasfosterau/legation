@@ -21,7 +21,10 @@
  * ```
  */
 
-import { Context, Effect, Layer, Stream } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import { ClientEngine, type EngineEvent } from "./ClientEngine.js";
 import { ClientStore } from "./ClientStore.js";
 import type { StoreError } from "./Errors.js";

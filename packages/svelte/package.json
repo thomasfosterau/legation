@@ -2,7 +2,34 @@
   "name": "@thomasfosterau/legation-svelte",
   "version": "0.1.0",
   "description": "Svelte bindings for the legation engine: rune hooks over the Client, plus the SvelteKit integration on /kit",
+  "keywords": [
+    "effect",
+    "runes",
+    "ssr",
+    "svelte",
+    "sveltekit",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/svelte#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/svelte"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.svelte.js",
   "types": "./dist/index.svelte.d.ts",
   "exports": {
@@ -17,55 +44,24 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.. packages/svelte"
-  },
-  "keywords": [
-    "effect",
-    "svelte",
-    "sveltekit",
-    "runes",
-    "ssr",
-    "sync-engine",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/legation-effect": "workspace:^",
-    "@thomasfosterau/effect-svelte": "^0.5.0"
-  },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118",
-    "svelte": ">=5.40",
-    "@sveltejs/kit": "^2.0.0 || ^3.0.0"
+    "@thomasfosterau/effect-svelte": "catalog:",
+    "@thomasfosterau/legation-effect": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@sveltejs/kit": "catalog:",
     "effect": "catalog:",
-    "svelte": "^5",
-    "@sveltejs/kit": "catalog:"
+    "svelte": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/svelte"
+  "peerDependencies": {
+    "@sveltejs/kit": "catalog:peers",
+    "effect": "catalog:peers",
+    "svelte": "catalog:peers"
   },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/svelte#readme",
   "peerDependenciesMeta": {
     "@sveltejs/kit": {
       "optional": true

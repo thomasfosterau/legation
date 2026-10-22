@@ -123,10 +123,10 @@ stalls that client's queue until the client is reset: an accepted trade-off of #
 SvelteKit 3 needs Node 22.17 or later.
 
 ```bash
-bun install && bun run build          # workspace root: build the packages
+pnpm install && vp run build          # workspace root: build the packages
 cd examples/commerce
-bun run dev:server                    # the sync server (WS + HTTP + JSON:API, port 3100)
-bun run dev                           # the SvelteKit app (port 5178, proxies /sync*)
+pnpm run dev:server                    # the sync server (WS + HTTP + JSON:API, port 3100)
+pnpm run dev                           # the SvelteKit app (port 5178, proxies /sync*)
 ```
 
 Sign in with any username (demo auth — the point is the `IdentityResolver`
@@ -138,7 +138,7 @@ in the console — the response carries `x-legation-served-at`.
 
 An existing database (`COMMERCE_DB`, default `commerce.db`) keeps the ledger table it was created with: `CREATE TABLE IF NOT EXISTS` does not add the `rejections` column, so its first push fails with the migration error. Add the column as described in the [SQL README](../../packages/sql/README.md#ledger-without-the-rejections-column), or delete the file to start over.
 
-A production build (`bun run build`, adapter-node) needs `BETTER_AUTH_SECRET`
+A production build (`pnpm run build`, adapter-node) needs `BETTER_AUTH_SECRET`
 set, and serves the read proxy itself; put a reverse proxy in front that
 routes `/sync*` to the sync server, as the dev server and the browser test's
 harness do. adapter-node takes the app's origin from the request, not from an
@@ -148,7 +148,7 @@ harness do. adapter-node takes the app's origin from the request, not from an
 
 ## Tests
 
-`bun run test` (from this directory) runs the app's server-side suites in
+`pnpm run test` (from this directory) runs the app's server-side suites in
 the workspace runner:
 
 - `backend-contract.test.ts` — the ADR-0009 contract verification of the
@@ -196,11 +196,11 @@ the workspace runner:
   forward at the socket (the emulation leaves the worker's own fetches
   reachable); offline, "Add to cart" journals a mutation the covered cart
   URL shows before the server has the row, and the server catches up on
-  reconnect. It needs Chromium: `bunx playwright-core install chromium` (or
+  reconnect. It needs Chromium: `pnpm exec playwright-core install chromium` (or
   `PLAYWRIGHT_BROWSERS_PATH` pointing at an install); without it the suite
   fails naming the missing binary — it never skips. About forty seconds wall
   time, most of it the build and the engine's first pull. Run it through the
-  root config (`bun run test` here selects both projects); a run without the
+  root config (`pnpm run test` here selects both projects); a run without the
   global setup fails rather than serving a stale `build/`.
 
 ## Deliberate next steps

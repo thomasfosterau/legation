@@ -21,19 +21,17 @@ import * as Related from "./Related.js";
 import * as RowChange from "./RowChange.js";
 import * as Subset from "./Subset.js";
 import * as Telemetry from "./Telemetry.js";
-import {
-  Deferred,
-  type Duration,
-  Effect,
-  HashMap,
-  Metric,
-  Option,
-  PubSub,
-  Ref,
-  Schema,
-  Scope,
-  Stream,
-} from "effect";
+import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 

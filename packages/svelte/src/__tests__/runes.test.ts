@@ -6,7 +6,7 @@
  * `include` resolves edges live — the hook subscribes its own windows, so
  * server-side rows arrive without any manual registration.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import RunesQueryHarness from "./fixtures/RunesQueryHarness.svelte";
 import RunesRelatedHarness from "./fixtures/RunesRelatedHarness.svelte";

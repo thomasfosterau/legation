@@ -6,7 +6,9 @@
  * the TestClock, so the bound is crossed by advancing virtual time, not by waiting.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Logger, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as InvalidationBus from "../InvalidationBus.js";
 

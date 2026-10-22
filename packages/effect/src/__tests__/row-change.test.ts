@@ -21,7 +21,7 @@
  * convention of a tiny seeded PRNG instead, so a failure prints a
  * reproducible seed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as RowChange from "../RowChange.js";

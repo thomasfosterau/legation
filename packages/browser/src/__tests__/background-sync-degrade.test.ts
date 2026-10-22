@@ -26,7 +26,14 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Layer, Logger, LogLevel, References, Schema, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as LogLevel from "effect/LogLevel";
+import * as References from "effect/References";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 

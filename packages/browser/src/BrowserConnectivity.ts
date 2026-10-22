@@ -44,7 +44,14 @@
 
 import { Transport } from "@thomasfosterau/legation-effect";
 import type { Protocol } from "@thomasfosterau/legation-effect/internal";
-import { Duration, Effect, Queue, Schedule, Scope, Stream, SubscriptionRef } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
+import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 /**
  * Options for {@link withBrowserConnectivity}.
@@ -61,7 +68,7 @@ export interface BrowserConnectivityOptions {
 
 /** The global `navigator` when it reports `onLine`, else undefined (SSR, or a runtime without it). */
 const globalNavigator = (): Navigator | undefined =>
-  typeof globalThis.navigator === "object" && typeof globalThis.navigator.onLine === "boolean"
+  P.isObjectOrArray(globalThis.navigator) && P.isBoolean(globalThis.navigator.onLine)
     ? globalThis.navigator
     : undefined;
 
@@ -109,9 +116,9 @@ export const withBrowserConnectivity = (
   options: BrowserConnectivityOptions = {}
 ): Effect.Effect<Transport.ClientTransport, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const win: EventTarget | undefined = typeof window !== "undefined" ? window : undefined;
+    const win: EventTarget | undefined = globalThis.window;
     const doc: (EventTarget & { readonly visibilityState?: string }) | undefined =
-      typeof document !== "undefined" ? document : undefined;
+      globalThis.document;
 
     // Read once, at construction: the initial status and the probe's baseline
     // are the same reading.

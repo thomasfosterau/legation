@@ -22,7 +22,8 @@
  * keeps every fold `O(log N)` regardless of how many mutations are pending.
  */
 
-import { HashMap, Option } from "effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import type { Mutation } from "./Protocol.js";
 
 /** Where a journaled mutation is in its lifecycle. */

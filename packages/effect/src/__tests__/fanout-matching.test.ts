@@ -14,7 +14,11 @@
  * and the poked group accounts for the whole total.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Metric, Option, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import type { ChangeHint } from "../Backend.js";

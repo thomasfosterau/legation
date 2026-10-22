@@ -7,7 +7,11 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
-import { Effect, Layer, Schedule, Schema, type Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import {
   Authorization,
   Backend,
@@ -68,7 +72,7 @@ const makeServer: Effect.Effect<Transport.ServerHandler, never, Scope.Scope> = E
 const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: string }> } => {
   const jar = new Map<string, string>();
   const sets: Array<{ name: string; value: string }> = [];
-  const cookies = {
+  const cookies: Cookies = {
     get: (name: string) => jar.get(name),
     getAll: () => [...jar].map(([name, value]) => ({ name, value })),
     set: (name: string, value: string) => {
@@ -77,7 +81,11 @@ const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: s
     },
     delete: (name: string) => void jar.delete(name),
     serialize: () => "",
-  } as unknown as Cookies;
+    // Nothing under test parses a `Set-Cookie` header.
+    parse: () => {
+      throw new Error("fakeCookies: parse is not faked");
+    },
+  };
   return { cookies, sets };
 };
 

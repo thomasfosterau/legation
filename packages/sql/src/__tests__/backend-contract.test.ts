@@ -9,7 +9,14 @@
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Exit, Layer, Redacted, Ref, Schedule, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import { PgClient } from "@effect/sql-pg";

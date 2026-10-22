@@ -26,7 +26,10 @@ import {
   Mirror,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 
@@ -324,7 +327,7 @@ describe("ServiceWorkerHost", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const engine = yield* makeEngine;
-          const name = `legation-swh-${Math.random().toString(36).slice(2)}`;
+          const name = `legation-swh-${crypto.randomUUID()}`;
           // The host wires its channel inside the forked fiber; give it a
           // beat before the mirror posts (BroadcastChannel drops unheard
           // messages).
@@ -394,7 +397,7 @@ describe("ServiceWorkerHost.start", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const engine = yield* makeEngine;
-          const name = `legation-swh-start-${Math.random().toString(36).slice(2)}`;
+          const name = `legation-swh-start-${crypto.randomUUID()}`;
           const host = yield* ServiceWorkerHost.start({
             channelName: name,
             registry: collections,

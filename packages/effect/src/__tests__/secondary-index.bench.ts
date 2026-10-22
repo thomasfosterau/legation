@@ -15,15 +15,18 @@
  * numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
-import { describe, test } from "vitest";
-import { Effect, Schema, Scope, Stream } from "effect";
+import { describe, test } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore, type StoredRow } from "../ClientStore.js";
 import * as Mutator from "../Mutator.js";
 import type { Mutation, PatchOp } from "../Protocol.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
-import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { layerInMemory, ServerHandler } from "../Transport.js";
 
 const ROWS = 50_000;
 
@@ -170,7 +173,6 @@ const benchScope = await Effect.runPromise(Scope.make());
 const buildEngine = (indexed: boolean) =>
   Effect.gen(function* () {
     const store = yield* makeBulkSeededStore(rows);
-    const transport = yield* makeInMemory(noopHandler, `bench-${indexed}`);
     const engine = yield* ClientEngineModule.make({
       clientId: "bench",
       clientGroupId: `bench-${indexed}`,
@@ -178,7 +180,8 @@ const buildEngine = (indexed: boolean) =>
       ...(indexed ? { indexes: { items: ["priority"] } } : {}),
     }).pipe(
       Effect.provideService(ClientStore, store),
-      Effect.provideService(ClientTransport, transport)
+      Effect.provide(layerInMemory(`bench-${indexed}`)),
+      Effect.provideService(ServerHandler, noopHandler)
     );
     // Prime the index (or, for the unindexed engine, just the overlay cache)
     // once outside the timed loop, matching how a long-lived app's first

@@ -36,7 +36,10 @@
  * reverse order, a single `redo` replays each member's `execute` in order.
  */
 
-import { Effect, Ref, Stream, SubscriptionRef } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 /** A mutator invocation: the name and (decoded) args handed to `mutate`. */
 export interface MutationIntent {

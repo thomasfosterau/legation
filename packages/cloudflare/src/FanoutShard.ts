@@ -22,7 +22,14 @@ import type {
   DurableObjectState,
   DurableObjectStorage,
 } from "@cloudflare/workers-types";
+import * as DateTime from "effect/DateTime";
 import { routes } from "./RoomProtocol.js";
+
+/**
+ * The wall clock in epoch milliseconds. A Durable Object's `fetch` runs
+ * outside any Effect runtime, so there is no `Clock` service to read here.
+ */
+const nowMillis = (): number => DateTime.toEpochMillis(DateTime.nowUnsafe());
 
 const LEASE_PREFIX = "legation:lease:";
 
@@ -71,13 +78,13 @@ export const makeShardClass = <Env>(config: ShardConfig<Env>) =>
       const url = new URL(request.url);
       if (url.pathname === "/register") {
         const body = (await request.json()) as { roomId: string; ttlMillis: number };
-        await leases.register(this.state.storage, body.roomId, body.ttlMillis, Date.now());
+        await leases.register(this.state.storage, body.roomId, body.ttlMillis, nowMillis());
         return new Response(null, { status: 204 });
       }
       if (url.pathname === "/publish") {
         const body = (await request.json()) as { topics: ReadonlyArray<string> };
         const rooms = config.rooms(this.env);
-        const alive = await leases.live(this.state.storage, Date.now());
+        const alive = await leases.live(this.state.storage, nowMillis());
         await Promise.all(
           alive.map((roomId) =>
             rooms

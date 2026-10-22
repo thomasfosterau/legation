@@ -1,18 +1,130 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": ["packages/*/src/index.ts", "packages/*/examples/*.ts"],
+  "entry": [
+    "packages/effect/src/index.ts",
+    "packages/effect/src/internal.ts",
+    "packages/browser/src/index.ts",
+    "packages/cloudflare/src/index.ts",
+    "packages/devtools/src/index.ts",
+    "packages/devtools/svelte/index.ts",
+    "packages/jsonapi/src/index.ts",
+    "packages/node/src/index.ts",
+    "packages/sql/src/index.ts",
+    "packages/svelte/src/index.svelte.ts",
+    "packages/svelte/src/kit/index.ts",
+    "packages/*/src/**/__tests__/**/*.test.ts",
+    "packages/*/src/**/__tests__/**/*.bench.ts",
+    "**/vite.config.ts",
+    "vite.package.ts",
+    "vitest.global-setup.ts",
+    "packages/devtools/svelte.config.js",
+    "scripts/*.mjs"
+  ],
   "publicPackages": ["@thomasfosterau/legation-*"],
-  "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", "scripts/**", "**/*.bench.ts"],
+  "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", ".claude/skills/**"],
   "ignoreDependencies": [
     "@thomasfosterau/legation-effect",
     "@thomasfosterau/legation-sql",
+    "@arethetypeswrong/cli",
+    "@changesets/cli",
+    "@effect/language-service",
+    "@effect/tsgo",
+    "@typescript/native",
+    "@vitest/coverage-v8",
+    "fallow",
+    "jsdom",
+    "playwright-core",
     "publint",
-    "@arethetypeswrong/cli"
+    "tsx",
+    "typescript",
+    "vite",
+    "vite-plus",
+    "vitest"
   ],
   "rules": {
-    "duplicate-exports": "off"
+    "duplicate-exports": "off",
+    "boundary-violation": "error",
+    "circular-dependencies": "error",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "unused-dependencies": "error",
+    "unused-files": "error"
   },
   "duplicates": {
     "ignore": ["packages/*/src/__tests__/**"]
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "effect",
+        "patterns": ["packages/effect/**"]
+      },
+      {
+        "name": "browser",
+        "patterns": ["packages/browser/**"]
+      },
+      {
+        "name": "cloudflare",
+        "patterns": ["packages/cloudflare/**"]
+      },
+      {
+        "name": "devtools",
+        "patterns": ["packages/devtools/**"]
+      },
+      {
+        "name": "jsonapi",
+        "patterns": ["packages/jsonapi/**"]
+      },
+      {
+        "name": "node",
+        "patterns": ["packages/node/**"]
+      },
+      {
+        "name": "sql",
+        "patterns": ["packages/sql/**"]
+      },
+      {
+        "name": "svelte",
+        "patterns": ["packages/svelte/**"]
+      }
+    ],
+    "rules": [
+      {
+        "from": "effect",
+        "allow": []
+      },
+      {
+        "from": "browser",
+        "allow": ["effect"]
+      },
+      {
+        "from": "cloudflare",
+        "allow": ["effect", "sql"]
+      },
+      {
+        "from": "devtools",
+        "allow": ["effect"]
+      },
+      {
+        "from": "jsonapi",
+        "allow": ["effect"]
+      },
+      {
+        "from": "node",
+        "allow": ["effect"]
+      },
+      {
+        "from": "sql",
+        "allow": ["effect"]
+      },
+      {
+        "from": "svelte",
+        "allow": ["effect"]
+      }
+    ]
+  },
+  "health": {
+    "coverage": "coverage/coverage-final.json",
+    "ignore": ["scripts/**"]
   }
 }

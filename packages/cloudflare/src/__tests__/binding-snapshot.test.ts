@@ -17,7 +17,11 @@
  * before while the conversation is lost.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import {
   Authorization,
@@ -28,6 +32,8 @@ import {
   Mutation,
   Node,
   Transport,
+  type TransportError,
+  type VersionNotSupportedError,
 } from "@thomasfosterau/legation-effect";
 import {
   ClientEngine,
@@ -38,6 +44,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation-effect/internal";
 import * as BindingTransport from "../BindingTransport.js";
+import { fakeBinding } from "./fakes.js";
 import { routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 
@@ -72,7 +79,7 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
 const makeNamespace = (
   dispatch: (name: string, request: Request) => Promise<Response>
 ): DurableObjectNamespace =>
-  ({
+  fakeBinding<DurableObjectNamespace>({
     idFromName: (name: string) => ({ name }),
     get: (id: { name: string }) => ({
       fetch: async (url: string, init?: RequestInit | Request) => {
@@ -88,7 +95,7 @@ const makeNamespace = (
         return dispatch(id.name, rebuilt);
       },
     }),
-  }) as unknown as DurableObjectNamespace;
+  });
 
 /** The session cookie the API Worker resolves a room from. */
 const sessionOf = (request: Request): string | undefined => {
@@ -141,13 +148,16 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
     const handler = await Effect.runPromise(handlerFor(room));
     const path = new URL(request.url).pathname;
     const body: unknown = await request.json();
-    const answer = (effect: Effect.Effect<unknown, { readonly message: string }>) =>
+    const badRequest = (error: TransportError | VersionNotSupportedError) =>
+      Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
+    const answer = (effect: Effect.Effect<unknown, TransportError | VersionNotSupportedError>) =>
       Effect.runPromise(
         effect.pipe(
           Effect.map(json),
-          Effect.catch((error) =>
-            Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }))
-          )
+          Effect.catchTags({
+            TransportError: badRequest,
+            VersionNotSupportedError: badRequest,
+          })
         )
       );
     if (path === routes.push) return answer(handler.handlePush(body as Protocol.PushRequest));

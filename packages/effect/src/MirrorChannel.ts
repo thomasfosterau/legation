@@ -14,7 +14,9 @@
  */
 
 import type { TransportError } from "./Errors.js";
-import { Effect, PubSub, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
+import * as Scope from "effect/Scope";
 
 /** A live inbound subscription. */
 export interface MirrorInbox {

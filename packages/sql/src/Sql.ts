@@ -65,6 +65,7 @@
  */
 
 import type { Predicate } from "@thomasfosterau/legation-effect";
+import * as P from "effect/Predicate";
 
 /** A SQL fragment plus its ordered bind parameters. */
 export interface SqlFragment {
@@ -183,7 +184,7 @@ const operand = (compilation: Compilation, field: string): string => {
 const bindLiteral = (compilation: Compilation, field: string, value: Predicate.Literal): string => {
   const { params, dialect, kinds } = compilation;
   if (!conforms(kinds?.[field], value)) return params.bind(null);
-  return params.bind(typeof value === "boolean" ? dialect.boolean(value) : value);
+  return params.bind(P.isBoolean(value) ? dialect.boolean(value) : value);
 };
 
 /**

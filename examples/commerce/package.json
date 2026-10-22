@@ -8,12 +8,12 @@
   },
   "description": "SvelteKit commerce catalog driving the legation engine end to end: SSR + hydration with CVR continuation, public/private auth split over IdentityResolver, live relational joins, cursor pagination, offline-first writes over WebSockets with HTTP fallback, and a no-JS baseline.",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vp dev",
     "dev:server": "tsx server/main.ts",
-    "build": "vite build",
-    "preview": "vite preview",
+    "build": "vp build",
+    "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json",
-    "test": "vitest run --root ../.. --project node --project commerce-browser examples/commerce",
+    "test": "vp test run --root ../.. --project node --project commerce-browser examples/commerce",
     "prepare": "svelte-kit sync"
   },
   "dependencies": {
@@ -25,11 +25,11 @@
     "@thomasfosterau/legation-node": "workspace:*",
     "@thomasfosterau/legation-sql": "workspace:*",
     "@thomasfosterau/legation-svelte": "workspace:*",
-    "@thomasfosterau/effect-jsonapi": "^0.16.3",
-    "better-auth": "^1.7.10",
-    "better-sqlite3": "^13",
+    "@thomasfosterau/effect-jsonapi": "catalog:",
+    "better-auth": "catalog:",
+    "better-sqlite3": "catalog:",
     "effect": "catalog:",
-    "svelte": "^5"
+    "svelte": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

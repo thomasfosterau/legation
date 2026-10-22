@@ -30,7 +30,14 @@
  * is normalized and may hold rows beyond one parent's window).
  */
 
-import { Context, Effect, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import type { SyncContext } from "./Backend.js";
 import type { LocalRow } from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
@@ -111,7 +118,7 @@ export function make(
   first: Read | string,
   args?: Schema.Codec<any, any>
 ): Read | Named<string, any, any> {
-  return typeof first === "string" ? named(first, args!) : first;
+  return P.isString(first) ? named(first, args!) : first;
 }
 
 /** Parse `order` tokens ("name", "-createdAt") into sort terms. */
@@ -220,12 +227,25 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
  */
 export const tryPlan = (nodes: Node.NodeRegistry, read: Read): Effect.Effect<Plan, QueryError> =>
   Effect.suspend(() => {
-    try {
-      return Effect.succeed(plan(nodes, read));
-    } catch (error) {
-      return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
-    }
+    const compiled = Result.try(() => plan(nodes, read));
+    if (Result.isSuccess(compiled)) return Effect.succeed(compiled.success);
+    const error = compiled.failure;
+    return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
   });
+
+/** The order an edge's terms put its resolved rows in (the first term that differs decides). */
+const edgeOrder =
+  (edgePlan: EdgePlan): Order.Order<unknown> =>
+  (a, b) => {
+    for (const term of edgePlan.order) {
+      const left = (a as Record<string, unknown>)[term.field] as string | number;
+      const right = (b as Record<string, unknown>)[term.field] as string | number;
+      if (left === right) continue;
+      const ascending = left < right;
+      return term.direction === "asc" ? (ascending ? -1 : 1) : ascending ? 1 : -1;
+    }
+    return 0;
+  };
 
 /** Order + window one edge's resolved rows (the client-side edge window). */
 const applyEdgeWindow = (
@@ -234,16 +254,7 @@ const applyEdgeWindow = (
 ): ReadonlyArray<unknown> => {
   let rows = values;
   if (edgePlan.order.length > 0) {
-    rows = [...rows].sort((a, b) => {
-      for (const term of edgePlan.order) {
-        const left = (a as Record<string, unknown>)[term.field] as string | number;
-        const right = (b as Record<string, unknown>)[term.field] as string | number;
-        if (left === right) continue;
-        const ordered = left < right ? -1 : 1;
-        return term.direction === "asc" ? ordered : -ordered;
-      }
-      return 0;
-    });
+    rows = Arr.sort(rows, edgeOrder(edgePlan));
   }
   return edgePlan.first === undefined ? rows : rows.slice(0, edgePlan.first);
 };

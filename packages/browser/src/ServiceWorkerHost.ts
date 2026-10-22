@@ -41,7 +41,8 @@
 
 import type { Client, Collection, Node } from "@thomasfosterau/legation-effect";
 import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import type * as BackgroundSync from "./BackgroundSync.js";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 

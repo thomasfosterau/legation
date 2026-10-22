@@ -6,7 +6,10 @@
  * MemoryBackend + SyncServer scaffolding as `engine.test.ts`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -187,8 +190,11 @@ describe("Hydration.dehydrate/hydrate (#41)", () => {
   it.effect("a malformed snapshot fails as a StoreError", () =>
     Effect.gen(function* () {
       const target = yield* ClientStoreModule.makeMemory;
+      // Untrusted input that merely claims to be a Snapshot: hydrate must validate it.
+      const malformed: unknown = { rows: "not-an-array" };
       const failure = yield* Effect.flip(
-        Hydration.hydrate(target, { rows: "not-an-array" } as unknown as Hydration.Snapshot)
+        // oxlint-disable-next-line effect/no-widen-then-assert -- the test feeds hydrate a value that is deliberately not a Snapshot, to prove its runtime decode rejects it; no well-typed Snapshot can fail that decode
+        Hydration.hydrate(target, malformed as Hydration.Snapshot)
       );
       expect(failure._tag).toBe("StoreError");
     })

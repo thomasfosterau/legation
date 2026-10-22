@@ -94,7 +94,7 @@ natively.
   or another combinator, so queries compose from queries) and are
   incrementally maintained the way TanStack DB's differential-dataflow engine
   maintains its live queries — the same operator set (`map / filter / join /
-reduce / distinct / ordered-window`), though over keyed row deltas on a
+  reduce / distinct / ordered-window`), though over keyed row deltas on a
   single timeline rather than a `[value, ±multiplicity]` multiset (ADR-0027).
   `Related` (declared-edge joins that auto-sync the foreign rows) and
   `Aggregate` (live folds) sit alongside them.

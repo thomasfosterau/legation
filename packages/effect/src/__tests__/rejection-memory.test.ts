@@ -3,7 +3,7 @@
  * a push carries, and the rejections below each floor that are forgotten. The
  * backends' own tests cover this end to end; these cover the module's edges.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as RejectionMemory from "../RejectionMemory.js";
 
 describe("RejectionMemory.floorsOf", () => {

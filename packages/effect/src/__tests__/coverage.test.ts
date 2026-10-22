@@ -5,8 +5,8 @@
  * include rule over a plan's edge selects — and the deliberate false
  * negatives (full implication is not built).
  */
-import { describe, expect, it } from "vitest";
-import { Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 import { Edge, Node, Predicate, Query } from "../index.js";
 import { Coverage, Subset } from "../internal.js";
 

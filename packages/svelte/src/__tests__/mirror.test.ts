@@ -6,9 +6,11 @@
  * the main-thread engine, proving Mirror satisfies the ClientView surface
  * structurally.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { Client } from "@thomasfosterau/legation-effect";
 import { ClientEngine } from "@thomasfosterau/legation-effect/internal";
 import { EngineHost, MirrorChannel, Mirror } from "@thomasfosterau/legation-effect/internal";

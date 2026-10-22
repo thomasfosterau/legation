@@ -16,8 +16,11 @@
  * default runtime.
  */
 
-import type { Cause, Layer } from "effect";
-import { Effect, HashMap, Stream } from "effect";
+import type * as Cause from "effect/Cause";
+import type * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Stream from "effect/Stream";
 import { Atom } from "effect/reactivity";
 import type { AsyncResult, AtomRegistry, Reactivity } from "effect/reactivity";
 import {

@@ -1,5 +1,5 @@
 /**
- * The sync server process (`bun run dev:server`).
+ * The sync server process (`pnpm run dev:server`).
  *
  * One Node HTTP server carries three surfaces:
  *

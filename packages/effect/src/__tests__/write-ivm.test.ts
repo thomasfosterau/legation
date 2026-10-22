@@ -9,7 +9,11 @@
  * `it.live` (real clock) with a short settle, mirroring `incremental.test.ts`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Ref, Schema, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

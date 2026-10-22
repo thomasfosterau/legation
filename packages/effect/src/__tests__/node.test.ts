@@ -5,7 +5,11 @@
  * derived CollectionRegistry driving the EXISTING engine's Related joins.
  */
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
-import { Effect, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Backend,
@@ -79,7 +83,7 @@ describe("Node model", () => {
   });
 
   it("computes the derivable set: one-edge keys + hintKeys", () => {
-    expect([...Node.derivableSet(Review)].sort()).toEqual(["authorName", "productId"]);
+    expect(Arr.sort(Node.derivableSet(Review), Order.String)).toEqual(["authorName", "productId"]);
     expect([...Node.derivableSet(Category)]).toEqual([]);
   });
 

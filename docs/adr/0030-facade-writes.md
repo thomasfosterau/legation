@@ -574,7 +574,7 @@ tab is offline. A no-JS enhancement script posts
 5. The engine folds `rejected` into the state map, resolves the handle,
    drops the overlay on the next rebase: `r-7f3a` leaves the list and the
    live query. `GET /jsonapi/_legation/mutations/42` answers `phase:
-"rejected"`, `reason: "rating out of range"`. `GET /jsonapi/reviews/r-7f3a`
+   "rejected"`, `reason: "rating out of range"`. `GET /jsonapi/reviews/r-7f3a`
    is forwarded and returns the server's 404.
 
 Had the rating been 5, step 4 acknowledges 42, step 5 shows
@@ -595,7 +595,7 @@ offline is answered `503` `offline` and never journaled.
 ## Consequences
 
 - **The receipt is the contract.** A `202` with `meta.legation.status:
-"pending"` and a `Location` means "durable, visible locally, not yet
+  "pending"` and a `Location` means "durable, visible locally, not yet
   ruled on". Clients that treat it as `201` are wrong in a way the
   status code already tells them.
 - **`JsonApiFacade` gains three obligations** and no engine: write

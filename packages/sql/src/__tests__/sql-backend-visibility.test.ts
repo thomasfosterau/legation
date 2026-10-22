@@ -13,12 +13,18 @@
  * same probe.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { BackendError, Mutator } from "@thomasfosterau/legation-effect";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import * as SqlBackend from "../SqlBackend.js";
@@ -118,11 +124,11 @@ interface Probe {
 const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const dir = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "legation-sql-visibility-")));
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(() => rm(dir, { recursive: true, force: true }))
-      );
-      const filename = join(dir, "visibility.db");
+      // Removed (recursively) when the probe's scope closes, after both clients.
+      const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "legation-sql-visibility-",
+      });
+      const filename = (yield* Path.Path).join(dir, "visibility.db");
       const writerSql = Context.get(
         yield* Layer.build(SqliteClient.layer({ filename })),
         SqlClient
@@ -176,7 +182,7 @@ const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
       const committed = yield* readView(reader);
       return { parked, committed, reported: result.lastMutationIds } satisfies Probe;
     })
-  );
+  ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)));
 
 /** The guarantee: a parked mutation's write and bump are invisible to a concurrent reader. */
 const expectInvisibleWhileParked = (parked: View) => {

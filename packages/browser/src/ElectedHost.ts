@@ -34,7 +34,13 @@ import {
   Subscriptions,
   Subset,
 } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Exit, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "./ServiceWorkerHost.js";
 
@@ -95,8 +101,7 @@ export interface ElectedHost {
 }
 
 /** Resolve the ambient `navigator.locks`, `undefined` where it (or `navigator`) doesn't exist. */
-const globalLocks = (): LockManager | undefined =>
-  typeof navigator === "undefined" ? undefined : navigator.locks;
+const globalLocks = (): LockManager | undefined => globalThis.navigator?.locks;
 
 /**
  * Wait to be granted `name` (Web Lock, exclusive mode), then hold it until

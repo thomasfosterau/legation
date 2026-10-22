@@ -14,7 +14,12 @@
  * reproducible randomized interleavings across many seeds.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Ref, Schema, Scope, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

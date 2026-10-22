@@ -3,7 +3,7 @@
  * verifyBackendContract, and the suite actually catches violations.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { Backend } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";

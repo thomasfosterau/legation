@@ -6,7 +6,9 @@
  * query's server-resolved subset stay exempt.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import {
   Authorization,
   type Backend,

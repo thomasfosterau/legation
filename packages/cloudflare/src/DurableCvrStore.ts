@@ -9,7 +9,7 @@
  */
 
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { StoreError } from "@thomasfosterau/legation-effect";
 import type { Cvr } from "@thomasfosterau/legation-effect/internal";
 

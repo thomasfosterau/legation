@@ -4,8 +4,15 @@
  * `Query.Read` parsing over a node graph with `QueryError`s naming the
  * parameter, and the canonical string round trip over generated reads.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer, Option, Random, Result, Schema } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Random from "effect/Random";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -98,7 +105,9 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
       Filter.isNull("createdAt", true),
       Filter.or(Filter.lte("priceCents", 5), Filter.not(Filter.ne("name", "x")))
     );
-    const predicate = Result.getOrThrow(JsonApiQuery.fromFilterAst(ast));
+    const decoded = JsonApiQuery.fromFilterAst(ast);
+    assert(Result.isSuccess(decoded));
+    const predicate = decoded.success;
     expect(predicate).toEqual(
       Predicate.and(
         Predicate.eq("name", "Desk"),
@@ -110,15 +119,15 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
         Predicate.or(Predicate.lte("priceCents", 5), Predicate.not(Predicate.ne("name", "x")))
       )
     );
-    expect(Option.getOrThrow(JsonApiQuery.toFilterAst(predicate))).toEqual(ast);
+    expect(JsonApiQuery.toFilterAst(predicate)).toEqual(Option.some(ast));
   });
 
   it("the empty conjunction is True; a Date literal is its instant text (an encode, ADR-0028 rule e)", () => {
-    expect(Result.getOrThrow(JsonApiQuery.fromFilterAst(Filter.and()))).toEqual(Predicate.always);
+    expect(JsonApiQuery.fromFilterAst(Filter.and())).toEqual(Result.succeed(Predicate.always));
     expect(JsonApiQuery.toFilterAst(Predicate.always)).toEqual(Option.some(Filter.and()));
     expect(
-      Result.getOrThrow(JsonApiQuery.fromFilterAst(Filter.gt("createdAt", new Date(0))))
-    ).toEqual(Predicate.gt("createdAt", "1970-01-01T00:00:00.000Z"));
+      JsonApiQuery.fromFilterAst(Filter.gt("createdAt", DateTime.toDateUtc(DateTime.makeUnsafe(0))))
+    ).toEqual(Result.succeed(Predicate.gt("createdAt", "1970-01-01T00:00:00.000Z")));
     // A literal outside string/number/boolean/Date is a typed failure, not a
     // thrown defect: any caller bridging an AST over a resource with a
     // richer decoded attribute type can hit this (the module doc).
@@ -157,14 +166,12 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
     let representable = 0;
     for (const predicate of predicates) {
       const ast = JsonApiQuery.toFilterAst(predicate);
-      if (Option.isNone(ast)) {
-        // Only an empty list has no grammar form; the corpus never emits
-        // null literals or Exists.
-        expect(hasEmptyList(predicate)).toBe(true);
-        continue;
-      }
+      // Only an empty list has no grammar form; the corpus never emits
+      // null literals or Exists.
+      expect(Option.isSome(ast) || hasEmptyList(predicate)).toBe(true);
+      if (Option.isNone(ast)) continue;
       representable++;
-      expect(Result.getOrThrow(JsonApiQuery.fromFilterAst(ast.value))).toEqual(predicate);
+      expect(JsonApiQuery.fromFilterAst(ast.value)).toEqual(Result.succeed(predicate));
     }
     expect(representable).toBeGreaterThan(200);
   });
@@ -201,7 +208,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
     const dateFilterCodec = UrlQuery.Filter(ReviewsWithDate);
 
     const randomDate = Random.nextIntBetween(0, 4_102_444_800_000).pipe(
-      Effect.map((ms) => new Date(ms))
+      Effect.map((ms) => DateTime.toDateUtc(DateTime.makeUnsafe(ms)))
     );
     const dates = Effect.runSync(
       randomDate.pipe(Effect.replicateEffect(200), Random.withSeed(218))
@@ -211,7 +218,9 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
       const ast = Filter.gt("createdAt", date);
 
       // The encode step itself: exact, not merely "does not throw".
-      const predicate = Result.getOrThrow(JsonApiQuery.fromFilterAst(ast));
+      const decoded = JsonApiQuery.fromFilterAst(ast);
+      assert(Result.isSuccess(decoded));
+      const predicate = decoded.success;
       expect(predicate).toEqual(Predicate.gt("createdAt", date.toISOString()));
 
       // What a resource that actually declares `createdAt` as a `Date`

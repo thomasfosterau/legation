@@ -16,7 +16,7 @@ export type RoomSocket = Pick<WebSocket, "send">;
 /** `new WebSocketPair()` — the Workers global (absent from lib.dom). */
 export const webSocketPair = (): { readonly client: unknown; readonly server: unknown } => {
   const pair = new (
-    globalThis as unknown as {
+    globalThis as typeof globalThis & {
       WebSocketPair: new () => Record<0 | 1, unknown>;
     }
   ).WebSocketPair();

@@ -18,7 +18,10 @@
  * generic pipeline is shared.
  */
 
-import { Effect, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { ClientEngine, Related, Subset } from "@thomasfosterau/legation-effect/internal";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
@@ -40,7 +43,7 @@ const refOf = (value: JsonApiRow, name: string): RelationshipRef =>
   (value.relationships?.[name] ?? null) as RelationshipRef;
 
 const isLink = (value: unknown): value is { readonly type: string; readonly id: string } =>
-  typeof value === "object" && value !== null && "type" in value && "id" in value;
+  P.isObjectOrArray(value) && "type" in value && "id" in value;
 
 /** The `{ type, id }` links a row's named relationship points at. */
 const linksOf = (

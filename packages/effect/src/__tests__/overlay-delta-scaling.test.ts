@@ -10,7 +10,11 @@
  * warm, which `bun run test:run` (unlike `bun run bench`) actually checks.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Ref, Schema, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";

@@ -1,0 +1,145 @@
+# pnpm workspace — the `@thomasfosterau/legation-*` packages and the example
+# apps that drive them end to end.
+#
+# The `catalog:` protocol pins versions that MUST be singletons across the
+# workspace. Effect especially: two copies of `effect` break Context / Layer /
+# Schema identity at runtime, so every package references `catalog:`.
+#
+# EVERY external dependency version lives here — package.json files reference
+# only `catalog:` / `catalog:peers` (or `workspace:` for internal packages).
+# `catalogMode: strict` makes `pnpm add` enforce this at add time. After
+# editing this catalog, ALWAYS run `pnpm install` and commit the regenerated
+# pnpm-lock.yaml — a stale lockfile fails CI at once with
+# ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+packages:
+  - packages/*
+  - examples/*
+
+catalogMode: strict
+
+catalog:
+  "@arethetypeswrong/cli": ^0.18.5
+  "@changesets/cli": ^3.0.3
+  "@cloudflare/workers-types": ^5.20261016.1
+  # The Effect dev pin: `effect` and every `@effect/*` runtime package move
+  # together, at one exact version (CONTRIBUTING.md "Effect version
+  # upgrades"). The published floor is `catalogs.peers` below, never this.
+  # CI's "Tests (effect floor)" job rewrites exactly these entries to the
+  # floor (`@effect/tsgo` and `@effect/language-service` excepted).
+  effect: 4.0.2
+  "@effect/platform-browser": 4.0.2
+  "@effect/platform-node": 4.0.2
+  # Not a direct dependency: the `overrides` entry below holds this transitive
+  # dependency of `@effect/platform-node` (which ranges it with a caret) at the
+  # pin, so the lockfile carries one Effect line.
+  "@effect/platform-node-shared": 4.0.2
+  "@effect/sql-pg": 4.0.2
+  "@effect/sql-sqlite-node": 4.0.2
+  "@effect/vitest": 4.0.2
+  "@effect/language-service": ^0.87.3
+  # Effect Language Service as a native (TypeScript-Go) binary — the TS7 side
+  # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
+  # (and the `oxlint` vite-plus carries) with an Effect-patched build matched
+  # by gitHead, so this pins in lockstep with `@typescript/native` below and
+  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.55.0
+  # supports typescript 7.0.2, oxlint 1.87.0 – 1.89.0 and tsgolint 7.0.2003 /
+  # 7.0.2004; vite-plus 1.3.0 carries oxlint 1.88.0 and tsgolint 7.0.2004.
+  # Each @effect/tsgo release hard-errors (UnsupportedTargetPackageVersionError)
+  # on any other component version, failing `pnpm install` itself. Read the
+  # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
+  # before bumping any of the three.
+  "@effect/tsgo": 0.55.0
+  "@electric-sql/pglite": ^0.5.10
+  "@mpsuesser/oxlint-plugin-effect": ^0.6.0
+  "@sveltejs/adapter-node": ^6.0.0
+  "@sveltejs/adapter-static": ^4.0.0
+  "@sveltejs/kit": ^3.1.0
+  "@sveltejs/vite-plugin-svelte": ^7.3.1
+  # Runtime dependencies of published packages: `pnpm pack` rewrites
+  # `catalog:` to these ranges in the packed manifest.
+  "@thomasfosterau/effect-jsonapi": ^0.16.3
+  "@thomasfosterau/effect-svelte": ^0.5.0
+  "@types/better-sqlite3": ^9.6.0
+  "@types/node": ^26.6.5
+  # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
+  # refuses to run coverage on a mismatch.
+  "@vitest/coverage-v8": 5.0.5
+  better-auth: ^1.7.10
+  better-sqlite3: ^13.0.3
+  fake-indexeddb: ^6.2.6
+  fallow: 3.34.1
+  jsdom: ^30.1.3
+  # The commerce façade's browser test drives Chromium through it. Pinned
+  # exact: each release expects one Chromium revision
+  # (`playwright-core install chromium` fetches it).
+  playwright-core: 1.64.1
+  publint: ^0.3.25
+  svelte: ^5.57.2
+  svelte-check: ^4.7.7
+  tsx: ^4.23.15
+  # TypeScript 6/7 side by side: TS7 (the native Go compiler) ships no JS API
+  # until 7.1, so JS-API consumers (svelte-check, @effect/language-service,
+  # tsdown's declaration bundler) stay on TS6 while native `tsc` builds
+  # nothing and type-checks everything. The alias keeps the TS6 package
+  # importable as `typescript` (bin `tsc6`); `@typescript/native` is TS7 (bin
+  # `tsc`). Pinned exact: @typescript/native's gitHead must match
+  # @effect/tsgo's bundled binary.
+  typescript: "npm:@typescript/typescript6@6.0.2"
+  "@typescript/native": "npm:typescript@7.0.2"
+  # vite-plus pins `oxlint`, `oxfmt`, `vitest` and the `@vitest/*` packages to
+  # exact versions (1.3.0 → oxlint 1.88.0, vitest 5.0.5). `vitest` and
+  # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
+  # its aliased core package. They move together with `@effect/tsgo` (above).
+  vite-plus: 1.3.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest: 5.0.5
+
+# Peer ranges the PUBLISHED packages declare: the published floor, a promise
+# to consumers, kept apart from the dev pin above. `pnpm pack` (the release
+# path, scripts/publish.mjs) replaces `catalog:peers` with these ranges in the
+# packed manifest. Never an exact version: an exact published peer makes the
+# package impossible to install beside a library that needs a different
+# release (ADR-0003; `scripts/pack-check.mjs` fails on one). Raising a floor
+# is a `minor` changeset for every package that declares it.
+catalogs:
+  peers:
+    # rc.118 removed every `effect/unstable/*` export path, so the published
+    # dist imports paths that do not exist on anything older.
+    effect: ">=4.0.0-rc.118"
+    "@effect/platform-browser": ">=4.0.0-rc.118"
+    "@effect/platform-node": ">=4.0.0-rc.118"
+    svelte: ">=5.40"
+    "@sveltejs/kit": ^2.0.0 || ^3.0.0
+
+overrides:
+  vite: "catalog:"
+  vitest: "catalog:"
+  # `effect` MUST be a singleton (see the header): force every resolution to
+  # the catalog version so a hoisting reshuffle cannot introduce a second copy.
+  effect: "catalog:"
+  # See its catalog entry.
+  "@effect/platform-node-shared": "catalog:"
+
+nodeLinker: hoisted
+
+# Install scripts are opt-in. better-sqlite3 builds its native binding (the
+# commerce example's server); esbuild and fallow fetch their platform binary.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  fallow: true
+
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: "*"
+    vitest: "*"
+
+# Supply-chain delay (owner's policy): hold newly published versions for 1 day
+# (unit: MINUTES) before pnpm will install them.
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  # @thomasfosterau/* is first-party — exempt so our own releases install immediately.
+  - "@thomasfosterau/*"

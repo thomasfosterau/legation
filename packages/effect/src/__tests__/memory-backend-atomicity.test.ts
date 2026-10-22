@@ -9,7 +9,14 @@
  * through a ClientEngine whose two push responses arrive in either order.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, HashMap, Option, Ref, Schema, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend, type SyncContext } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

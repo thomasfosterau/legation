@@ -27,7 +27,10 @@
  * by a thin REST adapter.
  */
 
-import { JsonSchema, Schema, type SchemaAST, SchemaRepresentation } from "effect";
+import * as JsonSchema from "effect/JsonSchema";
+import * as Schema from "effect/Schema";
+import type * as SchemaAST from "effect/SchemaAST";
+import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import type * as Collection from "./Collection.js";
 import type * as Mutator from "./Mutator.js";
 import {

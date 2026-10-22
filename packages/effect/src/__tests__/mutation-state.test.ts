@@ -7,7 +7,8 @@
  * module doc and `overlay-delta-scaling.test.ts`'s sibling scaling proof.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { HashMap, Option } from "effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import * as MutationState from "../MutationState.js";
 import type { Mutation } from "../Protocol.js";
 

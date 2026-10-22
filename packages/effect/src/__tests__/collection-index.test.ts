@@ -6,8 +6,13 @@
  * confirmed-row writers that bypass a pull (`reset`, `hydrate`, `clearRows`, #350).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vitest";
-import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect";
+import { vi } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";

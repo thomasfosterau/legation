@@ -8,9 +8,9 @@
   },
   "description": "Northwind Traders admin dashboard driving the legation engine through @thomasfosterau/legation-svelte on SvelteKit: a route per screen, seven collections joined live over the mirror, optimistic edits.",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "prepare": "svelte-kit sync"
   },
@@ -20,7 +20,7 @@
     "@thomasfosterau/legation-effect": "workspace:*",
     "@thomasfosterau/legation-svelte": "workspace:*",
     "effect": "catalog:",
-    "svelte": "^5"
+    "svelte": "catalog:"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "catalog:",

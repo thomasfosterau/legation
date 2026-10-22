@@ -15,7 +15,9 @@
  * subscribed to it.
  */
 
-import { Effect, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { ChangeHint } from "./Backend.js";
 import * as InvalidationBus from "./InvalidationBus.js";
 

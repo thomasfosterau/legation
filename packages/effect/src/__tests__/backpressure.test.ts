@@ -13,7 +13,14 @@
  * tab-mirror suites; the bus-drop case is deterministic and uses `it.effect`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Metric, Ref, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -186,7 +193,12 @@ describe("backpressure — engine change hub", () => {
       );
       const last = (yield* Ref.get(pages)).at(-1)!;
       // The resumed view equals a fresh query — no dropped Patch was lost.
-      expect([...last].sort()).toEqual(expected.map((r) => (r.value as { id: string }).id).sort());
+      expect(Arr.sort(last, Order.String)).toEqual(
+        Arr.sort(
+          expected.map((r) => (r.value as { id: string }).id),
+          Order.String
+        )
+      );
       const after = (yield* Metric.value(Telemetry.changeCollapsesTotal)).count;
       expect(after).toBeGreaterThan(before); // a gap forced at least one Rebuild
     }).pipe(Effect.scoped)

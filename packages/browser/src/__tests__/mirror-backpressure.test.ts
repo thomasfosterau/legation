@@ -26,7 +26,12 @@ import {
   Telemetry,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Metric, Ref, Schema, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 type Todo = typeof TodoArgs.Type;

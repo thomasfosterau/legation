@@ -8,7 +8,8 @@
  * state survives eviction, so none is kept.
  */
 
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { ProtocolError } from "@thomasfosterau/legation-effect";
 import { Protocol } from "@thomasfosterau/legation-effect/internal";
 

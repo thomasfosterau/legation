@@ -15,7 +15,7 @@
  */
 
 import { type Filter, Query } from "@thomasfosterau/effect-jsonapi";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 export type {
   ResourceIdentifier,

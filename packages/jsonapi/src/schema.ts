@@ -28,7 +28,8 @@
  */
 
 import { Document } from "@thomasfosterau/effect-jsonapi";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { ParseError } from "./errors.js";
 
 /** Free-form `meta` / `attributes` object: arbitrary JSON values by key. */

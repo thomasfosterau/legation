@@ -32,14 +32,19 @@ import {
   ClientView,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Effect, Exit, Fiber, Ref, Schema } from "effect";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
   authorId: Schema.optional(Schema.String),
 });
 type Todo = typeof TodoArgs.Type;
@@ -48,7 +53,7 @@ type Todo = typeof TodoArgs.Type;
 // `author` edge is what a `SubscribeUrl` with `include=author` must pin.
 const nodes = Node.registry([
   Node.make("todos", {
-    attributes: { title: Schema.String, done: Schema.Boolean, authorId: Schema.String },
+    attributes: { title: Schema.String, isDone: Schema.Boolean, authorId: Schema.String },
     edges: { author: Edge.one("users", { via: "authorId" }) },
   }),
   Node.make("users", { attributes: { name: Schema.String } }),
@@ -154,7 +159,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 
       yield* mirror.subscribe(allTodos);
       // The mutate ack means the host journaled it (optimistic write).
-      yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", done: false });
+      yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", isDone: false });
 
       const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
       expect(rows.map((row) => (row.value as Todo).title)).toEqual(["from the tab"]);
@@ -180,7 +185,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 
       const first = yield* Mirror.make({ channel: mirrorChannel, mutators });
       yield* first.subscribe(allTodos);
-      yield* first.mutate("todo/set", { id: "1", title: "before", done: false });
+      yield* first.mutate("todo/set", { id: "1", title: "before", isDone: false });
       yield* eventually(first.query(allTodos), (current) => current.length === 1);
 
       // Loopback broadcasts reach every subscriber on the tab side, so a
@@ -217,7 +222,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
       yield* mirrorChannel.post({ some: "other library's message" });
       yield* mirrorChannel.post("not even an object");
       yield* mirror.subscribe(allTodos);
-      yield* mirror.mutate("todo/set", { id: "1", title: "still works", done: false });
+      yield* mirror.mutate("todo/set", { id: "1", title: "still works", isDone: false });
       yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
     })
   );
@@ -345,14 +350,14 @@ describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
   it.effect("syncs tab to host over a real BroadcastChannel pair", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const name = `legation-test-${Date.now()}`;
+      const name = `legation-test-${crypto.randomUUID()}`;
       const host = yield* BroadcastMirrorChannel.make(name);
       const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
       yield* mirror.subscribe(allTodos);
-      yield* mirror.mutate("todo/set", { id: "1", title: "broadcast", done: false });
+      yield* mirror.mutate("todo/set", { id: "1", title: "broadcast", isDone: false });
       const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
       expect(rows.map((row) => (row.value as Todo).title)).toEqual(["broadcast"]);
     })
@@ -364,7 +369,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
     "a mutation orphaned by a dead host fails visibly once a new host announces itself",
     () =>
       Effect.gen(function* () {
-        const name = `legation-test-restart-${Date.now()}`;
+        const name = `legation-test-restart-${crypto.randomUUID()}`;
         const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
         yield* mirror.subscribe(allTodos);
@@ -378,14 +383,14 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
             const { engine } = yield* makeEngine;
             const host = yield* BroadcastMirrorChannel.make(name);
             yield* EngineHost.run({ channel: host, engine });
-            yield* mirror.mutate("todo/set", { id: "warm", title: "while alive", done: false });
+            yield* mirror.mutate("todo/set", { id: "warm", title: "while alive", isDone: false });
             yield* eventually(mirror.query(allTodos), (rows) => rows.length === 1);
           })
         );
 
         // Sent after the leader is gone: nobody will ever journal or ack it.
         const orphaned = yield* Effect.forkChild(
-          mirror.mutate("todo/set", { id: "orphan", title: "never acked", done: false })
+          mirror.mutate("todo/set", { id: "orphan", title: "never acked", isDone: false })
         );
         yield* sleepReal(30);
 
@@ -403,7 +408,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
 
   it.effect("a request still in flight fails once the mirror's own scope closes", () =>
     Effect.gen(function* () {
-      const name = `legation-test-orphan-scope-${Date.now()}`;
+      const name = `legation-test-orphan-scope-${crypto.randomUUID()}`;
       // Nobody is listening on this channel at all — the request can never
       // be answered while the mirror is alive.
       const inFlight = yield* Effect.scoped(
@@ -411,7 +416,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
           const channel = yield* BroadcastMirrorChannel.make(name);
           const mirror = yield* Mirror.make({ channel, mutators });
           return yield* Effect.forkChild(
-            mirror.mutate("todo/set", { id: "1", title: "orphaned", done: false })
+            mirror.mutate("todo/set", { id: "1", title: "orphaned", isDone: false })
           );
         })
       );
@@ -423,7 +428,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
   it.effect("the host's very first readiness announcement never fails a racing request", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
-      const name = `legation-test-first-ready-${Date.now()}`;
+      const name = `legation-test-first-ready-${crypto.randomUUID()}`;
       const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
@@ -431,7 +436,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
       // finishes propagating to this mirror — a brand-new host's first
       // handshake must never be mistaken for a restart.
       const outcome = yield* Effect.forkChild(
-        mirror.mutate("todo/set", { id: "1", title: "first contact", done: false })
+        mirror.mutate("todo/set", { id: "1", title: "first contact", isDone: false })
       );
       const host = yield* BroadcastMirrorChannel.make(name);
       yield* EngineHost.run({ channel: host, engine });
@@ -503,7 +508,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
         nodes,
         urls: stubUrls,
       });
-      yield* engine.mutate("todo/set", { id: "1", title: "by url", done: false, authorId: "u1" });
+      yield* engine.mutate("todo/set", { id: "1", title: "by url", isDone: false, authorId: "u1" });
 
       // Nothing but a message on the channel: the host parses, plans and
       // registers under the page's id, exactly as Subscribe + SubscribeRelated.
@@ -533,7 +538,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
       // No `registry`: an include URL must still pin its edge windows, not
       // just the root with a warning.
       yield* EngineHost.run({ channel: host, engine, nodes, urls: stubUrls });
-      yield* engine.mutate("todo/set", { id: "1", title: "by url", done: false, authorId: "u1" });
+      yield* engine.mutate("todo/set", { id: "1", title: "by url", isDone: false, authorId: "u1" });
       yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
       const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
       expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
@@ -571,7 +576,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
           yield* client.mutate("todo/set", {
             id: "1",
             title: "pinned",
-            done: false,
+            isDone: false,
             authorId: "u1",
           });
 

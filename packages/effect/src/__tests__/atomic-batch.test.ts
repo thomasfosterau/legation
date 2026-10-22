@@ -8,7 +8,10 @@
  * (unpulled-tail.test.ts).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Effect, Exit, Schema } from "effect";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

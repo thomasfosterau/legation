@@ -7,7 +7,13 @@
  * unknown to the client, and the server's pull response that tells it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, HashMap, Option, Ref, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

@@ -17,18 +17,16 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import { PgClient } from "@effect/sql-pg";
-import {
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Ref,
-  Redacted,
-  Schedule,
-  Schema,
-} from "effect";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
 import * as Sql from "../Sql.js";

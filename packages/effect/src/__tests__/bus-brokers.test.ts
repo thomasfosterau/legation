@@ -3,19 +3,17 @@
  * Redis Streams broker each carry a ChangeHint between two serialized buses.
  */
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Clock,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Logger,
-  PubSub,
-  Queue,
-  References,
-  Ref,
-} from "effect";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as References from "effect/References";
+import * as Ref from "effect/Ref";
 import { Redis } from "effect/persistence";
 import * as TestClock from "effect/testing/TestClock";
 import type { ChangeHint } from "../Backend.js";

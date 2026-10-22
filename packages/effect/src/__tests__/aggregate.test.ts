@@ -6,7 +6,11 @@
  * leaves the aggregate value unchanged.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Ref, Schema, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Aggregate from "../Aggregate.js";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -267,9 +271,15 @@ const mulberry32 = (seed: number): (() => number) => {
 
 const IDS = Array.from({ length: 8 }, (_, i) => `r${i}`);
 // Mixes number and string group keys on purpose (type-mismatched fields).
-const TEAMS: ReadonlyArray<unknown> = ["a", "b", 1, 2, undefined];
+const TEAMS: ReadonlyArray<string | number | undefined> = ["a", "b", 1, 2, undefined];
 
-const randomRowValue = (rand: () => number): unknown => {
+/** A generated row: `score` is sometimes non-numeric and `team` mixes key types. */
+interface RandomRowValue {
+  readonly score: number | string | null | undefined;
+  readonly team: string | number | undefined;
+}
+
+const randomRowValue = (rand: () => number): RandomRowValue => {
   const r = rand();
   const score =
     r < 0.55

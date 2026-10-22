@@ -411,7 +411,7 @@ projection for one job, not a general translation:
   copied verbatim, correct only because every caller here pre-synthesises a
   resource whose field names are already the engine's (`resourcesOf`).
 - **URL → `Query.Read`** — `parseRead(nodes, url)` / `parseParams(nodes,
-collection, params)` decode `include`, `fields`, `sort`, `page` and `filter`
+  collection, params)` decode `include`, `fields`, `sort`, `page` and `filter`
   with effect-jsonapi's `Query.schema` derived from the node graph (each
   node's filterable set and edges become the codec's declaration), then map
   them onto the read: `filter` → `where`, `sort` → `order`, `page[limit]` /
@@ -474,7 +474,7 @@ What the derivation guarantees:
 - **Scoping is the policy's.** A request without identity to a private
   collection sees the policy's empty allow-set: an empty collection for
   `list`, a 404 for `get` — exactly what the sync tier syncs. No `WHERE
-userId` lives in a handler.
+  userId` lives in a handler.
 - **Sorting and paging are `Subset.apply`'s** (ADR-0026 / ADR-0028): code-point
   text order, NULLs last, the id tie-break, `page[after]` as the cursor.
   `links.next` continues after the last row when the window is full.
@@ -643,7 +643,7 @@ self.addEventListener("fetch", (event) => {
   compiles to a plain limit-only window (`limit = offset + first`, no
   `cursor`), so it is covered by the ordinary rule: the subsuming
   subscription is unwindowed, or its own limit is at least `offset +
-first`. A deep offset past what is covered falls through exactly like any
+  first`. A deep offset past what is covered falls through exactly like any
   other uncovered window — the façade never fetches more rows to satisfy
   it, online or off. `links.next` / `links.prev` come back in the offset
   idiom when the request used it, never switching a caller to cursors

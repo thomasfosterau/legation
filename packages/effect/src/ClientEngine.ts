@@ -11,24 +11,22 @@
  * atomically through a single changes event.
  */
 
-import {
-  Clock,
-  Context,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Layer,
-  Metric,
-  PubSub,
-  Ref,
-  Schedule,
-  Schema,
-  Scope,
-  Semaphore,
-  Stream,
-  SubscriptionRef,
-} from "effect";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Aggregate from "./Aggregate.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore, NO_COMPACTION, freezePending, type CompactionResult } from "./ClientStore.js";
@@ -132,7 +130,8 @@ export interface WindowObservation {
  * permanently refused it (#35). Observed via {@link MutationHandle}.
  */
 export type MutationOutcome =
-  { readonly _tag: "applied" } | { readonly _tag: "rejected"; readonly reason: string };
+  | { readonly _tag: "applied" }
+  | { readonly _tag: "rejected"; readonly reason: string };
 
 /**
  * A handle to a journaled mutation whose backend outcome can be awaited. The
@@ -958,7 +957,7 @@ export const make = (
     // `sampleJournalDepth`'s tolerance elsewhere): the map starts empty and
     // catches up as mutations are journaled.
     const initialPending = yield* store.pendingMutations.pipe(
-      Effect.catch(() => Effect.succeed<ReadonlyArray<Mutation>>([]))
+      Effect.catchTag("StoreError", () => Effect.succeed<ReadonlyArray<Mutation>>([]))
     );
     // Entries journaled by an earlier session may already have been pushed (and
     // a store written before the sent watermark existed has no record of it),
@@ -1011,7 +1010,9 @@ export const make = (
     const clientIdRef = yield* Ref.make(
       clientIdFor(
         yield* store.getIdentity.pipe(
-          Effect.catch(() => Effect.succeed<Identity.Fingerprint | undefined>(undefined))
+          Effect.catchTag("StoreError", () =>
+            Effect.succeed<Identity.Fingerprint | undefined>(undefined)
+          )
         )
       )
     );
@@ -1598,7 +1599,7 @@ export const make = (
         };
         yield* handler(decodedArgs, writer);
         return touched;
-      }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+      }).pipe(Effect.catchTag(["MutatorError", "StoreError"], () => Effect.succeed(undefined)));
 
     // The union of collections a batch of journaled mutations touches (their
     // args are encoded, so decode before tracking). Any unknown/undecodable
@@ -1612,7 +1613,7 @@ export const make = (
           const definition = options.mutators.mutators.get(mutation.mutator);
           if (definition === undefined) return undefined;
           const decoded = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-            Effect.catch(() => Effect.succeed(undefined))
+            Effect.catchTag("SchemaError", () => Effect.succeed(undefined))
           );
           const touched = yield* collectionsTouchedBy(mutation.mutator, decoded);
           if (touched === undefined) return undefined;
@@ -2128,15 +2129,16 @@ export const make = (
     const resetUpdateLatch = Ref.set(updateNeededLatch, false);
     // Fire `onVersionError` on a version rejection, reset the latch on success;
     // shared by push and pull so both dedupe against one latch.
+    const isVersionNotSupported = (error: {
+      readonly _tag: string;
+    }): error is VersionNotSupportedError => error._tag === "VersionNotSupportedError";
     const withVersionLatch = <A, E extends { readonly _tag: string }, R>(
       effect: Effect.Effect<A, E, R>
     ): Effect.Effect<A, E, R> =>
       effect.pipe(
         Effect.tap(() => resetUpdateLatch),
         Effect.tapError((error) =>
-          error._tag === "VersionNotSupportedError"
-            ? onVersionError(error as unknown as VersionNotSupportedError)
-            : Effect.void
+          isVersionNotSupported(error) ? onVersionError(error) : Effect.void
         )
       );
 
@@ -3353,7 +3355,7 @@ export const make = (
             Effect.map((decoded) => local(decoded))
           )
         ),
-        Effect.catch(() => Effect.succeed(undefined))
+        Effect.catchTag(["QueryError", "SchemaError"], () => Effect.succeed(undefined))
       );
 
     // Read-only snapshot of every active subset: raw subscriptions plus each

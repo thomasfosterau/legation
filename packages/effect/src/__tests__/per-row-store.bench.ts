@@ -8,8 +8,8 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
-import { describe, test } from "vitest";
-import { Effect } from "effect";
+import { describe, test } from "vite-plus/test";
+import * as Effect from "effect/Effect";
 import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
 import type { PatchOp } from "../Protocol.js";

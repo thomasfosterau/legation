@@ -31,7 +31,7 @@ declare module "vitest" {
 /** `vite build` the app (adapter-node), its output or failure as a `CommerceBuild`. */
 export const buildApp = (): CommerceBuild => {
   try {
-    execFileSync("bun", ["run", "build"], {
+    execFileSync("pnpm", ["run", "build"], {
       cwd: appDir,
       env: { ...process.env, BETTER_AUTH_SECRET: "commerce-browser-test" },
       stdio: "pipe",

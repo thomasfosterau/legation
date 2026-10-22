@@ -6,7 +6,7 @@
  * keeps the previous UI on screen (stale-while-revalidate, no pending flash
  * after first load).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import type { Query } from "@thomasfosterau/legation-effect";
 import AsyncQueryHarness from "./fixtures/AsyncQueryHarness.svelte";

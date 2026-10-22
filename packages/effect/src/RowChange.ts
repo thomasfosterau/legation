@@ -28,6 +28,7 @@
  * through, so the two hosts (ADR-0021) emit identical batches from
  * identical page transitions (module the `position`/`move` gap above).
  */
+import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 
 /** One change in an observed window: a row entered, updated, moved or exited, or a `reset`. */
@@ -60,7 +61,7 @@ interface Positioned extends Identified {
 
 const positionOf = (row: Identified): string | undefined => {
   const position = (row as Partial<Positioned>).position;
-  return typeof position === "string" ? position : undefined;
+  return P.isString(position) ? position : undefined;
 };
 
 /** One `enter` per row of `rows`, in order, carrying `position` when present. */
