@@ -17,6 +17,7 @@
  */
 import { describe, test } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -104,6 +105,16 @@ const makeBulkSeededStore = (
           counters.set(clientId, next);
           return next;
         }),
+      mutationCounters: Effect.sync(() => R.fromEntries(counters)),
+      raiseMutationCounters: (raise) =>
+        Effect.forEach(
+          R.toEntries(raise),
+          ([clientId, id]) =>
+            Effect.sync(() => {
+              if ((counters.get(clientId) ?? 0) < id) counters.set(clientId, id);
+            }),
+          { concurrency: 1, discard: true }
+        ),
       // Nothing parks here: no push is acknowledged in a query-path benchmark, so the tail stays
       // empty. The members below are a working contract for the store, not a fixture the bench reads.
       unpulled: Effect.sync(() => unpulled),
