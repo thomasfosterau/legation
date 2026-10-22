@@ -26,8 +26,10 @@
  * (or an `updated_at`) for full coverage.
  */
 
-import { Effect, Ref, Schedule } from "effect";
-import type { Duration } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import type * as Duration from "effect/Duration";
 import { Backend, BackendError } from "@thomasfosterau/legation-effect";
 import { HintSource, InvalidationBus } from "@thomasfosterau/legation-effect/internal";
 import * as Sql from "./Sql.js";

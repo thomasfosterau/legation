@@ -18,8 +18,8 @@
  *    order equals code-point order (ADR-0028 rule c).
  *
  * Deterministic (mulberry32, fixed seed). Named `*.bench.ts` so `vitest run`
- * ignores it; run with `bun run bench`. Heap deltas are only meaningful when
- * node exposes `gc` (`NODE_OPTIONS=--expose-gc bun run bench …`).
+ * ignores it; run with `vp run bench`. Heap deltas are only meaningful when
+ * node exposes `gc` (`NODE_OPTIONS=--expose-gc vp run bench …`).
  *
  * vitest 5 prints a "Benchmark Warning … accessed module export getters too
  * many times" for the `CollectionIndex` benches: the hot loop calls
@@ -30,7 +30,13 @@
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
 import { describe, test } from "vite-plus/test";
-import { Duration, Effect, Layer } from "effect";
+import * as Arr from "effect/Array";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
+import type * as Ordering from "effect/Ordering";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Predicate } from "@thomasfosterau/legation-effect";
@@ -119,7 +125,7 @@ const keyBytes = (s: string): ArrayBuffer => new Uint8Array(utf8(s)).buffer as A
 const kb = (bytes: number) => Math.round(bytes / 102.4) / 10;
 const ms = (t: number) => Math.round(t * 100) / 100;
 const gc = () => (globalThis as { gc?: () => void }).gc?.();
-const gcExposed = typeof (globalThis as { gc?: unknown }).gc === "function";
+const gcExposed = P.isFunction((globalThis as { gc?: unknown }).gc);
 const heap = () => process.memoryUsage().heapUsed;
 const timed = async <A>(f: () => Promise<A> | A): Promise<[A, number]> => {
   const t0 = performance.now();
@@ -129,7 +135,7 @@ const timed = async <A>(f: () => Promise<A> | A): Promise<[A, number]> => {
 const median = (xs: ReadonlyArray<number>) => xs.toSorted((a, b) => a - b)[xs.length >> 1]!;
 
 /** UTF-8 byte order is code-point order; JS `<` is UTF-16 code-unit order. */
-const compareCodePoints = (a: string, b: string): number => {
+const compareCodePoints = (a: string, b: string): Ordering.Ordering => {
   let i = 0;
   let j = 0;
   while (i < a.length && j < b.length) {
@@ -392,7 +398,7 @@ const sectionC = async () => {
   const layer = IndexedDbClientStore.layer({ database: "kv-layout" }).pipe(
     Layer.provide(
       Layer.succeed(IndexedDb.IndexedDb)(
-        IndexedDb.make({ indexedDB: counted.factory as unknown as IDBFactory, IDBKeyRange })
+        IndexedDb.make({ indexedDB: counted.factory, IDBKeyRange })
       )
     )
   );
@@ -568,8 +574,14 @@ const sectionD = async () => {
     await walk(tx.objectStore(COLLECTION).index("name"), null, (r) => names.push(r.value.name));
     return names;
   });
-  const byCodePoint = idbRows.map((r) => r.name).sort(compareCodePoints);
-  const byCodeUnit = idbRows.map((r) => r.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const byCodePoint = Arr.sort(
+    idbRows.map((r) => r.name),
+    compareCodePoints
+  );
+  const byCodeUnit = Arr.sort(
+    idbRows.map((r) => r.name),
+    Order.String
+  );
   const cursorMatchesCodePoint = walked.every((n, i) => n === byCodePoint[i]);
   let divergent = 0;
   for (let i = 0; i < byCodePoint.length; i++) if (byCodePoint[i] !== byCodeUnit[i]) divergent += 1;

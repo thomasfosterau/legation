@@ -26,7 +26,11 @@
  */
 import { Predicate } from "@thomasfosterau/legation-effect";
 import { FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
-import { Effect, Exit, Option, Scope } from "effect";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
 
@@ -316,14 +320,19 @@ describe("differential filter harness (ADR-0028)", () => {
   /** Run a check; it resolves when every case agrees and rejects with the minimal case otherwise. */
   const run = (effect: Effect.Effect<void>) => Effect.runPromise(effect);
 
-  it("reports the seed and operator coverage", () => {
-    console.info(`differential corpus seed ${seed}; coverage ${JSON.stringify(full.coverage)}`);
-    // `true` is deliberately rare; everything else must recur.
-    const thin = Object.entries(full.coverage).filter(
-      ([name, count]) => count < (name === "true" ? 1 : 10)
-    );
-    expect(thin).toEqual([]);
-  });
+  it("reports the seed and operator coverage", () =>
+    run(
+      Effect.gen(function* () {
+        yield* Console.info(
+          `differential corpus seed ${seed}; coverage ${JSON.stringify(full.coverage)}`
+        );
+        // `true` is deliberately rare; everything else must recur.
+        const thin = Object.entries(full.coverage).filter(
+          ([name, count]) => count < (name === "true" ? 1 : 10)
+        );
+        expect(thin).toEqual([]);
+      })
+    ));
 
   describe("SQLite vs Postgres", () => {
     it(

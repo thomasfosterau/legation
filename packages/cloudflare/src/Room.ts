@@ -21,14 +21,25 @@
  * ```
  */
 
-import type { DurableObjectNamespace, DurableObjectState } from "@cloudflare/workers-types";
-import { Clock, type Duration, Effect, Ref, Scope } from "effect";
+import type {
+  DurableObjectNamespace,
+  DurableObjectState,
+  WebSocket,
+} from "@cloudflare/workers-types";
+import * as Clock from "effect/Clock";
+import type * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import {
   Authorization,
   Backend,
   Query,
   type Node,
+  type ProtocolError,
   type Transport,
+  type TransportError,
+  type VersionNotSupportedError,
 } from "@thomasfosterau/legation-effect";
 import {
   Cvr,
@@ -159,17 +170,27 @@ const boot = <Env>(
     )
   );
 
+/** What a protocol request can fail with: an undecodable body, or the handler's own errors. */
+type AnswerError = ProtocolError | TransportError | VersionNotSupportedError;
+
+/** A failed protocol request, answered as a 400 carrying the error's message. */
+const badRequest = (error: AnswerError) => Effect.succeed(json({ error: error.message }, 400));
+
 /** Answer one JSON protocol request with the matching handler operation. */
 const answer = (
   clock: Clock.Clock | undefined,
-  handle: Effect.Effect<unknown, { readonly message: string }>
+  handle: Effect.Effect<unknown, AnswerError>
 ): Promise<Response> =>
   Effect.runPromise(
     onRoomClock(
       clock,
       handle.pipe(
         Effect.map((response) => json(response)),
-        Effect.catch((error) => Effect.succeed(json({ error: error.message }, 400)))
+        Effect.catchTags({
+          ProtocolError: badRequest,
+          TransportError: badRequest,
+          VersionNotSupportedError: badRequest,
+        })
       )
     )
   );
@@ -213,9 +234,7 @@ export const makeRoomClass = <Env>(
         // The poke channel: accept under the hibernation API and hold no
         // per-socket state — eviction costs nothing.
         const pair = webSocketPair();
-        (this.state as unknown as { acceptWebSocket: (socket: unknown) => void }).acceptWebSocket(
-          pair.server
-        );
+        this.state.acceptWebSocket(pair.server as WebSocket);
         return upgradeResponse(pair.client);
       }
       if (url.pathname === routes.poke) {

@@ -8,9 +8,12 @@
    * Visual polish is out of scope for this first cut: plain, legible markup.
    */
   import { untrack } from "svelte";
-  import { Effect, Fiber, HashMap } from "effect";
+  import * as Effect from "effect/Effect";
+  import * as Fiber from "effect/Fiber";
+  import * as HashMap from "effect/HashMap";
+  import * as Result from "effect/Result";
   import type { DevtoolsCore } from "@thomasfosterau/legation-devtools";
-  import { makeStores } from "./store.js";
+  import * as Stores from "./store.js";
 
   const props: { core: DevtoolsCore } = $props();
   // `core` is a stable singleton built once by the app's `createWorld`, the
@@ -19,20 +22,19 @@
   const core = untrack(() => props.core);
 
   const { mutationStates, subscriptions, cookie, collections, events, syncFailures } =
-    makeStores(core);
+    Stores.makeStores(core);
 
   const journalEntries = $derived(
     [...HashMap.values($mutationStates)].toSorted((a, b) => b.mutationId - a.mutationId)
   );
   const pendingCount = $derived(journalEntries.filter((e) => e.phase === "pending").length);
 
-  const summarise = (mutator: string, args: unknown): string => {
-    try {
-      return `${mutator} ${JSON.stringify(args)}`;
-    } catch {
-      return mutator;
-    }
-  };
+  // `JSON.stringify` throws on a cycle or a BigInt; the mutator name alone stands in then.
+  const summarise = (mutator: string, args: unknown): string =>
+    Result.getOrElse(
+      Result.try(() => `${mutator} ${JSON.stringify(args)}`),
+      () => mutator
+    );
 
   let offline = $state<boolean | undefined>(undefined);
 

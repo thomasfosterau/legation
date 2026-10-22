@@ -5,7 +5,11 @@
  * mutation-id ledger.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref, Schema } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import {
   Authorization,
   BackendError,

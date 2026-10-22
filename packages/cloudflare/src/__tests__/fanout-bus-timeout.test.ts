@@ -4,7 +4,11 @@
  * dropped at that bound. TestClock moves the bound, not wall time.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Ref, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { Node } from "@thomasfosterau/legation-effect";
 import { FanoutBroker, FanoutBus } from "@thomasfosterau/legation-effect/internal";

@@ -23,12 +23,17 @@ import {
 } from "@thomasfosterau/legation-effect/internal";
 import type { MutationState } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, HashMap, Option, Ref, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
 });
 type Todo = typeof TodoArgs.Type;
 
@@ -103,7 +108,7 @@ describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
 
         const latest = yield* track(mirror.mutationStates);
-        yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", done: false });
+        yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", isDone: false });
 
         const pending = yield* eventually(Ref.get(latest), (states) => HashMap.size(states) === 1);
         expect(get(pending, 1)?.phase).toBe("pending");
@@ -126,7 +131,7 @@ describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
 
           const first = yield* Mirror.make({ channel: mirrorChannel, mutators });
           const firstLatest = yield* track(first.mutationStates);
-          yield* first.mutate("todo/set", { id: "1", title: "before", done: false });
+          yield* first.mutate("todo/set", { id: "1", title: "before", isDone: false });
           yield* eventually(Ref.get(firstLatest), (states) => HashMap.size(states) === 1);
 
           // A late-joining mirror on the same channel hydrates from the

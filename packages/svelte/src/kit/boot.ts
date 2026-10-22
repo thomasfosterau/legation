@@ -12,7 +12,9 @@
  * the `ManagedRuntime` {@link setClientRuntime} expects, so a root layout can
  * hand it straight to context.
  */
-import { Effect, Layer, ManagedRuntime } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { Client, ClientStore, Hydration, type Transport } from "@thomasfosterau/legation-effect";
 import type { ClientRuntime } from "../Runtime.js";
 

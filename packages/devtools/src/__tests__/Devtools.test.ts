@@ -5,7 +5,12 @@
  * `ClientStore.clearRows`) — nothing here is a bespoke wire.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, HashMap, Schema, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Backend,

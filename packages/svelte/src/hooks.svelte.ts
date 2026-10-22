@@ -24,7 +24,11 @@
  * ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
-import { Effect, Fiber, HashMap, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as P from "effect/Predicate";
+import * as Stream from "effect/Stream";
 import { AsyncResult } from "effect/reactivity";
 import { Aggregate, Client, Query } from "@thomasfosterau/legation-effect";
 import {
@@ -123,8 +127,8 @@ const live = <A, E>(
       // the boundary's `pending` snippet but renders awaited plain values
       // synchronously — so seeded pages fully server-render, and unseeded
       // ones legitimately show `pending`.
-      if (typeof document === "undefined" && options?.initial !== undefined) {
-        return options.initial as unknown as Promise<A>;
+      if (P.isUndefined(globalThis.document) && options?.initial !== undefined) {
+        return options.initial as Promise<A>;
       }
       return optedOut ? NEVER_PROMISE : result.promise;
     },

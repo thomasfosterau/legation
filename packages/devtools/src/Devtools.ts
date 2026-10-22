@@ -25,7 +25,8 @@
  * substrate work for a follow-up issue, not something this package works
  * around with a private hook of its own.
  */
-import { Effect, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import type { ClientStore, StoreError } from "@thomasfosterau/legation-effect";
 import {
   Introspection,

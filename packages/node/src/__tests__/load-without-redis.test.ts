@@ -17,11 +17,49 @@
  * controls: `redis` itself and the `@effect/platform-node` root entry must
  * both fail to load under the hook.
  */
-import { execFileSync } from "node:child_process";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { ChildProcess } from "effect/process";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vite-plus/test";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
+
+/** A stream of a child's output bytes, decoded and joined. */
+const text = <E, R>(bytes: Stream.Stream<Uint8Array, E, R>) =>
+  bytes.pipe(Stream.decodeText(), Stream.mkString);
+
+/**
+ * Run `node` with `args` from the workspace root and succeed with its stdout;
+ * a non-zero exit dies with everything the child printed, labelled `what`.
+ * `env`, when given, replaces the inherited environment.
+ */
+const runNode = (
+  what: string,
+  args: ReadonlyArray<string>,
+  env?: Record<string, string | undefined> | undefined
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const child = yield* ChildProcess.make(process.execPath, args, {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [text(child.stdout), text(child.stderr), child.exitCode],
+        { concurrency: "unbounded" }
+      );
+      if (exitCode !== 0) {
+        return yield* Effect.die(
+          new Error(`${what} failed (exit code ${exitCode}):\n${stdout}${stderr}`)
+        );
+      }
+      return stdout;
+    })
+  ).pipe(Effect.provide(NodeServices.layer));
 
 const hooks = `
 export async function resolve(specifier, context, next) {
@@ -56,47 +94,40 @@ process.stdout.write(JSON.stringify(results));
 `;
 
 describe("@thomasfosterau/legation-node without redis", () => {
-  // The child loads `dist/`, so build it (and `@thomasfosterau/legation-effect`, which it
-  // references) first; a no-op when `bun run build` already ran, as in CI.
-  beforeAll(() => {
-    try {
-      execFileSync(
-        process.execPath,
-        ["node_modules/@typescript/native/bin/tsc", "--build", "packages/node/tsconfig.json"],
-        { cwd: root, stdio: "pipe" }
-      );
-    } catch (error) {
-      // tsc prints its diagnostics on stdout, which the thrown error omits.
-      const failure = error as { stdout?: Buffer; stderr?: Buffer; message: string };
-      throw new Error(
-        `tsc --build of packages/node failed:\n${failure.stdout?.toString() ?? ""}${
-          failure.stderr?.toString() ?? ""
-        }${failure.message}`,
-        { cause: error }
-      );
-    }
-  }, 120_000);
+  it.live(
+    "loads the built package when redis cannot be resolved",
+    () =>
+      Effect.gen(function* () {
+        // The child loads `dist/`, so build it (and `@thomasfosterau/legation-effect`,
+        // which it references) first; a cache hit when `vp run build` already ran, as in CI.
+        yield* runNode("vp run build of @thomasfosterau/legation-node", [
+          "node_modules/vite-plus/bin/vp",
+          "run",
+          "@thomasfosterau/legation-node#build",
+        ]);
 
-  it("loads the built package when redis cannot be resolved", () => {
-    const { NODE_OPTIONS: _ignored, ...env } = process.env;
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--import",
-        `data:text/javascript,${encodeURIComponent(register)}`,
-        "--input-type=module",
-        "--eval",
-        probe,
-      ],
-      { cwd: root, env, encoding: "utf8" }
-    );
+        const { NODE_OPTIONS: _ignored, ...env } = process.env;
+        const output = yield* runNode(
+          "the load probe",
+          [
+            "--import",
+            `data:text/javascript,${encodeURIComponent(register)}`,
+            "--input-type=module",
+            "--eval",
+            probe,
+          ],
+          env
+        );
 
-    expect(JSON.parse(output)).toEqual({
-      // Controls: the hook hides redis, and the root entry needs it.
-      redis: "ERR_MODULE_NOT_FOUND",
-      "@effect/platform-node": "ERR_MODULE_NOT_FOUND",
-      // The package loads and exposes its API.
-      "@thomasfosterau/legation-node": "function",
-    });
-  }, 60_000);
+        expect(JSON.parse(output)).toEqual({
+          // Controls: the hook hides redis, and the root entry needs it.
+          redis: "ERR_MODULE_NOT_FOUND",
+          "@effect/platform-node": "ERR_MODULE_NOT_FOUND",
+          // The package loads and exposes its API.
+          "@thomasfosterau/legation-node": "function",
+        });
+      }),
+    // The build (up to 120 s cold) and the probe (60 s), as the two steps had.
+    180_000
+  );
 });

@@ -9,7 +9,10 @@ import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/in
 import { Telemetry } from "@thomasfosterau/legation-effect/internal";
 import { StoreError } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Metric, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Stream from "effect/Stream";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
 import * as HttpCacheInvalidation from "../HttpCacheInvalidation.js";
 

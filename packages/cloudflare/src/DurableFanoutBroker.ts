@@ -18,7 +18,10 @@ import type {
   AbortSignal as WorkersAbortSignal,
   DurableObjectNamespace,
 } from "@cloudflare/workers-types";
-import { Duration, Effect, PubSub, Scope } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
+import * as Scope from "effect/Scope";
 import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation-effect/internal";
 
 /** Options for {@link make}. */

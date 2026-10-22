@@ -6,7 +6,7 @@
  */
 import type { HttpCache } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
 
 /** Minimal in-memory Cache API fake, keyed by request URL. */

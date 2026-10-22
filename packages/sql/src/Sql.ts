@@ -65,6 +65,7 @@
  */
 
 import type { Predicate } from "@thomasfosterau/legation-effect";
+import * as P from "effect/Predicate";
 
 /** A SQL fragment plus its ordered bind parameters. */
 export interface SqlFragment {
@@ -81,6 +82,7 @@ export interface Dialect {
   /** The code-point collation name, emitted as `COLLATE <name>` after a declared-text operand. */
   readonly textCollation: string;
   /** How a boolean literal binds (Postgres has booleans; SQLite stores `0`/`1`). */
+  // oxlint-disable-next-line effect/no-unknown-returns -- a bind parameter is whatever the dialect's driver accepts (SQLite `0`/`1`, PostgreSQL `boolean`); narrowing this exported member's type would break hand-written dialects.
   readonly boolean: (value: boolean) => unknown;
   /** The larger of two SQL expressions: `MAX` on SQLite, `GREATEST` on PostgreSQL. */
   readonly greatest: (left: string, right: string) => string;
@@ -183,7 +185,7 @@ const operand = (compilation: Compilation, field: string): string => {
 const bindLiteral = (compilation: Compilation, field: string, value: Predicate.Literal): string => {
   const { params, dialect, kinds } = compilation;
   if (!conforms(kinds?.[field], value)) return params.bind(null);
-  return params.bind(typeof value === "boolean" ? dialect.boolean(value) : value);
+  return params.bind(P.isBoolean(value) ? dialect.boolean(value) : value);
 };
 
 /**

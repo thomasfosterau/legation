@@ -46,6 +46,7 @@
     "@thomasfosterau/legation-effect": "workspace:^"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",

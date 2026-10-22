@@ -21,7 +21,7 @@
  */
 
 import type { D1Database } from "@cloudflare/workers-types";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { BackendError } from "@thomasfosterau/legation-effect";
 import type { SqlBackend, Sql } from "@thomasfosterau/legation-sql";
 

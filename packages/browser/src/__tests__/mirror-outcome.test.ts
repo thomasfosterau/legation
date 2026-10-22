@@ -23,7 +23,9 @@ import {
   Mirror,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 
 interface Todo {
   readonly id: string;

@@ -43,19 +43,17 @@ import {
 } from "@thomasfosterau/legation-effect/internal";
 import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Effect,
-  HashMap,
-  Layer,
-  Logger,
-  LogLevel,
-  Option,
-  Ref,
-  References,
-  Schedule,
-  Schema,
-  Stream,
-} from "effect";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as LogLevel from "effect/LogLevel";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as References from "effect/References";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { KeyValueStore } from "effect/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
@@ -271,7 +269,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolea
     return yield* Effect.die(new Error("condition never held"));
   });
 
-const uniqueChannel = () => `legation-bg-${Math.random().toString(36).slice(2)}`;
+const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

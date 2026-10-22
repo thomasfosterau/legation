@@ -7,7 +7,8 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
-import { Effect, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import RunesConnectionHarness from "./fixtures/RunesConnectionHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
 

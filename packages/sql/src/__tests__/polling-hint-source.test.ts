@@ -11,7 +11,8 @@
  * mirroring `fanout-matching.test.ts`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Metric } from "effect";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
 import { Authorization, Backend, MemoryBackend } from "@thomasfosterau/legation-effect";
 import {
   Cvr,

@@ -10,7 +10,7 @@ A driver-agnostic SQL reference backend for the
   tiny `SqlExecutor` seam (`query` / `run` / `transaction`, and the optional
   `transactional` flag, which an executor without transactions sets to
   `false`). Bring your own
-  driver (`bun:sqlite`, `effect/sql`, `pg`, …); the backend supplies
+  driver (`better-sqlite3`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.
 - **`PollingHintSource`** — a tier-2 change-data-capture hint source over the

@@ -7,7 +7,10 @@
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Hydration } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
 import { KeyValueStore } from "effect/persistence";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
@@ -22,6 +25,12 @@ const failure = { armed: false, puts: 0, failAt: 2 };
 /** What the proxied factory saw: each readwrite and readonly transaction opened, and each key a put wrote. */
 const tally = { readwrite: 0, readonly: 0, putKeys: [] as Array<string> };
 
+/** A property read a trap does not intercept: the target's own, with methods bound to it. */
+const passThrough = <T extends object>(target: T, prop: string | symbol): T[keyof T] => {
+  const value = target[prop as keyof T];
+  return P.isFunction(value) ? value.bind(target) : value;
+};
+
 const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
   new Proxy(store, {
     get(target, prop) {
@@ -31,12 +40,11 @@ const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
             throw new DOMException("simulated write failure", "DataError");
           }
           const key = (value as { key?: unknown } | undefined)?.key;
-          if (typeof key === "string") tally.putKeys.push(key);
+          if (P.isString(key)) tally.putKeys.push(key);
           return target.put(value as never);
         };
       }
-      const value = Reflect.get(target, prop, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      return passThrough(target, prop);
     },
   });
 
@@ -46,8 +54,7 @@ const wrapTransaction = (tx: IDBTransaction): IDBTransaction =>
       if (prop === "objectStore") {
         return (name: string) => wrapStore(target.objectStore(name));
       }
-      const value = Reflect.get(target, prop, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      return passThrough(target, prop);
     },
   });
 
@@ -63,8 +70,7 @@ const wrapDatabase = (db: IDBDatabase): IDBDatabase =>
           return wrapTransaction(tx);
         };
       }
-      const value = Reflect.get(target, prop, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      return passThrough(target, prop);
     },
   });
 
@@ -72,8 +78,7 @@ const wrapRequest = (request: IDBOpenDBRequest): IDBOpenDBRequest =>
   new Proxy(request, {
     get(target, prop) {
       if (prop === "result") return wrapDatabase(target.result);
-      const value = Reflect.get(target, prop, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      return passThrough(target, prop);
     },
   });
 
@@ -82,8 +87,7 @@ const failingIndexedDb: IDBFactory = new Proxy(indexedDB, {
     if (prop === "open") {
       return (name: string, version?: number) => wrapRequest(target.open(name, version));
     }
-    const value = Reflect.get(target, prop, target) as unknown;
-    return typeof value === "function" ? value.bind(target) : value;
+    return passThrough(target, prop);
   },
 });
 

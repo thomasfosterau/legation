@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Subset, Undo } from "@thomasfosterau/legation-effect/internal";
 import UndoHarness from "./fixtures/UndoHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";

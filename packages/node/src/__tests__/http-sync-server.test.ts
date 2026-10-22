@@ -18,7 +18,9 @@ import {
   SyncRoom,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import * as HttpSyncServer from "../HttpSyncServer.js";
@@ -26,7 +28,7 @@ import * as HttpSyncServer from "../HttpSyncServer.js";
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
 });
 type Todo = typeof TodoArgs.Type;
 
@@ -85,7 +87,7 @@ describe("HttpSyncServer", () => {
       }).pipe(Effect.provideService(ClientStore.ClientStore, store));
 
       yield* engine.subscribe(allTodos);
-      yield* engine.mutate("todo/set", { id: "1", title: "over http", done: false });
+      yield* engine.mutate("todo/set", { id: "1", title: "over http", isDone: false });
       yield* engine.push;
       yield* engine.pull;
 

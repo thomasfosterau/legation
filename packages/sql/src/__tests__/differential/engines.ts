@@ -30,7 +30,11 @@ import { PGlite } from "@electric-sql/pglite";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Predicate } from "@thomasfosterau/legation-effect";
 import { FilterCorpus, type Subset } from "@thomasfosterau/legation-effect/internal";
-import { Context, Effect, Layer, type Scope } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
+import type * as Scope from "effect/Scope";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as Sql from "../../Sql.js";
 
@@ -64,11 +68,12 @@ const collatedColumns = new Set(
   columns.filter((column) => column.kind === "text").map((column) => column.name)
 );
 
-type Encoder = (value: Predicate.Literal | undefined) => unknown;
+/** A corpus value as the engine's driver binds it: a literal, or `NULL` for an absent field. */
+type Encoder = (value: Predicate.Literal | undefined) => Predicate.Literal;
 
 const encodePostgres: Encoder = (value) => value ?? null;
 const encodeSqlite: Encoder = (value) =>
-  value === undefined ? null : typeof value === "boolean" ? (value ? 1 : 0) : value;
+  value === undefined ? null : P.isBoolean(value) ? (value ? 1 : 0) : value;
 
 /**
  * Decode a `(<where>)` column: Postgres yields `true`/`false`/`null`, SQLite
