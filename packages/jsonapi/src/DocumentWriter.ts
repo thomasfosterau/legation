@@ -34,7 +34,10 @@
  *   `one`-edge linkage and paginated links, and the collection-valued
  *   linkage the caller resolved for it ({@link Input.linkage} — the third
  *   batch, keyed by the included rows); an edge with no resolved rows is
- *   omitted.
+ *   omitted. The member itself is present exactly when the read has an
+ *   `include`, as an empty array when nothing resolved (JSON:API 1.1
+ *   §Fetching Includes: a response to a request carrying `include` is a
+ *   compound document).
  * - **`fields[type]`** is applied last, to attributes only, on primary and
  *   included resources alike (ADR-0029 §5: a serialisation-time projection
  *   over full rows). Linkage is never projected away.
@@ -86,13 +89,13 @@ export interface ResourceValue {
   readonly relationships?: Readonly<Record<string, RelationshipValue>>;
 }
 
-/** A collection document: `{ data: [...], included?, links }`. */
+/** A collection document: `{ data: [...], included?, links }`, with `included` exactly when the read has an `include`. */
 export type CollectionDocument = Handlers.DocumentValue<
   ReadonlyArray<ResourceValue>,
   ResourceValue
 >;
 
-/** A single-resource document: `{ data: resource | null, included?, links }`. */
+/** A single-resource document: `{ data: resource | null, included?, links }`, with `included` exactly when the read has an `include`. */
 export type DataDocument = Handlers.DocumentValue<ResourceValue | null, ResourceValue>;
 
 /** Edge rows by collection, then row id, then edge name (see {@link Input.linkage}). */
@@ -271,14 +274,24 @@ const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
   return node;
 };
 
-/** The primary resources and the compound `included`, both projected. */
+/**
+ * The primary resources and the compound `included`, both projected.
+ * `included` is `undefined` for a read with no `include`, so the member is
+ * omitted; a read with one gets the array even when it is empty, because a
+ * response to a request carrying `include` is a compound document (JSON:API
+ * 1.1 §Fetching Includes).
+ */
 const assemble = (input: Input, node: Node.AnyNode) => {
   const env = envOf(input);
   const data = input.rows.map((row) => project(resourceOf(env, node, row), input.fields));
-  const included = Object.keys(input.read.include ?? {})
-    .toSorted(Predicate.compareText)
-    .flatMap((name) => includedOf(env, node, input.rows, name))
-    .map((resource) => project(resource, input.fields));
+  const include = input.read.include;
+  const included =
+    include === undefined
+      ? undefined
+      : Object.keys(include)
+          .toSorted(Predicate.compareText)
+          .flatMap((name) => includedOf(env, node, input.rows, name))
+          .map((resource) => project(resource, input.fields));
   return { data, included };
 };
 
@@ -350,7 +363,7 @@ export const collection = (input: Input): CollectionDocument => {
   const next = nextLink(input, page);
   const prev = prevLink(input);
   return Handlers.collection(data, {
-    included,
+    ...(included === undefined ? {} : { included }),
     links: {
       self: selfLink(input),
       ...(next === undefined ? {} : { next }),
@@ -370,5 +383,8 @@ export const data = (input: Input): DataDocument => {
     { ...input, rows: first === undefined ? [] : [first] },
     nodeOf(input.nodes, input.read)
   );
-  return Handlers.data(primary[0] ?? null, { included, links: { self: selfLink(input) } });
+  return Handlers.data(primary[0] ?? null, {
+    ...(included === undefined ? {} : { included }),
+    links: { self: selfLink(input) },
+  });
 };

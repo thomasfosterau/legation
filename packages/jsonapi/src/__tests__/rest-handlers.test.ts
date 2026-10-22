@@ -174,12 +174,9 @@ const api = HttpApi.make("shop")
   .add(
     Group.make(
       Product,
-      Endpoint.list(Product, {
-        include: true,
-        fields: true,
-        sort: ["name", "priceCents"],
-        page: JsonApiQuery.PageWindow,
-      }),
+      // The grammar the derived handler parses, declared on the endpoint
+      // (`JsonApiQuery.querySchema`), so `filter[…]` reaches the handler.
+      Endpoint.list(Product, { query: JsonApiQuery.querySchema(nodes, "products") }),
       Endpoint.get(Product, { include: true, fields: true, errors: [NotFound] })
     )
   )
@@ -194,7 +191,12 @@ const api = HttpApi.make("shop")
       })
     )
   )
-  .add(Group.make(CartItem, Endpoint.list(CartItem, { include: true })))
+  .add(
+    Group.make(
+      CartItem,
+      Endpoint.list(CartItem, { query: JsonApiQuery.querySchema(nodes, "cartItems") })
+    )
+  )
   .add(Group.make(Seller, Endpoint.list(Seller)))
   .prefix("/api");
 
