@@ -5,7 +5,7 @@
  * the hook per parent (scoping `where` to a parent id) pages each parent's
  * list independently.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import { Effect, Stream } from "effect";
 import RunesConnectionHarness from "./fixtures/RunesConnectionHarness.svelte";

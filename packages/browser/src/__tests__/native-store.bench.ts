@@ -29,7 +29,7 @@
  * index, so the comparison stands; absolute numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
-import { describe, test } from "vitest";
+import { describe, test } from "vite-plus/test";
 import { Duration, Effect, Layer } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
@@ -652,18 +652,15 @@ describe(`CollectionIndex over ${ROWS} rows: eq qty=42`, () => {
     );
   });
   test("Subset.applyIndexed with orderBy name (in-memory sort of hits)", async ({ bench }) => {
-    await bench(
-      "Subset.applyIndexed with orderBy name (in-memory sort of hits)",
-      () =>
-        void Subset.applyIndexed(
-          rowsById,
-          Subset.make({
-            collection: COLLECTION,
-            where: pointWhere,
-            orderBy: [{ field: "name", direction: "asc" }],
-          }),
-          index
-        )
-    ).run({ time: 500 });
+    await bench("Subset.applyIndexed with orderBy name (in-memory sort of hits)", () =>
+      void Subset.applyIndexed(
+        rowsById,
+        Subset.make({
+          collection: COLLECTION,
+          where: pointWhere,
+          orderBy: [{ field: "name", direction: "asc" }],
+        }),
+        index
+      )).run({ time: 500 });
   });
 });

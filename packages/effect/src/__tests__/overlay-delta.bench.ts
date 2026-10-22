@@ -12,7 +12,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { describe, test } from "vitest";
+import { describe, test } from "vite-plus/test";
 import { Effect, Ref, Schema, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
@@ -85,11 +85,8 @@ describe("delta-maintained overlay (#109)", () => {
   test(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async ({
     bench,
   }) => {
-    await bench(
-      `${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`,
-      async () => {
-        await Effect.runPromise(scenario.pipe(Effect.scoped));
-      }
-    ).run({ time: 1000 });
+    await bench(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async () => {
+      await Effect.runPromise(scenario.pipe(Effect.scoped));
+    }).run({ time: 1000 });
   });
 });

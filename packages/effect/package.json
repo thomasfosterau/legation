@@ -2,7 +2,39 @@
   "name": "@thomasfosterau/legation-effect",
   "version": "0.1.0",
   "description": "An offline-first sync engine over a typed resource graph: Node (with its Edges), Collection, declarative Query reads, named Mutation writes, one Client per thread and one Server per backend",
+  "keywords": [
+    "cache",
+    "edge",
+    "effect",
+    "fan-out",
+    "mutation",
+    "offline-first",
+    "query",
+    "service-worker",
+    "subscription",
+    "sync-engine",
+    "typescript",
+    "write-through"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/effect#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/effect"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,50 +48,14 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "sync-engine",
-    "cache",
-    "write-through",
-    "query",
-    "mutation",
-    "subscription",
-    "offline-first",
-    "service-worker",
-    "edge",
-    "fan-out",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
-  },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "effect": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/effect"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/effect#readme"
+  "peerDependencies": {
+    "effect": "catalog:peers"
+  }
 }

@@ -175,7 +175,8 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     MemoryBackend.handler(countUp, (args, writer) =>
       Effect.gen(function* () {
         const current = (yield* writer.get(args.collection, args.id)) as
-          { readonly n?: number } | undefined;
+          | { readonly n?: number }
+          | undefined;
         yield* park(args.gate);
         yield* writer.put(args.collection, args.id, { n: (current?.n ?? 0) + 1 });
       })

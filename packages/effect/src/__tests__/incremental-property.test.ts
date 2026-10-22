@@ -15,7 +15,7 @@
  * step, and values print. Uses a deterministic mulberry32 PRNG so a failure is
  * reproducible from its printed seed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
 import type { RowChange } from "../RowChange.js";

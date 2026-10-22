@@ -2,7 +2,35 @@
   "name": "@thomasfosterau/legation-devtools",
   "version": "0.1.0",
   "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with a Svelte panel on /svelte",
+  "keywords": [
+    "devtools",
+    "effect",
+    "introspection",
+    "react",
+    "svelte",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/devtools#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/devtools"
+  },
+  "files": [
+    "dist",
+    "svelte",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -17,56 +45,24 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "svelte",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "devtools",
-    "react",
-    "svelte",
-    "sync-engine",
-    "introspection",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
     "@thomasfosterau/legation-effect": "workspace:^"
   },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "svelte": "catalog:"
+  },
   "peerDependencies": {
-    "effect": ">=4.0.0-rc.118",
-    "svelte": ">=5.40"
+    "effect": "catalog:peers",
+    "svelte": "catalog:peers"
   },
   "peerDependenciesMeta": {
     "svelte": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@effect/vitest": "catalog:",
-    "effect": "catalog:",
-    "svelte": "^5"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/devtools"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/devtools#readme"
+  }
 }

@@ -8,7 +8,7 @@
  * Effect's seeded `Random` service (`Random.withSeed`), the repo's idiom.
  */
 import { Effect, Random } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 

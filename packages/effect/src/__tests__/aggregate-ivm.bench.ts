@@ -13,7 +13,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { describe, test } from "vitest";
+import { describe, test } from "vite-plus/test";
 import { Effect, Schema, Scope, Stream } from "effect";
 import * as Aggregate from "../Aggregate.js";
 import * as Authorization from "../Authorization.js";
@@ -125,11 +125,8 @@ describe("incremental aggregates (#110)", () => {
   test(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async ({
     bench,
   }) => {
-    await bench(
-      `single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`,
-      async () => {
-        await churnOnce();
-      }
-    ).run();
+    await bench(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async () => {
+      await churnOnce();
+    }).run();
   });
 });

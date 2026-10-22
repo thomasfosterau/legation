@@ -6,7 +6,7 @@
  * examples so a regression names the rule it broke.
  */
 import { Option, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as Predicate from "../Predicate.js";
 
 const T = Option.some(true);

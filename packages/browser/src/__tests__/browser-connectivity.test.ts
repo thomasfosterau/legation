@@ -32,7 +32,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Ref, Schema, Scope, Stream } from "effect";
 import * as TestClock from "effect/testing/TestClock";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 
 interface Todo {

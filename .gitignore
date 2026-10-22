@@ -141,3 +141,13 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+
+# The Vite+ task cache and vitest scratch dirs.
+.vite/
+# The generated git-hook runner; the editable hook itself is committed.
+.vite-hooks/_/
+.pnpm-store
+fallow.sarif
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock

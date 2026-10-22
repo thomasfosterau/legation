@@ -4,7 +4,7 @@
  * `useAggregate`/`useAggregateGrouped` track counts, and `useNamedQuery`
  * renders the named query's client-local subset.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import NamedQueryHarness from "./fixtures/NamedQueryHarness.svelte";

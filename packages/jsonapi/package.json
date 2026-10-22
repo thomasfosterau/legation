@@ -2,7 +2,33 @@
   "name": "@thomasfosterau/legation-jsonapi",
   "version": "0.1.0",
   "description": "JSON:API v1.1 collection loaders for the legation engine: map JSON:API documents into engine collection rows",
+  "keywords": [
+    "collection-loader",
+    "effect",
+    "json-api",
+    "jsonapi",
+    "sync-engine",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/jsonapi#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/legation/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/legation.git",
+    "directory": "packages/jsonapi"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,48 +38,18 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "test": "vitest run --root ../.."
-  },
-  "keywords": [
-    "effect",
-    "json-api",
-    "jsonapi",
-    "sync-engine",
-    "collection-loader",
-    "typescript"
-  ],
-  "author": "Thomas Foster",
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-jsonapi": "^0.16.3",
+    "@thomasfosterau/effect-jsonapi": "catalog:",
     "@thomasfosterau/legation-effect": "workspace:^"
-  },
-  "peerDependencies": {
-    "effect": ">=4.0.0-rc.118"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "effect": "catalog:"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/jsonapi"
-  },
-  "bugs": {
-    "url": "https://github.com/thomasfosterau/legation/issues"
-  },
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/jsonapi#readme"
+  "peerDependencies": {
+    "effect": "catalog:peers"
+  }
 }

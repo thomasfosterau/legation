@@ -11,6 +11,6 @@ import { fileURLToPath } from "node:url";
 export default function setup(): void {
   const app = fileURLToPath(new URL("examples/commerce", import.meta.url));
   if (!existsSync(`${app}/node_modules/$app/tsconfig.json`)) {
-    execSync("bunx svelte-kit sync", { cwd: app, stdio: "inherit" });
+    execSync("pnpm exec svelte-kit sync", { cwd: app, stdio: "inherit" });
   }
 }

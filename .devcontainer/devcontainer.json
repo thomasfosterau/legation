@@ -8,17 +8,10 @@
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {}
   },
   "postCreateCommand": "bun install",
-  "forwardPorts": [
-    8787,
-    8976
-  ],
+  "forwardPorts": [8787, 8976],
   "customizations": {
     "vscode": {
-      "extensions": [
-        "oxc.oxc-vscode",
-        "esbenp.prettier-vscode",
-        "svelte.svelte-vscode"
-      ]
+      "extensions": ["oxc.oxc-vscode", "esbenp.prettier-vscode", "svelte.svelte-vscode"]
     }
   },
   "workspaceFolder": "/workspaces/legation"

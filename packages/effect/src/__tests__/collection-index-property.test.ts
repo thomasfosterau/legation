@@ -12,7 +12,7 @@
  * criterion for the index.
  */
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as CollectionIndex from "../CollectionIndex.js";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";

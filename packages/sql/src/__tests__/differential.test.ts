@@ -27,7 +27,7 @@
 import { Predicate } from "@thomasfosterau/legation-effect";
 import { FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
 import { Effect, Exit, Option, Scope } from "effect";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
 
 const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);

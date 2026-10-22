@@ -4,7 +4,7 @@
  * The manager closes over the engine, so the hook needs no Client in context —
  * only a mounted component, for its `$effect`.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import { Effect } from "effect";
 import { Subset, Undo } from "@thomasfosterau/legation-effect/internal";

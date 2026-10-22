@@ -3,7 +3,7 @@
  * with the window boundary handled correctly (inserts push out, deletes pull
  * in, out-of-page changes don't disturb the visible page).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";

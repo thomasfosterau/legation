@@ -40,7 +40,7 @@
  * membership/value, the same contract before #112's position keys were
  * surfaced.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { Deferred, Effect, Ref, Schema, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

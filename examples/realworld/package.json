@@ -19,7 +19,7 @@
     "@thomasfosterau/legation-effect": "workspace:*",
     "@thomasfosterau/legation-svelte": "workspace:*",
     "effect": "catalog:",
-    "svelte": "^5"
+    "svelte": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

@@ -15,7 +15,7 @@
  * numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
-import { describe, test } from "vitest";
+import { describe, test } from "vite-plus/test";
 import { Effect, Schema, Scope, Stream } from "effect";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore, type StoredRow } from "../ClientStore.js";

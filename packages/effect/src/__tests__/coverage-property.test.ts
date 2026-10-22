@@ -13,7 +13,7 @@
  * Seeded through Effect's `Random.withSeed`; `LEGATION_CORPUS_SEED`
  * overrides the seed to reproduce a failure.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { Effect, Random } from "effect";
 import * as Coverage from "../Coverage.js";
 import * as FilterCorpus from "../FilterCorpus.js";

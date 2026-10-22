@@ -3,7 +3,7 @@
  * payloads (cross-context), and a publisher's own subscriber sees its payload
  * (self-delivery, which BroadcastChannel itself omits for the sender).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { Effect } from "effect";
 import * as BusBrokers from "../BusBrokers.js";
 

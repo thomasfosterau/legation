@@ -1,0 +1,315 @@
+/**
+ * Root workspace config. Owns the repo-wide format/lint/staged passes (read
+ * statically by `vp fmt` / `vp lint` / `vp staged`), the root tasks (`build`,
+ * `check`, `check:examples`, `pack:check`, `test`, `test:coverage`, `bench`)
+ * and the one Vitest run that covers every package and the example apps.
+ * Each package's own `build` (`vp pack`) is defined once in `vite.package.ts`
+ * and instantiated by its `packages/<name>/vite.config.ts`; a new package adds
+ * itself to the `packages` list below.
+ */
+import { fileURLToPath } from "node:url";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { defineConfig } from "vite-plus";
+
+/** The published packages, by directory; each has a `build` task. */
+const packages = [
+  "effect",
+  "browser",
+  "cloudflare",
+  "devtools",
+  "jsonapi",
+  "node",
+  "sql",
+  "svelte",
+] as const;
+
+/** Every package's `build`, named explicitly: the root has no package deps. */
+const buildAll = packages.map((name) => `@thomasfosterau/legation-${name}#build`);
+
+const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+
+/**
+ * Tests import the packages by name, exactly as a consumer would, and resolve
+ * that name to `src/` rather than the built `dist/` that `exports` points at,
+ * so a unit run never needs a build first. (The commerce façade's browser test
+ * builds the example app, which resolves through `dist/`; hence the `build`
+ * edge on the test tasks.)
+ */
+const alias = {
+  "@thomasfosterau/legation-effect/internal": source("packages/effect/src/internal.ts"),
+  "@thomasfosterau/legation-effect": source("packages/effect/src/index.ts"),
+  "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
+  "@thomasfosterau/legation-cloudflare": source("packages/cloudflare/src/index.ts"),
+  "@thomasfosterau/legation-node": source("packages/node/src/index.ts"),
+  "@thomasfosterau/legation-jsonapi": source("packages/jsonapi/src/index.ts"),
+  "@thomasfosterau/legation-sql": source("packages/sql/src/index.ts"),
+  "@thomasfosterau/legation-svelte/kit": source("packages/svelte/src/kit/index.ts"),
+  "@thomasfosterau/legation-svelte": source("packages/svelte/src/index.svelte.ts"),
+  "@thomasfosterau/legation-devtools": source("packages/devtools/src/index.ts"),
+};
+
+/**
+ * Input fingerprint for the cached root tasks: auto tracking minus
+ * node_modules bookkeeping churn, with the lockfile back explicitly.
+ */
+const cacheInputs = [{ auto: true }, "!node_modules/**", "!coverage/**", "pnpm-lock.yaml"];
+
+export default defineConfig({
+  // Staged-file checks run by `vp staged` (pre-commit). Oxfmt cannot format
+  // `.svelte`, so Svelte goes through lint alone.
+  staged: {
+    "*.{js,mjs,ts,json,md,yml,yaml}": "vp check --fix",
+    "*.svelte": "vp lint --fix",
+  },
+  // Oxfmt, the formatter of record. The options keep the style the
+  // repository was written in under Prettier, so the migration reformatted
+  // nothing. The example apps, the vendored skills and ADR-0012/0013's
+  // native ports are not formatted.
+  fmt: {
+    printWidth: 100,
+    trailingComma: "es5",
+    ignorePatterns: [
+      "**/dist/**",
+      "coverage/**",
+      "examples/**",
+      ".claude/skills/**",
+      ".changeset/*.md",
+      "**/CHANGELOG.md",
+      "pnpm-lock.yaml",
+    ],
+  },
+  lint: {
+    ignorePatterns: [
+      "**/dist/**",
+      "coverage/**",
+      "**/node_modules/**",
+      ".changeset/**",
+      // The example apps are demo code type-checked by their own
+      // svelte-check (`vp run check:examples`); the library lint does not
+      // apply to them.
+      "examples/**",
+    ],
+    categories: {
+      correctness: "error",
+      suspicious: "warn",
+      perf: "warn",
+    },
+    rules: {
+      "eslint/no-underscore-dangle": ["warn", { allow: ["_tag"] }],
+      "typescript/no-explicit-any": "off",
+      "vite-plus/prefer-vite-plus-imports": "error",
+    },
+    overrides: [
+      // Build/test configs and the release scripts are evaluated by Vite,
+      // Vitest and Node directly, before any Effect runtime exists: there is
+      // no `Config` provider to read and no `FileSystem` service to call, so
+      // `process.env` and `node:*` are the only things that work there.
+      {
+        files: ["**/vite.config.ts", "vite.package.ts", "scripts/**", "vitest.global-setup.ts"],
+        rules: {
+          "effect/avoid-node-imports": "off",
+          "effect/avoid-sync-fs": "off",
+          "effect/avoid-process-env": "off",
+          "effect/imperative-loops": "off",
+          "effect/no-length-comparison": "off",
+          "effect/prefer-arr-match": "off",
+          "effect/avoid-native-object-helpers": "off",
+          "effect/use-console-service": "off",
+          "effect/use-filesystem-service": "off",
+          "effect/use-path-service": "off",
+          "effect/use-command-executor-service": "off",
+          "effect/avoid-native-fetch": "off",
+          "effect/effect-promise-vs-trypromise": "off",
+          "effect/no-conditional-empty-object-spread": "off",
+        },
+      },
+      {
+        files: ["packages/*/src/**/__tests__/**/*.ts"],
+        rules: {
+          "vitest/no-standalone-expect": [
+            "error",
+            {
+              additionalTestBlockFunctions: [
+                "it.effect",
+                "it.live",
+                "it.scoped",
+                "it.scopedLive",
+                "it.layer",
+              ],
+            },
+          ],
+          "vitest/expect-expect": [
+            "error",
+            { assertFunctionNames: ["expect", "expect*", "check*"] },
+          ],
+          "vitest/valid-expect": ["error", { maxArgs: 2 }],
+          "vitest/no-conditional-expect": "off",
+          "vitest/require-to-throw-message": "off",
+        },
+      },
+      {
+        files: ["packages/*/src/**/__tests__/**/*.bench.ts"],
+        rules: {
+          "vitest/expect-expect": [
+            "error",
+            { assertFunctionNames: ["expect", "expect*", "check*", "bench", "bench.*"] },
+          ],
+        },
+      },
+    ],
+    // Type-aware linting is intentionally disabled: type checking stays the
+    // `check` task's job (native tsc, Effect-patched).
+    options: {
+      typeAware: false,
+      typeCheck: false,
+    },
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+      { name: "effect", specifier: "@mpsuesser/oxlint-plugin-effect" },
+    ],
+  },
+  run: {
+    tasks: {
+      // Every package's `dist/` (`vp pack`), in dependency order.
+      build: {
+        command: "echo 'build: every package packed'",
+        dependsOn: buildAll,
+        cache: false,
+      },
+      // The type gate: every package's `src` and tests in one native,
+      // Effect-patched `tsc` program (tsconfig.check.json maps the package
+      // names to `src/`, so no build is needed first).
+      check: {
+        command: "tsc -p tsconfig.check.json",
+        cache: { input: cacheInputs, output: [] },
+      },
+      // Each example app's own `tsc` / `svelte-check`. The apps resolve the
+      // packages through `dist/`, as they do at runtime.
+      "check:examples": {
+        command: "node scripts/typecheck-examples.mjs",
+        dependsOn: ["build"],
+        cache: false,
+      },
+      // Packs every publishable package the way the release does and lints
+      // the tarball (scripts/pack-check.mjs). No registry access.
+      "pack:check": {
+        command: "node scripts/pack-check.mjs",
+        dependsOn: ["build"],
+        cache: false,
+      },
+      test: {
+        command: "vp test run",
+        dependsOn: ["build"],
+        cache: false,
+      },
+      // The whole suite under one coverage map (`coverage/coverage-final.json`),
+      // which `fallow audit` reads for exact per-function CRAP scores
+      // (`health.coverage` in .fallowrc.json). Run this before `fallow audit`.
+      "test:coverage": {
+        command: "vp test run --coverage",
+        dependsOn: ["build"],
+        cache: false,
+      },
+      bench: {
+        command: "vp test bench --run --reporter=verbose",
+        cache: false,
+      },
+    },
+  },
+  resolve: {
+    alias,
+  },
+  test: {
+    globals: true,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          // Materializes the example app's generated tsconfig on fresh clones.
+          globalSetup: ["./vitest.global-setup.ts"],
+          include: [
+            "packages/*/src/**/*.test.ts",
+            "examples/commerce/tests/**/*.test.ts",
+            "examples/realworld/tests/**/*.test.ts",
+          ],
+          // The binding tests mount components and need the `svelte`
+          // project below; the /kit tests are plain node. The commerce
+          // browser test runs in `commerce-browser`, after its build.
+          exclude: [
+            "**/node_modules/**",
+            "packages/svelte/src/__tests__/**",
+            "examples/commerce/tests/facade-browser.test.ts",
+          ],
+        },
+      },
+      {
+        // The commerce façade's browser test serves the app's production
+        // build. Its global setup builds the app once, before the parallel
+        // test phase (#289): a `vite build` inside the test's `beforeAll`
+        // competed with every other file for CPU, so its wall time scaled
+        // with host load. Vitest runs the setup only when this project has
+        // files in the run.
+        extends: true,
+        test: {
+          name: "commerce-browser",
+          environment: "node",
+          globalSetup: [
+            "./vitest.global-setup.ts",
+            "./examples/commerce/tests/support/global-setup.ts",
+          ],
+          include: ["examples/commerce/tests/facade-browser.test.ts"],
+        },
+      },
+      {
+        // The Svelte bindings mount real components, so this project compiles
+        // `.svelte` fixtures and resolves Svelte's client (browser) build.
+        extends: true,
+        // `experimental.async` so fixtures can exercise the binding's
+        // awaitable surface (`Live.promise`) inside <svelte:boundary>.
+        plugins: [svelte({ compilerOptions: { experimental: { async: true } } })],
+        resolve: {
+          conditions: ["browser"],
+        },
+        test: {
+          name: "svelte",
+          environment: "jsdom",
+          include: ["packages/svelte/src/__tests__/**/*.test.ts"],
+          server: {
+            deps: {
+              // Vitest externalizes node_modules by default — even a package
+              // carrying a `svelte` export condition — so effect-svelte must
+              // be inlined to run through vite's browser pipeline; externalized
+              // its `import "svelte"` loads the SERVER runtime and every
+              // provide()/setContext throws lifecycle_outside_component. (The
+              // app's vite build needs no such flag: the `svelte` condition on
+              // effect-svelte >= 0.3.2 makes vite-plugin-svelte handle it.)
+              inline: ["@thomasfosterau/effect-svelte"],
+            },
+          },
+          // Component tests poll the DOM while engine fibers settle; leave
+          // headroom for cold-start transform/import under parallel workers.
+          testTimeout: 30_000,
+        },
+      },
+    ],
+    coverage: {
+      provider: "v8",
+      // `json` writes coverage-final.json, the map `fallow audit` reads.
+      reporter: ["text-summary", "json", "html"],
+      reportsDirectory: "./coverage",
+      include: ["packages/*/src/**/*.ts"],
+      exclude: ["packages/*/src/**/__tests__/**", "packages/*/dist/**"],
+      // Temporarily lowered during the v2 rebuild (ADRs 0007-0010) while
+      // skeleton modules await their phase-2/3 implementations; restore to
+      // 85/70/80/85 as coverage recovers.
+      thresholds: {
+        statements: 70,
+        branches: 55,
+        functions: 65,
+        lines: 70,
+      },
+    },
+  },
+});

@@ -4,7 +4,7 @@
  * (not just `mutateWithAck`) through pending → acknowledged, both the whole
  * map and a reactive per-mutator scope.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import RunesMutationStateHarness from "./fixtures/RunesMutationStateHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";

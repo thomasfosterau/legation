@@ -326,7 +326,8 @@ export const identityUnchecked: unique symbol = Symbol.for(
  * {@link identityUnchecked}. See {@link ListenOptions.identity}.
  */
 export type IdentitySource =
-  Effect.Effect<Identity.Fingerprint | undefined> | typeof identityUnchecked;
+  | Effect.Effect<Identity.Fingerprint | undefined>
+  | typeof identityUnchecked;
 
 /** Options for {@link flush}. */
 export interface FlushOptions {

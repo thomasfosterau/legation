@@ -3,7 +3,7 @@
  * context, so using one without `setClientRuntime` higher in the tree is a
  * setup error with an actionable message.
  */
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach } from "vite-plus/test";
 import { mount } from "svelte";
 import NoRuntime from "./fixtures/NoRuntime.svelte";
 

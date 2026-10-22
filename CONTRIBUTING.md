@@ -147,7 +147,7 @@ carries the bumped versions); when that PR is merged it runs `bun run release`
    `catalog:` specifier to real ranges; `npm pack` copies both verbatim and
    would ship uninstallable manifests
    ([#267](https://github.com/thomasfosterau/legation/issues/267)). `bun pm
-pack` takes those ranges from `bun.lock`, not from `package.json`, so the
+   pack` takes those ranges from `bun.lock`, not from `package.json`, so the
    lockfile must carry the bumped versions; `bun run version` refreshes it,
    and a hand-edited version needs `bun install --lockfile-only`. The run
    stops if a packed `package.json` still has either protocol, or if an

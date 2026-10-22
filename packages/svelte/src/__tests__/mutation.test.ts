@@ -4,7 +4,7 @@
  * applied for an accepted mutation, rejected (with the optimistic row dropped
  * on the next rebase) for a permanently rejected one.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
 import MutateHarness from "./fixtures/MutateHarness.svelte";

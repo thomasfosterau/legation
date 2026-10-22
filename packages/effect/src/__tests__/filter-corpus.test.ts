@@ -5,7 +5,7 @@
  * `Exists`, and the minimiser shrinks a disagreement to its smallest
  * reproducing predicate/row pair.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { Effect } from "effect";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";

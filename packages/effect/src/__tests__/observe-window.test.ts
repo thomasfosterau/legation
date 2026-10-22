@@ -10,7 +10,7 @@
  * were it re-subscribing/rebuilding, a `Rebuild` (and its `ViewRebuilt`)
  * would fire.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { Duration, Effect, Ref, Schema, Stream } from "effect";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

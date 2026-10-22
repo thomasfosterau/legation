@@ -195,7 +195,7 @@ reached for want of a small fix.
 One IndexedDB database per client store (versioned), with:
 
 - **One object store per collection**, named by the collection, `keyPath:
-"id"`. Records are `{ id, version, value, k_<field>… }`: the `StoredRow`
+  "id"`. Records are `{ id, version, value, k_<field>… }`: the `StoredRow`
   envelope plus one derived key field per indexed field, computed by the
   store on write. IndexedDB cannot compute keys, so the writer materialises
   them; the engine's row values stay `Unknown` and untouched (ADR-0014).
