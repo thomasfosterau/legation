@@ -1,15 +1,33 @@
 name: CI
 
+# The gate job runs AGENTS.md "Verification" in its order; the pipeline's task
+# graph lives in vite.config.ts (`build`, `pack:check`, `check`,
+# `check:examples`, `test:coverage`), not in GitHub Actions `needs:`. Shaped
+# like the effect-web library's CI, plus the PostgreSQL service the SQL
+# backend's overlap test needs and the second job that runs the suite at the
+# published `effect` floor.
+
 on:
   pull_request:
+    branches: [trunk]
+    types: [opened, reopened, synchronize, ready_for_review]
   push:
-    branches:
-      - trunk
+    branches: [trunk]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
+
+# No permissions by default; each job grants only read access.
+permissions: {}
 
 jobs:
   quality:
     name: Quality Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
     # The PostgreSQL overlap test (packages/sql/src/__tests__/sql-backend-postgres.test.ts,
     # #360) runs against this server. It fails, not skips, when DATABASE_URL is
     # unset in CI, so both jobs that run the suite carry the service.
@@ -28,76 +46,73 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history so fallow audit can diff against the base branch.
+          # Full history so fallow audit can diff against origin/trunk.
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup
 
-      # vitest, tsc and the Node adapter's tests run on Node (bun runs their
-      # `#!/usr/bin/env node` bins). CI tests on one Node, the latest stable
-      # (#299); `engines.node` on `@thomasfosterau/legation-node` stays the published floor
-      # (ADR-0003), and the release job publishes from the same line.
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Restore the Vite+ task cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          node-version: latest
+          path: node_modules/.vite/task-cache
+          key: vp-task-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-v1-${{ runner.os }}-
 
-      - name: Install dependencies
-        run: bun ci
-
-      - name: Check formatting
-        run: bun run format:check
-
-      - name: Lint
-        run: bun run lint
+      - name: Format and lint
+        run: vp check
 
       - name: Build
-        run: bun run build
+        run: vp run build
 
-      # Packs every publishable package the way `bun run release` does and
-      # fails on a `workspace:` / `catalog:` specifier left in a packed
-      # package.json (#267), an exact `effect` peer, or a publint or
-      # arethetypeswrong (ESM-only) finding on the tarball (#250). No
-      # registry access.
+      # Packs every publishable package the way the release does and fails on
+      # a `workspace:` / `catalog:` specifier left in a packed package.json
+      # (#267), an exact `effect` peer, a `svelte` condition naming an unpacked
+      # file, or a publint (strict) or arethetypeswrong (ESM-only) finding on
+      # the tarball (#250). No registry access.
       - name: Check and lint publish tarballs
-        run: bun run release:check
+        run: vp run pack:check
 
       - name: Typecheck (packages and tests)
-        run: bun run typecheck
+        run: vp run check
 
       - name: Typecheck examples
-        run: bun run typecheck:examples
+        run: vp run check:examples
 
       - name: Install Chromium (the commerce façade's browser test)
-        run: bunx playwright-core install --with-deps chromium
+        run: pnpm exec playwright-core install --with-deps chromium
 
       - name: Test with coverage
-        run: bun run test:coverage
+        run: vp run test:coverage
 
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
+
+      # Reads coverage/coverage-final.json from the step above for exact
+      # per-function CRAP scores.
       - name: Fallow audit
-        run: bun run analyze:audit:ci
+        run: fallow audit --ci --base origin/trunk
 
   # The test suite against the lowest `effect` the published peer range admits
-  # (`@thomasfosterau/legation-effect`'s `peerDependencies.effect`, `>=X` -> `X`), so each
+  # (`catalogs.peers.effect` in pnpm-workspace.yaml, `>=X` -> `X`), so each
   # package README's "tested against … the floor" claim holds on every PR.
   # Tests only: the full gate set runs once, at the pinned version, in Quality
   # Gates. Only the catalog entries versioned in lockstep with effect (`effect`
   # and the `@effect/*` runtime packages, plus the `overrides` entry that holds
-  # `@effect/platform-node-shared`) move; `typescript`, `@typescript/native`
-  # and `@effect/tsgo` keep their pins (`@effect/tsgo` is on its own 0.x line
-  # and patches `@typescript/native`, so the three move together by hand). The
-  # rewrite exists only in this job's checkout; nothing is committed. See
+  # `@effect/platform-node-shared`) move; `typescript`, `@typescript/native`,
+  # `@effect/tsgo` and `@effect/language-service` keep their pins. The rewrite
+  # exists only in this job's checkout; nothing is committed. See
   # CONTRIBUTING.md "Effect version upgrades".
   effect-floor:
     name: Tests (effect floor)
     runs-on: ubuntu-latest
-    # The PostgreSQL overlap test (packages/sql/src/__tests__/sql-backend-postgres.test.ts,
-    # #360) runs against this server. It fails, not skips, when DATABASE_URL is
-    # unset in CI, so both jobs that run the suite carry the service.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # The same PostgreSQL server as Quality Gates (see its comment).
     services:
       postgres:
         image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
@@ -113,58 +128,71 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # Not the shared setup action: it installs with a frozen lockfile, and
+      # the rewrite below deliberately moves the catalog off the lockfile.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      # The same Node line as Quality Gates.
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: latest
+          cache: pnpm
 
       - name: Point the catalog at the published floor
         id: floor
         run: |
-          FLOOR=$(node -p "require('./packages/effect/package.json').peerDependencies.effect.replace(/^>=\s*/, '')")
-          if [ -z "$FLOOR" ]; then
-            echo "::error::could not read the effect floor from packages/effect/package.json"
-            exit 1
-          fi
-          echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
-          FLOOR="$FLOOR" node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            const notLockstep = new Set(["@effect/tsgo", "@effect/language-service"]);
-            const movesWithEffect = (name) =>
-              name === "effect" || (name.startsWith("@effect/") && !notLockstep.has(name));
-            for (const name of Object.keys(pkg.workspaces.catalog)) {
-              if (movesWithEffect(name)) pkg.workspaces.catalog[name] = process.env.FLOOR;
+          node --input-type=module -e '
+            import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+            const file = "pnpm-workspace.yaml";
+            const yaml = readFileSync(file, "utf8");
+            // The `effect` entry under `catalogs.peers` (four-space indent).
+            const peer = yaml.match(/^ {4}effect: "?>=\s*([^"\s]+)"?$/m);
+            if (peer === null) {
+              console.error("::error::could not read the effect floor from catalogs.peers in pnpm-workspace.yaml");
+              process.exit(1);
             }
-            for (const name of Object.keys(pkg.overrides ?? {})) {
-              if (movesWithEffect(name)) pkg.overrides[name] = process.env.FLOOR;
-            }
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            const floor = peer[1];
+            const pinnedByHand = new Set(["@effect/tsgo", "@effect/language-service"]);
+            // Top-level `catalog:` and `overrides:` entries (two-space indent)
+            // whose value is a version, for effect and the @effect/* runtime.
+            const rewritten = yaml.replace(
+              /^ {2}("?)(effect|@effect\/[a-z0-9-]+)\1: \d\S*$/gm,
+              (line, quote, name) => (pinnedByHand.has(name) ? line : `  ${quote}${name}${quote}: ${floor}`)
+            );
+            writeFileSync(file, rewritten);
+            appendFileSync(process.env.GITHUB_OUTPUT, `version=${floor}\n`);
+            const pinned = yaml.match(/^ {2}effect: (\S+)$/m)[1];
+            console.log(`effect under test: ${floor} (pinned: ${pinned})`);
           '
-          echo "effect under test: $FLOOR (pinned: $(git show HEAD:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).workspaces.catalog.effect'))"
 
-      # Not `bun ci`: the catalog no longer matches `bun.lock`, so this
-      # re-resolves the effect entries (and rewrites the lockfile in this
-      # checkout only).
+      # Not `--frozen-lockfile`: the catalog no longer matches pnpm-lock.yaml,
+      # so this re-resolves the effect entries (and rewrites the lockfile in
+      # this checkout only).
       - name: Install dependencies (at the floor)
-        run: bun install
+        run: |
+          pnpm install --no-frozen-lockfile
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Check that only the floor is installed
         env:
           FLOOR: ${{ steps.floor.outputs.version }}
         run: |
-          node -e '
-            const lock = require("fs").readFileSync("bun.lock", "utf8");
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const lock = readFileSync("pnpm-lock.yaml", "utf8");
+            // Dev tooling on its own release line, not part of what the
+            // packages run on: the native compiler patch and the language
+            // service.
             const pinnedByHand = (name) =>
-              name.startsWith("@effect/tsgo") || name === "@effect/language-service";
-            const resolved = [...lock.matchAll(/\["((?:@effect\/[a-z0-9-]+)|effect)@([^"]+)"/g)]
+              name === "@effect/tsgo" ||
+              name.startsWith("@effect/tsgo-") ||
+              name === "@effect/language-service";
+            const resolved = [...lock.matchAll(/^ {2}\x27?((?:@effect\/[a-z0-9-]+)|effect)@([^:(\x27]+)/gm)]
               .filter(([, name]) => !pinnedByHand(name));
             const wrong = resolved.filter(([, , version]) => version !== process.env.FLOOR);
             for (const [, name, version] of resolved) console.log(`${name}@${version}`);
@@ -174,14 +202,12 @@ jobs:
             }
           '
 
-      # The one gate the tests need: the commerce façade's browser test
-      # `vite build`s the example app, which resolves `@thomasfosterau/legation-*` through
-      # each package's `exports` (`dist/`), not Vitest's source aliases.
-      - name: Build
-        run: bun run build
-
+      # The commerce façade's browser test `vite build`s the example app,
+      # which resolves `@thomasfosterau/legation-*` through each package's
+      # `exports` (`dist/`), not Vitest's source aliases; `vp run test`
+      # builds first.
       - name: Install Chromium (the commerce façade's browser test)
-        run: bunx playwright-core install --with-deps chromium
+        run: pnpm exec playwright-core install --with-deps chromium
 
       - name: Test
-        run: bun run test:run
+        run: vp run test

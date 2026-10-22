@@ -189,7 +189,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     if (!existsSync(executablePath)) {
       throw new Error(
         `Chromium is not installed at ${executablePath}. Install it with ` +
-          "`bunx playwright-core install chromium` (or point PLAYWRIGHT_BROWSERS_PATH at " +
+          "`pnpm exec playwright-core install chromium` (or point PLAYWRIGHT_BROWSERS_PATH at " +
           "an existing Playwright browser directory). This test fails rather than skips."
       );
     }

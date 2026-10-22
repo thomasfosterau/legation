@@ -72,6 +72,14 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 | [`@thomasfosterau/legation-svelte`](packages/svelte)         | Svelte bindings: `setClientRuntime` + the hooks (`useQuery` / `useConnection` / `useAggregate` / `useMutation` / `useUndo`) on one entry point, with the SvelteKit surface — client-group cookie, SSR snapshot `load`, snapshot-hydrated boot — on `/kit`              |
 | [`@thomasfosterau/legation-devtools`](packages/devtools)     | Headless devtools core (journal, subsets, forced push/pull, simulated offline) plus a Svelte panel on `/svelte`                                                                                                                                                        |
 
+## Install
+
+```sh
+npm install @thomasfosterau/legation-effect effect
+```
+
+Add the adapter packages your runtime needs (each package README lists its peers). `effect` is a peer: install one copy in your app.
+
 ## Quick start (in-process)
 
 The whole pipeline in one process, on the app-facing surface only: a `Server` over the reference in-memory backend, and a `Client` connected to it by a loopback transport. The [examples](examples) are the full-size versions.
@@ -156,13 +164,23 @@ The first three are SvelteKit **SPAs** — the engine, its store, and the demo
 backend are browser-only, so they turn SSR off in the root layout and build
 through `adapter-static` with a fallback page. `commerce` is the one that
 renders on the server; it is also the only example with tests, run as part of
-`bun run test:run` — including a browser test of the façade that needs
-Chromium (`bunx playwright-core install chromium`; it fails, never skips,
+`vp run test` — including a browser test of the façade that needs
+Chromium (`pnpm exec playwright-core install chromium`; it fails, never skips,
 without it).
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, commands and the release process.
+A pnpm 11 + [Vite+](https://viteplus.dev) workspace on Node 22 or later:
+
+```sh
+corepack enable && pnpm install
+vp check                 # format + lint
+vp run build             # every package's dist/
+vp run check             # the type gate
+vp run test              # every test suite
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the individual checks, [AGENTS.md](AGENTS.md) for the conventions and the full gate list, [PUBLISHING.md](PUBLISHING.md) for the release pipeline and [SECURITY.md](SECURITY.md) for reporting a vulnerability.
 
 ## License
 

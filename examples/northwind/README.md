@@ -61,12 +61,12 @@ src/routes/       +layout.ts (builds the world once) + one folder per screen
 
 ```sh
 # from the repo root
-bun install
-bun run build
+pnpm install
+vp run build
 
 # then, in this example
 cd examples/northwind
-bun run dev      # open the printed http://localhost:5179
+pnpm run dev      # open the printed http://localhost:5179
 ```
 
 ## Notes
@@ -77,4 +77,4 @@ bun run dev      # open the printed http://localhost:5179
 - The example is a workspace member for dependency consistency. It is excluded
   from the root `tsc` project, oxlint, and prettier (it is illustrative, not a
   published package), but CI does run its `check` script via
-  `bun run typecheck:examples`.
+  `vp run check:examples`.

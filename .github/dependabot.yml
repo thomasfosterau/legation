@@ -1,36 +1,39 @@
 # Dependabot version updates. Security updates are enabled separately in the
-# repository settings; the `ignore` rules below name only the three
-# `version-update:semver-*` update types, so they hold back version updates
-# and leave security updates enabled.
+# repository settings.
 #
-# The workspace is on bun (`bun.lock`), so the npm manifests are updated
-# through the `bun` ecosystem: the `npm` ecosystem would edit package.json
-# without touching `bun.lock`, and `bun ci` would then fail on the drifted
-# lockfile. Dependabot's bun support skips `catalog:` requirements (checked
-# against dependabot-core's `bun` file parser, 2026-10-02), so it does not
-# propose bumps of the root `workspaces.catalog` entries today. The catalog
-# rules below keep those pins held if it learns to read the catalog.
-# `playwright-core` and the dev tools in the catalog (vite, the Svelte
-# plugin, svelte-check, prettier, oxlint, fallow, jsdom, tsx and the
-# `@types/*` / workers-types entries) are catalog entries too, so they are
-# manual bumps: edit the catalog and run `bun install`.
+# The workspace is on pnpm: the `npm` ecosystem at `/` reads
+# pnpm-workspace.yaml and its catalogs, which cover every package and the
+# example apps (they are workspace members), and updates pnpm-lock.yaml.
 #
-# Effect is deliberately excluded from version updates: the exact dev pin
-# lives once in the root Bun catalog (`overrides` pins the transitive
-# `@effect/platform-node-shared` to the same version), and the published
-# floor is a hand-set open range in every package's `peerDependencies`;
-# Dependabot can keep neither in step (see CONTRIBUTING.md "Effect version
-# upgrades"). CI tests every PR at both the pin and the published floor
-# (`ci.yml`, "Tests (effect floor)").
+# Dependabot puts a dependency in the FIRST group that matches it, so the
+# groups run specific → general, and `exclude-patterns` keep a package out of
+# a broader group it would otherwise also match. Each lockstep group takes
+# every update type, majors included, so a set that must move together
+# always arrives as one PR:
 #
-# `typescript` (TS 6, the JS-API compiler) and `@typescript/native` (TS 7,
-# which `build` and `typecheck` run) move by hand, together with
-# `@effect/tsgo`, which patches the native compiler by its gitHead: read the
-# `components` table in `node_modules/@effect/tsgo/dist/effect-tsgo.cjs`
-# before moving any of the three; a bump of one alone can break the patch.
+# - toolchain: vite-plus pins the `oxlint`, `oxfmt`, `oxlint-tsgolint` and
+#   `vitest` it carries (and `vite` is its aliased core), and `effect-tsgo
+#   patch` matches the native `tsc` and `oxlint` by gitHead / version and
+#   hard-errors (UnsupportedTargetPackageVersionError) on any pairing it has
+#   no artifact for. The TS6 alias (`typescript`), the language service and
+#   the Effect lint plugin ride along (pnpm-workspace.yaml catalog comments).
+#   Before merging, check the `components` table in
+#   node_modules/@effect/tsgo/dist/effect-tsgo.cjs.
+# - effect: the Effect release line is a lockstep singleton set (`effect`,
+#   the `@effect/*` runtime packages and the `@effect/platform-node-shared`
+#   catalog entry the `overrides` pin uses). The published floor under
+#   `catalogs.peers` is hand-set; CI tests every PR at both the pin and the
+#   floor (`ci.yml`, "Tests (effect floor)").
+# - svelte, playwright, cloudflare, package-lint, changesets, fallow: the
+#   other sets whose members are released and tested together.
+# - minor-and-patch: everything else, minor and patch only, so PR volume
+#   stays low; a major outside a lockstep set arrives on its own.
+#
+# `cooldown` mirrors pnpm-workspace.yaml's `minimumReleaseAge` (1 day), with
+# the same first-party exemption as `minimumReleaseAgeExclude`.
 version: 2
 updates:
-  - package-ecosystem: "bun"
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -40,42 +43,84 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore"
-      prefix-development: "chore"
+    cooldown:
+      default-days: 1
+      exclude:
+        - "@thomasfosterau/*"
     groups:
-      dev-dependencies:
-        dependency-type: "development"
-    ignore:
-      - dependency-name: "effect"
-        update-types:
-          [
-            "version-update:semver-major",
-            "version-update:semver-minor",
-            "version-update:semver-patch",
-          ]
-      - dependency-name: "@effect/*"
-        update-types:
-          [
-            "version-update:semver-major",
-            "version-update:semver-minor",
-            "version-update:semver-patch",
-          ]
-      - dependency-name: "typescript"
-        update-types:
-          [
-            "version-update:semver-major",
-            "version-update:semver-minor",
-            "version-update:semver-patch",
-          ]
-      - dependency-name: "@typescript/native"
-        update-types:
-          [
-            "version-update:semver-major",
-            "version-update:semver-minor",
-            "version-update:semver-patch",
-          ]
+      toolchain:
+        applies-to: version-updates
+        patterns:
+          - "vite-plus"
+          - "vite"
+          - "vitest"
+          - "@vitest/*"
+          - "oxlint"
+          - "oxfmt"
+          - "oxlint-tsgolint"
+          - "@effect/tsgo"
+          - "@effect/language-service"
+          - "@typescript/native"
+          - "typescript"
+          - "@typescript/typescript6"
+          - "@mpsuesser/oxlint-plugin-effect"
+        update-types: ["major", "minor", "patch"]
+      effect:
+        applies-to: version-updates
+        patterns:
+          - "effect"
+          - "@effect/*"
+        exclude-patterns:
+          - "@effect/tsgo"
+          - "@effect/language-service"
+        update-types: ["major", "minor", "patch"]
+      svelte:
+        applies-to: version-updates
+        patterns:
+          - "svelte"
+          - "@sveltejs/*"
+          - "svelte-check"
+        update-types: ["major", "minor", "patch"]
+      playwright:
+        applies-to: version-updates
+        patterns:
+          - "playwright"
+          - "playwright-core"
+          - "@playwright/*"
+        update-types: ["major", "minor", "patch"]
+      cloudflare:
+        applies-to: version-updates
+        patterns:
+          - "@cloudflare/*"
+          - "wrangler"
+          - "miniflare"
+        update-types: ["major", "minor", "patch"]
+      package-lint:
+        applies-to: version-updates
+        patterns:
+          - "publint"
+          - "@arethetypeswrong/*"
+        update-types: ["major", "minor", "patch"]
+      changesets:
+        applies-to: version-updates
+        patterns:
+          - "@changesets/*"
+        update-types: ["major", "minor", "patch"]
+      fallow:
+        applies-to: version-updates
+        patterns:
+          - "fallow"
+        update-types: ["major", "minor", "patch"]
+      minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/setup"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -83,4 +128,10 @@ updates:
     labels:
       - "dependencies"
     commit-message:
-      prefix: "ci"
+      prefix: "chore"
+    cooldown:
+      default-days: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"

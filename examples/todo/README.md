@@ -124,18 +124,18 @@ them all.
 ## Run
 
 This example is a workspace member: it consumes the engine and its Svelte
-bindings via `workspace:*` (their built `dist`) and shares the root **Bun
+bindings via `workspace:*` (their built `dist`) and shares the root **pnpm
 catalog** for `effect` / `@effect/platform-browser`. Build the packages once,
 then run the dev server:
 
 ```sh
 # from the repo root
-bun install
-bun run build
+pnpm install
+vp run build
 
 # then, in this example
 cd examples/todo
-bun run dev      # open the printed http://localhost:5175
+pnpm run dev      # open the printed http://localhost:5175
 ```
 
 ## Notes
@@ -146,5 +146,5 @@ bun run dev      # open the printed http://localhost:5175
 - The example is a workspace member for dependency consistency. It is excluded
   from the root `tsc` project, oxlint, and prettier (it is illustrative, not a
   published package), but CI does run its `check` script via
-  `bun run typecheck:examples`, so binding-API changes in `packages/*` can't
+  `vp run check:examples`, so binding-API changes in `packages/*` can't
   silently rot it.

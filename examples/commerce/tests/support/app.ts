@@ -4,7 +4,7 @@
  * assets, the service worker and the read proxy — in front of the sync
  * server (WebSocket + HTTP carriers and the derived JSON:API), both
  * in-process on ephemeral ports over one temporary SQLite file, exactly
- * the deployment `bun run dev:server` + `bun run preview` stand up by hand
+ * the deployment `pnpm run dev:server` + `pnpm run preview` stand up by hand
  * with a reverse proxy in front.
  *
  * - The sync server is `server/main.ts`'s composition on port 0 (no

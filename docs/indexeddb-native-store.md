@@ -36,7 +36,7 @@ array per touched collection.
 ### Method
 
 Everything below comes from
-`packages/browser/src/__tests__/native-store.bench.ts` (`bun run bench`),
+`packages/browser/src/__tests__/native-store.bench.ts` (`vp run bench`),
 run on **this CI-class container**: 4 vCPU, 16 GB, Node 22.22.2, Linux.
 Numbers are from a run with `NODE_OPTIONS=--expose-gc` so the heap deltas
 are real. The data set is deterministic (mulberry32, seed 158): 50 000 rows
@@ -396,13 +396,13 @@ not lost.
 ## Appendix A. Reproducing the numbers
 
 ```
-bun install
-NODE_OPTIONS=--expose-gc bun run bench packages/browser/src/__tests__/native-store.bench.ts --project node
+pnpm install
+NODE_OPTIONS=--expose-gc vp test bench --run packages/browser/src/__tests__/native-store.bench.ts --project node
 ```
 
 Without `--expose-gc` the tables still print but the heap deltas are noise.
 The bench also runs under the `svelte` (jsdom) project in a plain
-`bun run bench`; the numbers there are the same code on the same runtime.
+`vp run bench`; the numbers there are the same code on the same runtime.
 
 ## Appendix B. The implementation issue, if a trigger fires
 

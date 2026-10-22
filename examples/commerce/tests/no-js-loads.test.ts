@@ -13,7 +13,7 @@
  * first — and that the read proxy the universal load calls
  * (`src/routes/jsonapi/[...path]/+server.ts`) vouches for the session and
  * for nothing else. Rendering the Svelte markup itself needs the Kit
- * runtime and stays a manual check (`bun run dev`, JavaScript off).
+ * runtime and stays a manual check (`pnpm run dev`, JavaScript off).
  */
 import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Scope } from "effect";

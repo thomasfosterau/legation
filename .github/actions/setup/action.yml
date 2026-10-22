@@ -1,0 +1,50 @@
+# Composite setup shared by every CI job that needs the toolchain.
+# Sets up Node.js + pnpm, restores the pnpm store cache (keyed on
+# pnpm-lock.yaml by setup-node), and installs dependencies with a frozen
+# lockfile (retried — see the Install step's own comment for why).
+# `vp` and the dev bins (tsc, fallow, attw, svelte-check) land in node_modules/.bin,
+# which this adds to PATH so later steps invoke `vp …` / `fallow …` directly.
+# Copied from the effect-web library's action (itself from effect-drizzle-ext and
+# the gardeneria application).
+#
+# Callers must run `actions/checkout` BEFORE this (a local composite action
+# needs the repo on disk first).
+name: Setup toolchain
+description: Set up Node.js and pnpm, restore the package cache, and install dependencies.
+runs:
+  using: composite
+  steps:
+    # pnpm before Node so setup-node's `cache: pnpm` can resolve the store path.
+    # The pnpm version comes from the `packageManager` field in package.json.
+    - name: Setup pnpm
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: latest
+        cache: pnpm
+
+    # Retried: pnpm's linker can race itself when a package with a build
+    # script resolves twice and both copies build — a transient ENOENT on the
+    # rename of a `_tmp_<pid>_<hex>` staging directory, seen in gardeneria CI
+    # on cold-store runs (see effect-drizzle-ext's copy of this action). Every
+    # attempt keeps `--frozen-lockfile` and install scripts, so a
+    # deterministic failure (lockfile drift, a policy violation) still fails
+    # all three.
+    - name: Install dependencies
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          if pnpm install --frozen-lockfile; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::pnpm install failed after 3 attempts"
+            exit 1
+          fi
+          delay=$((attempt * 15))
+          echo "::warning::pnpm install failed (attempt ${attempt}/3); retrying in ${delay}s"
+          sleep "$delay"
+        done
+        echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"

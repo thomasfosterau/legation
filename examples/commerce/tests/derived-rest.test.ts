@@ -11,7 +11,7 @@
  *    the canonical URL the SvelteKit loads fetch it by, against a committed
  *    fixture (`fixtures/rest/<read>.json`) — what #163's comparison with the
  *    hand-written handlers turned into once those were deleted. Regenerate
- *    with `COMMERCE_FIXTURES=write bun run test` and review the diff.
+ *    with `COMMERCE_FIXTURES=write pnpm run test` and review the diff.
  * 2. **The declarations agree.** `src/lib/resources.ts` bridged through
  *    `NodeBridge.registry` is the hand-written graph of `src/lib/domain.ts`,
  *    node for node: attributes, edges, the filterable set, the sortable
