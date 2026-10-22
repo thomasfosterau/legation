@@ -403,9 +403,11 @@ describe("DocumentWriter.data", () => {
     expect(found.links).toEqual({
       self: "/products?include=variants&filter[id]=p-1&page[limit]=1",
     });
+    // The read carries `include`, so the document is compound even with no row.
     const missing = DocumentWriter.data({ nodes, read, rows: [] });
     expect(missing).toEqual({
       data: null,
+      included: [],
       links: { self: "/products?include=variants&filter[id]=p-1&page[limit]=1" },
     });
   });
