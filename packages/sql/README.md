@@ -13,6 +13,9 @@ A driver-agnostic SQL reference backend for the
   driver (`better-sqlite3`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.
+- **`PgExecutor`** — the `SqlExecutor` for PostgreSQL, over the `SqlClient`
+  service from `effect/sql` (the driver, such as `@effect/sql-pg`, is yours to
+  provide). See [PostgreSQL](#postgresql) below.
 - **`PollingHintSource`** — a tier-2 change-data-capture hint source over the
   same `SqlExecutor` seam: it polls each table on an interval for a cheap
   change-detector (`COUNT(*)` plus `MAX(versionColumn)`) and pokes subscribers
@@ -49,6 +52,64 @@ PostgreSQL it is refused with a transient `BackendError`, and its retry lists it
 > executor's `transaction` must also open a top-level transaction, not a savepoint
 > nested in another: PostgreSQL refuses `SET TRANSACTION` there, and the batch
 > fails with a `BackendError` instead of running weaker.
+
+## PostgreSQL
+
+`PgExecutor.make(sql)` turns a PostgreSQL `SqlClient` into the executor
+`SqlBackend` runs over. It needs only `effect`, so this package gains no
+dependency; install a driver that provides `SqlClient`, such as
+`@effect/sql-pg`, and pass `dialect: Sql.postgres`:
+
+```ts
+import * as Effect from "effect/Effect";
+import { SqlClient } from "effect/sql/SqlClient";
+import { PgExecutor, Sql, SqlBackend } from "@thomasfosterau/legation-sql";
+
+const makeBackend = Effect.gen(function* () {
+  const sql = yield* SqlClient; // provided by PgClient.layer({ url }) from @effect/sql-pg
+  return SqlBackend.make({
+    executor: PgExecutor.make(sql),
+    dialect: Sql.postgres,
+    tables,
+    mutators,
+    handlers,
+  });
+});
+```
+
+What the executor guarantees:
+
+- **Each push is one transaction.** `transaction` is the client's
+  `withTransaction`: one `BEGIN … COMMIT` on one connection, so a batch's
+  mutation-id claims commit together with its handlers' writes, and a failure
+  rolls back both. `Sql.postgres` runs the transaction at `SERIALIZABLE`; a
+  handler whose reads went stale is refused (SQLSTATE 40001) with a
+  `BackendError`, and the client retries. Don't run the backend inside an outer
+  `withTransaction`: that makes the batch a savepoint, where PostgreSQL refuses
+  `SET TRANSACTION`, and the push fails.
+- **Statements run unprepared.** Nothing depends on a named prepared statement
+  surviving from one query to the next, which a transaction-mode pooler does
+  not promise.
+- **Round trips.** A push costs one transaction, however many mutations it
+  holds. `evaluate` costs one statement per subset, plus one per `exists` node
+  in its predicate. A pull evaluates its subsets one at a time, so it pays one
+  round trip per subset; batching a pull's subsets is
+  [#505](https://github.com/thomasfosterau/legation/issues/505).
+- **Errors.** A failed statement or transaction fails as a `BackendError` with
+  the statement's text, never its parameters, in the message, and the driver's
+  `SqlError` as its `cause`.
+
+### Behind a pooler (Hyperdrive)
+
+The atomicity above holds only if every statement from `BEGIN` to `COMMIT`
+reaches the same server connection. A pooler that runs a transaction on one
+connection keeps it; one that can split a transaction across connections breaks
+Backend guarantee 1, as D1 does (see `D1Executor`). In a Worker, build the
+`PgClient` layer per request, inside the request's scope, from the binding's
+connection string: a Worker cannot reuse one request's connection in another.
+What Hyperdrive guarantees about transactions, isolation statements and query
+caching is still to be confirmed against its documentation:
+[#506](https://github.com/thomasfosterau/legation/issues/506).
 
 ## Ledger without the `rejections` column
 

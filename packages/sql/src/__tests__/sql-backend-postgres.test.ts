@@ -29,6 +29,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
+import * as PgExecutor from "../PgExecutor.js";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 
@@ -87,36 +88,13 @@ const withDatabase = <A>(
     })
   ).pipe(Effect.orDie);
 
-const asBackendError = (message: string) => (cause: unknown) =>
-  new BackendError({ message, cause });
-
 /**
- * A `SqlExecutor` over the PostgreSQL client: transactions are real and do not
- * serialise. Statements run unprepared: a cached prepared statement is not
- * re-reported to `pg_stat_activity`, so the copy's lock wait would show a stale
- * statement text instead of the one it is waiting in.
+ * The shipped PostgreSQL executor (#203): transactions are real and do not serialise. Its
+ * statements run unprepared, which this suite also relies on: a cached prepared statement is not
+ * re-reported to `pg_stat_activity`, so the copy's lock wait would show a stale statement text
+ * instead of the one it is waiting in.
  */
-const executorOver = (sql: SqlClient): SqlBackend.SqlExecutor => ({
-  query: (fragment) =>
-    sql
-      .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)
-      .unprepared.pipe(Effect.mapError(asBackendError(`query failed: ${fragment.text}`))),
-  run: (fragment) =>
-    sql
-      .unsafe(fragment.text, fragment.params)
-      .unprepared.pipe(
-        Effect.asVoid,
-        Effect.mapError(asBackendError(`statement failed: ${fragment.text}`))
-      ),
-  transaction: (effect) =>
-    sql
-      .withTransaction(effect)
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(new BackendError({ message: "transaction failed", cause: error }))
-        )
-      ),
-});
+const executorOver = PgExecutor.make;
 
 interface Args {
   readonly id: string;

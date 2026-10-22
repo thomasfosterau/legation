@@ -39,6 +39,7 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation-effect/internal";
+import * as PgExecutor from "../PgExecutor.js";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 
@@ -357,33 +358,8 @@ const PG_DDL: ReadonlyArray<string> = [
   )`,
 ];
 
-const pgBackendError = (message: string) => (cause: unknown) =>
-  new BackendError({ message, cause });
-
-/** A `SqlExecutor` over the PostgreSQL client: real transactions, unprepared statements. */
-const pgExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
-  return {
-    query: (fragment) =>
-      sql
-        .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)
-        .unprepared.pipe(Effect.mapError(pgBackendError(`query failed: ${fragment.text}`))),
-    run: (fragment) =>
-      sql
-        .unsafe(fragment.text, fragment.params)
-        .unprepared.pipe(
-          Effect.asVoid,
-          Effect.mapError(pgBackendError(`statement failed: ${fragment.text}`))
-        ),
-    transaction: (effect) =>
-      sql
-        .withTransaction(effect)
-        .pipe(
-          Effect.catchTag("SqlError", (error) =>
-            Effect.fail(new BackendError({ message: "transaction failed", cause: error }))
-          )
-        ),
-  };
-};
+/** The shipped PostgreSQL executor (#203): real transactions, unprepared statements. */
+const pgExecutor = PgExecutor.make;
 
 /** The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts). */
 const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
