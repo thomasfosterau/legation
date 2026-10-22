@@ -4,10 +4,12 @@
  * A driver-agnostic SQL reference backend for the legation engine: a pure
  * `Subset` predicate → `WHERE` translator (`Sql`) and a `Backend`
  * implementation over a tiny `SqlExecutor` seam (`SqlBackend`). Bring your own
- * driver (`better-sqlite3`, `effect/sql`, `pg`, …); the backend supplies
+ * driver (`better-sqlite3`, `effect/sql`, `pg`, …), or use `PgExecutor` over an
+ * `effect/sql` PostgreSQL client; the backend supplies
  * subset evaluation, row fetching, and the transactional mutation-id ledger.
  */
 
 export * as Sql from "./Sql.js";
 export * as SqlBackend from "./SqlBackend.js";
 export * as PollingHintSource from "./PollingHintSource.js";
+export * as PgExecutor from "./PgExecutor.js";
