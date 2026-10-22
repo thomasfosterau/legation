@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -127,7 +128,10 @@ const planCompaction = <T extends Numbered>(
   return { result: { dropped, renumbered }, journal: after, counter: next };
 };
 
-/** A replica read as one state: the rows, the cookie, the journal and the unpulled tail (see {@link ClientStore.snapshot}, #392). */
+/**
+ * A replica read as one state: the rows, the cookie, the journal, the unpulled tail and the mutation
+ * counters (see {@link ClientStore.snapshot}, #392, #271).
+ */
 export interface ReplicaState {
   /** Every confirmed row, tagged with the collection it belongs to. */
   readonly rows: ReadonlyArray<{ readonly collection: string; readonly row: StoredRow }>;
@@ -137,6 +141,8 @@ export interface ReplicaState {
   readonly journal: ReadonlyArray<Mutation>;
   /** The acknowledged-but-unpulled tail, oldest first. */
   readonly unpulled: ReadonlyArray<Mutation>;
+  /** Each client's mutation id counter, as {@link ClientStore.mutationCounters} reads it. */
+  readonly counters: Readonly<Record<string, number>>;
 }
 
 /** A client's durable state: confirmed rows, the pending-mutation journal and the sync cookie. */
@@ -184,7 +190,7 @@ export interface ClientStore {
    *
    * Atomic with respect to every operation that writes the journal, the
    * quarantine or the counters (`appendMutation`, `acknowledge`,
-   * `compactPending`, `nextMutationId`, `quarantinePending`,
+   * `compactPending`, `nextMutationId`, `raiseMutationCounters`, `quarantinePending`,
    * `releaseQuarantine`, `discardQuarantine`): none can land between this
    * call's read and its write, so concurrent callers get distinct,
    * consecutive ids in the order they are served and no concurrent write is
@@ -255,6 +261,21 @@ export interface ClientStore {
    * appended is a gap (#258).
    */
   readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
+  /**
+   * Each client's mutation id counter: the highest id the store has issued, journaled or seen leave
+   * the journal for that client. A client with no counter is absent. The next id the store issues for
+   * a client is above both its counter and the highest id its journal holds.
+   */
+  readonly mutationCounters: Effect.Effect<Readonly<Record<string, number>>, StoreError>;
+  /**
+   * Raise each client's counter to at least its value in `counters`, never lowering one (#271).
+   * What `Hydration.hydrate` restores a snapshot's counters with, so a client id reused across the
+   * hydration boundary continues above the ids it has already had acknowledged, which the backend
+   * would skip as duplicates.
+   */
+  readonly raiseMutationCounters: (
+    counters: Readonly<Record<string, number>>
+  ) => Effect.Effect<void, StoreError>;
 
   // Unpulled tail (#336, ADR-0008)
   /**
@@ -534,7 +555,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // operations read one and then write it back. Every operation that WRITES
   // any of the three therefore holds this permit for its whole body:
   // `appendMutation`, `appendNext`, `acknowledge`, `compactPending`,
-  // `nextMutationId`, `quarantinePending`, `releaseQuarantine`,
+  // `nextMutationId`, `raiseMutationCounters`, `quarantinePending`, `releaseQuarantine`,
   // `discardQuarantine`, and the tail writers `parkUnpulled`,
   // `releaseUnpulled`, `clearUnpulled` and the atomic batch members (#411). A read-then-write
   // holder is only safe if every other writer is also excluded; a writer that skipped the permit
@@ -796,6 +817,14 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           return next;
         })
       ),
+    mutationCounters: Ref.get(counters).pipe(Effect.map(R.fromEntries)),
+    raiseMutationCounters: (raise) =>
+      locked(
+        Effect.forEach(R.toEntries(raise), ([clientId, id]) => raiseCounter(clientId, id), {
+          concurrency: 1,
+          discard: true,
+        })
+      ),
 
     unpulled: Ref.get(tail),
     parkUnpulled: (mutations) =>
@@ -841,6 +870,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           cookie: yield* Ref.get(cookie),
           journal: yield* Ref.get(journal),
           unpulled: yield* Ref.get(tail),
+          counters: R.fromEntries(yield* Ref.get(counters)),
         };
       })
     ),
@@ -943,6 +973,8 @@ const sealed = (cause: StoreError): ClientStore => {
     compactPending: () => refuse(),
     markSent: () => refuse(),
     nextMutationId: () => refuse(),
+    mutationCounters: refuse(),
+    raiseMutationCounters: () => refuse(),
     unpulled: refuse(),
     parkUnpulled: () => refuse(),
     beginRelease: () => refuse(),
@@ -1301,6 +1333,7 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
       cookie: yield* read("cookie", Schema.String),
       journal: yield* pendingMutationsWith(read),
       unpulled: yield* unpulledWith(read),
+      counters: (yield* read("counters", CountersFromJson)) ?? {},
     };
   });
 
@@ -2359,6 +2392,22 @@ export const makeKeyValue = (
             const next = last + 1;
             yield* writeJson("counters", { ...counters, [clientId]: next });
             return next;
+          })
+        ),
+      // Settled first, so a compaction's rewound counter is what is read or raised.
+      mutationCounters: locked(
+        settleCompaction.pipe(
+          Effect.andThen(readDecoded("counters", CountersFromJson)),
+          Effect.map((counters) => counters ?? {})
+        )
+      ),
+      raiseMutationCounters: (raise) =>
+        locked(
+          Effect.gen(function* () {
+            yield* settleCompaction;
+            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+            const raised = raisedCounters(counters, raise);
+            if (raised !== undefined) yield* writeJson("counters", raised);
           })
         ),
 

@@ -49,6 +49,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as ClientEngineModule from "./ClientEngine.js";
 import {
@@ -82,16 +83,29 @@ export const SnapshotRowSchema = Schema.Struct({
 
 /**
  * A serialisable capture of a {@link ClientStore}: confirmed rows (flattened
- * with their collection), the pull cookie, the pending-mutation journal, and
- * the acknowledged-but-unpulled tail (#336). The tail is optional so a
- * snapshot taken before it existed still loads, as an empty tail. The schema
- * is the source of truth; {@link Snapshot} is derived from it.
+ * with their collection), the pull cookie, the pending-mutation journal, the
+ * acknowledged-but-unpulled tail (#336), and each client's mutation id counter
+ * (#271). The tail and the counters are optional so a snapshot taken before
+ * they existed still loads, as an empty tail and no counters. The schema is
+ * the source of truth; {@link Snapshot} is derived from it.
+ *
+ * The counters are what let a client id be reused across the hydration
+ * boundary: once acknowledgements have drained the journal, they are the only
+ * record of the ids the backend has already applied, and a hydrated store
+ * without them would issue those ids again, which the backend skips as
+ * duplicates (a silent lost write).
  */
 export const SnapshotSchema = Schema.Struct({
   rows: Schema.Array(SnapshotRowSchema),
   cookie: Schema.optional(Schema.String),
   journal: Schema.Array(MutationSchema),
   unpulled: Schema.optional(Schema.Array(MutationSchema)),
+  counters: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+    )
+  ),
 });
 
 /** {@inheritDoc SnapshotSchema} */
@@ -123,23 +137,25 @@ const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError
       cookie: yield* store.getCookie,
       journal: yield* store.pendingMutations,
       unpulled: yield* store.unpulled,
+      counters: yield* store.mutationCounters,
     };
   });
 
 /**
  * Read a {@link ClientStore} into a {@link Snapshot}: enumerate the collections,
  * gather their confirmed rows (flattened with the collection), the cookie, the
- * journal, and the unpulled tail. The tail is left out when empty, so a
- * snapshot without one keeps its previous shape.
+ * journal, the unpulled tail and the mutation counters. The tail and the
+ * counters are each left out when empty, so a snapshot without them keeps its
+ * previous shape.
  *
- * The four parts are one state when the store offers {@link ClientStore.snapshot}
+ * The five parts are one state when the store offers {@link ClientStore.snapshot}
  * (the memory and key-value stores do): a pull or a push acknowledgement lands wholly
  * before or wholly after the read (#392). A store without it is read member by member.
  */
 export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreError> =>
   Effect.gen(function* () {
     const state = yield* store.snapshot ?? readMembers(store);
-    return {
+    const base: Snapshot = {
       rows: state.rows.map(({ collection, row }) => ({
         collection,
         id: row.id,
@@ -150,14 +166,21 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
       journal: state.journal,
       ...(state.unpulled.length > 0 ? { unpulled: state.unpulled } : {}),
     };
+    return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
   });
 
 /**
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
  * {@link SnapshotSchema} (so a malformed snapshot fails as a `StoreError`), then
- * put the rows, set the cookie if present, park the unpulled tail, and append
- * the journal, skipping any entry the tail already holds. A snapshot without a
- * tail parks nothing. An outstanding pull release is finished first.
+ * put the rows, set the cookie if present, park the unpulled tail, raise the
+ * store's mutation counters to the snapshot's, and append the journal, skipping
+ * any entry the tail already holds. A snapshot without a tail parks nothing. An
+ * outstanding pull release is finished first.
+ *
+ * The counters are raised, never lowered (#271): a client id reused after
+ * hydration continues above every id the snapshot's store had issued, so it
+ * never reissues an id the backend has already applied. A snapshot without
+ * counters leaves the store's as they are.
  *
  * A running {@link ClientEngine} built over the store re-reads its view and built
  * indexes afterwards: a direct write does not go through the engine, so without this
@@ -194,6 +217,8 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
       // The tail's effects are already in the rows, and the next pull releases it (#336).
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
+      // Once acks drain the journal, the counters are the only record of the ids already applied (#271).
+      if (decoded.counters !== undefined) yield* store.raiseMutationCounters(decoded.counters);
       // A snapshot read member by member (a store without `snapshot`) can hold a push acknowledgement's
       // entry in both its journal and its tail, since the two reads are not one state. The tail copy wins:
       // it is not journaled again (#387). The store's tail is read too, since an entry the store already

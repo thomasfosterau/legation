@@ -14,6 +14,7 @@ import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
+import * as Hydration from "../Hydration.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
@@ -47,6 +48,23 @@ describe("ClientStore.makeKeyValue", () => {
       expect(yield* second.getCookie).toBe("cookie-1");
       // The mutation-id counter continues, never restarts.
       expect(yield* second.nextMutationId("c1")).toBe(2);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("reads and raises the counters durably, never lowering one (#271)", () =>
+    Effect.gen(function* () {
+      const first = yield* ClientStoreModule.makeKeyValue();
+      yield* first.appendMutation(mutation(yield* first.nextMutationId("c1")));
+      yield* first.appendMutation(mutation(yield* first.nextMutationId("c1")));
+      yield* first.acknowledge("c1", 2);
+      expect(yield* first.mutationCounters).toEqual({ c1: 2 });
+      expect((yield* Hydration.dehydrate(first)).counters).toEqual({ c1: 2 });
+
+      yield* first.raiseMutationCounters({ c1: 1, c2: 5 });
+      const second = yield* ClientStoreModule.makeKeyValue();
+      expect(yield* second.mutationCounters).toEqual({ c1: 2, c2: 5 });
+      expect(yield* second.nextMutationId("c1")).toBe(3);
+      expect(yield* second.nextMutationId("c2")).toBe(6);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
