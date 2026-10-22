@@ -8,9 +8,9 @@
   },
   "description": "SvelteKit todo app driving the legation engine through @thomasfosterau/legation-svelte: offline-first, optimistic writes, live views, push/pull rebase, with the filter in the URL.",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "prepare": "svelte-kit sync"
   },

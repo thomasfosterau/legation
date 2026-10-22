@@ -124,6 +124,7 @@
     ]
   },
   "health": {
-    "coverage": "coverage/coverage-final.json"
+    "coverage": "coverage/coverage-final.json",
+    "ignore": ["scripts/**"]
   }
 }

@@ -8,9 +8,9 @@
   },
   "description": "RealWorld (Conduit) app driving the legation engine through @thomasfosterau/legation-svelte on SvelteKit: file-based routing, optimistic mutators, relational live queries joined over the mirror, server-side write authorization.",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "prepare": "svelte-kit sync"
   },
