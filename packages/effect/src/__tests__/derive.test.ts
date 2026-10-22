@@ -12,7 +12,10 @@
  *   over the engine's change stream, so a framework binding needs nothing new.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Schema, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
@@ -37,7 +40,7 @@ const page = (rows: ReadonlyArray<Row>): ReadonlyArray<{ id: string; value: unkn
   rows.map((row) => ({ id: row.id, value: row.value }));
 
 /** Compare a derived page by (id, canonical value) — order-sensitive. */
-const shape = (rows: ReadonlyArray<Row>): ReadonlyArray<readonly [string, string]> =>
+const canonicalPage = (rows: ReadonlyArray<Row>): ReadonlyArray<readonly [string, string]> =>
   rows.map((row) => [row.id, Hash.canonicalJson(row.value)] as const);
 
 const source = (...pages: ReadonlyArray<ReadonlyArray<Row>>): Derive.Source<never> =>
@@ -119,7 +122,7 @@ describe("Derive — composition (queries-from-queries)", () => {
         { id: "d", value: { c: "x" } },
       ];
       const final = yield* lastEmission(Derive.distinct(source(p)));
-      expect(shape(final)).toEqual([
+      expect(canonicalPage(final)).toEqual([
         [Hash.canonicalJson({ c: "x" }), Hash.canonicalJson({ c: "x" })],
         [Hash.canonicalJson({ c: "y" }), Hash.canonicalJson({ c: "y" })],
       ]);

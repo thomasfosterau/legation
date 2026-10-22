@@ -5,7 +5,9 @@
  * and that both projections are structurally well-formed.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
+import * as Schema from "effect/Schema";
 import * as Collection from "../Collection.js";
 import * as Mutator from "../Mutator.js";
 import * as Query from "../Query.js";
@@ -14,13 +16,13 @@ import * as SpecExport from "../SpecExport.js";
 const Todo = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
 });
 
 const todos = Collection.make({ name: "todos", schema: Todo, id: (t) => t.id });
 const setTodo = Mutator.make("todo/set", Todo);
 const removeTodo = Mutator.make("todo/remove", Schema.Struct({ id: Schema.String }));
-const byDone = Query.make("todos/byDone", Schema.Struct({ done: Schema.Boolean }));
+const byDone = Query.make("todos/byDone", Schema.Struct({ isDone: Schema.Boolean }));
 
 const api: SpecExport.SyncApi = {
   info: { title: "Todo Sync", version: "1.0.0" },
@@ -101,7 +103,7 @@ describe("SpecExport.toAsyncApi", () => {
       components: { messages: Record<string, unknown> };
     };
     expect(doc.asyncapi).toBe("3.0.0");
-    expect(Object.keys(doc.channels).sort()).toEqual(["pokes", "pull", "push"]);
+    expect(Arr.sort(Object.keys(doc.channels), Order.String)).toEqual(["pokes", "pull", "push"]);
     expect(doc.operations.receivePokes.action).toBe("receive");
     expect(doc.operations.push.action).toBe("send");
     expect(doc.components.messages["Poke"]).toBeDefined();

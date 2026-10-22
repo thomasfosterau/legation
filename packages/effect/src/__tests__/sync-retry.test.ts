@@ -4,8 +4,17 @@
  * failed poke stream, and surfaces terminal failures. Backoff *timing* is
  * verified with TestClock; the loop-integration cases use `it.live`.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Metric, Ref, Schedule, Schema, Scope, Stream } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -203,7 +212,8 @@ describe("retry integration (#34)", () => {
       yield* Effect.sleep(Duration.millis(200));
       const failure = yield* Fiber.join(collected);
       expect(failure._tag).toBe("Some");
-      if (failure._tag === "Some") expect(failure.value.operation).toBe("pull");
+      assert(Option.isSome(failure), "a sync failure should be reported");
+      expect(failure.value.operation).toBe("pull");
       const after = (yield* Metric.value(Telemetry.syncFailuresTotal)).count;
       expect(after).toBeGreaterThan(before);
     })

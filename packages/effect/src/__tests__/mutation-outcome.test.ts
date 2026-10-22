@@ -5,8 +5,15 @@
  * pending acknowledgements are interrupted on scope close, and plain `mutate`
  * is unchanged. The rejecting backend is copied from `poison-mutations.test.ts`.
  */
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -176,8 +183,8 @@ describe("per-mutation outcome (#36)", () => {
       // The scope closed without a push: the finalizer interrupts the deferred,
       // so awaiting the outcome fails with an interruption rather than hanging.
       const exit = yield* Effect.exit(handle.acknowledged);
-      expect(Exit.isFailure(exit)).toBe(true);
-      if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+      assert(Exit.isFailure(exit), "awaiting the outcome should fail");
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
     })
   );
 

@@ -6,7 +6,9 @@
  * still apply.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

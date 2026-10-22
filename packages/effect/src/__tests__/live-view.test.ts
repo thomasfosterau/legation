@@ -4,6 +4,7 @@
  * in, out-of-page changes don't disturb the visible page).
  */
 import { describe, expect, it } from "vite-plus/test";
+import * as P from "effect/Predicate";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
@@ -109,9 +110,7 @@ describe("LiveView", () => {
     it("assigns every in-window row a stable position key on the initial snapshot", () => {
       const view = LiveView.make(top2, [row("a", 1), row("b", 2), row("c", 3)]);
       const rows = LiveView.result(view);
-      expect(rows.map((r) => r.position).every((p) => typeof p === "string" && p.length > 0)).toBe(
-        true
-      );
+      expect(rows.map((r) => r.position).every((p) => P.isString(p) && p.length > 0)).toBe(true);
       // Positions sort the same way the rows are already sorted.
       expect(rows[0]!.position < rows[1]!.position).toBe(true);
     });
@@ -134,7 +133,7 @@ describe("LiveView", () => {
       const rows = LiveView.result(view);
       expect(rows.map((r) => r.id)).toEqual(["a", "b"]);
       expect(view.positions.has("c")).toBe(false); // left the window: no stale position kept
-      expect(rows.every((r) => typeof r.position === "string")).toBe(true);
+      expect(rows.every((r) => P.isString(r.position))).toBe(true);
     });
 
     it("reassigns a moved row's position between its new neighbors", () => {

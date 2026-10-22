@@ -7,7 +7,12 @@
  * engine over a channel with identical component-facing behavior.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Backend,

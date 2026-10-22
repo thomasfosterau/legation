@@ -3,7 +3,15 @@
  * memory backend applies authoritatively → CVR diff → pull patch → rebase.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope, Stream } from "effect";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -248,7 +256,11 @@ describe("mutator args validation", () => {
     Effect.gen(function* () {
       const { engine, store } = yield* makeTypedClient;
       const failure = yield* Effect.flip(
-        engine.mutate("todo/schedule", { id: "1", title: 42, due: new Date() })
+        engine.mutate("todo/schedule", {
+          id: "1",
+          title: 42,
+          due: DateTime.toDateUtc(yield* DateTime.now),
+        })
       );
       expect(failure._tag).toBe("MutatorError");
       expect(yield* store.pendingMutations).toEqual([]);
@@ -261,7 +273,7 @@ describe("mutator args validation", () => {
       yield* engine.mutate("todo/schedule", {
         id: "1",
         title: "ship",
-        due: new Date("2026-06-12T00:00:00.000Z"),
+        due: DateTime.toDateUtc(DateTime.makeUnsafe("2026-06-12T00:00:00.000Z")),
       });
 
       // The journal holds the wire/persistence form (Date encoded to string).

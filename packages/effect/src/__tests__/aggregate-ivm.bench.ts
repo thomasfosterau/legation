@@ -14,7 +14,10 @@
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
 import { describe, test } from "vite-plus/test";
-import { Effect, Schema, Scope, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Aggregate from "../Aggregate.js";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -27,7 +30,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
-import { ClientTransport, makeInMemory } from "../Transport.js";
+import { layerInMemory, ServerHandler } from "../Transport.js";
 
 const ROWS = 10_000;
 
@@ -69,14 +72,14 @@ const scope = await Effect.runPromise(Scope.make());
 const bootstrap = Effect.gen(function* () {
   const server = yield* makeServer;
   const store = yield* ClientStoreModule.makeMemory;
-  const transport = yield* makeInMemory(server, "bench");
   const engine = yield* ClientEngineModule.make({
     clientId: "bench",
     clientGroupId: "bench",
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),
-    Effect.provideService(ClientTransport, transport)
+    Effect.provide(layerInMemory("bench")),
+    Effect.provideService(ServerHandler, server)
   );
 
   yield* Effect.forEach(

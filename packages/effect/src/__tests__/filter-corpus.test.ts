@@ -6,7 +6,8 @@
  * reproducing predicate/row pair.
  */
 import { describe, expect, it } from "vite-plus/test";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 
@@ -14,13 +15,13 @@ const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolea
   switch (column.kind) {
     case "text":
     case "instant":
-      return typeof literal === "string";
+      return P.isString(literal);
     case "integer":
-      return typeof literal === "number" && Number.isInteger(literal);
+      return P.isNumber(literal) && Number.isInteger(literal);
     case "double":
-      return typeof literal === "number" && Number.isFinite(literal);
+      return P.isNumber(literal) && Number.isFinite(literal);
     case "boolean":
-      return typeof literal === "boolean";
+      return P.isBoolean(literal);
   }
 };
 
@@ -98,14 +99,14 @@ describe("FilterCorpus", () => {
       expect(seen).toContain(`${column.name}:null`);
       expect(seen).toContain(`${column.name}:${column.kind}`);
     }
-    const strings = corpus.rows.map((row) => row.value.s).filter((s) => typeof s === "string");
+    const strings = corpus.rows.map((row) => row.value.s).filter(P.isString);
     expect(strings).toContain("");
     expect(strings.some((s) => /[\u{10000}-\u{10FFFF}]/u.test(s))).toBe(true);
     expect(strings.some((s) => /^[-￿]+$/u.test(s))).toBe(true);
-    const ints = corpus.rows.map((row) => row.value.i).filter((i) => typeof i === "number");
+    const ints = corpus.rows.map((row) => row.value.i).filter(P.isNumber);
     expect(ints).toContain(2147483647);
     expect(ints).toContain(-2147483648);
-    const doubles = corpus.rows.map((row) => row.value.d).filter((d) => typeof d === "number");
+    const doubles = corpus.rows.map((row) => row.value.d).filter(P.isNumber);
     expect(doubles.some((d) => d >= 2 ** 53 - 1)).toBe(true);
     expect(doubles.every(Number.isFinite)).toBe(true);
   });
@@ -135,7 +136,7 @@ describe("FilterCorpus", () => {
       }
     }
     const astral = restricted.rows.filter(
-      (row) => typeof row.value.s === "string" && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
+      (row) => P.isString(row.value.s) && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
     );
     expect(astral).toEqual([]);
     // `isnull` over rows with no NULL/absent field is a constant predicate;

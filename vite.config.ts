@@ -123,6 +123,11 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
+      // The same boundary on the way out: exported combinators over untyped
+      // row values (`Incremental`, `Derive`, `Predicate.fieldValue`) and a
+      // dialect's driver-specific bind value return what the caller's
+      // projection or driver produces.
+      "effect/no-unknown-returns": "warn",
       "effect/no-unsafe-dictionary-type": "warn",
       "effect/no-runtime-typeof": "warn",
 
@@ -132,27 +137,27 @@ export default defineConfig({
       // committable while each site stays reported; a new site is a defect,
       // not headroom. Once a rule's count reaches zero its line is deleted,
       // so it is back at the preset's `error`. The remaining sites are listed
-      // in the tracking issue (see AGENTS.md "Effect").
-      "effect/avoid-native-object-helpers": "warn",
-      "effect/require-safety-comment-for-type-assertion": "warn",
-      "effect/imperative-loops": "warn",
-      "effect/yield-in-for-loop": "warn",
-      "effect/avoid-non-null-assertion": "warn",
-      "effect/prefer-arr-match": "warn",
-      "effect/no-length-comparison": "warn",
-      "effect/avoid-direct-tag-checks": "warn",
-      "effect/avoid-direct-json": "warn",
-      "effect/no-conditional-empty-object-spread": "warn",
-      "effect/effect-run-in-body": "warn",
-      "effect/prefer-effect-fn": "warn",
-      "effect/no-known-value-widening": "warn",
-      "effect/avoid-untagged-errors": "warn",
-      "effect/require-effect-concurrency": "warn",
-      "effect/effect-promise-vs-trypromise": "warn",
-      "effect/prefer-match-over-switch": "warn",
-      "effect/avoid-schema-suffix": "warn",
-      "effect/require-schema-type-alias": "warn",
-      "effect/avoid-data-tagged-error": "warn",
+      // in #497 (see AGENTS.md "Effect").
+      "effect/avoid-native-object-helpers": "warn", // 711 sites
+      "effect/require-safety-comment-for-type-assertion": "warn", // 623 sites
+      "effect/imperative-loops": "warn", // 659 sites
+      "effect/yield-in-for-loop": "warn", // 637 sites
+      "effect/avoid-non-null-assertion": "warn", // 429 sites
+      "effect/prefer-arr-match": "warn", // 198 sites
+      "effect/no-length-comparison": "warn", // 196 sites
+      "effect/avoid-direct-tag-checks": "warn", // 170 sites
+      "effect/avoid-direct-json": "warn", // 161 sites
+      "effect/no-conditional-empty-object-spread": "warn", // 146 sites
+      "effect/effect-run-in-body": "warn", // 123 sites
+      "effect/prefer-effect-fn": "warn", // 124 sites
+      "effect/no-known-value-widening": "warn", // 101 sites
+      "effect/avoid-untagged-errors": "warn", // 75 sites
+      "effect/require-effect-concurrency": "warn", // 73 sites
+      "effect/effect-promise-vs-trypromise": "warn", // 66 sites
+      "effect/prefer-match-over-switch": "warn", // 50 sites
+      "effect/avoid-schema-suffix": "warn", // 41 sites
+      "effect/require-schema-type-alias": "warn", // 30 sites
+      "effect/avoid-data-tagged-error": "warn", // 24 sites
     },
     overrides: [
       // The Node runtime adapter (ADR-0006): `node:http` and the other

@@ -7,7 +7,12 @@
  * `read` degrades to the local answer.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Client,
@@ -127,10 +132,12 @@ describe("the server tier", () => {
 
         // No subscriptions anywhere: the read falls through.
         const rows = yield* client.query({ collection: "products" });
-        expect(rows.map((row) => (row.value as { name: string }).name).sort()).toEqual([
-          "Desk",
-          "Lamp",
-        ]);
+        expect(
+          Arr.sort(
+            rows.map((row) => (row.value as { name: string }).name),
+            Order.String
+          )
+        ).toEqual(["Desk", "Lamp"]);
         // Point-in-time: nothing was registered, nothing entered the replica.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);
         const local = yield* engine

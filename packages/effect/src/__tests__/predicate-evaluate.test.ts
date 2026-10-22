@@ -5,7 +5,8 @@
  * Postgres over a generated corpus; this file pins the specification's own
  * examples so a regression names the rule it broke.
  */
-import { Option, Schema } from "effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import * as Predicate from "../Predicate.js";
 

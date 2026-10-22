@@ -11,7 +11,12 @@
  *   the typecheck gate via `@ts-expect-error`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -35,13 +40,13 @@ import { ClientTransport, layerInMemory, makeInMemory, type ServerHandler } from
 interface Todo {
   readonly id: string;
   readonly title: string;
-  readonly done: boolean;
+  readonly isDone: boolean;
 }
 
 const TodoSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  done: Schema.Boolean,
+  isDone: Schema.Boolean,
 });
 const todos = Collection.make({ name: "todos", schema: TodoSchema, id: (r) => r.id });
 
@@ -128,7 +133,7 @@ describe("canonical arg keys", () => {
 
   it.effect("reordered named-subscription args collapse to one subscription entry", () =>
     Effect.gen(function* () {
-      const QueryArgs = Schema.Struct({ done: Schema.Boolean, limit: Schema.Number });
+      const QueryArgs = Schema.Struct({ isDone: Schema.Boolean, limit: Schema.Number });
       const byDone = Query.make("todos/byDone", QueryArgs);
       const queries = Query.registry([
         {
@@ -136,7 +141,7 @@ describe("canonical arg keys", () => {
           local: (args: typeof QueryArgs.Type) =>
             Subset.make({
               collection: "todos",
-              where: Predicate.eq("done", args.done),
+              where: Predicate.eq("isDone", args.isDone),
               limit: args.limit,
             }),
         },
@@ -167,8 +172,8 @@ describe("canonical arg keys", () => {
       );
 
       // Same logical subscription, args written in two key orders.
-      yield* engine.subscribeQuery("todos/byDone", { done: false, limit: 10 });
-      yield* engine.subscribeQuery("todos/byDone", { limit: 10, done: false });
+      yield* engine.subscribeQuery("todos/byDone", { isDone: false, limit: 10 });
+      yield* engine.subscribeQuery("todos/byDone", { limit: 10, isDone: false });
       yield* engine.pull;
 
       const lastPull = pulls.at(-1);
@@ -184,24 +189,24 @@ describe("typed subset builder + reads", () => {
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
       const openTodos = Subset.for(todos).make({
-        where: (p) => p.eq("done", false),
+        where: (p) => p.eq("isDone", false),
         orderBy: [{ field: "title", direction: "asc" }],
       });
       yield* engine.subscribe(openTodos);
 
-      yield* engine.mutate("todo/set", { id: "1", title: "typed", done: false });
+      yield* engine.mutate("todo/set", { id: "1", title: "typed", isDone: false });
 
       const rows = yield* engine.query(openTodos);
-      // No cast: `value` is `Todo`, so `.title` / `.done` are typed access.
+      // No cast: `value` is `Todo`, so `.title` / `.isDone` are typed access.
       expect(rows.map((row) => row.value.title)).toEqual(["typed"]);
-      expect(rows[0]?.value.done).toBe(false);
+      expect(rows[0]?.value.isDone).toBe(false);
     })
   );
 
   it("the builder erases to a plain Subset at runtime", () => {
-    const built = Subset.for(todos).make({ where: (p) => p.eq("done", true), limit: 5 });
+    const built = Subset.for(todos).make({ where: (p) => p.eq("isDone", true), limit: 5 });
     expect(built).toEqual(
-      Subset.make({ collection: "todos", where: Predicate.eq("done", true), limit: 5 })
+      Subset.make({ collection: "todos", where: Predicate.eq("isDone", true), limit: 5 })
     );
   });
 
@@ -214,7 +219,7 @@ describe("typed subset builder + reads", () => {
     });
     Subset.for(todos).make({
       // @ts-expect-error a boolean field rejects a string literal
-      where: (p) => p.eq("done", "not-a-boolean"),
+      where: (p) => p.eq("isDone", "not-a-boolean"),
     });
     Subset.for(todos).make({
       // @ts-expect-error unknown orderBy field is rejected
@@ -235,7 +240,7 @@ describe("observe select projection", () => {
       yield* engine.subscribe(allTodos);
 
       const emissions = yield* Ref.make<ReadonlyArray<string>>([]);
-      // Projection ignores `done`: it is the concatenation of the titles.
+      // Projection ignores `isDone`: it is the concatenation of the titles.
       const projected = engine.observe(allTodos, {
         select: (rows) => rows.map((row) => row.value.title).join("|"),
       });
@@ -247,13 +252,13 @@ describe("observe select projection", () => {
 
       const settle = sleepReal(30);
       yield* settle; // initial empty projection ("")
-      yield* engine.mutate("todo/set", { id: "1", title: "a", done: false });
+      yield* engine.mutate("todo/set", { id: "1", title: "a", isDone: false });
       yield* settle;
       // Mutating a field the projection ignores must NOT re-emit.
-      yield* engine.mutate("todo/set", { id: "1", title: "a", done: true });
+      yield* engine.mutate("todo/set", { id: "1", title: "a", isDone: true });
       yield* settle;
       // Mutating a projected field must re-emit.
-      yield* engine.mutate("todo/set", { id: "1", title: "b", done: true });
+      yield* engine.mutate("todo/set", { id: "1", title: "b", isDone: true });
       yield* settle;
 
       yield* Fiber.interrupt(fiber);

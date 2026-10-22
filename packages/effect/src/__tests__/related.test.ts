@@ -6,7 +6,15 @@
  * `Predicate.exists` rendering.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Option, Schema, Scope, Stream, SubscriptionRef } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -39,20 +47,20 @@ interface Person {
   readonly name: string;
 }
 
-const IssueSchema = Schema.Struct({
+const IssueSchema: Schema.Codec<Issue> = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   authorId: Schema.String,
-}) as unknown as Schema.Codec<Issue>;
-const CommentSchema = Schema.Struct({
+});
+const CommentSchema: Schema.Codec<CommentRow> = Schema.Struct({
   id: Schema.String,
   issueId: Schema.String,
   body: Schema.String,
-}) as unknown as Schema.Codec<CommentRow>;
-const PersonSchema = Schema.Struct({
+});
+const PersonSchema: Schema.Codec<Person> = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
-}) as unknown as Schema.Codec<Person>;
+});
 
 const issuesCollection = Collection.make({
   name: "issues",
@@ -174,17 +182,22 @@ const waitForEmissions = <A>(
   seen: SubscriptionRef.SubscriptionRef<A>,
   until: (emissions: A) => boolean,
   failure: string,
-  show: (emissions: A) => unknown = (emissions) => emissions
+  show: (emissions: A) => string = (emissions) => JSON.stringify(emissions)
 ): Effect.Effect<A> =>
   SubscriptionRef.changes(seen).pipe(
     Stream.filter(until),
     Stream.runHead,
-    Effect.map(Option.getOrThrow),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.die(new Error(`${failure}; the changes stream ended`)),
+        onSome: Effect.succeed,
+      })
+    ),
     Effect.timeoutOrElse({
       duration: "5 seconds",
       orElse: () =>
         Effect.flatMap(SubscriptionRef.get(seen), (emissions) =>
-          Effect.die(new Error(`${failure}; saw ${JSON.stringify(show(emissions))}`))
+          Effect.die(new Error(`${failure}; saw ${show(emissions)}`))
         ),
     })
   );
@@ -253,7 +266,10 @@ describe("Related.query / observe", () => {
           const emitted = (
             until: (emissions: ReadonlyArray<ReadonlyArray<Related.RelatedRow>>) => boolean,
             failure: string
-          ) => waitForEmissions(seen, until, failure, (emissions) => emissions.map(i1Bodies));
+          ) =>
+            waitForEmissions(seen, until, failure, (emissions) =>
+              JSON.stringify(emissions.map(i1Bodies))
+            );
           yield* Effect.forkScoped(
             Stream.runForEach(
               Related.observe(engine, registry, "issues", issues, ["author", "comments"]),
@@ -572,7 +588,10 @@ const applyOp = (truth: GroundTruth, op: Op): void => {
 };
 
 const idsOf = (values: ReadonlyArray<unknown>) =>
-  values.map((v) => (v as { id: string }).id).sort();
+  Arr.sort(
+    values.map((v) => (v as { id: string }).id),
+    Order.String
+  );
 
 /** `many`/`paginated` order isn't a contract (a write can reorder a bucket —
  * see the `re-hydrates on a related-row write` test above), so compare those
@@ -620,15 +639,17 @@ describe("Related delta-maintenance (issue #111)", () => {
       const op = randomOp(rng, truth);
       applyOp(truth, op);
 
+      let removedTargets: ReadonlyArray<string> = [];
       if (op._tag === "putIssue" || op._tag === "deleteIssue") {
         const { added, removed, result } = engine.applyBase([...truth.issues.values()]);
-        expect(removed).toEqual([]); // this strategy's target set is static
+        removedTargets = removed;
         if (result !== undefined) lastResult = result;
         primeAdded(added);
       } else {
         const { result } = engine.applyForeign(op.collection, [...truth[op.collection].values()]);
         if (result !== undefined) lastResult = result;
       }
+      expect(removedTargets).toEqual([]); // this strategy's target set is static
 
       const expected = Related.hydrateFromScratch(
         strategy,

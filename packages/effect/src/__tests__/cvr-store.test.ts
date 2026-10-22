@@ -5,7 +5,8 @@
  * instance A is recognized by instance B, so no reset).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -15,7 +16,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import type { ServerHandler } from "../Transport.js";
 import type { PatchOp } from "../Protocol.js";
 

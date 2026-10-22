@@ -10,7 +10,14 @@
  * waits on wall-clock time a loaded machine could exhaust (#285).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Duration, Effect, Ref, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
@@ -144,10 +151,12 @@ describe("Server", () => {
         yield* server.broadcast({ collection: "products", ids: ["p-oob"] });
         expect(yield* Ref.get(hintBatches)).toBe(1);
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 2);
-        expect(rows.map((row) => (row.value as { name: string }).name).sort()).toEqual([
-          "Dropped by cron",
-          "Seed",
-        ]);
+        expect(
+          Arr.sort(
+            rows.map((row) => (row.value as { name: string }).name),
+            Order.String
+          )
+        ).toEqual(["Dropped by cron", "Seed"]);
         // Exactly the connect pull and the one broadcast caused: nothing else
         // could have pulled the bypassed write in early.
         expect(yield* Ref.get(pulls)).toBe(2);

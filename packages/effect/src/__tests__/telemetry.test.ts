@@ -4,7 +4,9 @@
  * deltas rather than absolute values.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Metric, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Metric from "effect/Metric";
+import * as Schema from "effect/Schema";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

@@ -6,7 +6,13 @@
  * sizes, and the new `legation_*` metrics move on a push/pull cycle.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Metric, Schema, Scope, Stream } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Metric from "effect/Metric";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";

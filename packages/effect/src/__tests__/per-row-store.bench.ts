@@ -9,7 +9,7 @@
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
 import { describe, test } from "vite-plus/test";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
 import type { PatchOp } from "../Protocol.js";

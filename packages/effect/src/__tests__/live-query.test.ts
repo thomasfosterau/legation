@@ -3,7 +3,8 @@
  * change stream — an optimistic mutate drives the Atom to a new Success.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

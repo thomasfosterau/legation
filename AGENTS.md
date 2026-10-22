@@ -80,7 +80,7 @@ The vendored skills in `.claude/skills/` read their repo config from `docs/agent
 Never guess at an Effect API. This repo is on the Effect v4 release-candidate line, whose APIs differ from v3 and from most online docs; the pinned version is the `effect` entry in `pnpm-workspace.yaml`'s catalog. Read the installed package: `node_modules/effect/AGENTS.md` and `node_modules/effect/ai-docs/` (the pinned version ships both), the declarations in `node_modules/effect/dist/*.d.ts`, and the source in `node_modules/effect/src/`.
 
 - On this line HTTP lives at `effect/http/*` and RPC at `effect/rpc`; there are no `effect/unstable/*` paths.
-- The Effect lint presets (`@effect/tsgo`'s and `@mpsuesser/oxlint-plugin-effect`'s `recommended`) run in `vp check`. A rule at `warn` under "ported-code allowances" in `vite.config.ts` carries the count left when the presets were adopted (the sites are listed in #TRACKING_ISSUE): a new site is a defect, not headroom, and a rule whose count reaches zero has its line deleted so it is back at `error`.
+- The Effect lint presets (`@effect/tsgo`'s and `@mpsuesser/oxlint-plugin-effect`'s `recommended`) run in `vp check`. A rule at `warn` under "ported-code allowances" in `vite.config.ts` carries the count left when the presets were adopted (the sites are listed in [#497](https://github.com/thomasfosterau/legation/issues/497)): a new site is a defect, not headroom, and a rule whose count reaches zero has its line deleted so it is back at `error`.
 
 ## Agent sessions
 

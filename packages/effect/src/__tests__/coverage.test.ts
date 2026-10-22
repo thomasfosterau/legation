@@ -6,7 +6,7 @@
  * negatives (full implication is not built).
  */
 import { describe, expect, it } from "vite-plus/test";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { Edge, Node, Predicate, Query } from "../index.js";
 import { Coverage, Subset } from "../internal.js";
 

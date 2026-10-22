@@ -8,7 +8,12 @@
  * (issue #223).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Schema, Scope } from "effect";
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as Client from "../Client.js";
@@ -250,11 +255,11 @@ describe("Undo (#46)", () => {
       yield* manager.group(
         Effect.all([manager.run(create("a")), manager.run(create("b")), manager.run(create("c"))])
       );
-      expect(
-        titles(yield* engine.query(allTodos))
-          .slice()
-          .sort()
-      ).toEqual(["a", "b", "c"]);
+      expect(Arr.sort(titles(yield* engine.query(allTodos)), Order.String)).toEqual([
+        "a",
+        "b",
+        "c",
+      ]);
       expect(yield* manager.canUndo).toBe(true);
 
       // One undo reverses all three (a single step) and empties the undo stack.
@@ -265,11 +270,11 @@ describe("Undo (#46)", () => {
 
       // One redo re-applies all three.
       yield* manager.redo;
-      expect(
-        titles(yield* engine.query(allTodos))
-          .slice()
-          .sort()
-      ).toEqual(["a", "b", "c"]);
+      expect(Arr.sort(titles(yield* engine.query(allTodos)), Order.String)).toEqual([
+        "a",
+        "b",
+        "c",
+      ]);
       expect(yield* manager.canUndo).toBe(true);
     })
   );

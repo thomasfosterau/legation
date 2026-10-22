@@ -295,7 +295,6 @@ export const holds = (op: Comparison, ordered: number): boolean => {
  * (`CollectionIndex.ts`) read fields with exactly this function so they bucket
  * the same way `evaluate` does.
  */
-// oxlint-disable-next-line effect/no-unknown-returns -- exported on the package root; a row's field is untyped JSON, and `undefined`/`null`/any literal are all meaningful results.
 export const fieldValue = (row: unknown, field: string): unknown =>
   P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
 

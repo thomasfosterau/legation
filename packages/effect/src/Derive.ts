@@ -176,7 +176,6 @@ export const filter = <E>(source: Source<E>, predicate: (value: unknown) => bool
   maintain(source, () => Incremental.makeFilter(predicate));
 
 /** Project each row's value through an arbitrary JS function, keeping its id. */
-// oxlint-disable-next-line effect/no-unknown-returns -- exported combinator; `f` is an arbitrary user projection over untyped row values, so its result is genuinely `unknown`.
 export const map = <E>(source: Source<E>, f: (value: unknown) => unknown): Source<E> =>
   maintain(source, () => Incremental.makeMap(f));
 

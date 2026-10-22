@@ -6,7 +6,7 @@
  * membership onto the issue row.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";

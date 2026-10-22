@@ -10,7 +10,15 @@
  * long it runs, and on trunk a second pull reaches it within a few yields.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Deferred, Effect, Exit, Fiber, Queue, Ref, Scope, Stream } from "effect";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
@@ -18,7 +26,7 @@ import { TransportError } from "../Errors.js";
 import * as Mutator from "../Mutator.js";
 import type { Poke, PullRequest, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
-import { ClientTransport, type ClientTransport as ClientTransportShape } from "../Transport.js";
+import { ClientTransport } from "../Transport.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -62,7 +70,7 @@ const respond = (cookie: string, title: string): PullResponse => ({
 });
 
 interface GatedTransport {
-  readonly transport: ClientTransportShape;
+  readonly transport: ClientTransport;
   readonly pokes: Queue.Queue<Poke>;
   /** Resolved with the request when the n-th pull reaches the transport. */
   readonly issued: ReadonlyArray<Deferred.Deferred<PullRequest>>;
@@ -104,7 +112,7 @@ const makeGatedTransport: Effect.Effect<GatedTransport> = Effect.gen(function* (
       // sees the arrival still finds the hook in place.
       Effect.onInterrupt(() => Ref.update(interrupted, (n) => n + 1))
     );
-  const transport: ClientTransportShape = {
+  const transport: ClientTransport = {
     push: () => Effect.die(new Error("push is not part of this test")),
     pull,
     pokes: Stream.fromQueue(pokes),

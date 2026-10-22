@@ -6,19 +6,17 @@
  * windows are exercised by failing the store at each step and reopening it.
  */
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Logger,
-  Ref,
-  References,
-  Schedule,
-  Schema,
-  Tracer,
-} from "effect";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Ref from "effect/Ref";
+import * as References from "effect/References";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";

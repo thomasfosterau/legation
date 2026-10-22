@@ -19,7 +19,11 @@
  * - Anonymous → signed in keeps the warm replica: the one permitted upgrade.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Ref, Schema, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { KeyValueStore } from "effect/persistence";
 import {
   Authorization,
