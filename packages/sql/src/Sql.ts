@@ -95,6 +95,21 @@ export interface Dialect {
    * no isolation statement, so its executor must provide the isolation itself.
    */
   readonly serializable?: string | undefined;
+  /**
+   * A SQL expression that carries the row aliased `alias` as JSON text, with
+   * `columns` its column names (#505). `SqlBackend.evaluateMany` projects each
+   * arm of its one `UNION ALL` statement through it, since mappings' columns
+   * differ per collection. Absent on a hand-written dialect, `evaluateMany`
+   * is too, and a pull evaluates its subsets one statement each.
+   */
+  readonly rowJson?: ((alias: string, columns: ReadonlyArray<string>) => string) | undefined;
+  /**
+   * The query listing a relation's column names, one row per column with the
+   * name in a `name` column, when {@link rowJson} needs the names: SQLite's
+   * `json_object` takes its keys one by one. Absent when `rowJson` reads the
+   * whole row by itself (PostgreSQL's `row_to_json`).
+   */
+  readonly columnsOf?: ((relation: string) => SqlFragment) | undefined;
 }
 
 /** Field → literal kind, for the collation clause and typed binds. */
@@ -110,16 +125,27 @@ export interface CompileOptions {
 
 const quoteDouble = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
 
-/** SQLite: `?` placeholders, `COLLATE BINARY`, booleans as `0`/`1`. */
+const quoteSingle = (text: string): string => `'${text.replace(/'/g, "''")}'`;
+
+/**
+ * SQLite: `?` placeholders, `COLLATE BINARY`, booleans as `0`/`1`, rows as
+ * JSON through `json_object` over the relation's columns (`pragma_table_info`).
+ */
 export const sqlite: Dialect = {
   placeholder: () => "?",
   quote: quoteDouble,
   textCollation: "BINARY",
   boolean: (value) => (value ? 1 : 0),
   greatest: (left, right) => `MAX(${left}, ${right})`,
+  rowJson: (alias, columns) =>
+    `json_object(${columns.map((column) => `${quoteSingle(column)}, ${alias}.${quoteDouble(column)}`).join(", ")})`,
+  columnsOf: (relation) => ({ text: `SELECT name FROM pragma_table_info(?)`, params: [relation] }),
 };
 
-/** PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans, SERIALIZABLE transactions. */
+/**
+ * PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans,
+ * SERIALIZABLE transactions, rows as JSON through `row_to_json`.
+ */
 export const postgres: Dialect = {
   placeholder: (index) => `$${index}`,
   quote: quoteDouble,
@@ -127,6 +153,7 @@ export const postgres: Dialect = {
   boolean: (value) => value,
   greatest: (left, right) => `GREATEST(${left}, ${right})`,
   serializable: "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+  rowJson: (alias) => `row_to_json(${alias})::text`,
 };
 
 const comparators: Record<Predicate.Comparison, string> = {

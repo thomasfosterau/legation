@@ -4,10 +4,11 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type { Backend } from "../Backend.js";
+import { type Backend, evaluateAll } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
+import * as Subset from "../Subset.js";
 import * as UnknownMutator from "../UnknownMutator.js";
 
 /** The reference handlers without the named contract mutator, i.e. an unregistered one. */
@@ -194,6 +195,73 @@ describe("verifyBackendContract", () => {
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure.rule).toContain("discards");
       expect(failure.message).toContain("not registered");
+    })
+  );
+
+  it.effect("passes a backend whose evaluateMany is per-subset evaluate (#505)", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const batched: Backend = {
+        ...inner,
+        evaluateMany: (context, subsets) =>
+          Effect.forEach(subsets, (subset) => inner.evaluate(context, subset), { concurrency: 1 }),
+      };
+      yield* BackendContract.verifyBackendContract(batched);
+    })
+  );
+
+  it.effect("catches a backend whose evaluateMany disagrees with evaluate (#505)", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      // Drops each subset's last entry: right for an empty subset, wrong otherwise.
+      const broken: Backend = {
+        ...inner,
+        evaluateMany: (context, subsets) =>
+          Effect.forEach(
+            subsets,
+            (subset) =>
+              inner.evaluate(context, subset).pipe(Effect.map((entries) => entries.slice(0, -1))),
+            { concurrency: 1 }
+          ),
+      };
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
+      expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("evaluateMany");
+    })
+  );
+});
+
+describe("Backend.evaluateAll (#505)", () => {
+  it.effect("asks evaluate per subset when the backend has no evaluateMany", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const asked: Array<string> = [];
+      const counted: Backend = {
+        ...inner,
+        evaluate: (context, subset) => {
+          asked.push(subset.collection);
+          return inner.evaluate(context, subset);
+        },
+      };
+      const lists = yield* evaluateAll(counted, { clientGroupId: "g" }, [
+        Subset.make({ collection: "a" }),
+        Subset.make({ collection: "b" }),
+      ]);
+      expect(lists).toEqual([[], []]);
+      expect(asked).toEqual(["a", "b"]);
+      expect(yield* evaluateAll(counted, { clientGroupId: "g" }, [])).toEqual([]);
+      expect(asked).toEqual(["a", "b"]);
+    })
+  );
+
+  it.effect("fails when evaluateMany returns a list count other than the subsets'", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const short: Backend = { ...inner, evaluateMany: () => Effect.succeed([]) };
+      const error = yield* Effect.flip(
+        evaluateAll(short, { clientGroupId: "g" }, [Subset.make({ collection: "a" })])
+      );
+      expect(error.message).toContain("0 entry lists for 1 subsets");
     })
   );
 });

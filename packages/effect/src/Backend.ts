@@ -36,7 +36,11 @@
  *    writer must be safe to repeat. A backend that does not meet this does not
  *    conform to guarantee 1.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
- *    authorized subset — versions change on every authoritative write.
+ *    authorized subset — versions change on every authoritative write. An
+ *    optional `evaluateMany` evaluates several subsets at once (#505), so a
+ *    backend can answer a pull's subsets in a bounded number of round trips;
+ *    its result for each subset must equal `evaluate`'s for that subset, in
+ *    the same order.
  * 3. `getRows` returns encoded row values for explicit ids.
  * 4. `rejections` lists the permanent rejections a client group still remembers,
  *    each with its reason (#365). A pull reports those its watermark covers, so
@@ -52,9 +56,9 @@
 
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type { RowId, RowVersion } from "./Collection.js";
-import type { BackendError } from "./Errors.js";
+import { BackendError } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";
 import type { Subset } from "./Subset.js";
 
@@ -154,6 +158,22 @@ export interface Backend {
     subset: Subset
   ) => Effect.Effect<ReadonlyArray<SubsetEntry>, BackendError>;
 
+  /**
+   * Evaluate several **already-authorized** subsets at once (#505): one entry
+   * list per subset, in the order of `subsets`, each equal to what
+   * {@link Backend.evaluate} returns for that subset (guarantee 2). Optional:
+   * a backend that can batch (one SQL statement for a pull's subsets) provides
+   * it, and callers fall back to per-subset `evaluate` through
+   * {@link evaluateAll} when it is absent. `BackendContract` checks the
+   * equivalence on every backend that provides it.
+   */
+  readonly evaluateMany?:
+    | ((
+        context: SyncContext,
+        subsets: ReadonlyArray<Subset>
+      ) => Effect.Effect<ReadonlyArray<ReadonlyArray<SubsetEntry>>, BackendError>)
+    | undefined;
+
   /** Fetch encoded row values for explicit ids. Missing ids are omitted. */
   readonly getRows: (
     context: SyncContext,
@@ -164,6 +184,47 @@ export interface Backend {
     BackendError
   >;
 }
+
+/**
+ * Evaluate `subsets` to their entries, one list per subset in order: through
+ * the backend's {@link Backend.evaluateMany} when it provides one, else one
+ * {@link Backend.evaluate} per subset, in sequence. An empty `subsets` makes
+ * no backend call, and an `evaluateMany` that returns a different number of
+ * lists than it was given subsets fails with a `BackendError`.
+ *
+ * @example
+ * ```ts
+ * import { Backend, MemoryBackend } from "@thomasfosterau/legation-effect";
+ * import { Subset } from "@thomasfosterau/legation-effect/internal";
+ * import * as Effect from "effect/Effect";
+ *
+ * const program = Effect.gen(function* () {
+ *   const backend = yield* MemoryBackend.make({});
+ *   return yield* Backend.evaluateAll(backend, { clientGroupId: "g" }, [
+ *     Subset.make({ collection: "todos" }),
+ *   ]);
+ * });
+ * ```
+ */
+export const evaluateAll = (
+  backend: Backend,
+  context: SyncContext,
+  subsets: ReadonlyArray<Subset>
+): Effect.Effect<ReadonlyArray<ReadonlyArray<SubsetEntry>>, BackendError> => {
+  if (Arr.isReadonlyArrayEmpty(subsets)) return Effect.succeed([]);
+  const many = backend.evaluateMany;
+  return many === undefined
+    ? Effect.forEach(subsets, (subset) => backend.evaluate(context, subset), { concurrency: 1 })
+    : many(context, subsets).pipe(
+        Effect.filterOrFail(
+          (lists) => lists.length === subsets.length,
+          (lists) =>
+            new BackendError({
+              message: `evaluateMany returned ${lists.length} entry lists for ${subsets.length} subsets`,
+            })
+        )
+      );
+};
 
 /** The {@link Backend} service the sync server reads and writes through. */
 export const Backend = Context.Service<Backend>("@thomasfosterau/legation-effect/Backend");

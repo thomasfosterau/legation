@@ -90,10 +90,20 @@
  * the next CVR view and `Cvr.diff` reports it as a delete for that id,
  * exactly as a row that vanished from the relation outright would (fail-open
  * would be a bug: a soft-deleted row must never keep syncing as a put).
+ *
+ * A pull's subsets are evaluated together by `evaluateMany` (#505): one
+ * `UNION ALL` statement whose arms each select their subset's index and their
+ * row as JSON (the dialect's `rowJson`), plus one statement per `Exists` node,
+ * as in `evaluate`. The rows read back are finished by the same code as
+ * `evaluate`'s, so the two agree wherever JSON carries a column's value as the
+ * driver does (`BackendContract` rule 14 checks it over the generated corpus);
+ * the README lists the column types it does not.
  */
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -314,6 +324,29 @@ export interface SqlBackendConfig {
   readonly mutationsTable?: string;
 }
 
+/**
+ * The alias each arm of `evaluateMany`'s statement gives its relation: its
+ * `rowJson` names the row by it, so it must not be a column of any mapping.
+ */
+const MANY_ROW_ALIAS = "__legation_row";
+
+/**
+ * A row of `evaluateMany`'s statement: the index of the subset its arm
+ * answers, and its row as the JSON text the dialect's `rowJson` built.
+ */
+const ManyRow = Schema.Struct({
+  subset: Schema.Int,
+  row: Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+});
+
+/** Decode a row of `evaluateMany`'s statement, failing as a `BackendError`. */
+const decodeManyRow = (row: SqlRow) =>
+  Schema.decodeUnknownEffect(ManyRow)(row).pipe(
+    Effect.mapError(
+      (cause) => new BackendError({ message: "evaluateMany read a row it could not decode", cause })
+    )
+  );
+
 /** Content-hash fallback version when no version column is mapped. */
 export const versionOf = Hash.contentHash;
 
@@ -412,6 +445,28 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       );
   };
 
+  // A subset's entries from the rows its `WHERE` selected (`where` is the
+  // subset's predicate with its `Exists` nodes resolved).
+  const entriesOf = (
+    subset: Subset.Subset,
+    where: Predicate.Predicate,
+    rows: ReadonlyArray<SqlRow>
+  ): ReadonlyArray<Backend.SubsetEntry> => {
+    const idColumn = idOf(subset.collection);
+    // A tombstoned row is dropped here, before ordering/limit/cursor: it is
+    // not a live row to page over, and its absence from the returned
+    // entries is exactly what makes `Cvr.diff` report it as a delete
+    // (#204) — the same mechanism a row vanishing from the relation
+    // outright already relies on.
+    const values = rows
+      .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
+      .filter((row) => isLive(subset.collection, row.value));
+    return Subset.apply(values, { ...subset, where }).map((row) => ({
+      id: row.id,
+      version: versionFor(subset.collection, row.value),
+    }));
+  };
+
   const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
     Effect.gen(function* () {
       const mapping = config.tables[subset.collection];
@@ -426,20 +481,106 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           foreignKinds,
         })
       );
-      const idColumn = idOf(subset.collection);
-      // A tombstoned row is dropped here, before ordering/limit/cursor: it is
-      // not a live row to page over, and its absence from the returned
-      // entries is exactly what makes `Cvr.diff` report it as a delete
-      // (#204) — the same mechanism a row vanishing from the relation
-      // outright already relies on.
-      const values = rows
-        .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
-        .filter((row) => isLive(subset.collection, row.value));
-      return Subset.apply(values, { ...subset, where }).map((row) => ({
-        id: row.id,
-        version: versionFor(subset.collection, row.value),
-      }));
+      return entriesOf(subset, where, rows);
     });
+
+  // A read relation's column names, for a dialect whose `rowJson` needs them
+  // (SQLite). Looked up once per relation and kept for the backend's life: a
+  // read relation whose columns change needs a new backend. An empty answer
+  // (no such relation yet) is not kept.
+  const columnCache = MutableHashMap.empty<string, ReadonlyArray<string>>();
+  const columnsOf = (relation: string): Effect.Effect<ReadonlyArray<string>, BackendError> => {
+    const lookup = dialect.columnsOf;
+    if (lookup === undefined) return Effect.succeed([]);
+    return Option.match(MutableHashMap.get(columnCache, relation), {
+      onSome: Effect.succeed,
+      onNone: () =>
+        executor.query(lookup(relation)).pipe(
+          Effect.map((rows) => rows.map((row) => String(row["name"]))),
+          Effect.tap((columns) =>
+            Effect.sync(() => {
+              if (Arr.isReadonlyArrayNonEmpty(columns)) {
+                MutableHashMap.set(columnCache, relation, columns);
+              }
+            })
+          )
+        ),
+    });
+  };
+
+  // One subset's arm of `evaluateMany`'s statement, before its binds are numbered.
+  interface ManyArm {
+    readonly index: number;
+    readonly subset: Subset.Subset;
+    readonly mapping: TableMapping;
+    readonly where: Predicate.Predicate;
+    readonly columns: ReadonlyArray<string>;
+  }
+
+  // One subset's arm, or none for a collection without a mapping (which
+  // `evaluate` answers with no entries). Resolves the `Exists` nodes as
+  // `evaluate` does.
+  const manyArm = (
+    subset: Subset.Subset,
+    index: number
+  ): Effect.Effect<Option.Option<ManyArm>, BackendError> => {
+    const mapping = config.tables[subset.collection];
+    if (mapping === undefined) return Effect.succeedNone;
+    return Effect.all(
+      {
+        where: Predicate.resolveExists(subset.where, resolveExistsNode),
+        columns: columnsOf(readTableOf(mapping)),
+      },
+      { concurrency: 1 }
+    ).pipe(
+      Effect.map(({ where, columns }) => Option.some({ index, subset, mapping, where, columns }))
+    );
+  };
+
+  // One `UNION ALL` statement for every subset (#505): each arm selects its
+  // subset's index and its row as JSON (`Dialect.rowJson`), since mappings'
+  // columns differ per collection. The arms' `WHERE`s are the ones `evaluate`
+  // compiles, numbered on from the previous arm's binds, and the rows are
+  // finished per subset exactly as `evaluate` finishes them. Round trips: one
+  // statement, plus one per `Exists` node (resolved first, as in `evaluate`),
+  // plus on SQLite one column lookup per read relation the first time it is
+  // read.
+  const evaluateMany = (rowJson: NonNullable<Sql.Dialect["rowJson"]>) =>
+    ((_context, subsets) =>
+      Effect.gen(function* () {
+        const arms = yield* Effect.forEach(subsets, manyArm, { concurrency: 1 });
+        const alias = q(MANY_ROW_ALIAS);
+        const noBinds: ReadonlyArray<unknown> = [];
+        const [params, texts] = Arr.mapAccum(Arr.getSomes(arms), noBinds, (bound, arm) => {
+          const offset = bound.length;
+          const compiled = Sql.compileWhere(
+            arm.where,
+            { ...dialect, placeholder: (bind) => dialect.placeholder(offset + bind) },
+            { kinds: arm.mapping.kinds, foreignKinds }
+          );
+          const relation = q(readTableOf(arm.mapping));
+          return [
+            [...bound, ...compiled.params],
+            `SELECT ${arm.index} AS ${q("subset")}, ${rowJson(alias, arm.columns)} AS ${q("row")} FROM ${relation} AS ${alias} WHERE ${compiled.text}`,
+          ] as const;
+        });
+        const rows = Arr.isReadonlyArrayNonEmpty(texts)
+          ? yield* executor.query({ text: texts.join(" UNION ALL "), params })
+          : [];
+        const decoded = yield* Effect.forEach(rows, decodeManyRow, { concurrency: 1 });
+        const bySubset = Arr.groupBy(decoded, (row) => String(row.subset));
+        return arms.map((arm) =>
+          Option.match(arm, {
+            onNone: () => [],
+            onSome: ({ index, subset, where }) =>
+              entriesOf(
+                subset,
+                where,
+                (bySubset[String(index)] ?? []).map((row) => row.row)
+              ),
+          })
+        );
+      })) satisfies NonNullable<Backend.Backend["evaluateMany"]>;
 
   // Fetch the raw rows for explicit ids (shared by getRows and hint
   // enrichment). Reads see the push transaction's own writes. A tombstoned
@@ -879,6 +1020,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     lastMutationIds: (context) => readLastIds(context.clientGroupId),
     rejections: (context) => rememberedRejections(context.clientGroupId),
     evaluate,
+    evaluateMany: dialect.rowJson === undefined ? undefined : evaluateMany(dialect.rowJson),
     getRows,
   });
 };

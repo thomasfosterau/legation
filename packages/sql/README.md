@@ -92,9 +92,19 @@ What the executor guarantees:
   not promise.
 - **Round trips.** A push costs one transaction, however many mutations it
   holds. `evaluate` costs one statement per subset, plus one per `exists` node
-  in its predicate. A pull evaluates its subsets one at a time, so it pays one
-  round trip per subset; batching a pull's subsets is
-  [#505](https://github.com/thomasfosterau/legation/issues/505).
+  in its predicate. A pull goes through `evaluateMany`, which asks for all of
+  its subsets in one `UNION ALL` statement, plus one per `exists` node, however
+  many subsets it holds
+  ([#505](https://github.com/thomasfosterau/legation/issues/505)).
+- **Rows as JSON in a pull.** Each arm of `evaluateMany`'s statement carries
+  its row as JSON (`row_to_json`), since mappings' columns differ, and the
+  backend orders, windows and versions the rows it reads back from that JSON.
+  A column JSON represents as the driver does (text, integers that fit a
+  number, booleans, `NULL`) gives the same answer as `evaluate`. One it does
+  not (`timestamptz`, `numeric`, `bigint`, `bytea`) can order or, without a
+  `versionColumn`, hash differently from the driver's value: map such a
+  relation's ordered and version columns to text or a JSON-safe number, or
+  set `versionColumn`.
 - **Errors.** A failed statement or transaction fails as a `BackendError` with
   the statement's text, never its parameters, in the message, and the driver's
   `SqlError` as its `cause`.

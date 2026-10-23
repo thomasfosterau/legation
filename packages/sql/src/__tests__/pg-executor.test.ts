@@ -170,6 +170,57 @@ describePostgres("PgExecutor round trips (#203)", () => {
     )
   );
 
+  it.live(
+    "evaluateMany costs one statement for all of a pull's subsets, plus one per Exists node (#505)",
+    () =>
+      withCounted(databaseUrl ?? "", (backend, counts) =>
+        Effect.gen(function* () {
+          const evaluateMany = backend.evaluateMany;
+          expect(evaluateMany).toBeDefined();
+          if (evaluateMany === undefined) return;
+          const plain = [
+            Subset.make({ collection: "todos" }),
+            Subset.make({ collection: "todos", where: Predicate.eq("done", false) }),
+            Subset.make({
+              collection: "todos",
+              where: Predicate.and(Predicate.eq("project_id", "p1"), Predicate.eq("done", true)),
+              orderBy: [{ field: "id", direction: "asc" }],
+              limit: 1,
+            }),
+            Subset.make({ collection: "projects", where: Predicate.eq("archived", true) }),
+          ];
+          const live = Subset.make({
+            collection: "todos",
+            where: Predicate.exists({
+              collection: "projects",
+              localField: "project_id",
+              foreignField: "id",
+              where: Predicate.eq("archived", false),
+            }),
+          });
+          const lists = yield* evaluateMany(context, [...plain, live]);
+          expect(lists.map((entries) => entries.map((entry) => entry.id).toSorted())).toEqual([
+            ["t1", "t2", "t3"],
+            ["t1", "t3"],
+            ["t2"],
+            ["p2"],
+            ["t1", "t2"],
+          ]);
+          // One statement for the five subsets, one for the Exists node.
+          expect(yield* Ref.get(counts)).toEqual({ statements: 2, transactions: 0 });
+          // And the same entries, versions included, as one evaluate per subset.
+          const single = yield* Effect.forEach(
+            [...plain, live],
+            (subset) => backend.evaluate(context, subset),
+            {
+              concurrency: 1,
+            }
+          );
+          expect(lists).toEqual(single);
+        })
+      )
+  );
+
   it.live("a pushed batch runs in one transaction, however many mutations it holds", () =>
     withCounted(databaseUrl ?? "", (backend, counts) =>
       Effect.gen(function* () {
