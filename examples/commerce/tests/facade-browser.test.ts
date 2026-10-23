@@ -62,6 +62,15 @@
  * found in the log, not missed. A wall-clock deadline on each wait only bounds
  * a hang.
  *
+ * The boot test waits on page events the same way: the sign-up redirect's
+ * navigation, the signed-in nav in the DOM (Playwright's locator wait, which
+ * re-checks as the page renders), and the worker's `ready` promise. One boot
+ * budget (`BOOT_BUDGET_MS`) bounds them together, sized from runs under load,
+ * and each step that overruns it names itself. Every later test needs what
+ * boot leaves behind (the controlled page, the user's id), so each first
+ * checks that boot completed and fails with that message rather than with
+ * whatever its first step trips over.
+ *
  * Identity is the app's own: the test signs up through the account page's
  * form (Better Auth), the Kit process aligns the client-group binding, and
  * the read proxy vouches for the session — the browser never sets
@@ -118,6 +127,25 @@ type Signal = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 /** The wall-clock instant `ms` from now: a safety bound for a wait, not a timing assumption. */
 const deadlineIn = (ms: number): number => Date.now() + ms;
+
+/** What is left of `deadline`, at least 1 ms (Playwright reads a `timeout` of 0 as "no limit"). */
+const remaining = (deadline: number): number => Math.max(deadline - Date.now(), 1);
+
+/**
+ * `work`, or a rejection naming `step` once `deadline` passes: a bound for a
+ * page-side wait (a promise awaited inside `page.evaluate`) that has no
+ * timeout of its own.
+ */
+const within = <A>(step: string, deadline: number, work: Promise<A>): Promise<A> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`boot: ${step} did not happen within the boot budget`)),
+      remaining(deadline)
+    );
+  });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+};
 
 /**
  * The worker's signals in arrival order. `mark` is the cursor a wait starts
@@ -178,8 +206,32 @@ let browser: Browser;
 let context: BrowserContext;
 let page: Page;
 const signals = makeSignals();
-/** The signed-up user's id (Better Auth's), once known. */
-let userId: string;
+/**
+ * The boot test's budget for everything after the account page's form is
+ * filled: the sign-up round trip and redirect, the signed-in render and the
+ * worker taking control. A safety bound on event-driven waits, not a timing
+ * assumption. On a 4-core host these steps took 3.5 s at a load average of
+ * ~63, and the whole boot test 8 s with the load climbing from 75 to 97
+ * (#509); the old 30 s test budget ran out near 105, so this leaves an order
+ * of magnitude over what was measured.
+ */
+const BOOT_BUDGET_MS = 60_000;
+/** The signed-up user's id (Better Auth's), set once boot has completed. */
+let userId: string | undefined;
+
+/**
+ * The user's id, or a failure saying boot did not complete: every test after
+ * boot runs on the page and the account boot leaves behind, so without them
+ * its own first failure would only be a symptom.
+ */
+const booted = (): string => {
+  if (userId === undefined) {
+    throw new Error(
+      "boot did not complete (see the boot test's failure): no signed-up user and no controlled page to run on"
+    );
+  }
+  return userId;
+};
 /** The network's document for the first catalog page, from demonstration 1. */
 let firstPageFromNetwork: string;
 
@@ -224,24 +276,42 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     await signup.locator('input[name="name"]').fill(USER.name);
     await signup.locator('input[name="email"]').fill(USER.email);
     await signup.locator('input[name="password"]').fill(USER.password);
-    await Promise.all([page.waitForURL(`${app.origin}/`), signup.locator("button").click()]);
-    await expect.poll(() => page.locator("nav").textContent()).toContain(`signed in as ${USER.name}`);
+    const deadline = deadlineIn(BOOT_BUDGET_MS);
+    // The form action redirects home; the layout renders the signed-in nav
+    // from the session the action set. Both waits are on the page's events.
+    await Promise.all([
+      page.waitForURL(`${app.origin}/`, { timeout: remaining(deadline) }),
+      signup.locator("button").click({ timeout: remaining(deadline) }),
+    ]);
+    await page
+      .locator("nav", { hasText: `signed in as ${USER.name}` })
+      .waitFor({ state: "visible", timeout: remaining(deadline) });
     const users = await Effect.runPromise(
       app.sql<{ id: string }>`SELECT id FROM user WHERE email = ${USER.email}`
     );
-    userId = users[0]!.id;
+    expect(users).toHaveLength(1);
 
     // The worker: registered by Kit, `clients.claim()`ed on activation, so
     // the page is controlled without a reload — reload once if not.
-    await page.evaluate(() => navigator.serviceWorker.ready);
+    const workerReady = () =>
+      within(
+        "the service worker's activation",
+        deadline,
+        page.evaluate(async () => {
+          await navigator.serviceWorker.ready;
+        })
+      );
+    await workerReady();
     if (await page.evaluate(() => navigator.serviceWorker.controller === null)) {
-      await page.reload();
-      await page.evaluate(() => navigator.serviceWorker.ready);
+      await page.reload({ timeout: remaining(deadline) });
+      await workerReady();
     }
     expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
-  }, 30_000);
+    userId = users[0]!.id;
+  }, BOOT_BUDGET_MS + 15_000);
 
   it("1. online: an uncovered URL is the network's; a covered one, once pulled, is the replica's — same bytes", async () => {
+    booted();
     // The category page: rule 2's strict window sends it to the server.
     const before = app.restCalls();
     const keyboards = await fetched(page, keyboardsPage);
@@ -282,10 +352,11 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     // it: demonstration 4 navigates there offline, and must not depend on
     // how the browser's offline emulation treats the worker's own fetches.
     await page.goto(`${app.origin}/product/p-01`);
-    await expect.poll(() => page.locator("h1").textContent()).toContain("Studio Headphones");
+    await page.locator("h1", { hasText: "Studio Headphones" }).waitFor({ state: "visible" });
   }, 60_000);
 
   it("2. offline: the covered URL is served from the replica, header present, same bytes", async () => {
+    booted();
     await context.setOffline(true);
     expect(await page.evaluate(() => navigator.onLine)).toBe(false);
     const local = await fetched(page, firstPage);
@@ -295,6 +366,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
   }, 15_000);
 
   it("3. offline: an uncovered URL is the 503 `offline` error document, by either half of §4", async () => {
+    booted();
     const isOfflineDocument = (result: Fetched) => {
       expect(result.status).toBe(503);
       expect(result.contentType).toBe(MEDIA_TYPE);
@@ -333,6 +405,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     // optimistic write at the push debounce (300 ms after the journal
     // write), so the write is kept off the server by the cut, not by the
     // timing of the read below.
+    const userId = booted();
     app.carriers(false);
     await context.setOffline(true);
     const cartPath = readPath(myCartItems(userId));
