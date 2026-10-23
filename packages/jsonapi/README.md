@@ -708,6 +708,17 @@ const facade = JsonApiFacade.fetchHandler({
   pass, capped by `maxWait` (default 30 s), with `Preference-Applied: wait=N`:
   `POST`, then `GET Location` with `Prefer: wait=10`, learns the ruling in
   one round trip.
+- **What it cannot journal.** Online, it is forwarded untouched. Offline
+  (either half), `Prefer: handling=strict` gets the `503` `offline` document;
+  a create without a client id the same document plus `client_id_required`
+  (`source.pointer: "/data/id"`); a mutation the engine refuses (an intent
+  mapping naming an unregistered mutator) plus `not_journalable`; and a
+  malformed body the statuses JSON:API prescribes for it: `400`
+  `invalid_document` (no `data`, `data` / `attributes` / `relationships` not
+  objects), `409` `type_mismatch` / `id_mismatch`, `422`
+  `unsupported_relationship` (a to-many relationship, which has no home on the
+  row). Attribute values are never checked: a bad one is journaled and the
+  server rules on it.
 - **A receipt is not a ruling.** The server rules when the journal pushes; a
   permanent rejection drops the optimistic effect on the next rebase, and the
   write's fate is on `Client.mutationStates`. Attribute values are not
