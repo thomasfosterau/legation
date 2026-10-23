@@ -178,6 +178,16 @@ export interface ClientView {
     args: unknown
   ) => Effect.Effect<MutationOutcome, ClientViewError>;
   /**
+   * The client half of an enhanced form submit (ADR-0030 #215 §4): see
+   * {@link ClientEngineModule.ClientEngine.beginFormMutation}. Present only
+   * for an engine-backed view (`fromEngine`); a mirror does not carry it yet.
+   */
+  readonly beginFormMutation?: (
+    form: ClientEngineModule.FormClient,
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngineModule.FormSubmission, ClientViewError>;
+  /**
    * The keyed mutation-state map (#116): current value now, then every fold.
    * A main-thread engine emits its own {@link ClientEngineModule.ClientEngine.mutationStates};
    * a mirror mirrors the host's — the same states either way (ADR-0021).
@@ -260,6 +270,7 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     mutate: (mutator, args) => engine.mutate(mutator, args),
     mutateWithAck: (mutator, args) =>
       engine.mutateWithAck(mutator, args).pipe(Effect.flatMap((handle) => handle.acknowledged)),
+    beginFormMutation: (form, mutator, args) => engine.beginFormMutation(form, mutator, args),
     mutationStates: engine.mutationStates,
   };
 };

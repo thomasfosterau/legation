@@ -4,6 +4,9 @@
  * Server: {@link clientGroupId} (the client-group cookie) and
  * {@link loadSnapshot} (the page's SSR snapshot, for any Effect-based `load`).
  * Client: {@link clientRuntime} (snapshot-hydrated Client boot).
+ * Form actions (ADR-0030 #215): {@link formMutationTarget} and
+ * {@link runFormMutation} on the server, {@link enhanceFormMutation} for the
+ * enhanced submit.
  *
  * All three are thin: the hydration itself is `Hydration` in
  * `@thomasfosterau/legation-effect` and the wiring is `Client.make`. What lives here is only
@@ -16,3 +19,4 @@
 export * from "./clientGroup.js";
 export * from "./load.js";
 export * from "./boot.js";
+export * from "./formMutation.js";

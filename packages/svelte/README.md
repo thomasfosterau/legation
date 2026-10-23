@@ -244,12 +244,108 @@ seeding the rune hooks:
 </script>
 ```
 
-### No-JS baseline
+### Form actions run Mutations
 
-Writes without JavaScript are ordinary SvelteKit form actions hitting the
-app's own API — out-of-band writers in engine terms (ADR-0019): commit the
-write, then `server.broadcast({ collection })` for the touched collections so
-live subscribers pull. The next full-page render re-snapshots.
+A form action that can name the client group runs a named Mutation as one of
+that group's mutations (ADR-0030, amendment #215): the same definition the JS
+path journals, so a write is authored once. The mechanism is core
+(`server.mutate` in `@thomasfosterau/legation-effect`); `/kit` reads the
+group cookie and the form's hidden fields, and gives the enhanced submit.
+
+Each rendered form carries a **form client**: a fresh id with mutation id
+`1`, minted by the page's `load` and rendered in hidden fields. A resubmission
+of the same rendered form is the same mutation, so the ledger applies it once
+and the action answers the original ruling.
+
+```ts
+// +page.server.ts
+import { Effect } from "effect";
+import {
+  FORM_CLIENT_FIELD,
+  FORM_MUTATION_FIELD,
+  RECEIPT_KEY,
+  formMutationTarget,
+  mintFormClient,
+  runFormMutation,
+} from "@thomasfosterau/legation-svelte/kit";
+import { addToCart } from "$lib/domain";
+import { server } from "$lib/server/sync";
+
+export const load = () => ({ form: mintFormClient() });
+
+export const actions = {
+  add: async ({ cookies, request }) => {
+    const data = await request.formData();
+    // The form layer (e.g. effect-forms) validates the fields first.
+    const args = { productId: String(data.get("productId")) };
+    const target = formMutationTarget(cookies, data);
+    if (target === undefined) {
+      // No client-group cookie: an out-of-band writer, as before.
+      return writeThroughApiAndBroadcast(args);
+    }
+    const receipt = await Effect.runPromise(runFormMutation(server, target, addToCart, args));
+    return { [RECEIPT_KEY]: receipt };
+  },
+};
+```
+
+```svelte
+<!-- +page.svelte -->
+<script lang="ts">
+  import { enhance } from "$app/forms";
+  import {
+    FORM_CLIENT_FIELD,
+    FORM_MUTATION_FIELD,
+    enhanceFormMutation,
+  } from "@thomasfosterau/legation-svelte/kit";
+  import { getClientRuntime } from "@thomasfosterau/legation-svelte";
+  import { addToCart } from "$lib/domain";
+  const { data } = $props();
+  const submit = enhanceFormMutation(getClientRuntime(), {
+    mutation: addToCart,
+    args: (form) => ({ productId: String(form.get("productId")) }),
+  });
+</script>
+
+<form method="POST" action="?/add" use:enhance={submit}>
+  <input type="hidden" name={FORM_CLIENT_FIELD} value={data.form.clientId} />
+  <input type="hidden" name={FORM_MUTATION_FIELD} value={data.form.mutationId} />
+  <button name="productId" value="p1">Add</button>
+</form>
+```
+
+- **No JS:** the form posts its rendered form client; the action runs the
+  Mutation and the page re-renders from the server.
+- **Enhanced:** each submit mints a fresh form client into the posted fields
+  and applies the Mutation's local handler to the optimistic overlay under it,
+  **without journaling it** (the action delivers it; a push would apply it
+  twice). On the receipt, `acknowledged` moves the effect to the unpulled
+  tail and `rejected` drops it (`onReceipt` gets the reason). The effect is
+  released only by the pull whose `lastMutationIds` covers the form client,
+  never on the action's response, exactly as for a pushed mutation. The
+  post-action `load` re-run is off by default (`refreshAll: false`); the
+  overlay already shows the write. Offline, the submit fails as the network
+  does (ADR-0030 open point 6).
+- The enhanced submit needs an engine on the page's thread: over a connected
+  host (`Client.connect`, a mirror) `beginFormMutation` fails with a
+  `TransportError`.
+
+**One path per write.** A form-action Mutation and a façade write (#169,
+`@thomasfosterau/legation-jsonapi`) are two interception points for the same
+intent. Both name the mutation by id, neither fabricates a status the server
+did not give, and both release the optimistic effect only when a pull
+observes it. A façade write journals a plain `fetch` on the client and
+answers `202 pending`; a form-action Mutation runs on the server and answers
+the ruling. Write a submission through one of them, never both: the two
+deliveries carry different client ids, so the backend would apply the write
+twice.
+
+### No-JS baseline for other writers
+
+An action that cannot name the client group (no cookie, another service, a
+cron) stays an out-of-band writer (ADR-0019): commit the write through the
+app's API, then `server.broadcast({ collection })` for the touched
+collections so live subscribers pull. The next full-page render re-snapshots.
 
 ## License
 

@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -20,8 +21,10 @@ import {
   Hydration,
   MemoryBackend,
   Mutation,
+  MutationRejected,
   Node,
   type Query,
+  Server,
   Transport,
 } from "@thomasfosterau/legation-effect";
 import {
@@ -31,7 +34,20 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation-effect/internal";
-import { clientGroupId, clientRuntime, loadSnapshot } from "../index.js";
+import type { SubmitFunction } from "$app/forms";
+import {
+  FORM_CLIENT_FIELD,
+  FORM_MUTATION_FIELD,
+  RECEIPT_KEY,
+  clientGroupId,
+  clientRuntime,
+  enhanceFormMutation,
+  formMutationTarget,
+  loadSnapshot,
+  mintFormClient,
+  receiptOf,
+  runFormMutation,
+} from "../index.js";
 
 interface Todo {
   readonly id: string;
@@ -258,5 +274,233 @@ describe("loadSnapshot + clientRuntime", () => {
       expect(yield* store.getCookie).toBe("newer-cookie");
       expect((yield* store.listRows("todos")).map((row) => row.id)).toEqual(["9"]);
     })
+  );
+});
+
+// ─── Form-action Mutations (ADR-0030 #215) ──────────────────────────────────
+
+const Tally = Schema.Struct({ id: Schema.String, n: Schema.Number });
+const asTally = Schema.decodeUnknownOption(Tally);
+const tallyArgs = Schema.Struct({ id: Schema.String });
+// A non-idempotent tally: a double application shows as `n: 2`.
+const tallyUp = Mutation.make("tally/up", tallyArgs);
+const tallyLocked = Mutation.make("tally/locked", tallyArgs);
+const nextTally = (id: string, current: Option.Option<typeof Tally.Type>) => ({
+  id,
+  n: Option.match(current, { onNone: () => 0, onSome: (tally) => tally.n }) + 1,
+});
+const tallyMutations = Mutation.registry([
+  {
+    mutator: tallyUp,
+    local: (args, writer) =>
+      Effect.flatMap(writer.get("tallies", args.id), (row) =>
+        writer.put("tallies", args.id, nextTally(args.id, asTally(row)))
+      ),
+  },
+  {
+    mutator: tallyLocked,
+    local: (args, writer) => writer.put("tallies", args.id, nextTally(args.id, Option.none())),
+  },
+]);
+const tallyNodes = Node.registry([Node.make("tallies", { attributes: { n: Schema.Number } })]);
+const allTallies: Query.Read = { collection: "tallies" };
+
+const makeTallyServer = Effect.fn("makeTallyServer")(function* () {
+  const backend = yield* MemoryBackend.make(
+    MemoryBackend.validatedHandlers([
+      MemoryBackend.handler(tallyUp, (args, writer) =>
+        Effect.flatMap(writer.get("tallies", args.id), (row) =>
+          writer.put("tallies", args.id, nextTally(args.id, asTally(row)))
+        )
+      ),
+      MemoryBackend.handler(tallyLocked, () =>
+        Effect.fail(new MutationRejected({ reason: "tally is locked" }))
+      ),
+    ])
+  );
+  const server = yield* Server.make({
+    backend,
+    auth: { policy: Authorization.policy({ tallies: Authorization.allowAll }) },
+  });
+  return { backend, server };
+});
+
+// What a browser posts for a form rendered with `form`'s hidden fields.
+const postedForm = (form: { clientId: string; mutationId: number }, id: string) => {
+  const data = new FormData();
+  data.set(FORM_CLIENT_FIELD, form.clientId);
+  data.set(FORM_MUTATION_FIELD, String(form.mutationId));
+  data.set("id", id);
+  return data;
+};
+
+// The form layer's decode of the posted fields into the Mutation's args.
+const tallyArgsOf = (data: FormData) => ({ id: String(data.get("id")) });
+
+describe("form-action Mutations (ADR-0030 #215)", () => {
+  it.effect("the no-JS path: a rendered form resubmitted is applied once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, server } = yield* makeTallyServer();
+        const { cookies } = fakeCookies();
+        const group = clientGroupId(cookies, { generate: () => "group-nojs" });
+
+        // The page's `load` mints a form client and renders it in hidden fields.
+        const form = mintFormClient(() => "rendered");
+        expect(form).toEqual({ clientId: "form-rendered", mutationId: 1 });
+
+        // The action, run once per POST of the same rendered form.
+        const action = (data: FormData) =>
+          Effect.gen(function* () {
+            const target = formMutationTarget(cookies, data);
+            expect(target).toEqual({ clientGroupId: group, ...form });
+            if (target === undefined) return yield* Effect.die("unroutable");
+            const receipt = yield* runFormMutation(server, target, tallyUp, tallyArgsOf(data));
+            return { [RECEIPT_KEY]: receipt };
+          });
+        const first = yield* action(postedForm(form, "t1"));
+        const second = yield* action(postedForm(form, "t1"));
+        expect(first[RECEIPT_KEY]).toEqual({ ...form, phase: "acknowledged" });
+        expect(second).toEqual(first);
+        const rows = yield* backend.getRows({ clientGroupId: group }, "tallies", ["t1"]);
+        expect(rows.map((row) => row.value)).toEqual([{ id: "t1", n: 1 }]);
+      })
+    )
+  );
+
+  it("an action that cannot name the group or the form is not routed", () => {
+    const { cookies } = fakeCookies();
+    expect(
+      formMutationTarget(cookies, postedForm({ clientId: "form-x", mutationId: 1 }, "t"))
+    ).toBe(undefined);
+    clientGroupId(cookies);
+    expect(formMutationTarget(cookies, new FormData())).toBe(undefined);
+    const malformed = postedForm({ clientId: "form-x", mutationId: 0 }, "t");
+    expect(formMutationTarget(cookies, malformed)).toBe(undefined);
+  });
+
+  it("reads a receipt off an action result, and nothing off one without it", () => {
+    const receipt = { clientId: "form-a", mutationId: 1, phase: "rejected", reason: "no" };
+    expect(receiptOf({ type: "failure", data: { [RECEIPT_KEY]: receipt } })).toEqual(receipt);
+    expect(receiptOf({ type: "success", data: {} })).toBe(undefined);
+    expect(receiptOf({ type: "redirect" })).toBe(undefined);
+    expect(
+      receiptOf({ type: "success", data: { [RECEIPT_KEY]: { ...receipt, phase: "pending" } } })
+    ).toBe(undefined);
+  });
+
+  it.effect("the enhanced submit overlays, settles on the receipt and skips the load re-run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeTallyServer();
+        const { cookies } = fakeCookies();
+        const group = clientGroupId(cookies, { generate: () => "group-js" });
+        const runtime = clientRuntime({
+          nodes: tallyNodes,
+          mutations: tallyMutations,
+          clientId: "browser",
+          clientGroupId: group,
+          store: ClientStore.layerMemory,
+          transport: Transport.layerInMemory(group).pipe(
+            Layer.provide(Layer.succeed(Transport.ServerHandler)(server.handler))
+          ),
+          subscribe: [allTallies],
+        });
+        const query = Effect.tryPromise(() =>
+          runtime.runPromise(
+            Effect.flatMap(Client.Client, (client) => client.query(allTallies)).pipe(
+              Effect.map((rows) => rows.map((row) => row.value))
+            )
+          )
+        );
+
+        const receipts: Array<Server.Receipt> = [];
+        const enhanced = enhanceFormMutation(runtime, {
+          mutation: tallyUp,
+          args: tallyArgsOf,
+          generate: () => "enhanced",
+          onReceipt: (receipt) => void receipts.push(receipt),
+        });
+        const data = new FormData();
+        data.set("id", "t2");
+        // The returned function is a SvelteKit `SubmitFunction`, for `use:enhance`.
+        const submit: SubmitFunction = enhanced;
+        expect(submit).toBe(enhanced);
+        const settle = enhanced({ formData: data });
+        // The submit writes a fresh form client into the posted fields.
+        expect(data.get(FORM_CLIENT_FIELD)).toBe("form-enhanced");
+        expect(data.get(FORM_MUTATION_FIELD)).toBe("1");
+
+        // The action runs on the server with what was posted.
+        const target = formMutationTarget(cookies, data);
+        if (target === undefined) return yield* Effect.die("unroutable");
+        const receipt = yield* runFormMutation(server, target, tallyUp, tallyArgsOf(data));
+
+        const updates: Array<unknown> = [];
+        yield* Effect.tryPromise(() =>
+          settle({
+            result: { type: "success", data: { [RECEIPT_KEY]: receipt } },
+            update: (options) => {
+              updates.push(options);
+              return Promise.resolve();
+            },
+          })
+        );
+        expect(receipts).toEqual([
+          { clientId: "form-enhanced", mutationId: 1, phase: "acknowledged" },
+        ]);
+        expect(updates).toEqual([{ refreshAll: false }]);
+        // Shown from the tail, then from the confirmed rows: applied once.
+        expect(yield* query).toEqual([{ id: "t2", n: 1 }]);
+
+        yield* Effect.tryPromise(() => runtime.dispose());
+      })
+    )
+  );
+
+  it.effect("a rejected receipt drops the effect and reaches the form layer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeTallyServer();
+        const { cookies } = fakeCookies();
+        const group = clientGroupId(cookies, { generate: () => "group-rejected" });
+        const runtime = clientRuntime({
+          nodes: tallyNodes,
+          mutations: tallyMutations,
+          clientId: "browser",
+          clientGroupId: group,
+          store: ClientStore.layerMemory,
+          transport: Transport.layerInMemory(group).pipe(
+            Layer.provide(Layer.succeed(Transport.ServerHandler)(server.handler))
+          ),
+        });
+        const receipts: Array<Server.Receipt> = [];
+        const settle = enhanceFormMutation(runtime, {
+          mutation: tallyLocked,
+          args: tallyArgsOf,
+          onReceipt: (receipt) => void receipts.push(receipt),
+        })({ formData: postedForm({ clientId: "", mutationId: 1 }, "t3") });
+        const query = Effect.tryPromise(() =>
+          runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTallies)))
+        );
+        const target = formMutationTarget(
+          cookies,
+          postedForm({ clientId: "form-z", mutationId: 1 }, "t3")
+        );
+        if (target === undefined) return yield* Effect.die("unroutable");
+        const receipt = yield* runFormMutation(server, target, tallyLocked, { id: "t3" });
+        yield* Effect.tryPromise(() =>
+          settle({
+            result: { type: "failure", data: { [RECEIPT_KEY]: receipt } },
+            update: () => Promise.resolve(),
+          })
+        );
+        expect(receipts.map((r) => (r.phase === "rejected" ? r.reason : r.phase))).toEqual([
+          "tally is locked",
+        ]);
+        expect(yield* query).toEqual([]);
+        yield* Effect.tryPromise(() => runtime.dispose());
+      })
+    )
   );
 });

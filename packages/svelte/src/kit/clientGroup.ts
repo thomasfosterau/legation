@@ -23,7 +23,8 @@ export interface ClientGroupOptions {
   readonly maxAge?: number;
 }
 
-const DEFAULT_NAME = "legation-client-group";
+/** The client-group cookie's default name. */
+export const CLIENT_GROUP_COOKIE = "legation-client-group";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 /**
@@ -37,7 +38,7 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
  * through the `IdentityResolver` seam, never from this value.
  */
 export const clientGroupId = (cookies: Cookies, options?: ClientGroupOptions): string => {
-  const name = options?.name ?? DEFAULT_NAME;
+  const name = options?.name ?? CLIENT_GROUP_COOKIE;
   const existing = cookies.get(name);
   if (existing !== undefined && existing !== "") return existing;
   const id = (options?.generate ?? (() => crypto.randomUUID()))();
