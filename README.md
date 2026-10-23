@@ -33,7 +33,7 @@ Pre-1.0: APIs will change. Targets the Effect v4 release-candidate line (peer `e
 - **Pull is the correctness path**: periodic HTTP-only sync is fully correct; pokes and streaming are latency optimizations.
 - **Bring your own backend**: implement two operations (apply mutations transactionally, evaluate a subset); the library owns CVR bookkeeping, diffing, auth, and fan-out.
 
-See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for the decisions. Coming from TanStack Query / SwiftData / SWR / Apollo? [docs/comparisons/coming-from-tanstack-query.md](docs/comparisons/coming-from-tanstack-query.md) maps their concepts onto this model.
+See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for the decisions. Coming from TanStack Query / SwiftData / SWR / Apollo? [docs/comparisons/coming-from-tanstack-query.md](docs/comparisons/coming-from-tanstack-query.md) maps their concepts onto this model. Adopting legation in an app that already has a JSON:API, SSR loads and a service worker? [docs/adoption.md](docs/adoption.md) gives the phase order and the two traps to check first.
 
 ### Browser topology: service worker vs. elected main-thread host
 
