@@ -695,6 +695,19 @@ const facade = JsonApiFacade.fetchHandler({
   meta-only. `Preference-Applied: respond-async` says when it was asked for.
   The façade never answers a write with `201`, `200` or `204`: those are only
   ever the server's.
+- **The mutation status URL.** With `mutationStates` (the engine's
+  `mutationStates`), the façade answers `GET {prefix}/_legation/mutations/{id}`
+  itself, never forwarding it: `200` with one `legation-mutations` resource —
+  `phase` (`pending`, `acknowledged`, `rejected`, `dropped`), `mutator`,
+  `journaledAt`, `settledAt` once settled, `reason` only when rejected, and
+  `links.self` / `links.resource` — or `404` `code: "unknown_mutation"` for
+  an id the map does not hold (never journaled here, evicted beyond
+  `mutationStateRetention.maxTerminal`, or settled before this worker
+  started; indistinguishable, so raise `maxTerminal` in the worker).
+  `Prefer: wait=N` holds a pending answer until it settles or `N` seconds
+  pass, capped by `maxWait` (default 30 s), with `Preference-Applied: wait=N`:
+  `POST`, then `GET Location` with `Prefer: wait=10`, learns the ruling in
+  one round trip.
 - **A receipt is not a ruling.** The server rules when the journal pushes; a
   permanent rejection drops the optimistic effect on the next rebase, and the
   write's fate is on `Client.mutationStates`. Attribute values are not

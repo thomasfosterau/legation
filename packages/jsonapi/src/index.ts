@@ -44,6 +44,7 @@ export * as JsonApiFacade from "./JsonApiFacade.js";
 export * as FacadeWrites from "./FacadeWrites.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
+export * as MutationStatus from "./MutationStatus.js";
 export * as Ledger from "./Ledger.js";
 export * as NodeBridge from "./NodeBridge.js";
 export * as Relationships from "./Relationships.js";

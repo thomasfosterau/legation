@@ -72,6 +72,14 @@
  *    cannot journal is forwarded online and is the 503 `offline` document
  *    offline.
  *
+ * 7. **The mutation status URL** (ADR-0030 §2, with
+ *    {@link Options.mutationStates} set): `GET {prefix}/_legation/mutations/{id}`
+ *    beside every reflected prefix is answered from the engine's
+ *    mutation-state map and never forwarded (`MutationStatus`): `200` with
+ *    the mutation's phase, `404 unknown_mutation` for an id the map does not
+ *    hold, `Prefer: wait=N` holding a pending answer up to
+ *    {@link Options.maxWait}.
+ *
  * What it never does: register a subscription because a request arrived,
  * journal a write online unless asked, or rewrite a request it forwards. A single-resource
  * request whose row the covered replica does not hold is forwarded too: the
@@ -87,9 +95,12 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import type * as Stream from "effect/Stream";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
@@ -101,11 +112,17 @@ import type {
   QueryError,
   StoreError,
 } from "@thomasfosterau/legation-effect";
-import type { ClientEngine, ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import type {
+  ClientEngine,
+  ClientView,
+  Coverage,
+  MutationState,
+} from "@thomasfosterau/legation-effect/internal";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "./Convention.js";
 import * as FacadeWrites from "./FacadeWrites.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
+import * as MutationStatus from "./MutationStatus.js";
 import * as ReplicaDocuments from "./ReplicaDocuments.js";
 import type { Write } from "./JsonApiBackend.js";
 import * as RestHandlers from "./RestHandlers.js";
@@ -195,6 +212,17 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    * failure is ignored; the sync loop pulls again on its own.
    */
   readonly pull?: Effect.Effect<unknown, unknown>;
+  /**
+   * The engine's mutation-state map (`engine.mutationStates`, #116), which
+   * the mutation status URL `{prefix}/_legation/mutations/{mutationId}` is
+   * answered from (ADR-0030 §2, `MutationStatus`). Absent, that route is not
+   * the façade's. A worker composing the façade should raise the engine's
+   * `mutationStateRetention.maxTerminal`, so a settled phase outlives a busy
+   * session.
+   */
+  readonly mutationStates?: Stream.Stream<MutationState.MutationStateMap>;
+  /** The cap on a status request's `Prefer: wait`; default 30 seconds. */
+  readonly maxWait?: Duration.Input;
 }
 
 /** The built façade. */
@@ -662,7 +690,65 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     );
   };
 
+  // ─── The mutation status URL (ADR-0030 §2) ─────────────────────────────────
+
+  const mutationStates = options.mutationStates;
+  const maxWait = Duration.fromInputUnsafe(options.maxWait ?? MutationStatus.defaultMaxWait);
+  /** Every prefix the api's reflected routes sit under: the status route sits beside each. */
+  const prefixes = Arr.dedupe(Arr.map([...routes, ...writeRoutes], (route) => route.prefix));
+
+  /** A status request: the route prefix it names and the id segment, or `undefined`. */
+  const statusCandidateOf = (
+    request: Request
+  ): { readonly prefix: string; readonly id: string } | undefined => {
+    if (mutationStates === undefined || request.method !== "GET") return undefined;
+    if (!acceptsJsonApi(request.headers.get("accept"))) return undefined;
+    const path = pathUnder(base, new URL(request.url));
+    if (path === undefined) return undefined;
+    const segments = Convention.segmentsOf(path);
+    const [id = "", mutations = "", legation = ""] = segments.toReversed();
+    if (legation !== MutationStatus.segment || mutations !== "mutations") return undefined;
+    const prefix = segments.slice(0, -3);
+    const joined = Arr.isReadonlyArrayEmpty(prefix) ? "" : `/${prefix.join("/")}`;
+    return prefixes.includes(joined) ? { prefix: joined, id: decodeURIComponent(id) } : undefined;
+  };
+
+  const statusHandle = (
+    request: Request,
+    states: Stream.Stream<MutationState.MutationStateMap>,
+    candidate: { readonly prefix: string; readonly id: string }
+  ): Effect.Effect<Response> =>
+    Effect.gen(function* () {
+      const links = `${base.origin ?? ""}${base.path}${candidate.prefix}`;
+      const mutationId = MutationStatus.parseId(candidate.id);
+      if (Option.isNone(mutationId)) {
+        return respondWith(404, MutationStatus.unknownDocument(candidate.id), yield* cookie);
+      }
+      const now = yield* MutationStatus.current(states, mutationId.value);
+      const asked = FacadeWrites.preferencesOf(request.headers).wait;
+      const wait =
+        asked === undefined || Option.isNone(now) || now.value.phase !== "pending"
+          ? undefined
+          : Duration.min(Duration.seconds(asked), maxWait);
+      const state =
+        wait === undefined ? now : yield* MutationStatus.settled(states, mutationId.value, wait);
+      const served = yield* cookie;
+      if (Option.isNone(state)) {
+        return respondWith(404, MutationStatus.unknownDocument(candidate.id), served);
+      }
+      const document = MutationStatus.document(nodes, links, state.value);
+      return wait === undefined
+        ? respondWith(200, document, served)
+        : respondWith(200, document, served, {
+            "preference-applied": `wait=${Math.floor(Duration.toSeconds(wait))}`,
+          });
+    });
+
   const handle: FetchHandler["handle"] = (request) => {
+    const status = statusCandidateOf(request);
+    if (status !== undefined && mutationStates !== undefined) {
+      return statusHandle(request, mutationStates, status);
+    }
     const write = writeCandidateOf(request);
     return write === undefined ? readHandle(request) : writeHandle(request, write);
   };
@@ -685,7 +771,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 
   return {
     matches: (request) =>
-      candidateOf(request) !== undefined || writeCandidateOf(request) !== undefined,
+      candidateOf(request) !== undefined ||
+      writeCandidateOf(request) !== undefined ||
+      statusCandidateOf(request) !== undefined,
     handle,
     offline,
     forwarded,

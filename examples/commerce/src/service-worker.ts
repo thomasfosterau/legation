@@ -184,6 +184,8 @@ config.addEventListener("message", (event) => {
           // Façade writes journal into this worker's engine, never over the mirror channel.
           mutate: host.engine.mutateWithAck,
           pull: host.engine.pull,
+          // The receipts' status URLs, answered from the engine's mutation-state map.
+          mutationStates: host.engine.mutationStates,
         });
         void reportToClients("jsonapi façade serving covered GETs and journaling writes");
       },

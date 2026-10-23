@@ -58,6 +58,7 @@ const makeWorld = Effect.gen(function* () {
     online: () => online.current,
     mutate: engine.mutateWithAck,
     pull: engine.pull,
+    mutationStates: engine.mutationStates,
   });
   const serverReview = (id: string) =>
     sql<{ userId: string; rating: number }>`SELECT userId, rating FROM reviews WHERE id = ${id}`;
@@ -145,6 +146,18 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
         expect(yield* phaseOf(mutationId)).toEqual(
           Option.some({ phase: "rejected", reason: "rating out of range" })
         );
+        // The receipt's `Location` is where a plain-fetch caller reads the ruling (ADR-0030 §2).
+        const status = yield* facade.handle(
+          new Request(`http://commerce.test${response!.headers.get("location")}`, {
+            headers: { accept: MEDIA },
+          })
+        );
+        expect(status?.status).toBe(200);
+        expect((yield* json(status!)).data.attributes).toMatchObject({
+          phase: "rejected",
+          mutator: "reviews/create",
+          reason: "rating out of range",
+        });
         const listed = yield* facade.handle(reviewsOfP01);
         const ids = ((yield* json(listed!)).data as ReadonlyArray<{ id: string }>).map((r) => r.id);
         expect(ids).not.toContain("r-off-2");
