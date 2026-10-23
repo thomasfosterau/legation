@@ -69,8 +69,12 @@
  *    journaled, read back through the one writer, `meta.legation.status:
  *    "pending"` and a `Location` naming the mutation status URL. Never `201`,
  *    `200` or `204`: those are the server's words for "applied". A write it
- *    cannot journal is forwarded online and is the 503 `offline` document
- *    offline.
+ *    cannot journal is forwarded online; offline it gets ADR-0030 §3's error
+ *    documents: `400 invalid_document`, `409 type_mismatch` / `id_mismatch`
+ *    or `422 unsupported_relationship` for a malformed body, and the `503`
+ *    `offline` document otherwise, with `client_id_required` appended for a
+ *    create without an id and `not_journalable` for a mutation the engine
+ *    refuses. Attribute values are never the façade's to refuse.
  *
  * 7. **The mutation status URL** (ADR-0030 §2, with
  *    {@link Options.mutationStates} set): `GET {prefix}/_legation/mutations/{id}`
@@ -97,7 +101,9 @@
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
@@ -299,6 +305,63 @@ const respondWith = (
       "cache-control": "no-store",
       [servedAtHeader]: cookie ?? "",
     },
+  });
+
+/**
+ * Why a write candidate was not journaled: its body was refused
+ * structurally (`FacadeWrites.Refusal`), the engine refused the mutation (a
+ * `MutatorError`: the intent mapping named a mutator it does not register),
+ * or there is no mutation to journal (the intent mapping declined it, or the
+ * store failed).
+ */
+type Unjournaled =
+  | { readonly _tag: "Refused"; readonly refusal: FacadeWrites.Refusal }
+  | { readonly _tag: "NotJournalable"; readonly detail: string }
+  | { readonly _tag: "Unmapped" };
+
+/** One error object of a façade-synthesised write error, `source.pointer` when it names one. */
+const errorObject = (refusal: {
+  readonly status: number;
+  readonly code: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly pointer?: string;
+}): RestHandlers.ErrorDocument["errors"][number] => {
+  const error = {
+    status: String(refusal.status),
+    code: refusal.code,
+    title: refusal.title,
+    detail: refusal.detail,
+  };
+  return refusal.pointer === undefined ? error : { ...error, source: { pointer: refusal.pointer } };
+};
+
+/** The 503 `offline` document with a second error object saying why the write was not journaled. */
+const offlineWith = (reason: Parameters<typeof errorObject>[0]): RestHandlers.ErrorDocument => ({
+  errors: [...offlineDocument.errors, errorObject(reason)],
+});
+
+/**
+ * The offline answer to a write it could not journal (ADR-0030 §3): a
+ * structural refusal is its own `400` / `409` / `422` document — the statuses
+ * JSON:API prescribes for the same faults, so no divergence from the server —
+ * except a create without a client id, which is the `503` `offline` document
+ * with `client_id_required` appended; an engine refusal is `503` `offline`
+ * with `not_journalable`; anything else the plain `503` `offline`.
+ */
+const unjournaledDocument = (
+  failure: Unjournaled
+): readonly [status: number, document: RestHandlers.ErrorDocument] =>
+  Match.valueTags(failure, {
+    Refused: ({ refusal }): readonly [number, RestHandlers.ErrorDocument] =>
+      refusal.status === 503
+        ? [503, offlineWith(refusal)]
+        : [refusal.status, { errors: [errorObject(refusal)] }],
+    NotJournalable: ({ detail }): readonly [number, RestHandlers.ErrorDocument] => [
+      503,
+      offlineWith({ status: 503, code: "not_journalable", title: "Not journalable", detail }),
+    ],
+    Unmapped: (): readonly [number, RestHandlers.ErrorDocument] => [503, offlineDocument],
   });
 
 /** The 503 response of an uncovered request while offline, marked with the cookie when known. */
@@ -647,18 +710,24 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     request: Request,
     candidate: WriteCandidate,
     preferences: FacadeWrites.Preferences
-  ): Effect.Effect<Response, undefined> =>
+  ): Effect.Effect<Response, Unjournaled> =>
     Effect.gen(function* () {
       const body = Effect.tryPromise(() => request.clone().text());
       const write = yield* FacadeWrites.decodeWrite(
         candidate.route.node,
         candidate.target,
         body
-      ).pipe(Effect.mapError(() => undefined));
+      ).pipe(Effect.mapError((refusal): Unjournaled => ({ _tag: "Refused", refusal })));
       const intent = intentOf(write);
-      if (intent === undefined || mutate === undefined) return yield* Effect.fail(undefined);
+      if (intent === undefined || mutate === undefined) {
+        return yield* Effect.fail<Unjournaled>({ _tag: "Unmapped" });
+      }
       const handle = yield* mutate(intent.mutator, intent.args).pipe(
-        Effect.mapError(() => undefined)
+        Effect.mapError((error): Unjournaled =>
+          P.isTagged(error, "MutatorError")
+            ? { _tag: "NotJournalable", detail: error.message }
+            : { _tag: "Unmapped" }
+        )
       );
       const location = statusUrl(candidate.route, handle.mutationId);
       const meta = {
@@ -676,6 +745,13 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 
   const offlineNow: Effect.Effect<Response> = Effect.map(cookie, offlineResponse);
 
+  /** The offline answer to a write it could not journal: ADR-0030 §3's error documents. */
+  const unjournaled = (failure: Unjournaled): Effect.Effect<Response> =>
+    Effect.map(cookie, (served) => {
+      const [status, document] = unjournaledDocument(failure);
+      return respondWith(status, document, served);
+    });
+
   /** ADR-0030 §3's decision table for a write candidate, offline meaning `navigator.onLine` false. */
   const writeHandle = (
     request: Request,
@@ -686,7 +762,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     if (preferences.strict) return reachable ? Effect.succeed(undefined) : offlineNow;
     if (reachable && !preferences.respondAsync) return Effect.succeed(undefined);
     return journal(request, candidate, preferences).pipe(
-      Effect.catch(() => (reachable ? Effect.succeed(undefined) : offlineNow))
+      Effect.catch((failure) => (reachable ? Effect.succeed(undefined) : unjournaled(failure)))
     );
   };
 
@@ -758,7 +834,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     if (write === undefined) return offlineNow;
     const preferences = FacadeWrites.preferencesOf(request.headers);
     if (preferences.strict) return offlineNow;
-    return journal(request, write, preferences).pipe(Effect.catch(() => offlineNow));
+    return journal(request, write, preferences).pipe(Effect.catch(unjournaled));
   };
 
   const forwarded: FetchHandler["forwarded"] = (request, response) =>
