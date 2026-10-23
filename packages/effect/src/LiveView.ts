@@ -107,8 +107,10 @@ const stillOrdered = (
   i: number,
   position: string
 ): boolean => {
-  const leftPrev = i > 0 ? previous.get(windowRows[i - 1]!.id) : undefined;
-  const rightPrev = i < windowRows.length - 1 ? previous.get(windowRows[i + 1]!.id) : undefined;
+  const left = windowRows[i - 1];
+  const right = windowRows[i + 1];
+  const leftPrev = left === undefined ? undefined : previous.get(left.id);
+  const rightPrev = right === undefined ? undefined : previous.get(right.id);
   const okLeft = leftPrev === undefined || FractionalIndex.compare(leftPrev, position) < 0;
   const okRight = rightPrev === undefined || FractionalIndex.compare(position, rightPrev) < 0;
   return okLeft && okRight;
@@ -136,9 +138,11 @@ const fillGaps = (
   let left: string | undefined;
   let i = 0;
   while (i < n) {
-    if (reused[i] !== undefined) {
-      next.set(windowRows[i]!.id, reused[i]!);
-      left = reused[i];
+    const kept = reused[i];
+    if (kept !== undefined) {
+      const row = windowRows[i];
+      if (row !== undefined) next.set(row.id, kept);
+      left = kept;
       i++;
       continue;
     }
@@ -146,7 +150,10 @@ const fillGaps = (
     while (j < n && reused[j] === undefined) j++;
     const right = j < n ? reused[j] : undefined;
     const fresh = FractionalIndex.generateNBetween(left, right, j - i);
-    for (let k = i; k < j; k++) next.set(windowRows[k]!.id, fresh[k - i]!);
+    fresh.forEach((position, offset) => {
+      const row = windowRows[i + offset];
+      if (row !== undefined) next.set(row.id, position);
+    });
     left = right;
     i = j;
   }
@@ -195,11 +202,10 @@ export const makeIndexed = (
 
 /** The visible page: the subset's cursor + limit over the maintained order. */
 export const result = (view: LiveView): ReadonlyArray<PositionedRow> =>
-  windowSlice(view.order, view.byId, view.subset).map((row): PositionedRow => ({
-    id: row.id,
-    value: row.value,
-    position: view.positions.get(row.id)!,
-  }));
+  windowSlice(view.order, view.byId, view.subset).flatMap((row): ReadonlyArray<PositionedRow> => {
+    const position = view.positions.get(row.id);
+    return position === undefined ? [] : [{ id: row.id, value: row.value, position }];
+  });
 
 /**
  * Retarget the window — a new `limit` and/or `cursor`, e.g. "load more"

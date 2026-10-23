@@ -279,7 +279,7 @@ const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
   Effect.gen(function* () {
     const value: Record<string, Predicate.Literal> = {};
     for (const [c, column] of plan.columns.entries()) {
-      const pool = plan.pools[c]!;
+      const pool = plan.pools[c] ?? [];
       let field: Predicate.Literal | undefined;
       if (index < plan.pinned) field = index === 0 ? null : undefined;
       else if (index < plan.pinned + plan.sweep) field = pool[(index - plan.pinned) % pool.length];

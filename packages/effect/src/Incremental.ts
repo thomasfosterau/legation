@@ -268,8 +268,7 @@ export const makeGroupBy = (key: (value: unknown) => string): Operator => {
   const lastRow = new Map<string, Row>();
 
   const groupRow = (groupKey: string): Row => {
-    const members = groups.get(groupKey)!;
-    const rows = [...members.entries()]
+    const rows = [...(groups.get(groupKey)?.entries() ?? [])]
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([, value]) => value);
     return { id: groupKey, value: { key: groupKey, rows } };
@@ -281,10 +280,10 @@ export const makeGroupBy = (key: (value: unknown) => string): Operator => {
       for (const row of delta.removed) {
         const groupKey = groupOf.get(row.id);
         if (groupKey === undefined) continue;
-        const members = groups.get(groupKey)!;
-        members.delete(row.id);
+        const members = groups.get(groupKey);
+        members?.delete(row.id);
         groupOf.delete(row.id);
-        if (members.size === 0) groups.delete(groupKey);
+        if (members?.size === 0) groups.delete(groupKey);
         touched.add(groupKey);
       }
       for (const row of delta.added) {

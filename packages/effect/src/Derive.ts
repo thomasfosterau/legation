@@ -115,7 +115,11 @@ const sameRow = (a: Row, b: Row): boolean =>
  * spurious reorder — a genuine no-op step re-emits nothing.
  */
 const samePage = (a: ReadonlyArray<Row>, b: ReadonlyArray<Row>): boolean =>
-  a.length === b.length && a.every((row, i) => sameRow(row, b[i]!));
+  a.length === b.length &&
+  a.every((row, i) => {
+    const other = b[i];
+    return other !== undefined && sameRow(row, other);
+  });
 
 // ─── Single-input maintenance ────────────────────────────────────────────────
 

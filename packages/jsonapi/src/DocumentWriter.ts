@@ -197,7 +197,8 @@ const relationshipOf = (
   row: Row,
   name: string
 ): RelationshipValue | undefined => {
-  const edge = node.edges[name]!;
+  const edge = node.edges[name];
+  if (edge === undefined) return undefined;
   if (edge.kind === "one") {
     const key = recordOf(row.value)[edge.via];
     return {
@@ -241,7 +242,9 @@ const includedOf = (
   rows: ReadonlyArray<Related.RelatedRow>,
   name: string
 ): ReadonlyArray<ResourceValue> => {
-  const target = env.nodes.nodes.get(node.edges[name]!.target)!;
+  const edge = node.edges[name];
+  const target = edge === undefined ? undefined : env.nodes.nodes.get(edge.target);
+  if (target === undefined) return [];
   const included: Array<ResourceValue> = [];
   for (const row of rows) {
     for (const related of relatedValuesOf(row.related[name])) {
@@ -330,11 +333,11 @@ const pageOf = (input: Input): ReadonlyArray<Related.RelatedRow> => {
 const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): string | undefined => {
   const { first, offset } = input.read;
   if (first === undefined || page.length < first) return undefined;
-  const read: Query.Read =
-    offset === undefined
-      ? { ...input.read, after: page.at(-1)!.id }
-      : { ...input.read, offset: offset + first };
-  return `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
+  const link = (read: Query.Read): string =>
+    `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
+  if (offset !== undefined) return link({ ...input.read, offset: offset + first });
+  const last = page.at(-1);
+  return last === undefined ? undefined : link({ ...input.read, after: last.id });
 };
 
 /**

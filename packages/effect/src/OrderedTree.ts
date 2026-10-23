@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 /**
  * OrderedTree
  *
@@ -22,6 +21,8 @@ import * as Arr from "effect/Array";
  * total order (no ties) for `rankOf`/`remove` to behave — `LiveView` gets
  * this from `Subset.comparator`'s id tie-break.
  */
+
+import * as Arr from "effect/Array";
 
 interface Node<T> {
   readonly value: T;
@@ -222,9 +223,9 @@ function* inorderFrom<T>(tree: Tree<T>, from: number): IterableIterator<T> {
     }
   }
   while (Arr.isReadonlyArrayNonEmpty(stack)) {
-    const top = stack[stack.length - 1]!;
+    const top = stack.pop();
+    if (top === undefined) break;
     yield top.value;
-    stack.pop();
     let right = top.right;
     while (right !== undefined) {
       stack.push(right);
@@ -256,7 +257,7 @@ export const fromSorted = <T>(sorted: ReadonlyArray<T>): Tree<T> => {
   const build = (lo: number, hi: number): Tree<T> => {
     if (lo >= hi) return undefined;
     const mid = (lo + hi) >>> 1;
-    return node(build(lo, mid), sorted[mid]!, build(mid + 1, hi));
+    return node(build(lo, mid), Arr.getUnsafe(sorted, mid), build(mid + 1, hi));
   };
   return build(0, sorted.length);
 };

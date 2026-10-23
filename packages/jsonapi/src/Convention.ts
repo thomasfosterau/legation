@@ -30,7 +30,6 @@
  * instead — the backend then pushes a whole batch as one request.
  */
 
-import * as Arr from "effect/Array";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Str from "effect/String";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -97,9 +96,9 @@ export const classify = (
   path: string
 ): { readonly type: string; readonly operation: Operation } | undefined => {
   const segments = segmentsOf(path);
-  if (Arr.isReadonlyArrayEmpty(segments)) return undefined;
+  const last = segments.at(-1);
+  if (last === undefined) return undefined;
 
-  const last = segments[segments.length - 1]!;
   const hasId = isParam(last);
   const type = hasId ? segments[segments.length - 2] : last;
   if (type === undefined || isParam(type)) return undefined;

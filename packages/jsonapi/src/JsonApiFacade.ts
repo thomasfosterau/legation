@@ -269,7 +269,9 @@ const pathUnder = (base: Base, url: URL): string | undefined => {
 /** Whether an `Accept` header names the JSON:API media type (parameters aside). */
 const acceptsJsonApi = (header: string | null): boolean =>
   header !== null &&
-  header.split(",").some((part) => part.trim().split(";")[0]!.trim().toLowerCase() === MEDIA_TYPE);
+  header
+    .split(",")
+    .some((part) => (part.trim().split(";")[0] ?? "").trim().toLowerCase() === MEDIA_TYPE);
 
 const navigatorOnline = (): boolean => {
   const navigator = (globalThis as { navigator?: { onLine?: boolean } }).navigator;
@@ -378,7 +380,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 
   const answer = ({ route, url }: Candidate) =>
     Effect.gen(function* () {
-      const docs = writers.get(options.prefix ?? route.prefix)!;
+      const docs = writers.get(options.prefix ?? route.prefix);
+      // Every route's prefix has a writer (built above); an unknown one is the server's to answer.
+      if (docs === undefined) return yield* Effect.fail(forward);
       const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));

@@ -99,7 +99,8 @@ const lowerBoundOf = (arr: ReadonlyArray<SortedEntry>, probe: SortedEntry): numb
   let hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (entryOrder(arr[mid]!, probe) < 0) lo = mid + 1;
+    const entry = arr[mid];
+    if (entry !== undefined && entryOrder(entry, probe) < 0) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -111,7 +112,8 @@ const insertSorted = (arr: Array<SortedEntry>, entry: SortedEntry): void => {
 
 const removeSorted = (arr: Array<SortedEntry>, entry: SortedEntry): void => {
   const at = lowerBoundOf(arr, entry);
-  if (arr[at] !== undefined && arr[at]!.value === entry.value && arr[at]!.id === entry.id) {
+  const found = arr[at];
+  if (found !== undefined && found.value === entry.value && found.id === entry.id) {
     arr.splice(at, 1);
   }
 };
@@ -126,7 +128,8 @@ const lowerBoundValue = (
   let hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    const ordered = valueOrder(arr[mid]!.value, value);
+    const entry = arr[mid];
+    const ordered = entry === undefined ? 1 : valueOrder(entry.value, value);
     if (strict ? ordered <= 0 : ordered < 0) lo = mid + 1;
     else hi = mid;
   }
@@ -157,7 +160,10 @@ const rangeIds = (
       return EMPTY_IDS;
   }
   const ids = new Set<RowId>();
-  for (let i = start; i < end; i++) ids.add(arr[i]!.id);
+  for (let i = start; i < end; i++) {
+    const entry = arr[i];
+    if (entry !== undefined) ids.add(entry.id);
+  }
   return ids;
 };
 

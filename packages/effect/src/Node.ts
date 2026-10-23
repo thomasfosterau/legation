@@ -353,7 +353,7 @@ const toCollection = (
     name: node.type,
     // oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- `AnyNode` erases fields to the open `Schema.Struct.Fields`, whose services are `unknown`; `Collection.make` needs a service-free codec, which node rows are by construction but the exported types cannot state.
     schema: node.row as unknown as Schema.Codec<unknown, unknown>,
-    id: (value) => (value as Record<string, string>)[node.id]!,
+    id: (value) => (value as Record<string, string>)[node.id] ?? "",
     identity: node.id,
     relationships,
     ...(Arr.isReadonlyArrayNonEmpty(node.indexes) ? { indexes: node.indexes } : {}),

@@ -267,17 +267,18 @@ export const debounce = (
       Semaphore.withPermit(
         lock,
         Effect.gen(function* () {
-          const entry = entries.get(key);
+          let entry = entries.get(key);
           if (entry === undefined) {
             // Leading edge: journal now so the overlay reflects it immediately.
-            entries.set(key, { latestArgs: args, dirty: false, timer: undefined });
+            entry = { latestArgs: args, dirty: false, timer: undefined };
+            entries.set(key, entry);
             yield* flush(engine, mutator, lastIdByKey, key, args);
           } else {
             if (entry.timer !== undefined) yield* Fiber.interrupt(entry.timer);
             entry.latestArgs = args;
             entry.dirty = true;
           }
-          entries.get(key)!.timer = yield* Effect.forkIn(trailing(key), scope);
+          entry.timer = yield* Effect.forkIn(trailing(key), scope);
         })
       );
 

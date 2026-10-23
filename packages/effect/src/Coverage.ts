@@ -122,7 +122,8 @@ const flatten = (
  */
 const junctionKey = (tag: Junction, members: ReadonlyArray<Predicate.Predicate>): string => {
   const keys = sortedUnique(flatten(tag, members).map(structuralKey));
-  if (keys.length === 1) return keys[0]!;
+  const first = keys[0];
+  if (keys.length === 1 && first !== undefined) return first;
   if (Arr.isReadonlyArrayEmpty(keys) && tag === "And") return "True";
   return `${tag}(${keys.join(",")})`;
 };
@@ -186,7 +187,10 @@ export const canonicalConjuncts = (predicate: Predicate.Predicate): ReadonlyArra
     const key = structuralKey(member);
     if (key !== "True" && !byKey.has(key)) byKey.set(key, member);
   }
-  return Arr.sort(byKey.keys(), Order.String).map((key) => ({ key, predicate: byKey.get(key)! }));
+  return Arr.sort(
+    byKey.entries(),
+    Order.mapInput(Order.String, ([key]: readonly [string, Predicate.Predicate]) => key)
+  ).map(([key, member]) => ({ key, predicate: member }));
 };
 
 const conjunctKeys = (predicate: Predicate.Predicate): ReadonlyArray<string> =>
@@ -243,7 +247,7 @@ const sameOrder = (
   subscribed.length === requested.length &&
   subscribed.every(
     (term, index) =>
-      term.field === requested[index]!.field && term.direction === requested[index]!.direction
+      term.field === requested[index]?.field && term.direction === requested[index]?.direction
   );
 
 /** An unlimited subscription holds every row after its cursor; a limited one a prefix. */

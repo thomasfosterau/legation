@@ -201,6 +201,7 @@ export const ClientView = Context.Service<ClientView>("@thomasfosterau/legation-
 export const fromEngine = (raw: ClientEngine): ClientView => {
   const engine = Subscriptions.counted(raw);
   const marks = PullMarks.make(engine);
+  const readThrough = engine.readThrough;
   return {
     query: (subset) => engine.query(subset),
     observe: (subset) => engine.observe(subset),
@@ -237,11 +238,11 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
         Effect.andThen(Related.trackEdges(marks.wrap(key), registry, collectionName, subset, edges))
       );
     },
-    ...(engine.readThrough === undefined
+    ...(readThrough === undefined
       ? {}
       : {
           read: (subsets: ReadonlyArray<Subset.Subset>) =>
-            engine.readThrough!(subsets).pipe(
+            readThrough(subsets).pipe(
               Effect.mapError((error) =>
                 error._tag === "VersionNotSupportedError"
                   ? new TransportError({ message: error.message, cause: error })

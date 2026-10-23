@@ -357,13 +357,23 @@ const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
  * (its per-parent window is the plan's, not the URL's — {@link canonical}
  * refuses `include: { first }`).
  */
+/**
+ * The resource of node `type`. {@link resourcesOf} builds one per node and
+ * every edge targets a node, so a miss is a defect, never a request error.
+ */
+const resourceIn = (resources: ReadonlyMap<string, Resource.Any>, type: string): Resource.Any => {
+  const resource = resources.get(type);
+  if (resource === undefined) throw new QueryError({ message: `No resource for node "${type}"` });
+  return resource;
+};
+
 const relationshipsOf = (
   node: Node.AnyNode,
   resources: ReadonlyMap<string, Resource.Any>
 ): Record<string, Relationship.Descriptor> => {
   const relationships: Record<string, Relationship.Descriptor> = {};
   for (const [name, edge] of Object.entries(node.edges)) {
-    const target = () => resources.get(edge.target)!;
+    const target = () => resourceIn(resources, edge.target);
     relationships[name] =
       edge.kind === "one" ? Relationship.one(target) : Relationship.many(target);
   }
@@ -459,7 +469,7 @@ const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
 /** Build (or fetch) the query codec of one node: `Query.schema` over its synthetic resource. */
 const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
   memoised(queryCodecs, nodes, node, () => {
-    const resource = resourcesOf(nodes).get(node.type)!;
+    const resource = resourceIn(resourcesOf(nodes), node.type);
     const schema = UrlQuery.schema(resource, {
       include: includeOption(node),
       fields: true,
@@ -536,7 +546,7 @@ export const singleRowSchema = (
     nodes,
     node,
     () =>
-      UrlQuery.schema(resourcesOf(nodes).get(node.type)!, {
+      UrlQuery.schema(resourceIn(resourcesOf(nodes), node.type), {
         include: includeOption(node),
         fields: true,
       }) as Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>
@@ -683,7 +693,7 @@ const checkFields = (
 ): Effect.Effect<void, QueryError> => {
   for (const key of Object.keys(record)) {
     const match = /^fields\[(.*)\]$/.exec(key);
-    const error = match === null ? undefined : projectionError(node, match[1]!);
+    const error = match === null ? undefined : projectionError(node, match[1] ?? "");
     if (error !== undefined) return Effect.fail(error);
   }
   return Effect.void;
@@ -816,17 +826,22 @@ const locate = (
   const segments = url.pathname.split("/").filter((segment) => Str.isNonEmpty(segment));
   const last = segments.at(-1);
   const previous = segments.at(-2);
-  if (previous !== undefined && nodes.nodes.has(previous)) {
-    return Effect.map(decodeId(previous, last!), (id) => ({ collection: previous, id }));
+  if (previous !== undefined && last !== undefined && nodes.nodes.has(previous)) {
+    return Effect.map(decodeId(previous, last), (id) => ({ collection: previous, id }));
   }
   const message = segments.slice(0, -2).some((segment) => nodes.nodes.has(segment))
     ? `Nested resource path "${url.pathname}" is not a read; filter the related collection by its key instead`
     : last !== undefined && nodes.nodes.has(last)
       ? undefined
       : `No collection on path "${url.pathname}"`;
-  return message === undefined
-    ? Effect.succeed({ collection: last! })
-    : Effect.fail(new QueryError({ message, query: url.pathname }));
+  return message === undefined && last !== undefined
+    ? Effect.succeed({ collection: last })
+    : Effect.fail(
+        new QueryError({
+          message: message ?? `No collection on path "${url.pathname}"`,
+          query: url.pathname,
+        })
+      );
 };
 
 /**
@@ -849,7 +864,7 @@ export const singleRowParams = (
   const widened = new URLSearchParams(params);
   // Through the grammar's own encoder, so an id carrying `,` or `\` is
   // escaped as a literal rather than read as a list.
-  widened.set("filter[id]", flatFilter(Filter.eq("id", id))["filter[id]"]!);
+  widened.set("filter[id]", flatFilter(Filter.eq("id", id))["filter[id]"] ?? "");
   widened.set("page[limit]", "1");
   return Effect.succeed(widened);
 };
@@ -1007,7 +1022,7 @@ export const canonical = (
   }
   const encoded = Result.try({
     try: () => {
-      const declaration = Resource.filterable(resourcesOf(nodes).get(node.type)!);
+      const declaration = Resource.filterable(resourceIn(resourcesOf(nodes), node.type));
       return codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
     },
     catch: (error) =>

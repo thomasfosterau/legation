@@ -152,7 +152,8 @@ const discoverInverse = (
   targetOneEdges: Record<string, Edge.One>
 ): string => {
   const candidates = Object.entries(targetOneEdges).filter(([, edge]) => edge.target === source);
-  if (candidates.length === 1) return candidates[0]![0];
+  const only = candidates[0];
+  if (candidates.length === 1 && only !== undefined) return only[0];
   return fail(
     source,
     name,

@@ -139,10 +139,10 @@ export default defineConfig({
       // so it is back at the preset's `error`. The remaining sites are listed
       // in #497 (see AGENTS.md "Effect").
       "effect/avoid-native-object-helpers": "warn", // 701 sites
-      "effect/require-safety-comment-for-type-assertion": "warn", // 623 sites
-      "effect/imperative-loops": "warn", // 659 sites
+      "effect/require-safety-comment-for-type-assertion": "warn", // 622 sites
+      "effect/imperative-loops": "warn", // 658 sites
       "effect/yield-in-for-loop": "warn", // 637 sites
-      "effect/avoid-non-null-assertion": "warn", // 429 sites
+      "effect/avoid-non-null-assertion": "warn", // 345 sites
       "effect/avoid-direct-tag-checks": "warn", // 170 sites
       "effect/avoid-direct-json": "warn", // 161 sites
       "effect/no-conditional-empty-object-spread": "warn", // 146 sites

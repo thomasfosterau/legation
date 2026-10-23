@@ -131,8 +131,8 @@ const sameRelated = (a: RelatedValue, b: RelatedValue): boolean => {
 const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): boolean =>
   a.length === b.length &&
   a.every((row, i) => {
-    const other = b[i]!;
-    if (row.id !== other.id || row.value !== other.value) return false;
+    const other = b[i];
+    if (other === undefined || row.id !== other.id || row.value !== other.value) return false;
     const names = Object.keys(row.related);
     return (
       names.length === Object.keys(other.related).length &&
@@ -217,11 +217,12 @@ export const fieldMappingStrategy = (
     for (const relationship of relationships) {
       const key = Predicate.fieldValue(baseRow.value, relationship.localField) as Predicate.Literal;
       const bucket = index.get(relationship.collection)?.get(key);
+      const first = bucket?.[0];
       related[relationship.name] =
         relationship.kind === "one"
-          ? bucket !== undefined && Arr.isReadonlyArrayNonEmpty(bucket)
-            ? bucket[0]!.value
-            : null
+          ? first === undefined
+            ? null
+            : first.value
           : (bucket ?? []).map((row) => row.value);
     }
     return related;
@@ -456,7 +457,10 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
   };
 
   const currentOutput = (): ReadonlyArray<RelatedRow> =>
-    baseOrder.map((id) => resolvedById.get(id)!);
+    baseOrder.flatMap((id) => {
+      const row = resolvedById.get(id);
+      return row === undefined ? [] : [row];
+    });
 
   /**
    * Diff the targeted collection set (the `reconcile` pattern, :366-388):
@@ -739,18 +743,19 @@ export const windowsFor = (
 const subsetsForTargets = (targets: ReadonlyMap<string, Target>): ReadonlyArray<Subset.Subset> =>
   [...targets]
     .filter(([, target]) => target.ids.size > 0)
-    .flatMap(([collection, target]) =>
-      target.window === undefined
+    .flatMap(([collection, target]) => {
+      const window = target.window;
+      return window === undefined
         ? [Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })]
         : [...target.ids].map((id) =>
             Subset.make({
               collection,
               where: Predicate.eq(target.field, id),
-              orderBy: target.window!.orderBy,
-              limit: target.window!.limit,
+              orderBy: window.orderBy,
+              limit: window.limit,
             })
-          )
-    );
+          );
+    });
 
 const hasSubset = (list: ReadonlyArray<Subset.Subset>, subset: Subset.Subset): boolean =>
   list.some((other) => Subset.hash(other) === Subset.hash(subset));

@@ -156,8 +156,8 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     const take = (from: "undo" | "redo"): Effect.Effect<Step | undefined> =>
       SubscriptionRef.modify(history, (h) => {
         const stack = h[from];
-        if (Arr.isReadonlyArrayEmpty(stack)) return [undefined, h] as const;
-        const step = stack[stack.length - 1]!;
+        const step = stack.at(-1);
+        if (step === undefined) return [undefined, h] as const;
         return [step, { ...h, [from]: stack.slice(0, -1) }] as const;
       });
 
