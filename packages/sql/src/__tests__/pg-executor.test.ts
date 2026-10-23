@@ -27,7 +27,7 @@ import * as SqlBackend from "../SqlBackend.js";
 const databaseUrl = process.env.DATABASE_URL;
 const context = { clientGroupId: "g" };
 
-const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_sync_mutations`;
+const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_big, pgx_sync_mutations`;
 
 const DDL: ReadonlyArray<string> = [
   DROP_TABLES,
@@ -39,6 +39,8 @@ const DDL: ReadonlyArray<string> = [
     PRIMARY KEY (client_group_id, client_id)
   )`,
   `INSERT INTO pgx_projects (id, archived) VALUES ('p1', false), ('p2', true)`,
+  `CREATE TABLE pgx_big (id BIGINT PRIMARY KEY, version BIGINT NOT NULL, rank BIGINT)`,
+  `INSERT INTO pgx_big (id, version, rank) VALUES (1, 5, 9007199254740993), (9007199254740993, 9007199254740995, 2)`,
   `INSERT INTO pgx_todos (id, project_id, done) VALUES ('t1', 'p1', false), ('t2', 'p1', true), ('t3', 'p2', false)`,
 ];
 
@@ -76,6 +78,7 @@ const backendOver = (executor: SqlBackend.SqlExecutor) =>
     tables: {
       projects: { table: "pgx_projects", kinds: { archived: "boolean" } },
       todos: { table: "pgx_todos", kinds: { project_id: "text", done: "boolean" } },
+      big: { table: "pgx_big", versionColumn: "version", kinds: { rank: "integer" } },
     },
     mutators: Mutator.registry([{ mutator: setDone, local: () => Effect.void }]).mutators,
     handlers: {
@@ -166,6 +169,81 @@ describePostgres("PgExecutor round trips (#203)", () => {
         const entries = yield* backend.evaluate(context, live);
         expect(entries.map((entry) => entry.id).toSorted()).toEqual(["t1", "t2"]);
         expect(yield* Ref.get(counts)).toEqual({ statements: 2, transactions: 0 });
+      })
+    )
+  );
+
+  it.live(
+    "evaluateMany costs one statement for all of a pull's subsets, plus one per Exists node (#505)",
+    () =>
+      withCounted(databaseUrl ?? "", (backend, counts) =>
+        Effect.gen(function* () {
+          const evaluateMany = backend.evaluateMany;
+          expect(evaluateMany).toBeDefined();
+          if (evaluateMany === undefined) return;
+          const plain = [
+            Subset.make({ collection: "todos" }),
+            Subset.make({ collection: "todos", where: Predicate.eq("done", false) }),
+            Subset.make({
+              collection: "todos",
+              where: Predicate.and(Predicate.eq("project_id", "p1"), Predicate.eq("done", true)),
+              orderBy: [{ field: "id", direction: "asc" }],
+              limit: 1,
+            }),
+            Subset.make({ collection: "projects", where: Predicate.eq("archived", true) }),
+          ];
+          const live = Subset.make({
+            collection: "todos",
+            where: Predicate.exists({
+              collection: "projects",
+              localField: "project_id",
+              foreignField: "id",
+              where: Predicate.eq("archived", false),
+            }),
+          });
+          const lists = yield* evaluateMany(context, [...plain, live]);
+          expect(lists.map((entries) => entries.map((entry) => entry.id).toSorted())).toEqual([
+            ["t1", "t2", "t3"],
+            ["t1", "t3"],
+            ["t2"],
+            ["p2"],
+            ["t1", "t2"],
+          ]);
+          // One statement for the five subsets, one for the Exists node.
+          expect(yield* Ref.get(counts)).toEqual({ statements: 2, transactions: 0 });
+          // And the same entries, versions included, as one evaluate per subset.
+          const single = yield* Effect.forEach(
+            [...plain, live],
+            (subset) => backend.evaluate(context, subset),
+            {
+              concurrency: 1,
+            }
+          );
+          expect(lists).toEqual(single);
+        })
+      )
+  );
+
+  it.live("evaluateMany gives evaluate's entries for bigint columns beyond 2^53 (#505)", () =>
+    withCounted(databaseUrl ?? "", (backend) =>
+      Effect.gen(function* () {
+        const evaluateMany = backend.evaluateMany;
+        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const subsets = [
+          Subset.make({ collection: "big" }),
+          Subset.make({ collection: "big", orderBy: [{ field: "rank", direction: "desc" }] }),
+          Subset.make({ collection: "todos" }),
+        ];
+        const single = yield* Effect.forEach(
+          subsets,
+          (subset) => backend.evaluate(context, subset),
+          {
+            concurrency: 1,
+          }
+        );
+        expect(single[0]?.map((entry) => entry.id).toSorted()).toEqual(["1", "9007199254740993"]);
+        // JSON would round 9007199254740993 to …992: the pull falls back to evaluate.
+        expect(yield* evaluateMany(context, subsets)).toEqual(single);
       })
     )
   );

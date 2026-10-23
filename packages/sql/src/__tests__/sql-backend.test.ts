@@ -5,9 +5,11 @@
  * mutation-id ledger.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
@@ -41,6 +43,38 @@ const MONOTONIC_BUMP =
   /DO UPDATE SET "last_mutation_id" = MAX\("sync_mutations"\."last_mutation_id", excluded\."last_mutation_id"\)$/;
 const unmodelled = (fragment: Sql.SqlFragment): never => {
   throw new Error(`mock ledger: unmodelled statement: ${fragment.text}`);
+};
+
+/**
+ * A read of the seeded rows: the column lookup `evaluateMany` makes on SQLite
+ * (every key a seeded row of the relation carries), `evaluateMany`'s `UNION
+ * ALL` (#505: each arm's seeded rows, its columns by position as
+ * `"__legation_row"."<name>" AS "c<k>"`, tagged with the arm's subset index),
+ * or any other `SELECT` (the table's seeded rows, its WHERE ignored).
+ */
+const readSeeded = (
+  tables: ReadonlyMap<string, ReadonlyArray<SqlBackend.SqlRow>>,
+  fragment: Sql.SqlFragment
+): ReadonlyArray<SqlBackend.SqlRow> => {
+  if (fragment.text.includes("pragma_table_info")) {
+    const rows = tables.get(String(fragment.params[0])) ?? [];
+    return Arr.dedupe(rows.flatMap((row) => R.keys(row))).map((name) => ({ name }));
+  }
+  if (fragment.text.includes(`AS "subset"`)) {
+    return fragment.text.split(" UNION ALL ").flatMap((arm) => {
+      const subset = Number(arm.match(/^SELECT (\d+) AS "subset"/)?.[1]);
+      const projected = [...arm.matchAll(/"__legation_row"\."([^"]+)" AS "(c\d+)"/g)];
+      const rows = tables.get(tableOf(arm.replace(/^.*? FROM /, "FROM ")) ?? "") ?? [];
+      return rows.map((row) =>
+        R.fromEntries([
+          ["subset", subset],
+          ...projected.map(([, name = "", column = ""]) => [column, row[name]] as const),
+        ])
+      );
+    });
+  }
+  const table = tableOf(fragment.text);
+  return table !== undefined ? (tables.get(table) ?? []) : [];
 };
 
 /**
@@ -135,8 +169,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
           }
           return unmodelled(fragment);
         }
-        const table = tableOf(fragment.text);
-        return table !== undefined ? (tables.get(table) ?? []) : [];
+        return readSeeded(tables, fragment);
       }),
     run: (fragment) =>
       Effect.sync(() => {

@@ -39,6 +39,11 @@
  * to listed rows through the backend, and checks that `getRows` returns the
  * post-write value and omits the deleted row, without a re-list (#444). It uses
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
+ *
+ * A backend that provides the optional `evaluateMany` (#505) must agree with
+ * its own `evaluate`: rule 14 asks for rule 6's subsets, the generated corpus
+ * included, in one call and checks each list against `evaluate` for that
+ * subset. A backend without it passes that rule vacuously.
  */
 
 import * as Arr from "effect/Array";
@@ -50,7 +55,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { Backend, SyncContext } from "./Backend.js";
+import type { Backend, SubsetEntry, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
 import * as MemoryBackend from "./MemoryBackend.js";
@@ -582,6 +587,42 @@ const evalSeed: ReadonlyArray<readonly [string, EvalRow]> = [
 ];
 
 /**
+ * The generated corpus rules 6 and 14 share (issue #153): two columns, NULL
+ * and astral values on, from the fixed seed, so every run sees the same rows,
+ * predicates and order terms.
+ */
+const contractCorpus = Effect.suspend(() => {
+  const columns: ReadonlyArray<FilterCorpus.Column> = [
+    { name: "rank", kind: "integer" },
+    { name: "tag", kind: "text" },
+  ];
+  const options: FilterCorpus.CorpusOptions = { nulls: true, astral: true };
+  return FilterCorpus.generateCorpus({
+    seed: FilterCorpus.DEFAULT_SEED,
+    columns,
+    // The guaranteed pool sweep plus a handful of random rows.
+    rows: FilterCorpus.minimumRows(columns, options) + 10,
+    predicates: 40,
+    orderBys: 40,
+    ...options,
+  });
+});
+
+/** The corpus's subsets over the evaluation collection: one per predicate, some with a limit. */
+const corpusSubsets = (
+  h: Harness,
+  corpus: Effect.Success<typeof contractCorpus>
+): ReadonlyArray<Subset.Subset> =>
+  corpus.predicates.map((where, index) =>
+    Subset.make({
+      collection: h.evalRows,
+      where,
+      orderBy: corpus.orderBys[index % corpus.orderBys.length],
+      ...(index % 3 === 0 ? { limit: 1 + (index % 7) } : {}),
+    })
+  );
+
+/**
  * The generated half of rule 6: a small corpus (issue #153) over the same two
  * columns, so every backend inherits the check for every operator in the
  * core: `evaluate` must return exactly what `Subset.apply` returns over the
@@ -602,20 +643,7 @@ const generatedCorpus = (
   nextMutationId: number
 ) =>
   Effect.gen(function* () {
-    const columns: ReadonlyArray<FilterCorpus.Column> = [
-      { name: "rank", kind: "integer" },
-      { name: "tag", kind: "text" },
-    ];
-    const options: FilterCorpus.CorpusOptions = { nulls: true, astral: true };
-    const corpus = yield* FilterCorpus.generateCorpus({
-      seed: FilterCorpus.DEFAULT_SEED,
-      columns,
-      // The guaranteed pool sweep plus a handful of random rows.
-      rows: FilterCorpus.minimumRows(columns, options) + 10,
-      predicates: 40,
-      orderBys: 40,
-      ...options,
-    });
+    const corpus = yield* contractCorpus;
     const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
     yield* h.expectOk(
       rule,
@@ -625,13 +653,8 @@ const generatedCorpus = (
       )
     );
     const all = [...reference, ...corpusRows];
-    for (const [index, where] of corpus.predicates.entries()) {
-      const subset = Subset.make({
-        collection: h.evalRows,
-        where,
-        orderBy: corpus.orderBys[index % corpus.orderBys.length],
-        ...(index % 3 === 0 ? { limit: 1 + (index % 7) } : {}),
-      });
+    for (const [index, subset] of corpusSubsets(h, corpus).entries()) {
+      const { where } = subset;
       yield* expectEvaluation(h, rule, all, subset, (expected, evaluated) =>
         FilterCorpus.formatDisagreement({
           seed: corpus.seed,
@@ -1048,6 +1071,72 @@ const rule13ListsRejections: Rule = (h) =>
     );
   });
 
+/**
+ * 14. `evaluateMany`, when the backend provides it (#505), equals per-subset
+ *     `evaluate`: for rule 6's subsets over its rows (the hand-picked windows
+ *     and the generated corpus) plus whole-collection subsets of both contract
+ *     collections, asked in one call, each list holds the same entries, ids
+ *     and versions, in the same order, as `evaluate` gives that subset. Asking
+ *     for no subsets gives no lists. A backend without `evaluateMany` passes
+ *     vacuously: a pull falls back to `evaluate`.
+ */
+/** Whether two entry lists hold the same ids and versions in the same order. */
+const sameEntries = (
+  left: ReadonlyArray<SubsetEntry>,
+  right: ReadonlyArray<SubsetEntry>
+): boolean =>
+  left.length === right.length &&
+  left.every(
+    (entry, index) => entry.id === right[index]?.id && entry.version === right[index]?.version
+  );
+
+/** An entry list for a violation message: `id@version`, comma-separated. */
+const describeEntries = (entries: ReadonlyArray<SubsetEntry>): string =>
+  entries.map((entry) => `${entry.id}@${entry.version}`).join(", ");
+
+const rule14EvaluateManyEquivalence: Rule = (h) =>
+  Effect.gen(function* () {
+    const many = h.backend.evaluateMany;
+    if (many === undefined) return;
+    const rule = "evaluateMany equals per-subset evaluate";
+    const corpus = yield* contractCorpus;
+    const keep = Predicate.eq("tag", "keep");
+    const byRank = [{ field: "rank", direction: "desc" as const }];
+    const subsets: ReadonlyArray<Subset.Subset> = [
+      Subset.make({ collection: h.evalRows }),
+      Subset.make({ collection: h.rows }),
+      Subset.make({ collection: h.evalRows, where: keep, orderBy: byRank, limit: 2 }),
+      Subset.make({ collection: h.evalRows, where: keep, orderBy: byRank, limit: 2, cursor: "e5" }),
+      ...corpusSubsets(h, corpus),
+    ];
+    const batched = yield* h.expectOk(rule, many(h.context, subsets));
+    yield* h.check(
+      rule,
+      batched.length === subsets.length,
+      `Expected ${subsets.length} entry lists, one per subset, got ${batched.length}`
+    );
+    yield* Effect.forEach(
+      subsets,
+      (subset, index) =>
+        Effect.gen(function* () {
+          const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
+          const together = batched[index] ?? [];
+          yield* h.check(
+            rule,
+            sameEntries(together, single),
+            `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateMany gave [${describeEntries(together)}]`
+          );
+        }),
+      { concurrency: 1, discard: true }
+    );
+    const none = yield* h.expectOk(rule, many(h.context, []));
+    yield* h.check(
+      rule,
+      Arr.isReadonlyArrayEmpty(none),
+      `Asked for no subsets, evaluateMany gave ${none.length} lists`
+    );
+  });
+
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [
   rule1InOrderApplication,
@@ -1063,6 +1152,7 @@ const rules: ReadonlyArray<Rule> = [
   rule11CrossGroupLostUpdate,
   rule12OwnWritesReachGetRows,
   rule13ListsRejections,
+  rule14EvaluateManyEquivalence,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import { Backend, type ChangeHint, type SyncContext } from "./Backend.js";
+import { Backend, type ChangeHint, evaluateAll, type SyncContext } from "./Backend.js";
 import {
   AuthPolicy,
   IdentityResolver,
@@ -454,12 +454,16 @@ export const makeWithIntrospectionWith = (
       });
 
     // Evaluate the desired next view: (collection → id → version) per subset.
+    // The subsets go to the backend together (`Backend.evaluateAll`), so a
+    // backend with `evaluateMany` answers the pull in a bounded number of
+    // round trips (#505); one without it is asked per subset.
     const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
       Effect.gen(function* () {
+        const evaluated = yield* evaluateAll(backend, context, subsets);
         const rows = new Map<string, Map<string, string | number>>();
-        for (const subset of subsets) {
+        for (const [index, subset] of subsets.entries()) {
           const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-          for (const entry of yield* backend.evaluate(context, subset)) {
+          for (const entry of evaluated[index] ?? []) {
             collection.set(entry.id, entry.version);
           }
           rows.set(subset.collection, collection);

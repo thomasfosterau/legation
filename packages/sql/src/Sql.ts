@@ -95,7 +95,38 @@ export interface Dialect {
    * no isolation statement, so its executor must provide the isolation itself.
    */
   readonly serializable?: string | undefined;
+  /**
+   * How each arm of `SqlBackend.evaluateMany`'s one `UNION ALL` statement
+   * carries its row (#505), since mappings' columns differ per collection.
+   * Absent on a hand-written dialect, `evaluateMany` is too, and a pull
+   * evaluates its subsets one statement each. See {@link UnionRows}.
+   */
+  readonly unionRows?: UnionRows | undefined;
 }
+
+/**
+ * How a `UNION ALL` arm carries a row whose columns differ from the other
+ * arms' (`Dialect.unionRows`, #505):
+ *
+ * - `Columns`: the relation's own columns by position, padded with `NULL` to
+ *   the widest arm. Only for a database whose `UNION ALL` columns take any
+ *   type per row (SQLite): each value then reaches the driver as `SELECT *`
+ *   would give it. `columnsOf` lists a relation's columns, one row per column
+ *   with its name in a `name` column.
+ * - `Json`: one column of JSON text, `rowJson(alias)` for the row aliased
+ *   `alias` (PostgreSQL's `row_to_json`). JSON carries text, booleans, `NULL`
+ *   and numbers that fit a double as the driver does; other column types reach
+ *   the backend as JSON gives them.
+ */
+export type UnionRows =
+  | {
+      readonly _tag: "Columns";
+      readonly columnsOf: (relation: string) => SqlFragment;
+    }
+  | {
+      readonly _tag: "Json";
+      readonly rowJson: (alias: string) => string;
+    };
 
 /** Field → literal kind, for the collation clause and typed binds. */
 export type Kinds = Readonly<Record<string, Predicate.LiteralKind>>;
@@ -110,16 +141,29 @@ export interface CompileOptions {
 
 const quoteDouble = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
 
-/** SQLite: `?` placeholders, `COLLATE BINARY`, booleans as `0`/`1`. */
+/**
+ * SQLite: `?` placeholders, `COLLATE BINARY`, booleans as `0`/`1`, a `UNION
+ * ALL` arm's row as its own columns by position (`pragma_table_info`).
+ */
 export const sqlite: Dialect = {
   placeholder: () => "?",
   quote: quoteDouble,
   textCollation: "BINARY",
   boolean: (value) => (value ? 1 : 0),
   greatest: (left, right) => `MAX(${left}, ${right})`,
+  unionRows: {
+    _tag: "Columns",
+    columnsOf: (relation) => ({
+      text: `SELECT name FROM pragma_table_info(?)`,
+      params: [relation],
+    }),
+  },
 };
 
-/** PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans, SERIALIZABLE transactions. */
+/**
+ * PostgreSQL: `$1`, `$2`, … placeholders, `COLLATE "C"`, native booleans,
+ * SERIALIZABLE transactions, a `UNION ALL` arm's row as JSON (`row_to_json`).
+ */
 export const postgres: Dialect = {
   placeholder: (index) => `$${index}`,
   quote: quoteDouble,
@@ -127,6 +171,7 @@ export const postgres: Dialect = {
   boolean: (value) => value,
   greatest: (left, right) => `GREATEST(${left}, ${right})`,
   serializable: "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+  unionRows: { _tag: "Json", rowJson: (alias) => `row_to_json(${alias})::text` },
 };
 
 const comparators: Record<Predicate.Comparison, string> = {
