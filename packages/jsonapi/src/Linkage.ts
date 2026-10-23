@@ -161,15 +161,25 @@ export const collectionsOf = (
     if (included[name] === undefined && edge !== undefined) collections.add(edge.target);
   }
   for (const name of Object.keys(included)) {
-    const via = node.edges[name];
-    const target = via === undefined ? undefined : nodes.nodes.get(via.target);
-    if (target === undefined) continue;
-    for (const edge of plan.included.get(name) ?? []) {
-      const next = target.edges[edge];
-      if (next !== undefined) collections.add(next.target);
-    }
+    for (const target of includedTargets(nodes, node, plan, name)) collections.add(target);
   }
   return [...collections];
+};
+
+/** The targets of the declared `many` edges of included edge `name`'s type. */
+const includedTargets = (
+  nodes: Node.NodeRegistry,
+  node: Node.AnyNode,
+  plan: Plan,
+  name: string
+): ReadonlyArray<string> => {
+  const via = node.edges[name];
+  const target = via === undefined ? undefined : nodes.nodes.get(via.target);
+  if (target === undefined) return [];
+  return (plan.included.get(name) ?? []).flatMap((edge) => {
+    const next = target.edges[edge];
+    return next === undefined ? [] : [next.target];
+  });
 };
 
 // ─── The included resources' batch ───────────────────────────────────────────

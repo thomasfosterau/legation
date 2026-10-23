@@ -33,6 +33,10 @@ const ZERO = DIGITS.charAt(0);
 const digitValue = (char: string): number => DIGITS.indexOf(char);
 const digitChar = (value: number): string => DIGITS.charAt(value);
 
+/** The digit of `key` at position `i`; a position past its end reads as 0. */
+const digitAt = (key: string, i: number): number =>
+  i < key.length ? digitValue(key.charAt(i)) : 0;
+
 /**
  * Compare two keys by the fraction they encode (zero-padding the shorter
  * one), not by raw string order — see the module doc for why that matters.
@@ -58,9 +62,8 @@ export const generateBetween = (lo?: string, hi?: string): string => {
   const digits: Array<number> = [];
   let unbounded = hi === undefined;
   for (let i = 0; ; i++) {
-    const loDigit = lo !== undefined && i < lo.length ? digitValue(lo.charAt(i)) : 0;
-    const hiDigit =
-      unbounded || hi === undefined ? BASE : i < hi.length ? digitValue(hi.charAt(i)) : 0;
+    const loDigit = lo === undefined ? 0 : digitAt(lo, i);
+    const hiDigit = unbounded || hi === undefined ? BASE : digitAt(hi, i);
     const gap = hiDigit - loDigit;
     if (gap >= 2) {
       digits.push(loDigit + Math.floor(gap / 2));

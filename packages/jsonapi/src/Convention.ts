@@ -30,7 +30,6 @@
  * instead — the backend then pushes a whole batch as one request.
  */
 
-import * as Arr from "effect/Array";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Str from "effect/String";
 import * as HttpApi from "effect/http-api/HttpApi";

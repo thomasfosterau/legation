@@ -150,11 +150,10 @@ const fillGaps = (
     while (j < n && reused[j] === undefined) j++;
     const right = j < n ? reused[j] : undefined;
     const fresh = FractionalIndex.generateNBetween(left, right, j - i);
-    for (let k = i; k < j; k++) {
-      const row = windowRows[k];
-      const position = fresh[k - i];
-      if (row !== undefined && position !== undefined) next.set(row.id, position);
-    }
+    fresh.forEach((position, offset) => {
+      const row = windowRows[i + offset];
+      if (row !== undefined) next.set(row.id, position);
+    });
     left = right;
     i = j;
   }
