@@ -351,8 +351,8 @@ const literalCheck = (
   operator: FilterOperator,
   value: Literal
 ): AuthorizationError | undefined => {
-  const kind = declaration.filterable[field]!.kind;
-  return value !== null && matchesKind(kind, value)
+  const kind = declaration.filterable[field]?.kind;
+  return value !== null && kind !== undefined && matchesKind(kind, value)
     ? undefined
     : deny(
         collection,

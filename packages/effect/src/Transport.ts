@@ -258,12 +258,11 @@ export const simulateOffline = (
       (isOffline, real): ConnectionStatus => (isOffline ? "disconnected" : real)
     ).pipe(Stream.changesWith((a, b) => a === b));
 
+    const read = transport.read;
     const wrapped: ClientTransport = {
       push: (request) => gate(transport.push(request)),
       pull: (request) => gate(transport.pull(request)),
-      ...(transport.read === undefined
-        ? {}
-        : { read: (request: ReadRequest) => gate(transport.read!(request)) }),
+      ...(read === undefined ? {} : { read: (request: ReadRequest) => gate(read(request)) }),
       pokes: transport.pokes,
       status,
       statusChanges,

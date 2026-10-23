@@ -125,7 +125,9 @@ export const planOf = (
   for (const [name, descriptor] of descriptorsOf(resource)) {
     if (descriptor.kind === "paginated") continue;
     const target = descriptor.ref();
-    included.set(name, manyEdgesOf(target, nodes.nodes.get(target.type)!));
+    const targetNode = nodes.nodes.get(target.type);
+    if (targetNode === undefined) continue;
+    included.set(name, manyEdgesOf(target, targetNode));
   }
   return { root, included };
 };
@@ -155,11 +157,17 @@ export const collectionsOf = (
   const collections = new Set<string>();
   const included = read.include ?? {};
   for (const name of plan.root) {
-    if (included[name] === undefined) collections.add(node.edges[name]!.target);
+    const edge = node.edges[name];
+    if (included[name] === undefined && edge !== undefined) collections.add(edge.target);
   }
   for (const name of Object.keys(included)) {
-    const target = nodes.nodes.get(node.edges[name]!.target)!;
-    for (const edge of plan.included.get(name) ?? []) collections.add(target.edges[edge]!.target);
+    const via = node.edges[name];
+    const target = via === undefined ? undefined : nodes.nodes.get(via.target);
+    if (target === undefined) continue;
+    for (const edge of plan.included.get(name) ?? []) {
+      const next = target.edges[edge];
+      if (next !== undefined) collections.add(next.target);
+    }
   }
   return [...collections];
 };
@@ -204,7 +212,8 @@ const addLinkageQuery = (
     for (const id of parents) existing.parents.add(id);
     return;
   }
-  const relationship = Collection.relationshipsOf(nodes.collections, type).get(edge)!;
+  const relationship = Collection.relationshipsOf(nodes.collections, type).get(edge);
+  if (relationship === undefined) return;
   queries.set(key, {
     type,
     edge,
@@ -228,7 +237,8 @@ const linkageQueries = (
     const edges = plan.included.get(name) ?? [];
     const parents = includedIds(rows, name);
     if (Arr.isReadonlyArrayEmpty(edges) || parents.size === 0) continue;
-    const type = node.edges[name]!.target;
+    const type = node.edges[name]?.target;
+    if (type === undefined) continue;
     for (const edge of edges) addLinkageQuery(nodes, queries, type, edge, parents);
   }
   return [...queries.values()];

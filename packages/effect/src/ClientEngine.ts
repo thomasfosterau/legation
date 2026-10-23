@@ -2872,7 +2872,7 @@ export const make = (
 
     const sameResult = (a: ReadonlyArray<LocalRow>, b: ReadonlyArray<LocalRow>): boolean =>
       a.length === b.length &&
-      a.every((row, i) => row.id === b[i]!.id && row.value === b[i]!.value);
+      a.every((row, i) => row.id === b[i]?.id && row.value === b[i]?.value);
 
     // A scoped rebuild that doesn't name the observed collection cannot have
     // moved it, so the observer keeps its page (and `changesWith` dedups the
@@ -3376,6 +3376,7 @@ export const make = (
       }
     );
 
+    const transportRead = transport.read;
     return ClientEngine.of({
       mutate: (mutator, args) =>
         encodeFor(mutator, args).pipe(
@@ -3432,11 +3433,11 @@ export const make = (
       quarantines: store.quarantines,
       quarantinedMutations: store.quarantinedMutations,
       discardQuarantine: store.discardQuarantine,
-      ...(transport.read === undefined
+      ...(transportRead === undefined
         ? {}
         : {
             readThrough: (subsets: ReadonlyArray<Subset.Subset>) =>
-              transport.read!({
+              transportRead({
                 clientGroupId: options.clientGroupId,
                 subsets,
                 ...(options.schemaVersion === undefined

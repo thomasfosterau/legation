@@ -130,10 +130,8 @@ export const parseResponse = (
   Effect.gen(function* () {
     if (response.status < 200 || response.status >= 300) {
       const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
-      const errors =
-        P.isObjectOrArray(body) && Array.isArray((body as JsonApiDocument).errors)
-          ? (body as JsonApiDocument).errors!
-          : [];
+      const candidate = P.isObjectOrArray(body) ? (body as JsonApiDocument).errors : undefined;
+      const errors = Array.isArray(candidate) ? candidate : [];
       return yield* new ApiError({ message: `HTTP ${response.status}`, errors });
     }
     const json = yield* response.json.pipe(

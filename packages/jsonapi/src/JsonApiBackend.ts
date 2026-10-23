@@ -916,7 +916,9 @@ export const make = (
         const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
           Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
         );
-        return custom !== undefined ? custom(args) : yield* writeOf(operation!, args);
+        if (custom !== undefined) return custom(args);
+        if (operation === undefined) return yield* UnknownMutator.make(mutation.mutator);
+        return yield* writeOf(operation, args);
       });
 
     // Apply one write as its own request. Resolves to the resource document the
@@ -1289,9 +1291,13 @@ export const make = (
             results = outcome.results;
             break;
           }
-          const refused = outcome.rejections.map(({ index }) => pending[index]!);
+          const refused = outcome.rejections.flatMap(({ index }) => {
+            const entry = pending[index];
+            return entry === undefined ? [] : [entry];
+          });
           for (const { index, reason } of outcome.rejections) {
-            rejectedAt.set(pending[index]!.index, reason);
+            const entry = pending[index];
+            if (entry !== undefined) rejectedAt.set(entry.index, reason);
           }
           pending = pending.filter((entry) => !rejectedAt.has(entry.index));
           // A create the server refused may have left its row in place: read it
@@ -1309,11 +1315,18 @@ export const make = (
 
         const rejected = [...rejectedAt]
           .toSorted(([a], [b]) => a - b)
-          .map(([index, reason]) => ({
-            clientId: batch[index]!.mutation.clientId,
-            mutationId: batch[index]!.mutation.mutationId,
-            reason,
-          }));
+          .flatMap(([index, reason]) => {
+            const entry = batch[index];
+            return entry === undefined
+              ? []
+              : [
+                  {
+                    clientId: entry.mutation.clientId,
+                    mutationId: entry.mutation.mutationId,
+                    reason,
+                  },
+                ];
+          });
         // The rejections are remembered before the ids are acknowledged (#366).
         yield* rememberRejections(context, rejected);
         // Applied and rejected alike are acknowledged, in original order.

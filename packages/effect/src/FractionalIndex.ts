@@ -28,10 +28,10 @@
 
 const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const BASE = DIGITS.length;
-const ZERO = DIGITS[0]!;
+const ZERO = DIGITS.charAt(0);
 
 const digitValue = (char: string): number => DIGITS.indexOf(char);
-const digitChar = (value: number): string => DIGITS[value]!;
+const digitChar = (value: number): string => DIGITS.charAt(value);
 
 /**
  * Compare two keys by the fraction they encode (zero-padding the shorter
@@ -58,8 +58,9 @@ export const generateBetween = (lo?: string, hi?: string): string => {
   const digits: Array<number> = [];
   let unbounded = hi === undefined;
   for (let i = 0; ; i++) {
-    const loDigit = lo !== undefined && i < lo.length ? digitValue(lo[i]!) : 0;
-    const hiDigit = unbounded ? BASE : i < hi!.length ? digitValue(hi![i]!) : 0;
+    const loDigit = lo !== undefined && i < lo.length ? digitValue(lo.charAt(i)) : 0;
+    const hiDigit =
+      unbounded || hi === undefined ? BASE : i < hi.length ? digitValue(hi.charAt(i)) : 0;
     const gap = hiDigit - loDigit;
     if (gap >= 2) {
       digits.push(loDigit + Math.floor(gap / 2));

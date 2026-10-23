@@ -118,7 +118,7 @@ export function make(
   first: Read | string,
   args?: Schema.Codec<any, any>
 ): Read | Named<string, any, any> {
-  return P.isString(first) ? named(first, args!) : first;
+  return P.isString(first) ? named(first, args ?? Schema.Unknown) : first;
 }
 
 /** Parse `order` tokens ("name", "-createdAt") into sort terms. */
@@ -158,7 +158,8 @@ const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   const terms = Object.entries(where).map(([field, value]) =>
     Predicate.eq(field, value as Predicate.Literal)
   );
-  return terms.length === 1 ? terms[0]! : Predicate.and(...terms);
+  const only = terms[0];
+  return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
 };
 
 /** One included edge, compiled: how to join and how to window the result. */

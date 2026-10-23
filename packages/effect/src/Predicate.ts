@@ -194,12 +194,16 @@ export const notIn = (field: string, values: ReadonlyArray<Literal>): Predicate 
 });
 
 /** Conjunction (three-valued); a single predicate is returned unchanged. */
-export const and = (...predicates: ReadonlyArray<Predicate>): Predicate =>
-  predicates.length === 1 ? predicates[0]! : { _tag: "And", predicates };
+export const and = (...predicates: ReadonlyArray<Predicate>): Predicate => {
+  const only = predicates[0];
+  return predicates.length === 1 && only !== undefined ? only : { _tag: "And", predicates };
+};
 
 /** Disjunction (three-valued); a single predicate is returned unchanged. */
-export const or = (...predicates: ReadonlyArray<Predicate>): Predicate =>
-  predicates.length === 1 ? predicates[0]! : { _tag: "Or", predicates };
+export const or = (...predicates: ReadonlyArray<Predicate>): Predicate => {
+  const only = predicates[0];
+  return predicates.length === 1 && only !== undefined ? only : { _tag: "Or", predicates };
+};
 
 /** Negation (three-valued: `not` of unknown stays unknown). */
 export const not = (predicate: Predicate): Predicate => ({ _tag: "Not", predicate });
@@ -235,8 +239,8 @@ export const exists = (options: {
 export const compareText = (a: string, b: string): number => {
   let i = 0;
   while (i < a.length && i < b.length) {
-    const x = a.codePointAt(i)!;
-    const y = b.codePointAt(i)!;
+    const x = a.codePointAt(i) ?? 0;
+    const y = b.codePointAt(i) ?? 0;
     if (x !== y) return x < y ? -1 : 1;
     i += x > 0xffff ? 2 : 1;
   }

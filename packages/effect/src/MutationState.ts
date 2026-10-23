@@ -149,7 +149,7 @@ const evictTerminal = (
   const excess = terminal.length - maxTerminal;
   if (excess <= 0) return map;
   let next = map;
-  for (let i = 0; i < excess; i++) next = HashMap.remove(next, terminal[i]!.mutationId);
+  for (const entry of terminal.slice(0, excess)) next = HashMap.remove(next, entry.mutationId);
   return next;
 };
 

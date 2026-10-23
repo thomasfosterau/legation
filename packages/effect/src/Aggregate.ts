@@ -235,7 +235,9 @@ const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined):
     bucket.count += 1;
     return;
   }
-  const n = numericField(value, field!);
+  // Only `Count` has no field, and it returned above.
+  if (field === undefined) return;
+  const n = numericField(value, field);
   if (n === undefined) return;
   switch (bucket._tag) {
     case "Sum":
@@ -268,7 +270,9 @@ const removeFromBucket = (
     bucket.count -= 1;
     return;
   }
-  const n = numericField(value, field!);
+  // Only `Count` has no field, and it returned above.
+  if (field === undefined) return;
+  const n = numericField(value, field);
   if (n === undefined) return;
   switch (bucket._tag) {
     case "Sum":
@@ -347,7 +351,9 @@ export const applyPut = (
   if (existing === undefined && !matches) return state;
   if (existing !== undefined) {
     state.byId.delete(id);
-    removeFromBucket(state.bucket, existing, field, () => numericValuesOf(state.byId, field!));
+    removeFromBucket(state.bucket, existing, field, () =>
+      field === undefined ? [] : numericValuesOf(state.byId, field)
+    );
   }
   if (matches) {
     state.byId.set(id, value);
@@ -362,7 +368,9 @@ export const applyDel = (state: State, agg: Aggregate, id: string): State => {
   if (existing === undefined) return state;
   const field = fieldOf(agg);
   state.byId.delete(id);
-  removeFromBucket(state.bucket, existing, field, () => numericValuesOf(state.byId, field!));
+  removeFromBucket(state.bucket, existing, field, () =>
+    field === undefined ? [] : numericValuesOf(state.byId, field)
+  );
   return state;
 };
 
@@ -416,9 +424,11 @@ export const applyGroupedPut = (
   if (existingKey === undefined && newKey === undefined) return state;
 
   if (existingKey !== undefined && existingKey !== newKey) {
-    const oldGroup = state.groups.get(existingKey)!;
-    applyDel(oldGroup, agg, id);
-    if (oldGroup.byId.size === 0) state.groups.delete(existingKey);
+    const oldGroup = state.groups.get(existingKey);
+    if (oldGroup !== undefined) {
+      applyDel(oldGroup, agg, id);
+      if (oldGroup.byId.size === 0) state.groups.delete(existingKey);
+    }
   }
 
   if (newKey === undefined) {
@@ -440,9 +450,11 @@ export const applyGroupedPut = (
 export const applyGroupedDel = (state: GroupedState, agg: Aggregate, id: string): GroupedState => {
   const existingKey = state.groupKeyOf.get(id);
   if (existingKey === undefined) return state;
-  const group = state.groups.get(existingKey)!;
-  applyDel(group, agg, id);
-  if (group.byId.size === 0) state.groups.delete(existingKey);
+  const group = state.groups.get(existingKey);
+  if (group !== undefined) {
+    applyDel(group, agg, id);
+    if (group.byId.size === 0) state.groups.delete(existingKey);
+  }
   state.groupKeyOf.delete(id);
   return state;
 };

@@ -97,9 +97,9 @@ export const classify = (
   path: string
 ): { readonly type: string; readonly operation: Operation } | undefined => {
   const segments = segmentsOf(path);
-  if (Arr.isReadonlyArrayEmpty(segments)) return undefined;
+  const last = segments.at(-1);
+  if (last === undefined) return undefined;
 
-  const last = segments[segments.length - 1]!;
   const hasId = isParam(last);
   const type = hasId ? segments[segments.length - 2] : last;
   if (type === undefined || isParam(type)) return undefined;
