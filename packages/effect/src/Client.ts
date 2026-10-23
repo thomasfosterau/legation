@@ -57,7 +57,7 @@ import * as RpcTransport from "./RpcTransport.js";
 import * as Transport from "./Transport.js";
 import * as ClientView from "./ClientView.js";
 import * as Coverage from "./Coverage.js";
-import { QueryError, StoreError } from "./Errors.js";
+import { QueryError, StoreError, TransportError } from "./Errors.js";
 import * as Identity from "./Identity.js";
 import type * as Mutator from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
@@ -142,6 +142,20 @@ export interface Client {
     mutation: string,
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, ClientView.ClientViewError>;
+  /**
+   * The client half of an enhanced form submit (ADR-0030 #215 §4): apply the
+   * Mutation optimistically under the form client's id, without journaling it
+   * (the form action delivers it), and settle the returned submission on the
+   * action's receipt. An acknowledgement parks the effect in the unpulled
+   * tail until the pull that covers the form client releases it; a rejection
+   * drops it. Needs an engine on this thread: over a connected host (a
+   * mirror) it fails with a `TransportError`.
+   */
+  readonly beginFormMutation: (
+    form: ClientEngine.FormClient,
+    mutation: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngine.FormSubmission, ClientView.ClientViewError>;
   /**
    * The keyed mutation-state map (#116) — TanStack Query's
    * `useMutationState` analogue: every journaled mutation's current
@@ -655,6 +669,15 @@ export const fromView = (
       boundary === undefined ? noBoundary() : boundary.discardQuarantine(identity),
     mutate: (mutation, args) => view.mutate(mutation, args),
     mutateWithAck: (mutation, args) => view.mutateWithAck(mutation, args),
+    beginFormMutation: (form, mutation, args) =>
+      view.beginFormMutation === undefined
+        ? Effect.fail(
+            new TransportError({
+              message:
+                "Client.beginFormMutation: an enhanced form submit needs an engine on this thread; a connected host does not carry it",
+            })
+          )
+        : view.beginFormMutation(form, mutation, args),
     mutationStates: view.mutationStates,
     view,
   };

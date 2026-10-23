@@ -154,6 +154,45 @@ export interface MutationHandle {
 }
 
 /**
+ * The form client a form-action Mutation runs under (ADR-0030 #215 §2): a
+ * fresh client id minted for one rendered form, with its mutation id (`1`).
+ */
+export interface FormClient {
+  readonly clientId: string;
+  readonly mutationId: number;
+}
+
+/**
+ * The part of a form action's receipt the engine settles on: the backend's
+ * ruling. `Server.Receipt` (what `Server.mutate` answers) has this shape.
+ */
+export type FormRuling =
+  | { readonly phase: "acknowledged" }
+  | { readonly phase: "rejected"; readonly reason: string };
+
+/**
+ * An enhanced form submission's optimistic entry (ADR-0030 #215 §4), from
+ * {@link ClientEngine.beginFormMutation}. Exactly one of `settle` or `abandon`
+ * ends it; later calls do nothing.
+ */
+export interface FormSubmission {
+  /** The form client the entry is overlaid under. */
+  readonly form: FormClient;
+  /**
+   * Settle on the action's receipt. `acknowledged` moves the entry to the
+   * unpulled tail, where it stays overlaid until a pull whose
+   * `lastMutationIds` covers the form client releases it, exactly as for a
+   * pushed mutation; `rejected` drops it now. Either way a pull is signalled.
+   */
+  readonly settle: (ruling: FormRuling) => Effect.Effect<void, StoreError>;
+  /**
+   * The action did not answer (the network failed, or the server errored):
+   * drop the entry and signal a pull, which shows whatever the server did.
+   */
+  readonly abandon: Effect.Effect<void>;
+}
+
+/**
  * A mutation lifecycle event on {@link ClientEngine.mutationEvents}: emitted
  * when a mutation is `journaled` locally, then when the backend `acknowledged`
  * (applied) or `rejected` it — or, for a still-unpushed entry, when a paced
@@ -596,6 +635,26 @@ export interface ClientEngine {
     mutator: string,
     args: unknown
   ) => Effect.Effect<MutationHandle, MutatorError | StoreError>;
+  /**
+   * The client half of an enhanced form submit (ADR-0030 #215 §4): apply the
+   * mutator's local handler to the overlay under the form client's id,
+   * **without journaling it**, because the form action is its delivery and a
+   * push would apply it twice. Settle the returned {@link FormSubmission} on
+   * the action's receipt. The optimistic effect is released by the pull that
+   * covers the form client, never by the receipt itself.
+   *
+   * The entry holds a place in the unpulled tail's bound from the start, so
+   * an acknowledgement never takes the tail past it. When the tail has no
+   * room, the entry is overlaid without one, and an acknowledgement drops it
+   * instead of parking it; the pull it signals then shows the confirmed rows.
+   * The entry lives in memory only: a reload before the receipt loses it, and
+   * the next pull shows the server's state.
+   */
+  readonly beginFormMutation: (
+    form: FormClient,
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<FormSubmission, MutatorError | StoreError>;
   /**
    * Mutation lifecycle events: a `journaled` event for every journaled
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
@@ -1233,6 +1292,9 @@ export const make = (
       )
     );
     const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>(bootTail.entries);
+    // Enhanced form submissions awaiting their action's receipt (ADR-0030 #215
+    // §4): overlaid, never journaled. Written only under `overlayLock`.
+    const formsInFlight = yield* Ref.make<ReadonlyArray<Mutation>>([]);
     // Set while the copy may differ from the store: its boot read failed, or a reload did. The
     // next reader under `overlayLock` re-reads the store first, so a failed read cannot leave the
     // copy empty for good (#387).
@@ -1246,12 +1308,14 @@ export const make = (
       }
       return yield* Ref.get(unpulled);
     });
-    // The journal the overlay replays: the unpulled tail, then the pending
+    // The journal the overlay replays: the unpulled tail, the enhanced form
+    // submissions awaiting their receipt, then the pending
     // journal. The caller holds `overlayLock`.
     const overlayJournalLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
       function* () {
         const tail = yield* tailLocked;
-        return [...tail, ...(yield* store.pendingMutations)];
+        const forms = yield* Ref.get(formsInFlight);
+        return [...tail, ...forms, ...(yield* store.pendingMutations)];
       }
     );
     // The same snapshot, for a caller that does not already hold the lock.
@@ -2057,7 +2121,10 @@ export const make = (
           // which are cleared just below, so the tail goes with them (#286).
           yield* Semaphore.withPermit(
             overlayLock,
-            store.clearUnpulled.pipe(Effect.andThen(Ref.set(unpulled, [])))
+            store.clearUnpulled.pipe(
+              Effect.andThen(Ref.set(unpulled, [])),
+              Effect.andThen(Ref.set(formsInFlight, []))
+            )
           );
           yield* clearConfirmedRows;
           yield* store.clearCookie;
@@ -3344,6 +3411,67 @@ export const make = (
         );
       });
 
+    // The client half of an enhanced form submit (ADR-0030 #215 §4). The entry
+    // is overlaid under the form client's id but never journaled: the form
+    // action delivers it. It holds one place of the tail's bound from the start
+    // (`reserveChunk`), so parking it on acknowledgement never takes the tail
+    // past the bound. A pull that covers the form client releases it from the
+    // tail as it releases a pushed mutation (`acknowledgeLocked`).
+    const engineScope = yield* Effect.scope;
+    const signalPull = Effect.forkIn(pull.pipe(Effect.ignore), engineScope).pipe(Effect.asVoid);
+    const beginFormMutation = (form: FormClient, mutator: string, args: unknown) =>
+      Effect.gen(function* () {
+        const encoded = yield* encodeFor(mutator, args);
+        const entry: Mutation = {
+          clientId: form.clientId,
+          mutationId: form.mutationId,
+          mutator,
+          args: encoded,
+          createdAt: yield* Clock.currentTimeMillis,
+        };
+        const reserved = yield* reserveChunk(1);
+        const change = yield* Semaphore.withPermit(
+          overlayLock,
+          Effect.gen(function* () {
+            const cachedBefore = yield* Ref.get(overlayCache);
+            const base: OverlayBase =
+              cachedBefore === undefined
+                ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked }
+                : { _tag: "Warm", view: cachedBefore };
+            yield* Ref.update(formsInFlight, (forms) => [...forms, entry]);
+            return yield* applyMutationToOverlayLocked(mutator, args, base);
+          })
+        ).pipe(Effect.onError(() => releaseChunk(reserved)));
+        yield* publishChange(change);
+        const open = yield* Ref.make(true);
+        // End the entry once: take it out of the in-flight list, park it when
+        // `park` and it holds a place, give the place back, and pull.
+        const end = (park: boolean) =>
+          Effect.gen(function* () {
+            if (!(yield* Ref.getAndSet(open, false))) return;
+            yield* Semaphore.withPermit(
+              overlayLock,
+              Effect.gen(function* () {
+                yield* Ref.update(formsInFlight, (forms) => forms.filter((m) => m !== entry));
+                if (park && reserved > 0) {
+                  const held = yield* tailLocked;
+                  yield* store.parkUnpulled([entry]);
+                  yield* Ref.set(unpulled, [...held, entry]);
+                }
+                yield* Ref.set(overlayCache, undefined);
+              })
+            ).pipe(Effect.ensuring(releaseChunk(reserved)));
+            yield* publishChange(REBUILD);
+            yield* signalPull;
+          });
+        const submission: FormSubmission = {
+          form,
+          settle: (ruling) => end(ruling.phase === "acknowledged"),
+          abandon: end(false).pipe(Effect.ignore),
+        };
+        return submission;
+      });
+
     // Resolve one named subscription to its local subset, skipping (undefined)
     // any whose args can no longer decode or whose query is unregistered — a
     // read-only best effort for introspection, never a failure.
@@ -3399,6 +3527,7 @@ export const make = (
           const mutationId = yield* journal(mutator, encoded, args, deferred);
           return { mutationId, acknowledged: Deferred.await(deferred) };
         }),
+      beginFormMutation,
       subscribe: subscribeSubset,
       seed,
       clearRows,
