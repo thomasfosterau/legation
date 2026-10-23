@@ -3,6 +3,7 @@
 Date: 2026-07-03
 Status: Accepted — amended 2026-09-01 (placement 2: the Kit package became the
 `@thomasfosterau/legation-svelte/kit` subpath; `Hydration` is public and speaks `Query.Read`)
+and 2026-10-23 (#215: a form action that can name the client group runs a named Mutation; see ADR-0030)
 
 ## Context
 
@@ -70,6 +71,20 @@ concept, not an implementation seam. And it speaks ADR-0022's vocabulary:
 `Subset`. The Kit boot is `clientRuntime` (over `Client.make`, so the sync loop
 starts itself) rather than `engineRuntime`.
 
+## Amendment (2026-10-23, #215): form actions that can name the client group
+
+The out-of-band-writer line in Consequences split every write into two
+authorings — a `Mutation` for the JS path and a form action for the no-JS
+path — which is what `Mutation` exists to prevent. It now applies only to a
+writer that **cannot** name the client group. A form action that can (the
+client-group cookie above) runs a named Mutation as one of that group's
+mutations — the push path's handler, the mutation id bumped in the same
+transaction — and returns a receipt naming the mutation id, so a JS page
+reconciles on it rather than waiting for a pull. The mechanism is core;
+only the `Cookies` and form-field plumbing is the Kit subpath's. The
+design, its receipt semantics and their relationship to façade writes are
+[ADR-0030's #215 amendment](0030-facade-writes.md#amendment-215-a-form-action-runs-a-named-mutation-with-the-same-receipt-semantics).
+
 ## Consequences
 
 - SSR works on any Effect-capable server framework — the Kit surface is sugar,
@@ -85,3 +100,5 @@ starts itself) rather than `engineRuntime`.
 - No-JS writes are out-of-band writers (ADR-0019): form actions commit
   through the app's API and publish invalidation hints; they do not enter the
   mutation journal.
+  _Amended 2026-10-23 (#215): this holds only for an action that cannot
+  name the client group; see the amendment below._
