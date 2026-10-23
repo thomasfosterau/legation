@@ -20,6 +20,7 @@
 
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ClientEngine, Related, Subset } from "@thomasfosterau/legation-effect/internal";
@@ -60,12 +61,10 @@ export const resolve = (lookup: Lookup, value: JsonApiRow, name: string): Relate
   const ref = refOf(value, name);
   if (ref === null || ref === undefined) return ref;
   if (Array.isArray(ref)) {
-    const rows: Array<JsonApiRow> = [];
-    for (const link of ref) {
+    return ref.flatMap((link) => {
       const row = lookup(link.type, link.id);
-      if (row !== undefined) rows.push(row);
-    }
-    return rows;
+      return row === undefined ? [] : [row];
+    });
   }
   return isLink(ref) ? lookup(ref.type, ref.id) : undefined;
 };
@@ -76,9 +75,10 @@ export const hydrate = (
   value: JsonApiRow,
   names: ReadonlyArray<string>
 ): Record<string, RelatedValue> => {
-  const related: Record<string, RelatedValue> = {};
-  for (const name of names) related[name] = resolve(lookup, value, name);
-  return related;
+  return R.fromIterableWith(names, (name): [string, RelatedValue] => [
+    name,
+    resolve(lookup, value, name),
+  ]);
 };
 
 // ─── Delegation to the core `Related` plumbing ───────────────────────────────
@@ -97,16 +97,14 @@ export const hydrate = (
 const linkageStrategy = (names: ReadonlyArray<string>): Related.Strategy => ({
   targets: (baseRows) => {
     const map = new Map<string, { field: string; ids: Set<string> }>();
-    for (const row of baseRows) {
-      const value = row.value as JsonApiRow;
-      for (const name of names) {
-        for (const link of linksOf(value, name)) {
-          const entry = map.get(link.type) ?? { field: "id", ids: new Set<string>() };
-          entry.ids.add(link.id);
-          map.set(link.type, entry);
-        }
-      }
-    }
+    const links = baseRows.flatMap((row) =>
+      names.flatMap((name) => linksOf(row.value as JsonApiRow, name))
+    );
+    links.forEach((link) => {
+      const entry = map.get(link.type) ?? { field: "id", ids: new Set<string>() };
+      entry.ids.add(link.id);
+      map.set(link.type, entry);
+    });
     return map;
   },
   resolveRow: (index, baseRow) => {

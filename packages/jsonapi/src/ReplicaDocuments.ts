@@ -175,13 +175,13 @@ const bindAll = (
   resources: ReadonlyMap<string, Resource.Any>
 ): ReadonlyMap<string, Binding> => {
   const bindings = new Map<string, Binding>();
-  for (const resource of resources.values()) {
+  resources.forEach((resource) => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) {
       throw new Error(`ReplicaDocuments: no node "${resource.type}" in the graph for the resource`);
     }
     bindings.set(resource.type, { node, resource, plan: Linkage.planOf(nodes, resource, node) });
-  }
+  });
   return bindings;
 };
 
@@ -203,24 +203,24 @@ const carriedTypes = (resource: Resource.Any): ReadonlyArray<string> => [
 const undeclared = (binding: Binding, parsed: JsonApiQuery.ParsedRead): QueryError | undefined => {
   const { resource } = binding;
   const relationships = descriptorsOf(resource);
-  for (const name of Object.keys(parsed.read.include ?? {})) {
-    if (relationships[name] === undefined) {
-      return JsonApiQuery.invalidParameter(
-        resource.type,
-        "include",
-        `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${Object.keys(relationships).join(", ")})`
-      );
-    }
+  const name = Object.keys(parsed.read.include ?? {}).find(
+    (included) => relationships[included] === undefined
+  );
+  if (name !== undefined) {
+    return JsonApiQuery.invalidParameter(
+      resource.type,
+      "include",
+      `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${Object.keys(relationships).join(", ")})`
+    );
   }
   const types = carriedTypes(resource);
-  for (const type of Object.keys(parsed.fields ?? {})) {
-    if (!types.includes(type)) {
-      return JsonApiQuery.invalidParameter(
-        resource.type,
-        `fields[${type}]`,
-        `"${type}" is not a type the "${resource.type}" resource can carry (types: ${types.join(", ")})`
-      );
-    }
+  const type = Object.keys(parsed.fields ?? {}).find((projected) => !types.includes(projected));
+  if (type !== undefined) {
+    return JsonApiQuery.invalidParameter(
+      resource.type,
+      `fields[${type}]`,
+      `"${type}" is not a type the "${resource.type}" resource can carry (types: ${types.join(", ")})`
+    );
   }
   return undefined;
 };

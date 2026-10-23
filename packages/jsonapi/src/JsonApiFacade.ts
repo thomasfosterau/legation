@@ -390,15 +390,14 @@ const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
   nodes: Node.NodeRegistry
 ): ReadonlyArray<Route> => {
-  const routes: Array<Route> = [];
-  for (const resource of Convention.reflectResources(api).values()) {
-    if (!nodes.nodes.has(resource.type)) continue;
-    if (resource.list !== undefined) routes.push(routeOf(resource.type, resource.list.path, false));
-    if (resource.getOne !== undefined) {
-      routes.push(routeOf(resource.type, resource.getOne.path, true));
-    }
-  }
-  return routes;
+  return [...Convention.reflectResources(api).values()].flatMap((resource) => {
+    if (!nodes.nodes.has(resource.type)) return [];
+    const list =
+      resource.list === undefined ? [] : [routeOf(resource.type, resource.list.path, false)];
+    const one =
+      resource.getOne === undefined ? [] : [routeOf(resource.type, resource.getOne.path, true)];
+    return list.concat(one);
+  });
 };
 
 /** One reflected write route the façade may intercept (ADR-0030 §3). */
@@ -561,7 +560,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     return made;
   };
 
-  for (const route of routes) writerFor(options.prefix ?? route.prefix);
+  routes.forEach((route) => {
+    writerFor(options.prefix ?? route.prefix);
+  });
 
   const candidateOf = (request: Request): Candidate | undefined => {
     if (request.method !== "GET" || !acceptsJsonApi(request.headers.get("accept"))) {

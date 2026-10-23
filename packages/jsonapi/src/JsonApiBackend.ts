@@ -110,6 +110,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -248,13 +249,10 @@ const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefi
       return predicate.op === "eq" && predicate.field === "id"
         ? new Set([String(predicate.value)])
         : undefined;
-    case "And": {
-      for (const inner of predicate.predicates) {
-        const ids = pinnedIds(inner);
-        if (ids !== undefined) return ids;
-      }
-      return undefined;
-    }
+    case "And":
+      return Option.getOrUndefined(
+        Arr.findFirst(predicate.predicates, (inner) => Option.fromUndefinedOr(pinnedIds(inner)))
+      );
     default:
       return undefined;
   }
@@ -325,16 +323,16 @@ const setEntry = (acc: WriteAccumulator, collection: string, id: string, entry: 
  */
 const oldsOf = (acc: WriteAccumulator): Map<string, Map<string, unknown>> => {
   const olds = new Map<string, Map<string, unknown>>();
-  for (const [collection, entries] of acc.rows) {
-    for (const [id, entry] of entries) {
+  acc.rows.forEach((entries, collection) =>
+    entries.forEach((entry, id) => {
       if (Option.isSome(entry.before)) {
         olds.set(
           collection,
           (olds.get(collection) ?? new Map<string, unknown>()).set(id, entry.before.value)
         );
       }
-    }
-  }
+    })
+  );
   return olds;
 };
 
@@ -514,13 +512,13 @@ const rejectionsOf = (
         }>)
       : [];
   const byIndex = new Map<number, string>();
-  for (const error of errors) {
+  errors.forEach((error) => {
     const pointer = error?.source?.pointer;
-    if (!P.isString(pointer)) continue;
+    if (!P.isString(pointer)) return;
     const index = operationIndex(pointer, count);
-    if (index === undefined || byIndex.has(index)) continue;
+    if (index === undefined || byIndex.has(index)) return;
     byIndex.set(index, error.detail ?? error.title ?? fallbackReason);
-  }
+  });
   return [...byIndex].map(([index, reason]) => ({ index, reason }));
 };
 
@@ -570,11 +568,11 @@ interface Group {
 /** A stored group ledger, as the backend holds it. */
 const groupOf = (ledger: Ledger.GroupLedger): Group => {
   const rejections = new Map<string, Map<number, string>>();
-  for (const entry of ledger.rejections) {
+  ledger.rejections.forEach((entry) => {
     const ids = rejections.get(entry.clientId) ?? new Map<number, string>();
     ids.set(entry.mutationId, entry.reason);
     rejections.set(entry.clientId, ids);
-  }
+  });
   return { acknowledged: new Map(Object.entries(ledger.lastMutationIds)), rejections };
 };
 
@@ -770,7 +768,7 @@ export const make = (
       Ref.update(cache, (current) => {
         const next = new Map(current);
         const map = new Map(next.get(collection) ?? []);
-        for (const value of rows) map.set(value.id, value);
+        rows.forEach((value) => map.set(value.id, value));
         next.set(collection, map);
         return next;
       });
@@ -797,22 +795,23 @@ export const make = (
       included: ReadonlyArray<JsonApiRow & { readonly $collection: string }>
     ) =>
       Effect.gen(function* () {
-        const byCollection = new Map<string, Array<JsonApiRow>>();
-        for (const row of included) {
-          const rows = byCollection.get(row.$collection) ?? [];
-          rows.push(row);
-          byCollection.set(row.$collection, rows);
-        }
-        for (const [collection, rows] of byCollection) {
-          yield* cacheRows(collection, rows);
-          yield* Ref.update(includedIds, (current) => {
-            const next = new Map(current);
-            const ids = new Set(next.get(collection) ?? []);
-            for (const row of rows) ids.add(row.id);
-            next.set(collection, ids);
-            return next;
-          });
-        }
+        const byCollection = Arr.groupBy(included, (row) => row.$collection);
+        yield* Effect.forEach(
+          R.toEntries(byCollection),
+          ([collection, rows]) =>
+            cacheRows(collection, rows).pipe(
+              Effect.andThen(
+                Ref.update(includedIds, (current) => {
+                  const next = new Map(current);
+                  const ids = new Set(next.get(collection) ?? []);
+                  rows.forEach((row) => ids.add(row.id));
+                  next.set(collection, ids);
+                  return next;
+                })
+              )
+            ),
+          { concurrency: 1, discard: true }
+        );
       });
 
     const entriesFrom = (values: ReadonlyArray<JsonApiRow>, subset: Subset.Subset) =>
@@ -880,29 +879,29 @@ export const make = (
       Effect.gen(function* () {
         const cached = (yield* Ref.get(cache)).get(collection);
         const getOne = config.resources.get(collection)?.getOne;
-        const result: Array<{ id: string; version: string; value: unknown }> = [];
-        for (const id of ids) {
-          const hit = cached?.get(id);
-          if (hit !== undefined) {
-            result.push({ id, version: versionOf(hit), value: hit });
-            continue;
-          }
-          if (getOne === undefined) continue;
-          const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
-            Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
-          );
-          // A 404 is an absent row: omitted, as the contract requires.
-          if (response.status === 404) continue;
-          const document = yield* parseResponse(response).pipe(
-            Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
-          );
-          const resource = documentToRows(document).rows[0]?.value;
-          if (resource !== undefined) {
-            const value = toRow(resource);
-            result.push({ id, version: versionOf(value), value });
-          }
-        }
-        return result;
+        const found = yield* Effect.forEach(
+          ids,
+          (id) =>
+            Effect.gen(function* () {
+              const hit = cached?.get(id);
+              if (hit !== undefined) return [{ id, version: versionOf(hit), value: hit }];
+              if (getOne === undefined) return [];
+              const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
+                Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
+              );
+              // A 404 is an absent row: omitted, as the contract requires.
+              if (response.status === 404) return [];
+              const document = yield* parseResponse(response).pipe(
+                Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
+              );
+              const resource = documentToRows(document).rows[0]?.value;
+              if (resource === undefined) return [];
+              const value = toRow(resource);
+              return [{ id, version: versionOf(value), value }];
+            }),
+          { concurrency: 1 }
+        );
+        return found.flat();
       });
 
     /** Decode a pushed mutation's args and express it as one JSON:API write. */
@@ -1010,8 +1009,9 @@ export const make = (
         ? Effect.void
         : updateGroup(context.clientGroupId, (group) => {
             const acknowledged = new Map(group.acknowledged);
-            for (const mutation of mutations)
-              acknowledged.set(mutation.clientId, mutation.mutationId);
+            mutations.forEach((mutation) =>
+              acknowledged.set(mutation.clientId, mutation.mutationId)
+            );
             return { ...group, acknowledged };
           });
 
@@ -1024,11 +1024,11 @@ export const make = (
         ? Effect.void
         : updateGroup(context.clientGroupId, (group) => {
             const rejections = new Map(group.rejections);
-            for (const entry of rejected) {
+            rejected.forEach((entry) => {
               const ids = new Map(rejections.get(entry.clientId) ?? []);
               ids.set(entry.mutationId, entry.reason);
               rejections.set(entry.clientId, ids);
-            }
+            });
             return { ...group, rejections };
           });
 
@@ -1058,19 +1058,13 @@ export const make = (
     ): Effect.Effect<Array<Backend.RejectedMutation>, BackendError> =>
       Effect.gen(function* () {
         const group = yield* readGroup(context.clientGroupId);
-        const replayed: Array<Backend.RejectedMutation> = [];
-        for (const mutation of mutations) {
-          if (mutation.mutationId > (group.acknowledged.get(mutation.clientId) ?? 0)) continue;
+        return mutations.flatMap((mutation): Array<Backend.RejectedMutation> => {
+          if (mutation.mutationId > (group.acknowledged.get(mutation.clientId) ?? 0)) return [];
           const reason = group.rejections.get(mutation.clientId)?.get(mutation.mutationId);
-          if (reason !== undefined) {
-            replayed.push({
-              clientId: mutation.clientId,
-              mutationId: mutation.mutationId,
-              reason,
-            });
-          }
-        }
-        return replayed;
+          return reason === undefined
+            ? []
+            : [{ clientId: mutation.clientId, mutationId: mutation.mutationId, reason }];
+        });
       });
 
     const lastMutationIdsOf = (context: Backend.SyncContext) =>
@@ -1081,13 +1075,15 @@ export const make = (
     /** The group's remembered rejections, each with its reason (#365). A pull reports those its watermark covers. */
     const rememberedRejections = (context: Backend.SyncContext) =>
       readGroup(context.clientGroupId).pipe(
-        Effect.map((group) => {
-          const rejected: Array<Backend.RejectedMutation> = [];
-          for (const [clientId, ids] of group.rejections) {
-            for (const [mutationId, reason] of ids) rejected.push({ clientId, mutationId, reason });
-          }
-          return rejected;
-        })
+        Effect.map((group) =>
+          [...group.rejections].flatMap(([clientId, ids]) =>
+            [...ids].map(([mutationId, reason]): Backend.RejectedMutation => ({
+              clientId,
+              mutationId,
+              reason,
+            }))
+          )
+        )
       );
 
     /**
@@ -1108,14 +1104,20 @@ export const make = (
         const group = yield* readGroup(context.clientGroupId);
         const expected = new Map<string, number>(group.acknowledged);
         const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
-        for (const mutation of mutations) {
-          const last = expected.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (acknowledged)
-          if (strict && mutation.mutationId > last + 1)
-            return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
-          expected.set(mutation.clientId, mutation.mutationId);
-          batch.push({ mutation, write: yield* writeFor(mutation) });
-        }
+        yield* Effect.forEach(
+          mutations,
+          (mutation) => {
+            const last = expected.get(mutation.clientId) ?? 0;
+            if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
+            if (strict && mutation.mutationId > last + 1)
+              return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
+            expected.set(mutation.clientId, mutation.mutationId);
+            return Effect.map(writeFor(mutation), (write) => {
+              batch.push({ mutation, write });
+            });
+          },
+          { concurrency: 1, discard: true }
+        );
         return batch;
       });
 
@@ -1137,14 +1139,19 @@ export const make = (
           (yield* readGroup(context.clientGroupId)).acknowledged
         );
         const pending: Array<PushedMutation> = [];
-        for (const mutation of mutations) {
-          const last = expected.get(mutation.clientId) ?? 0;
-          if (mutation.mutationId <= last) continue; // idempotent (acknowledged)
-          if (mutation.mutationId > last + 1)
-            return yield* mutationGap(mutation.clientId, last + 1, mutation.mutationId);
-          expected.set(mutation.clientId, mutation.mutationId);
-          pending.push(mutation);
-        }
+        yield* Effect.forEach(
+          mutations,
+          (mutation) => {
+            const last = expected.get(mutation.clientId) ?? 0;
+            if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
+            if (mutation.mutationId > last + 1)
+              return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
+            expected.set(mutation.clientId, mutation.mutationId);
+            pending.push(mutation);
+            return Effect.void;
+          },
+          { concurrency: 1, discard: true }
+        );
         return pending;
       });
 
@@ -1176,38 +1183,43 @@ export const make = (
           })
         );
 
-        for (const { mutation, write: decodedWrite } of decoded) {
-          // An undecodable mutation decodes again here and fails the push with the
-          // same BackendError it always raised, leaving its ledger entry unmoved.
-          const write = Option.isSome(decodedWrite)
-            ? decodedWrite.value
-            : yield* writeFor(mutation);
-          yield* enterRow(acc, write);
-          // A permanent HTTP rejection (4xx) skips this mutation but still bumps
-          // its id, so it is acknowledged and never poisons the queue. A
-          // transient failure propagates and aborts the push.
-          const outcome = yield* applyOne(write).pipe(
-            Effect.map((document) => ({ _tag: "applied", document }) as const),
-            Effect.catchTag("MutationRejected", (error) =>
-              Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
-            )
-          );
-          if (outcome._tag === "applied") {
-            recordApplied(acc, write, outcome.document);
-            yield* cacheApplied(acc, write);
-          } else {
-            const rejection = {
-              clientId: mutation.clientId,
-              mutationId: mutation.mutationId,
-              reason: outcome.reason,
-            };
-            acc.rejected.push(rejection);
-            // Remembered before the id is acknowledged, so a copy that sees the id
-            // as covered also sees its rejection (#366).
-            yield* rememberRejections(context, [rejection]);
-          }
-          yield* bumpLedger(context, [mutation]);
-        }
+        yield* Effect.forEach(
+          decoded,
+          ({ mutation, write: decodedWrite }) =>
+            Effect.gen(function* () {
+              // An undecodable mutation decodes again here and fails the push with the
+              // same BackendError it always raised, leaving its ledger entry unmoved.
+              const write = Option.isSome(decodedWrite)
+                ? decodedWrite.value
+                : yield* writeFor(mutation);
+              yield* enterRow(acc, write);
+              // A permanent HTTP rejection (4xx) skips this mutation but still bumps
+              // its id, so it is acknowledged and never poisons the queue. A
+              // transient failure propagates and aborts the push.
+              const outcome = yield* applyOne(write).pipe(
+                Effect.map((document) => ({ _tag: "applied", document }) as const),
+                Effect.catchTag("MutationRejected", (error) =>
+                  Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
+                )
+              );
+              if (outcome._tag === "applied") {
+                recordApplied(acc, write, outcome.document);
+                yield* cacheApplied(acc, write);
+              } else {
+                const rejection = {
+                  clientId: mutation.clientId,
+                  mutationId: mutation.mutationId,
+                  reason: outcome.reason,
+                };
+                acc.rejected.push(rejection);
+                // Remembered before the id is acknowledged, so a copy that sees the id
+                // as covered also sees its rejection (#366).
+                yield* rememberRejections(context, [rejection]);
+              }
+              yield* bumpLedger(context, [mutation]);
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         const rejected = [...replays, ...acc.rejected];
         return {
@@ -1276,42 +1288,57 @@ export const make = (
           rejected: [],
           rows: new Map(),
         };
-        for (const { write } of batch) yield* enterBatchWrite(acc, write);
+        yield* Effect.forEach(batch, ({ write }) => enterBatchWrite(acc, write), {
+          concurrency: 1,
+          discard: true,
+        });
 
         // Batch index → rejection reason; each round trip drops at least one.
         const rejectedAt = new Map<number, string>();
-        let pending = batch.map((entry, index) => ({ ...entry, index }));
-        let results: ReadonlyArray<unknown> = [];
-        while (Arr.isReadonlyArrayNonEmpty(pending)) {
-          const outcome = yield* sendAtomic(
-            atomic.path,
-            pending.map((entry) => operationOf(entry.write))
-          );
-          if (outcome._tag === "applied") {
-            results = outcome.results;
-            break;
-          }
-          const refused = outcome.rejections.flatMap(({ index }) => {
-            const entry = pending[index];
-            return entry === undefined ? [] : [entry];
+        type Pending = ReadonlyArray<(typeof batch)[number] & { readonly index: number }>;
+        // One round trip; refused operations are dropped and the rest resent.
+        const round = (
+          pending: Pending
+        ): Effect.Effect<
+          { readonly pending: Pending; readonly results: ReadonlyArray<unknown> },
+          BackendError
+        > =>
+          Effect.gen(function* () {
+            if (Arr.isReadonlyArrayEmpty(pending)) return { pending, results: [] };
+            const outcome = yield* sendAtomic(
+              atomic.path,
+              pending.map((entry) => operationOf(entry.write))
+            );
+            if (outcome._tag === "applied") return { pending, results: outcome.results };
+            const refused = outcome.rejections.flatMap(({ index }) => {
+              const entry = pending[index];
+              return entry === undefined ? [] : [entry];
+            });
+            outcome.rejections.forEach(({ index, reason }) => {
+              const entry = pending[index];
+              if (entry !== undefined) rejectedAt.set(entry.index, reason);
+            });
+            const next = pending.filter((entry) => !rejectedAt.has(entry.index));
+            // A create the server refused may have left its row in place: read it
+            // before the resend when a later write of it still needs the old value.
+            yield* readRefusedCreates(acc, refused, next);
+            return yield* round(next);
           });
-          for (const { index, reason } of outcome.rejections) {
-            const entry = pending[index];
-            if (entry !== undefined) rejectedAt.set(entry.index, reason);
-          }
-          pending = pending.filter((entry) => !rejectedAt.has(entry.index));
-          // A create the server refused may have left its row in place: read it
-          // before the resend when a later write of it still needs the old value.
-          yield* readRefusedCreates(acc, refused, pending);
-        }
+        const { pending, results } = yield* round(
+          batch.map((entry, index) => ({ ...entry, index }))
+        );
 
         // Hints from what applied, in push order: each row's value from the
         // result document where the server returned one, else as merged or
         // written. A delete drops an earlier write's value for the row (#369).
-        for (const [position, { write }] of pending.entries()) {
-          recordApplied(acc, write, resultRow(results[position]));
-          yield* cacheApplied(acc, write);
-        }
+        yield* Effect.forEach(
+          pending,
+          ({ write }, position) => {
+            recordApplied(acc, write, resultRow(results[position]));
+            return cacheApplied(acc, write);
+          },
+          { concurrency: 1, discard: true }
+        );
 
         const rejected = [...rejectedAt]
           .toSorted(([a], [b]) => a - b)

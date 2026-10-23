@@ -18,6 +18,8 @@ import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
+import * as Result from "effect/Result";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -73,13 +75,13 @@ const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Arr
 /** Map a resource (or bare identifier) to a collection row. */
 export const resourceToRow = (resource: ResourceObject | ResourceIdentifier): CollectionRow => {
   const full = resource as ResourceObject;
-  const relationships: Record<string, RelationshipRef> = {};
-  for (const [name, relationship] of Object.entries(full.relationships ?? {})) {
-    const data = relationship.data;
-    if (data === undefined) continue;
-    relationships[name] =
-      data === null ? null : isReadonlyArray(data) ? data.map(identifier) : identifier(data);
-  }
+  const relationships = R.filterMap(full.relationships ?? {}, ({ data }) =>
+    data === undefined
+      ? Result.failVoid
+      : Result.succeed<RelationshipRef>(
+          data === null ? null : isReadonlyArray(data) ? data.map(identifier) : identifier(data)
+        )
+  );
   return {
     collection: resource.type,
     id: resource.id,
