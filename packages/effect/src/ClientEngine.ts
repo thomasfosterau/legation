@@ -11,6 +11,7 @@
  * atomically through a single changes event.
  */
 
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -1390,7 +1391,7 @@ export const make = (
     const noteAutoIndexFields = (subset: Subset.Subset): Effect.Effect<void> => {
       if (!options.autoIndex) return Effect.void;
       const discovered = indexableFieldsOf(subset.where);
-      if (discovered.length === 0) return Effect.void;
+      if (Arr.isReadonlyArrayEmpty(discovered)) return Effect.void;
       return Ref.modify(indexFields, (map) => {
         const current = map.get(subset.collection) ?? new Set<string>();
         const grown = new Set(current);
@@ -1481,7 +1482,7 @@ export const make = (
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
       overlayJournal.pipe(
         Effect.flatMap((pending) => {
-          if (pending.length === 0) return ensureIndexBuilt(collection);
+          if (Arr.isReadonlyArrayEmpty(pending)) return ensureIndexBuilt(collection);
           return collectionsTouchedByMutations(pending).pipe(
             Effect.flatMap((touched) =>
               touched !== undefined && !touched.has(collection)
@@ -1511,7 +1512,7 @@ export const make = (
     // `built` snapshot are one `Ref.modify`, so an install is ordered entirely
     // before or entirely after this write.
     const updateIndexes = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void> => {
-      if (ops.length === 0) return Effect.void;
+      if (Arr.isReadonlyArrayEmpty(ops)) return Effect.void;
       return Ref.modify(indexState, (state) => {
         let clears = state.clears;
         const generations = new Map(state.generations);
@@ -1961,7 +1962,7 @@ export const make = (
     // re-decoding args already gone from the journal.
     const dropIfPending: ClientEngine["dropIfPending"] = (mutationIds) =>
       Effect.gen(function* () {
-        if (mutationIds.length === 0) return NO_COMPACTION;
+        if (Arr.isReadonlyArrayEmpty(mutationIds)) return NO_COMPACTION;
         const clientId = yield* currentClientId;
         // Uninterruptible from the store's commit to the last re-key (#249
         // review B1): the store has renumbered the journal by the time
@@ -1976,7 +1977,7 @@ export const make = (
             Effect.gen(function* () {
               if ((yield* Ref.get(pushInFlight)) > 0) return NO_COMPACTION;
               const compaction = yield* store.compactPending(clientId, mutationIds);
-              if (compaction.dropped.length === 0) return NO_COMPACTION;
+              if (Arr.isReadonlyArrayEmpty(compaction.dropped)) return NO_COMPACTION;
               // Move the `mutateWithAck` deferreds: detach every old key first, so
               // a survivor landing on a slot a dropped entry vacated cannot clash.
               const orphans = yield* Ref.modify(acks, (map) => {
@@ -2156,7 +2157,7 @@ export const make = (
       Effect.gen(function* () {
         const pending = yield* store.pendingMutations;
         yield* adoptPending(pending);
-        if (pending.length === 0) return pending;
+        if (Arr.isReadonlyArrayEmpty(pending)) return pending;
         const highest = new Map<string, number>();
         for (const m of pending) {
           if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
@@ -2226,7 +2227,7 @@ export const make = (
                     const rejected = yield* acknowledgePushed(response);
                     yield* settleOwnApplied(response.lastMutationIds);
                     yield* sampleJournalDepth; // the trim changed journal depth
-                    if (rejected.length > 0) {
+                    if (Arr.isReadonlyArrayNonEmpty(rejected)) {
                       yield* publishChange(
                         rebuildFor(yield* collectionsTouchedByMutations(rejected))
                       );
@@ -2271,8 +2272,9 @@ export const make = (
     const push: ClientEngine["push"] = withVersionLatch(
       Effect.acquireUseRelease(
         claimPending,
-        (pending) => (pending.length === 0 ? Effect.void : pushClaimed(pending)),
-        (pending) => (pending.length === 0 ? Effect.void : Ref.update(pushInFlight, (n) => n - 1))
+        (pending) => (Arr.isReadonlyArrayEmpty(pending) ? Effect.void : pushClaimed(pending)),
+        (pending) =>
+          Arr.isReadonlyArrayEmpty(pending) ? Effect.void : Ref.update(pushInFlight, (n) => n - 1)
       )
     ).pipe(Effect.withSpan(Telemetry.span.clientPush));
 
@@ -2424,7 +2426,7 @@ export const make = (
             return before;
           })
         );
-        const hadPending = journalBefore.length > 0;
+        const hadPending = Arr.isReadonlyArrayNonEmpty(journalBefore);
         let change: ViewChange;
         if (hasClear) {
           change = REBUILD;
@@ -2472,7 +2474,7 @@ export const make = (
             clientGroupId: options.clientGroupId,
             cookie,
             subscriptions: subsets,
-            ...(namedSubscriptions.length > 0 ? { namedSubscriptions } : {}),
+            ...(Arr.isReadonlyArrayNonEmpty(namedSubscriptions) ? { namedSubscriptions } : {}),
             ...(options.schemaVersion !== undefined
               ? { schemaVersion: options.schemaVersion }
               : {}),
@@ -2659,7 +2661,7 @@ export const make = (
       Effect.gen(function* () {
         yield* subscribeSubset(subset);
         const rows = yield* query(subset);
-        if (rows.length > 0) return;
+        if (Arr.isReadonlyArrayNonEmpty(rows)) return;
         yield* dedupedPull(subset);
       });
 
@@ -3024,7 +3026,7 @@ export const make = (
           // `includeInitial` emits the current window as `enter`s in its own
           // batch — no `reset` marker, since there is nothing to reset from.
           const initial: ReadonlyArray<ReadonlyArray<RowChange.RowChange<LocalRow>>> =
-            changeOptions?.includeInitial === true && initialRows.length > 0
+            changeOptions?.includeInitial === true && Arr.isReadonlyArrayNonEmpty(initialRows)
               ? [RowChange.enters(initialRows)]
               : [];
           const readSubset = Effect.succeed(subset);
@@ -3032,7 +3034,7 @@ export const make = (
             Stream.fromIterable(initial),
             Stream.fromSubscription(subscription).pipe(
               Stream.mapEffect((item) => stepViewChanges(viewRef, lastSeenRef, readSubset, item)),
-              Stream.filter((batch) => batch.length > 0)
+              Stream.filter((batch) => Arr.isReadonlyArrayNonEmpty(batch))
             )
           );
         })

@@ -14,6 +14,7 @@
  * from the upstream's own change token (ETag, `meta.version`, …).
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
@@ -139,7 +140,7 @@ export const parseResponse = (
       Effect.mapError((cause) => new ParseError({ message: "Failed to parse JSON body", cause }))
     );
     const document = yield* decodeDocument(json);
-    if (document.errors && document.errors.length > 0) {
+    if (document.errors && Arr.isReadonlyArrayNonEmpty(document.errors)) {
       return yield* new ApiError({ message: "Document carried errors", errors: document.errors });
     }
     return document;

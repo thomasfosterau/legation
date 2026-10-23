@@ -40,11 +40,13 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -294,7 +296,7 @@ const oneFewerOn = (current: Interest, kind: Kind): Interest => {
  * plain root, and each entry is what coverage compares against.
  */
 const keyOf = (registration: Coverage.Registration): string =>
-  registration.edges.length === 0
+  Arr.isReadonlyArrayEmpty(registration.edges)
     ? Subset.hash(registration.root)
     : MirrorProtocol.relatedKey(
         registration.root.collection,
@@ -385,7 +387,9 @@ export const fromView = (
 
   const register = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
     holdRoot(registration.root).pipe(
-      Effect.andThen(registration.edges.length === 0 ? Effect.void : openEdges(key, registration))
+      Effect.andThen(
+        Arr.isReadonlyArrayEmpty(registration.edges) ? Effect.void : openEdges(key, registration)
+      )
     );
 
   const unregister = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
@@ -588,7 +592,7 @@ export const fromView = (
 
   const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
     const compiled = Query.plan(nodes, read);
-    if (compiled.edges.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
         Effect.acquireRelease(acquire(registration, "observer"), () =>
@@ -738,7 +742,7 @@ const declaredIndexes = (
 ): Readonly<Record<string, ReadonlyArray<string>>> => {
   const indexes: Record<string, ReadonlyArray<string>> = {};
   for (const [name, collection] of nodes.collections) {
-    if (collection.indexes !== undefined && collection.indexes.length > 0) {
+    if (collection.indexes !== undefined && Arr.isReadonlyArrayNonEmpty(collection.indexes)) {
       indexes[name] = collection.indexes;
     }
   }
@@ -779,7 +783,7 @@ export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.S
       mutators: options.mutations,
       ...(options.queries === undefined ? {} : { queries: options.queries }),
       ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      ...(Object.keys(indexes).length > 0 ? { indexes } : {}),
+      ...(!R.isEmptyReadonlyRecord(indexes) ? { indexes } : {}),
       ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),

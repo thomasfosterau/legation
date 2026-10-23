@@ -77,12 +77,15 @@
  */
 
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as Str from "effect/String";
 import {
   type Client,
   FilterPolicy,
@@ -165,7 +168,7 @@ export const fromFilterAst = (ast: Filter.Node): Result.Result<Predicate.Predica
         ast.negated ? Predicate.isNotNull(ast.field) : Predicate.isNull(ast.field)
       );
     case "And":
-      return ast.members.length === 0
+      return Arr.isReadonlyArrayEmpty(ast.members)
         ? Result.succeed(Predicate.always)
         : Result.map(
             Result.all(ast.members.map(fromFilterAst)),
@@ -244,7 +247,7 @@ const FALSE: Predicate.Predicate = { _tag: "Or", predicates: [] };
 
 const isTrue = (predicate: Predicate.Predicate): boolean => predicate._tag === "True";
 const isFalse = (predicate: Predicate.Predicate): boolean =>
-  predicate._tag === "Or" && predicate.predicates.length === 0;
+  predicate._tag === "Or" && Arr.isReadonlyArrayEmpty(predicate.predicates);
 
 /** Kleene `And` over folded members: any false is false; true members vanish. */
 const foldAnd = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
@@ -254,7 +257,7 @@ const foldAnd = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predica
     if (isFalse(folded)) return FALSE;
     if (!isTrue(folded)) kept.push(folded);
   }
-  return kept.length === 0 ? Predicate.always : Predicate.and(...kept);
+  return Arr.isReadonlyArrayEmpty(kept) ? Predicate.always : Predicate.and(...kept);
 };
 
 /** Kleene `Or` over folded members: any true is true; false members vanish. */
@@ -265,7 +268,7 @@ const foldOr = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicat
     if (isTrue(folded)) return Predicate.always;
     if (!isFalse(folded)) kept.push(folded);
   }
-  return kept.length === 0 ? FALSE : Predicate.or(...kept);
+  return Arr.isReadonlyArrayEmpty(kept) ? FALSE : Predicate.or(...kept);
 };
 
 const foldNot = (inner: Predicate.Predicate): Predicate.Predicate => {
@@ -285,9 +288,9 @@ const foldNot = (inner: Predicate.Predicate): Predicate.Predicate => {
 export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predicate => {
   switch (predicate._tag) {
     case "In":
-      return predicate.values.length === 0 ? FALSE : predicate;
+      return Arr.isReadonlyArrayEmpty(predicate.values) ? FALSE : predicate;
     case "NotIn":
-      return predicate.values.length === 0 ? Predicate.always : predicate;
+      return Arr.isReadonlyArrayEmpty(predicate.values) ? Predicate.always : predicate;
     case "And":
       return foldAnd(predicate.predicates);
     case "Or":
@@ -449,7 +452,7 @@ const memoised = <A>(
 
 /** The `include` option of a node's query codecs: single-level paths only (ADR-0028 D1); no edges, no `include` at all. */
 const includeOption = (node: Node.AnyNode) =>
-  Object.keys(node.edges).length > 0 ? ({ depth: 1 } as const) : false;
+  !R.isEmptyReadonlyRecord(node.edges) ? ({ depth: 1 } as const) : false;
 
 const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
 
@@ -749,10 +752,10 @@ const readOf = (
   return Result.map(whereResult, (where) => ({
     collection,
     ...(where === undefined ? {} : { where }),
-    ...(decoded.include === undefined || decoded.include.length === 0
+    ...(decoded.include === undefined || Arr.isReadonlyArrayEmpty(decoded.include)
       ? {}
       : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
-    ...(decoded.sort === undefined || decoded.sort.length === 0
+    ...(decoded.sort === undefined || Arr.isReadonlyArrayEmpty(decoded.sort)
       ? {}
       : { order: orderOf(decoded.sort) }),
     ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
@@ -810,7 +813,7 @@ const locate = (
   nodes: Node.NodeRegistry,
   url: URL
 ): Effect.Effect<{ readonly collection: string; readonly id?: string }, QueryError> => {
-  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+  const segments = url.pathname.split("/").filter((segment) => Str.isNonEmpty(segment));
   const last = segments.at(-1);
   const previous = segments.at(-2);
   if (previous !== undefined && nodes.nodes.has(previous)) {
@@ -960,11 +963,11 @@ const decodedOf = (
         }
       : { ...(read.first === undefined ? {} : { limit: read.first }), offset: read.offset };
   return {
-    ...(include.length === 0 ? {} : { include }),
+    ...(Arr.isReadonlyArrayEmpty(include) ? {} : { include }),
     ...(fields === undefined ? {} : { fields: projectionOf(fields) }),
     ...(filter === undefined ? {} : { filter }),
-    ...(root.orderBy.length === 0 ? {} : { sort: root.orderBy }),
-    ...(Object.keys(page).length === 0 ? {} : { page }),
+    ...(Arr.isReadonlyArrayEmpty(root.orderBy) ? {} : { sort: root.orderBy }),
+    ...(R.isEmptyReadonlyRecord<string, unknown>(page) ? {} : { page }),
   };
 };
 
@@ -1085,7 +1088,7 @@ const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
   const resolved = new Map<string, string>();
   for (const [field, kinds] of types) {
     const [kind, ...rest] = kinds;
-    if (rest.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(rest)) {
       throw new QueryError({
         message: `Field "${field}" is compared with literals of several types (${[...kinds].join(", ")}); ADR-0028 rule (d) admits one`,
         parameter: `filter[${field}]`,
@@ -1159,13 +1162,14 @@ const encodeSort = (terms: ReadonlyArray<SortTerm>): string => {
 export const buildQueryString = (options?: JsonApiRequestOptions): string => {
   if (options === undefined) return "";
   const pairs: Array<UrlQuery.Pair> = [];
-  if (options.include && options.include.length > 0)
+  if (options.include && Arr.isReadonlyArrayNonEmpty(options.include))
     pairs.push(["include", options.include.join(",")]);
   for (const [type, names] of Object.entries(options.fields ?? {})) {
     pairs.push([`fields[${type}]`, names.join(",")]);
   }
   if (options.filter !== undefined) pairs.push(...Object.entries(flatFilter(options.filter)));
-  if (options.sort && options.sort.length > 0) pairs.push(["sort", encodeSort(options.sort)]);
+  if (options.sort && Arr.isReadonlyArrayNonEmpty(options.sort))
+    pairs.push(["sort", encodeSort(options.sort)]);
   for (const [key, value] of Object.entries(options.page ?? {})) {
     if (value !== undefined) pairs.push([`page[${key}]`, String(value)]);
   }
@@ -1200,7 +1204,7 @@ export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRe
   const sort = subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
   return Option.some({
     ...(filter === undefined ? {} : { filter }),
-    ...(sort.length === 0 ? {} : { sort }),
+    ...(Arr.isReadonlyArrayEmpty(sort) ? {} : { sort }),
   });
 };
 

@@ -19,6 +19,7 @@
  * same machinery via {@link queryWith}/{@link observeWith}/{@link relatedWith}.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as P from "effect/Predicate";
@@ -148,7 +149,7 @@ const windowOf = (
   relationship.kind === "paginated" &&
   relationship.first !== undefined &&
   relationship.order !== undefined &&
-  relationship.order.length > 0
+  Arr.isReadonlyArrayNonEmpty(relationship.order)
     ? { orderBy: relationship.order, limit: relationship.first }
     : undefined;
 
@@ -218,7 +219,7 @@ export const fieldMappingStrategy = (
       const bucket = index.get(relationship.collection)?.get(key);
       related[relationship.name] =
         relationship.kind === "one"
-          ? bucket !== undefined && bucket.length > 0
+          ? bucket !== undefined && Arr.isReadonlyArrayNonEmpty(bucket)
             ? bucket[0]!.value
             : null
           : (bucket ?? []).map((row) => row.value);
@@ -902,7 +903,9 @@ export const queryVia = <E>(
       .map(({ id, value }) => ({ id, value }));
     const targets = strategy.targets(base);
     const foreignSubsets = subsetsForTargets(targets);
-    const foreign = foreignSubsets.length === 0 ? [] : yield* fetchRows(foreignSubsets);
+    const foreign = Arr.isReadonlyArrayEmpty(foreignSubsets)
+      ? []
+      : yield* fetchRows(foreignSubsets);
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     for (const [collection, target] of targets) {
       index.set(

@@ -3,6 +3,7 @@
  * (to-one and to-many), and that resolution reads live synced state.
  */
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -10,6 +11,7 @@ import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Str from "effect/String";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -94,7 +96,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
       requests.push(url.pathname + url.search);
-      const segments = url.pathname.split("/").filter((s) => s.length > 0);
+      const segments = url.pathname.split("/").filter((s) => Str.isNonEmpty(s));
       const type = segments[0]!;
       const id = segments[1];
       let response: Response;
@@ -266,7 +268,7 @@ describe("Relationships", () => {
               SubscriptionRef.update(seen, (acc) => [...acc, bodiesOf(rows)])
             )
           );
-          yield* emitted((emissions) => emissions.length > 0);
+          yield* emitted((emissions) => Arr.isReadonlyArrayNonEmpty(emissions));
 
           // Edit a referenced comment only — the base `issues` row is untouched.
           yield* engine.mutate("comments/update", {

@@ -26,6 +26,7 @@ import {
   Mirror,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -241,9 +242,8 @@ describe("EngineHost ↔ Mirror extensions", () => {
 
         // Scope closed → UnsubscribeRelated posted → host released the engine
         // subscriptions the reconcile loop held.
-        const remaining = yield* eventually(
-          engine.activeSubscriptions,
-          (subs) => subs.length === 0
+        const remaining = yield* eventually(engine.activeSubscriptions, (subs) =>
+          Arr.isReadonlyArrayEmpty(subs)
         );
         expect(remaining).toHaveLength(0);
       }),
@@ -280,9 +280,8 @@ describe("Mirror interest ledger", () => {
         );
 
         // The stream was the last interest: its end releases the registration.
-        const remaining = yield* eventually(
-          engine.activeSubscriptions,
-          (subs) => subs.length === 0
+        const remaining = yield* eventually(engine.activeSubscriptions, (subs) =>
+          Arr.isReadonlyArrayEmpty(subs)
         );
         expect(remaining).toHaveLength(0);
       }),
@@ -314,7 +313,7 @@ describe("Mirror interest ledger", () => {
 
         // Releasing the pin (no observers left) drops the registration.
         yield* mirror.unsubscribe(allTodos);
-        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 0);
+        yield* eventually(engine.activeSubscriptions, (subs) => Arr.isReadonlyArrayEmpty(subs));
       }),
     20_000
   );
@@ -422,7 +421,7 @@ describe("ServiceWorkerHost.start", () => {
           const held = yield* eventually(host.registrations, (current) => current.length === 1);
           expect(held).toMatchObject([{ root: allTodos, edges: [] }]);
           yield* mirror.unsubscribe(allTodos);
-          yield* eventually(host.registrations, (current) => current.length === 0);
+          yield* eventually(host.registrations, (current) => Arr.isReadonlyArrayEmpty(current));
         })
       ),
     20_000

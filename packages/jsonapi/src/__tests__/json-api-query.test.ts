@@ -5,6 +5,7 @@
  * parameter, and the canonical string round trip over generated reads.
  */
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -240,7 +241,7 @@ const hasEmptyList = (predicate: Predicate.Predicate): boolean => {
   switch (predicate._tag) {
     case "In":
     case "NotIn":
-      return predicate.values.length === 0;
+      return Arr.isReadonlyArrayEmpty(predicate.values);
     case "And":
     case "Or":
       return predicate.predicates.some(hasEmptyList);

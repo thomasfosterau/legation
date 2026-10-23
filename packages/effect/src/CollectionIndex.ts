@@ -32,6 +32,7 @@
  * residual conjuncts, evaluated by `Predicate.test` over the candidates.
  */
 
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 import * as Predicate from "./Predicate.js";
@@ -244,7 +245,7 @@ const hashLookupIn = (
   fi: FieldIndex,
   values: ReadonlyArray<Predicate.Literal>
 ): ReadonlySet<RowId> => {
-  if (values.length === 0) return EMPTY_IDS;
+  if (Arr.isReadonlyArrayEmpty(values)) return EMPTY_IDS;
   const ids = new Set<RowId>();
   for (const value of values) for (const id of hashLookup(fi, value)) ids.add(id);
   return ids;
@@ -318,7 +319,7 @@ const intersect = (sets: ReadonlyArray<ReadonlySet<RowId>>): ReadonlySet<RowId> 
   const bySize = sets.toSorted((a, b) => a.size - b.size);
   const [smallest, ...rest] = bySize;
   if (smallest === undefined) return EMPTY_IDS;
-  if (rest.length === 0) return smallest;
+  if (Arr.isReadonlyArrayEmpty(rest)) return smallest;
   const result = new Set<RowId>();
   for (const id of smallest) {
     if (rest.every((set) => set.has(id))) result.add(id);
@@ -340,10 +341,10 @@ export const plan = (index: CollectionIndex, predicate: Predicate.Predicate): Pl
     if (ids === undefined) residual.push(conjunct);
     else narrowing.push(ids);
   }
-  if (narrowing.length === 0) return undefined;
+  if (Arr.isReadonlyArrayEmpty(narrowing)) return undefined;
   return {
     candidateIds: intersect(narrowing),
-    residual: residual.length === 0 ? Predicate.always : Predicate.and(...residual),
+    residual: Arr.isReadonlyArrayEmpty(residual) ? Predicate.always : Predicate.and(...residual),
   };
 };
 

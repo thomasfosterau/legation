@@ -295,7 +295,7 @@ describe("per-parent windowed subsets", () => {
           engine.activeSubscriptions,
           (all) =>
             all.some((subset) => subset.collection === "reviews" && subset.limit === undefined) &&
-            reviewWindows(all).length === 0
+            Arr.isReadonlyArrayEmpty(reviewWindows(all))
         );
       })
     )

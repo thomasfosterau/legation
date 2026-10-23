@@ -42,6 +42,7 @@
  * already requires.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -571,7 +572,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             final.lastMutationIds.get(context.clientGroupId) ?? new Map()
           ),
           hints,
-          ...(rejected.length > 0 ? { rejected } : {}),
+          ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
         };
       });
 

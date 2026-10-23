@@ -3,6 +3,7 @@
  * Redis Streams broker each carry a ChangeHint between two serialized buses.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -135,7 +136,7 @@ const makeFakeRedis = Effect.gen(function* () {
         const loop = (): Effect.Effect<unknown> =>
           Effect.gen(function* () {
             const slice = (yield* Ref.get(entries)).filter((e) => seqOf(e.id) > after);
-            if (slice.length > 0) {
+            if (Arr.isReadonlyArrayNonEmpty(slice)) {
               yield* Queue.offer(events, "delivered");
               return [[stream, slice.map((e) => [e.id, ["p", e.payload]])]];
             }

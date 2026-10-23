@@ -60,6 +60,7 @@
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
 import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
@@ -229,7 +230,7 @@ const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
     type: node.type,
     id: row.id,
     attributes: attributesOf(node, recordOf(row.value)),
-    ...(Object.keys(relationships).length === 0 ? {} : { relationships }),
+    ...(R.isEmptyReadonlyRecord(relationships) ? {} : { relationships }),
   };
 };
 

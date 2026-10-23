@@ -68,6 +68,7 @@
  * a single undo step too, matching what the user actually experiences as one
  * edit.
  */
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
@@ -126,7 +127,7 @@ const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, St
   Effect.uninterruptible(
     Effect.gen(function* () {
       const { renumbered } = yield* engine.dropIfPending([previous]);
-      if (renumbered.length === 0) return;
+      if (Arr.isReadonlyArrayEmpty(renumbered)) return;
       const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
       const all = trackersByEngine.get(engine);
       if (all === undefined) return;

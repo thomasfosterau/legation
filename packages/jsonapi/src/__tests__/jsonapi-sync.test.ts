@@ -17,6 +17,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as Str from "effect/String";
 import { ClientStore } from "@thomasfosterau/legation-effect";
 import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
@@ -57,7 +58,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
 
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
-      const segments = url.pathname.split("/").filter((s) => s.length > 0);
+      const segments = url.pathname.split("/").filter((s) => Str.isNonEmpty(s));
       const id = segments.length > 1 ? segments[1] : undefined;
       let response: Response;
       switch (request.method) {

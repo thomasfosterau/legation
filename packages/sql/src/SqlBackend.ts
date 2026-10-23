@@ -92,6 +92,7 @@
  * would be a bug: a soft-deleted row must never keep syncing as a put).
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -448,7 +449,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     ids: ReadonlyArray<string>
   ): Effect.Effect<ReadonlyArray<SqlRow>, BackendError> => {
     const mapping = config.tables[collection];
-    if (mapping === undefined || ids.length === 0) return Effect.succeed([]);
+    if (mapping === undefined || Arr.isReadonlyArrayEmpty(ids)) return Effect.succeed([]);
     return executor
       .query(
         Sql.compileSelect({
@@ -623,7 +624,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           `AND ${q("last_mutation_id")} = ${ph(4)} RETURNING ${q("last_mutation_id")}`,
         params: [mutationId, clientGroupId, clientId, mutationId - 1],
       })
-      .pipe(Effect.map((rows) => rows.length > 0));
+      .pipe(Effect.map((rows) => Arr.isReadonlyArrayNonEmpty(rows)));
 
   // Claim `mutationId` before its handler runs. `undefined`: this call won the
   // claim and must run the handler. A `replayed` settlement: the ledger already
@@ -855,7 +856,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         return {
           lastMutationIds: yield* readLastIds(context.clientGroupId),
           hints: yield* Effect.forEach(hints, enrichHint),
-          ...(rejected.length > 0 ? { rejected } : {}),
+          ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
         };
       })
     );

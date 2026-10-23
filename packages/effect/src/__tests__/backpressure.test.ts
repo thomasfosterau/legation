@@ -189,7 +189,7 @@ describe("backpressure — engine change hub", () => {
       const expected = yield* engine.query(todos);
       yield* eventually(
         Ref.get(pages),
-        (all) => all.length > 0 && all[all.length - 1]!.length === expected.length
+        (all) => Arr.isReadonlyArrayNonEmpty(all) && all[all.length - 1]!.length === expected.length
       );
       const last = (yield* Ref.get(pages)).at(-1)!;
       // The resumed view equals a fresh query — no dropped Patch was lost.

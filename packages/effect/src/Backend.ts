@@ -50,6 +50,7 @@
  * any implementation.
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type { RowId, RowVersion } from "./Collection.js";
@@ -190,5 +191,10 @@ export const buildChangeHints = (
     const oldValues = [...ids].flatMap((id) =>
       oldMap?.has(id) === true ? [{ id, value: oldMap.get(id) }] : []
     );
-    return { collection, ids: [...ids], values, ...(oldValues.length === 0 ? {} : { oldValues }) };
+    return {
+      collection,
+      ids: [...ids],
+      values,
+      ...(Arr.isReadonlyArrayEmpty(oldValues) ? {} : { oldValues }),
+    };
   });

@@ -14,6 +14,7 @@
  * implementing one tiny interface.
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -121,7 +122,7 @@ export const makeInProcessWith = (
   Effect.gen(function* () {
     const hub = yield* droppingHub<ReadonlyArray<ChangeHint>>(options?.capacity);
     return InvalidationBus.of({
-      publish: (hints) => (hints.length === 0 ? Effect.void : hub.publish(hints)),
+      publish: (hints) => (Arr.isReadonlyArrayEmpty(hints) ? Effect.void : hub.publish(hints)),
       subscribe: takeHandle(hub.pubsub),
     });
   });
@@ -211,7 +212,7 @@ export const makeSerialized = (
   const timeout = options?.timeout ?? "5 seconds";
   return InvalidationBus.of({
     publish: (hints) =>
-      hints.length === 0
+      Arr.isReadonlyArrayEmpty(hints)
         ? Effect.void
         : broker.publish(JSON.stringify(hints)).pipe(
             Effect.timeoutOrElse({

@@ -28,6 +28,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Stream from "effect/Stream";
 import { AsyncResult } from "effect/reactivity";
 import { Aggregate, Client, Query } from "@thomasfosterau/legation-effect";
@@ -282,7 +283,7 @@ export const useConnection = (
         Stream.unwrap(
           Effect.gen(function* () {
             const observeWindow = client.view.observeWindow;
-            const hasEdges = Object.keys(base.include ?? {}).length > 0;
+            const hasEdges = !R.isEmptyReadonlyRecord(base.include ?? {});
             if (hasEdges || observeWindow === undefined) {
               retargetHandle = undefined;
               return client.observe({ ...base, first: pages * pageSize });

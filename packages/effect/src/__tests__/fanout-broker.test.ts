@@ -14,6 +14,7 @@
  * a heartbeat mid-test (#282, #292).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -361,7 +362,7 @@ describe("two rooms over one broker", () => {
           createdAt: "2026-01-01",
           productId: "p-1",
         });
-        yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => pushes.length > 0);
+        yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => Arr.isReadonlyArrayNonEmpty(pushes));
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
         expect((rows[0]!.value as { body: string }).body).toBe("cross-room");
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);

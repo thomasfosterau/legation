@@ -81,7 +81,7 @@ describe("OrderedTree", () => {
       return (state >>> 0) / 0xffffffff;
     };
     for (let i = 0; i < 2000; i++) {
-      if (reference.length === 0 || next() < 0.6) {
+      if (Arr.isReadonlyArrayEmpty(reference) || next() < 0.6) {
         const value = Math.floor(next() * 10_000);
         if (!reference.includes(value)) {
           tree = OrderedTree.insert(tree, value, numberCompare);

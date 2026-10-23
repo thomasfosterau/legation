@@ -7,12 +7,15 @@
  * engine over a channel with identical component-facing behavior.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Str from "effect/String";
 import {
   Authorization,
   Backend,
@@ -166,7 +169,7 @@ describe("Client over an owned engine", () => {
         yield* sleepReal(50);
         expect(yield* engine.activeSubscriptions).toHaveLength(1);
         yield* client.unsubscribe(read);
-        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 0);
+        yield* eventually(engine.activeSubscriptions, (subs) => Arr.isReadonlyArrayEmpty(subs));
       })
     )
   );
@@ -219,9 +222,8 @@ describe("Client over an owned engine", () => {
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         // No push/pull calls anywhere: the auto-started loop drains it.
-        yield* eventually(
-          store.pendingMutations.pipe(Effect.orDie),
-          (pending) => pending.length === 0
+        yield* eventually(store.pendingMutations.pipe(Effect.orDie), (pending) =>
+          Arr.isReadonlyArrayEmpty(pending)
         );
       })
     )
@@ -405,7 +407,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* eventually(rootHashes(engine), (hashes) => hashes.includes(perParent("p-3")));
         // ... and release with it, root included.
         yield* client.unsubscribe(pinned);
-        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
   );
@@ -465,7 +467,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
 
         yield* client.unsubscribe(plain);
-        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
   );
@@ -501,7 +503,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
 
         expect((yield* client.coverageOf(pinned))._tag).toBe("Uncovered");
         expect(yield* client.subscriptions).toEqual([]);
-        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
   );
@@ -527,7 +529,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         // Releasing the last pin drops both.
         yield* client.unsubscribe(withInclude);
         expect((yield* client.coverageOf(productPage("c-audio")))._tag).toBe("Uncovered");
-        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
   );
@@ -544,7 +546,7 @@ const stubUrls: Client.UrlReads = {
   parse: (url) =>
     Effect.suspend(() => {
       const { pathname, searchParams } = new URL(url, "http://localhost");
-      const collection = pathname.split("/").findLast((s) => s.length > 0) ?? "";
+      const collection = pathname.split("/").findLast((s) => Str.isNonEmpty(s)) ?? "";
       if (!nodes.nodes.has(collection)) {
         return Effect.fail(
           new QueryError({ message: `Unknown collection: ${collection}`, query: collection })
@@ -564,8 +566,8 @@ const stubUrls: Client.UrlReads = {
       }
       return Effect.succeed({
         collection,
-        ...(Object.keys(where).length === 0 ? {} : { where }),
-        ...(Object.keys(include).length === 0 ? {} : { include }),
+        ...(R.isEmptyReadonlyRecord(where) ? {} : { where }),
+        ...(R.isEmptyReadonlyRecord(include) ? {} : { include }),
       });
     }),
   canonical: (read) =>
@@ -576,7 +578,7 @@ const stubUrls: Client.UrlReads = {
       }
       const where = read.where !== undefined && !("_tag" in read.where) ? read.where : {};
       const params = [
-        ...(compiled.edges.length === 0
+        ...(Arr.isReadonlyArrayEmpty(compiled.edges)
           ? []
           : [
               `include=${compiled.edges
@@ -589,7 +591,7 @@ const stubUrls: Client.UrlReads = {
           .map(([field, value]) => `filter[${field}]=${String(value)}`),
       ];
       return Effect.succeed(
-        `/${read.collection}${params.length === 0 ? "" : `?${params.join("&")}`}`
+        `/${read.collection}${Arr.isReadonlyArrayEmpty(params) ? "" : `?${params.join("&")}`}`
       );
     }),
 };
@@ -629,7 +631,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
         expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
         yield* client.unsubscribe("/products?include=reviews&filter[categoryId]=c-audio");
         expect(yield* client.subscriptions).toEqual([]);
-        yield* eventually(rootHashes(engine), (hashes) => hashes.length === 0);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
   );
@@ -762,9 +764,8 @@ describe("Client.make defaults (zero wiring)", () => {
         });
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
-        yield* eventually(
-          store.pendingMutations.pipe(Effect.orDie),
-          (pending) => pending.length === 0
+        yield* eventually(store.pendingMutations.pipe(Effect.orDie), (pending) =>
+          Arr.isReadonlyArrayEmpty(pending)
         );
       })
     )
@@ -788,9 +789,8 @@ describe("Client.make defaults (zero wiring)", () => {
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         // The journal lives in the OPTION store, not the context one.
-        yield* eventually(
-          optionStore.pendingMutations.pipe(Effect.orDie),
-          (pending) => pending.length === 0
+        yield* eventually(optionStore.pendingMutations.pipe(Effect.orDie), (pending) =>
+          Arr.isReadonlyArrayEmpty(pending)
         );
         expect(yield* contextStore.pendingMutations.pipe(Effect.orDie)).toHaveLength(0);
         const confirmed = yield* client.query({ collection: "products" });

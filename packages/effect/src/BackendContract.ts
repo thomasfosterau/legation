@@ -41,6 +41,7 @@
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  */
 
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -504,7 +505,7 @@ const rule3GapRejection: Rule = ({
       "A rejected gap must not bump lastMutationId"
     );
     const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["c"]));
-    yield* check(rule, fetched.length === 0, "A rejected gap must not apply effects");
+    yield* check(rule, Arr.isReadonlyArrayEmpty(fetched), "A rejected gap must not apply effects");
   });
 
 /** 4. Atomicity: a failed mutator bumps nothing. */
@@ -748,7 +749,7 @@ const rule9PermanentRejection: Rule = (h) =>
     const poison = yield* expectOk(rule, backend.getRows(context, rows, ["poison"]));
     yield* check(
       rule,
-      poison.length === 0,
+      Arr.isReadonlyArrayEmpty(poison),
       "A rejected mutation must leave no effects (its staged write must roll back)"
     );
     const behind = yield* expectOk(rule, backend.getRows(context, rows, ["behind"]));
@@ -792,7 +793,7 @@ const rule10WriteThenFail: Rule = (h) =>
 
     yield* Effect.exit(attempt("ghost"));
     const ghost = yield* expectOk(rule, backend.getRows(context, rows, ["ghost"]));
-    yield* check(rule, ghost.length === 0, "A failed write must not create a row");
+    yield* check(rule, Arr.isReadonlyArrayEmpty(ghost), "A failed write must not create a row");
 
     yield* check(
       rule,
@@ -1005,7 +1006,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     const removed = yield* expectOk(rule, backend.getRows(context, collection, [gone]));
     yield* check(
       rule,
-      removed.length === 0,
+      Arr.isReadonlyArrayEmpty(removed),
       `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${JSON.stringify(removed[0]?.value)}`
     );
   });

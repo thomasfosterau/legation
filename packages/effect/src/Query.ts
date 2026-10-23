@@ -253,7 +253,7 @@ const applyEdgeWindow = (
   edgePlan: EdgePlan
 ): ReadonlyArray<unknown> => {
   let rows = values;
-  if (edgePlan.order.length > 0) {
+  if (Arr.isReadonlyArrayNonEmpty(edgePlan.order)) {
     rows = Arr.sort(rows, edgeOrder(edgePlan));
   }
   return edgePlan.first === undefined ? rows : rows.slice(0, edgePlan.first);
@@ -271,7 +271,7 @@ const windowRow = (row: Related.RelatedRow, edges: ReadonlyArray<EdgePlan>): Rel
   for (const edgePlan of edges) {
     const value = related[edgePlan.edge];
     if (!Array.isArray(value)) continue;
-    if (edgePlan.first === undefined && edgePlan.order.length === 0) continue;
+    if (edgePlan.first === undefined && Arr.isReadonlyArrayEmpty(edgePlan.order)) continue;
     related = { ...related, [edgePlan.edge]: applyEdgeWindow(value, edgePlan) };
   }
   return related === row.related ? row : { ...row, related };
@@ -287,7 +287,7 @@ export const run = (
   read: Read
 ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, never> => {
   const compiled = plan(nodes, read);
-  if (compiled.edges.length === 0) {
+  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return view.query(compiled.root).pipe(
       Effect.orDie,
       Effect.map((rows) => rows.map((row) => ({ ...row, related: {} })))
@@ -314,7 +314,7 @@ export const runRows = (
   rows: ReadonlyArray<LocalRow>
 ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, never> => {
   const compiled = plan(nodes, read);
-  if (compiled.edges.length === 0) {
+  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return Effect.succeed(rows.map((row) => ({ ...row, related: {} })));
   }
   return Related.queryRows(
@@ -375,7 +375,7 @@ export const observe = (
   read: Read
 ): Stream.Stream<ReadonlyArray<Related.RelatedRow>, never> => {
   const compiled = plan(nodes, read);
-  if (compiled.edges.length === 0) {
+  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return view.observe(compiled.root).pipe(
       Stream.orDie,
       Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))

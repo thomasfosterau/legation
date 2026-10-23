@@ -18,6 +18,7 @@
  * room simply ages out shard-side.
  */
 
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -70,7 +71,7 @@ const topicsForHint = (
   const values = new Map(hint.values?.map(({ id, value }) => [id, value]) ?? []);
   const olds = new Map(hint.oldValues?.map(({ id, value }) => [id, value]) ?? []);
   const topics = new Set<FanoutTopics.Topic>([FanoutTopics.coarse(hint.collection)]);
-  const ids = hint.ids.length > 0 ? hint.ids : [...values.keys()];
+  const ids = Arr.isReadonlyArrayNonEmpty(hint.ids) ? hint.ids : [...values.keys()];
   for (const id of ids) {
     for (const topic of FanoutTopics.topicsForWrite(hint.collection, derivable, {
       oldValue: olds.get(id),

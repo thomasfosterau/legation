@@ -60,6 +60,7 @@
 
 import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import type * as Schema from "effect/Schema";
 
@@ -155,7 +156,7 @@ const discoverInverse = (
   return fail(
     source,
     name,
-    candidates.length === 0
+    Arr.isReadonlyArrayEmpty(candidates)
       ? `no inverse found: "${target}" bridges no one-edge back to "${source}" — declare one (a relationship, or options.edges over its key attribute), or name it in options.inverses`
       : `ambiguous inverse: "${target}" bridges ${candidates.length} one-edges back to "${source}" (${candidates
           .map(([candidate]) => `"${candidate}"`)

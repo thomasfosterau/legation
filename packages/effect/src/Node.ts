@@ -32,6 +32,7 @@
  * while later ADR-0022 program steps move onto them directly.
  */
 
+import * as Arr from "effect/Array";
 import type * as Brand from "effect/Brand";
 import * as Schema from "effect/Schema";
 import * as Collection from "./Collection.js";
@@ -355,7 +356,7 @@ const toCollection = (
     id: (value) => (value as Record<string, string>)[node.id]!,
     identity: node.id,
     relationships,
-    ...(node.indexes.length > 0 ? { indexes: node.indexes } : {}),
+    ...(Arr.isReadonlyArrayNonEmpty(node.indexes) ? { indexes: node.indexes } : {}),
     // The filterable set travels like `indexes` (#154): the server enforces
     // it from the collection alone.
     filterable: node.filterable,

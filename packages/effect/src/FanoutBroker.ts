@@ -14,6 +14,7 @@
  * pull, never prevents convergence.
  */
 
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -103,7 +104,7 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
           const hubMap = yield* Ref.get(hubs);
           for (const [roomId, lease] of live) {
             const matched = [...wanted].filter((topic) => lease.topics.has(topic));
-            if (matched.length === 0) continue;
+            if (Arr.isReadonlyArrayEmpty(matched)) continue;
             const hub = hubMap.get(roomId);
             if (hub !== undefined) yield* PubSub.publish(hub, matched);
           }

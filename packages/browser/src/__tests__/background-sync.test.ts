@@ -43,6 +43,7 @@ import {
 } from "@thomasfosterau/legation-effect/internal";
 import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
@@ -505,15 +506,15 @@ describe("BackgroundSync (#213)", () => {
               .mutate("todo/set", { id: "0", title: "warm-up" })
               // Longer than the debounce window, so a retry never resets it.
               .pipe(Effect.andThen(Effect.sleep("400 millis")), Effect.andThen(Ref.get(pushes))),
-            (sent) => sent.length > 0
+            (sent) => Arr.isReadonlyArrayNonEmpty(sent)
           );
-          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+          yield* eventually(store.pendingMutations, (pending) => Arr.isReadonlyArrayEmpty(pending));
           yield* Ref.set(pushes, []);
 
           for (let n = 1; n <= 5; n++) {
             yield* engine.mutate("todo/set", { id: "1", title: `edit ${n}` });
           }
-          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+          yield* eventually(store.pendingMutations, (pending) => Arr.isReadonlyArrayEmpty(pending));
 
           expect(self.tags).toEqual([]);
           expect(self.fired).toEqual([]);
@@ -620,9 +621,9 @@ describe("BackgroundSync (#213)", () => {
             engine
               .mutate("todo/set", { id: "0", title: "warm-up" })
               .pipe(Effect.andThen(Effect.sleep("200 millis")), Effect.andThen(Ref.get(pushes))),
-            (sent) => sent.length > 0
+            (sent) => Arr.isReadonlyArrayNonEmpty(sent)
           );
-          yield* eventually(store.pendingMutations, (pending) => pending.length === 0);
+          yield* eventually(store.pendingMutations, (pending) => Arr.isReadonlyArrayEmpty(pending));
           expect(self.tags).toEqual([]);
 
           // One write; the backend is unreachable.
