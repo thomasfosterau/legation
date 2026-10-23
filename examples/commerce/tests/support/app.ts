@@ -147,7 +147,6 @@ const tunnel = (
   open: Set<Closable>
 ) => {
   open.add(socket);
-  socket.on("close", () => open.delete(socket));
   const upstream = connect(port, "127.0.0.1", () => {
     let raw = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
     for (let index = 0; index < req.rawHeaders.length; index += 2) {
@@ -158,7 +157,16 @@ const tunnel = (
     socket.pipe(upstream).pipe(socket);
   });
   open.add(upstream);
-  upstream.on("close", () => open.delete(upstream));
+  // Either end closing closes the other, so the sync server never keeps a
+  // WebSocket whose browser end is gone (#522).
+  socket.on("close", () => {
+    open.delete(socket);
+    upstream.destroy();
+  });
+  upstream.on("close", () => {
+    open.delete(upstream);
+    socket.destroy();
+  });
   upstream.on("error", () => socket.destroy());
   socket.on("error", () => upstream.destroy());
 };
@@ -236,6 +244,11 @@ export const serveApp = async (): Promise<App> => {
       blackout = on;
     },
     close: async () => {
+      // The carriers' tunnels and forwards first: `closeAllConnections`
+      // reaches neither an upgraded socket nor the front's own connections
+      // to the sync server, and one left open holds the sync server's
+      // shutdown for its whole 20 s graceful-shutdown bound (#522).
+      for (const connection of open) connection.destroy();
       front.closeAllConnections();
       await new Promise<void>((resolve) => front.close(() => resolve()));
       // Closing the scope interrupts the server fibers; an interruption-only
