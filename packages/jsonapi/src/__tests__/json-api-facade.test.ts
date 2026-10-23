@@ -538,7 +538,7 @@ describe("JsonApiFacade", () => {
         expect(covered!.status).toBe(200);
         // What a worker answers for a forward that rejected at the transport:
         // the same document, with the replica's current cookie.
-        const synthesised = yield* handler.offline;
+        const synthesised = yield* handler.offline(jsonApi("/jsonapi/categories"));
         expect(synthesised.status).toBe(503);
         expect(synthesised.headers.get(JsonApiFacade.servedAtHeader)).toBe(
           response!.headers.get(JsonApiFacade.servedAtHeader)
