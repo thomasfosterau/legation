@@ -27,7 +27,7 @@ import * as SqlBackend from "../SqlBackend.js";
 const databaseUrl = process.env.DATABASE_URL;
 const context = { clientGroupId: "g" };
 
-const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_sync_mutations`;
+const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_big, pgx_sync_mutations`;
 
 const DDL: ReadonlyArray<string> = [
   DROP_TABLES,
@@ -39,6 +39,8 @@ const DDL: ReadonlyArray<string> = [
     PRIMARY KEY (client_group_id, client_id)
   )`,
   `INSERT INTO pgx_projects (id, archived) VALUES ('p1', false), ('p2', true)`,
+  `CREATE TABLE pgx_big (id BIGINT PRIMARY KEY, version BIGINT NOT NULL, rank BIGINT)`,
+  `INSERT INTO pgx_big (id, version, rank) VALUES (1, 5, 9007199254740993), (9007199254740993, 9007199254740995, 2)`,
   `INSERT INTO pgx_todos (id, project_id, done) VALUES ('t1', 'p1', false), ('t2', 'p1', true), ('t3', 'p2', false)`,
 ];
 
@@ -76,6 +78,7 @@ const backendOver = (executor: SqlBackend.SqlExecutor) =>
     tables: {
       projects: { table: "pgx_projects", kinds: { archived: "boolean" } },
       todos: { table: "pgx_todos", kinds: { project_id: "text", done: "boolean" } },
+      big: { table: "pgx_big", versionColumn: "version", kinds: { rank: "integer" } },
     },
     mutators: Mutator.registry([{ mutator: setDone, local: () => Effect.void }]).mutators,
     handlers: {
@@ -219,6 +222,30 @@ describePostgres("PgExecutor round trips (#203)", () => {
           expect(lists).toEqual(single);
         })
       )
+  );
+
+  it.live("evaluateMany gives evaluate's entries for bigint columns beyond 2^53 (#505)", () =>
+    withCounted(databaseUrl ?? "", (backend) =>
+      Effect.gen(function* () {
+        const evaluateMany = backend.evaluateMany;
+        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const subsets = [
+          Subset.make({ collection: "big" }),
+          Subset.make({ collection: "big", orderBy: [{ field: "rank", direction: "desc" }] }),
+          Subset.make({ collection: "todos" }),
+        ];
+        const single = yield* Effect.forEach(
+          subsets,
+          (subset) => backend.evaluate(context, subset),
+          {
+            concurrency: 1,
+          }
+        );
+        expect(single[0]?.map((entry) => entry.id).toSorted()).toEqual(["1", "9007199254740993"]);
+        // JSON would round 9007199254740993 to …992: the pull falls back to evaluate.
+        expect(yield* evaluateMany(context, subsets)).toEqual(single);
+      })
+    )
   );
 
   it.live("a pushed batch runs in one transaction, however many mutations it holds", () =>

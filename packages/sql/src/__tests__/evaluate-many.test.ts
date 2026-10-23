@@ -45,7 +45,8 @@ const countedExecutor = (sql: SqlClient, statements: Ref.Ref<number>): SqlBacken
 const withBackend = <A>(
   use: (
     backend: ReturnType<typeof SqlBackend.make>,
-    statements: Ref.Ref<number>
+    statements: Ref.Ref<number>,
+    sql: SqlClient
   ) => Effect.Effect<A, unknown>
 ) =>
   Effect.scoped(
@@ -66,7 +67,7 @@ const withBackend = <A>(
         mutators: Mutator.registry([]).mutators,
         handlers: {},
       });
-      return yield* use(backend, statements);
+      return yield* use(backend, statements, sql);
     })
   ).pipe(Effect.orDie);
 
@@ -146,6 +147,30 @@ describe("SqlBackend.evaluateMany on SQLite (#505)", () => {
           [],
         ]);
         expect(yield* Ref.get(statements)).toBe(0);
+      })
+    )
+  );
+
+  it.effect("carries each value as the driver reads it, past what JSON holds exactly", () =>
+    withBackend((backend, statements, sql) =>
+      Effect.gen(function* () {
+        const evaluateMany = backend.evaluateMany;
+        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        // An integer past 2^53 and a double JSON at 15 digits would round:
+        // SQLite's arms carry the columns themselves, so neither is touched.
+        yield* sql.unsafe(`UPDATE todos SET rank = 9007199254740993 WHERE id = 't2'`).unprepared;
+        yield* sql.unsafe(`UPDATE todos SET rank = 0.30000000000000004 WHERE id = 't1'`).unprepared;
+        const wide = [
+          Subset.make({ collection: "todos", orderBy: [{ field: "rank", direction: "desc" }] }),
+          Subset.make({ collection: "todos", where: Predicate.gt("rank", 0.3) }),
+        ];
+        const single = yield* Effect.forEach(wide, (subset) => backend.evaluate(context, subset), {
+          concurrency: 1,
+        });
+        yield* Ref.set(statements, 0);
+        expect(yield* evaluateMany(context, wide)).toEqual(single);
+        // The column lookup and the one batched statement: no fallback.
+        expect(yield* Ref.get(statements)).toBe(2);
       })
     )
   );

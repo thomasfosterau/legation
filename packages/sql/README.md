@@ -99,12 +99,18 @@ What the executor guarantees:
 - **Rows as JSON in a pull.** Each arm of `evaluateMany`'s statement carries
   its row as JSON (`row_to_json`), since mappings' columns differ, and the
   backend orders, windows and versions the rows it reads back from that JSON.
-  A column JSON represents as the driver does (text, integers that fit a
-  number, booleans, `NULL`) gives the same answer as `evaluate`. One it does
-  not (`timestamptz`, `numeric`, `bigint`, `bytea`) can order or, without a
-  `versionColumn`, hash differently from the driver's value: map such a
-  relation's ordered and version columns to text or a JSON-safe number, or
-  set `versionColumn`.
+  A column JSON represents as the driver does (text, `integer`, `double
+  precision`, booleans, `NULL`) gives the same answer as `evaluate`. A pull
+  whose rows hold an integer past ±(2^53 − 1) (a `bigint` id, version or
+  ordered column that wide) falls back to one `evaluate` per subset, since
+  JSON would round it. Other types the driver does not read as JSON does
+  (`bigint` and `numeric`, which the driver reads as text; `timestamptz`,
+  which it reads as a `Date`) reach the backend as JSON gives them, so a
+  `versionColumn` or ordered column of those types gives the pull versions or
+  an order of a different type than `evaluate` and `getRows`: declare such
+  columns `integer`, `double precision` or `text` in the read relation (a view
+  can cast them). SQLite has no such caveat: its `UNION ALL` columns take any
+  type per row, so each arm carries the relation's own columns by position.
 - **Errors.** A failed statement or transaction fails as a `BackendError` with
   the statement's text, never its parameters, in the message, and the driver's
   `SqlError` as its `cause`.

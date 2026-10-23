@@ -93,11 +93,16 @@
  *
  * A pull's subsets are evaluated together by `evaluateMany` (#505): one
  * `UNION ALL` statement whose arms each select their subset's index and their
- * row as JSON (the dialect's `rowJson`), plus one statement per `Exists` node,
- * as in `evaluate`. The rows read back are finished by the same code as
- * `evaluate`'s, so the two agree wherever JSON carries a column's value as the
- * driver does (`BackendContract` rule 14 checks it over the generated corpus);
- * the README lists the column types it does not.
+ * row, plus one statement per `Exists` node, as in `evaluate`. On SQLite, whose
+ * `UNION ALL` columns take any type per row, an arm carries the relation's own
+ * columns by position, so each value reaches the backend exactly as `evaluate`
+ * reads it. On PostgreSQL an arm carries its row as JSON (`row_to_json`): the
+ * two agree wherever JSON carries a column's value as the driver does
+ * (`BackendContract` rule 14 checks it over the generated corpus), the README
+ * lists the column types it does not, and a pull whose rows hold an integer
+ * JSON cannot carry exactly (beyond ±(2^53 − 1), a `bigint` id or version) is
+ * answered by `evaluate` per subset instead. The rows read back are finished
+ * by the same code as `evaluate`'s.
  */
 
 import * as Arr from "effect/Array";
@@ -105,6 +110,7 @@ import * as Effect from "effect/Effect";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import {
   Backend,
@@ -325,26 +331,38 @@ export interface SqlBackendConfig {
 }
 
 /**
- * The alias each arm of `evaluateMany`'s statement gives its relation: its
- * `rowJson` names the row by it, so it must not be a column of any mapping.
+ * The alias each arm of `evaluateMany`'s statement gives its relation: a
+ * `Json` dialect's `rowJson` names the row by it, so it must not be a column
+ * of any mapping.
  */
 const MANY_ROW_ALIAS = "__legation_row";
 
-/**
- * A row of `evaluateMany`'s statement: the index of the subset its arm
- * answers, and its row as the JSON text the dialect's `rowJson` built.
- */
-const ManyRow = Schema.Struct({
-  subset: Schema.Int,
-  row: Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-});
+/** The subset index each row of `evaluateMany`'s statement carries. */
+const ManyIndex = Schema.Struct({ subset: Schema.Int });
 
-/** Decode a row of `evaluateMany`'s statement, failing as a `BackendError`. */
-const decodeManyRow = (row: SqlRow) =>
-  Schema.decodeUnknownEffect(ManyRow)(row).pipe(
-    Effect.mapError(
-      (cause) => new BackendError({ message: "evaluateMany read a row it could not decode", cause })
-    )
+/** A row a `Json` dialect's arm carries: JSON text holding an object. */
+const ManyJsonRow = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+
+/** A failure to decode a row of `evaluateMany`'s statement, as a `BackendError`. */
+const undecodable = (cause: unknown) =>
+  new BackendError({ message: "evaluateMany read a row it could not decode", cause });
+
+/** The subset index of a row of `evaluateMany`'s statement. */
+const decodeManyIndex = (row: SqlRow) =>
+  Schema.decodeUnknownEffect(ManyIndex)(row).pipe(Effect.mapError(undecodable));
+
+/** The row a `Json` dialect's arm carried, from its JSON text. */
+const decodeManyJson = (text: string) =>
+  Schema.decodeEffect(ManyJsonRow)(text).pipe(Effect.mapError(undecodable));
+
+/**
+ * Whether a row read back from JSON holds an integer JSON could not carry
+ * exactly: one beyond ±(2^53 − 1), which `JSON.parse` rounds to the nearest
+ * double (a `bigint` id, version or ordered column).
+ */
+const holdsUnsafeInteger = (row: SqlRow): boolean =>
+  R.values(row).some(
+    (value) => P.isNumber(value) && Number.isInteger(value) && !Number.isSafeInteger(value)
   );
 
 /** Content-hash fallback version when no version column is mapped. */
@@ -484,18 +502,20 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       return entriesOf(subset, where, rows);
     });
 
-  // A read relation's column names, for a dialect whose `rowJson` needs them
-  // (SQLite). Looked up once per relation and kept for the backend's life: a
-  // read relation whose columns change needs a new backend. An empty answer
-  // (no such relation yet) is not kept.
+  // A read relation's column names, for a `Columns` dialect (SQLite).
+  // Looked up once per relation and kept for the backend's life: a read
+  // relation whose columns change needs a new backend. An empty answer (no
+  // such relation yet) is not kept.
   const columnCache = MutableHashMap.empty<string, ReadonlyArray<string>>();
-  const columnsOf = (relation: string): Effect.Effect<ReadonlyArray<string>, BackendError> => {
-    const lookup = dialect.columnsOf;
-    if (lookup === undefined) return Effect.succeed([]);
+  const columnsOf = (
+    union: Sql.UnionRows,
+    relation: string
+  ): Effect.Effect<ReadonlyArray<string>, BackendError> => {
+    if (P.isTagged(union, "Json")) return Effect.succeed([]);
     return Option.match(MutableHashMap.get(columnCache, relation), {
       onSome: Effect.succeed,
       onNone: () =>
-        executor.query(lookup(relation)).pipe(
+        executor.query(union.columnsOf(relation)).pipe(
           Effect.map((rows) => rows.map((row) => String(row["name"]))),
           Effect.tap((columns) =>
             Effect.sync(() => {
@@ -514,44 +534,75 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     readonly subset: Subset.Subset;
     readonly mapping: TableMapping;
     readonly where: Predicate.Predicate;
+    /** The relation's columns, in order, for a `Columns` dialect; empty for `Json`. */
     readonly columns: ReadonlyArray<string>;
   }
 
   // One subset's arm, or none for a collection without a mapping (which
   // `evaluate` answers with no entries). Resolves the `Exists` nodes as
   // `evaluate` does.
-  const manyArm = (
-    subset: Subset.Subset,
-    index: number
-  ): Effect.Effect<Option.Option<ManyArm>, BackendError> => {
-    const mapping = config.tables[subset.collection];
-    if (mapping === undefined) return Effect.succeedNone;
-    return Effect.all(
-      {
-        where: Predicate.resolveExists(subset.where, resolveExistsNode),
-        columns: columnsOf(readTableOf(mapping)),
-      },
-      { concurrency: 1 }
-    ).pipe(
-      Effect.map(({ where, columns }) => Option.some({ index, subset, mapping, where, columns }))
-    );
+  const manyArm =
+    (union: Sql.UnionRows) =>
+    (subset: Subset.Subset, index: number): Effect.Effect<Option.Option<ManyArm>, BackendError> => {
+      const mapping = config.tables[subset.collection];
+      if (mapping === undefined) return Effect.succeedNone;
+      return Effect.all(
+        {
+          where: Predicate.resolveExists(subset.where, resolveExistsNode),
+          columns: columnsOf(union, readTableOf(mapping)),
+        },
+        { concurrency: 1 }
+      ).pipe(
+        Effect.map(({ where, columns }) => Option.some({ index, subset, mapping, where, columns }))
+      );
+    };
+
+  // What an arm selects after its subset index: its row as JSON, or its own
+  // columns by position (`c0`, `c1`, …) padded with NULL to `width`.
+  const projection = (union: Sql.UnionRows, arm: ManyArm, width: number): string => {
+    const alias = q(MANY_ROW_ALIAS);
+    if (P.isTagged(union, "Json")) return `${union.rowJson(alias)} AS ${q("row")}`;
+    return Arr.makeBy(width, (position) => {
+      const column = arm.columns[position];
+      const value = column === undefined ? "NULL" : `${alias}.${q(column)}`;
+      return `${value} AS ${q(`c${position}`)}`;
+    }).join(", ");
   };
 
-  // One `UNION ALL` statement for every subset (#505): each arm selects its
-  // subset's index and its row as JSON (`Dialect.rowJson`), since mappings'
-  // columns differ per collection. The arms' `WHERE`s are the ones `evaluate`
-  // compiles, numbered on from the previous arm's binds, and the rows are
-  // finished per subset exactly as `evaluate` finishes them. Round trips: one
-  // statement, plus one per `Exists` node (resolved first, as in `evaluate`),
-  // plus on SQLite one column lookup per read relation the first time it is
-  // read.
-  const evaluateMany = (rowJson: NonNullable<Sql.Dialect["rowJson"]>) =>
-    ((_context, subsets) =>
+  // A statement row back as the subset index and the row `SELECT *` would give.
+  const readManyRow =
+    (union: Sql.UnionRows, arms: ReadonlyArray<Option.Option<ManyArm>>) => (row: SqlRow) =>
       Effect.gen(function* () {
-        const arms = yield* Effect.forEach(subsets, manyArm, { concurrency: 1 });
-        const alias = q(MANY_ROW_ALIAS);
+        const { subset } = yield* decodeManyIndex(row);
+        if (P.isTagged(union, "Json")) {
+          return { subset, row: yield* decodeManyJson(String(row["row"])) };
+        }
+        const columns = Option.match(arms[subset] ?? Option.none(), {
+          onNone: () => [],
+          onSome: (arm) => arm.columns,
+        });
+        return {
+          subset,
+          row: R.fromEntries(columns.map((name, position) => [name, row[`c${position}`]])),
+        };
+      });
+
+  // One `UNION ALL` statement for every subset (#505): each arm selects its
+  // subset's index and its row (`Dialect.unionRows`: its own columns by
+  // position on SQLite, JSON on PostgreSQL), since mappings' columns differ per
+  // collection. The arms' `WHERE`s are the ones `evaluate` compiles, numbered
+  // on from the previous arm's binds, and the rows are finished per subset
+  // exactly as `evaluate` finishes them. Round trips: one statement, plus one
+  // per `Exists` node (resolved first, as in `evaluate`), plus on SQLite one
+  // column lookup per read relation the first time it is read.
+  const evaluateMany = (union: Sql.UnionRows) =>
+    ((context, subsets) =>
+      Effect.gen(function* () {
+        const arms = yield* Effect.forEach(subsets, manyArm(union), { concurrency: 1 });
+        const present = Arr.getSomes(arms);
+        const width = Math.max(0, ...present.map((arm) => arm.columns.length));
         const noBinds: ReadonlyArray<unknown> = [];
-        const [params, texts] = Arr.mapAccum(Arr.getSomes(arms), noBinds, (bound, arm) => {
+        const [params, texts] = Arr.mapAccum(present, noBinds, (bound, arm) => {
           const offset = bound.length;
           const compiled = Sql.compileWhere(
             arm.where,
@@ -561,14 +612,26 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           const relation = q(readTableOf(arm.mapping));
           return [
             [...bound, ...compiled.params],
-            `SELECT ${arm.index} AS ${q("subset")}, ${rowJson(alias, arm.columns)} AS ${q("row")} FROM ${relation} AS ${alias} WHERE ${compiled.text}`,
+            `SELECT ${arm.index} AS ${q("subset")}, ${projection(union, arm, width)} FROM ${relation} AS ${q(MANY_ROW_ALIAS)} WHERE ${compiled.text}`,
           ] as const;
         });
         const rows = Arr.isReadonlyArrayNonEmpty(texts)
           ? yield* executor.query({ text: texts.join(" UNION ALL "), params })
           : [];
-        const decoded = yield* Effect.forEach(rows, decodeManyRow, { concurrency: 1 });
-        const bySubset = Arr.groupBy(decoded, (row) => String(row.subset));
+        const read = yield* Effect.forEach(rows, readManyRow(union, arms), {
+          concurrency: 1,
+        });
+        // JSON carries an integer beyond ±(2^53 − 1) as a number it cannot
+        // hold exactly, so an id, version or ordered column that wide would
+        // read back as a different value than `evaluate`'s. Such a pull is
+        // answered by `evaluate` per subset instead. (A `Columns` arm hands
+        // the driver its values as `evaluate`'s statement does.)
+        if (P.isTagged(union, "Json") && read.some((row) => holdsUnsafeInteger(row.row))) {
+          return yield* Effect.forEach(subsets, (subset) => evaluate(context, subset), {
+            concurrency: 1,
+          });
+        }
+        const bySubset = Arr.groupBy(read, (row) => String(row.subset));
         return arms.map((arm) =>
           Option.match(arm, {
             onNone: () => [],
@@ -1020,7 +1083,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     lastMutationIds: (context) => readLastIds(context.clientGroupId),
     rejections: (context) => rememberedRejections(context.clientGroupId),
     evaluate,
-    evaluateMany: dialect.rowJson === undefined ? undefined : evaluateMany(dialect.rowJson),
+    evaluateMany: dialect.unionRows === undefined ? undefined : evaluateMany(dialect.unionRows),
     getRows,
   });
 };

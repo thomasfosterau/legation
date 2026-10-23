@@ -34,8 +34,6 @@ interface Mock {
   readonly ledgerOf: (clientGroupId: string, clientId: string) => number;
 }
 
-/** A seeded row as the JSON text a dialect's `rowJson` gives `evaluateMany`. */
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
 const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
 // The bump after a handler on an executor without transactions: an upsert to
@@ -144,13 +142,20 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
           const rows = tables.get(String(fragment.params[0])) ?? [];
           return Arr.dedupe(rows.flatMap((row) => R.keys(row))).map((name) => ({ name }));
         }
-        // `evaluateMany`'s `UNION ALL` (#505): each arm's seeded rows, as JSON,
-        // tagged with the arm's subset index.
+        // `evaluateMany`'s `UNION ALL` (#505): each arm's seeded rows, its
+        // columns by position (`"__legation_row"."<name>" AS "c<k>"`), tagged
+        // with the arm's subset index.
         if (fragment.text.includes(`AS "subset"`)) {
           return fragment.text.split(" UNION ALL ").flatMap((arm) => {
             const subset = Number(arm.match(/^SELECT (\d+) AS "subset"/)?.[1]);
-            const rows = tables.get(tableOf(arm) ?? "") ?? [];
-            return rows.map((row) => ({ subset, row: encodeJson(row) }));
+            const projected = [...arm.matchAll(/"__legation_row"\."([^"]+)" AS "(c\d+)"/g)];
+            const rows = tables.get(tableOf(arm.replace(/^.*? FROM /, "FROM ")) ?? "") ?? [];
+            return rows.map((row) =>
+              R.fromEntries([
+                ["subset", subset],
+                ...projected.map(([, name = "", column = ""]) => [column, row[name]] as const),
+              ])
+            );
           });
         }
         const table = tableOf(fragment.text);
