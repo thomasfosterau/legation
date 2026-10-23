@@ -12,15 +12,16 @@ import * as Random from "effect/Random";
 import { describe, expect, it } from "vite-plus/test";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 // ─── Reference ───────────────────────────────────────────────────────────────
 
 /** Code-point order by construction: compare the arrays `Array.from` yields. */
 const referenceCompare = (a: string, b: string): number => {
-  const xs = Array.from(a, (c) => c.codePointAt(0)!);
-  const ys = Array.from(b, (c) => c.codePointAt(0)!);
+  const xs = Array.from(a, (c) => defined(c.codePointAt(0)));
+  const ys = Array.from(b, (c) => defined(c.codePointAt(0)));
   for (let i = 0; i < Math.min(xs.length, ys.length); i++) {
-    if (xs[i] !== ys[i]) return xs[i]! < ys[i]! ? -1 : 1;
+    if (xs[i] !== ys[i]) return defined(xs[i]) < defined(ys[i]) ? -1 : 1;
   }
   return xs.length === ys.length ? 0 : xs.length < ys.length ? -1 : 1;
 };

@@ -27,6 +27,7 @@ import * as Mutator from "../Mutator.js";
 import type { Poke, PullRequest, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
+import { defined } from "./defined.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -167,20 +168,20 @@ describe("pull serialisation (#412)", () => {
         const { issued, answers, count } = client.gated;
 
         const first = yield* Effect.forkChild(client.engine.pull);
-        yield* Deferred.await(issued[0]!);
+        yield* Deferred.await(defined(issued[0]));
         const second = yield* Effect.forkChild(client.engine.pull);
         yield* settle;
         // Both pulls would leave with the same cookie if the second one were not held back.
         expect(yield* count).toBe(1);
 
-        yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
+        yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
         yield* Fiber.join(first);
         expect(yield* snapshot(client)).toEqual({ cookie: "c1", titles: ["old"] });
 
         // The second pull starts only now, from the cookie the first one applied.
-        const secondRequest = yield* Deferred.await(issued[1]!);
+        const secondRequest = yield* Deferred.await(defined(issued[1]));
         expect(secondRequest.cookie).toBe("c1");
-        yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+        yield* Deferred.succeed(defined(answers[1]), respond("c2", "new"));
         yield* Fiber.join(second);
         expect(yield* snapshot(client)).toEqual({ cookie: "c2", titles: ["new"] });
       })
@@ -196,7 +197,7 @@ describe("pull serialisation (#412)", () => {
 
         yield* client.engine.runSync;
         yield* Queue.offer(pokes, { reason: "test" });
-        yield* Deferred.await(issued[0]!);
+        yield* Deferred.await(defined(issued[0]));
 
         const explicit = yield* Effect.forkChild(
           client.engine.pull.pipe(Effect.andThen(Ref.set(explicitDone, true)))
@@ -205,14 +206,14 @@ describe("pull serialisation (#412)", () => {
         expect(yield* count).toBe(1);
 
         // The poke's pull lands; the explicit call still needs a pull of its own.
-        yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
+        yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
         yield* settle;
         expect(yield* Ref.get(explicitDone)).toBe(false);
         expect(yield* snapshot(client)).toEqual({ cookie: "c1", titles: ["old"] });
 
-        const explicitRequest = yield* Deferred.await(issued[1]!);
+        const explicitRequest = yield* Deferred.await(defined(issued[1]));
         expect(explicitRequest.cookie).toBe("c1");
-        yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+        yield* Deferred.succeed(defined(answers[1]), respond("c2", "new"));
         yield* Fiber.join(explicit);
         expect(yield* Ref.get(explicitDone)).toBe(true);
         expect(yield* snapshot(client)).toEqual({ cookie: "c2", titles: ["new"] });
@@ -226,7 +227,7 @@ describe("pull serialisation (#412)", () => {
 
       yield* client.engine.runSync;
       yield* Queue.offer(pokes, { reason: "first" });
-      yield* Deferred.await(issued[0]!);
+      yield* Deferred.await(defined(issued[0]));
 
       yield* Queue.offer(pokes, { reason: "second" });
       yield* Queue.offer(pokes, { reason: "third" });
@@ -234,9 +235,9 @@ describe("pull serialisation (#412)", () => {
       yield* settle;
       expect(yield* count).toBe(1);
 
-      yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
-      yield* Deferred.await(issued[1]!);
-      yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+      yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
+      yield* Deferred.await(defined(issued[1]));
+      yield* Deferred.succeed(defined(answers[1]), respond("c2", "new"));
       yield* settle;
       // The three pokes shared one follow-up; no pull was left over for them after it.
       expect(yield* count).toBe(2);
@@ -252,10 +253,10 @@ describe("pull serialisation (#412)", () => {
       const pulling = yield* Effect.forkChild(
         client.engine.pull.pipe(Effect.provideService(Clock.Clock, fixedClock))
       );
-      yield* Deferred.await(issued[0]!);
+      yield* Deferred.await(defined(issued[0]));
       // The transport reads the clock the caller provided, not the engine's own.
       expect(yield* Ref.get(clockSeen)).toEqual([FIXED_MILLIS]);
-      yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
+      yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
       yield* Fiber.join(pulling);
       expect(yield* snapshot(client)).toEqual({ cookie: "c1", titles: ["old"] });
     })
@@ -267,14 +268,14 @@ describe("pull serialisation (#412)", () => {
       const { issued, answers, cancelled } = client.gated;
 
       const abandoned = yield* Effect.forkChild(client.engine.pull);
-      yield* Deferred.await(issued[0]!);
+      yield* Deferred.await(defined(issued[0]));
       yield* Fiber.interrupt(abandoned);
       // The transport call was aborted with its caller, as on trunk.
       expect(yield* cancelled).toBe(1);
 
       const next = yield* Effect.forkChild(client.engine.pull);
-      yield* Deferred.await(issued[1]!);
-      yield* Deferred.succeed(answers[1]!, respond("c1", "new"));
+      yield* Deferred.await(defined(issued[1]));
+      yield* Deferred.succeed(defined(answers[1]), respond("c1", "new"));
       yield* Fiber.join(next);
       expect(yield* snapshot(client)).toEqual({ cookie: "c1", titles: ["new"] });
     })
@@ -288,18 +289,18 @@ describe("pull serialisation (#412)", () => {
         const { issued, answers, count } = client.gated;
 
         const failing = yield* Effect.forkChild(client.engine.pull);
-        yield* Deferred.await(issued[0]!);
+        yield* Deferred.await(defined(issued[0]));
         const queued = yield* Effect.forkChild(client.engine.pull);
         yield* settle;
         expect(yield* count).toBe(1);
 
-        yield* Deferred.fail(answers[0]!, new TransportError({ message: "offline" }));
+        yield* Deferred.fail(defined(answers[0]), new TransportError({ message: "offline" }));
         expect(Exit.isFailure(yield* Fiber.await(failing))).toBe(true);
 
         // Nothing was applied, so the queued caller's request is still unserved: it pulls now.
-        yield* Deferred.await(issued[1]!);
+        yield* Deferred.await(defined(issued[1]));
         expect(yield* count).toBe(2);
-        yield* Deferred.succeed(answers[1]!, respond("c1", "new"));
+        yield* Deferred.succeed(defined(answers[1]), respond("c1", "new"));
         expect(Exit.isSuccess(yield* Fiber.await(queued))).toBe(true);
         expect(yield* snapshot(client)).toEqual({ cookie: "c1", titles: ["new"] });
       })
@@ -312,7 +313,7 @@ describe("pull serialisation (#412)", () => {
 
       yield* client.engine.runSync;
       yield* Queue.offer(pokes, { reason: "first" });
-      yield* Deferred.await(issued[0]!);
+      yield* Deferred.await(defined(issued[0]));
 
       // The burst arrives while the pull hangs. The poke stream buffers it in one slot, so the
       // burst adds no pull and no fibre per poke; the offers all complete regardless.
@@ -322,9 +323,9 @@ describe("pull serialisation (#412)", () => {
       yield* settle;
       expect(yield* count).toBe(1);
 
-      yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
-      yield* Deferred.await(issued[1]!);
-      yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+      yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
+      yield* Deferred.await(defined(issued[1]));
+      yield* Deferred.succeed(defined(answers[1]), respond("c2", "new"));
       yield* settle;
       expect(yield* count).toBe(2);
       expect(yield* snapshot(client)).toEqual({ cookie: "c2", titles: ["new"] });
@@ -337,7 +338,7 @@ describe("pull serialisation (#412)", () => {
       const { issued, answers, count } = client.gated;
 
       const first = yield* Effect.forkChild(client.engine.pull);
-      yield* Deferred.await(issued[0]!);
+      yield* Deferred.await(defined(issued[0]));
       // B and C both enter while the first pull is in flight.
       const second = yield* Effect.forkChild(client.engine.pull);
       yield* settle;
@@ -345,12 +346,12 @@ describe("pull serialisation (#412)", () => {
       yield* settle;
       expect(yield* count).toBe(1);
 
-      yield* Deferred.succeed(answers[0]!, respond("c1", "old"));
+      yield* Deferred.succeed(defined(answers[0]), respond("c1", "old"));
       yield* Fiber.join(first);
       // B's pull starts after C entered, so it serves C too.
-      const secondRequest = yield* Deferred.await(issued[1]!);
+      const secondRequest = yield* Deferred.await(defined(issued[1]));
       expect(secondRequest.cookie).toBe("c1");
-      yield* Deferred.succeed(answers[1]!, respond("c2", "new"));
+      yield* Deferred.succeed(defined(answers[1]), respond("c2", "new"));
       yield* Fiber.join(second);
       yield* settle;
       expect(yield* count).toBe(2);
@@ -367,7 +368,7 @@ describe("pull serialisation (#412)", () => {
         const { issued, answers, count } = client.gated;
 
         const first = yield* Effect.forkChild(client.engine.pull);
-        yield* Deferred.await(issued[0]!);
+        yield* Deferred.await(defined(issued[0]));
         const second = yield* Effect.forkChild(client.engine.pull);
         yield* settle;
         const third = yield* Effect.forkChild(client.engine.pull);
@@ -375,17 +376,17 @@ describe("pull serialisation (#412)", () => {
         expect(yield* count).toBe(1);
 
         // The first pull fails and applies nothing, so B pulls #2 and that fails too.
-        yield* Deferred.fail(answers[0]!, new TransportError({ message: "offline" }));
+        yield* Deferred.fail(defined(answers[0]), new TransportError({ message: "offline" }));
         expect(Exit.isFailure(yield* Fiber.await(first))).toBe(true);
-        yield* Deferred.await(issued[1]!);
-        yield* Deferred.fail(answers[1]!, new TransportError({ message: "offline" }));
+        yield* Deferred.await(defined(issued[1]));
+        yield* Deferred.fail(defined(answers[1]), new TransportError({ message: "offline" }));
         expect(Exit.isFailure(yield* Fiber.await(second))).toBe(true);
 
         // Neither failure applied anything, so C pulls #3 itself rather than skipping.
         yield* settle;
         expect(yield* count).toBe(3);
-        yield* Deferred.await(issued[2]!);
-        yield* Deferred.succeed(answers[2]!, respond("c3", "new"));
+        yield* Deferred.await(defined(issued[2]));
+        yield* Deferred.succeed(defined(answers[2]), respond("c3", "new"));
         expect(Exit.isSuccess(yield* Fiber.await(third))).toBe(true);
         expect(yield* snapshot(client)).toEqual({ cookie: "c3", titles: ["new"] });
       })

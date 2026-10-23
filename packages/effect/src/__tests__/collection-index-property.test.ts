@@ -17,6 +17,7 @@ import * as CollectionIndex from "../CollectionIndex.js";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 // ─── Deterministic PRNG (mulberry32) ─────────────────────────────────────────
 
@@ -30,7 +31,7 @@ const mulberry32 = (seed: number) => () => {
 
 type Rng = () => number;
 const int = (rng: Rng, max: number): number => Math.floor(rng() * max);
-const pick = <A>(rng: Rng, xs: ReadonlyArray<A>): A => xs[int(rng, xs.length)]!;
+const pick = <A>(rng: Rng, xs: ReadonlyArray<A>): A => defined(xs[int(rng, xs.length)]);
 const chance = (rng: Rng, p: number): boolean => rng() < p;
 
 // ─── Row generation ──────────────────────────────────────────────────────────

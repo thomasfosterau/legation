@@ -27,6 +27,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -585,7 +586,7 @@ describe("a pull's reveal is atomic with its tail release (#286)", () => {
       const store: ClientStore = {
         ...inner,
         commitPull: (release) =>
-          inner.commitPull!(release).pipe(Effect.andThen(parkIfArmed(parking))),
+          defined(inner.commitPull)(release).pipe(Effect.andThen(parkIfArmed(parking))),
       };
       const engine = yield* makeCounterEngine(server, store);
       yield* engine.subscribe(countersSubset);

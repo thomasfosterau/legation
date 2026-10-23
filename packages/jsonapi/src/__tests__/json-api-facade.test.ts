@@ -38,6 +38,7 @@ import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
+import { defined } from "./defined.js";
 
 // ─── The graph ───────────────────────────────────────────────────────────────
 
@@ -290,15 +291,15 @@ describe("JsonApiFacade", () => {
         expect(handler.matches(request)).toBe(true);
         const response = yield* handler.handle(request);
         expect(response).toBeDefined();
-        expect(response!.status).toBe(200);
-        expect(response!.headers.get("content-type")).toBe("application/vnd.api+json");
-        expect(response!.headers.get("cache-control")).toBe("no-store");
+        expect(defined(response).status).toBe(200);
+        expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
+        expect(defined(response).headers.get("cache-control")).toBe("no-store");
         // The replica pulled once: the header carries its CVR cookie.
-        const cookie = response!.headers.get(JsonApiFacade.servedAtHeader);
+        const cookie = defined(response).headers.get(JsonApiFacade.servedAtHeader);
         expect(cookie).not.toBeNull();
-        expect(cookie!.length).toBeGreaterThan(0);
+        expect(cookie ?? "").not.toBe("");
         const local = yield* docs.fromUrl(client.view, url);
-        expect(bytes(yield* body(response!))).toBe(bytes(local));
+        expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
         // The rows themselves: audio products by name descending, with linkage.
         const document = local as { data: ReadonlyArray<{ id: string }> };
         expect(document.data.map((row) => row.id)).toEqual(["p-2", "p-3"]);
@@ -324,8 +325,10 @@ describe("JsonApiFacade", () => {
           const response = yield* handler.handle(jsonApi("/jsonapi/products?include=variants"));
           expect(yield* Ref.get(rootReads)).toBe(1);
           expect(response).toBeDefined();
-          expect(response!.status).toBe(200);
-          const document = (yield* body(response!)) as { data: ReadonlyArray<{ id: string }> };
+          expect(defined(response).status).toBe(200);
+          const document = (yield* body(defined(response))) as {
+            data: ReadonlyArray<{ id: string }>;
+          };
           expect(
             Arr.sort(
               document.data.map((row) => row.id),
@@ -344,9 +347,9 @@ describe("JsonApiFacade", () => {
           "/jsonapi/variants",
         ]);
         const found = yield* handler.handle(jsonApi("/jsonapi/products/p-1"));
-        expect(found!.status).toBe(200);
+        expect(defined(found).status).toBe(200);
         const local = yield* docs.fromUrl(client.view, "/jsonapi/products/p-1");
-        expect(bytes(yield* body(found!))).toBe(bytes(local));
+        expect(bytes(yield* body(defined(found)))).toBe(bytes(local));
         // Covered, but no such row: the 404 is the endpoint's own, so the
         // server writes it.
         expect(yield* handler.handle(jsonApi("/jsonapi/products/p-9"))).toBeUndefined();
@@ -360,7 +363,9 @@ describe("JsonApiFacade", () => {
         const { handler, client } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         yield* client.mutate("product/rename", { id: "p-1", name: "Standing desk" });
         const response = yield* handler.handle(jsonApi("/jsonapi/products/p-1"));
-        const document = (yield* body(response!)) as { data: { attributes: { name: string } } };
+        const document = (yield* body(defined(response))) as {
+          data: { attributes: { name: string } };
+        };
         // The same view `Client.query` reads: the journal's overlay is visible
         // before any push, as ADR-0029 §4 documents for covered requests.
         expect(document.data.attributes.name).toBe("Standing desk");
@@ -383,7 +388,7 @@ describe("JsonApiFacade", () => {
         expect(yield* handler.handle(request)).toBeUndefined();
         // A prefix of the identical window is covered.
         const covered = yield* handler.handle(jsonApi("/jsonapi/products?sort=name&page[limit]=1"));
-        expect(covered!.status).toBe(200);
+        expect(defined(covered).status).toBe(200);
         // A category listing with no pin at all: the network's.
         expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toBeUndefined();
       })
@@ -401,7 +406,7 @@ describe("JsonApiFacade", () => {
           ]);
           const url = "/jsonapi/products?sort=name&page[offset]=0&page[limit]=2";
           const response = yield* handler.handle(jsonApi(url));
-          expect(response!.status).toBe(200);
+          expect(defined(response).status).toBe(200);
           const local = yield* docs.fromUrl(client.view, url);
           // The byte-equal comparison above is honest about what it checks:
           // the document writer emits no `meta` yet (a total count is #210),
@@ -411,7 +416,7 @@ describe("JsonApiFacade", () => {
           // at once, since both call the one writer.
           const document = local as { data: ReadonlyArray<{ id: string }>; meta?: unknown };
           expect(document.meta).toBeUndefined();
-          expect(bytes(yield* body(response!))).toBe(bytes(local));
+          expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
           expect(document.data.map((row) => row.id)).toEqual(["p-3", "p-1"]);
         })
       )
@@ -439,8 +444,8 @@ describe("JsonApiFacade", () => {
           ]);
           online.current = false;
           const response = yield* offlineHandler.handle(deep);
-          expect(response!.status).toBe(503);
-          expect(yield* body(response!)).toEqual(JsonApiFacade.offlineDocument);
+          expect(defined(response).status).toBe(503);
+          expect(yield* body(defined(response))).toEqual(JsonApiFacade.offlineDocument);
         })
       )
   );
@@ -456,9 +461,9 @@ describe("JsonApiFacade", () => {
           ]);
           const url = "/jsonapi/products?sort=name&page[offset]=1&page[limit]=1";
           const response = yield* handler.handle(jsonApi(url));
-          expect(response!.status).toBe(200);
+          expect(defined(response).status).toBe(200);
           const local = yield* docs.fromUrl(client.view, url);
-          expect(bytes(yield* body(response!))).toBe(bytes(local));
+          expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
           const document = local as { data: ReadonlyArray<{ id: string }> };
           expect(document.data.map((row) => row.id)).toEqual(["p-1"]);
         })
@@ -474,11 +479,11 @@ describe("JsonApiFacade", () => {
           const response = yield* handler.handle(
             jsonApi("/jsonapi/products?page[offset]=1&page[after]=p-1")
           );
-          expect(response!.status).toBe(400);
-          const document = (yield* body(response!)) as {
+          expect(defined(response).status).toBe(400);
+          const document = (yield* body(defined(response))) as {
             errors: ReadonlyArray<{ source?: unknown }>;
           };
-          expect(document.errors[0]!.source).toEqual({ parameter: "page[offset]" });
+          expect(defined(document.errors[0]).source).toEqual({ parameter: "page[offset]" });
         })
       )
   );
@@ -504,8 +509,8 @@ describe("JsonApiFacade", () => {
         const request = jsonApi("/jsonapi/variants");
         online.current = false;
         const response = yield* handler.handle(request);
-        expect(response!.status).toBe(503);
-        expect(yield* body(response!)).toEqual(JsonApiFacade.offlineDocument);
+        expect(defined(response).status).toBe(503);
+        expect(yield* body(defined(response))).toEqual(JsonApiFacade.offlineDocument);
         // Online, the same read is forwarded to the server rather than answered locally.
         online.current = true;
         expect(yield* handler.handle(request)).toBeUndefined();
@@ -519,10 +524,10 @@ describe("JsonApiFacade", () => {
         const { handler, online } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         online.current = false;
         const response = yield* handler.handle(jsonApi("/jsonapi/categories"));
-        expect(response!.status).toBe(503);
-        expect(response!.headers.get("content-type")).toBe("application/vnd.api+json");
-        expect(response!.headers.get("cache-control")).toBe("no-store");
-        expect(yield* body(response!)).toEqual({
+        expect(defined(response).status).toBe(503);
+        expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
+        expect(defined(response).headers.get("cache-control")).toBe("no-store");
+        expect(yield* body(defined(response))).toEqual({
           errors: [
             {
               status: "503",
@@ -535,13 +540,13 @@ describe("JsonApiFacade", () => {
         });
         // A covered request is never affected by connectivity.
         const covered = yield* handler.handle(jsonApi("/jsonapi/products/p-2"));
-        expect(covered!.status).toBe(200);
+        expect(defined(covered).status).toBe(200);
         // What a worker answers for a forward that rejected at the transport:
         // the same document, with the replica's current cookie.
         const synthesised = yield* handler.offline(jsonApi("/jsonapi/categories"));
         expect(synthesised.status).toBe(503);
         expect(synthesised.headers.get(JsonApiFacade.servedAtHeader)).toBe(
-          response!.headers.get(JsonApiFacade.servedAtHeader)
+          defined(response).headers.get(JsonApiFacade.servedAtHeader)
         );
         expect(yield* body(synthesised)).toEqual(JsonApiFacade.offlineDocument);
         expect(
@@ -557,13 +562,15 @@ describe("JsonApiFacade", () => {
         const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         const url = "/jsonapi/products?filter[priceCents]=gt:abc";
         const response = yield* handler.handle(jsonApi(url));
-        expect(response!.status).toBe(400);
-        expect(response!.headers.get("content-type")).toBe("application/vnd.api+json");
+        expect(defined(response).status).toBe(400);
+        expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
         const failure = yield* Effect.flip(JsonApiQuery.parseRead(nodes, url));
         expect(failure).toBeInstanceOf(QueryError);
-        expect(yield* body(response!)).toEqual(RestHandlers.queryErrorDocument(failure));
+        expect(yield* body(defined(response))).toEqual(RestHandlers.queryErrorDocument(failure));
         // Whatever the ledger holds: the server would reject it identically.
-        expect((yield* handler.handle(jsonApi("/jsonapi/categories?sort=nope")))!.status).toBe(400);
+        expect(
+          defined(yield* handler.handle(jsonApi("/jsonapi/categories?sort=nope"))).status
+        ).toBe(400);
       })
     )
   );
@@ -627,9 +634,9 @@ describe("JsonApiFacade", () => {
         const served = yield* origin.handler.handle(
           jsonApi("https://api.shop.test/jsonapi/products")
         );
-        expect(served!.status).toBe(200);
+        expect(defined(served).status).toBe(200);
         // Links keep the route's own prefix: the server mounts the api as declared.
-        const document = (yield* body(served!)) as { links: { self: string } };
+        const document = (yield* body(defined(served))) as { links: { self: string } };
         expect(document.links.self).toBe("/jsonapi/products");
 
         const proxied = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"], {
@@ -660,9 +667,9 @@ describe("JsonApiFacade", () => {
         expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toBeUndefined();
         yield* engine.pull.pipe(Effect.orDie);
         const response = yield* handler.handle(jsonApi("/jsonapi/categories"));
-        expect(response!.status).toBe(200);
-        expect(response!.headers.get(JsonApiFacade.servedAtHeader)).not.toBe("");
-        expect((yield* body(response!)) as { data: unknown }).toEqual({
+        expect(defined(response).status).toBe(200);
+        expect(defined(response).headers.get(JsonApiFacade.servedAtHeader)).not.toBe("");
+        expect((yield* body(defined(response))) as { data: unknown }).toEqual({
           data: [
             { type: "categories", id: "c-audio", attributes: { name: "Audio" } },
             { type: "categories", id: "c-desk", attributes: { name: "Desk" } },
@@ -694,8 +701,8 @@ describe("JsonApiFacade", () => {
         expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toBeUndefined();
         yield* engine.pull.pipe(Effect.orDie);
         const response = yield* handler.handle(jsonApi("/jsonapi/products"));
-        expect(response!.status).toBe(200);
-        const document = (yield* body(response!)) as {
+        expect(defined(response).status).toBe(200);
+        const document = (yield* body(defined(response))) as {
           readonly data: ReadonlyArray<{
             readonly id: string;
             readonly relationships: {

@@ -42,6 +42,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
+import { defined } from "./defined.js";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
@@ -658,7 +659,7 @@ describe("EngineHost.Host.registrations", () => {
           yield* engine.pull.pipe(Effect.orDie);
           const held = yield* eventually(host.registrations, (current) => current.length === 2);
           expect(held.map((entry) => Subset.hash(entry.root))).toEqual([todosRoot, todosRoot]);
-          const edged = held.find((entry) => entry.edges.length === 1)!;
+          const edged = defined(held.find((entry) => entry.edges.length === 1));
           expect(edged.edges).toEqual([{ name: "author" }]);
           expect(edged.url).toBeUndefined();
 
@@ -736,7 +737,8 @@ describe("EngineHost.Host.registrations", () => {
       const held = yield* eventually(
         host.registrations,
         (current) =>
-          current.length === 1 && current[0]!.pulled.windows.every((window) => window.pulled)
+          current.length === 1 &&
+          defined(current[0]).pulled.windows.every((window) => window.pulled)
       );
       expect(held).toMatchObject([{ root: allTodos, edges: [{ name: "author" }] }]);
       expect(yield* hashes(engine)).toContain(todosRoot);
@@ -776,7 +778,7 @@ describe("EngineHost.Host.registrations", () => {
         yield* engine.pull.pipe(Effect.orDie);
         const both = yield* eventually(
           host.registrations,
-          (current) => current.length === 1 && current[0]!.url === "/todos"
+          (current) => current.length === 1 && defined(current[0]).url === "/todos"
         );
         expect(both).toMatchObject([{ root: allTodos, edges: [], url: "/todos" }]);
         expect(yield* coverageOf({ collection: "todos" })).toMatchObject({ url: "/todos" });
@@ -785,7 +787,7 @@ describe("EngineHost.Host.registrations", () => {
         yield* channel.post({ _tag: "UnsubscribeUrl", mirrorId: "page", url: "/todos" });
         const tabOnly = yield* eventually(
           host.registrations,
-          (current) => current.length === 1 && current[0]!.url === undefined
+          (current) => current.length === 1 && defined(current[0]).url === undefined
         );
         expect(tabOnly).toMatchObject([{ root: allTodos, edges: [] }]);
         const verdict = yield* coverageOf({ collection: "todos" });

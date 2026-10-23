@@ -22,6 +22,7 @@ import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
+import { defined } from "./defined.js";
 
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
@@ -70,7 +71,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
     for (const [key, value] of params) {
       const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
       if (match === null) continue;
-      const field = match[1]!;
+      const field = defined(match[1]);
       const allowed = value.split(",");
       rows = rows.filter((r) =>
         field === "id" ? allowed.includes(r.id) : allowed.includes(String(r.attributes[field]))
@@ -97,7 +98,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
     Effect.sync(() => {
       requests.push(url.pathname + url.search);
       const segments = url.pathname.split("/").filter((s) => Str.isNonEmpty(s));
-      const type = segments[0]!;
+      const type = defined(segments[0]);
       const id = segments[1];
       let response: Response;
       switch (request.method) {
@@ -120,7 +121,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
         }
         case "PATCH": {
           const patch = readBody(request).data as Stored;
-          const existing = store.get(`${type}:${id}`) ?? { type, id: id!, attributes: {} };
+          const existing = store.get(`${type}:${id}`) ?? { type, id: defined(id), attributes: {} };
           const merged = {
             ...existing,
             attributes: { ...existing.attributes, ...patch.attributes },
@@ -205,7 +206,7 @@ describe("Relationships", () => {
 
         const rows = yield* Relationships.query(engine, issues, ["author", "comments"]);
         expect(rows).toHaveLength(1);
-        const issue = rows[0]!;
+        const issue = defined(rows[0]);
         expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
         const comments = issue.related.comments as ReadonlyArray<JsonApiRow>;
         expect(comments.map((c) => attr(c, "body"))).toEqual(["first", "second"]);
@@ -223,7 +224,7 @@ describe("Relationships", () => {
 
         // observe's first emission matches a one-shot query.
         const first = yield* Stream.runHead(Relationships.observe(engine, issues, ["comments"]));
-        const initial = (first._tag === "Some" ? first.value : [])[0]!;
+        const initial = defined((first._tag === "Some" ? first.value : [])[0]);
         expect(
           (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
         ).toEqual(["first", "second"]);
@@ -239,7 +240,9 @@ describe("Relationships", () => {
 
         const rows = yield* Relationships.query(engine, issues, ["comments"]);
         expect(
-          (rows[0]!.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
+          (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
+            attr(c, "body")
+          )
         ).toEqual(["edited", "second"]);
       }),
       server
@@ -258,7 +261,9 @@ describe("Relationships", () => {
           yield* syncAll(engine);
 
           const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
-            (rows[0]!.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"));
+            (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
+              attr(c, "body")
+            );
           const seen = yield* SubscriptionRef.make<ReadonlyArray<ReadonlyArray<unknown>>>([]);
           // Wait on the observer's emissions, not on wall-clock time.
           const emitted = (until: (emissions: ReadonlyArray<ReadonlyArray<unknown>>) => boolean) =>
@@ -306,7 +311,7 @@ describe("Relationships", () => {
         // No manual subscribe of comments/people — related() does it.
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = (head._tag === "Some" ? head.value : [])[0]!;
+        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
 
         expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
         expect(
@@ -329,7 +334,7 @@ describe("Relationships", () => {
         const engine = yield* ClientEngine.ClientEngine;
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = (head._tag === "Some" ? head.value : [])[0]!;
+        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
 
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))

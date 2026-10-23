@@ -58,6 +58,7 @@ import * as Stream from "effect/Stream";
 import { KeyValueStore } from "effect/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -312,7 +313,10 @@ describe("BackgroundSync (#213)", () => {
         // bespoke replay loop.
         const sent = yield* Ref.get(pushes);
         expect(sent).toHaveLength(1);
-        expect(sent[0]!.mutations.map((m) => m.mutator)).toEqual(["todo/set", "todo/refused"]);
+        expect(defined(sent[0]).mutations.map((m) => m.mutator)).toEqual([
+          "todo/set",
+          "todo/refused",
+        ]);
         // Acknowledged: the journal is trimmed...
         expect(yield* store.pendingMutations).toEqual([]);
         // ...the refused write's optimistic effect is dropped...
@@ -520,7 +524,7 @@ describe("BackgroundSync (#213)", () => {
           expect(self.fired).toEqual([]);
           const sent = yield* Ref.get(pushes);
           expect(sent).toHaveLength(1);
-          expect(sent[0]!.mutations).toHaveLength(5);
+          expect(defined(sent[0]).mutations).toHaveLength(5);
         }).pipe(Effect.scoped),
       30_000
     );

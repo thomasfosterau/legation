@@ -27,6 +27,7 @@ import type { Mutation, PatchOp } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { defined } from "./defined.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -207,7 +208,7 @@ describe("the atomic batch on the key-value store (#393)", () => {
       writes.length = 0;
       state.batches.length = 0;
 
-      yield* store.commitPull!({
+      yield* defined(store.commitPull)({
         lastMutationIds: { c: 1 },
         cookie: "cookie-1",
         patch: [put("a", 1), put("b", 2), put("a", 3)],
@@ -259,9 +260,9 @@ describe("the atomic batch on the key-value store (#393)", () => {
 
       // Acknowledge the first two, then release them with a pull; then release the last one with a
       // pull; then a pull that clears the rows.
-      yield* batchStore.commitAcknowledgement!(history.slice(0, 2), { c: 2 });
+      yield* defined(batchStore.commitAcknowledgement)(history.slice(0, 2), { c: 2 });
       yield* acknowledgeOnRecordPath(recordStore, history.slice(0, 2), { c: 2 });
-      yield* batchStore.commitPull!({
+      yield* defined(batchStore.commitPull)({
         lastMutationIds: { c: 1 },
         cookie: "k1",
         patch: [put("a", 1), put("b", 2)],
@@ -271,10 +272,10 @@ describe("the atomic batch on the key-value store (#393)", () => {
         cookie: "k1",
         patch: [put("a", 1), put("b", 2)],
       });
-      yield* batchStore.commitPull!({ lastMutationIds: { c: 2 }, patch: [] });
+      yield* defined(batchStore.commitPull)({ lastMutationIds: { c: 2 }, patch: [] });
       yield* recordStore.beginRelease({ lastMutationIds: { c: 2 }, patch: [] });
       yield* recordStore.releaseUnpulled({ c: 2 });
-      yield* batchStore.commitPull!({
+      yield* defined(batchStore.commitPull)({
         lastMutationIds: { c: 3 },
         cookie: "k2",
         patch: [{ _tag: "Clear" }, put("b", 9)],
@@ -310,12 +311,16 @@ describe("the atomic batch on the key-value store (#393)", () => {
           args: {},
           createdAt: 0,
         });
-        yield* store.commitAcknowledgement!([m1], { c: 1 });
+        yield* defined(store.commitAcknowledgement)([m1], { c: 1 });
         const before = contents(data);
 
         state.abortNext = true;
         const pull = yield* Effect.exit(
-          store.commitPull!({ lastMutationIds: { c: 1 }, cookie: "k1", patch: [put("a", 5)] })
+          defined(store.commitPull)({
+            lastMutationIds: { c: 1 },
+            cookie: "k1",
+            patch: [put("a", 5)],
+          })
         );
         expect(Exit.isFailure(pull)).toBe(true);
         // Nothing landed: the same keys hold the same values, and the tail still holds the entry.
@@ -381,7 +386,11 @@ describe("the atomic batch on the key-value store (#393)", () => {
 
         // A newer pull commits. It finishes the stale record before it writes, so the record is not
         // left to replay over the batch's rows and cookie.
-        yield* store.commitPull!({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] });
+        yield* defined(store.commitPull)({
+          lastMutationIds: {},
+          cookie: "k2",
+          patch: [put("a", 2)],
+        });
         // A later row write finishes whatever is still outstanding.
         yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
 
@@ -399,9 +408,13 @@ describe("the atomic batch on the key-value store (#393)", () => {
   > = [
     [
       "commitPull",
-      (store) => store.commitPull!({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] }),
+      (store) =>
+        defined(store.commitPull)({ lastMutationIds: {}, cookie: "k2", patch: [put("a", 2)] }),
     ],
-    ["commitAcknowledgement", (store) => store.commitAcknowledgement!([mutation("c", 2)], {})],
+    [
+      "commitAcknowledgement",
+      (store) => defined(store.commitAcknowledgement)([mutation("c", 2)], {}),
+    ],
   ];
   for (const [member, call] of batchMemberCalls) {
     it.effect(
@@ -437,8 +450,12 @@ describe("the atomic batch on the key-value store (#393)", () => {
         args: {},
         createdAt: 0,
       });
-      yield* batched.commitAcknowledgement!([m1], { c: 1 });
-      yield* batched.commitPull!({ lastMutationIds: { c: 1 }, cookie: "k1", patch: [put("a", 4)] });
+      yield* defined(batched.commitAcknowledgement)([m1], { c: 1 });
+      yield* defined(batched.commitPull)({
+        lastMutationIds: { c: 1 },
+        cookie: "k1",
+        patch: [put("a", 4)],
+      });
 
       // Reopened without the seam, the record path reads what the batch wrote and keeps working.
       const recordPath = yield* openStore(kv);

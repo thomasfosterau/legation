@@ -27,6 +27,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { defined } from "./defined.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 
@@ -511,7 +512,7 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
         const store = yield* ClientStoreModule.makeMemory;
         yield* store.appendMutation(m(1));
         yield* race(
-          store.commitPull!({ lastMutationIds: { c: 1 }, patch: [] }),
+          defined(store.commitPull)({ lastMutationIds: { c: 1 }, patch: [] }),
           store.appendNext(d()).pipe(Effect.asVoid)
         );
         if (!(yield* store.pendingMutations).map(key).includes("c:2")) lost++;
@@ -529,7 +530,7 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
         yield* store.appendMutation(m(1, "other"));
         yield* race(
           store.acknowledge("c", 1),
-          store.commitPull!({ lastMutationIds: { other: 1 }, patch: [] })
+          defined(store.commitPull)({ lastMutationIds: { other: 1 }, patch: [] })
         );
         const pending = new Set((yield* store.pendingMutations).map(key));
         if (pending.has("c:1") || pending.has("other:1")) resurrected++;
@@ -550,7 +551,7 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
             const store = yield* ClientStoreModule.makeMemory;
             yield* store.appendMutation(m(1));
             const pulling = yield* Effect.forkChild(
-              store.commitPull!({
+              defined(store.commitPull)({
                 lastMutationIds: { c: 1 },
                 cookie: "cookie-1",
                 patch: [

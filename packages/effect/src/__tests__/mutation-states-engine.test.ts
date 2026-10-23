@@ -35,6 +35,7 @@ import * as MutationState from "../MutationState.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -296,9 +297,9 @@ describe("ClientEngine.mutationStates (#116)", () => {
 
       const snapshots = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
       expect(snapshots).toHaveLength(3);
-      expect(HashMap.size(snapshots[0]!)).toBe(0); // initial (empty)
-      expect(get(snapshots[1]!, 1)?.phase).toBe("pending"); // journaled
-      expect(get(snapshots[2]!, 1)?.phase).toBe("acknowledged"); // settled
+      expect(HashMap.size(defined(snapshots[0]))).toBe(0); // initial (empty)
+      expect(get(defined(snapshots[1]), 1)?.phase).toBe("pending"); // journaled
+      expect(get(defined(snapshots[2]), 1)?.phase).toBe("acknowledged"); // settled
     })
   );
 });

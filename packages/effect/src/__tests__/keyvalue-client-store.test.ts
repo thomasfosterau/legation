@@ -22,6 +22,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import type { Mutation } from "../Protocol.js";
+import { defined } from "./defined.js";
 
 const mutation = (mutationId: number): Mutation => ({
   clientId: "c1",
@@ -440,7 +441,7 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
       expect(kv.data.has("legation/compactionIntent")).toBe(false);
       // The index is untouched: still the full run, nothing half-renumbered.
       expect(idsOf(yield* first.pendingMutations)).toEqual([1, 2, 4, 5]);
-      expect(JSON.parse(kv.data.get("legation/journalIndex")!)).toHaveLength(5);
+      expect(JSON.parse(defined(kv.data.get("legation/journalIndex")))).toHaveLength(5);
     })
   );
 

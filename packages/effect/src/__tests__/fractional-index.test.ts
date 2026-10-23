@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import * as FractionalIndex from "../FractionalIndex.js";
+import { defined } from "./defined.js";
 
 describe("FractionalIndex", () => {
   it("generates a key with no bounds", () => {
@@ -60,7 +61,7 @@ describe("FractionalIndex", () => {
     }
     // Strictly decreasing (each new key is the tightest lower neighbor so far).
     for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(keys[i]!, keys[i - 1]!)).toBeLessThan(0);
+      expect(FractionalIndex.compare(defined(keys[i]), defined(keys[i - 1]))).toBeLessThan(0);
     }
   });
 
@@ -81,7 +82,7 @@ describe("FractionalIndex", () => {
     const keys = FractionalIndex.generateNBetween(undefined, undefined, 10);
     expect(keys.length).toBe(10);
     for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(keys[i - 1]!, keys[i]!)).toBeLessThan(0);
+      expect(FractionalIndex.compare(defined(keys[i - 1]), defined(keys[i]))).toBeLessThan(0);
     }
   });
 
@@ -114,7 +115,7 @@ describe("FractionalIndex", () => {
       keys = [...keys.slice(0, index), inserted, ...keys.slice(index)];
     }
     for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(keys[i - 1]!, keys[i]!)).toBeLessThan(0);
+      expect(FractionalIndex.compare(defined(keys[i - 1]), defined(keys[i]))).toBeLessThan(0);
     }
   });
 });

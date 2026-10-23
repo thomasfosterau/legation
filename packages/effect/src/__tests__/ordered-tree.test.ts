@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import * as OrderedTree from "../OrderedTree.js";
+import { defined } from "./defined.js";
 
 const numberCompare = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -90,7 +91,7 @@ describe("OrderedTree", () => {
         }
       } else {
         const index = Math.floor(next() * reference.length);
-        const value = reference[index]!;
+        const value = defined(reference[index]);
         tree = OrderedTree.remove(tree, value, numberCompare);
         reference = reference.filter((v) => v !== value);
       }

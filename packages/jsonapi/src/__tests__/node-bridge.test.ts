@@ -25,6 +25,7 @@ import {
   Transport,
 } from "@thomasfosterau/legation-effect";
 import * as NodeBridge from "../NodeBridge.js";
+import { defined } from "./defined.js";
 
 // The commerce trio, declared once as JSON:API resources. The graph is
 // acyclic (the library's resource types expand eagerly): products point at
@@ -144,7 +145,7 @@ describe("NodeBridge.registry", () => {
       "products",
       "reviews",
     ]);
-    expect(nodes.nodes.get("products")!.edges["reviews"]).toEqual({
+    expect(defined(nodes.nodes.get("products")).edges["reviews"]).toEqual({
       kind: "paginated",
       target: "reviews",
       inverse: "product",
@@ -180,7 +181,7 @@ describe("NodeBridge.registry", () => {
       messages: { edges },
       accounts: { inverses: { messages: "recipient" } },
     });
-    expect(nodes.nodes.get("accounts")!.edges["messages"]).toEqual({
+    expect(defined(nodes.nodes.get("accounts")).edges["messages"]).toEqual({
       kind: "many",
       target: "messages",
       inverse: "recipient",

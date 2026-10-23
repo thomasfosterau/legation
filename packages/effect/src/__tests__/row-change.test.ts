@@ -26,6 +26,7 @@ import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 /** mulberry32: tiny deterministic PRNG so a failing seed is reproducible. */
 const mulberry32 = (seed: number) => {
@@ -232,7 +233,7 @@ const checkSession = (
 
 const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatch | undefined => {
   const rand = mulberry32(seed);
-  const pick = <A>(xs: ReadonlyArray<A>): A => xs[Math.floor(rand() * xs.length)]!;
+  const pick = <A>(xs: ReadonlyArray<A>): A => defined(xs[Math.floor(rand() * xs.length)]);
 
   // The backing "confirmed collection", independent of the subset's filter —
   // put/del apply here first, mirroring the store `LiveView` maintains a
@@ -308,7 +309,7 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
     ];
     const bUpdated: Positioned = { id: "b", value: { rank: 5 }, position: "a1" };
     const cEnters: Positioned = { id: "c", value: { rank: 3 }, position: "a2" };
-    const after: ReadonlyArray<Positioned> = [before[0]!, bUpdated, cEnters];
+    const after: ReadonlyArray<Positioned> = [defined(before[0]), bUpdated, cEnters];
     expect(RowChange.diff(before, after)).toEqual([
       { _tag: "update", row: bUpdated, previous: before[1], position: "a1" },
       { _tag: "enter", row: cEnters, position: "a2" },
@@ -325,8 +326,8 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
     ];
     // "b"'s value is unchanged but its position moved ahead of "a" (a
     // neighbor's insert/delete re-ranked it without touching its value).
-    const bMoved: Positioned = { id: "b", value: before[1]!.value, position: "a-1" };
-    const after: ReadonlyArray<Positioned> = [bMoved, before[0]!];
+    const bMoved: Positioned = { id: "b", value: defined(before[1]).value, position: "a-1" };
+    const after: ReadonlyArray<Positioned> = [bMoved, defined(before[0])];
     expect(RowChange.diff(before, after)).toEqual([
       { _tag: "move", row: bMoved, position: "a-1", previousPosition: "a1" },
     ]);

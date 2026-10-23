@@ -22,6 +22,7 @@ import {
   Transport,
 } from "../index.js";
 import { ClientEngine, ClientView, Cvr, InvalidationBus, SyncServer } from "../internal.js";
+import { defined } from "./defined.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 const Product = Node.make("products", {
@@ -180,7 +181,7 @@ describe("Query.run / Query.observe", () => {
 
       const plain = yield* Query.run(view, nodes, Query.make({ collection: "reviews" }));
       expect(plain).toHaveLength(3);
-      expect(plain[0]!.related).toEqual({});
+      expect(defined(plain[0]).related).toEqual({});
 
       // The paginated edge window: newest 2 reviews, in the edge's order.
       const windowed = yield* Query.run(
@@ -189,7 +190,7 @@ describe("Query.run / Query.observe", () => {
         Query.make({ collection: "products", include: { reviews: { first: 2 }, category: true } })
       );
       expect(windowed).toHaveLength(1);
-      const reviews = windowed[0]!.related["reviews"] as ReadonlyArray<{ id: string }>;
+      const reviews = defined(windowed[0]).related["reviews"] as ReadonlyArray<{ id: string }>;
       expect(reviews.map((row) => row.id)).toEqual(["r-2", "r-3"]);
     })
   );

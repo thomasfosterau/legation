@@ -33,6 +33,7 @@ import {
 import { ClientEngine, FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
+import { defined } from "./defined.js";
 
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
@@ -399,7 +400,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
       for (const [key, value] of url.searchParams) {
         const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
         if (match === null) continue;
-        const field = match[1]!;
+        const field = defined(match[1]);
         const allowed = value.split(",");
         rows = rows.filter((row) => allowed.includes(String(row.attributes[field])));
       }
@@ -795,7 +796,7 @@ describe("JsonApiQuery.canonical", () => {
       const first = generated.firsts[index];
       reads.push({
         ...read,
-        ...(index % 3 === 0 ? {} : { order: orderTokens(generated.orderBys[index]!) }),
+        ...(index % 3 === 0 ? {} : { order: orderTokens(defined(generated.orderBys[index])) }),
         ...(first === 0 ? {} : { first }),
         ...(index % 4 === 0 ? { after: `row-${index}` } : {}),
       });
@@ -938,7 +939,7 @@ describe("JsonApiQuery.resourcesOf", () => {
       "variants",
     ]);
     expect(JsonApiQuery.resourcesOf(nodes)).toBe(resources);
-    expect(Object.keys(resources.get("products")!.relationships).toSorted()).toEqual([
+    expect(Object.keys(defined(resources.get("products")).relationships).toSorted()).toEqual([
       "category",
       "reviews",
       "variants",

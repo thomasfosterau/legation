@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
+import { defined } from "./defined.js";
 
 const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean => {
   switch (column.kind) {
@@ -119,7 +120,7 @@ describe("FilterCorpus", () => {
     const unknownFields = allLeaves.filter((leaf) => !columns.has(leaf.field));
     expect(unknownFields).toEqual([]);
     const crossTyped = allLeaves.filter(
-      (leaf) => leaf.literal !== null && !kindOf(leaf.literal, columns.get(leaf.field)!)
+      (leaf) => leaf.literal !== null && !kindOf(leaf.literal, defined(columns.get(leaf.field)))
     );
     expect(crossTyped).toEqual([]);
   });

@@ -35,6 +35,7 @@ import * as Subscriptions from "../Subscriptions.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 type Row = Derive.Row;
 const page = (rows: ReadonlyArray<Row>): ReadonlyArray<{ id: string; value: unknown }> =>
@@ -48,7 +49,7 @@ const source = (...pages: ReadonlyArray<ReadonlyArray<Row>>): Derive.Source<neve
   Stream.fromIterable(pages);
 
 const lastEmission = <A>(stream: Stream.Stream<A, never>): Effect.Effect<A> =>
-  Stream.runCollect(stream).pipe(Effect.map((all) => all[all.length - 1]!));
+  Stream.runCollect(stream).pipe(Effect.map((all) => defined(all[all.length - 1])));
 
 describe("Derive — composition (queries-from-queries)", () => {
   it.effect("filter → map → orderedWindow, maintained across snapshots", () =>
@@ -104,10 +105,10 @@ describe("Derive — composition (queries-from-queries)", () => {
       const final = yield* lastEmission(byRegion);
       // Two groups, ordered by key: east has o1+o3, west has o2.
       expect(final.map((row) => row.id)).toEqual(["east", "west"]);
-      const east = final.find((row) => row.id === "east")!.value as {
+      const east = defined(final.find((row) => row.id === "east")).value as {
         rows: ReadonlyArray<unknown>;
       };
-      const west = final.find((row) => row.id === "west")!.value as {
+      const west = defined(final.find((row) => row.id === "west")).value as {
         rows: ReadonlyArray<unknown>;
       };
       expect(east.rows.length).toBe(2);

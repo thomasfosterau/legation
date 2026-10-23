@@ -45,6 +45,7 @@ import { makeRoomClass } from "../Room.js";
 import { routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 import { fakeBinding } from "./fakes.js";
+import { defined } from "./defined.js";
 
 // ─── Runtime stubs ───────────────────────────────────────────────────────────
 
@@ -337,7 +338,7 @@ describe("rooms + shards, end to end", () => {
                   Effect.provideService(ClientStore.ClientStore, store),
                   Effect.provideService(
                     Transport.ClientTransport,
-                    roomTransport(rooms.get("room-a")!)
+                    roomTransport(defined(rooms.get("room-a")))
                   )
                 );
                 return engine;
@@ -388,7 +389,7 @@ describe("rooms + shards, end to end", () => {
                   Effect.provideService(ClientStore.ClientStore, store),
                   Effect.provideService(
                     Transport.ClientTransport,
-                    roomTransport(rooms.get("room-b")!)
+                    roomTransport(defined(rooms.get("room-b")))
                   )
                 );
               }).pipe(Scope.provide(writerScope))
@@ -409,7 +410,7 @@ describe("rooms + shards, end to end", () => {
               (call) => call.shard === "reviews/productId=p-1" && call.path === "/publish"
             );
             expect(socketA.sent.length).toBeGreaterThan(0);
-            expect(JSON.parse(socketA.sent[0]!)).toEqual({ type: "poke" });
+            expect(JSON.parse(defined(socketA.sent[0]))).toEqual({ type: "poke" });
             // …and (a client honouring the poke pulls) the window converges.
             await Effect.runPromise(reader.pull.pipe(Effect.orDie));
             await hasConverged;

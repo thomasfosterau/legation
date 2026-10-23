@@ -99,7 +99,7 @@ describe("clientGroupId", () => {
     const second = clientGroupId(cookies);
     expect(first).toBe(second);
     expect(sets).toHaveLength(1);
-    expect(sets[0]!.name).toBe("legation-client-group");
+    expect(sets[0]?.name).toBe("legation-client-group");
   });
 
   it("honours a custom name and generator", () => {

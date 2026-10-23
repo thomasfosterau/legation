@@ -14,6 +14,7 @@ import * as P from "effect/Predicate";
 import { KeyValueStore } from "effect/persistence";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
+import { defined } from "./defined.js";
 
 /**
  * Makes the Nth `put` of an armed batch throw, as a write that fails mid-transaction would. Every
@@ -182,7 +183,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(store.commitPull).toBeDefined();
         const kv = yield* KeyValueStore.KeyValueStore;
 
-        yield* store.commitPull!({
+        yield* defined(store.commitPull)({
           lastMutationIds: {},
           cookie: "cookie-1",
           patch: [put("a", 1), put("b", 2)],
@@ -216,7 +217,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
             args: {},
             createdAt: 0,
           });
-          yield* store.commitAcknowledgement!([m1], { c: 1 });
+          yield* defined(store.commitAcknowledgement)([m1], { c: 1 });
           yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
         }).pipe(Effect.provide(storeLayer(database)));
 
@@ -226,7 +227,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           failure.armed = true;
           failure.puts = 0;
           const pull = yield* Effect.exit(
-            store.commitPull!({
+            defined(store.commitPull)({
               lastMutationIds: { c: 1 },
               cookie: "cookie-2",
               patch: [put("a", 5), put("b", 6)],
@@ -256,7 +257,11 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.commitPull!({ lastMutationIds: {}, cookie: "cookie-0", patch: [put("a", 0)] });
+        yield* defined(store.commitPull)({
+          lastMutationIds: {},
+          cookie: "cookie-0",
+          patch: [put("a", 0)],
+        });
       }).pipe(Effect.provide(storeLayer("atomic-tally")));
 
       tally.readwrite = 0;
@@ -264,7 +269,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         // Row a is patched twice: one put for it, as the staged batch holds one value per key.
-        yield* store.commitPull!({
+        yield* defined(store.commitPull)({
           lastMutationIds: {},
           cookie: "cookie-1",
           patch: [put("a", 1), put("b", 2), put("a", 3)],
@@ -283,7 +288,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
       yield* Effect.promise(() => createAtVersion2("atomic-v2", true));
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.commitPull!({
+        yield* defined(store.commitPull)({
           lastMutationIds: {},
           cookie: "cookie-v2",
           patch: [put("a", 3)],
@@ -342,7 +347,11 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           const read = yield* Effect.exit(store.getCookie);
           const write = yield* Effect.exit(store.setCookie("cookie-after"));
           const batch = yield* Effect.exit(
-            store.commitPull!({ lastMutationIds: {}, cookie: "cookie-after", patch: [put("a", 1)] })
+            defined(store.commitPull)({
+              lastMutationIds: {},
+              cookie: "cookie-after",
+              patch: [put("a", 1)],
+            })
           );
           const attempts: ReadonlyArray<Exit.Exit<unknown, unknown>> = [read, write, batch];
           for (const attempt of attempts) {
@@ -397,7 +406,11 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
       const database = "atomic-snapshot";
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.commitPull!({ lastMutationIds: {}, cookie: "cookie-1", patch: [put("a", 1)] });
+        yield* defined(store.commitPull)({
+          lastMutationIds: {},
+          cookie: "cookie-1",
+          patch: [put("a", 1)],
+        });
         // One entry parked in the tail by an acknowledgement, one still in the journal.
         const first = yield* store.appendNext({
           clientId: "c",
@@ -405,7 +418,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           args: {},
           createdAt: 0,
         });
-        yield* store.commitAcknowledgement!([first], { c: first.mutationId });
+        yield* defined(store.commitAcknowledgement)([first], { c: first.mutationId });
         yield* store.appendNext({ clientId: "c", mutator: "counter/inc", args: {}, createdAt: 0 });
       }).pipe(Effect.provide(storeLayer(database)));
 
@@ -413,7 +426,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         const store = yield* ClientStore.ClientStore;
         tally.readonly = 0;
         tally.readwrite = 0;
-        const state = yield* store.snapshot!;
+        const state = yield* defined(store.snapshot);
         // The whole read is one transaction, and it writes nothing.
         expect(tally.readonly).toBe(1);
         expect(tally.readwrite).toBe(0);
@@ -437,7 +450,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
       const database = "atomic-snapshot-non-string";
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.commitPull!({
+        yield* defined(store.commitPull)({
           lastMutationIds: {},
           cookie: "cookie-1",
           patch: [put("a", 1)],
@@ -448,7 +461,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        const state = yield* store.snapshot!;
+        const state = yield* defined(store.snapshot);
         expect(state.cookie).toBeUndefined();
         expect(state.cookie).toBe(yield* store.getCookie);
         expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));

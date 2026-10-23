@@ -23,6 +23,7 @@ import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
+import { defined } from "./defined.js";
 
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
@@ -86,17 +87,21 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
         }
         case "PATCH": {
           const patch = readBody(request).data as StoredResource;
-          const existing = store.get(id!) ?? { type: "todos", id: id!, attributes: {} };
+          const existing = store.get(defined(id)) ?? {
+            type: "todos",
+            id: defined(id),
+            attributes: {},
+          };
           const merged = {
             ...existing,
             attributes: { ...existing.attributes, ...patch.attributes },
           };
-          store.set(id!, merged);
+          store.set(defined(id), merged);
           response = doc(merged);
           break;
         }
         case "DELETE":
-          store.delete(id!);
+          store.delete(defined(id));
           response = empty(204);
           break;
         default:

@@ -31,6 +31,7 @@ import * as Related from "../Related.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Issue {
   readonly id: string;
@@ -238,11 +239,11 @@ describe("Related.query / observe", () => {
       yield* syncAll(engine);
 
       const rows = yield* Related.query(engine, registry, "issues", issues, ["author", "comments"]);
-      const i1 = rows.find((r) => r.id === "i1")!;
+      const i1 = defined(rows.find((r) => r.id === "i1"));
       expect((i1.related.author as Person).name).toBe("Ada");
       expect(commentBodies(i1)).toEqual(["first", "second"]);
       // The comment-less issue resolves to an empty list, not undefined.
-      expect(commentBodies(rows.find((r) => r.id === "i2")!)).toEqual([]);
+      expect(commentBodies(defined(rows.find((r) => r.id === "i2")))).toEqual([]);
     })
   );
 
@@ -262,7 +263,7 @@ describe("Related.query / observe", () => {
             ReadonlyArray<ReadonlyArray<Related.RelatedRow>>
           >([]);
           const i1Bodies = (rows: ReadonlyArray<Related.RelatedRow>) =>
-            commentBodies(rows.find((r) => r.id === "i1")!).toSorted();
+            commentBodies(defined(rows.find((r) => r.id === "i1"))).toSorted();
           const emitted = (
             until: (emissions: ReadonlyArray<ReadonlyArray<Related.RelatedRow>>) => boolean,
             failure: string
@@ -298,11 +299,13 @@ describe("Related.query / observe", () => {
           const emissions = yield* emitted(
             (acc) =>
               acc.length >= 2 &&
-              JSON.stringify(i1Bodies(acc[acc.length - 1]!)) === JSON.stringify(settled),
+              JSON.stringify(i1Bodies(defined(acc[acc.length - 1]))) === JSON.stringify(settled),
             "the join never re-emitted the pulled edit"
           );
-          const firstI1 = emissions[0]!.find((r) => r.id === "i1")!;
-          const lastI1 = emissions[emissions.length - 1]!.find((r) => r.id === "i1")!;
+          const firstI1 = defined(defined(emissions[0]).find((r) => r.id === "i1"));
+          const lastI1 = defined(
+            defined(emissions[emissions.length - 1]).find((r) => r.id === "i1")
+          );
           // `many` order follows the foreign collection's row order (a write can
           // reorder it), so compare as sets.
           expect(commentBodies(firstI1).toSorted()).toEqual(["first", "second"]);
@@ -387,7 +390,7 @@ describe("Related.related", () => {
         "comments",
       ]).pipe(Effect.provideService(Scope.Scope, scope));
       const head = yield* Stream.runHead(stream);
-      const i1 = (head._tag === "Some" ? head.value : []).find((r) => r.id === "i1")!;
+      const i1 = defined((head._tag === "Some" ? head.value : []).find((r) => r.id === "i1"));
       expect((i1.related.author as Person).name).toBe("Ada");
       expect(commentBodies(i1)).toEqual(["first", "second"]);
 
@@ -527,7 +530,7 @@ type Op =
   | { readonly _tag: "deleteForeign"; readonly collection: ForeignCollection; readonly id: string };
 
 const pick = <A>(rng: () => number, values: ReadonlyArray<A>): A =>
-  values[Math.floor(rng() * values.length)]!;
+  defined(values[Math.floor(rng() * values.length)]);
 
 const FOREIGN_COLLECTIONS: ReadonlyArray<ForeignCollection> = ["people", "comments", "tags"];
 const FOREIGN_ID_PREFIX: Record<ForeignCollection, string> = {
@@ -612,7 +615,7 @@ const sameJoinUnordered = (
 ): boolean =>
   actual.length === expected.length &&
   actual.every((row, i) => {
-    const other = expected[i]!;
+    const other = defined(expected[i]);
     if (row.id !== other.id || row.value !== other.value) return false;
     const names = Object.keys(row.related);
     return (

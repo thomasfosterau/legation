@@ -23,6 +23,7 @@ import { Subset } from "@thomasfosterau/legation-effect/internal";
 import type { Backend } from "@thomasfosterau/legation-effect";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
+import { defined } from "./defined.js";
 
 interface Mock {
   readonly executor: SqlBackend.SqlExecutor;
@@ -184,7 +185,7 @@ describe("SqlBackend evaluate / getRows", () => {
       const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
       // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
-      const select = mock.queries.at(-1)!;
+      const select = defined(mock.queries.at(-1));
       // No kinds are declared, so nothing collates.
       expect(select.text).toBe(`SELECT * FROM "todos" WHERE "status" = ?`);
       expect(select.params).toEqual(["open"]);
@@ -225,12 +226,12 @@ describe("SqlBackend evaluate / getRows", () => {
       // clause, and the decoded row (done: false) survived Subset.apply's
       // re-evaluation against the boolean literal.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
-      const select = mock.queries.at(-1)!;
+      const select = defined(mock.queries.at(-1));
       expect(select.text).toBe(`SELECT * FROM "todos" WHERE "done" = ? AND "createdAt" > ?`);
       expect(select.params).toEqual([0, "2000-01-01T00:00:00.000Z"]);
 
       const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
-      expect(rows[0]!.value).toEqual({
+      expect(defined(rows[0]).value).toEqual({
         id: "1",
         done: true,
         flags: 1,
@@ -314,14 +315,14 @@ describe("SqlBackend evaluate / getRows", () => {
       );
       expect(hidden.map((e) => e.id)).toEqual(["i2"]);
       // The subquery took the foreign table's kinds: its text field collates.
-      const subquery = mock.queries.find((q) => q.text.startsWith("SELECT DISTINCT"))!;
+      const subquery = defined(mock.queries.find((q) => q.text.startsWith("SELECT DISTINCT")));
       expect(subquery.text).toBe(`SELECT DISTINCT "projectId" FROM "memberships" WHERE 1 = 1`);
       const named = yield* backend.evaluate(
         { clientGroupId: "g" },
         Subset.make({ collection: "issues", where: membership(Predicate.eq("userId", "alice")) })
       );
       expect(named.map((e) => e.id)).toEqual(["i1"]);
-      expect(mock.queries.at(-2)!.text).toBe(
+      expect(defined(mock.queries.at(-2)).text).toBe(
         `SELECT DISTINCT "projectId" FROM "memberships" WHERE "userId" COLLATE BINARY = ?`
       );
       // A boolean foreign field yields true/false, not 1/0, so the resolved
@@ -358,7 +359,7 @@ describe("SqlBackend evaluate / getRows", () => {
       ]);
       // The id column has no declared kind (it may well be a uuid or serial
       // on Postgres), so the by-id lookup is a plain `IN`.
-      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
+      expect(defined(mock.queries.at(-1)).text).toBe(`SELECT * FROM "todos" WHERE "id" IN (?)`);
     });
   });
 });
@@ -541,8 +542,8 @@ describe("TableMapping.fromCollection (issue #204)", () => {
         Subset.make({ collection: "todos", where: Predicate.eq("done", false) })
       );
       expect(entries).toEqual([{ id: "2", version: "b" }]);
-      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos" WHERE "done" = ?`);
-      expect(mock.queries.at(-1)!.params).toEqual([0]);
+      expect(defined(mock.queries.at(-1)).text).toBe(`SELECT * FROM "todos" WHERE "done" = ?`);
+      expect(defined(mock.queries.at(-1)).params).toEqual([0]);
     });
   });
 });
@@ -566,11 +567,13 @@ describe("TableMapping.readRelation (issue #204)", () => {
         Subset.make({ collection: "todos" })
       );
       expect(entries).toEqual([{ id: "1", version: "a" }]);
-      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos_view" WHERE 1 = 1`);
+      expect(defined(mock.queries.at(-1)).text).toBe(`SELECT * FROM "todos_view" WHERE 1 = 1`);
 
       const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
       expect(rows).toEqual([{ id: "1", version: "a", value: { id: "1", version: "a" } }]);
-      expect(mock.queries.at(-1)!.text).toBe(`SELECT * FROM "todos_view" WHERE "id" IN (?)`);
+      expect(defined(mock.queries.at(-1)).text).toBe(
+        `SELECT * FROM "todos_view" WHERE "id" IN (?)`
+      );
     });
   });
 });

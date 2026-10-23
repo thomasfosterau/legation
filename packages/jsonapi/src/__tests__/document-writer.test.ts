@@ -12,6 +12,7 @@ import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation-effe
 import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as DocumentWriter from "../DocumentWriter.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
+import { defined } from "./defined.js";
 
 // ─── A commerce-shaped graph ─────────────────────────────────────────────────
 
@@ -106,7 +107,10 @@ describe("DocumentWriter.collection", () => {
       read: { collection: "products" },
       rows: [row(desk)],
     });
-    expect(Object.keys(partial.data[0]!.relationships!)).toEqual(["category", "reviews"]);
+    expect(Object.keys(defined(defined(partial.data[0]).relationships))).toEqual([
+      "category",
+      "reviews",
+    ]);
     const plain = DocumentWriter.collection({
       nodes,
       read: { collection: "categories" },
@@ -151,13 +155,13 @@ describe("DocumentWriter.collection", () => {
       read: { collection: "products" },
       rows: [row(desk)],
     });
-    expect(unresolved.data[0]!.relationships!["reviews"]).toEqual({ links });
+    expect(defined(defined(unresolved.data[0]).relationships)["reviews"]).toEqual({ links });
     const included = DocumentWriter.collection({
       nodes,
       read: { collection: "products", include: { reviews: true } },
       rows: [row(desk, { reviews: [r1] })],
     });
-    expect(included.data[0]!.relationships!["reviews"]).toEqual({
+    expect(defined(defined(included.data[0]).relationships)["reviews"]).toEqual({
       links,
       data: [{ type: "reviews", id: "r-1" }],
     });
@@ -172,11 +176,11 @@ describe("DocumentWriter.collection", () => {
       rows: [row(desk, { variants: [v1] })],
       fields: { products: ["name"], variants: [] },
     });
-    expect(document.data[0]!.attributes).toEqual({ name: "Desk" });
-    expect(document.data[0]!.relationships!["category"]).toEqual({
+    expect(defined(document.data[0]).attributes).toEqual({ name: "Desk" });
+    expect(defined(defined(document.data[0]).relationships)["category"]).toEqual({
       data: { type: "categories", id: "c-audio" },
     });
-    expect(document.included?.[0]!.attributes).toEqual({});
+    expect(defined(document.included?.[0]).attributes).toEqual({});
     expect(document.links).toEqual({
       self: "/products?include=variants&fields[products]=name&fields[variants]=",
     });
@@ -200,15 +204,15 @@ describe("DocumentWriter.collection", () => {
     // and the included variants are full (no fields[variants]).
     const linked = new Set(
       document.data.flatMap((resource) => {
-        const linkage = resource.relationships!["variants"]! as {
+        const linkage = defined(defined(resource.relationships)["variants"]) as {
           data: ReadonlyArray<{ id: string }>;
         };
         return linkage.data.map((identifier) => identifier.id);
       })
     );
-    expect(document.included!.map((resource) => resource.id)).toEqual(["v-1", "v-2"]);
-    expect(document.included!.every((resource) => linked.has(resource.id))).toBe(true);
-    expect(document.included![0]).toEqual({
+    expect(defined(document.included).map((resource) => resource.id)).toEqual(["v-1", "v-2"]);
+    expect(defined(document.included).every((resource) => linked.has(resource.id))).toBe(true);
+    expect(defined(document.included)[0]).toEqual({
       type: "variants",
       id: "v-1",
       attributes: { sku: "DSK-1" },
@@ -319,7 +323,7 @@ describe("DocumentWriter.collection", () => {
   it("offset links round-trip through the parser, never switching the caller to cursors (#209)", () => {
     const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };
     const page = DocumentWriter.collection({ nodes, read, rows: [row(desk), row(lamp)] });
-    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, page.links!.next as string));
+    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, defined(page.links).next as string));
     expect(next.read).toEqual({ ...read, offset: 2 });
     expect(next.read.after).toBeUndefined();
   });
@@ -340,7 +344,7 @@ describe("DocumentWriter.collection", () => {
       fields,
       prefix: "/api",
     });
-    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, page.links!.next as string));
+    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, defined(page.links).next as string));
     // The same read, `after` at the last row — as `Subset.apply` continues it —
     // with the projection still beside it; nothing else moved.
     expect(next).toEqual({
@@ -348,7 +352,7 @@ describe("DocumentWriter.collection", () => {
       fields,
     });
     expect(JsonApiQuery.canonical(nodes, next.read, next.fields)).toBe(
-      (page.links!.next as string).slice("/api".length)
+      (defined(page.links).next as string).slice("/api".length)
     );
     // The advanced read's own document continues the chain from where it stood.
     const second = DocumentWriter.collection({ nodes, read: next.read, rows: [row(lamp)], fields });
@@ -368,7 +372,7 @@ describe("DocumentWriter.collection", () => {
       self: "/jsonapi/products?page[limit]=1",
       next: "/jsonapi/products?page[limit]=1&page[after]=p-1",
     });
-    expect(document.data[0]!.relationships!["reviews"]).toEqual({
+    expect(defined(defined(document.data[0]).relationships)["reviews"]).toEqual({
       links: {
         self: "/jsonapi/products/p-1/relationships/reviews",
         related: "/jsonapi/products/p-1/reviews",

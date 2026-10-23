@@ -44,6 +44,7 @@ import { CollectionIndex, Subset } from "@thomasfosterau/legation-effect/interna
 import type { Protocol } from "@thomasfosterau/legation-effect/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
+import { defined } from "./defined.js";
 
 // ─── Deterministic data ──────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ const mulberry32 = (seed: number) => () => {
 };
 type Rng = () => number;
 const int = (rng: Rng, max: number) => Math.floor(rng() * max);
-const pick = <A>(rng: Rng, xs: ReadonlyArray<A>): A => xs[int(rng, xs.length)]!;
+const pick = <A>(rng: Rng, xs: ReadonlyArray<A>): A => defined(xs[int(rng, xs.length)]);
 
 // Mixed BMP and astral text, plus a private-use (U+E000) and a U+FFFD word:
 // exactly the characters for which UTF-16 code-unit order and code-point
@@ -132,15 +133,15 @@ const timed = async <A>(f: () => Promise<A> | A): Promise<[A, number]> => {
   const result = await f();
   return [result, performance.now() - t0];
 };
-const median = (xs: ReadonlyArray<number>) => xs.toSorted((a, b) => a - b)[xs.length >> 1]!;
+const median = (xs: ReadonlyArray<number>) => defined(xs.toSorted((a, b) => a - b)[xs.length >> 1]);
 
 /** UTF-8 byte order is code-point order; JS `<` is UTF-16 code-unit order. */
 const compareCodePoints = (a: string, b: string): Ordering.Ordering => {
   let i = 0;
   let j = 0;
   while (i < a.length && j < b.length) {
-    const ca = a.codePointAt(i)!;
-    const cb = b.codePointAt(j)!;
+    const ca = defined(a.codePointAt(i));
+    const cb = defined(b.codePointAt(j));
     if (ca !== cb) return ca < cb ? -1 : 1;
     i += ca > 0xffff ? 2 : 1;
     j += cb > 0xffff ? 2 : 1;

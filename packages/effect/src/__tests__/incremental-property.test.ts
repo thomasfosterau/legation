@@ -20,6 +20,7 @@ import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
 import type { RowChange } from "../RowChange.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 type Row = Incremental.Row;
 
@@ -35,7 +36,7 @@ const mulberry32 = (seed: number) => {
 };
 
 const pick = <A>(rng: () => number, values: ReadonlyArray<A>): A =>
-  values[Math.floor(rng() * values.length)]!;
+  defined(values[Math.floor(rng() * values.length)]);
 
 /** Two result maps are equal when they have the same ids and the same values. */
 const sameResult = (
@@ -55,8 +56,8 @@ const sameOrdered = (actual: ReadonlyArray<Row>, expected: ReadonlyArray<Row>): 
   actual.length === expected.length &&
   actual.every(
     (row, i) =>
-      row.id === expected[i]!.id &&
-      Hash.canonicalJson(row.value) === Hash.canonicalJson(expected[i]!.value)
+      row.id === defined(expected[i]).id &&
+      Hash.canonicalJson(row.value) === Hash.canonicalJson(defined(expected[i]).value)
   );
 
 /** The first prefix where incremental diverged from recompute, or `null`. */
@@ -312,9 +313,9 @@ const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> 
   if (
     delta.added.length === 1 &&
     delta.removed.length === 1 &&
-    delta.added[0]!.id === delta.removed[0]!.id
+    defined(delta.added[0]).id === defined(delta.removed[0]).id
   ) {
-    return [{ _tag: "update", row: delta.added[0]!, previous: delta.removed[0]! }];
+    return [{ _tag: "update", row: defined(delta.added[0]), previous: defined(delta.removed[0]) }];
   }
   const changes: Array<RowChange<Row>> = [];
   for (const row of delta.added) changes.push({ _tag: "enter", row });

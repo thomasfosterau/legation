@@ -20,6 +20,7 @@ import * as Coverage from "../Coverage.js";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 const seed = FilterCorpus.resolveSeed(process.env["LEGATION_CORPUS_SEED"]);
 /** Rows in the generated set (the pinned sweep plus random rows). */
@@ -228,7 +229,7 @@ describe("the harness corpus as subscriptions", () => {
   it("every corpus predicate, unwindowed, covers itself under every corpus window", () => {
     for (const [index, where] of corpus.predicates.entries()) {
       const subscribed = Subset.make({ collection: "corpus", where });
-      const orderBy = corpus.orderBys[index % corpus.orderBys.length]!;
+      const orderBy = defined(corpus.orderBys[index % corpus.orderBys.length]);
       const requested = Subset.make({
         collection: "corpus",
         where,
@@ -242,12 +243,12 @@ describe("the harness corpus as subscriptions", () => {
 
   it("every corpus predicate, unwindowed, covers itself conjoined with its neighbour", () => {
     for (const [index, where] of corpus.predicates.entries()) {
-      const neighbour = corpus.predicates[(index + 1) % corpus.predicates.length]!;
+      const neighbour = defined(corpus.predicates[(index + 1) % corpus.predicates.length]);
       const subscribed = Subset.make({ collection: "corpus", where });
       const requested = Subset.make({
         collection: "corpus",
         where: Predicate.and(neighbour, where),
-        orderBy: corpus.orderBys[index % corpus.orderBys.length]!,
+        orderBy: defined(corpus.orderBys[index % corpus.orderBys.length]),
       });
       expect(Coverage.covers(subscribed, requested)).toBe(true);
       expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
