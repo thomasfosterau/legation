@@ -29,6 +29,7 @@ import * as Subscriptions from "../Subscriptions.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Item {
   readonly id: string;
@@ -135,13 +136,23 @@ describe("ClientEngine.observeWindow", () => {
         yield* settle;
 
         const initial = yield* Ref.get(pages);
-        expect(ids(initial[initial.length - 1]!)).toEqual(["i0", "i1", "i2"]);
+        expect(ids(defined(initial[initial.length - 1]))).toEqual(["i0", "i1", "i2"]);
 
         yield* observation.retarget({ limit: 6 });
-        yield* eventually(Ref.get(pages), (seen) => ids(seen[seen.length - 1]!).length === 6);
+        yield* eventually(
+          Ref.get(pages),
+          (seen) => ids(defined(seen[seen.length - 1])).length === 6
+        );
 
         const widened = yield* Ref.get(pages);
-        expect(ids(widened[widened.length - 1]!)).toEqual(["i0", "i1", "i2", "i3", "i4", "i5"]);
+        expect(ids(defined(widened[widened.length - 1]))).toEqual([
+          "i0",
+          "i1",
+          "i2",
+          "i3",
+          "i4",
+          "i5",
+        ]);
 
         // The whole point: reslicing the maintained order, not a re-subscribe
         // + rebuild — no extra `ViewRebuilt` fired for the retarget itself.
@@ -178,13 +189,16 @@ describe("ClientEngine.observeWindow", () => {
         );
         yield* settle;
         const initial = yield* Ref.get(pages);
-        expect(ids(initial[initial.length - 1]!)).toEqual(["i0", "i1", "i2"]);
+        expect(ids(defined(initial[initial.length - 1]))).toEqual(["i0", "i1", "i2"]);
 
         // Advance the cursor past "i2" — the window slides to the next 3.
         yield* observation.retarget({ cursor: "i2" });
-        yield* eventually(Ref.get(pages), (seen) => ids(seen[seen.length - 1]!)[0] === "i3");
+        yield* eventually(
+          Ref.get(pages),
+          (seen) => ids(defined(seen[seen.length - 1]))[0] === "i3"
+        );
         const advanced = yield* Ref.get(pages);
-        expect(ids(advanced[advanced.length - 1]!)).toEqual(["i3", "i4", "i5"]);
+        expect(ids(defined(advanced[advanced.length - 1]))).toEqual(["i3", "i4", "i5"]);
       }).pipe(Effect.scoped)
     );
   }, 10000);
@@ -217,7 +231,10 @@ describe("ClientEngine.observeWindow", () => {
         yield* settle;
 
         yield* observation.retarget({ limit: 10 }); // widen past the current 4 rows
-        yield* eventually(Ref.get(pages), (seen) => ids(seen[seen.length - 1]!).length === 4);
+        yield* eventually(
+          Ref.get(pages),
+          (seen) => ids(defined(seen[seen.length - 1])).length === 4
+        );
 
         // A row inserted after the retarget must show up in the *widened*
         // window — proving the retargeted subset (not the original limit 3)
@@ -225,9 +242,12 @@ describe("ClientEngine.observeWindow", () => {
         yield* writer.mutate("item/set", { id: "i4", rank: 4 });
         yield* writer.push;
         yield* reader.pull;
-        yield* eventually(Ref.get(pages), (seen) => ids(seen[seen.length - 1]!).length === 5);
+        yield* eventually(
+          Ref.get(pages),
+          (seen) => ids(defined(seen[seen.length - 1])).length === 5
+        );
         const final = yield* Ref.get(pages);
-        expect(ids(final[final.length - 1]!)).toEqual(["i0", "i1", "i2", "i3", "i4"]);
+        expect(ids(defined(final[final.length - 1]))).toEqual(["i0", "i1", "i2", "i3", "i4"]);
       }).pipe(Effect.scoped)
     );
   }, 10000);

@@ -19,6 +19,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Schema from "effect/Schema";
 import type { ServerHandler } from "../Transport.js";
 import type { PatchOp } from "../Protocol.js";
+import { defined } from "./defined.js";
 
 describe("Cvr.makeKeyValueStore", () => {
   it.effect("round-trips a CVR through shared storage", () =>
@@ -36,8 +37,8 @@ describe("Cvr.makeKeyValueStore", () => {
       const reader = yield* Cvr.makeKeyValueStore();
       const read = yield* reader.get("cookie-1");
       expect(read).toBeDefined();
-      expect(read!.rows.get("todos")?.get("1")).toBe(7);
-      expect(read!.rows.get("notes")?.get("n1")).toBe("v-abc");
+      expect(defined(read).rows.get("todos")?.get("1")).toBe(7);
+      expect(defined(read).rows.get("notes")?.get("n1")).toBe("v-abc");
 
       yield* writer.remove("cookie-1");
       expect(yield* reader.get("cookie-1")).toBeUndefined();

@@ -28,6 +28,7 @@ import { type ClientView, Subset } from "@thomasfosterau/legation-effect/interna
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
+import { defined } from "./defined.js";
 
 // ─── The graph ───────────────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ class NotFound extends Data.TaggedError("NotFound") {}
 
 const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: string) =>
   rest.get(resource, { notFound: () => new NotFound() })({
-    params: { id: new URL(url, "http://shop.test").pathname.split("/").at(-1)! },
+    params: { id: defined(new URL(url, "http://shop.test").pathname.split("/").at(-1)) },
     request: HttpServerRequest.fromWeb(new Request(`http://shop.test${url}`)),
   });
 
@@ -192,7 +193,11 @@ describe("ReplicaDocuments over the replica", () => {
           "/variants?include=offers",
         ]) {
           const local = yield* docs.fromUrl(view, url);
-          const served = yield* restList(rest, declared.get(url.split("?")[0]!.slice(1))!, url);
+          const served = yield* restList(
+            rest,
+            defined(declared.get(defined(url.split("?")[0]).slice(1))),
+            url
+          );
           expect(bytes(local), url).toBe(bytes(served));
         }
         // The included variants carry the linkage their own declaration
@@ -236,7 +241,7 @@ describe("ReplicaDocuments over the replica", () => {
         const synthetic = JsonApiQuery.resourcesOf(nodes);
         const url = "/products?sort=name";
         const local = yield* docs.fromUrl(view, url);
-        const served = yield* restList(rest, synthetic.get("products")!, `/api${url}`);
+        const served = yield* restList(rest, defined(synthetic.get("products")), `/api${url}`);
         expect(bytes(local)).toBe(bytes(served));
         // The paginated `reviews` edge is a `many` relationship of the synthetic
         // resource: links, and its rows' linkage in the edge's order.
@@ -360,7 +365,7 @@ describe("ReplicaDocuments over the replica", () => {
       const exit = yield* Effect.exit(docs.fromUrl(view, "/products?filter[name]=Desk"));
       expect(Exit.isFailure(exit)).toBe(true);
       assert(Exit.isFailure(exit));
-      const error = exit.cause.reasons[0]!;
+      const error = defined(exit.cause.reasons[0]);
       expect(error._tag).toBe("Fail");
       assert(error._tag === "Fail");
       expect(error.error).toBeInstanceOf(QueryError);

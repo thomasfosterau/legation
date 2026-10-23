@@ -30,6 +30,7 @@ import {
   Transport,
 } from "../index.js";
 import { InvalidationBus } from "../internal.js";
+import { defined } from "./defined.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -268,7 +269,7 @@ describe("Server", () => {
         // bus (no broadcast call anywhere), and the poke's pull brings the
         // row in.
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
-        expect((rows[0]!.value as { name: string }).name).toBe("Pushed");
+        expect((defined(rows[0]).value as { name: string }).name).toBe("Pushed");
         // The connect pull and the one the push's poke caused: no other pull
         // could have brought the row in.
         expect(yield* Ref.get(reader.pulls)).toBe(2);

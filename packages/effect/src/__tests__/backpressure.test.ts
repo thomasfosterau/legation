@@ -34,6 +34,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory, makePokeHub, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 const mutators = Mutator.registry([
   {
@@ -189,9 +190,11 @@ describe("backpressure — engine change hub", () => {
       const expected = yield* engine.query(todos);
       yield* eventually(
         Ref.get(pages),
-        (all) => Arr.isReadonlyArrayNonEmpty(all) && all[all.length - 1]!.length === expected.length
+        (all) =>
+          Arr.isReadonlyArrayNonEmpty(all) &&
+          defined(all[all.length - 1]).length === expected.length
       );
-      const last = (yield* Ref.get(pages)).at(-1)!;
+      const last = defined((yield* Ref.get(pages)).at(-1));
       // The resumed view equals a fresh query — no dropped Patch was lost.
       expect(Arr.sort(last, Order.String)).toEqual(
         Arr.sort(

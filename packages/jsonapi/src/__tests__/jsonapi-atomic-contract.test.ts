@@ -44,6 +44,7 @@ import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
 import { flakyLedger } from "./flaky-ledger.js";
+import { defined } from "./defined.js";
 
 // ─── The api ─────────────────────────────────────────────────────────────────
 
@@ -484,7 +485,7 @@ const makeBackend = (
       mutators: omitted === undefined ? mutators : without(mutators, omitted),
       operations: new Map(),
       writes: omitted === undefined ? writes : without(writes, omitted),
-      atomic: { path: atomic!.path },
+      atomic: { path: defined(atomic).path },
       // The server declares no filter/sort parameters (its list endpoint is the
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.

@@ -8,6 +8,7 @@ import type { HttpCache } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
+import { defined } from "./defined.js";
 
 /** Minimal in-memory Cache API fake, keyed by request URL. */
 const makeFakeCache = (): CacheApiHttpCache.CacheLike & {
@@ -49,7 +50,7 @@ describe("CacheApiHttpCache store", () => {
       const hit = yield* store.match(request);
       expect(hit).toBeDefined();
       expect(hit?.meta.tags).toEqual(["todos"]);
-      expect(yield* Effect.promise(() => hit!.response.json())).toEqual([{ id: "1" }]);
+      expect(yield* Effect.promise(() => defined(hit).response.json())).toEqual([{ id: "1" }]);
     })
   );
 
@@ -125,7 +126,7 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       const stale = yield* handler(request);
       expect(yield* Effect.promise(() => stale.response.text())).toBe("network-1");
       expect(stale.revalidate).toBeDefined();
-      yield* stale.revalidate!;
+      yield* defined(stale.revalidate);
       expect(network.calls()).toBe(2);
 
       // The background refresh replaced the stored copy.

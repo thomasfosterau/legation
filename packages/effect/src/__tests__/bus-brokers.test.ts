@@ -20,6 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { ChangeHint } from "../Backend.js";
 import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";
+import { defined } from "./defined.js";
 
 const hint: ChangeHint = { collection: "todos", ids: ["1"] };
 
@@ -180,11 +181,11 @@ const makeFakeRedis = Effect.gen(function* () {
         );
       }
       return command === "XADD"
-        ? xadd(args[3]!)
+        ? xadd(defined(args[3]))
         : command === "XREVRANGE"
           ? xrevrange()
           : command === "XREAD"
-            ? xread(args[3]!, Number(args[1]), args[4]!)
+            ? xread(defined(args[3]), Number(args[1]), defined(args[4]))
             : Effect.die(new Error(`fake Redis: unhandled ${command}`));
     }) as Effect.Effect<A, Redis.RedisError>) as Redis.Redis["Service"]["send"];
 
@@ -338,7 +339,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
         expect(yield* Queue.take(fake.events)).toBe("refused");
       }
       const times = yield* Ref.get(fake.refusedAt);
-      const origin = times[0]!;
+      const origin = defined(times[0]);
       // subscribe's attempt at 0, the reader's first step at 0, then each retry after its back-off.
       expect(times.map((t) => t - origin)).toEqual([
         0, 0, 200, 600, 1400, 3000, 6200, 11200, 16200,
@@ -453,7 +454,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       // Every refusal, on the TestClock: subscribe's attempt and outage 1's first step at 0,
       // outage 1's second at 200; outage 2's first at 800, then 200 and 400 ms back-offs.
       const times = yield* Ref.get(fake.refusedAt);
-      const origin = times[0]!;
+      const origin = defined(times[0]);
       expect(times.map((t) => t - origin)).toEqual([0, 0, 200, 800, 1000, 1400]);
     }).pipe(
       Effect.scoped,

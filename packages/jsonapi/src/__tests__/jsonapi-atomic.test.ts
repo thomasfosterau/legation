@@ -25,6 +25,7 @@ import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
+import { defined } from "./defined.js";
 
 // A conventional JSON:API surface for `todos`, plus an atomic operations
 // endpoint declared with a plain HttpApiEndpoint: what makes it atomic is its
@@ -306,11 +307,11 @@ describe("JsonApiBackend in atomic mode", () => {
 
       expect(writesOf(server)).toHaveLength(1);
       const [request] = writesOf(server);
-      expect(request!.method).toBe("POST");
-      expect(request!.path).toBe("/operations");
-      expect(request!.headers["content-type"]).toBe(Atomic.MEDIA_TYPE);
-      expect(request!.headers["accept"]).toBe(Atomic.MEDIA_TYPE);
-      expect(request!.body).toEqual({
+      expect(defined(request).method).toBe("POST");
+      expect(defined(request).path).toBe("/operations");
+      expect(defined(request).headers["content-type"]).toBe(Atomic.MEDIA_TYPE);
+      expect(defined(request).headers["accept"]).toBe(Atomic.MEDIA_TYPE);
+      expect(defined(request).body).toEqual({
         "atomic:operations": [
           { op: "add", data: { type: "todos", id: "1", attributes: { title: "first" } } },
           { op: "update", data: { type: "todos", id: "2", attributes: { title: "second" } } },
@@ -391,8 +392,8 @@ describe("JsonApiBackend in atomic mode", () => {
       const result = yield* backend.applyMutations(context, three);
 
       expect(writesOf(server)).toHaveLength(2);
-      expect(writesOf(server)[0]!.body["atomic:operations"]).toHaveLength(3);
-      expect(writesOf(server)[1]!.body["atomic:operations"]).toEqual([
+      expect(defined(writesOf(server)[0]).body["atomic:operations"]).toHaveLength(3);
+      expect(defined(writesOf(server)[1]).body["atomic:operations"]).toEqual([
         { op: "add", data: { type: "todos", id: "1", attributes: { title: "first" } } },
         { op: "remove", ref: { type: "todos", id: "3" } },
       ]);
@@ -431,9 +432,9 @@ describe("JsonApiBackend in atomic mode", () => {
         const backend = yield* makeBackend(server);
         const result = yield* backend.applyMutations(context, three);
         expect(writesOf(server)).toHaveLength(2);
-        expect(writesOf(server)[1]!.body["atomic:operations"].map((op: any) => op.op)).toEqual([
-          "update",
-        ]);
+        expect(
+          defined(writesOf(server)[1]).body["atomic:operations"].map((op: any) => op.op)
+        ).toEqual(["update"]);
         expect(result.rejected).toEqual([
           { clientId: "client-1", mutationId: 1, reason: "bad title" },
           { clientId: "client-1", mutationId: 3, reason: "Gone" },
@@ -446,7 +447,7 @@ describe("JsonApiBackend in atomic mode", () => {
     Effect.gen(function* () {
       const server = threeServer(() => rejectionAt(0, "no"));
       const backend = yield* makeBackend(server);
-      const result = yield* backend.applyMutations(context, [three[0]!]);
+      const result = yield* backend.applyMutations(context, [defined(three[0])]);
       expect(server.requests).toHaveLength(1);
       expect(result.rejected).toHaveLength(1);
       expect(result.hints).toEqual([]);
@@ -500,11 +501,11 @@ describe("JsonApiBackend in atomic mode", () => {
         respond(200, resultsFor(request.body["atomic:operations"]))
       );
       const backend = yield* makeBackend(server);
-      yield* backend.applyMutations(context, [three[0]!, three[1]!]);
+      yield* backend.applyMutations(context, [defined(three[0]), defined(three[1])]);
 
-      const replay = yield* backend.applyMutations(context, [three[1]!, three[2]!]);
+      const replay = yield* backend.applyMutations(context, [defined(three[1]), defined(three[2])]);
       expect(writesOf(server)).toHaveLength(2);
-      expect(writesOf(server)[1]!.body["atomic:operations"]).toEqual([
+      expect(defined(writesOf(server)[1]).body["atomic:operations"]).toEqual([
         { op: "remove", ref: { type: "todos", id: "3" } },
       ]);
       expect(replay.lastMutationIds).toEqual({ "client-1": 3 });

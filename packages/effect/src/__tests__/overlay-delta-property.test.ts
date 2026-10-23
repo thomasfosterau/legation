@@ -34,6 +34,7 @@ import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface PutArgs {
   readonly id: string;
@@ -143,7 +144,7 @@ type Step =
 
 const randomStep = (rng: () => number, ids: ReadonlyArray<string>): Step => {
   const r = rng();
-  const id = ids[Math.floor(rng() * ids.length)]!;
+  const id = defined(ids[Math.floor(rng() * ids.length)]);
   const value = Math.floor(rng() * 1000);
   if (r < 0.3) return { kind: "put", id, value };
   if (r < 0.45) return { kind: "del", id };

@@ -42,6 +42,7 @@ import {
   type ClientTransport as CT,
   type ServerHandler,
 } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -197,8 +198,8 @@ describe("Paced (#117)", () => {
       // Ten calls for t1 collapse to its newest entry; t2 is untouched by that
       // compaction — two keys, two surviving entries.
       expect(pending).toHaveLength(2);
-      const t1 = pending.find((m) => (m.args as Todo).id === "t1")!;
-      const t2 = pending.find((m) => (m.args as Todo).id === "t2")!;
+      const t1 = defined(pending.find((m) => (m.args as Todo).id === "t1"));
+      const t2 = defined(pending.find((m) => (m.args as Todo).id === "t2"));
       expect((t1.args as Todo).title).toBe("v9");
       expect((t2.args as Todo).title).toBe("other");
       // Every call journaled (fully durable): eleven appends, nine of them
@@ -222,21 +223,21 @@ describe("Paced (#117)", () => {
         // Still inside the window: only the leading-edge entry exists.
         const during = yield* store.pendingMutations;
         expect(during).toHaveLength(1);
-        expect(during[0]!.mutationId).toBe(1);
-        expect((during[0]!.args as Todo).title).toBe("keystroke-0");
+        expect(defined(during[0]).mutationId).toBe(1);
+        expect((defined(during[0]).args as Todo).title).toBe("keystroke-0");
 
         // The window closes: the trailing flush supersedes the leading entry
         // with the latest args.
         yield* TestClock.adjust(Duration.millis(200));
         const after = yield* store.pendingMutations;
         expect(after).toHaveLength(1);
-        expect((after[0]!.args as Todo).title).toBe("keystroke-49");
+        expect((defined(after[0]).args as Todo).title).toBe("keystroke-49");
         // Exactly two `mutateWithAck` calls happened for 50 keystrokes — i.e.
         // exactly two journal writes / overlay invalidations, not fifty:
         // "bounded overlay replays". The survivor was renumbered back to 1 so
         // the journal stays gap-free (#249).
         expect(counter.appends).toBe(2);
-        expect(after[0]!.mutationId).toBe(1);
+        expect(defined(after[0]).mutationId).toBe(1);
       }).pipe(Effect.scoped)
   );
 
@@ -253,7 +254,7 @@ describe("Paced (#117)", () => {
       // Only one append ever happened — the trailing timer saw nothing new
       // buffered and skipped its flush.
       expect(counter.appends).toBe(1);
-      expect(pending[0]!.mutationId).toBe(1);
+      expect(defined(pending[0]).mutationId).toBe(1);
     }).pipe(Effect.scoped)
   );
 
@@ -275,18 +276,18 @@ describe("Paced (#117)", () => {
       yield* TestClock.adjust(Duration.millis(100));
       let pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((pending[0]!.args as Todo).title).toBe("v2");
+      expect((defined(pending[0]).args as Todo).title).toBe("v2");
       expect(counter.appends).toBe(2);
-      expect(pending[0]!.mutationId).toBe(1); // renumbered (#249)
+      expect(defined(pending[0]).mutationId).toBe(1); // renumbered (#249)
 
       // More calls arrive in the new window, then it goes quiet.
       yield* paced.call("t1", todo("t1", "v3"));
       yield* TestClock.adjust(Duration.millis(100));
       pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((pending[0]!.args as Todo).title).toBe("v3");
+      expect((defined(pending[0]).args as Todo).title).toBe("v3");
       expect(counter.appends).toBe(3);
-      expect(pending[0]!.mutationId).toBe(1);
+      expect(defined(pending[0]).mutationId).toBe(1);
 
       // No further calls: the next tick finds nothing dirty and goes idle.
       yield* TestClock.adjust(Duration.millis(100));
@@ -316,7 +317,7 @@ describe("Paced (#117)", () => {
       const paced = yield* Paced.coalesce(engine, "todo/set");
 
       yield* paced.call("t1", todo("t1", "first"));
-      const firstId = (yield* store.pendingMutations)[0]!.mutationId;
+      const firstId = defined((yield* store.pendingMutations)[0]).mutationId;
 
       // Start a push and let it block right after reading the pending
       // snapshot — the entry is now claimed, but not yet acknowledged.
@@ -342,7 +343,7 @@ describe("Paced (#117)", () => {
       yield* paced.call("t1", todo("t1", "third"));
       const final = yield* store.pendingMutations;
       expect(final).toHaveLength(1);
-      expect((final[0]!.args as Todo).title).toBe("third");
+      expect((defined(final[0]).args as Todo).title).toBe("third");
     }).pipe(Effect.scoped)
   );
 
@@ -366,7 +367,7 @@ describe("Paced (#117)", () => {
         };
 
         for (let round = 0; round < 300; round++) {
-          const strategy = strategies[Math.floor(next() * strategies.length)]!;
+          const strategy = defined(strategies[Math.floor(next() * strategies.length)]);
           const key = `k${Math.floor(next() * 4)}`;
           yield* strategy.call(key, todo(key, `r${round}`));
           if (next() < 0.25) yield* TestClock.adjust(Duration.millis(10));
@@ -660,7 +661,7 @@ describe("paced compaction renumbers the journal (#249)", () => {
 
         for (let round = 0; round < 400; round++) {
           const which = Math.floor(next() * strategies.length);
-          const strategy = strategies[which]!;
+          const strategy = defined(strategies[which]);
           // Keys are per strategy: a debounce buffer and a coalescer racing on
           // one key is a different (caller-visible) ordering question than
           // the gap-free journal this property is about.
@@ -687,7 +688,7 @@ describe("paced compaction renumbers the journal (#249)", () => {
           const ids = idsOf(
             (yield* store.pendingMutations).filter((m) => m.clientId === "client-a")
           );
-          for (let i = 1; i < ids.length; i++) expect(ids[i]).toBe(ids[i - 1]! + 1);
+          for (let i = 1; i < ids.length; i++) expect(ids[i]).toBe(defined(ids[i - 1]) + 1);
         }
 
         yield* TestClock.adjust(Duration.seconds(1)); // flush every debounce/throttle buffer

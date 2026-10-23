@@ -9,6 +9,7 @@ import * as Str from "effect/String";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 const row = (id: string, rank: number, open = true): LiveView.Row => ({
   id,
@@ -115,15 +116,15 @@ describe("LiveView", () => {
         true
       );
       // Positions sort the same way the rows are already sorted.
-      expect(rows[0]!.position < rows[1]!.position).toBe(true);
+      expect(defined(rows[0]).position < defined(rows[1]).position).toBe(true);
     });
 
     it("keeps an unmoved row's position across an unrelated delta", () => {
       const view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);
-      const before = LiveView.result(view).find((r) => r.id === "a")!.position;
+      const before = defined(LiveView.result(view).find((r) => r.id === "a")).position;
       // Updating "c" (elsewhere in the order) doesn't touch "a"'s neighbors.
       const after = LiveView.put(view, row("c", 30));
-      const afterPosition = LiveView.result(after).find((r) => r.id === "a")!.position;
+      const afterPosition = defined(LiveView.result(after).find((r) => r.id === "a")).position;
       expect(afterPosition).toBe(before);
     });
 
@@ -141,13 +142,13 @@ describe("LiveView", () => {
 
     it("reassigns a moved row's position between its new neighbors", () => {
       let view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);
-      const aBefore = LiveView.result(view).find((r) => r.id === "a")!.position;
+      const aBefore = defined(LiveView.result(view).find((r) => r.id === "a")).position;
       view = LiveView.put(view, row("a", 2.5)); // "a" moves between "b" and "c"
       const rows = LiveView.result(view);
       expect(rows.map((r) => r.id)).toEqual(["b", "a", "c"]);
-      const aAfter = rows.find((r) => r.id === "a")!.position;
-      const bPos = rows.find((r) => r.id === "b")!.position;
-      const cPos = rows.find((r) => r.id === "c")!.position;
+      const aAfter = defined(rows.find((r) => r.id === "a")).position;
+      const bPos = defined(rows.find((r) => r.id === "b")).position;
+      const cPos = defined(rows.find((r) => r.id === "c")).position;
       expect(aAfter).not.toBe(aBefore);
       expect(bPos < aAfter && aAfter < cPos).toBe(true);
     });

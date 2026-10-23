@@ -27,6 +27,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -160,7 +161,7 @@ describe("per-mutation outcome (#36)", () => {
 
       const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
       expect(events.map((event) => event.phase)).toEqual(["journaled", "rejected"]);
-      expect(events[1]!.reason).toBe("permission revoked");
+      expect(defined(events[1]).reason).toBe("permission revoked");
     })
   );
 

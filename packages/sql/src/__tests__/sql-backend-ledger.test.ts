@@ -23,6 +23,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
 import * as SqlBackend from "../SqlBackend.js";
+import { defined } from "./defined.js";
 
 const CLIENT_GROUP = "g";
 const CLIENT = "c1";
@@ -334,7 +335,7 @@ describe("SqlBackend ledger on SQLite (issue #352)", () => {
                 const args = raw as Args;
                 return Effect.gen(function* () {
                   if (args.id === "2" && !(yield* Ref.getAndSet(nested, true))) {
-                    yield* backend!.applyMutations(context, [mutation(2), mutation(3)]);
+                    yield* defined(backend).applyMutations(context, [mutation(2), mutation(3)]);
                   }
                   return yield* applyWrite(tx, args);
                 });

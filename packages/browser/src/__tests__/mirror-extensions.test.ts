@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -159,7 +160,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
           mirror.queryNamed("todos/open", {}),
           (current) => current.length === 1
         );
-        expect((rows[0]!.value as Todo).title).toBe("open");
+        expect((defined(rows[0]).value as Todo).title).toBe("open");
 
         // The named registration reached the server: after a push/pull round
         // trip the confirmed row still renders through the named subset.
@@ -169,7 +170,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
           mirror.queryNamed("todos/open", {}),
           (current) => current.length === 1
         );
-        expect((confirmed[0]!.value as Todo).done).toBe(false);
+        expect((defined(confirmed[0]).value as Todo).done).toBe(false);
       }),
     20_000
   );
@@ -201,9 +202,10 @@ describe("EngineHost ↔ Mirror extensions", () => {
           // The host computes the join; the tab receives resolved rows.
           const joined = yield* eventually(
             Ref.get(latest),
-            (rows) => rows.length === 1 && (rows[0]!.related["author"] as User)?.name === "Ada"
+            (rows) =>
+              rows.length === 1 && (defined(rows[0]).related["author"] as User)?.name === "Ada"
           );
-          expect((joined[0]!.related["author"] as User).name).toBe("Ada");
+          expect((defined(joined[0]).related["author"] as User).name).toBe("Ada");
 
           // A foreign write re-resolves the join without touching the base.
           yield* mirror.mutate("user/set", { id: "u1", name: "Ada Lovelace" });
@@ -274,7 +276,7 @@ describe("Mirror interest ledger", () => {
               )
             );
             const rows = yield* eventually(Ref.get(latest), (current) => current.length === 1);
-            expect((rows[0]!.value as Todo).title).toBe("auto");
+            expect((defined(rows[0]).value as Todo).title).toBe("auto");
             yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
           })
         );
@@ -308,7 +310,7 @@ describe("Mirror interest ledger", () => {
         // Still registered: a later write still reaches the mirror.
         yield* mirror.mutate("todo/set", { id: "1", title: "pinned", done: false, authorId: "u1" });
         const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
-        expect((rows[0]!.value as Todo).title).toBe("pinned");
+        expect((defined(rows[0]).value as Todo).title).toBe("pinned");
         expect(yield* engine.activeSubscriptions).toHaveLength(1);
 
         // Releasing the pin (no observers left) drops the registration.
@@ -350,9 +352,10 @@ describe("ServiceWorkerHost", () => {
           );
           const joined = yield* eventually(
             Ref.get(latest),
-            (rows) => rows.length === 1 && (rows[0]!.related["author"] as User)?.name === "Ada"
+            (rows) =>
+              rows.length === 1 && (defined(rows[0]).related["author"] as User)?.name === "Ada"
           );
-          expect((joined[0]!.related["author"] as User).name).toBe("Ada");
+          expect((defined(joined[0]).related["author"] as User).name).toBe("Ada");
         })
       ),
     20_000
@@ -378,12 +381,12 @@ describe("HostReady replay", () => {
         yield* mirror.mutate("todo/set", { id: "1", title: "late", done: false, authorId: "u1" });
 
         const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
-        expect((rows[0]!.value as Todo).title).toBe("late");
+        expect((defined(rows[0]).value as Todo).title).toBe("late");
         const named = yield* eventually(
           mirror.queryNamed("todos/open", {}),
           (current) => current.length === 1
         );
-        expect((named[0]!.value as Todo).done).toBe(false);
+        expect((defined(named[0]).value as Todo).done).toBe(false);
       }),
     20_000
   );

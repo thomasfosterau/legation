@@ -25,6 +25,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 const rowsOf = (...values: ReadonlyArray<unknown>) =>
   values.map((value, i) => ({ id: `${i}`, value }));
@@ -300,7 +301,7 @@ interface RandomOp {
 
 const randomOps = (rand: () => number, n: number): ReadonlyArray<RandomOp> =>
   Array.from({ length: n }, () => {
-    const id = IDS[Math.floor(rand() * IDS.length)]!;
+    const id = defined(IDS[Math.floor(rand() * IDS.length)]);
     return rand() < 0.25
       ? { _tag: "Del" as const, id }
       : { _tag: "Put" as const, id, value: randomRowValue(rand) };
@@ -381,13 +382,13 @@ const checkIncrementalSeed = (seed: number): void => {
     else truth.set(op.id, op.value);
 
     for (const agg of INCREMENTAL_AGGS) {
-      states.set(agg, applyOpToState(states.get(agg)!, agg, op));
-      groupedStates.set(agg, applyOpToGroupedState(groupedStates.get(agg)!, agg, op));
+      states.set(agg, applyOpToState(defined(states.get(agg)), agg, op));
+      groupedStates.set(agg, applyOpToGroupedState(defined(groupedStates.get(agg)), agg, op));
     }
 
     const rows = matchingRows(truth);
     for (const agg of INCREMENTAL_AGGS) {
-      expectAggMatches(agg, states.get(agg)!, groupedStates.get(agg)!, rows);
+      expectAggMatches(agg, defined(states.get(agg)), defined(groupedStates.get(agg)), rows);
     }
   }
 };

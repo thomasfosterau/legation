@@ -22,6 +22,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -100,7 +101,7 @@ describe("permanent mutation rejection (#35)", () => {
       yield* engine.pull;
       const view = yield* engine.query(allTodos);
       expect(view.map((row) => row.id)).toEqual(["y"]); // x's optimistic effect is gone
-      expect((view[0]!.value as Todo).title).toBe("kept");
+      expect((defined(view[0]).value as Todo).title).toBe("kept");
       // The confirmed row carries a backend version; x never reached the store.
       expect((yield* store.listRows("todos")).map((row) => row.id)).toEqual(["y"]);
     })

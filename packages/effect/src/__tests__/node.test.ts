@@ -24,6 +24,7 @@ import {
   Transport,
 } from "../index.js";
 import { ClientEngine, Cvr, InvalidationBus, Related, Subset, SyncServer } from "../internal.js";
+import { defined } from "./defined.js";
 
 const Category = Node.make("categories", {
   attributes: { name: Schema.String },
@@ -103,7 +104,7 @@ describe("Node model", () => {
 
   it("derives the engine registry: edges become relationships, both directions", () => {
     const { collections } = Node.registry([Category, Product, Review]);
-    const products = collections.get("products")!;
+    const products = defined(collections.get("products"));
     expect(products.relationships).toContainEqual({
       name: "category",
       kind: "one",
@@ -200,14 +201,14 @@ describe("Node identity attribute", () => {
 
   it("resolves each end of an edge from its own node's identity", () => {
     const { collections } = Node.registry([Author, Post, Bookmark]);
-    expect(collections.get("posts")!.relationships).toContainEqual({
+    expect(defined(collections.get("posts")).relationships).toContainEqual({
       name: "author",
       kind: "one",
       collection: "authors",
       localField: "authorName",
       foreignField: "username",
     });
-    expect(collections.get("authors")!.relationships).toContainEqual({
+    expect(defined(collections.get("authors")).relationships).toContainEqual({
       name: "posts",
       kind: "many",
       collection: "posts",
@@ -215,7 +216,7 @@ describe("Node identity attribute", () => {
       foreignField: "authorName",
     });
     // A node with the default identity joining one with a declared identity.
-    expect(collections.get("bookmarks")!.relationships).toContainEqual({
+    expect(defined(collections.get("bookmarks")).relationships).toContainEqual({
       name: "post",
       kind: "one",
       collection: "posts",
@@ -226,17 +227,17 @@ describe("Node identity attribute", () => {
 
   it("extracts the row id from the declared attribute, and carries its name", () => {
     const { collections } = Node.registry([Author, Post, Bookmark]);
-    const authors = collections.get("authors")!;
+    const authors = defined(collections.get("authors"));
     expect(authors.identity).toBe("username");
     expect(authors.id({ username: "ada", bio: "" })).toBe("ada");
-    const bookmarks = collections.get("bookmarks")!;
+    const bookmarks = defined(collections.get("bookmarks"));
     expect(bookmarks.identity).toBe("id");
     expect(bookmarks.id({ id: "b-1", note: "", postSlug: "hello-world" })).toBe("b-1");
   });
 
   it("admits a read filtering and sorting on the declared identity", () => {
     const { collections } = Node.registry([Author, Post, Bookmark]);
-    const declaration = Collection.filterDeclarationOf(collections.get("posts")!);
+    const declaration = Collection.filterDeclarationOf(defined(collections.get("posts")));
     expect(
       FilterPolicy.check("posts", declaration, {
         where: Predicate.eq("slug", "hello-world"),
@@ -396,7 +397,7 @@ describe("Node registry over the existing engine", () => {
         const first = yield* Stream.runHead(Stream.take(stream, 1));
         const rows = first._tag === "Some" ? first.value : [];
         expect(rows).toHaveLength(1);
-        expect((rows[0]!.related["product"] as { name: string }).name).toBe("Desk");
+        expect((defined(rows[0]).related["product"] as { name: string }).name).toBe("Desk");
       })
     )
   );
@@ -424,7 +425,7 @@ describe("Node registry over the existing engine", () => {
         );
         const posts = yield* firstRows(authorOf);
         expect(posts).toHaveLength(1);
-        expect((posts[0]!.related["author"] as { bio: string }).bio).toBe("engine");
+        expect((defined(posts[0]).related["author"] as { bio: string }).bio).toBe("engine");
 
         // The inverse: authors.username → posts.authorName.
         const postsOf = yield* Related.related(
@@ -437,7 +438,9 @@ describe("Node registry over the existing engine", () => {
         const authors = yield* firstRows(postsOf);
         expect(authors).toHaveLength(1);
         expect(
-          (authors[0]!.related["posts"] as ReadonlyArray<{ slug: string }>).map((row) => row.slug)
+          (defined(authors[0]).related["posts"] as ReadonlyArray<{ slug: string }>).map(
+            (row) => row.slug
+          )
         ).toEqual(["hello-world"]);
       })
     )

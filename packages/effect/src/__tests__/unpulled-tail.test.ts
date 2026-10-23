@@ -36,6 +36,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Counter {
   readonly id: string;
@@ -841,11 +842,11 @@ describe("the tail's crash windows and interleavings (#387)", () => {
           Ref.getAndSet(holdNext, false).pipe(
             Effect.flatMap((hold) =>
               hold
-                ? inner.commitAcknowledgement!(parkedNow, lastMutationIds).pipe(
+                ? defined(inner.commitAcknowledgement)(parkedNow, lastMutationIds).pipe(
                     Effect.andThen(Deferred.succeed(parked, undefined)),
                     Effect.andThen(Deferred.await(resume))
                   )
-                : inner.commitAcknowledgement!(parkedNow, lastMutationIds)
+                : defined(inner.commitAcknowledgement)(parkedNow, lastMutationIds)
             )
           ),
       };
@@ -1321,11 +1322,11 @@ const appendFour = (store: ClientStore) =>
 const batchMembersScenario = (store: ClientStore) =>
   Effect.gen(function* () {
     yield* appendFour(store);
-    yield* store.commitAcknowledgement!([mutation("c1", 1), mutation("c1", 2)], { c1: 1 });
+    yield* defined(store.commitAcknowledgement)([mutation("c1", 1), mutation("c1", 2)], { c1: 1 });
     const afterAck = yield* stateOf(store);
-    yield* store.commitPull!({ lastMutationIds: { c1: 1 }, patch: [] });
+    yield* defined(store.commitPull)({ lastMutationIds: { c1: 1 }, patch: [] });
     const afterRelease = yield* stateOf(store);
-    yield* store.commitPull!({
+    yield* defined(store.commitPull)({
       lastMutationIds: { c1: 2 },
       cookie: "cookie-2",
       patch: [
@@ -1404,7 +1405,7 @@ describe("the memory store's atomic batch members (#411)", () => {
           ],
         });
         // The batch commit's own patch sets `c` to a later value and leaves `d` alone.
-        yield* store.commitPull!({
+        yield* defined(store.commitPull)({
           lastMutationIds: {},
           cookie: "cookie-2",
           patch: [
@@ -2083,7 +2084,7 @@ describe("dehydrate reads one state of the store (#392)", () => {
       yield* engine.push;
       yield* engine.mutate("counter/inc", { id: "c" });
 
-      const state = yield* store.snapshot!;
+      const state = yield* defined(store.snapshot);
       expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
       expect(state.cookie).toBe(yield* store.getCookie);
       expect(state.journal).toEqual(yield* store.pendingMutations);
@@ -2117,7 +2118,7 @@ describe("dehydrate reads one state of the store (#392)", () => {
       const seen = new Set<number | undefined>();
       const pulls = Effect.gen(function* () {
         for (let k = 1; k <= rounds; k++) {
-          yield* store.commitPull!({
+          yield* defined(store.commitPull)({
             lastMutationIds: {},
             cookie: `c${k}`,
             patch: [{ _tag: "Put", collection: "counters", id: "a", version: k, value: { n: k } }],
@@ -2126,7 +2127,7 @@ describe("dehydrate reads one state of the store (#392)", () => {
       });
       const reads = Effect.gen(function* () {
         for (let i = 0; i < rounds * 2; i++) {
-          const state = yield* store.snapshot!;
+          const state = yield* defined(store.snapshot);
           const row = state.rows.find((entry) => entry.row.id === "a")?.row;
           const n = row === undefined ? undefined : (row.value as { readonly n: number }).n;
           seen.add(n);

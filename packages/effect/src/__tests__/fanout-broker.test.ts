@@ -46,6 +46,7 @@ import {
 } from "../internal.js";
 import { Backend } from "../index.js";
 import * as Predicate from "../Predicate.js";
+import { defined } from "./defined.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -364,7 +365,7 @@ describe("two rooms over one broker", () => {
         });
         yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => Arr.isReadonlyArrayNonEmpty(pushes));
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
-        expect((rows[0]!.value as { body: string }).body).toBe("cross-room");
+        expect((defined(rows[0]).value as { body: string }).body).toBe("cross-room");
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
 
         // A write to ANOTHER parent must not poke room A (routing precision):

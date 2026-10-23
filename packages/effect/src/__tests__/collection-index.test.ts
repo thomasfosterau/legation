@@ -25,6 +25,7 @@ import * as Predicate from "../Predicate.js";
 import type { PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 // ─── CollectionIndex (pure module) ───────────────────────────────────────────
 
@@ -178,8 +179,8 @@ describe("CollectionIndex", () => {
       Predicate.and(Predicate.eq("a", 1), Predicate.eq("b", true))
     );
     expect(found).toBeDefined();
-    expect([...found!.candidateIds].toSorted()).toEqual(["x", "y"]); // narrowed by `a` alone
-    expect(found!.residual).toEqual(Predicate.eq("b", true)); // `b` isn't indexed here
+    expect([...defined(found).candidateIds].toSorted()).toEqual(["x", "y"]); // narrowed by `a` alone
+    expect(defined(found).residual).toEqual(Predicate.eq("b", true)); // `b` isn't indexed here
   });
 });
 

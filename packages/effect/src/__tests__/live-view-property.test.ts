@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
+import { defined } from "./defined.js";
 
 const makePrng = (seed: number) => {
   let state = seed | 0 || 1;
@@ -34,7 +35,7 @@ const ID_SPACE = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
 
 const randomDeltas = (next: () => number, count: number, rankRange: number): ReadonlyArray<Delta> =>
   Array.from({ length: count }, () => {
-    const id = ID_SPACE[Math.floor(next() * ID_SPACE.length)]!;
+    const id = defined(ID_SPACE[Math.floor(next() * ID_SPACE.length)]);
     if (next() < 0.15) return { _tag: "del" as const, id };
     return { _tag: "put" as const, id, rank: Math.floor(next() * rankRange) };
   });
@@ -95,7 +96,7 @@ describe("LiveView property: maintained order ≡ Subset.apply after every delta
       let view = LiveView.make(subset, []);
       let reference = new Map<string, LiveView.Row>();
       for (let i = 0; i < deltas.length; i++) {
-        ({ view, reference } = step(view, reference, deltas[i]!));
+        ({ view, reference } = step(view, reference, defined(deltas[i])));
         const maintained = LiveView.result(view).map((r) => r.id);
         const expected = Subset.apply([...reference.values()], subset).map((r) => r.id);
         expect(maintained, `seed ${seed}, step ${i} (${JSON.stringify(deltas[i])})`).toEqual(

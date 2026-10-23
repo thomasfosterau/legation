@@ -31,6 +31,7 @@ import type { Mutation } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { defined } from "./defined.js";
 
 const context: SyncContext = { clientGroupId: "memory-atomicity-group" };
 const clientId = "memory-atomicity-client";
@@ -460,7 +461,7 @@ const racingTransport = (
   ...inner,
   push: (request) =>
     Effect.gen(function* () {
-      const gate = gates[(yield* Ref.updateAndGet(pushes, (n) => n + 1)) - 1]!;
+      const gate = defined(gates[(yield* Ref.updateAndGet(pushes, (n) => n + 1)) - 1]);
       const response = yield* inner.push(request);
       yield* Deferred.succeed(gate.returned, undefined);
       yield* Deferred.await(gate.deliver);
@@ -613,7 +614,7 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     const pushFibers = [pushA, pushB] as const;
     for (const index of order === "rejected-first" ? [1, 0] : [0, 1]) {
       yield* Deferred.succeed(gates[index].deliver, undefined);
-      yield* Fiber.join(pushFibers[index]!);
+      yield* Fiber.join(defined(pushFibers[index]));
     }
 
     // The client settles as the server committed: rejected, with no effects shown.

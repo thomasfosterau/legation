@@ -36,6 +36,7 @@ import {
   type ClientTransport as CT,
   type ServerHandler,
 } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -172,7 +173,7 @@ describe("Undo (#46)", () => {
 
       // Capture the pre-delete value from the local view, then delete with an
       // undo that re-creates exactly that captured row.
-      const row = (yield* engine.query(allTodos)).find((r) => r.id === "1")!;
+      const row = defined((yield* engine.query(allTodos)).find((r) => r.id === "1"));
       const captured = row.value as Todo;
       yield* manager.run({
         execute: { mutator: "todo/remove", args: { id: "1" } },
@@ -184,7 +185,7 @@ describe("Undo (#46)", () => {
       yield* manager.undo;
       const restored = yield* engine.query(allTodos);
       expect(restored).toHaveLength(1);
-      expect(restored[0]!.value).toEqual(captured);
+      expect(defined(restored[0]).value).toEqual(captured);
     })
   );
 

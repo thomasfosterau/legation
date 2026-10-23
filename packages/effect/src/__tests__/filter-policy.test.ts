@@ -26,6 +26,7 @@ import {
   type TransportError,
 } from "../index.js";
 import { Subset } from "../internal.js";
+import { defined } from "./defined.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 
@@ -99,8 +100,8 @@ describe("FilterPolicy: declaration", () => {
     });
     expect(Reply.sortable).toEqual(["id"]);
     const graph = Node.registry([Post, Reply]);
-    expect(graph.nodes.get("replies")!.sortable).toEqual(["id", "createdAt"]);
-    expect(graph.collections.get("replies")!.sortable).toEqual(["id", "createdAt"]);
+    expect(defined(graph.nodes.get("replies")).sortable).toEqual(["id", "createdAt"]);
+    expect(defined(graph.collections.get("replies")).sortable).toEqual(["id", "createdAt"]);
     // Untouched where no paginated edge orders the node.
     expect(graph.nodes.get("posts")).toBe(Post);
 
@@ -133,7 +134,7 @@ describe("FilterPolicy: declaration", () => {
   });
 
   it("travels onto the derived Collection, like indexes", () => {
-    const products = nodes.collections.get("products")!;
+    const products = defined(nodes.collections.get("products"));
     expect(products.filterable).toEqual(Product.filterable);
     expect(products.sortable).toEqual(Product.sortable);
     expect(Collection.filterDeclarationOf(products)).toEqual({

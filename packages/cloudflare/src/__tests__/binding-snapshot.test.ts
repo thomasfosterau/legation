@@ -47,6 +47,7 @@ import * as BindingTransport from "../BindingTransport.js";
 import { fakeBinding } from "./fakes.js";
 import { routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
+import { defined } from "./defined.js";
 
 // ─── The app ─────────────────────────────────────────────────────────────────
 
@@ -251,7 +252,7 @@ describe("BindingTransport", () => {
       transport.pull({ clientGroupId: GROUP, subscriptions: [] }).pipe(Effect.orDie)
     );
 
-    const sent = seen[0]!;
+    const sent = defined(seen[0]);
     expect(sent.url).toBe(`https://shop.example.com/sync${routes.pull}`);
     expect(sent.headers.get("cookie")).toBe(`${SESSION}; legation-client-group=${GROUP}`);
     // A top-level navigation carries no Origin header; the front door's own
@@ -275,11 +276,11 @@ describe("BindingTransport", () => {
     const transport = BindingTransport.make({ binding, request, path: "/legation" });
 
     await Effect.runPromise(
-      transport.read!({ clientGroupId: GROUP, subsets: [] }).pipe(Effect.orDie)
+      defined(transport.read)({ clientGroupId: GROUP, subsets: [] }).pipe(Effect.orDie)
     );
 
-    expect(seen[0]!.url).toBe(`https://shop.example.com/legation${routes.read}`);
-    expect(seen[0]!.headers.get("origin")).toBe("https://admin.example.com");
+    expect(defined(seen[0]).url).toBe(`https://shop.example.com/legation${routes.read}`);
+    expect(defined(seen[0]).headers.get("origin")).toBe("https://admin.example.com");
   });
 
   it("maps an HTTP failure onto a TransportError carrying the server's reason", async () => {

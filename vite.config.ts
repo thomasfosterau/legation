@@ -142,7 +142,6 @@ export default defineConfig({
       "effect/require-safety-comment-for-type-assertion": "warn", // 622 sites
       "effect/imperative-loops": "warn", // 658 sites
       "effect/yield-in-for-loop": "warn", // 637 sites
-      "effect/avoid-non-null-assertion": "warn", // 345 sites
       "effect/avoid-direct-tag-checks": "warn", // 170 sites
       "effect/avoid-direct-json": "warn", // 161 sites
       "effect/no-conditional-empty-object-spread": "warn", // 146 sites

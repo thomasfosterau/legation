@@ -63,6 +63,7 @@ import type * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { defined } from "./defined.js";
 
 interface Todo {
   readonly id: string;
@@ -237,17 +238,17 @@ describe("ClientEngine.observeChanges", () => {
         yield* eventually(Ref.get(batches), (seen) => seen.length === 3);
 
         const seen = yield* Ref.get(batches);
-        expect(stripPositions(seen[0]!)).toEqual([
+        expect(stripPositions(defined(seen[0]))).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "first" } } },
         ]);
-        expect(stripPositions(seen[1]!)).toEqual([
+        expect(stripPositions(defined(seen[1]))).toEqual([
           {
             _tag: "update",
             row: { id: "1", value: { id: "1", title: "second" } },
             previous: { id: "1", value: { id: "1", title: "first" } },
           },
         ]);
-        expect(stripPositions(seen[2]!)).toEqual([
+        expect(stripPositions(defined(seen[2]))).toEqual([
           { _tag: "exit", id: "1", previous: { id: "1", value: { id: "1", title: "second" } } },
         ]);
       }).pipe(Effect.scoped)
@@ -298,7 +299,7 @@ describe("ClientEngine.observeChanges", () => {
         // mutate is a precise enter, the same shape a confirmed-row Patch
         // from a pull would produce (see the Patch-path test above).
         const seen = yield* Ref.get(batches);
-        expect(stripPositions(seen[0]!)).toEqual([
+        expect(stripPositions(defined(seen[0]))).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "optimistic" } } },
         ]);
       }).pipe(Effect.scoped)
@@ -335,7 +336,7 @@ describe("ClientEngine.observeChanges", () => {
         const seen = yield* Ref.get(batches);
         expect(seen[1]?.[0]).toEqual({ _tag: "reset" });
         const entered = new Set(
-          stripPositions(seen[1]!)
+          stripPositions(defined(seen[1]))
             .slice(1)
             .map((c) => (c._tag === "enter" ? c.row.id : undefined))
         );
@@ -598,7 +599,7 @@ describe("ClientEngine.observeChanges — randomized property through the real e
           yield* settle;
 
           const rand = mulberry32(seed);
-          const pick = <A>(xs: ReadonlyArray<A>): A => xs[Math.floor(rand() * xs.length)]!;
+          const pick = <A>(xs: ReadonlyArray<A>): A => defined(xs[Math.floor(rand() * xs.length)]);
 
           for (let step = 0; step < 20; step++) {
             const action = rand();

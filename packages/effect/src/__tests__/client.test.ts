@@ -40,6 +40,7 @@ import {
   Subset,
   SyncServer,
 } from "../internal.js";
+import { defined } from "./defined.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, categoryId: Schema.String },
@@ -239,7 +240,9 @@ const makeCountingEngine = Effect.gen(function* () {
   const counting: Transport.ClientTransport = {
     ...transport,
     read: (request) =>
-      Ref.update(reads, (count) => count + 1).pipe(Effect.flatMap(() => transport.read!(request))),
+      Ref.update(reads, (count) => count + 1).pipe(
+        Effect.flatMap(() => defined(transport.read)(request))
+      ),
   };
   const engine = yield* ClientEngine.make({
     clientId: "client-coverage",
@@ -556,7 +559,7 @@ const stubUrls: Client.UrlReads = {
       const include: Record<string, true> = {};
       for (const [key, value] of searchParams) {
         const filter = /^filter\[(\w+)\]$/.exec(key);
-        if (filter !== null) where[filter[1]!] = value;
+        if (filter !== null) where[defined(filter[1])] = value;
         else if (key === "include") for (const edge of value.split(",")) include[edge] = true;
         else {
           return Effect.fail(
@@ -733,7 +736,7 @@ describe("Client.make defaults (zero wiring)", () => {
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const rows = yield* client.query({ collection: "products" });
         expect(rows).toHaveLength(1);
-        expect((rows[0]!.value as { name: string }).name).toBe("Desk");
+        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
 
         // Live reads work too — entirely against the local replica.
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
@@ -828,9 +831,9 @@ describe("Client.connect over a hosted engine", () => {
           Ref.get(latest),
           (current) =>
             current.length === 1 &&
-            ((current[0]!.related["reviews"] ?? []) as ReadonlyArray<unknown>).length === 1
+            ((defined(current[0]).related["reviews"] ?? []) as ReadonlyArray<unknown>).length === 1
         );
-        expect((rows[0]!.value as { name: string }).name).toBe("Desk");
+        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
       })
     )
   );
