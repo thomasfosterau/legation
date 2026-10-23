@@ -58,8 +58,22 @@
  * vocabulary — must not compose the façade: its 400s and its documents
  * would diverge from the server's.
  *
+ * 6. **Writes** (ADR-0030, with {@link Options.mutate} set). A `POST` /
+ *    `PATCH` / `DELETE` on a reflected write route of a type the graph
+ *    declares (and {@link Options.writes} allows) is forwarded unchanged
+ *    while online and unasked; offline, after a forward that rejected at the
+ *    transport, or on `Prefer: respond-async`, it is decoded structurally
+ *    (`FacadeWrites`), mapped to a mutation by the intent mapping (default:
+ *    the graph-derived CRUD mutations, `CrudMutation`), journaled, and
+ *    answered with a `202 Accepted` **write receipt**: the resource as
+ *    journaled, read back through the one writer, `meta.legation.status:
+ *    "pending"` and a `Location` naming the mutation status URL. Never `201`,
+ *    `200` or `204`: those are the server's words for "applied". A write it
+ *    cannot journal is forwarded online and is the 503 `offline` document
+ *    offline.
+ *
  * What it never does: register a subscription because a request arrived,
- * touch a non-`GET`, or rewrite a request it forwards. A single-resource
+ * journal a write online unless asked, or rewrite a request it forwards. A single-resource
  * request whose row the covered replica does not hold is forwarded too: the
  * 404 is the endpoint's own error class, which only the server can write.
  *
@@ -74,17 +88,26 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
 import { Query } from "@thomasfosterau/legation-effect";
-import type { Node, QueryError } from "@thomasfosterau/legation-effect";
+import type {
+  CrudMutation,
+  MutatorError,
+  Node,
+  QueryError,
+  StoreError,
+} from "@thomasfosterau/legation-effect";
 import type { ClientEngine, ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
 import { Subset } from "@thomasfosterau/legation-effect/internal";
 import * as Convention from "./Convention.js";
+import * as FacadeWrites from "./FacadeWrites.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as ReplicaDocuments from "./ReplicaDocuments.js";
+import type { Write } from "./JsonApiBackend.js";
 import * as RestHandlers from "./RestHandlers.js";
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -141,32 +164,79 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
   readonly prefix?: string;
   /** Whether the network is reachable; default `navigator.onLine !== false` (reachable where there is no `navigator`). */
   readonly online?: () => boolean;
+  /**
+   * The engine's journal seam for façade writes (ADR-0030 §5): in a worker,
+   * `host.engine.mutateWithAck`. Absent, the façade intercepts no write: a
+   * `POST` / `PATCH` / `DELETE` is never its business, as before ADR-0030.
+   */
+  readonly mutate?: (
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngine.MutationHandle, MutatorError | StoreError>;
+  /**
+   * The intent mapping: a decoded write to the mutation the engine journals,
+   * or `undefined` when it is not interceptable. Default: the graph-derived
+   * CRUD mutations (`CrudMutation`, `FacadeWrites.graphIntentOf`), which the
+   * engine's registry must then carry (`CrudMutation.entries(nodes)`), with a
+   * server handler under each name.
+   */
+  readonly intentOf?: FacadeWrites.IntentOf;
+  /**
+   * Which reflected write routes may be intercepted, per type: owning this
+   * declaration means owning the server's side of it (handlers under the
+   * mutation names, creates that honour the client id, ADR-0030 §4).
+   * Default: every reflected `create` / `update` / `delete` route of a type
+   * the graph declares.
+   */
+  readonly writes?: CrudMutation.Writes;
+  /**
+   * The pull to signal after a write forwarded online succeeded
+   * ({@link FetchHandler.forwarded}): in a worker, `host.engine.pull`. Its
+   * failure is ignored; the sync loop pulls again on its own.
+   */
+  readonly pull?: Effect.Effect<unknown, unknown>;
 }
 
 /** The built façade. */
 export interface FetchHandler {
   /**
    * Whether a request is the façade's business: a `GET` accepting
-   * `application/vnd.api+json` on a reflected route under `baseUrl`. A
-   * worker uses it to know that a forward which rejected at the transport
-   * should become {@link FetchHandler.offline}.
+   * `application/vnd.api+json` on a reflected read route under `baseUrl`,
+   * or — with {@link Options.mutate} set — a `POST` / `PATCH` / `DELETE` on a
+   * reflected write route the façade may intercept, accepting the media
+   * type and (for `POST` / `PATCH`) sending it without the atomic extension
+   * (ADR-0030 §3). A worker asks it for every method, clones a matched
+   * write before forwarding it, and turns a forward that rejected at the
+   * transport into {@link FetchHandler.offline}.
    */
   readonly matches: (request: Request) => boolean;
   /**
    * The façade's answer: a document (200), the codec's 400 for a URL the
-   * grammar rejects, or the 503 `offline` document for an uncovered request
-   * while offline — or `undefined` when the request is not the façade's
-   * business or is uncovered and online, for the caller to forward
-   * unchanged. A store failure while reading the replica is a defect, as
-   * `Query.run` treats it.
+   * grammar rejects, the 503 `offline` document for an uncovered request
+   * while offline, a `202` write receipt for a write it journals (offline,
+   * or on `Prefer: respond-async`) — or `undefined` when the request is not
+   * the façade's business, is uncovered and online, or is a write to
+   * forward, for the caller to forward unchanged. A write's body is read
+   * from a clone, so the request itself can still be forwarded. A store
+   * failure while reading the replica is a defect, as `Query.run` treats it.
    */
   readonly handle: (request: Request) => Effect.Effect<Response | undefined>;
   /**
-   * The 503 `offline` response with the replica's current cookie — what a
-   * worker answers when the forward of a request {@link matches} held for
-   * rejected at the transport, the other half of ADR-0029 §4's definition.
+   * What a worker answers when the forward of a request {@link matches} held
+   * for rejected at the transport, the other half of ADR-0029 §4's
+   * definition: for a write, the request is journaled and answered with a
+   * `202` receipt (pass the clone taken before forwarding, whose body is
+   * unread); otherwise, or when the write cannot be journaled, the 503
+   * `offline` response with the replica's current cookie.
    */
-  readonly offline: Effect.Effect<Response>;
+  readonly offline: (request: Request) => Effect.Effect<Response>;
+  /**
+   * Tell the façade what a forwarded request came back with: after a `2xx`
+   * to a write it {@link matches}, it signals {@link Options.pull} so a
+   * covered read soon shows the server's row (ADR-0030 §3). A worker runs it
+   * in the background (`event.waitUntil`); it never fails.
+   */
+  readonly forwarded: (request: Request, response: Response) => Effect.Effect<void>;
 }
 
 // ─── Headers and documents ───────────────────────────────────────────────────
@@ -187,10 +257,16 @@ export const offlineDocument: RestHandlers.ErrorDocument = {
 };
 
 /** Every response the façade synthesises: JSON:API, never cached, marked as served locally. */
-const respondWith = (status: number, body: unknown, cookie: string | undefined): Response =>
+const respondWith = (
+  status: number,
+  body: unknown,
+  cookie: string | undefined,
+  headers: Readonly<Record<string, string>> = {}
+): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
+      ...headers,
       "content-type": MEDIA_TYPE,
       "cache-control": "no-store",
       [servedAtHeader]: cookie ?? "",
@@ -234,6 +310,41 @@ const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   return routes;
 };
 
+/** One reflected write route the façade may intercept (ADR-0030 §3). */
+interface WriteRoute extends Route {
+  readonly operation: "create" | "update" | "delete";
+  /** The node the route writes. */
+  readonly node: Node.AnyNode;
+  /** The method it answers: `POST`, `PATCH` or `DELETE` (a `PUT` update is never intercepted). */
+  readonly method: string;
+}
+
+const writeMethods = { create: "POST", update: "PATCH", delete: "DELETE" } as const;
+
+/** The write routes of the api whose type the graph declares and `writes` allows. */
+const writeRoutesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>,
+  nodes: Node.NodeRegistry,
+  writes: CrudMutation.Writes | undefined
+): ReadonlyArray<WriteRoute> =>
+  Arr.flatMap([...Convention.reflectResources(api).values()], (resource) => {
+    const node = nodes.nodes.get(resource.type);
+    if (node === undefined) return [];
+    return Arr.filterMap(["create", "update", "delete"] as const, (operation) => {
+      const endpoint = resource[operation];
+      const method = writeMethods[operation];
+      const allowed = writes === undefined || (writes[resource.type] ?? []).includes(operation);
+      return endpoint === undefined || endpoint.method.toUpperCase() !== method || !allowed
+        ? Result.failVoid
+        : Result.succeed({
+            ...routeOf(resource.type, endpoint.path, operation !== "create"),
+            operation,
+            node,
+            method,
+          });
+    });
+  });
+
 const matchesTemplate = (route: Route, segments: ReadonlyArray<string>): boolean =>
   route.segments.length === segments.length &&
   route.segments.every((template, index) =>
@@ -272,6 +383,21 @@ const acceptsJsonApi = (header: string | null): boolean =>
   header
     .split(",")
     .some((part) => (part.trim().split(";")[0] ?? "").trim().toLowerCase() === MEDIA_TYPE);
+
+/**
+ * Whether a `Content-Type` is the JSON:API media type without the atomic
+ * extension: an `ext` parameter naming atomic marks the operations endpoint,
+ * never a façade write (ADR-0030 §5).
+ */
+const sendsJsonApi = (header: string | null): boolean => {
+  if (header === null) return false;
+  const [type = "", ...parameters] = header.split(";");
+  if (type.trim().toLowerCase() !== MEDIA_TYPE) return false;
+  return !parameters.some((parameter) => {
+    const [name = "", value = ""] = parameter.split("=");
+    return name.trim().toLowerCase() === "ext" && value.toLowerCase().includes("atomic");
+  });
+};
 
 const navigatorOnline = (): boolean => {
   const navigator = (globalThis as { navigator?: { onLine?: boolean } }).navigator;
@@ -319,6 +445,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 ): FetchHandler => {
   const { nodes, view, coverageOf } = options;
   const routes = routesOf(options.api, nodes);
+  const mutate = options.mutate;
+  const writeRoutes = mutate === undefined ? [] : writeRoutesOf(options.api, nodes, options.writes);
+  const intentOf = options.intentOf ?? FacadeWrites.graphIntentOf(nodes);
   const base = baseOf(options.baseUrl ?? "");
   const online = options.online ?? navigatorOnline;
   /** The cookie at the time of an answer; read only when a response is synthesised. */
@@ -328,19 +457,20 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       : Effect.catch(options.cookie, () => Effect.succeed(undefined));
   // One writer per link prefix the routes imply (one, for an api mounted once).
   const writers = new Map<string, ReplicaDocuments.ReplicaDocuments>();
-  for (const route of routes) {
-    const prefix = options.prefix ?? route.prefix;
-    if (!writers.has(prefix)) {
-      writers.set(
-        prefix,
-        ReplicaDocuments.make({
-          nodes,
-          prefix,
-          ...(options.resources === undefined ? {} : { resources: options.resources }),
-        })
-      );
-    }
-  }
+  /** The writer for a link prefix: one per prefix, built when a route first needs it. */
+  const writerFor = (prefix: string): ReplicaDocuments.ReplicaDocuments => {
+    const existing = writers.get(prefix);
+    if (existing !== undefined) return existing;
+    const made = ReplicaDocuments.make({
+      nodes,
+      prefix,
+      ...(options.resources === undefined ? {} : { resources: options.resources }),
+    });
+    writers.set(prefix, made);
+    return made;
+  };
+
+  for (const route of routes) writerFor(options.prefix ?? route.prefix);
 
   const candidateOf = (request: Request): Candidate | undefined => {
     if (request.method !== "GET" || !acceptsJsonApi(request.headers.get("accept"))) {
@@ -410,7 +540,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       return respondWith(200, document, yield* cookie);
     });
 
-  const handle: FetchHandler["handle"] = (request) => {
+  const readHandle = (request: Request): Effect.Effect<Response | undefined> => {
     const candidate = candidateOf(request);
     if (candidate === undefined) return Effect.succeed(undefined);
     return answer(candidate).pipe(
@@ -421,9 +551,143 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     );
   };
 
+  // ─── Writes (ADR-0030) ─────────────────────────────────────────────────────
+
+  /** A write the façade may intercept: the route, its target, and where its api is mounted. */
+  interface WriteCandidate {
+    readonly route: WriteRoute;
+    readonly target: FacadeWrites.Target;
+  }
+
+  const writeCandidateOf = (request: Request): WriteCandidate | undefined => {
+    const method = request.method.toUpperCase();
+    if (!acceptsJsonApi(request.headers.get("accept"))) return undefined;
+    if (method !== "DELETE" && !sendsJsonApi(request.headers.get("content-type"))) {
+      return undefined;
+    }
+    const path = pathUnder(base, new URL(request.url));
+    if (path === undefined) return undefined;
+    const segments = Convention.segmentsOf(path);
+    const route = writeRoutes.find(
+      (candidate) => candidate.method === method && matchesTemplate(candidate, segments)
+    );
+    if (route === undefined) return undefined;
+    const target: FacadeWrites.Target =
+      route.operation === "create"
+        ? { operation: "create", type: route.type }
+        : {
+            operation: route.operation,
+            type: route.type,
+            id: decodeURIComponent(segments.at(-1) ?? ""),
+          };
+    return { route, target };
+  };
+
+  /** The mutation status URL of a journaled mutation: beside the api it belongs to (ADR-0030 §2). */
+  const statusUrl = (route: Route, mutationId: number): string =>
+    `${base.origin ?? ""}${base.path}${route.prefix}/_legation/mutations/${mutationId}`;
+
+  /**
+   * The receipt's `data`: the resource read back through the one writer
+   * after journaling (ADR-0030 §1), or — when the replica does not hold the
+   * row (a patch of a row it never pulled) — the request's own members.
+   */
+  const receiptData = ({ route }: WriteCandidate, write: Write): Effect.Effect<unknown> => {
+    const prefix = options.prefix ?? route.prefix;
+    const docs = writerFor(prefix);
+    const sent = {
+      type: write.type,
+      id: write.id,
+      attributes: write.attributes ?? {},
+    };
+    return docs.fromUrl(view, `${prefix}/${write.type}/${encodeURIComponent(write.id)}`).pipe(
+      Effect.map((document) =>
+        "data" in document && document.data !== null && !Array.isArray(document.data)
+          ? document.data
+          : sent
+      ),
+      Effect.orElseSucceed(() => sent)
+    );
+  };
+
+  /**
+   * Journal a write and answer its `202` receipt, or fail with `undefined`
+   * when it cannot be journaled (the caller forwards it online, or answers
+   * offline). The body is read from a clone.
+   */
+  const journal = (
+    request: Request,
+    candidate: WriteCandidate,
+    preferences: FacadeWrites.Preferences
+  ): Effect.Effect<Response, undefined> =>
+    Effect.gen(function* () {
+      const body = Effect.tryPromise(() => request.clone().text());
+      const write = yield* FacadeWrites.decodeWrite(
+        candidate.route.node,
+        candidate.target,
+        body
+      ).pipe(Effect.mapError(() => undefined));
+      const intent = intentOf(write);
+      if (intent === undefined || mutate === undefined) return yield* Effect.fail(undefined);
+      const handle = yield* mutate(intent.mutator, intent.args).pipe(
+        Effect.mapError(() => undefined)
+      );
+      const location = statusUrl(candidate.route, handle.mutationId);
+      const meta = {
+        legation: { status: "pending", mutationId: handle.mutationId, mutation: location },
+      };
+      const document =
+        write.operation === "delete"
+          ? { meta }
+          : { data: yield* receiptData(candidate, write), meta };
+      const headers = preferences.respondAsync
+        ? { location, "preference-applied": "respond-async" }
+        : { location };
+      return respondWith(202, document, yield* cookie, headers);
+    });
+
+  const offlineNow: Effect.Effect<Response> = Effect.map(cookie, offlineResponse);
+
+  /** ADR-0030 §3's decision table for a write candidate, offline meaning `navigator.onLine` false. */
+  const writeHandle = (
+    request: Request,
+    candidate: WriteCandidate
+  ): Effect.Effect<Response | undefined> => {
+    const preferences = FacadeWrites.preferencesOf(request.headers);
+    const reachable = online();
+    if (preferences.strict) return reachable ? Effect.succeed(undefined) : offlineNow;
+    if (reachable && !preferences.respondAsync) return Effect.succeed(undefined);
+    return journal(request, candidate, preferences).pipe(
+      Effect.catch(() => (reachable ? Effect.succeed(undefined) : offlineNow))
+    );
+  };
+
+  const handle: FetchHandler["handle"] = (request) => {
+    const write = writeCandidateOf(request);
+    return write === undefined ? readHandle(request) : writeHandle(request, write);
+  };
+
+  const offline: FetchHandler["offline"] = (request) => {
+    const write = writeCandidateOf(request);
+    if (write === undefined) return offlineNow;
+    const preferences = FacadeWrites.preferencesOf(request.headers);
+    if (preferences.strict) return offlineNow;
+    return journal(request, write, preferences).pipe(Effect.catch(() => offlineNow));
+  };
+
+  const forwarded: FetchHandler["forwarded"] = (request, response) =>
+    options.pull !== undefined &&
+    response.status >= 200 &&
+    response.status < 300 &&
+    writeCandidateOf(request) !== undefined
+      ? Effect.ignore(options.pull)
+      : Effect.void;
+
   return {
-    matches: (request) => candidateOf(request) !== undefined,
+    matches: (request) =>
+      candidateOf(request) !== undefined || writeCandidateOf(request) !== undefined,
     handle,
-    offline: Effect.map(cookie, offlineResponse),
+    offline,
+    forwarded,
   };
 };

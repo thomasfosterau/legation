@@ -32,7 +32,7 @@
  * from a client.
  */
 import { Effect, Schema } from "effect";
-import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
+import { CrudMutation, Edge, Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -337,7 +337,20 @@ export type OrderPlace = typeof OrderPlaceArgs.Type;
 export const ReviewWriteArgs = ReviewSchema;
 export const ProfileUpdateArgs = ProfileSchema;
 
+/**
+ * The writes the worker's JSON:API façade may journal (ADR-0030 §5): a
+ * plain-fetch `POST /jsonapi/reviews` with a client id, journaled offline (or
+ * on `Prefer: respond-async`) as the graph-derived `reviews/create`. Its
+ * server half is `server/handlers.ts`'s `reviews/create`, under
+ * `review/write`'s rules. Cart lines and orders stay forwarded only: their
+ * per-resource server rules (stock, the authoritative cart) are not lifted
+ * into derived-name handlers yet (#525).
+ */
+export const facadeWrites: CrudMutation.Writes = { reviews: ["create"] };
+
 export const mutators = Mutation.registry([
+  // The graph-derived mutations the façade journals, beside the app's named intents.
+  ...CrudMutation.entries(nodes, { writes: facadeWrites }),
   {
     mutator: Mutation.make("cart/add", CartAddArgs),
     local: (args, writer) =>

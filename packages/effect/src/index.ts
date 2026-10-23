@@ -45,6 +45,7 @@ export * as Aggregate from "./Aggregate.js";
 export * as Mutation from "./Mutator.js";
 /** @deprecated The write concept is {@link Mutation} (ADR-0022). */
 export * as Mutator from "./Mutator.js";
+export * as CrudMutation from "./CrudMutation.js";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as Client from "./Client.js";

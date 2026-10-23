@@ -12,6 +12,7 @@ JSON:API loaders, derived sync and the replica-served façade. Read the root [AG
 - **Read-side**: reads come from JSON:API documents; writes are the engine's named mutators, replayed as `POST` / `PATCH` / `DELETE` or one `atomic:operations` request (ADR-0030), never ad-hoc REST calls.
 - **The filter bridge is exact** against the engine's filter grammar (ADR-0028); `FilterCorpus` cases pin it.
 - **The façade answers only covered reads** from the replica (ADR-0029); an uncovered `GET` is forwarded, never answered from a partial replica.
+- **A façade write is a receipt, never a ruling** (ADR-0030): a journaled write is answered `202` with `meta.legation.status: "pending"`; `201` / `200` / `204` only ever come from the server. Online and unasked, writes forward unchanged.
 
 ## Tests
 

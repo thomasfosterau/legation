@@ -137,6 +137,9 @@ const pacedEngineLayer = (
         clientGroupId: options.clientGroupId,
         mutators,
         syncLoop: { pullInterval: "15 seconds", pushDebounce: "300 millis" },
+        // The façade's mutation status URLs read settled phases from this map (ADR-0030 §2):
+        // keep more of them than the default, so a receipt's ruling outlives a busy session.
+        mutationStateRetention: { maxTerminal: 1000 },
       }).pipe(Layer.provide(transportLayer(options)))
     )
   );
