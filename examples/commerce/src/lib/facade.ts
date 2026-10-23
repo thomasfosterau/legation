@@ -15,7 +15,10 @@
  * `POST /jsonapi/reviews` carrying a client id is journaled as the
  * graph-derived `reviews/create` while offline (or on
  * `Prefer: respond-async`) and answered with a `202` write receipt; online
- * it is forwarded and the façade pulls after the server's `2xx`. Only the
+ * it is forwarded and the façade pulls after the server's `2xx`. The
+ * receipt's `Location`, `/jsonapi/_legation/mutations/{id}`, is answered
+ * from the engine's mutation-state map: `pending`, then `acknowledged` or
+ * `rejected` with the server's reason (`Prefer: wait=N` holds for it). Only the
  * types and operations in `facadeWrites` are intercepted, because only those
  * have a server handler under the derived name.
  *
@@ -24,11 +27,16 @@
  * carries exactly the relationships the server writes (ADR-0029 §6;
  * `tests/replica-documents.test.ts` checks the bytes).
  */
-import type { Effect } from "effect";
+import type { Effect, Stream } from "effect";
 import type { MutatorError, StoreError } from "@thomasfosterau/legation-effect";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@thomasfosterau/legation-effect";
-import type { ClientEngine, ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import type {
+  ClientEngine,
+  ClientView,
+  Coverage,
+  MutationState,
+} from "@thomasfosterau/legation-effect/internal";
 import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./api.js";
 import { resources as declared } from "./resources.js";
@@ -56,6 +64,8 @@ export interface FacadeSource {
   ) => Effect.Effect<ClientEngine.MutationHandle, MutatorError | StoreError>;
   /** The pull to signal after a forwarded write succeeds: the worker engine's `pull`. */
   readonly pull?: Effect.Effect<unknown, unknown>;
+  /** The engine's mutation-state map, which the mutation status URL is answered from. */
+  readonly mutationStates?: Stream.Stream<MutationState.MutationStateMap>;
 }
 
 /** The façade over this app's api and declarations. */
