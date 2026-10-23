@@ -363,6 +363,20 @@ export default defineConfig({
             "./examples/commerce/tests/support/global-setup.ts",
           ],
           include: ["examples/commerce/tests/facade-browser.test.ts"],
+          server: {
+            deps: {
+              // The test's `beforeAll` imports the app's built server
+              // (`build/handler.js` and its ~60 chunks). Vitest inlines every
+              // module outside node_modules, so without this the whole bundle
+              // went through vite's transform pipeline in the main process and
+              // back over RPC: about 4.5x the CPU of a native import (1.2 s
+              // against 0.27 s). Under a load average of ~95 on 4 cores that
+              // import alone took 113 s and timed the hook out at 120 s; loaded
+              // natively it took 5-29 s (#472). The build is plain Node ESM:
+              // load it the way `node build` serves it.
+              external: [/\/examples\/commerce\/build\//],
+            },
+          },
         },
       },
       {
