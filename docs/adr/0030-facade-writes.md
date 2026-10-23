@@ -1,7 +1,7 @@
 # ADR-0030: Façade writes — journaled `POST`/`PATCH`/`DELETE`, write receipts, and where a rejection surfaces
 
 Date: 2026-09-04
-Status: Proposed (issue #169; extends ADR-0029 §7, which declared writes out of scope)
+Status: Accepted 2026-10-23 with the #215 amendment (issue #169; extends ADR-0029 §7, which declared writes out of scope; amends ADR-0020's out-of-band-writer line)
 
 ## Context
 
@@ -629,7 +629,7 @@ offline is answered `503` `offline` and never journaled.
   they do for a `200`.
 - **No changeset accompanies this ADR.** ADR-only commits carry none in
   this repository (ADR-0029); the implementation issues carry their own.
-- **CONTEXT.md gains the rows below** once the design is accepted.
+- **CONTEXT.md carries the rows below** (added on acceptance, 2026-10-23).
 
 ## Open points
 
@@ -683,9 +683,9 @@ a candidate follow-up.
 - **Requiring coverage to intercept a write.** The journal needs no
   subscription; coverage decides visibility, not durability (§5).
 
-## Proposed CONTEXT.md rows
+## CONTEXT.md rows
 
-Under **Writes**:
+Added to CONTEXT.md on acceptance. Under **Writes**:
 
 | Term                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                             |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -696,3 +696,99 @@ Under **Writes**:
 
 And in the **Façade** row under Reads, append: "Writes: see **Façade
 write** (ADR-0030)."
+
+## Amendment (#215): a form action runs a named Mutation, with the same receipt semantics
+
+Decided 2026-10-23, together with this ADR's acceptance. #215 is the
+second interception point for the same intent: a SvelteKit form action, the
+primary write surface of the apps adopting legation (Gardeneria alone has 72
+routes exporting `actions`). ADR-0020 made form actions **out-of-band
+writers** (ADR-0019): they commit through the app's API and publish hints,
+so every write was authored twice, once as a `Mutation` and once as an
+action, and the two could drift. `Mutation`'s premise is "defined once,
+executed twice" (CONTEXT.md); this section restores it for actions.
+
+**1. An action that can name the client group runs a named Mutation as
+one of that group's mutations.** The server decodes the posted args against
+the Mutation's args schema, runs the **same handler the push path runs**,
+bumps the mutation id in the **same transaction** as the handler's effects
+(permanent rejection bumps it without effects, ADR-0008), and broadcasts as
+a pushed write does. It is a push minus the transport: identity is resolved
+for the group through `IdentityResolver`, middleware and auth apply as on
+`/sync`, and the mutation-id ledger gives exactly-once. The group comes
+from ADR-0020's client-group cookie; an action that cannot name a group (no
+cookie, another service, a cron) stays an **out-of-band writer**, unchanged.
+
+**2. The mutation's identity travels with the form.** A mutation id is per
+_client_ and contiguous (the backend rejects a gap), so the action cannot
+borrow the next id of a tab's engine without colliding with its journal.
+Each rendered form carries a fresh **form client** id and mutation id `1`
+in hidden fields, minted when the page renders it (server-side for the
+no-JS page, per submit by the enhanced one). A resubmission of the same
+rendered form is the same mutation: the ledger already covers it, the
+handler does not run again, and the action answers the original outcome.
+That replaces the apps' hand-rolled `idempotentCreate` (client id plus a
+re-fetch as proof of its own retry), and works for every Mutation, not only
+creates.
+
+**3. The action returns a receipt naming the mutation, not a claim about
+the page.** Its result carries `{ clientId, mutationId, phase, reason? }`,
+where `phase` is `MutationState`'s vocabulary: `acknowledged`, or
+`rejected` with the backend's reason (which the form layer may route to a
+root message). These are the **same receipt semantics** as §1–§2: the
+caller learns the mutation's id and where its ruling lives, and the
+optimistic overlay is released only when the authoritative effect is
+observed, **never on the response itself**. The two entry points differ
+only in timing: the façade answers before the server rules (`pending`, ruling
+on the status URL); the action runs on the server, so its receipt already
+carries the ruling.
+
+**4. A JS page reconciles on that id instead of waiting for a pull.** An
+enhanced submit applies the Mutation's local handler to the overlay under
+the form client's id — not journaled, since the action is its delivery and
+a push would apply it twice. On the action's receipt the engine moves the
+entry to the **unpulled tail** (acknowledged, held in the overlay) or drops
+it (`rejected`), and signals a pull; the pull whose `lastMutationIds`
+covers the form client's id reveals the confirmed rows and releases it,
+exactly as for a pushed mutation. SvelteKit's post-action `load` re-run is
+then optional: the page already shows the write, and the progressively
+enhanced form behaves better than the unenhanced one rather than merely as
+well.
+
+**5. Field-level validation stays the form layer's.** A Mutation's args
+schema and a form's field errors are different shapes. The seam is "this
+decoded, validated command is now a Mutation invocation"; the form layer
+(`@thomasfosterau/effect-forms` in the apps) runs first and hands over args.
+A decode failure of the args against the Mutation's schema is a defect of
+that hand-over, not a field error.
+
+**6. Placement (ADR-0006).** Running a named Mutation for a group needs
+only `effect` and the backend contract, so the mechanism is core: an entry
+point on `Server` beside `handler` and `broadcast` (`@thomasfosterau/legation-effect`;
+the name is the implementation's). `@thomasfosterau/legation-svelte/kit` adds only
+what binds to SvelteKit: reading the group and form-client fields from
+`Cookies` and the request, and the enhanced submit's client half. An app on
+another framework calls the core entry point directly.
+
+**Relationship to the façade write.** Both are interception points for one
+intent and do not contradict each other: a façade write journals a
+plain-fetch request on the client and answers `202 pending`; a form-action
+Mutation runs on the server and answers the ruling. Both name the mutation
+by id, neither fabricates a status the server did not give, and both
+release the optimistic effect only when a pull observes it. A page should
+use one path per write, not both for the same submission.
+
+**Open points** (candidate follow-ups; none blocks #215's implementation):
+
+5. **Form-client ledger growth.** One form client per rendered form adds
+   one `lastMutationIds` entry per submission to the group. The ledger
+   needs a retention rule for form clients (a TTL longer than any
+   plausible resubmission); none exists for ordinary clients either.
+6. **Enhanced submit while offline.** The action cannot run; the enhanced
+   path could journal the Mutation through the engine instead (a different
+   client id, so a later replay of the form would be a second mutation).
+   Until decided, the enhanced submit fails as the network fails.
+
+Implementation: #215 (the core entry point, the Kit plumbing, the two
+tests its acceptance criteria name); the façade side is #510 (receipts),
+#511 (status URL) and #512 (error documents).
