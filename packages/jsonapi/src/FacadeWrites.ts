@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { CrudMutation } from "@thomasfosterau/legation-effect";
 import type { Node } from "@thomasfosterau/legation-effect";
@@ -129,21 +130,11 @@ const linkageOf = (
   return Effect.succeed(data["id"]);
 };
 
-/**
- * Decode a write's body structurally into a `Write` whose `relationships`
- * are flattened into `one`-edge ids by relationship name (`null` clears).
- * A `DELETE` reads no body. Fails with the {@link Refusal} the offline façade
- * answers with.
- */
-export const decodeWrite = (
-  node: Node.AnyNode,
-  target: Target,
+/** The body's `data` member as an object, or the refusal for a body that has none. */
+const dataOf = (
   body: Effect.Effect<string, unknown>
-): Effect.Effect<Write, Refusal> =>
+): Effect.Effect<Record<string, unknown>, Refusal> =>
   Effect.gen(function* () {
-    if (target.operation === "delete") {
-      return { operation: "delete", type: target.type, id: target.id };
-    }
     const text = yield* body.pipe(
       Effect.catch(() => invalid("the request body could not be read", ""))
     );
@@ -154,64 +145,100 @@ export const decodeWrite = (
       return yield* invalid('a write document needs a "data" member', "");
     }
     const data = document["data"];
-    if (!isRecord(data)) return yield* invalid('"data" must be a resource object', "/data");
-    if (data["type"] !== target.type) {
-      return yield* refuse({
-        status: 409,
-        code: "type_mismatch",
-        title: "Type mismatch",
-        detail: `this endpoint writes "${target.type}" resources`,
-        pointer: "/data/type",
-      });
-    }
-    const id = data["id"];
-    if (id !== undefined && !P.isString(id)) {
-      return yield* invalid('"data.id" must be a string', "/data/id");
-    }
-    if (target.operation === "update" && id === undefined) {
-      return yield* invalid("an update's data needs the id the path names", "/data/id");
-    }
-    if (target.operation === "update" && id !== target.id) {
-      return yield* refuse({
+    return isRecord(data) ? data : yield* invalid('"data" must be a resource object', "/data");
+  });
+
+const clientIdRequired: Refusal = {
+  status: 503,
+  code: "client_id_required",
+  title: "Client id required",
+  detail: "A create the façade journals offline needs a client-generated id in data.id.",
+  pointer: "/data/id",
+};
+
+/** The resource id a create or an update addresses, checked against the route's type and path. */
+const idOf = (
+  target: Exclude<Target, { readonly operation: "delete" }>,
+  data: Record<string, unknown>
+): Effect.Effect<string, Refusal> => {
+  if (data["type"] !== target.type) {
+    return refuse({
+      status: 409,
+      code: "type_mismatch",
+      title: "Type mismatch",
+      detail: `this endpoint writes "${target.type}" resources`,
+      pointer: "/data/type",
+    });
+  }
+  const id = data["id"];
+  if (id !== undefined && !P.isString(id)) {
+    return invalid('"data.id" must be a string', "/data/id");
+  }
+  if (target.operation === "create") {
+    return id === undefined || id === "" ? refuse(clientIdRequired) : Effect.succeed(id);
+  }
+  if (id === undefined) return invalid("an update's data needs the id the path names", "/data/id");
+  return id === target.id
+    ? Effect.succeed(id)
+    : refuse({
         status: 409,
         code: "id_mismatch",
         title: "Id mismatch",
         detail: `"data.id" must be the id the path names ("${target.id}")`,
         pointer: "/data/id",
       });
+};
+
+/** An optional object member of `data` (`attributes`, `relationships`): `{}` when absent. */
+const memberOf = (
+  data: Record<string, unknown>,
+  name: "attributes" | "relationships"
+): Effect.Effect<Record<string, unknown>, Refusal> => {
+  const member = data[name] ?? {};
+  return isRecord(member)
+    ? Effect.succeed(member)
+    : invalid(`"data.${name}" must be an object`, `/data/${name}`);
+};
+
+/**
+ * Decode a write's body structurally into a `Write` whose `relationships`
+ * are flattened into `one`-edge ids by relationship name (`null` clears).
+ * A `DELETE` reads no body. Fails with the {@link Refusal} the offline façade
+ * answers with; a create without a client id is refused only once the rest
+ * of its body has passed.
+ */
+export const decodeWrite = (
+  node: Node.AnyNode,
+  target: Target,
+  body: Effect.Effect<string, unknown>
+): Effect.Effect<Write, Refusal> => {
+  if (target.operation === "delete") {
+    return Effect.succeed({ operation: "delete", type: target.type, id: target.id });
+  }
+  return Effect.gen(function* () {
+    const data = yield* dataOf(body);
+    // A missing client id is refused last, after the body's other faults (ADR-0030 §3).
+    const checked = yield* Effect.result(idOf(target, data));
+    if (Result.isFailure(checked) && checked.failure.code !== "client_id_required") {
+      return yield* refuse(checked.failure);
     }
-    const attributes = data["attributes"] ?? {};
-    if (!isRecord(attributes)) {
-      return yield* invalid('"data.attributes" must be an object', "/data/attributes");
-    }
-    const relationships = data["relationships"] ?? {};
-    if (!isRecord(relationships)) {
-      return yield* invalid('"data.relationships" must be an object', "/data/relationships");
-    }
+    const attributes = yield* memberOf(data, "attributes");
+    const relationships = yield* memberOf(data, "relationships");
     const linkage = yield* Effect.forEach(
       R.toEntries(relationships),
       ([name, member]) =>
         Effect.map(linkageOf(name, member, node), (related) => [name, related] as const),
       { concurrency: 1 }
     );
-    const resolved = target.operation === "create" ? id : target.id;
-    if (resolved === undefined || resolved === "") {
-      return yield* refuse({
-        status: 503,
-        code: "client_id_required",
-        title: "Client id required",
-        detail: "A create the façade journals offline needs a client-generated id in data.id.",
-        pointer: "/data/id",
-      });
-    }
     return {
       operation: target.operation,
       type: target.type,
-      id: resolved,
+      id: yield* Result.match(checked, { onFailure: refuse, onSuccess: Effect.succeed }),
       attributes,
       relationships: R.fromEntries(linkage),
     };
   });
+};
 
 // ─── The intent mapping ──────────────────────────────────────────────────────
 
