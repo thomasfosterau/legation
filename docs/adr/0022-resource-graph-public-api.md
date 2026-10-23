@@ -257,3 +257,7 @@ internal modules or subpath exports for tooling. Target surface:
 - The `TabMirror → Mirror` rename (#87, merged) remains the internal
   vocabulary; this ADR takes `Mirror` out of the public API entirely, so
   the app-facing name stops mattering.
+
+## Amendment (2026-10-23, #208): shared anonymous CVRs
+
+The per-client reference topology has one exception, [ADR-0032](0032-shared-anonymous-cvrs.md). A subscription whose collection's auth filter is a constant for the anonymous identity, checked when the policy is built, shares one CVR keyed by (subscription, cookie generation). It lives in a shared room rather than a user's room, its pull is edge-cacheable, and its pokes route per topic. Everything else keeps per-client CVRs and per-user rooms. Designed now and built when an adopter needs it.

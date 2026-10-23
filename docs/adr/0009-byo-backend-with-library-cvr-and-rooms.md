@@ -28,3 +28,7 @@ The library ships an in-memory reference backend, predicate-evaluation helpers (
 ## Amendment (2026-10-15, #365): the rejection list
 
 `Backend` gains a required method, `rejections(context)`, which lists the permanent rejections a client group still remembers, each with the reason `applyMutations` reported for it. It is Backend guarantee 4. The sync server filters that list by a pull's watermark and returns the covered entries in `PullResponse.rejected`, so a client whose push response was lost learns the outcome from its next pull (see ADR-0008's amendment for #365). Every backend supplies it: `MemoryBackend` and `SqlBackend` read their rejection memory, and `JsonApiBackend` reads its in-session one. `BackendContract` rule 13 checks that a rejection the backend reports is also listed by `rejections`, with the same reason. A third-party backend that omits the method fails to type-check, so a custom backend must add it before it upgrades.
+
+## Amendment (2026-10-23, #208): shared anonymous CVRs
+
+The per-client CVR bookkeeping has one exception, [ADR-0032](0032-shared-anonymous-cvrs.md). A subscription whose collection's auth filter is a constant for the anonymous identity, checked when the policy is built, shares one CVR keyed by (subscription, cookie generation). It lives in a shared room rather than a user's room, its pull is edge-cacheable, and its pokes route per topic. Everything else keeps per-client CVRs and per-user rooms. Designed now and built when an adopter needs it.
