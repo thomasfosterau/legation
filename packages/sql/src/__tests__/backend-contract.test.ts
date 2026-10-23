@@ -29,6 +29,7 @@ import {
   ClientStore,
   MutationRejected,
   Mutator,
+  Server,
   Transport,
 } from "@thomasfosterau/legation-effect";
 import {
@@ -225,6 +226,98 @@ describe("SqlBackend", () => {
         const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));
         expect(failure.rule).toContain("discards");
         expect(failure.message).toContain("not registered");
+      })
+    )
+  );
+});
+
+// A counter bump on the contract table: applying it twice would read `n: 2`.
+const formBump = Mutator.make("form/bump", Schema.Struct({ id: Schema.String }));
+
+describe("Server.mutate over SqlBackend (ADR-0030 #215)", () => {
+  const makeServer = Effect.fn("makeServer")(function* () {
+    const backend = yield* makeContractBackend(
+      {
+        ...handlers,
+        [formBump.name]: (raw, tx) =>
+          Effect.gen(function* () {
+            const { id } = yield* Schema.decodeUnknownEffect(formBump.args)(raw).pipe(
+              Effect.mapError((cause) => new BackendError({ message: "form/bump args", cause }))
+            );
+            yield* tx.run({
+              text: `INSERT INTO __contract (id, n) VALUES (?, 1) ON CONFLICT(id) DO UPDATE SET n = n + 1`,
+              params: [id],
+            });
+            return [{ collection: "__contract", ids: [id] }];
+          }),
+      },
+      new Map([...contractMutators, [formBump.name, formBump]])
+    );
+    const server = yield* Server.make({
+      backend,
+      auth: { policy: Authorization.policy({ __contract: Authorization.allowAll }) },
+    });
+    return { backend, server };
+  });
+
+  it.effect("the same form submitted twice applies once, and both answer one receipt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, server } = yield* makeServer();
+        const submission = {
+          clientGroupId: "group-1",
+          clientId: "form-a",
+          mutationId: 1,
+          mutation: formBump,
+          args: { id: "c1" },
+        } as const;
+        const first = yield* server.mutate(submission);
+        const second = yield* server.mutate(submission);
+        expect(first).toEqual({ clientId: "form-a", mutationId: 1, phase: "acknowledged" });
+        expect(second).toEqual(first);
+        const rows = yield* backend
+          .getRows({ clientGroupId: "group-1" }, "__contract", ["c1"])
+          .pipe(Effect.orDie);
+        expect(rows).toEqual([
+          expect.objectContaining({ value: expect.objectContaining({ n: 1 }) }),
+        ]);
+        const pull = yield* server.handler.handlePull({
+          clientGroupId: "group-1",
+          subscriptions: [Subset.make({ collection: "__contract" })],
+        });
+        expect(pull.lastMutationIds["form-a"]).toBe(1);
+      })
+    )
+  );
+
+  it.effect("a permanent rejection answers its reason, bumped without effects, on replay too", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, server } = yield* makeServer();
+        const submission = {
+          clientGroupId: "group-1",
+          clientId: "form-b",
+          mutationId: 1,
+          mutation: BackendContract.rejectAlways,
+          args: { collection: "__contract", id: "c2" },
+        } as const;
+        const receipt = yield* server.mutate(submission);
+        expect(receipt).toEqual({
+          clientId: "form-b",
+          mutationId: 1,
+          phase: "rejected",
+          reason: "contract/reject always rejects",
+        });
+        expect(
+          yield* backend
+            .getRows({ clientGroupId: "group-1" }, "__contract", ["c2"])
+            .pipe(Effect.orDie)
+        ).toEqual([]);
+        const ledger = yield* backend
+          .lastMutationIds({ clientGroupId: "group-1" })
+          .pipe(Effect.orDie);
+        expect(ledger["form-b"]).toBe(1);
+        expect(yield* server.mutate(submission)).toEqual(receipt);
       })
     )
   );
