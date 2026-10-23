@@ -12,6 +12,7 @@
  *   over the engine's change stream, so a framework binding needs nothing new.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -238,7 +239,7 @@ describe("Derive — observable via the standard atom surface", () => {
           return yield* Effect.die(new Error("derived atom never reached the expected state"));
         });
 
-      yield* await1((rows) => rows.length === 0);
+      yield* await1((rows) => Arr.isReadonlyArrayEmpty(rows));
 
       // Only the "keep-" row survives the client-local filter — the "drop-" row
       // is synced but never shown (the filter shapes, it does not widen sync).
@@ -291,7 +292,7 @@ describe("Derive — observed leaf consumes observeChanges (#133 item 1), not pa
       // An update that crosses the filter boundary the other way: "keep-me"
       // no longer matches, so the pipeline drops back to empty.
       yield* engine.mutate("todo/set", { id: "1", title: "renamed" });
-      yield* await1((current) => current.length === 0);
+      yield* await1((current) => Arr.isReadonlyArrayEmpty(current));
 
       // And a fresh row entering after that keeps working (the maintained
       // operator state survives past the boundary crossing).

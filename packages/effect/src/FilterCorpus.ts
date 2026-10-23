@@ -31,6 +31,7 @@
  * meaning.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
@@ -428,7 +429,7 @@ const FOREIGN_RATE = 0.3;
 /** A literal of the pool's kind: usually one that occurs, sometimes one that does not. */
 const literalFor = (pool: Pool): Effect.Effect<Predicate.Literal> =>
   Effect.gen(function* () {
-    const foreign = pool.foreign.length > 0 && (yield* chance(FOREIGN_RATE));
+    const foreign = Arr.isReadonlyArrayNonEmpty(pool.foreign) && (yield* chance(FOREIGN_RATE));
     return yield* pick(foreign ? pool.foreign : pool.rows);
   });
 

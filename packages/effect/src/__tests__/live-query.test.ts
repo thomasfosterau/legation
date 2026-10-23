@@ -3,6 +3,7 @@
  * change stream — an optimistic mutate drives the Atom to a new Success.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
@@ -88,7 +89,7 @@ describe("LiveQuery", () => {
         });
 
       // Initial emission: empty collection.
-      yield* await1((current) => current.length === 0);
+      yield* await1((current) => Arr.isReadonlyArrayEmpty(current));
 
       // Optimistic mutate re-emits with the new row.
       yield* engine.mutate("todo/set", { id: "1", title: "reactive" });

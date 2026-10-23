@@ -8,6 +8,7 @@
  * cannot make a case time out (#309).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -298,7 +299,7 @@ describe("sync-loop scheduling (#33)", () => {
         rows.map((row) => (row.value as Todo).title)
       );
       yield* advanceUntil(
-        Effect.map(titles, (seen) => seen.length > 0),
+        Effect.map(titles, (seen) => Arr.isReadonlyArrayNonEmpty(seen)),
         Duration.millis(25)
       );
       expect(yield* titles).toEqual(["remote"]);

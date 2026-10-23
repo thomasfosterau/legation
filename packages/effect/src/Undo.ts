@@ -36,6 +36,7 @@
  * reverse order, a single `redo` replays each member's `execute` in order.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -155,7 +156,7 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     const take = (from: "undo" | "redo"): Effect.Effect<Step | undefined> =>
       SubscriptionRef.modify(history, (h) => {
         const stack = h[from];
-        if (stack.length === 0) return [undefined, h] as const;
+        if (Arr.isReadonlyArrayEmpty(stack)) return [undefined, h] as const;
         const step = stack[stack.length - 1]!;
         return [step, { ...h, [from]: stack.slice(0, -1) }] as const;
       });
@@ -183,8 +184,12 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
         )
       );
 
-    const canUndo = SubscriptionRef.get(history).pipe(Effect.map((h) => h.undo.length > 0));
-    const canRedo = SubscriptionRef.get(history).pipe(Effect.map((h) => h.redo.length > 0));
+    const canUndo = SubscriptionRef.get(history).pipe(
+      Effect.map((h) => Arr.isReadonlyArrayNonEmpty(h.undo))
+    );
+    const canRedo = SubscriptionRef.get(history).pipe(
+      Effect.map((h) => Arr.isReadonlyArrayNonEmpty(h.redo))
+    );
 
     const observe = (project: (h: History) => boolean): Stream.Stream<boolean> =>
       SubscriptionRef.changes(history).pipe(Stream.map(project), Stream.changes);
@@ -192,7 +197,7 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     // Flush the open group as one step (nothing to push for an empty group).
     const flushGroup: Effect.Effect<void> = Ref.get(groupBuffer).pipe(
       Effect.flatMap((buffer) =>
-        buffer !== undefined && buffer.length > 0 ? pushStep(buffer) : Effect.void
+        buffer !== undefined && Arr.isReadonlyArrayNonEmpty(buffer) ? pushStep(buffer) : Effect.void
       )
     );
 
@@ -216,8 +221,8 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
       redo: step("redo", "undo"),
       canUndo,
       canRedo,
-      canUndoChanges: observe((h) => h.undo.length > 0),
-      canRedoChanges: observe((h) => h.redo.length > 0),
+      canUndoChanges: observe((h) => Arr.isReadonlyArrayNonEmpty(h.undo)),
+      canRedoChanges: observe((h) => Arr.isReadonlyArrayNonEmpty(h.redo)),
       group,
     } satisfies UndoManager<E>;
   });

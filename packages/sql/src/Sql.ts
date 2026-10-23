@@ -65,6 +65,7 @@
  */
 
 import type { Predicate } from "@thomasfosterau/legation-effect";
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 
 /** A SQL fragment plus its ordered bind parameters. */
@@ -201,7 +202,7 @@ const bindableList = (
 ): ReadonlyArray<Predicate.Literal> => {
   const kind = compilation.kinds?.[field];
   const kept = values.filter((value) => conforms(kind, value));
-  return kept.length === 0 ? [null] : kept;
+  return Arr.isReadonlyArrayEmpty(kept) ? [null] : kept;
 };
 
 type CompareNode = Extract<Predicate.Predicate, { readonly _tag: "Compare" }>;
@@ -213,7 +214,7 @@ const compileCompare = (node: CompareNode, compilation: Compilation): string =>
 
 /** `In` / `NotIn`: an empty list is the constant `FALSE` / `TRUE` (ADR-0028 §3). */
 const compileList = (node: ListNode, compilation: Compilation): string => {
-  if (node.values.length === 0) return node._tag === "In" ? "1 = 0" : "1 = 1";
+  if (Arr.isReadonlyArrayEmpty(node.values)) return node._tag === "In" ? "1 = 0" : "1 = 1";
   const placeholders = bindableList(compilation, node.field, node.values)
     .map((value) => bindLiteral(compilation, node.field, value))
     .join(", ");
@@ -242,10 +243,10 @@ const compileNode = (predicate: Predicate.Predicate, compilation: Compilation): 
     case "IsNull":
       return `${compilation.dialect.quote(predicate.field)} IS ${predicate.negated === true ? "NOT " : ""}NULL`;
     case "And":
-      if (predicate.predicates.length === 0) return "1 = 1";
+      if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 1";
       return predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" AND ");
     case "Or": {
-      if (predicate.predicates.length === 0) return "1 = 0";
+      if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 0";
       return `(${predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" OR ")})`;
     }
     case "Not":

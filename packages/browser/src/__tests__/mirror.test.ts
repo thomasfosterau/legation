@@ -32,12 +32,14 @@ import {
   ClientView,
 } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 
@@ -458,7 +460,7 @@ const stubUrls: Client.UrlReads = {
   parse: (url) =>
     Effect.suspend(() => {
       const { pathname, searchParams } = new URL(url, "http://localhost");
-      const collection = pathname.split("/").findLast((s) => s.length > 0) ?? "";
+      const collection = pathname.split("/").findLast((s) => Str.isNonEmpty(s)) ?? "";
       if (!nodes.nodes.has(collection)) {
         return Effect.fail(
           new QueryError({ message: `Unknown collection: ${collection}`, query: collection })
@@ -527,7 +529,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
         mirrorId: "page",
         url: "/api/todos?include=author",
       });
-      yield* eventually(hashes(engine), (current) => current.length === 0);
+      yield* eventually(hashes(engine), (current) => Arr.isReadonlyArrayEmpty(current));
     })
   );
 
@@ -605,7 +607,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
           expect((yield* client.coverageOf({ collection: "todos" }))._tag).toBe("Covered");
 
           yield* client.unsubscribe("/todos");
-          yield* eventually(hashes(engine), (current) => current.length === 0);
+          yield* eventually(hashes(engine), (current) => Arr.isReadonlyArrayEmpty(current));
           expect(yield* client.subscriptions).toEqual([]);
         })
       )
@@ -687,7 +689,7 @@ describe("EngineHost.Host.registrations", () => {
           // engine no longer holds.
           yield* client.unsubscribe("/todos?include=author");
           yield* channel.post({ _tag: "UnsubscribeUrl", mirrorId: "page", url: "/users" });
-          yield* eventually(host.registrations, (current) => current.length === 0);
+          yield* eventually(host.registrations, (current) => Arr.isReadonlyArrayEmpty(current));
           expect((yield* coverageOf({ collection: "todos" }))._tag).toBe("Uncovered");
         })
       )
@@ -721,7 +723,7 @@ describe("EngineHost.Host.registrations", () => {
       expect(yield* host.registrations).toMatchObject([{ root: barrier }]);
       expect(yield* hashes(engine)).toEqual([Subset.hash(barrier)]);
       yield* channel.post({ _tag: "Unsubscribe", mirrorId: "page", subset: barrier });
-      yield* eventually(hashes(engine), (current) => current.length === 0);
+      yield* eventually(hashes(engine), (current) => Arr.isReadonlyArrayEmpty(current));
       // A declared edge is held with its root and edge windows registered
       // before it is listed.
       yield* channel.post({
@@ -749,8 +751,8 @@ describe("EngineHost.Host.registrations", () => {
         subset: allTodos,
         edges: [{ name: "author" }],
       });
-      yield* eventually(host.registrations, (current) => current.length === 0);
-      yield* eventually(hashes(engine), (current) => current.length === 0);
+      yield* eventually(host.registrations, (current) => Arr.isReadonlyArrayEmpty(current));
+      yield* eventually(hashes(engine), (current) => Arr.isReadonlyArrayEmpty(current));
     })
   );
 

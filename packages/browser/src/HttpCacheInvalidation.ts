@@ -33,6 +33,7 @@
 
 import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
 import { Telemetry } from "@thomasfosterau/legation-effect/internal";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 import * as Stream from "effect/Stream";
@@ -103,7 +104,11 @@ export const collectionChanges = (
 ): Stream.Stream<Touched> =>
   events.pipe(
     Stream.map(touchedBy),
-    Stream.filter((touched) => touched.collections.length > 0 || touched.rows.length > 0)
+    Stream.filter(
+      (touched) =>
+        Arr.isReadonlyArrayNonEmpty(touched.collections) ||
+        Arr.isReadonlyArrayNonEmpty(touched.rows)
+    )
   );
 
 /** Options for {@link invalidateOnChanges}. */

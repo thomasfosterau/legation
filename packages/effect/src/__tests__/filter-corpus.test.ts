@@ -6,6 +6,7 @@
  * reproducing predicate/row pair.
  */
 import { describe, expect, it } from "vite-plus/test";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
 import * as FilterCorpus from "../FilterCorpus.js";
@@ -183,7 +184,7 @@ describe("FilterCorpus", () => {
     const disagrees = (candidate: FilterCorpus.Case) =>
       Effect.sync(() => {
         const hasNe =
-          leaves(candidate.predicate).length > 0 &&
+          Arr.isReadonlyArrayNonEmpty(leaves(candidate.predicate)) &&
           JSON.stringify(candidate.predicate).includes('"op":"ne"');
         return hasNe && candidate.rows.some((row) => row.value.s === null);
       });

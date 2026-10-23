@@ -15,6 +15,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
@@ -582,9 +583,7 @@ describe("RestHandlers over the read path", () => {
           );
           // Linkage survives the projection; the rows behind it were full.
           expect(body.data[0].relationships.category.data.id).toBe("c-audio");
-          expect(body.included.every((r: any) => Object.keys(r.attributes).length === 0)).toBe(
-            true
-          );
+          expect(body.included.every((r: any) => R.isEmptyReadonlyRecord(r.attributes))).toBe(true);
         })
       )
   );

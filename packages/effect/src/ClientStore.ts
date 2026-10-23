@@ -17,6 +17,7 @@
  * are neither discarded nor adopted by the next principal.
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -101,13 +102,12 @@ const planCompaction = <T extends Numbered>(
   const dropped = mine
     .filter((m) => m.mutationId > sentUpTo && wanted.has(m.mutationId))
     .map((m) => m.mutationId);
-  if (dropped.length === 0) return undefined;
+  if (Arr.isReadonlyArrayEmpty(dropped)) return undefined;
   const droppedSet = new Set(dropped);
   const frozen = mine.filter((m) => m.mutationId <= sentUpTo);
-  const anchor =
-    frozen.length > 0
-      ? Math.max(...frozen.map((m) => m.mutationId))
-      : Math.min(...mine.map((m) => m.mutationId)) - 1;
+  const anchor = Arr.isReadonlyArrayNonEmpty(frozen)
+    ? Math.max(...frozen.map((m) => m.mutationId))
+    : Math.min(...mine.map((m) => m.mutationId)) - 1;
   const renumbered: Array<{ from: number; to: number }> = [];
   const after: Array<T> = [];
   let next = anchor;
@@ -621,7 +621,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     const parked = new Set((yield* Ref.get(tail)).map(entryKey));
     if (parked.size === 0) return;
     const dropped = (yield* Ref.get(journal)).filter((m) => parked.has(entryKey(m)));
-    if (dropped.length === 0) return;
+    if (Arr.isReadonlyArrayEmpty(dropped)) return;
     yield* raiseCountersTo(dropped);
     yield* Ref.update(journal, (entries) => entries.filter((m) => !parked.has(entryKey(m))));
   });
@@ -887,7 +887,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       locked(
         Effect.gen(function* () {
           const entries = yield* Ref.get(journal);
-          if (entries.length === 0) return 0;
+          if (Arr.isReadonlyArrayEmpty(entries)) return 0;
           // The counters keep the high-water mark of what leaves the journal.
           yield* raiseCountersTo(entries);
           yield* Ref.set(journal, []);
@@ -905,7 +905,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         Effect.gen(function* () {
           const held = yield* Ref.get(quarantine);
           const entries = held.get(fingerprint) ?? [];
-          if (entries.length === 0) return 0;
+          if (Arr.isReadonlyArrayEmpty(entries)) return 0;
           yield* Ref.update(journal, (pending) => [...pending, ...entries]);
           yield* Ref.update(quarantine, (map) => {
             const next = new Map(map);
@@ -1441,7 +1441,7 @@ export const makeKeyValue = (
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         const highest = highestIds(ids);
-        if (Object.keys(highest).length === 0) return;
+        if (R.isEmptyReadonlyRecord(highest)) return;
         const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
         const raised = raisedCounters(counters, highest);
         if (raised !== undefined) yield* writeJson("counters", raised);
@@ -1528,7 +1528,7 @@ export const makeKeyValue = (
       mutations: ReadonlyArray<Mutation>
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
-        if (mutations.length === 0) return;
+        if (Arr.isReadonlyArrayEmpty(mutations)) return;
         // A journal copy may be left behind by the trim that follows, so the finish must run (#387).
         yield* Ref.set(finishPending, true);
         for (const m of mutations) yield* writeJson(unpulledBodyKey(m.clientId, m.mutationId), m);
@@ -1555,7 +1555,7 @@ export const makeKeyValue = (
         for (const entry of released) {
           yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
         }
-        if (released.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(released)) {
           yield* writeJson(
             UNPULLED_INDEX_KEY,
             index.filter((entry) => !coveredBy(lastMutationIds, entry))
@@ -1566,7 +1566,7 @@ export const makeKeyValue = (
 
     const clearUnpulledInner: Effect.Effect<void, StoreError> = Effect.gen(function* () {
       const index = yield* unpulledIndexOf;
-      if (index.length > 0) yield* writeJson(UNPULLED_INDEX_KEY, []);
+      if (Arr.isReadonlyArrayNonEmpty(index)) yield* writeJson(UNPULLED_INDEX_KEY, []);
       for (const entry of index) {
         yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
       }
@@ -1616,7 +1616,7 @@ export const makeKeyValue = (
         const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
         if (index === undefined) return;
         const dropped = index.filter(drop);
-        if (dropped.length === 0) return;
+        if (Arr.isReadonlyArrayEmpty(dropped)) return;
         yield* raiseCounters(dropped);
         for (const entry of dropped)
           yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
@@ -1636,7 +1636,7 @@ export const makeKeyValue = (
     ): Effect.Effect<number, StoreError> =>
       Effect.gen(function* () {
         const pending = yield* pendingMutationsOf;
-        if (pending.length === 0) return 0;
+        if (Arr.isReadonlyArrayEmpty(pending)) return 0;
         const held = yield* quarantinedOf(fingerprint);
         yield* writeJson(quarantineKey(fingerprint), appendDistinct(held, pending));
         const index = yield* quarantineIndexOf;
@@ -1668,7 +1668,7 @@ export const makeKeyValue = (
     ): Effect.Effect<number, StoreError> =>
       Effect.gen(function* () {
         const entries = yield* quarantinedOf(fingerprint);
-        if (entries.length === 0) return 0;
+        if (Arr.isReadonlyArrayEmpty(entries)) return 0;
         const index = yield* journalIndex;
         const restored: Array<JournalIndexEntry> = [];
         for (const entry of entries) {
@@ -1811,7 +1811,7 @@ export const makeKeyValue = (
           .pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
         (present ? kept : orphaned).push(entry);
       }
-      if (orphaned.length === 0) return;
+      if (Arr.isReadonlyArrayEmpty(orphaned)) return;
       yield* raiseCounters(orphaned);
       yield* writeJson("journalIndex", kept);
     });
@@ -1849,7 +1849,7 @@ export const makeKeyValue = (
     // by reads and pushed again.
     const trimParkedCopies: Effect.Effect<void, StoreError> = Effect.gen(function* () {
       const parked = yield* unpulledIndexOf;
-      if (parked.length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(parked)) {
         const keys = new Set(parked.map(entryKey));
         yield* trimJournal((entry) => keys.has(entryKey(entry)));
       }
@@ -2011,7 +2011,7 @@ export const makeKeyValue = (
     const stagedRaiseCounters = (b: Stage, ids: ReadonlyArray<JournalIndexEntry>) =>
       Effect.gen(function* () {
         const highest = highestIds(ids);
-        if (Object.keys(highest).length === 0) return;
+        if (R.isEmptyReadonlyRecord(highest)) return;
         const counters = (yield* b.read("counters", CountersFromJson)) ?? {};
         const raised = raisedCounters(counters, highest);
         if (raised !== undefined) b.putJson("counters", raised);
@@ -2023,7 +2023,7 @@ export const makeKeyValue = (
         const index = yield* b.read("journalIndex", JournalIndexFromJson);
         if (index === undefined) return;
         const dropped = index.filter(drop);
-        if (dropped.length === 0) return;
+        if (Arr.isReadonlyArrayEmpty(dropped)) return;
         yield* stagedRaiseCounters(b, dropped);
         for (const entry of dropped) b.drop(journalBodyKey(entry.clientId, entry.mutationId));
         b.putJson(
@@ -2038,7 +2038,7 @@ export const makeKeyValue = (
         const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
         const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
         for (const entry of released) b.drop(unpulledBodyKey(entry.clientId, entry.mutationId));
-        if (released.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(released)) {
           b.putJson(
             UNPULLED_INDEX_KEY,
             index.filter((entry) => !coveredBy(lastMutationIds, entry))
@@ -2049,7 +2049,7 @@ export const makeKeyValue = (
     // `parkUnpulledInner`, staged.
     const stagedPark = (b: Stage, mutations: ReadonlyArray<Mutation>) =>
       Effect.gen(function* () {
-        if (mutations.length === 0) return;
+        if (Arr.isReadonlyArrayEmpty(mutations)) return;
         for (const m of mutations) b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m);
         const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
         const next = appendMissing(
@@ -2102,7 +2102,7 @@ export const makeKeyValue = (
     ): Effect.Effect<void, StoreError> =>
       Effect.suspend(() => {
         const ops = b.ops();
-        return ops.length === 0 ? Effect.void : atomicSeam.apply(ops);
+        return Arr.isReadonlyArrayEmpty(ops) ? Effect.void : atomicSeam.apply(ops);
       });
 
     // Each member first finishes an outstanding release record, as a row write does (#387). A record

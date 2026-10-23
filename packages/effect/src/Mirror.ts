@@ -21,6 +21,7 @@ import * as Related from "./Related.js";
 import * as RowChange from "./RowChange.js";
 import * as Subset from "./Subset.js";
 import * as Telemetry from "./Telemetry.js";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -600,7 +601,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           const initialRows = yield* read;
           const previousRef = yield* Ref.make(initialRows);
           const initial: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>> =
-            options?.includeInitial === true && initialRows.length > 0
+            options?.includeInitial === true && Arr.isReadonlyArrayNonEmpty(initialRows)
               ? [RowChange.enters(initialRows)]
               : [];
           const live = Stream.fromSubscription(subscription).pipe(
@@ -614,7 +615,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                 return option.value.gapped ? RowChange.reset(next) : RowChange.diff(previous, next);
               })
             ),
-            Stream.filter((batch) => batch.length > 0)
+            Stream.filter((batch) => Arr.isReadonlyArrayNonEmpty(batch))
           );
           return Stream.concat(Stream.fromIterable(initial), live);
         })

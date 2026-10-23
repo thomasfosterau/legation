@@ -123,7 +123,7 @@ const flatten = (
 const junctionKey = (tag: Junction, members: ReadonlyArray<Predicate.Predicate>): string => {
   const keys = sortedUnique(flatten(tag, members).map(structuralKey));
   if (keys.length === 1) return keys[0]!;
-  if (keys.length === 0 && tag === "And") return "True";
+  if (Arr.isReadonlyArrayEmpty(keys) && tag === "And") return "True";
   return `${tag}(${keys.join(",")})`;
 };
 
@@ -479,7 +479,8 @@ export const requestedOf = <E>(
   rowsOf: RowsOf<E>
 ): Effect.Effect<Requested, E> => {
   const registration = ofPlan(plan);
-  if (registration.edges.length === 0) return Effect.succeed({ ...registration, windows: [] });
+  if (Arr.isReadonlyArrayEmpty(registration.edges))
+    return Effect.succeed({ ...registration, windows: [] });
   return rowsOf(plan.root).pipe(
     Effect.map((rows) => ({
       ...registration,

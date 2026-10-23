@@ -19,6 +19,7 @@ import {
 } from "@thomasfosterau/legation-effect";
 import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation-effect/internal";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -382,9 +383,8 @@ describe("ElectedHost (#119)", () => {
         // silently dropped: it was durably journaled before tab A died, and
         // tab B's sync loop — same client id, same store — pushes it to
         // the real backend once it takes over.
-        yield* eventually(
-          store.pendingMutations.pipe(Effect.orDie),
-          (pending) => pending.length === 0
+        yield* eventually(store.pendingMutations.pipe(Effect.orDie), (pending) =>
+          Arr.isReadonlyArrayEmpty(pending)
         );
         const rows = yield* survivor.client.query({ collection: "todos" }).pipe(Effect.orDie);
         expect(rows.map((row) => row.id)).toContain("orphan");

@@ -10,6 +10,7 @@
 import { IndexedDb } from "@effect/platform-browser";
 import { StoreError } from "@thomasfosterau/legation-effect";
 import { AtomicKeyValue } from "@thomasfosterau/legation-effect/internal";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
@@ -366,7 +367,7 @@ export const atomicKeyValueLayer = (
         (opened) => Effect.sync(() => opened.db.close())
       ).pipe(Effect.orDie);
       return AtomicKeyValue.AtomicKeyValue.of({
-        apply: (ops) => (ops.length === 0 ? Effect.void : commitOps(connection, ops)),
+        apply: (ops) => (Arr.isReadonlyArrayEmpty(ops) ? Effect.void : commitOps(connection, ops)),
         readAll: readEntries(connection),
       });
     })

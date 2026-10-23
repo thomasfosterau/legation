@@ -48,6 +48,7 @@
  * decode.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
@@ -164,7 +165,7 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
       })),
       ...(state.cookie !== undefined ? { cookie: state.cookie } : {}),
       journal: state.journal,
-      ...(state.unpulled.length > 0 ? { unpulled: state.unpulled } : {}),
+      ...(Arr.isReadonlyArrayNonEmpty(state.unpulled) ? { unpulled: state.unpulled } : {}),
     };
     return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
   });
@@ -247,10 +248,10 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
 export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> =>
   Effect.gen(function* () {
     if ((yield* store.getCookie) !== undefined) return false;
-    if ((yield* store.pendingMutations).length > 0) return false;
-    if ((yield* store.unpulled).length > 0) return false;
+    if (Arr.isReadonlyArrayNonEmpty(yield* store.pendingMutations)) return false;
+    if (Arr.isReadonlyArrayNonEmpty(yield* store.unpulled)) return false;
     for (const collection of yield* store.listCollections) {
-      if ((yield* store.listRows(collection)).length > 0) return false;
+      if (Arr.isReadonlyArrayNonEmpty(yield* store.listRows(collection))) return false;
     }
     return true;
   });

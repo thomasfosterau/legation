@@ -12,6 +12,7 @@
  * {@link compute} / {@link computeGrouped}.
  */
 
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -90,13 +91,17 @@ const foldNumeric = (agg: Exclude<Aggregate, { _tag: "Count" }>, values: Readonl
     case "Sum":
       return values.reduce((total, value) => total + value, 0);
     case "Avg":
-      return values.length === 0
+      return Arr.isReadonlyArrayEmpty(values)
         ? undefined
         : values.reduce((total, value) => total + value, 0) / values.length;
     case "Min":
-      return values.length === 0 ? undefined : values.reduce((a, b) => (a < b ? a : b));
+      return Arr.isReadonlyArrayEmpty(values)
+        ? undefined
+        : values.reduce((a, b) => (a < b ? a : b));
     case "Max":
-      return values.length === 0 ? undefined : values.reduce((a, b) => (a > b ? a : b));
+      return Arr.isReadonlyArrayEmpty(values)
+        ? undefined
+        : values.reduce((a, b) => (a > b ? a : b));
   }
 };
 
@@ -276,7 +281,7 @@ const removeFromBucket = (
     case "MinMax": {
       if (n !== bucket.current) return; // not the extremum: O(1), no refold needed
       const rest = remainingValues();
-      bucket.current = rest.length === 0 ? undefined : rest.reduce(bucket.pick);
+      bucket.current = Arr.isReadonlyArrayEmpty(rest) ? undefined : rest.reduce(bucket.pick);
       return;
     }
   }

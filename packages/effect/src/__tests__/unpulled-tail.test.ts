@@ -6,6 +6,7 @@
  * windows are exercised by failing the store at each step and reopening it.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -1847,7 +1848,9 @@ describe("a push that takes the tail to half the bound pulls ahead of it (#337)"
             // A crossing starts a pull that releases the whole tail. Wait for it, so the next push
             // sees the pull's effect; without the trigger the wait gives up and the tail reaches the bound.
             if (depth >= pullAheadAt) {
-              yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0)));
+              yield* settles(
+                store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))
+              );
             }
           }
 
@@ -1892,7 +1895,9 @@ describe("a push that takes the tail to half the bound pulls ahead of it (#337)"
 
           yield* Deferred.succeed(release, undefined);
           expect(
-            yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0))),
+            yield* settles(
+              store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))
+            ),
             "the held pull to release the tail"
           ).toBe(true);
           expect(yield* Ref.get(probe.pulls), "pulls after the held one ends").toBe(1);
@@ -1938,12 +1943,12 @@ describe("a push that takes the tail to half the bound pulls ahead of it (#337)"
         // The connection returns. A push that starts a pull after the failed one has ended releases the
         // tail; a push that lands while it is still ending starts none, so keep pushing until one does.
         yield* Ref.set(probe.failing, false);
-        for (let i = 0; i < 16 && (yield* store.unpulled).length > 0; i++) {
+        for (let i = 0; i < 16 && Arr.isReadonlyArrayNonEmpty(yield* store.unpulled); i++) {
           yield* pushOne;
           yield* Effect.yieldNow;
         }
         expect(
-          yield* settles(store.unpulled.pipe(Effect.map((tail) => tail.length === 0))),
+          yield* settles(store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))),
           "a later pull to release the tail"
         ).toBe(true);
 

@@ -72,6 +72,7 @@
  * handler needs from the host.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as HttpApi from "effect/http-api/HttpApi";
@@ -214,7 +215,7 @@ interface Route {
 const routeOf = (type: string, template: string, single: boolean): Route => {
   const segments = Convention.segmentsOf(template);
   const prefix = segments.slice(0, segments.length - (single ? 2 : 1));
-  return { type, segments, prefix: prefix.length === 0 ? "" : `/${prefix.join("/")}` };
+  return { type, segments, prefix: Arr.isReadonlyArrayEmpty(prefix) ? "" : `/${prefix.join("/")}` };
 };
 
 /** The read routes of the api whose type the graph declares: a `list` and a `getOne` per such resource. */

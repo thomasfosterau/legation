@@ -36,7 +36,9 @@
  * `@thomasfosterau/legation-jsonapi` derives linkage.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation-effect";
 import { type Related, Subset } from "@thomasfosterau/legation-effect/internal";
@@ -133,7 +135,7 @@ export const withLinkage = (plan: Plan, read: Query.Read): Query.Read => {
   const include: Record<string, true | Query.IncludeOptions> = {};
   for (const name of plan.root) include[name] = true;
   Object.assign(include, read.include);
-  return Object.keys(include).length === 0 ? read : { ...read, include };
+  return R.isEmptyReadonlyRecord(include) ? read : { ...read, include };
 };
 
 /**
@@ -225,7 +227,7 @@ const linkageQueries = (
   for (const name of Object.keys(read.include ?? {})) {
     const edges = plan.included.get(name) ?? [];
     const parents = includedIds(rows, name);
-    if (edges.length === 0 || parents.size === 0) continue;
+    if (Arr.isReadonlyArrayEmpty(edges) || parents.size === 0) continue;
     const type = node.edges[name]!.target;
     for (const edge of edges) addLinkageQuery(nodes, queries, type, edge, parents);
   }
@@ -273,17 +275,16 @@ export const resolve = <E>(
   Effect.gen(function* () {
     const rows = yield* Query.runVia(fetchRows, nodes, withLinkage(plan, read));
     const queries = linkageQueries(nodes, plan, node, read, rows);
-    const fetched =
-      queries.length === 0
-        ? []
-        : yield* fetchRows(
-            queries.map((query) =>
-              Subset.make({
-                collection: query.collection,
-                where: Predicate.isIn(query.field, [...query.parents]),
-                orderBy: query.order,
-              })
-            )
-          );
+    const fetched = Arr.isReadonlyArrayEmpty(queries)
+      ? []
+      : yield* fetchRows(
+          queries.map((query) =>
+            Subset.make({
+              collection: query.collection,
+              where: Predicate.isIn(query.field, [...query.parents]),
+              orderBy: query.order,
+            })
+          )
+        );
     return { rows, linkage: assignLinkage(queries, fetched) };
   });

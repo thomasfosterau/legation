@@ -278,7 +278,10 @@ describe("Related.query / observe", () => {
           );
           // The first emission is recorded before the write, so it holds the
           // pre-write rows.
-          yield* emitted((emissions) => emissions.length > 0, "the join never emitted");
+          yield* emitted(
+            (emissions) => Arr.isReadonlyArrayNonEmpty(emissions),
+            "the join never emitted"
+          );
 
           yield* engine.mutate("comment/set", { id: "c1", issueId: "i1", body: "edited" });
           yield* engine.push;
@@ -340,7 +343,7 @@ describe("Related.query / observe", () => {
                     ...acc,
                     names,
                   ]);
-                  if (priors.length === 0) {
+                  if (Arr.isReadonlyArrayEmpty(priors)) {
                     yield* engine.mutate("person/set", { id: "p1", name: "Grace" });
                   }
                 })

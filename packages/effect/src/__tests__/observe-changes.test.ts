@@ -41,6 +41,7 @@
  * surfaced.
  */
 import { describe, expect, it } from "vite-plus/test";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -267,7 +268,7 @@ describe("ClientEngine.observeChanges", () => {
         yield* reader.pull; // rows already present before anyone observes
 
         const batches = yield* collect(reader.observeChanges(todos, { includeInitial: true }));
-        yield* eventually(Ref.get(batches), (seen) => seen.length >= 1);
+        yield* eventually(Ref.get(batches), (seen) => Arr.isReadonlyArrayNonEmpty(seen));
 
         const seen = yield* Ref.get(batches);
         expect(seen).toHaveLength(1); // one batch: the initial enters, no gap/dup
@@ -478,21 +479,21 @@ describe("Mirror.observeChanges", () => {
 
         yield* mirror.mutate("todo/set", { id: "1", title: "first" });
         yield* eventually(
-          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => Arr.isReadonlyArrayNonEmpty(x)))),
           (seen) => seen.length === 1
         );
         yield* mirror.mutate("todo/set", { id: "1", title: "second" });
         yield* eventually(
-          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => Arr.isReadonlyArrayNonEmpty(x)))),
           (seen) => seen.length === 2
         );
         yield* mirror.mutate("todo/remove", { id: "1" });
         yield* eventually(
-          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => x.length > 0))),
+          Ref.get(batches).pipe(Effect.map((b) => b.filter((x) => Arr.isReadonlyArrayNonEmpty(x)))),
           (seen) => seen.length === 3
         );
 
-        const seen = (yield* Ref.get(batches)).filter((b) => b.length > 0);
+        const seen = (yield* Ref.get(batches)).filter((b) => Arr.isReadonlyArrayNonEmpty(b));
         const tags = seen.map((batch) => batch.map((c) => c._tag));
         expect(tags).toEqual([["enter"], ["update"], ["exit"]]);
       }).pipe(Effect.scoped)
@@ -513,7 +514,7 @@ describe("Mirror.observeChanges", () => {
         yield* eventually(mirror.query(todos), (rows) => rows.length === 1);
 
         const batches = yield* collect(mirror.observeChanges(todos, { includeInitial: true }));
-        yield* eventually(Ref.get(batches), (seen) => seen.length >= 1);
+        yield* eventually(Ref.get(batches), (seen) => Arr.isReadonlyArrayNonEmpty(seen));
 
         const seen = yield* Ref.get(batches);
         expect(seen[0]).toEqual([

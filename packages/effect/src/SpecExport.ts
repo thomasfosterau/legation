@@ -27,10 +27,12 @@
  * by a thin REST adapter.
  */
 
+import * as Arr from "effect/Array";
 import * as JsonSchema from "effect/JsonSchema";
 import * as Schema from "effect/Schema";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
+import * as Str from "effect/String";
 import type * as Collection from "./Collection.js";
 import type * as Mutator from "./Mutator.js";
 import {
@@ -108,7 +110,7 @@ export interface SyncSpec {
 /** Coerce an arbitrary name into a `$ref`-safe component identifier fragment. */
 const sanitize = (name: string): string => {
   const cleaned = name.replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
-  if (cleaned.length === 0) return "x";
+  if (Str.isEmpty(cleaned)) return "x";
   return /^[0-9]/.test(cleaned) ? `n${cleaned}` : cleaned;
 };
 
@@ -152,70 +154,67 @@ const specialize = (api: SyncApi) => {
   const queryNames = queries.map((q) => ({ def: q, schema: name("QueryArgs_", q.name) }));
 
   // Mutation: one variant per mutator, discriminated by `mutator` name.
-  const mutation =
-    mutatorNames.length === 0
-      ? id(MutationSchema, "Mutation")
-      : id(
-          Schema.Union(
-            mutatorNames.map(({ def, schema }) =>
-              id(
-                Schema.Struct({
-                  clientId: Schema.String,
-                  mutationId: Schema.Number,
-                  mutator: Schema.Literal(def.name),
-                  args: id(def.args, schema),
-                  createdAt: Schema.Number,
-                }),
-                `Mutation_${sanitize(def.name)}`
-              )
+  const mutation = Arr.isReadonlyArrayEmpty(mutatorNames)
+    ? id(MutationSchema, "Mutation")
+    : id(
+        Schema.Union(
+          mutatorNames.map(({ def, schema }) =>
+            id(
+              Schema.Struct({
+                clientId: Schema.String,
+                mutationId: Schema.Number,
+                mutator: Schema.Literal(def.name),
+                args: id(def.args, schema),
+                createdAt: Schema.Number,
+              }),
+              `Mutation_${sanitize(def.name)}`
             )
-          ),
-          "Mutation"
-        );
+          )
+        ),
+        "Mutation"
+      );
 
   // PatchOp: a `Put` variant per collection (its row schema), plus Del/Clear.
-  const patchOp =
-    collectionNames.length === 0
-      ? id(PatchOpSchema, "PatchOp")
-      : id(
-          Schema.Union([
-            ...collectionNames.map(({ def, schema }) =>
-              id(
-                Schema.Struct({
-                  _tag: Schema.tag("Put"),
-                  collection: Schema.Literal(def.name),
-                  id: Schema.String,
-                  version: Schema.Union([Schema.String, Schema.Number]),
-                  value: id(def.schema, schema),
-                }),
-                `Put_${sanitize(def.name)}`
-              )
-            ),
-            Schema.Struct({
-              _tag: Schema.tag("Del"),
-              collection: Schema.String,
-              id: Schema.String,
-            }),
-            Schema.Struct({ _tag: Schema.tag("Clear") }),
-          ]),
-          "PatchOp"
-        );
-
-  // NamedSubscription: one variant per query (its args schema).
-  const namedSubscription =
-    queryNames.length === 0
-      ? id(NamedSubscriptionSchema, "NamedSubscription")
-      : id(
-          Schema.Union(
-            queryNames.map(({ def, schema }) =>
-              id(
-                Schema.Struct({ name: Schema.Literal(def.name), args: id(def.args, schema) }),
-                `NamedSubscription_${sanitize(def.name)}`
-              )
+  const patchOp = Arr.isReadonlyArrayEmpty(collectionNames)
+    ? id(PatchOpSchema, "PatchOp")
+    : id(
+        Schema.Union([
+          ...collectionNames.map(({ def, schema }) =>
+            id(
+              Schema.Struct({
+                _tag: Schema.tag("Put"),
+                collection: Schema.Literal(def.name),
+                id: Schema.String,
+                version: Schema.Union([Schema.String, Schema.Number]),
+                value: id(def.schema, schema),
+              }),
+              `Put_${sanitize(def.name)}`
             )
           ),
-          "NamedSubscription"
-        );
+          Schema.Struct({
+            _tag: Schema.tag("Del"),
+            collection: Schema.String,
+            id: Schema.String,
+          }),
+          Schema.Struct({ _tag: Schema.tag("Clear") }),
+        ]),
+        "PatchOp"
+      );
+
+  // NamedSubscription: one variant per query (its args schema).
+  const namedSubscription = Arr.isReadonlyArrayEmpty(queryNames)
+    ? id(NamedSubscriptionSchema, "NamedSubscription")
+    : id(
+        Schema.Union(
+          queryNames.map(({ def, schema }) =>
+            id(
+              Schema.Struct({ name: Schema.Literal(def.name), args: id(def.args, schema) }),
+              `NamedSubscription_${sanitize(def.name)}`
+            )
+          )
+        ),
+        "NamedSubscription"
+      );
 
   const pushRequest = id(
     Schema.Struct({ clientGroupId: Schema.String, mutations: Schema.Array(mutation) }),

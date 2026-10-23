@@ -106,6 +106,7 @@
  * naturally idempotent) and retries are safe.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -1003,7 +1004,7 @@ export const make = (
       context: Backend.SyncContext,
       mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
     ) =>
-      mutations.length === 0
+      Arr.isReadonlyArrayEmpty(mutations)
         ? Effect.void
         : updateGroup(context.clientGroupId, (group) => {
             const acknowledged = new Map(group.acknowledged);
@@ -1017,7 +1018,7 @@ export const make = (
       context: Backend.SyncContext,
       rejected: ReadonlyArray<Backend.RejectedMutation>
     ) =>
-      rejected.length === 0
+      Arr.isReadonlyArrayEmpty(rejected)
         ? Effect.void
         : updateGroup(context.clientGroupId, (group) => {
             const rejections = new Map(group.rejections);
@@ -1210,7 +1211,7 @@ export const make = (
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(rejected.length > 0 ? { rejected } : {}),
+          ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
         };
       });
 
@@ -1243,7 +1244,8 @@ export const make = (
         }
         if (isPermanentStatus(status)) {
           const rejections = rejectionsOf(body, operations.length, message);
-          if (rejections.length > 0) return { _tag: "rejected", rejections } as const;
+          if (Arr.isReadonlyArrayNonEmpty(rejections))
+            return { _tag: "rejected", rejections } as const;
         }
         // 5xx, 408/429, transport, or a 4xx naming no operation: transient.
         return yield* new BackendError({ message });
@@ -1278,7 +1280,7 @@ export const make = (
         const rejectedAt = new Map<number, string>();
         let pending = batch.map((entry, index) => ({ ...entry, index }));
         let results: ReadonlyArray<unknown> = [];
-        while (pending.length > 0) {
+        while (Arr.isReadonlyArrayNonEmpty(pending)) {
           const outcome = yield* sendAtomic(
             atomic.path,
             pending.map((entry) => operationOf(entry.write))
@@ -1324,7 +1326,7 @@ export const make = (
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(reported.length > 0 ? { rejected: reported } : {}),
+          ...(Arr.isReadonlyArrayNonEmpty(reported) ? { rejected: reported } : {}),
         };
       });
 

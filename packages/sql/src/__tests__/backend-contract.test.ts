@@ -9,6 +9,7 @@
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -485,7 +486,7 @@ const peerBlockedOnLock = (sql: SqlClient) =>
         `AND strpos(query, '__contract') > 0 LIMIT 1`
     )
     .unprepared.pipe(
-      Effect.map((rows) => rows.length > 0),
+      Effect.map((rows) => Arr.isReadonlyArrayNonEmpty(rows)),
       Effect.orDie
     );
 

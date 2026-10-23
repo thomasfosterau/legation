@@ -10,6 +10,7 @@
  * the api advertises the extension.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -119,7 +120,8 @@ const makeServer = (
       const status = readStatuses.shift();
       if (status !== undefined)
         return respond(status, { errors: [{ title: "Refused" }] }, jsonHeaders);
-      if (readDocuments.length > 0) return respond(200, readDocuments.shift(), jsonHeaders);
+      if (Arr.isReadonlyArrayNonEmpty(readDocuments))
+        return respond(200, readDocuments.shift(), jsonHeaders);
       const row = rows[id];
       return row === undefined ? empty(404) : rowResponse(id, row);
     }

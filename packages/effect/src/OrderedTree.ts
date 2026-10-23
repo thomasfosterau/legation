@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 /**
  * OrderedTree
  *
@@ -220,7 +221,7 @@ function* inorderFrom<T>(tree: Tree<T>, from: number): IterableIterator<T> {
       cursor = cursor.right;
     }
   }
-  while (stack.length > 0) {
+  while (Arr.isReadonlyArrayNonEmpty(stack)) {
     const top = stack[stack.length - 1]!;
     yield top.value;
     stack.pop();

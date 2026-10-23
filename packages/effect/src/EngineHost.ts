@@ -66,6 +66,7 @@ import * as Query from "./Query.js";
 import * as Related from "./Related.js";
 import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -504,7 +505,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           Effect.logWarning(`EngineHost: SubscribeUrl "${url}" rejected: ${error.message}`)
         ),
         Effect.flatMap(({ root, edges, url: canonical }) =>
-          edges.length === 0
+          Arr.isReadonlyArrayEmpty(edges)
             ? handleSubscribe(mirrorId, root, canonical)
             : handleSubscribe(mirrorId, root).pipe(
                 Effect.andThen(
@@ -519,7 +520,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         Effect.flatMap(({ root, edges }) =>
           release(mirrorId, Subset.hash(root)).pipe(
             Effect.andThen(
-              edges.length === 0
+              Arr.isReadonlyArrayEmpty(edges)
                 ? Effect.void
                 : release(mirrorId, MirrorProtocol.relatedKey(root.collection, root, edges))
             )

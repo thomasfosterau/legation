@@ -19,6 +19,7 @@
  * predicate → SQL WHERE clause) live with the backends that need them.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -347,7 +348,7 @@ const evaluateMembership = (
   onMatch: boolean,
   row: unknown
 ): Option.Option<boolean> => {
-  if (values.length === 0) return definite(!onMatch);
+  if (Arr.isReadonlyArrayEmpty(values)) return definite(!onMatch);
   const left = fieldValue(row, field);
   return isNullish(left) ? UNKNOWN : membership(left, values, onMatch);
 };

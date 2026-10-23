@@ -50,6 +50,7 @@
  * beside hand-written handlers on the same api.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
@@ -327,7 +328,7 @@ export const make = (options: Options): RestHandlers => {
           );
           const { read, fields } = yield* JsonApiQuery.parseParams(nodes, node.type, single);
           const resolved = yield* run(context, node, plan, read);
-          if (resolved.rows.length === 0) return yield* Effect.fail(notFound());
+          if (Arr.isReadonlyArrayEmpty(resolved.rows)) return yield* Effect.fail(notFound());
           return DocumentWriter.data(input(read, resolved, fields)) as DataDocumentOf<R>;
         })
       );

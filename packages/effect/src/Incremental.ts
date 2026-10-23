@@ -34,6 +34,7 @@
  * by its canonical value — always a plain string, always stable.
  */
 
+import * as Arr from "effect/Array";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
 import * as Predicate from "./Predicate.js";
@@ -525,7 +526,7 @@ export const joinFromScratch = (
   for (const leftRow of left) {
     const key = joinKey(options.leftKey(leftRow.value));
     const matches = key === undefined ? undefined : rightByKey.get(key);
-    if (matches !== undefined && matches.length > 0) {
+    if (matches !== undefined && Arr.isReadonlyArrayNonEmpty(matches)) {
       for (const rightRow of matches) {
         const id = `${leftRow.id}${NUL}${rightRow.id}`;
         result.set(id, { id, value: combine(leftRow.value, rightRow.value) });
