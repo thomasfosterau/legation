@@ -46,12 +46,17 @@ export const leases = {
   /** The unexpired room ids; expired entries are deleted as a side effect. */
   live: async (storage: DurableObjectStorage, now: number): Promise<ReadonlyArray<string>> => {
     const all = await storage.list<number>({ prefix: LEASE_PREFIX });
-    const alive: Array<string> = [];
-    for (const [key, expiresAt] of all) {
-      if (expiresAt > now) alive.push(key.slice(LEASE_PREFIX.length));
-      else await storage.delete(key);
-    }
-    return alive;
+    const entries = [...all];
+    // Expired leases are deleted one at a time, in listing order.
+    await entries
+      .filter(([, expiresAt]) => expiresAt <= now)
+      .reduce<Promise<unknown>>(
+        (previous, [key]) => previous.then(() => storage.delete(key)),
+        Promise.resolve()
+      );
+    return entries
+      .filter(([, expiresAt]) => expiresAt > now)
+      .map(([key]) => key.slice(LEASE_PREFIX.length));
   },
 };
 

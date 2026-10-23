@@ -11,6 +11,7 @@
  * are supplied by the app inside its own transaction (Backend.ts).
  */
 
+import * as Arr from "effect/Array";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import type { RowId } from "./Collection.js";
@@ -62,12 +63,12 @@ export const registry = (
 ): MutatorRegistry => {
   const mutators = new Map<string, AnyMutator>();
   const handlers = new Map<string, LocalHandler<any>>();
-  for (const { mutator, local } of entries) {
+  Arr.forEach(entries, ({ mutator, local }) => {
     if (mutators.has(mutator.name)) {
       throw new DuplicateNameError({ kind: "mutator", name: mutator.name });
     }
     mutators.set(mutator.name, mutator);
     handlers.set(mutator.name, local);
-  }
+  });
   return { mutators, handlers };
 };

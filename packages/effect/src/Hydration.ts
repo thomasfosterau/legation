@@ -50,6 +50,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as ClientEngineModule from "./ClientEngine.js";
@@ -130,9 +131,16 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
 const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError> =>
   Effect.gen(function* () {
     const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
-    for (const collection of yield* store.listCollections) {
-      for (const row of yield* store.listRows(collection)) rows.push({ collection, row });
-    }
+    yield* Effect.forEach(
+      yield* store.listCollections,
+      (collection) =>
+        Effect.gen(function* () {
+          Arr.forEach(yield* store.listRows(collection), (row) => {
+            rows.push({ collection, row });
+          });
+        }),
+      { concurrency: 1, discard: true }
+    );
     return {
       rows,
       cookie: yield* store.getCookie,
@@ -212,9 +220,14 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       // An outstanding pull release goes first: its record would re-apply its patch over the
       // snapshot's rows on the next open, so it is finished before the snapshot is written (#387).
       yield* store.finishRelease;
-      for (const { collection, ...row } of decoded.rows) {
-        yield* store.putRow(collection, row);
-      }
+      yield* Effect.forEach(
+        decoded.rows,
+        ({ collection, ...row }) =>
+          Effect.gen(function* () {
+            yield* store.putRow(collection, row);
+          }),
+        { concurrency: 1, discard: true }
+      );
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
       // The tail's effects are already in the rows, and the next pull releases it (#336).
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
@@ -227,10 +240,15 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       const parked = new Set(
         (yield* store.unpulled).map((m) => `${m.clientId}\u0000${m.mutationId}`)
       );
-      for (const mutation of decoded.journal) {
-        if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) continue;
-        yield* store.appendMutation(mutation);
-      }
+      yield* Effect.forEach(
+        decoded.journal,
+        (mutation) =>
+          Effect.gen(function* () {
+            if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) return;
+            yield* store.appendMutation(mutation);
+          }),
+        { concurrency: 1, discard: true }
+      );
       // These entries came from another context: whether they were pushed there
       // is unknowable here, so paced compaction must not renumber them (#249).
       yield* freezePending(store);
@@ -250,10 +268,10 @@ export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> 
     if ((yield* store.getCookie) !== undefined) return false;
     if (Arr.isReadonlyArrayNonEmpty(yield* store.pendingMutations)) return false;
     if (Arr.isReadonlyArrayNonEmpty(yield* store.unpulled)) return false;
-    for (const collection of yield* store.listCollections) {
-      if (Arr.isReadonlyArrayNonEmpty(yield* store.listRows(collection))) return false;
-    }
-    return true;
+    const holding = yield* Effect.findFirst(yield* store.listCollections, (collection) =>
+      Effect.map(store.listRows(collection), Arr.isReadonlyArrayNonEmpty)
+    );
+    return Option.isNone(holding);
   });
 
 /**
@@ -355,9 +373,14 @@ const renderOver = (
         Effect.provideService(ClientStore, store),
         Effect.provideService(ClientTransport, transport)
       );
-      for (const read of options.reads) {
-        yield* engine.subscribe(Query.plan(options.nodes, read).root);
-      }
+      yield* Effect.forEach(
+        options.reads,
+        (read) =>
+          Effect.gen(function* () {
+            yield* engine.subscribe(Query.plan(options.nodes, read).root);
+          }),
+        { concurrency: 1, discard: true }
+      );
       yield* engine.pull;
       return yield* dehydrate(store);
     })

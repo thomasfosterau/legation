@@ -15,6 +15,7 @@
  *   relay (each Worker isolate holds a socket to the DO; the DO rebroadcasts).
  */
 
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -64,10 +65,11 @@ const PAYLOAD_FIELD = "p";
 
 /** Pull the payload value out of an entry's flattened field/value pairs. */
 const payloadOf = (fields: ReadonlyArray<string>): string | undefined => {
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    if (String(fields[i]) === PAYLOAD_FIELD) return String(fields[i + 1]);
-  }
-  return undefined;
+  const at = Arr.findFirstIndex(
+    fields,
+    (field, i) => i % 2 === 0 && i + 1 < fields.length && String(field) === PAYLOAD_FIELD
+  );
+  return Option.match(at, { onNone: () => undefined, onSome: (i) => String(fields[i + 1]) });
 };
 
 /**
@@ -234,13 +236,23 @@ export const makeRedisBroker = (
             redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor.id)
           ).pipe(Effect.tap(() => answered));
           if (reply === null) return;
-          for (const [, entries] of reply) {
-            for (const [id, fields] of entries) {
-              cursor.id = id;
-              const payload = payloadOf(fields);
-              if (payload !== undefined) yield* Queue.offer(queue, payload);
-            }
-          }
+          yield* Effect.forEach(
+            reply,
+            ([, entries]) =>
+              Effect.gen(function* () {
+                yield* Effect.forEach(
+                  entries,
+                  ([id, fields]) =>
+                    Effect.gen(function* () {
+                      cursor.id = id;
+                      const payload = payloadOf(fields);
+                      if (payload !== undefined) yield* Queue.offer(queue, payload);
+                    }),
+                  { concurrency: 1, discard: true }
+                );
+              }),
+            { concurrency: 1, discard: true }
+          );
         }).pipe(
           // A transient Redis error, a read with no reply (XReadTimeout), or an
           // unresolved start position must not kill the subscription: log it, back
@@ -322,8 +334,11 @@ export const makeBroadcastChannelBroker = (
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const listener = (event: { readonly data: unknown }) => {
-          if (!P.isString(event.data)) return;
-          for (const queue of queues) Queue.offerUnsafe(queue, event.data);
+          const data = event.data;
+          if (!P.isString(data)) return;
+          Arr.forEach(queues, (queue) => {
+            Queue.offerUnsafe(queue, data);
+          });
         };
         channel.addEventListener("message", listener);
         return listener;
@@ -333,7 +348,9 @@ export const makeBroadcastChannelBroker = (
     return {
       publish: (payload) =>
         Effect.sync(() => {
-          for (const queue of queues) Queue.offerUnsafe(queue, payload); // self
+          Arr.forEach(queues, (queue) => {
+            Queue.offerUnsafe(queue, payload);
+          }); // self
           channel.postMessage(payload); // other contexts
         }),
       subscribe: Effect.gen(function* () {

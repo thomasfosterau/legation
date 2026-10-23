@@ -653,20 +653,22 @@ const generatedCorpus = (
       )
     );
     const all = [...reference, ...corpusRows];
-    for (const [index, subset] of corpusSubsets(h, corpus).entries()) {
-      const { where } = subset;
-      yield* expectEvaluation(h, rule, all, subset, (expected, evaluated) =>
-        FilterCorpus.formatDisagreement({
-          seed: corpus.seed,
-          subject: `generated subset ${index}${subset.limit !== undefined ? ` (limit ${subset.limit})` : ""}`,
-          predicate: where,
-          orderBy: subset.orderBy,
-          rows: all,
-          results: { "Subset.apply": expected, "backend.evaluate": evaluated },
-          reproduce: "the contract corpus uses FilterCorpus.DEFAULT_SEED, not the environment",
-        })
-      );
-    }
+    yield* Effect.forEach(
+      corpusSubsets(h, corpus),
+      (subset, index) =>
+        expectEvaluation(h, rule, all, subset, (expected, evaluated) =>
+          FilterCorpus.formatDisagreement({
+            seed: corpus.seed,
+            subject: `generated subset ${index}${subset.limit !== undefined ? ` (limit ${subset.limit})` : ""}`,
+            predicate: subset.where,
+            orderBy: subset.orderBy,
+            rows: all,
+            results: { "Subset.apply": expected, "backend.evaluate": evaluated },
+            reproduce: "the contract corpus uses FilterCorpus.DEFAULT_SEED, not the environment",
+          })
+        ),
+      { concurrency: 1, discard: true }
+    );
   });
 
 /** 6. Evaluate matches the reference subset semantics (Subset.apply). */
@@ -852,13 +854,16 @@ const retryTransient = <A>(effect: Effect.Effect<A, BackendError>) =>
   );
 
 /** Runs the scheduler until `peerSettled` reads true, or `PEER_TURNS` turns have passed. */
-const settleByTurns = (peerSettled: Effect.Effect<boolean>) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < PEER_TURNS; turn++) {
-      if (yield* peerSettled) return;
-      yield* Effect.yieldNow;
-    }
-  });
+const settleByTurns = (peerSettled: Effect.Effect<boolean>): Effect.Effect<void> => {
+  // Each turn checks first, then yields, until settled or out of turns.
+  const turn = (left: number): Effect.Effect<void> =>
+    left <= 0
+      ? Effect.void
+      : Effect.flatMap(peerSettled, (settled) =>
+          settled ? Effect.void : Effect.andThen(Effect.yieldNow, turn(left - 1))
+        );
+  return turn(PEER_TURNS);
+};
 
 /**
  * 11. Serialisable across client groups (guarantee 1, #353). Group X reads a
@@ -945,18 +950,19 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       yield* Deferred.succeed(parked.release, undefined);
       const firstExit = yield* Effect.exit(Fiber.join(first));
       const peerExit = yield* Effect.exit(Fiber.join(second));
-      for (const [label, exit] of [
-        ["first", firstExit],
-        ["peer", peerExit],
-      ] as const) {
-        const failure = Exit.findErrorOption(exit);
-        if (Option.isSome(failure)) {
-          return yield* h.check(
-            rule,
-            false,
-            `The ${label} increment failed: ${failure.value.message}`
-          );
-        }
+      const failed = Arr.findFirst(
+        [
+          ["first", firstExit],
+          ["peer", peerExit],
+        ] as const,
+        ([label, exit]) => Option.map(Exit.findErrorOption(exit), (error) => ({ label, error }))
+      );
+      if (Option.isSome(failed)) {
+        return yield* h.check(
+          rule,
+          false,
+          `The ${failed.value.label} increment failed: ${failed.value.error.message}`
+        );
       }
 
       const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));

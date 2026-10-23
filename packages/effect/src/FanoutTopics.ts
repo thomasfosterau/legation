@@ -16,6 +16,7 @@
  * path); under-poking is impossible.
  */
 
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import type * as Node from "./Node.js";
 import type * as Predicate from "./Predicate.js";
@@ -42,13 +43,13 @@ export const derivableSets = (
   nodes: Node.NodeRegistry
 ): ReadonlyMap<string, ReadonlySet<string>> => {
   const map = new Map<string, ReadonlySet<string>>();
-  for (const [type, node] of nodes.nodes) {
+  Arr.forEach(nodes.nodes, ([type, node]) => {
     const fields = new Set<string>(node.hintKeys);
-    for (const edge of Object.values(node.edges)) {
+    Arr.forEach(Object.values(node.edges), (edge) => {
       if (edge.kind === "one") fields.add(edge.via);
-    }
+    });
     map.set(type, fields);
-  }
+  });
   return map;
 };
 
@@ -76,14 +77,13 @@ export const topicForSubset = (
   subset: Subset.Subset,
   derivable: ReadonlySet<string> | undefined
 ): Topic => {
-  if (derivable !== undefined) {
-    for (const conjunct of eqConjuncts(subset.where)) {
-      if (derivable.has(conjunct.field)) {
-        return fine(subset.collection, conjunct.field, conjunct.value);
-      }
-    }
-  }
-  return coarse(subset.collection);
+  const conjunct =
+    derivable === undefined
+      ? undefined
+      : eqConjuncts(subset.where).find((candidate) => derivable.has(candidate.field));
+  return conjunct === undefined
+    ? coarse(subset.collection)
+    : fine(subset.collection, conjunct.field, conjunct.value);
 };
 
 /**
@@ -99,12 +99,12 @@ export const topicsForWrite = (
 ): ReadonlySet<Topic> => {
   const topics = new Set<Topic>([coarse(collection)]);
   if (derivable === undefined) return topics;
-  for (const value of [values.oldValue, values.newValue]) {
-    if (!P.isObjectOrArray(value)) continue;
-    for (const field of derivable) {
+  Arr.forEach([values.oldValue, values.newValue], (value) => {
+    if (!P.isObjectOrArray(value)) return;
+    Arr.forEach(derivable, (field) => {
       const fieldValue = (value as Record<string, unknown>)[field];
       if (isLiteral(fieldValue)) topics.add(fine(collection, field, fieldValue));
-    }
-  }
+    });
+  });
   return topics;
 };

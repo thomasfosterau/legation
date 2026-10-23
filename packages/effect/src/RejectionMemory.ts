@@ -6,6 +6,8 @@
  * loop over its ledger rows.
  */
 
+import * as Arr from "effect/Array";
+
 /**
  * The lowest mutation id a push carries, per client: the push's floors (#355).
  * A client resends only ids it has not had acknowledged, so a push whose lowest
@@ -15,9 +17,9 @@ export const floorsOf = (
   mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
 ): Map<string, number> => {
   const floors = new Map<string, number>();
-  for (const { clientId, mutationId } of mutations) {
+  Arr.forEach(mutations, ({ clientId, mutationId }) => {
     floors.set(clientId, Math.min(floors.get(clientId) ?? Infinity, mutationId));
-  }
+  });
   return floors;
 };
 
@@ -36,14 +38,14 @@ export const forgetBelow = (
   floors: ReadonlyMap<string, number>
 ): ReadonlyMap<string, ReadonlyMap<number, string>> => {
   let kept: Map<string, ReadonlyMap<number, string>> | undefined;
-  for (const [clientId, floor] of floors) {
+  Arr.forEach(floors, ([clientId, floor]) => {
     const ids = clients.get(clientId);
-    if (ids === undefined) continue;
+    if (ids === undefined) return;
     const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
-    if (remaining.size === ids.size) continue;
+    if (remaining.size === ids.size) return;
     kept ??= new Map(clients);
     if (remaining.size === 0) kept.delete(clientId);
     else kept.set(clientId, remaining);
-  }
+  });
   return kept ?? clients;
 };

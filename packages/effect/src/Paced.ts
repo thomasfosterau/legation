@@ -131,17 +131,17 @@ const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, St
       const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
       const all = trackersByEngine.get(engine);
       if (all === undefined) return;
-      for (const ref of all) {
+      Arr.forEach(all, (ref) => {
         const tracker = ref.deref();
         if (tracker === undefined) {
           all.delete(ref);
-          continue;
+          return;
         }
-        for (const [key, id] of tracker) {
+        Arr.forEach(tracker, ([key, id]) => {
           const moved = moves.get(id);
           if (moved !== undefined) tracker.set(key, moved);
-        }
-      }
+        });
+      });
     })
   );
 

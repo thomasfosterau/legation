@@ -475,13 +475,18 @@ export const fromView = (
       const entries = yield* Ref.getAndSet(ledger, new Map<string, Interest>());
       yield* Ref.set(roots, new Map<string, number>());
       const released = new Set<string>();
-      for (const [key, interest] of entries) {
-        yield* closeEdges(key);
-        const root = Subset.hash(interest.root);
-        if (released.has(root)) continue;
-        released.add(root);
-        yield* view.unsubscribe(interest.root).pipe(Effect.ignore);
-      }
+      yield* Effect.forEach(
+        entries,
+        ([key, interest]) =>
+          Effect.gen(function* () {
+            yield* closeEdges(key);
+            const root = Subset.hash(interest.root);
+            if (released.has(root)) return;
+            released.add(root);
+            yield* view.unsubscribe(interest.root).pipe(Effect.ignore);
+          }),
+        { concurrency: 1, discard: true }
+      );
     })
   );
 
@@ -764,11 +769,11 @@ const declaredIndexes = (
   nodes: Node.NodeRegistry
 ): Readonly<Record<string, ReadonlyArray<string>>> => {
   const indexes: Record<string, ReadonlyArray<string>> = {};
-  for (const [name, collection] of nodes.collections) {
+  Arr.forEach(nodes.collections, ([name, collection]) => {
     if (collection.indexes !== undefined && Arr.isReadonlyArrayNonEmpty(collection.indexes)) {
       indexes[name] = collection.indexes;
     }
-  }
+  });
   return indexes;
 };
 

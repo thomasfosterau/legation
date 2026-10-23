@@ -169,9 +169,14 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     const replay = (step: Step, direction: "undo" | "redo"): Effect.Effect<void, E> =>
       Effect.gen(function* () {
         const ordered = direction === "undo" ? [...step].reverse() : step;
-        for (const entry of ordered) {
-          yield* runIntent(direction === "undo" ? entry.undo : entry.execute);
-        }
+        yield* Effect.forEach(
+          ordered,
+          (entry) =>
+            Effect.gen(function* () {
+              yield* runIntent(direction === "undo" ? entry.undo : entry.execute);
+            }),
+          { concurrency: 1, discard: true }
+        );
       });
 
     // Pop `from`, replay it, then push it `onto` the opposite stack. Empty → no-op.

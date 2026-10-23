@@ -22,6 +22,7 @@
  * keeps every fold `O(log N)` regardless of how many mutations are pending.
  */
 
+import * as Arr from "effect/Array";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import type { Mutation } from "./Protocol.js";
@@ -99,8 +100,8 @@ export const adopt = (
 ): readonly [adopted: ReadonlyArray<Mutation>, map: MutationStateMap] => {
   let next = map;
   const adopted: Array<Mutation> = [];
-  for (const mutation of pending) {
-    if (HashMap.has(next, mutation.mutationId)) continue;
+  Arr.forEach(pending, (mutation) => {
+    if (HashMap.has(next, mutation.mutationId)) return;
     next = journaled(next, {
       mutationId: mutation.mutationId,
       mutator: mutation.mutator,
@@ -108,7 +109,7 @@ export const adopt = (
       journaledAt: mutation.createdAt,
     });
     adopted.push(mutation);
-  }
+  });
   return [adopted, next];
 };
 
@@ -149,7 +150,9 @@ const evictTerminal = (
   const excess = terminal.length - maxTerminal;
   if (excess <= 0) return map;
   let next = map;
-  for (const entry of terminal.slice(0, excess)) next = HashMap.remove(next, entry.mutationId);
+  Arr.forEach(terminal.slice(0, excess), (entry) => {
+    next = HashMap.remove(next, entry.mutationId);
+  });
   return next;
 };
 
@@ -236,9 +239,9 @@ export const droppedMany = (
   options?: RetentionOptions
 ): MutationStateMap => {
   let next = map;
-  for (const mutationId of mutationIds) {
+  Arr.forEach(mutationIds, (mutationId) => {
     next = transition(next, mutationId, "dropped", settledAt, undefined);
-  }
+  });
   return evictTerminal(next, options);
 };
 
@@ -261,17 +264,19 @@ export const compacted = (
   options?: RetentionOptions
 ): MutationStateMap => {
   let next = map;
-  for (const mutationId of compaction.dropped) {
+  Arr.forEach(compaction.dropped, (mutationId) => {
     next = transition(next, mutationId, "dropped", settledAt, undefined);
-  }
+  });
   const moved: Array<MutationState> = [];
-  for (const { from, to } of compaction.renumbered) {
+  Arr.forEach(compaction.renumbered, ({ from, to }) => {
     const current = HashMap.get(next, from);
-    if (Option.isNone(current)) continue;
+    if (Option.isNone(current)) return;
     moved.push({ ...current.value, mutationId: to });
     next = HashMap.remove(next, from);
-  }
-  for (const state of moved) next = HashMap.set(next, state.mutationId, state);
+  });
+  Arr.forEach(moved, (state) => {
+    next = HashMap.set(next, state.mutationId, state);
+  });
   return evictTerminal(next, options);
 };
 
@@ -290,8 +295,8 @@ export const acknowledgedMany = (
   options?: RetentionOptions
 ): MutationStateMap => {
   let next = map;
-  for (const mutationId of mutationIds) {
+  Arr.forEach(mutationIds, (mutationId) => {
     next = transition(next, mutationId, "acknowledged", settledAt, undefined);
-  }
+  });
   return evictTerminal(next, options);
 };

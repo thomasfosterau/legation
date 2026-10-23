@@ -28,6 +28,7 @@
  * through, so the two hosts (ADR-0021) emit identical batches from
  * identical page transitions (module the `position`/`move` gap above).
  */
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 
@@ -123,13 +124,13 @@ export const diff = <Row extends Identified>(
   const previousById = new Map(previous.map((row) => [row.id, row]));
   const nextIds = new Set<RowId>();
   const changes: Array<RowChange<Row>> = [];
-  for (const row of next) {
+  Arr.forEach(next, (row) => {
     nextIds.add(row.id);
     const change = changeFor(row, previousById.get(row.id));
     if (change !== undefined) changes.push(change);
-  }
-  for (const row of previous) {
+  });
+  Arr.forEach(previous, (row) => {
     if (!nextIds.has(row.id)) changes.push({ _tag: "exit", id: row.id, previous: row });
-  }
+  });
   return changes;
 };

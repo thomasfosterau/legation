@@ -98,10 +98,10 @@ const evaluateRows = (
     const fetched = yield* backend.getRows(context, subset.collection, ids);
     const byId = new Map(fetched.map((row) => [row.id, row] as const));
     const rows: Array<ReadRow> = [];
-    for (const id of ids) {
+    Arr.forEach(ids, (id) => {
       const row = byId.get(id);
       if (row !== undefined) rows.push({ collection: subset.collection, ...row });
-    }
+    });
     return rows;
   });
 
@@ -128,15 +128,17 @@ export const readSubsets = (
     });
     const onRead = deps.middleware?.onRead;
     const checked = onRead === undefined ? request : yield* onRead(context, request);
-    const authorized: Array<Subset> = [];
-    for (const subset of checked.subsets) {
-      authorized.push(yield* authorize(deps.authPolicy, context, subset, "server"));
-    }
-    const rows: Array<ReadRow> = [];
-    for (const subset of authorized) {
-      rows.push(...(yield* evaluateRows(deps.backend, context, subset)));
-    }
-    return rows;
+    const authorized = yield* Effect.forEach(
+      checked.subsets,
+      (subset) => authorize(deps.authPolicy, context, subset, "server"),
+      { concurrency: 1 }
+    );
+    const rows = yield* Effect.forEach(
+      authorized,
+      (subset) => evaluateRows(deps.backend, context, subset),
+      { concurrency: 1 }
+    );
+    return rows.flat();
   });
 
 /**
@@ -262,7 +264,9 @@ export interface ServerIntrospection {
 /** Rows a CVR holds, summed across its collections. */
 const cvrSize = (cvr: Cvr.Cvr): number => {
   let total = 0;
-  for (const rows of cvr.rows.values()) total += rows.size;
+  Arr.forEach(cvr.rows.values(), (rows) => {
+    total += rows.size;
+  });
   return total;
 };
 
@@ -353,15 +357,20 @@ export const makeWithIntrospectionWith = (
               const touched = new Set(hints.map((hint) => hint.collection));
               const groups = yield* Ref.get(activeSubsets);
               const cvrs = yield* Ref.get(activeCvrs);
-              for (const [clientGroupId, subsets] of groups) {
-                if (!collectionMatch(touched, subsets)) continue;
-                if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
-                  yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                  yield* Metric.update(Telemetry.pokesTotal, 1);
-                } else {
-                  yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
-                }
-              }
+              yield* Effect.forEach(
+                groups,
+                ([clientGroupId, subsets]) =>
+                  Effect.gen(function* () {
+                    if (!collectionMatch(touched, subsets)) return;
+                    if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
+                      yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                      yield* Metric.update(Telemetry.pokesTotal, 1);
+                    } else {
+                      yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
+                    }
+                  }),
+                { concurrency: 1, discard: true }
+              );
               yield* Metric.update(
                 Telemetry.fanoutLatencyMs,
                 (yield* Clock.currentTimeMillis) - start
@@ -441,16 +450,25 @@ export const makeWithIntrospectionWith = (
       request: PullRequest
     ): Effect.Effect<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> =>
       Effect.gen(function* () {
-        const authorized: Array<Subset> = [];
-        for (const subset of request.subscriptions) {
-          authorized.push(yield* authorize(authPolicy, context, subset, "server"));
-        }
-        for (const named of request.namedSubscriptions ?? []) {
-          authorized.push(
-            yield* authorize(authPolicy, context, yield* resolveNamed(context, named), "server")
-          );
-        }
-        return authorized;
+        const direct = yield* Effect.forEach(
+          request.subscriptions,
+          (subset) => authorize(authPolicy, context, subset, "server"),
+          { concurrency: 1 }
+        );
+        const named = yield* Effect.forEach(
+          request.namedSubscriptions ?? [],
+          (entry) =>
+            Effect.gen(function* () {
+              return yield* authorize(
+                authPolicy,
+                context,
+                yield* resolveNamed(context, entry),
+                "server"
+              );
+            }),
+          { concurrency: 1 }
+        );
+        return [...direct, ...named];
       });
 
     // Evaluate the desired next view: (collection → id → version) per subset.
@@ -461,13 +479,13 @@ export const makeWithIntrospectionWith = (
       Effect.gen(function* () {
         const evaluated = yield* evaluateAll(backend, context, subsets);
         const rows = new Map<string, Map<string, string | number>>();
-        for (const [index, subset] of subsets.entries()) {
+        Arr.forEach(subsets, (subset, index) => {
           const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-          for (const entry of evaluated[index] ?? []) {
+          Arr.forEach(evaluated[index] ?? [], (entry) => {
             collection.set(entry.id, entry.version);
-          }
+          });
           rows.set(subset.collection, collection);
-        }
+        });
         return { rows } satisfies Cvr.NextView;
       });
 
@@ -477,26 +495,31 @@ export const makeWithIntrospectionWith = (
       Effect.gen(function* () {
         const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
         const putsByCollection = new Map<string, Array<string>>();
-        for (const put of difference.puts) {
+        Arr.forEach(difference.puts, (put) => {
           putsByCollection.set(put.collection, [
             ...(putsByCollection.get(put.collection) ?? []),
             put.id,
           ]);
-        }
-        for (const [collection, ids] of putsByCollection) {
-          for (const row of yield* backend.getRows(context, collection, ids)) {
-            patch.push({
-              _tag: "Put",
-              collection,
-              id: row.id,
-              version: row.version,
-              value: row.value,
-            });
-          }
-        }
-        for (const del of difference.dels) {
+        });
+        yield* Effect.forEach(
+          putsByCollection,
+          ([collection, ids]) =>
+            Effect.gen(function* () {
+              Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
+                patch.push({
+                  _tag: "Put",
+                  collection,
+                  id: row.id,
+                  version: row.version,
+                  value: row.value,
+                });
+              });
+            }),
+          { concurrency: 1, discard: true }
+        );
+        Arr.forEach(difference.dels, (del) => {
           patch.push({ _tag: "Del", collection: del.collection, id: del.id });
-        }
+        });
         return patch;
       });
 
@@ -560,10 +583,19 @@ export const makeWithIntrospectionWith = (
       cookie: string | undefined
     ) =>
       Effect.gen(function* () {
-        let view = yield* readPullOnce(context, authorized, cookie);
-        for (let attempt = 1; !view.consistent && attempt < PULL_VIEW_ATTEMPTS; attempt++) {
-          view = yield* readPullOnce(context, authorized, cookie);
-        }
+        // Read again while a push commits mid-read, up to PULL_VIEW_ATTEMPTS reads.
+        const read = (
+          attempt: number
+        ): Effect.Effect<
+          Effect.Success<ReturnType<typeof readPullOnce>>,
+          Effect.Error<ReturnType<typeof readPullOnce>>
+        > =>
+          Effect.flatMap(readPullOnce(context, authorized, cookie), (view) =>
+            view.consistent || attempt >= PULL_VIEW_ATTEMPTS
+              ? Effect.succeed(view)
+              : read(attempt + 1)
+          );
+        const view = yield* read(1);
         if (!view.consistent) {
           yield* Effect.logWarning(
             "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch, so a client may briefly revert an acknowledged mutation",
@@ -655,10 +687,10 @@ export const makeWithIntrospectionWith = (
         const subs = yield* Ref.get(activeSubsets);
         const cvrs = yield* Ref.get(activeCvrs);
         const result: Array<ServerGroup> = [];
-        for (const [clientGroupId, subsets] of subs) {
+        Arr.forEach(subs, ([clientGroupId, subsets]) => {
           const cvr = cvrs.get(clientGroupId);
           result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
-        }
+        });
         return result;
       }),
       pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),

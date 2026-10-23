@@ -33,6 +33,7 @@
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -195,7 +196,7 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
   });
   const node = nodes.nodes.get(read.collection);
   const edges: Array<EdgePlan> = [];
-  for (const [name, options] of Object.entries(read.include ?? {})) {
+  Arr.forEach(Object.entries(read.include ?? {}), ([name, options]) => {
     if (node === undefined) {
       throw new QueryError({
         message: `Unknown collection for include: ${read.collection}`,
@@ -217,7 +218,7 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
       ...(window.first === undefined ? {} : { first: window.first }),
       order: edge.kind === "paginated" ? orderBy(edge.order) : [],
     });
-  }
+  });
   return { root, edges };
 };
 
@@ -238,14 +239,17 @@ export const tryPlan = (nodes: Node.NodeRegistry, read: Read): Effect.Effect<Pla
 const edgeOrder =
   (edgePlan: EdgePlan): Order.Order<unknown> =>
   (a, b) => {
-    for (const term of edgePlan.order) {
+    // The first term whose fields differ decides; equal on every term is a tie.
+    const decided = Arr.findFirst(edgePlan.order, (term) => {
       const left = (a as Record<string, unknown>)[term.field] as string | number;
       const right = (b as Record<string, unknown>)[term.field] as string | number;
-      if (left === right) continue;
+      if (left === right) return Option.none();
       const ascending = left < right;
-      return term.direction === "asc" ? (ascending ? -1 : 1) : ascending ? 1 : -1;
-    }
-    return 0;
+      return Option.some<-1 | 0 | 1>(
+        term.direction === "asc" ? (ascending ? -1 : 1) : ascending ? 1 : -1
+      );
+    });
+    return Option.getOrElse(decided, (): -1 | 0 | 1 => 0);
   };
 
 /** Order + window one edge's resolved rows (the client-side edge window). */
@@ -269,12 +273,12 @@ export const applyWindows = (
 /** Apply every collection-valued edge window to one resolved row. */
 const windowRow = (row: Related.RelatedRow, edges: ReadonlyArray<EdgePlan>): Related.RelatedRow => {
   let related = row.related;
-  for (const edgePlan of edges) {
+  Arr.forEach(edges, (edgePlan) => {
     const value = related[edgePlan.edge];
-    if (!Array.isArray(value)) continue;
-    if (edgePlan.first === undefined && Arr.isReadonlyArrayEmpty(edgePlan.order)) continue;
+    if (!Array.isArray(value)) return;
+    if (edgePlan.first === undefined && Arr.isReadonlyArrayEmpty(edgePlan.order)) return;
     related = { ...related, [edgePlan.edge]: applyEdgeWindow(value, edgePlan) };
-  }
+  });
   return related === row.related ? row : { ...row, related };
 };
 
@@ -408,11 +412,11 @@ export const registry = (
 ): QueryRegistry => {
   const queries = new Map<string, AnyQuery>();
   const locals = new Map<string, LocalQuery<any>>();
-  for (const { query, local } of entries) {
+  Arr.forEach(entries, ({ query, local }) => {
     if (queries.has(query.name)) throw new DuplicateNameError({ kind: "query", name: query.name });
     queries.set(query.name, query);
     locals.set(query.name, local);
-  }
+  });
   return { queries, locals };
 };
 

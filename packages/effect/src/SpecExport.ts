@@ -119,9 +119,10 @@ const uniqueNamer = () => {
   const seen = new Set<string>();
   return (prefix: string, name: string): string => {
     const base = `${prefix}${sanitize(name)}`;
-    let candidate = base;
-    let n = 2;
-    while (seen.has(candidate)) candidate = `${base}_${n++}`;
+    // `base`, then `base_2`, `base_3`, … until one is free.
+    const at = (n: number): string => (n < 2 ? base : `${base}_${n}`);
+    const free = (n: number): string => (seen.has(at(n)) ? free(n + 1) : at(n));
+    const candidate = free(1);
     seen.add(candidate);
     return candidate;
   };

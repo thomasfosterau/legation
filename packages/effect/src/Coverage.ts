@@ -45,6 +45,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import type * as Collection from "./Collection.js";
 import type { LocalRow } from "./ClientEngine.js";
@@ -183,10 +184,10 @@ export interface Conjunct {
  */
 export const canonicalConjuncts = (predicate: Predicate.Predicate): ReadonlyArray<Conjunct> => {
   const byKey = new Map<string, Predicate.Predicate>();
-  for (const member of flatten("And", [predicate])) {
+  Arr.forEach(flatten("And", [predicate]), (member) => {
     const key = structuralKey(member);
     if (key !== "True" && !byKey.has(key)) byKey.set(key, member);
-  }
+  });
   return Arr.sort(
     byKey.entries(),
     Order.mapInput(Order.String, ([key]: readonly [string, Predicate.Predicate]) => key)
@@ -335,10 +336,9 @@ export const covering = <S extends Registration>(
   requested: Registration
 ): S | undefined => {
   const request = canonical(requested);
-  for (const subscription of subscriptions) {
-    if (coversCanonical(subscription, request)) return subscription;
-  }
-  return undefined;
+  return Option.getOrUndefined(
+    Arr.findFirst(subscriptions, (subscription) => coversCanonical(subscription, request))
+  );
 };
 
 // ─── Pulled windows (#426) ───────────────────────────────────────────────────
@@ -418,13 +418,15 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
   const wanted = pinnedOf(window.where);
   if (wanted === undefined) return false;
   const have = new Set<string>();
-  for (const entry of held) {
-    if (!entry.pulled || isWindowed(entry.subset)) continue;
-    if (entry.subset.collection !== window.collection) continue;
+  Arr.forEach(held, (entry) => {
+    if (!entry.pulled || isWindowed(entry.subset)) return;
+    if (entry.subset.collection !== window.collection) return;
     const pinned = pinnedOf(entry.subset.where);
-    if (pinned === undefined || pinned.field !== wanted.field) continue;
-    for (const value of pinned.values) have.add(value);
-  }
+    if (pinned === undefined || pinned.field !== wanted.field) return;
+    Arr.forEach(pinned.values, (value) => {
+      have.add(value);
+    });
+  });
   return wanted.values.every((value) => have.has(value));
 };
 

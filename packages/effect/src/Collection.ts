@@ -14,6 +14,7 @@
  * deprecated; the graph is preferred when it applies.
  */
 
+import * as Arr from "effect/Array";
 import type * as Schema from "effect/Schema";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
@@ -147,9 +148,9 @@ export const make = <A, I>(options: {
 export const filterDeclarationOf = (collection: AnyCollection): FilterPolicy.FilterDeclaration => {
   const identity = collection.identity ?? "id";
   const keyFields = [identity];
-  for (const relationship of collection.relationships ?? []) {
+  Arr.forEach(collection.relationships ?? [], (relationship) => {
     if (relationship.kind === "one") keyFields.push(relationship.localField);
-  }
+  });
   return FilterPolicy.withKeyDefaults(
     keyFields,
     collection.filterable ?? {},
@@ -175,7 +176,7 @@ const validateRelationships = (
   map: ReadonlyMap<string, AnyCollection>
 ): void => {
   const seen = new Set<string>();
-  for (const relationship of collection.relationships ?? []) {
+  Arr.forEach(collection.relationships ?? [], (relationship) => {
     if (seen.has(relationship.name)) {
       throw new DuplicateNameError({ kind: "relationship", name: relationship.name });
     }
@@ -187,7 +188,7 @@ const validateRelationships = (
         collection: relationship.collection,
       });
     }
-  }
+  });
 };
 
 /**
@@ -197,13 +198,15 @@ const validateRelationships = (
  */
 export const registry = (collections: ReadonlyArray<AnyCollection>): CollectionRegistry => {
   const map = new Map<string, AnyCollection>();
-  for (const collection of collections) {
+  Arr.forEach(collections, (collection) => {
     if (map.has(collection.name)) {
       throw new DuplicateNameError({ kind: "collection", name: collection.name });
     }
     map.set(collection.name, collection);
-  }
-  for (const collection of collections) validateRelationships(collection, map);
+  });
+  Arr.forEach(collections, (collection) => {
+    validateRelationships(collection, map);
+  });
   return map;
 };
 
@@ -217,8 +220,8 @@ export const relationshipsOf = (
   collectionName: string
 ): ReadonlyMap<string, Relationship> => {
   const map = new Map<string, Relationship>();
-  for (const relationship of registry.get(collectionName)?.relationships ?? []) {
+  Arr.forEach(registry.get(collectionName)?.relationships ?? [], (relationship) => {
     map.set(relationship.name, relationship);
-  }
+  });
   return map;
 };

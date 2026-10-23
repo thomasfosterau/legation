@@ -78,15 +78,22 @@ export const make = (cache: CacheLike): HttpCache.ResponseCacheStore => ({
   invalidateTags: (tags) =>
     Effect.gen(function* () {
       const requests = yield* tryCache("Cache enumeration failed", () => cache.keys());
-      for (const request of requests) {
-        const response = yield* tryCache(`Cache match failed for ${request.url}`, () =>
-          cache.match(request)
-        );
-        const meta = response === undefined ? undefined : readMeta(response);
-        if (meta !== undefined && meta.tags.some((tag) => tags.includes(tag))) {
-          yield* tryCache(`Cache delete failed for ${request.url}`, () => cache.delete(request));
-        }
-      }
+      yield* Effect.forEach(
+        requests,
+        (request) =>
+          Effect.gen(function* () {
+            const response = yield* tryCache(`Cache match failed for ${request.url}`, () =>
+              cache.match(request)
+            );
+            const meta = response === undefined ? undefined : readMeta(response);
+            if (meta !== undefined && meta.tags.some((tag) => tags.includes(tag))) {
+              yield* tryCache(`Cache delete failed for ${request.url}`, () =>
+                cache.delete(request)
+              );
+            }
+          }),
+        { concurrency: 1, discard: true }
+      );
     }),
 });
 
