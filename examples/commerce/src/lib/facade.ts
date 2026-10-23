@@ -11,19 +11,28 @@
  * the façade answers are the URLs the server serves, under one grammar —
  * the parity the façade presumes.
  *
+ * **The writes** (ADR-0030, #510): with the engine's `mutateWithAck`, a
+ * `POST /jsonapi/reviews` carrying a client id is journaled as the
+ * graph-derived `reviews/create` while offline (or on
+ * `Prefer: respond-async`) and answered with a `202` write receipt; online
+ * it is forwarded and the façade pulls after the server's `2xx`. Only the
+ * types and operations in `facadeWrites` are intercepted, because only those
+ * have a server handler under the derived name.
+ *
  * **The declarations.** Linkage follows the resources those endpoints are
  * declared with (`src/lib/resources.ts`), so a locally served document
  * carries exactly the relationships the server writes (ADR-0029 §6;
  * `tests/replica-documents.test.ts` checks the bytes).
  */
 import type { Effect } from "effect";
+import type { MutatorError, StoreError } from "@thomasfosterau/legation-effect";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@thomasfosterau/legation-effect";
-import type { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine, ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
 import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./api.js";
 import { resources as declared } from "./resources.js";
-import { nodes } from "./domain.js";
+import { facadeWrites, nodes } from "./domain.js";
 
 /** The resource declarations the api's endpoints carry, by type. */
 export const resources: ReadonlyMap<string, Resource.Any> = new Map(
@@ -40,8 +49,15 @@ export interface FacadeSource {
   readonly cookie: Effect.Effect<string | undefined, unknown>;
   /** Connectivity; defaults to `navigator.onLine`. */
   readonly online?: () => boolean;
+  /** The journal seam: the worker engine's `mutateWithAck`. Absent, writes are never intercepted. */
+  readonly mutate?: (
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngine.MutationHandle, MutatorError | StoreError>;
+  /** The pull to signal after a forwarded write succeeds: the worker engine's `pull`. */
+  readonly pull?: Effect.Effect<unknown, unknown>;
 }
 
 /** The façade over this app's api and declarations. */
 export const makeFacade = (source: FacadeSource): JsonApiFacade.FetchHandler =>
-  JsonApiFacade.fetchHandler({ nodes, api, resources, ...source });
+  JsonApiFacade.fetchHandler({ nodes, api, resources, writes: facadeWrites, ...source });

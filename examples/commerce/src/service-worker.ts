@@ -23,6 +23,10 @@
  *    it becomes the 503 `offline` document (ADR-0029 §4).
  * 2. **The HTTP cache** (`CacheApiHttpCache`): built assets cache-first,
  *    page navigations stale-while-revalidate, exactly as before the façade.
+ *    A `POST /jsonapi/reviews` with a client id is a **façade write**
+ *    (ADR-0030): offline it is journaled and answered `202` with a write
+ *    receipt; online it is forwarded (a clone kept first), and a forward
+ *    that rejects at the transport is journaled from that clone instead.
  * 3. **The network**, request unchanged. Sync traffic (`/sync*`) passes
  *    straight through — the engine's journal + pull pipeline owns that path.
  *
@@ -82,20 +86,32 @@ const viaCache = (event: FetchEvent): Effect.Effect<Response, unknown> =>
 let facade: JsonApiFacade.FetchHandler | undefined;
 
 /**
- * The network, last. A JSON:API request the façade recognised but could not
- * cover, whose forward rejected at the transport, is offline by ADR-0029
- * §4's definition and gets the 503 `offline` document (with the replica's
- * cookie, as every façade answer) rather than a failed fetch; anything else
+ * The network, last. A JSON:API request the façade recognised, whose forward
+ * rejected at the transport, is offline by ADR-0029 §4's definition: a read
+ * gets the 503 `offline` document (with the replica's cookie, as every façade
+ * answer), and a write is journaled from the clone taken before forwarding
+ * and answered with its `202` receipt (ADR-0030 §3). A forwarded write that
+ * succeeds tells the façade, which pulls in the background. Anything else
  * fails as it always did.
  */
-const network = (request: Request, candidate: boolean): Promise<Response> =>
-  fetch(request).catch((error: unknown) => {
-    if (candidate && facade !== undefined) return Effect.runPromise(facade.offline);
-    throw error;
-  });
+const network = (event: FetchEvent, candidate: Request | undefined): Promise<Response> =>
+  fetch(event.request).then(
+    (response) => {
+      if (candidate !== undefined && facade !== undefined) {
+        event.waitUntil(Effect.runPromise(facade.forwarded(candidate, response)));
+      }
+      return response;
+    },
+    (error: unknown) => {
+      if (candidate !== undefined && facade !== undefined) {
+        return Effect.runPromise(facade.offline(candidate));
+      }
+      throw error;
+    }
+  );
 
 /** Façade, then cache, then network (ADR-0029 §1). */
-const respond = async (event: FetchEvent, candidate: boolean): Promise<Response> => {
+const respond = async (event: FetchEvent, candidate: Request | undefined): Promise<Response> => {
   const { request } = event;
   try {
     const local = facade === undefined ? undefined : await Effect.runPromise(facade.handle(request));
@@ -104,7 +120,7 @@ const respond = async (event: FetchEvent, candidate: boolean): Promise<Response>
   } catch {
     // A failed façade or cache is never fatal: the network answers either way.
   }
-  return network(request, candidate);
+  return network(event, candidate);
 };
 
 self.addEventListener("install", (event) => {
@@ -116,9 +132,10 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  if (request.method !== "GET") return;
-  const candidate = facade?.matches(request) === true;
-  if (!candidate && policy(request) === undefined) return;
+  // Every method: the façade's writes are `POST` / `PATCH` / `DELETE` (ADR-0030 §5). A candidate is
+  // cloned before anything reads or forwards it, so its body is still there for `offline`.
+  const candidate = facade?.matches(request) === true ? request.clone() : undefined;
+  if (candidate === undefined && (request.method !== "GET" || policy(request) === undefined)) return;
   event.respondWith(respond(event, candidate));
 });
 
@@ -164,8 +181,11 @@ config.addEventListener("message", (event) => {
           view,
           coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations),
           cookie: host.cookie,
+          // Façade writes journal into this worker's engine, never over the mirror channel.
+          mutate: host.engine.mutateWithAck,
+          pull: host.engine.pull,
         });
-        void reportToClients("jsonapi façade serving covered GETs from the replica");
+        void reportToClients("jsonapi façade serving covered GETs and journaling writes");
       },
     })
   ).catch((error) => {

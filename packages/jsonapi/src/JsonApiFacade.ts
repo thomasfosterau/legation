@@ -58,8 +58,22 @@
  * vocabulary — must not compose the façade: its 400s and its documents
  * would diverge from the server's.
  *
+ * 6. **Writes** (ADR-0030, with {@link Options.mutate} set). A `POST` /
+ *    `PATCH` / `DELETE` on a reflected write route of a type the graph
+ *    declares (and {@link Options.writes} allows) is forwarded unchanged
+ *    while online and unasked; offline, after a forward that rejected at the
+ *    transport, or on `Prefer: respond-async`, it is decoded structurally
+ *    (`FacadeWrites`), mapped to a mutation by the intent mapping (default:
+ *    the graph-derived CRUD mutations, `CrudMutation`), journaled, and
+ *    answered with a `202 Accepted` **write receipt**: the resource as
+ *    journaled, read back through the one writer, `meta.legation.status:
+ *    "pending"` and a `Location` naming the mutation status URL. Never `201`,
+ *    `200` or `204`: those are the server's words for "applied". A write it
+ *    cannot journal is forwarded online and is the 503 `offline` document
+ *    offline.
+ *
  * What it never does: register a subscription because a request arrived,
- * touch a non-`GET`, or rewrite a request it forwards. A single-resource
+ * journal a write online unless asked, or rewrite a request it forwards. A single-resource
  * request whose row the covered replica does not hold is forwarded too: the
  * 404 is the endpoint's own error class, which only the server can write.
  *
@@ -74,6 +88,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -298,6 +313,8 @@ const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
 /** One reflected write route the façade may intercept (ADR-0030 §3). */
 interface WriteRoute extends Route {
   readonly operation: "create" | "update" | "delete";
+  /** The node the route writes. */
+  readonly node: Node.AnyNode;
   /** The method it answers: `POST`, `PATCH` or `DELETE` (a `PUT` update is never intercepted). */
   readonly method: string;
 }
@@ -309,24 +326,24 @@ const writeRoutesOf = <Id extends string, Groups extends HttpApiGroup.Constraint
   api: HttpApi.HttpApi<Id, Groups>,
   nodes: Node.NodeRegistry,
   writes: CrudMutation.Writes | undefined
-): ReadonlyArray<WriteRoute> => {
-  const routes: Array<WriteRoute> = [];
-  for (const resource of Convention.reflectResources(api).values()) {
-    if (!nodes.nodes.has(resource.type)) continue;
-    for (const operation of ["create", "update", "delete"] as const) {
+): ReadonlyArray<WriteRoute> =>
+  Arr.flatMap([...Convention.reflectResources(api).values()], (resource) => {
+    const node = nodes.nodes.get(resource.type);
+    if (node === undefined) return [];
+    return Arr.filterMap(["create", "update", "delete"] as const, (operation) => {
       const endpoint = resource[operation];
       const method = writeMethods[operation];
-      if (endpoint === undefined || endpoint.method.toUpperCase() !== method) continue;
-      if (writes !== undefined && !(writes[resource.type] ?? []).includes(operation)) continue;
-      routes.push({
-        ...routeOf(resource.type, endpoint.path, operation !== "create"),
-        operation,
-        method,
-      });
-    }
-  }
-  return routes;
-};
+      const allowed = writes === undefined || (writes[resource.type] ?? []).includes(operation);
+      return endpoint === undefined || endpoint.method.toUpperCase() !== method || !allowed
+        ? Result.failVoid
+        : Result.succeed({
+            ...routeOf(resource.type, endpoint.path, operation !== "create"),
+            operation,
+            node,
+            method,
+          });
+    });
+  });
 
 const matchesTemplate = (route: Route, segments: ReadonlyArray<string>): boolean =>
   route.segments.length === segments.length &&
@@ -440,19 +457,20 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       : Effect.catch(options.cookie, () => Effect.succeed(undefined));
   // One writer per link prefix the routes imply (one, for an api mounted once).
   const writers = new Map<string, ReplicaDocuments.ReplicaDocuments>();
-  for (const route of [...routes, ...writeRoutes]) {
-    const prefix = options.prefix ?? route.prefix;
-    if (!writers.has(prefix)) {
-      writers.set(
-        prefix,
-        ReplicaDocuments.make({
-          nodes,
-          prefix,
-          ...(options.resources === undefined ? {} : { resources: options.resources }),
-        })
-      );
-    }
-  }
+  /** The writer for a link prefix: one per prefix, built when a route first needs it. */
+  const writerFor = (prefix: string): ReplicaDocuments.ReplicaDocuments => {
+    const existing = writers.get(prefix);
+    if (existing !== undefined) return existing;
+    const made = ReplicaDocuments.make({
+      nodes,
+      prefix,
+      ...(options.resources === undefined ? {} : { resources: options.resources }),
+    });
+    writers.set(prefix, made);
+    return made;
+  };
+
+  for (const route of routes) writerFor(options.prefix ?? route.prefix);
 
   const candidateOf = (request: Request): Candidate | undefined => {
     if (request.method !== "GET" || !acceptsJsonApi(request.headers.get("accept"))) {
@@ -542,7 +560,6 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   }
 
   const writeCandidateOf = (request: Request): WriteCandidate | undefined => {
-    if (writeRoutes.length === 0) return undefined;
     const method = request.method.toUpperCase();
     if (!acceptsJsonApi(request.headers.get("accept"))) return undefined;
     if (method !== "DELETE" && !sendsJsonApi(request.headers.get("content-type"))) {
@@ -555,15 +572,15 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       (candidate) => candidate.method === method && matchesTemplate(candidate, segments)
     );
     if (route === undefined) return undefined;
-    const id = route.operation === "create" ? undefined : segments[segments.length - 1];
-    return {
-      route,
-      target: {
-        operation: route.operation,
-        type: route.type,
-        ...(id === undefined ? {} : { id: decodeURIComponent(id) }),
-      },
-    };
+    const target: FacadeWrites.Target =
+      route.operation === "create"
+        ? { operation: "create", type: route.type }
+        : {
+            operation: route.operation,
+            type: route.type,
+            id: decodeURIComponent(segments.at(-1) ?? ""),
+          };
+    return { route, target };
   };
 
   /** The mutation status URL of a journaled mutation: beside the api it belongs to (ADR-0030 §2). */
@@ -577,7 +594,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
    */
   const receiptData = ({ route }: WriteCandidate, write: Write): Effect.Effect<unknown> => {
     const prefix = options.prefix ?? route.prefix;
-    const docs = writers.get(prefix)!;
+    const docs = writerFor(prefix);
     const sent = {
       type: write.type,
       id: write.id,
@@ -586,7 +603,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     return docs.fromUrl(view, `${prefix}/${write.type}/${encodeURIComponent(write.id)}`).pipe(
       Effect.map((document) =>
         "data" in document && document.data !== null && !Array.isArray(document.data)
-          ? (document.data as unknown)
+          ? document.data
           : sent
       ),
       Effect.orElseSucceed(() => sent)
@@ -604,11 +621,12 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     preferences: FacadeWrites.Preferences
   ): Effect.Effect<Response, undefined> =>
     Effect.gen(function* () {
-      const node = nodes.nodes.get(candidate.route.type)!;
       const body = Effect.tryPromise(() => request.clone().text());
-      const write = yield* FacadeWrites.decodeWrite(node, candidate.target, body).pipe(
-        Effect.mapError(() => undefined)
-      );
+      const write = yield* FacadeWrites.decodeWrite(
+        candidate.route.node,
+        candidate.target,
+        body
+      ).pipe(Effect.mapError(() => undefined));
       const intent = intentOf(write);
       if (intent === undefined || mutate === undefined) return yield* Effect.fail(undefined);
       const handle = yield* mutate(intent.mutator, intent.args).pipe(
@@ -622,10 +640,10 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
         write.operation === "delete"
           ? { meta }
           : { data: yield* receiptData(candidate, write), meta };
-      return respondWith(202, document, yield* cookie, {
-        location,
-        ...(preferences.respondAsync ? { "preference-applied": "respond-async" } : {}),
-      });
+      const headers = preferences.respondAsync
+        ? { location, "preference-applied": "respond-async" }
+        : { location };
+      return respondWith(202, document, yield* cookie, headers);
     });
 
   const offlineNow: Effect.Effect<Response> = Effect.map(cookie, offlineResponse);

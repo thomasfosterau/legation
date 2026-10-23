@@ -588,11 +588,14 @@ const facade = JsonApiFacade.fetchHandler({
 });
 
 self.addEventListener("fetch", (event) => {
-  const candidate = facade.matches(event.request);
+  // Cloned before anything reads or forwards it: `offline` may need a write's body.
+  const candidate = facade.matches(event.request) ? event.request.clone() : undefined;
   event.respondWith(
     Effect.runPromise(facade.handle(event.request))
       .then((local) => local ?? httpCacheThenNetwork(event.request))
-      .catch(() => (candidate ? Effect.runPromise(facade.offline) : fetch(event.request)))
+      .catch(() =>
+        candidate ? Effect.runPromise(facade.offline(candidate)) : fetch(event.request)
+      )
   );
 });
 ```
@@ -624,8 +627,8 @@ self.addEventListener("fetch", (event) => {
   row the replica does not hold — the 404 is the endpoint's own error class,
   which only the server can write. A forward that rejects at the transport
   is the other half of "offline": the worker answers it with
-  `facade.offline` (the same document, with the replica's cookie) when
-  `matches(request)` held.
+  `facade.offline(request)` (the same document, with the replica's cookie)
+  when `matches(request)` held.
 - **Coverage is the ledger's.** `coverageOf` is `Client.coverageOf` over a
   Client, or `Coverage.coverageOf(nodes, view.query, host.registrations)` over
   the registrations an `EngineHost` holds on its mirrors' behalf — the only
@@ -650,6 +653,57 @@ self.addEventListener("fetch", (event) => {
   mid-collection. See ADR-0029's amendment for the full rule and why an
   offset _window_ (as opposed to an offset _read_, translated at read time)
   was rejected.
+
+### Façade writes: the `202` write receipt (ADR-0030)
+
+Given the engine's journal seam, the façade also intercepts writes:
+`POST /{type}` (with a client-generated `data.id`), `PATCH /{type}/:id` and
+`DELETE /{type}/:id` on the api's reflected routes for a type the graph
+declares, with `Accept` and (for `POST` / `PATCH`) `Content-Type` naming
+`application/vnd.api+json` — the atomic extension's `ext` marks the operations
+endpoint, never a façade write, and a `PUT` is never intercepted.
+
+```ts
+import { CrudMutation, Mutation } from "@thomasfosterau/legation-effect";
+
+// The engine's registry carries the graph-derived CRUD mutations the façade journals …
+const mutators = Mutation.registry([...myMutations, ...CrudMutation.entries(nodes, { writes })]);
+// … and the façade is handed the worker engine's journal and pull.
+const facade = JsonApiFacade.fetchHandler({
+  ...readOptions,
+  writes, // e.g. { reviews: ["create"] }: what the server has handlers for
+  mutate: host.engine.mutateWithAck,
+  pull: host.engine.pull,
+});
+// After a forwarded write: `event.waitUntil(Effect.runPromise(facade.forwarded(candidate, response)))`.
+```
+
+- **Online and unasked, a write is forwarded unchanged** and nothing is
+  journaled; after a `2xx`, `facade.forwarded` signals `pull` so a covered
+  read soon shows the server's row. `Prefer: handling=strict` is never
+  journaled.
+- **Offline** (`navigator.onLine === false`), **after a forward that rejected
+  at the transport** (`facade.offline(clone)`), or **online with
+  `Prefer: respond-async`**, the write is journaled as the graph-derived
+  `{type}/create|update|delete` (`CrudMutation`, the graph row form: `one`
+  relationships become their `via` keys; the default **intent mapping**, which
+  `intentOf` replaces) and answered **`202 Accepted`**: `data` is the resource
+  as journaled, read back through the one writer (for a `PATCH` of a row the
+  replica lacks, the attributes sent), `meta.legation = { status: "pending",
+  mutationId, mutation }`, and `Location` naming the mutation status URL
+  `{prefix}/_legation/mutations/{mutationId}`; a `DELETE`'s receipt is
+  meta-only. `Preference-Applied: respond-async` says when it was asked for.
+  The façade never answers a write with `201`, `200` or `204`: those are only
+  ever the server's.
+- **A receipt is not a ruling.** The server rules when the journal pushes; a
+  permanent rejection drops the optimistic effect on the next rebase, and the
+  write's fate is on `Client.mutationStates`. Attribute values are not
+  validated by the façade.
+- **The server side is the app's.** Every type and operation in `writes`
+  needs a server handler under the derived name, and creates that honour the
+  client id: a journaled name the server cannot handle stalls the push.
+- **Same-origin only, offline**: a cross-origin write preflights, and the
+  preflight bypasses the service worker.
 
 ## Types, schemas, and errors
 

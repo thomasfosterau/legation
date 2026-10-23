@@ -19,13 +19,19 @@ const reviews = Node.make("reviews", {
 const users = Node.make("users", { id: "username", attributes: { username: Schema.String } });
 const nodes = Node.registry([products, reviews, users]);
 
-/** A local writer over a plain map, keyed `collection/id`. */
+/** A local writer over a plain record, keyed `collection/id`. */
 const memoryWriter = () => {
-  const rows = new Map<string, unknown>();
+  const rows: Record<string, unknown> = {};
   const writer: Mutator.LocalWriter = {
-    put: (collection, id, value) => Effect.sync(() => void rows.set(`${collection}/${id}`, value)),
-    del: (collection, id) => Effect.sync(() => void rows.delete(`${collection}/${id}`)),
-    get: (collection, id) => Effect.sync(() => rows.get(`${collection}/${id}`)),
+    put: (collection, id, value) =>
+      Effect.sync(() => {
+        rows[`${collection}/${id}`] = value;
+      }),
+    del: (collection, id) =>
+      Effect.sync(() => {
+        delete rows[`${collection}/${id}`];
+      }),
+    get: (collection, id) => Effect.sync(() => rows[`${collection}/${id}`]),
   };
   return { rows, writer };
 };
@@ -35,7 +41,10 @@ const run = (
   mutator: string,
   args: unknown,
   writer: Mutator.LocalWriter
-) => registry.handlers.get(mutator)!(args, writer);
+) => {
+  const handler = registry.handlers.get(mutator);
+  return handler === undefined ? Effect.die(`no handler for ${mutator}`) : handler(args, writer);
+};
 
 describe("CrudMutation", () => {
   const registry = CrudMutation.registry(nodes);
@@ -70,14 +79,14 @@ describe("CrudMutation", () => {
         { type: "reviews", id: "r-1", attributes: { rating: 5, body: "Good", productId: "p-1" } },
         writer
       );
-      expect(rows.get("reviews/r-1")).toEqual({
+      expect(rows["reviews/r-1"]).toEqual({
         id: "r-1",
         rating: 5,
         body: "Good",
         productId: "p-1",
       });
       yield* run(registry, "users/create", { type: "users", id: "ana", attributes: {} }, writer);
-      expect(rows.get("users/ana")).toEqual({ username: "ana" });
+      expect(rows["users/ana"]).toEqual({ username: "ana" });
     })
   );
 
@@ -90,15 +99,15 @@ describe("CrudMutation", () => {
         { type: "reviews", id: "r-1", attributes: { rating: 4 } },
         writer
       );
-      expect(rows.has("reviews/r-1")).toBe(false);
-      rows.set("reviews/r-1", { id: "r-1", rating: 5, body: "Good", productId: "p-1" });
+      expect("reviews/r-1" in rows).toBe(false);
+      rows["reviews/r-1"] = { id: "r-1", rating: 5, body: "Good", productId: "p-1" };
       yield* run(
         registry,
         "reviews/update",
         { type: "reviews", id: "r-1", attributes: { rating: 4, productId: null } },
         writer
       );
-      expect(rows.get("reviews/r-1")).toEqual({
+      expect(rows["reviews/r-1"]).toEqual({
         id: "r-1",
         rating: 4,
         body: "Good",
@@ -110,10 +119,10 @@ describe("CrudMutation", () => {
   it.effect("delete removes the row, and is a no-op when it is absent", () =>
     Effect.gen(function* () {
       const { rows, writer } = memoryWriter();
-      rows.set("reviews/r-1", { id: "r-1" });
+      rows["reviews/r-1"] = { id: "r-1" };
       yield* run(registry, "reviews/delete", { type: "reviews", id: "r-1" }, writer);
       yield* run(registry, "reviews/delete", { type: "reviews", id: "r-1" }, writer);
-      expect(rows.has("reviews/r-1")).toBe(false);
+      expect("reviews/r-1" in rows).toBe(false);
     })
   );
 

@@ -11,9 +11,12 @@
  * transport and read through a `Client`, as in `json-api-facade.test.ts`.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -69,19 +72,32 @@ const GROUP = "group-w";
 
 const crud = CrudMutation.entries(nodes);
 
+const SeedPut = Schema.Struct({
+  collection: Schema.String,
+  value: Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]),
+});
+
 /** The server's handlers: the same derived mutations, applied authoritatively. */
-const serverHandlers: Record<string, MemoryBackend.BackendHandler> = {
-  "seed/put": (args, writer) => {
-    const { collection, value } = args as { collection: string; value: { id: string } };
-    return writer.put(collection, value.id, value);
-  },
-  ...Object.fromEntries(
-    crud.map((entry) => [
-      entry.mutator.name,
-      ((args, writer) => Effect.orDie(entry.local(args, writer))) as MemoryBackend.BackendHandler,
-    ])
+const serverHandlers = R.fromEntries([
+  [
+    "seed/put",
+    (args: unknown, writer: MemoryBackend.BackendWriter) =>
+      Effect.flatMap(Effect.orDie(Schema.decodeUnknownEffect(SeedPut)(args)), (seed) =>
+        writer.put(seed.collection, seed.value.id, seed.value)
+      ),
+  ],
+  ...Arr.map(
+    crud,
+    (entry) =>
+      [
+        entry.mutator.name,
+        (args: unknown, writer: MemoryBackend.BackendWriter) =>
+          Effect.orDie(entry.local(args, writer)),
+      ] as const
   ),
-};
+]);
 
 interface Fixture {
   readonly handler: JsonApiFacade.FetchHandler;
@@ -168,20 +184,26 @@ const MEDIA = "application/vnd.api+json";
 const read = (url: string): Request =>
   new Request(new URL(url, "http://notes.test"), { headers: { accept: MEDIA } });
 
+const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** A write with a JSON:API document body. */
 const write = (
-  method: "POST" | "PATCH" | "DELETE" | "PUT",
+  method: "POST" | "PATCH" | "PUT",
   url: string,
-  document?: unknown,
+  document: unknown,
   headers: Record<string, string> = {}
 ): Request =>
   new Request(new URL(url, "http://notes.test"), {
     method,
-    headers: {
-      accept: MEDIA,
-      ...(document === undefined ? {} : { "content-type": MEDIA }),
-      ...headers,
-    },
-    ...(document === undefined ? {} : { body: JSON.stringify(document) }),
+    headers: { accept: MEDIA, "content-type": MEDIA, ...headers },
+    body: toJson(document),
+  });
+
+/** A `DELETE`: no body, no `Content-Type`. */
+const remove = (url: string, headers: Record<string, string> = {}): Request =>
+  new Request(new URL(url, "http://notes.test"), {
+    method: "DELETE",
+    headers: { accept: MEDIA, ...headers },
   });
 
 const createNote = (headers: Record<string, string> = {}) =>
@@ -215,35 +237,65 @@ const patchNote = (headers: Record<string, string> = {}) =>
     headers
   );
 
-const deleteNote = (headers: Record<string, string> = {}) =>
-  write("DELETE", "/jsonapi/notes/n-1", undefined, headers);
+const deleteNote = (headers: Record<string, string> = {}) => remove("/jsonapi/notes/n-1", headers);
 
-const body = (response: Response) => Effect.promise(() => response.json() as Promise<any>);
+const body = (response: Response): Effect.Effect<any> =>
+  Effect.orDie(Effect.tryPromise(() => response.json()));
+
+/** The façade's own answer to a request; a forward (`undefined`) is a test failure. */
+const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
+  Effect.flatMap(handler.handle(request), (response) =>
+    response === undefined
+      ? Effect.die(`forwarded: ${request.method} ${request.url}`)
+      : Effect.succeed(response)
+  );
+
+/** Run `f` over each item in order. */
+const each = <A>(items: ReadonlyArray<A>, f: (item: A) => Effect.Effect<unknown>) =>
+  Effect.forEach(items, f, { concurrency: 1, discard: true });
 
 /** The note ids a covered `GET /jsonapi/notes` lists now. */
 const listed = (handler: JsonApiFacade.FetchHandler) =>
   Effect.gen(function* () {
-    const response = yield* handler.handle(read("/jsonapi/notes"));
-    expect(response?.status).toBe(200);
-    const document = yield* body(response!);
-    return (document.data as ReadonlyArray<{ id: string; attributes: Record<string, unknown> }>)
-      .map((resource) => resource.id)
-      .toSorted();
+    const response = yield* answer(handler, read("/jsonapi/notes"));
+    expect(response.status).toBe(200);
+    const document = yield* body(response);
+    // SAFETY: a collection document's `data` is an array of resource objects.
+    const resources = document.data as ReadonlyArray<{ id: string }>;
+    return Arr.sort(
+      Arr.map(resources, (resource) => resource.id),
+      Order.String
+    );
   });
 
 /** A `202` receipt's shared shape: headers, `Location` and `meta.legation`. */
-const expectReceipt = (response: Response | undefined, document: any) => {
-  expect(response).toBeDefined();
-  expect(response!.status).toBe(202);
-  expect(response!.headers.get("content-type")).toBe(MEDIA);
-  expect(response!.headers.get("cache-control")).toBe("no-store");
-  expect(response!.headers.get(JsonApiFacade.servedAtHeader)).not.toBeNull();
+const expectReceipt = (response: Response, document: any) => {
+  expect(response.status).toBe(202);
+  expect(response.headers.get("content-type")).toBe(MEDIA);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get(JsonApiFacade.servedAtHeader)).not.toBeNull();
   const { mutationId } = document.meta.legation;
   expect(typeof mutationId).toBe("number");
   const location = `/jsonapi/_legation/mutations/${mutationId}`;
-  expect(response!.headers.get("location")).toBe(location);
+  expect(response.headers.get("location")).toBe(location);
   expect(document.meta.legation).toEqual({ status: "pending", mutationId, mutation: location });
 };
+
+/** Answer a request as a receipt and check its shape; the document is returned. */
+const receipt = (handler: JsonApiFacade.FetchHandler, request: Request) =>
+  Effect.gen(function* () {
+    const response = yield* answer(handler, request);
+    const document = yield* body(response);
+    expectReceipt(response, document);
+    return { response, document };
+  });
+
+/** The mutators of the tracked mutations, sorted. */
+const mutatorsOf = (map: MutationState.MutationStateMap) =>
+  Arr.sort(
+    Arr.map([...HashMap.values(map)], (state) => state.mutator),
+    Order.String
+  );
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -255,10 +307,8 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
         online.current = false;
         const request = createNote();
         expect(handler.matches(request)).toBe(true);
-        const response = yield* handler.handle(request);
-        const document = yield* body(response!);
-        expectReceipt(response, document);
-        expect(response!.headers.get("preference-applied")).toBeNull();
+        const { response, document } = yield* receipt(handler, request);
+        expect(response.headers.get("preference-applied")).toBeNull();
         // The resource as journaled, read back through the one writer: the `via` key is linkage.
         expect(document.data).toMatchObject({
           type: "notes",
@@ -266,9 +316,9 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
           attributes: { title: "Ship", body: "Today" },
           relationships: { category: { data: { type: "categories", id: "c-1" } } },
         });
-        // Byte-equal to what a covered GET of the resource answers next.
-        const get = yield* handler.handle(read("/jsonapi/notes/n-2"));
-        expect((yield* body(get!)).data).toEqual(document.data);
+        // Equal to what a covered GET of the resource answers next.
+        const get = yield* answer(handler, read("/jsonapi/notes/n-2"));
+        expect((yield* body(get)).data).toEqual(document.data);
         expect(yield* listed(handler)).toEqual(["n-1", "n-2"]);
         const state = HashMap.get(yield* states, document.meta.legation.mutationId);
         expect(Option.map(state, (entry) => [entry.mutator, entry.phase])).toEqual(
@@ -285,25 +335,26 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
         Effect.gen(function* () {
           const { handler, online } = yield* makeFixture();
           online.current = false;
-          const response = yield* handler.handle(patchNote());
-          const document = yield* body(response!);
-          expectReceipt(response, document);
+          const { document } = yield* receipt(handler, patchNote());
           expect(document.data).toMatchObject({
             type: "notes",
             id: "n-1",
             attributes: { title: "Plan B", body: "Draft" },
           });
-          const get = yield* handler.handle(read("/jsonapi/notes/n-1"));
-          expect((yield* body(get!)).data.attributes.title).toBe("Plan B");
+          const get = yield* answer(handler, read("/jsonapi/notes/n-1"));
+          expect((yield* body(get)).data.attributes.title).toBe("Plan B");
           // A row the replica does not hold: journaled all the same, the update a no-op locally.
-          const absent = yield* handler.handle(
+          const ghost = yield* receipt(
+            handler,
             write("PATCH", "/jsonapi/notes/n-9", {
               data: { type: "notes", id: "n-9", attributes: { title: "Ghost" } },
             })
           );
-          const ghost = yield* body(absent!);
-          expectReceipt(absent, ghost);
-          expect(ghost.data).toEqual({ type: "notes", id: "n-9", attributes: { title: "Ghost" } });
+          expect(ghost.document.data).toEqual({
+            type: "notes",
+            id: "n-9",
+            attributes: { title: "Ghost" },
+          });
           expect(yield* listed(handler)).toEqual(["n-1"]);
         })
       )
@@ -314,10 +365,8 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
       Effect.gen(function* () {
         const { handler, online } = yield* makeFixture();
         online.current = false;
-        const response = yield* handler.handle(deleteNote());
-        const document = yield* body(response!);
-        expectReceipt(response, document);
-        expect(Object.keys(document)).toEqual(["meta"]);
+        const { document } = yield* receipt(handler, deleteNote());
+        expect(R.keys(document)).toEqual(["meta"]);
         expect(yield* listed(handler)).toEqual([]);
       })
     )
@@ -328,15 +377,13 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
       Effect.gen(function* () {
         const { handler, states } = yield* makeFixture();
         const prefer = { prefer: "respond-async" };
-        for (const request of [createNote(prefer), patchNote(prefer), deleteNote(prefer)]) {
-          const response = yield* handler.handle(request);
-          expectReceipt(response, yield* body(response!));
-          expect(response!.headers.get("preference-applied")).toBe("respond-async");
-        }
-        expect(yield* listed(handler)).toEqual(["n-2"]);
-        expect([...HashMap.values(yield* states)].map((state) => state.mutator).toSorted()).toEqual(
-          ["notes/create", "notes/delete", "notes/update"]
+        yield* each([createNote(prefer), patchNote(prefer), deleteNote(prefer)], (request) =>
+          Effect.map(receipt(handler, request), ({ response }) =>
+            expect(response.headers.get("preference-applied")).toBe("respond-async")
+          )
         );
+        expect(yield* listed(handler)).toEqual(["n-2"]);
+        expect(mutatorsOf(yield* states)).toEqual(["notes/create", "notes/delete", "notes/update"]);
       })
     )
   );
@@ -352,12 +399,11 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
           const request = createNote();
           const clone = request.clone();
           expect(yield* handler.handle(request)).toBeUndefined();
-          const response = yield* handler.offline(clone);
-          expectReceipt(response, yield* body(response));
-          for (const other of [patchNote(), deleteNote()]) {
-            const receipt = yield* handler.offline(other);
-            expectReceipt(receipt, yield* body(receipt));
-          }
+          yield* each([clone, patchNote(), deleteNote()], (candidate) =>
+            Effect.flatMap(handler.offline(candidate), (response) =>
+              Effect.map(body(response), (document) => expectReceipt(response, document))
+            )
+          );
           expect(HashMap.size(yield* states)).toBe(3);
           // The push delivers each intent once; a rebase replays them locally over the same rows.
           yield* engine.push;
@@ -365,8 +411,8 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
           yield* engine.pull;
           expect(yield* listed(handler)).toEqual(["n-2"]);
           const rows = yield* backend.getRows({ clientGroupId: GROUP }, "notes", ["n-1", "n-2"]);
-          expect(rows.map((row) => row.id)).toEqual(["n-2"]);
-          const phases = [...HashMap.values(yield* states)].map((state) => state.phase);
+          expect(Arr.map(rows, (row) => row.id)).toEqual(["n-2"]);
+          const phases = Arr.map([...HashMap.values(yield* states)], (state) => state.phase);
           expect(phases).toEqual(["acknowledged", "acknowledged", "acknowledged"]);
         })
       )
@@ -389,11 +435,13 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { handler, pulls, states } = yield* makeFixture();
-        for (const request of [createNote(), createNoteWithoutId(), patchNote(), deleteNote()]) {
-          expect(handler.matches(request)).toBe(true);
-          expect(yield* handler.handle(request)).toBeUndefined();
-          yield* handler.forwarded(request, new Response(null, { status: 201 }));
-        }
+        yield* each([createNote(), createNoteWithoutId(), patchNote(), deleteNote()], (request) =>
+          Effect.gen(function* () {
+            expect(handler.matches(request)).toBe(true);
+            expect(yield* handler.handle(request)).toBeUndefined();
+            yield* handler.forwarded(request, new Response(null, { status: 201 }));
+          })
+        );
         expect(pulls.count).toBe(4);
         // Not after an error, nor for a request that is not a write candidate.
         yield* handler.forwarded(createNote(), new Response(null, { status: 422 }));
@@ -411,17 +459,18 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
         Effect.gen(function* () {
           const { handler, online, states } = yield* makeFixture();
           const strict = { prefer: "handling=strict" };
-          for (const request of [createNote(strict), patchNote(strict), deleteNote(strict)]) {
-            expect(yield* handler.handle(request)).toBeUndefined();
-          }
+          const strictWrites = () => [createNote(strict), patchNote(strict), deleteNote(strict)];
+          yield* each(strictWrites(), (request) =>
+            Effect.map(handler.handle(request), (response) => expect(response).toBeUndefined())
+          );
           expect(
             yield* handler.handle(createNoteWithoutId({ prefer: "respond-async" }))
           ).toBeUndefined();
           // Offline, strict is refused rather than journaled (the 503 document is #512's to refine).
           online.current = false;
-          for (const request of [createNote(strict), patchNote(strict), deleteNote(strict)]) {
-            expect((yield* handler.handle(request))!.status).toBe(503);
-          }
+          yield* each(strictWrites(), (request) =>
+            Effect.map(answer(handler, request), (response) => expect(response.status).toBe(503))
+          );
           expect((yield* handler.offline(createNote(strict))).status).toBe(503);
           expect(HashMap.size(yield* states)).toBe(0);
         })
@@ -445,17 +494,19 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
           }),
           // Wrong media types.
           write("POST", "/jsonapi/notes", document, { "content-type": "application/json" }),
-          write("DELETE", "/jsonapi/notes/n-1", undefined, { accept: "*/*" }),
+          remove("/jsonapi/notes/n-1", { accept: "*/*" }),
         ];
-        for (const request of notCandidates) {
-          expect(handler.matches(request)).toBe(false);
-          expect(yield* handler.handle(request)).toBeUndefined();
-        }
+        yield* each(notCandidates, (request) =>
+          Effect.map(handler.handle(request), (response) => {
+            expect(handler.matches(request)).toBe(false);
+            expect(response).toBeUndefined();
+          })
+        );
       })
     )
   );
 
-  it.effect("online with respond-async, a body it cannot journal is forwarded untouched", () =>
+  it.effect("online with respond-async, a write it cannot journal is forwarded untouched", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { handler, states } = yield* makeFixture({
@@ -490,24 +541,32 @@ describe("JsonApiFacade writes: never a fabricated status", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { handler, online } = yield* makeFixture();
-        const statuses: Array<number> = [];
-        for (const offline of [false, true]) {
-          online.current = !offline;
-          for (const prefer of [{}, { prefer: "respond-async" }, { prefer: "handling=strict" }]) {
-            for (const request of [
-              createNote(prefer),
-              createNoteWithoutId(prefer),
-              patchNote(prefer),
-              deleteNote(prefer),
-            ]) {
-              const response = yield* handler.handle(request);
-              if (response !== undefined) statuses.push(response.status);
-              statuses.push((yield* handler.offline(request.clone())).status);
-            }
-          }
-        }
-        expect(statuses.length).toBeGreaterThan(0);
-        expect(statuses.filter((status) => [200, 201, 204].includes(status))).toEqual([]);
+        const preferences = [{}, { prefer: "respond-async" }, { prefer: "handling=strict" }];
+        const cases = Arr.flatMap([false, true], (offline) =>
+          Arr.flatMap(preferences, (prefer) =>
+            Arr.map(
+              [createNote, createNoteWithoutId, patchNote, deleteNote],
+              (make) => [offline, make(prefer)] as const
+            )
+          )
+        );
+        const statuses = yield* Effect.forEach(
+          cases,
+          ([offline, request]) =>
+            Effect.gen(function* () {
+              online.current = !offline;
+              const clone = request.clone();
+              const handled = yield* handler.handle(request);
+              const synthesised = yield* handler.offline(clone);
+              return handled === undefined
+                ? [synthesised.status]
+                : [handled.status, synthesised.status];
+            }),
+          { concurrency: 1 }
+        );
+        const flat = Arr.flatten(statuses);
+        expect(Arr.isReadonlyArrayNonEmpty(flat)).toBe(true);
+        expect(Arr.filter(flat, (status) => [200, 201, 204].includes(status))).toEqual([]);
       })
     )
   );

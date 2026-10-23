@@ -15,8 +15,11 @@
  * them, and a value it refuses surfaces as a permanent rejection.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import { CrudMutation } from "@thomasfosterau/legation-effect";
 import type { Node } from "@thomasfosterau/legation-effect";
@@ -36,22 +39,24 @@ export interface Preferences {
 
 /** Read the `Prefer` headers of a request (several headers and comma-separated lists alike). */
 export const preferencesOf = (headers: Headers): Preferences => {
-  let respondAsync = false;
-  let strict = false;
-  let wait: number | undefined;
-  for (const part of (headers.get("prefer") ?? "").split(",")) {
-    const [rawName = "", ...rest] = part.split(";")[0]!.split("=");
-    const name = rawName.trim().toLowerCase();
+  const pairs = Arr.map((headers.get("prefer") ?? "").split(","), (part) => {
+    const [token = ""] = part.split(";");
+    const [rawName = "", ...rest] = token.split("=");
     const value = rest
       .join("=")
       .trim()
       .replace(/^"(.*)"$/, "$1")
       .toLowerCase();
-    if (name === "respond-async") respondAsync = true;
-    else if (name === "handling" && value === "strict") strict = true;
-    else if (name === "wait" && /^\d+$/.test(value)) wait = Number(value);
-  }
-  return { respondAsync, strict, ...(wait === undefined ? {} : { wait }) };
+    return [rawName.trim().toLowerCase(), value] as const;
+  });
+  const has = (name: string, value?: string) =>
+    Arr.some(pairs, ([n, v]) => n === name && (value === undefined || v === value));
+  const wait = Arr.findLast(pairs, ([n, v]) => n === "wait" && /^\d+$/.test(v));
+  const preferences = { respondAsync: has("respond-async"), strict: has("handling", "strict") };
+  return Option.match(wait, {
+    onNone: () => preferences,
+    onSome: ([, v]) => ({ ...preferences, wait: Number(v) }),
+  });
 };
 
 // ─── Decoding ────────────────────────────────────────────────────────────────
@@ -77,14 +82,8 @@ export interface Refusal {
 
 const refuse = (refusal: Refusal): Effect.Effect<never, Refusal> => Effect.fail(refusal);
 
-const invalid = (detail: string, pointer?: string): Effect.Effect<never, Refusal> =>
-  refuse({
-    status: 400,
-    code: "invalid_document",
-    title: "Invalid document",
-    detail,
-    ...(pointer === undefined ? {} : { pointer }),
-  });
+const invalid = (detail: string, pointer: string): Effect.Effect<never, Refusal> =>
+  refuse({ status: 400, code: "invalid_document", title: "Invalid document", detail, pointer });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   P.isObject(value) && !Array.isArray(value);
@@ -92,11 +91,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 /** What a write route matched: its operation, the route's type, and the path's id for `PATCH` / `DELETE`. */
-export interface Target {
-  readonly operation: Write["operation"];
-  readonly type: string;
-  readonly id?: string;
-}
+export type Target =
+  | { readonly operation: "create"; readonly type: string }
+  | { readonly operation: "update" | "delete"; readonly type: string; readonly id: string };
 
 /** The linkage of one relationship: a related id, `null`, or a refusal. */
 const linkageOf = (
@@ -145,13 +142,13 @@ export const decodeWrite = (
 ): Effect.Effect<Write, Refusal> =>
   Effect.gen(function* () {
     if (target.operation === "delete") {
-      return { operation: "delete", type: target.type, id: target.id! };
+      return { operation: "delete", type: target.type, id: target.id };
     }
     const text = yield* body.pipe(
-      Effect.catch(() => invalid("the request body could not be read"))
+      Effect.catch(() => invalid("the request body could not be read", ""))
     );
     const document = yield* decodeJson(text).pipe(
-      Effect.catch(() => invalid("the request body is not JSON"))
+      Effect.catch(() => invalid("the request body is not JSON", ""))
     );
     if (!isRecord(document) || !("data" in document)) {
       return yield* invalid('a write document needs a "data" member', "");
@@ -171,6 +168,9 @@ export const decodeWrite = (
     if (id !== undefined && !P.isString(id)) {
       return yield* invalid('"data.id" must be a string', "/data/id");
     }
+    if (target.operation === "update" && id === undefined) {
+      return yield* invalid("an update's data needs the id the path names", "/data/id");
+    }
     if (target.operation === "update" && id !== target.id) {
       return yield* refuse({
         status: 409,
@@ -188,11 +188,14 @@ export const decodeWrite = (
     if (!isRecord(relationships)) {
       return yield* invalid('"data.relationships" must be an object', "/data/relationships");
     }
-    const linkage: Record<string, string | null> = {};
-    for (const [name, member] of Object.entries(relationships)) {
-      linkage[name] = yield* linkageOf(name, member, node);
-    }
-    if (target.operation === "create" && (id === undefined || id === "")) {
+    const linkage = yield* Effect.forEach(
+      R.toEntries(relationships),
+      ([name, member]) =>
+        Effect.map(linkageOf(name, member, node), (related) => [name, related] as const),
+      { concurrency: 1 }
+    );
+    const resolved = target.operation === "create" ? id : target.id;
+    if (resolved === undefined || resolved === "") {
       return yield* refuse({
         status: 503,
         code: "client_id_required",
@@ -204,9 +207,9 @@ export const decodeWrite = (
     return {
       operation: target.operation,
       type: target.type,
-      id: id as string,
+      id: resolved,
       attributes,
-      relationships: linkage,
+      relationships: R.fromEntries(linkage),
     };
   });
 
@@ -238,11 +241,12 @@ export const graphIntentOf =
     if (node === undefined) return undefined;
     const mutator = CrudMutation.name(write.type, write.operation);
     if (write.operation === "delete") return { mutator, args: { type: write.type, id: write.id } };
-    const attributes: Record<string, unknown> = { ...write.attributes };
-    for (const [name, related] of Object.entries(write.relationships ?? {})) {
+    const linked = Arr.map(R.toEntries(write.relationships ?? {}), ([name, related]) => {
       const edge = node.edges[name];
-      if (edge === undefined || edge.kind !== "one") return undefined;
-      attributes[edge.via] = related;
-    }
+      return edge?.kind === "one" ? Option.some([edge.via, related] as const) : Option.none();
+    });
+    const vias = Option.all(linked);
+    if (Option.isNone(vias)) return undefined;
+    const attributes = { ...write.attributes, ...R.fromEntries(vias.value) };
     return { mutator, args: { type: write.type, id: write.id, attributes } };
   };

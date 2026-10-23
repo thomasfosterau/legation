@@ -113,6 +113,7 @@ const nodeEntries = (node: Node.AnyNode, writes: Writes | undefined): ReadonlyAr
           current === undefined
             ? Effect.void
             : writer.put(type, args.id, {
+                // SAFETY: a row of a node collection is the node's row struct, an object.
                 ...(current as Record<string, unknown>),
                 ...args.attributes,
                 [identity]: args.id,

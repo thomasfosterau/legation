@@ -41,6 +41,7 @@ export * as Derive from "./Derive.js";
 export * as DocumentWriter from "./DocumentWriter.js";
 export * as JsonApiBackend from "./JsonApiBackend.js";
 export * as JsonApiFacade from "./JsonApiFacade.js";
+export * as FacadeWrites from "./FacadeWrites.js";
 export * as JsonApiQuery from "./JsonApiQuery.js";
 export * as JsonApiSync from "./JsonApiSync.js";
 export * as Ledger from "./Ledger.js";

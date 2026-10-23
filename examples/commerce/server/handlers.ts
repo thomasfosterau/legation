@@ -23,6 +23,25 @@ import {
   ReviewWriteArgs,
 } from "../src/lib/domain.js";
 
+/**
+ * `reviews/create`'s args: the graph-derived create (`CrudMutation`), in the
+ * graph row form the worker's JSON:API façade journals a `POST /jsonapi/reviews`
+ * as. The author is the caller, never the payload; a `userId` sent along
+ * must be the caller's.
+ */
+const ReviewCreateArgs = Schema.Struct({
+  type: Schema.Literal("reviews"),
+  id: Schema.String,
+  attributes: Schema.Struct({
+    productId: Schema.String,
+    authorName: Schema.String,
+    rating: Schema.Number,
+    body: Schema.String,
+    createdAt: Schema.String,
+    userId: Schema.optional(Schema.String),
+  }),
+});
+
 export const tables: Readonly<Record<string, SqlBackend.TableMapping>> = {
   categories: { table: "categories" },
   sellers: { table: "sellers" },
@@ -164,6 +183,26 @@ export const makeHandlers = (sql: SqlClient): Readonly<Record<string, SqlBackend
       yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
         VALUES (${args.id}, ${args.productId}, ${userId}, ${args.authorName}, ${args.rating}, ${args.body}, ${args.createdAt})`;
       return [hint("reviews", [args.id])];
+    }).pipe(transient),
+
+  // The façade's journaled `POST /jsonapi/reviews` (ADR-0030 §5): `review/write`'s rules over
+  // the graph row form, plus the client id's ownership (a resend of the caller's own review
+  // replaces it; someone else's id is a rejection, as the atomic endpoint's `ownedOrFree`).
+  "reviews/create": (raw, _tx, context) =>
+    Effect.gen(function* () {
+      const { id, attributes } = yield* decode(ReviewCreateArgs, raw);
+      const identity = typeof context.identity === "string" ? context.identity : undefined;
+      const userId = yield* requireUser(context, attributes.userId ?? identity ?? "");
+      if (attributes.rating < 1 || attributes.rating > 5) {
+        return yield* Effect.fail(new MutationRejected({ reason: "rating out of range" }));
+      }
+      const existing = yield* sql<{ userId: string }>`SELECT userId FROM reviews WHERE id = ${id}`;
+      if (existing[0] !== undefined && existing[0].userId !== userId) {
+        return yield* Effect.fail(new MutationRejected({ reason: "review id belongs to another user" }));
+      }
+      yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
+        VALUES (${id}, ${attributes.productId}, ${userId}, ${attributes.authorName}, ${attributes.rating}, ${attributes.body}, ${attributes.createdAt})`;
+      return [hint("reviews", [id])];
     }).pipe(transient),
 
   "profile/update": (raw, _tx, context) =>
