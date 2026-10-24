@@ -96,6 +96,16 @@ const hostUnavailable = new TransportError({
   message: "Mirror: the engine host is gone — outcome unknown, verify before retrying",
 });
 
+/**
+ * Raised when an enhanced form submit's begin reaches a host that predates
+ * carrying it over the mirror protocol (#536): that host answers the begin's
+ * `Mutate` as an unknown mutator, and nothing was overlaid or journaled.
+ */
+const hostPredatesFormMutations = new TransportError({
+  message:
+    "Mirror.beginFormMutation: the engine host predates enhanced form submits over the mirror protocol; upgrade it",
+});
+
 /** Fail (and clear) every deferred still waiting in `ref`, never leaving a caller hanging. */
 const failPending = <A>(
   ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>
@@ -127,6 +137,23 @@ export interface Mirror {
     mutator: string,
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, MutatorError | TransportError>;
+  /**
+   * The client half of an enhanced form submit (ADR-0030 #215 §4), carried to
+   * the host (#536): the host's engine overlays the Mutation under the form
+   * client's id without journaling it, and holds the in-flight entry, so its
+   * overlay and unpulled tail serve every mirror. Settling or abandoning the
+   * returned submission tells the host; as on an engine, an acknowledgement
+   * parks the effect until the pull that covers the form client releases it.
+   * Fails with a `TransportError` when the host predates this, and with a
+   * `MutatorError` when the args do not fit the Mutation or the host refuses
+   * the begin. A submission whose host is gone (restarted, or this mirror's
+   * scope closed) settles as a no-op: its entry went with the host.
+   */
+  readonly beginFormMutation: (
+    form: ClientEngine.FormClient,
+    mutator: string,
+    args: unknown
+  ) => Effect.Effect<ClientEngine.FormSubmission, MutatorError | TransportError>;
   /** Register a subset with the host; rows arrive as mirror updates. */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, TransportError>;
@@ -360,15 +387,31 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         Deferred.Deferred<ReadonlyArray<ClientEngine.ReadRow>, MutatorError | TransportError>
       >()
     );
+    // Enhanced form submits (#536): begins awaiting the host's answer, and
+    // ends awaiting `FormMutationEnded`, same requestId space (an end is keyed
+    // by its begin's requestId, which has left `pendingForms` by then).
+    const pendingForms = yield* Ref.make(
+      new Map<number, Deferred.Deferred<void, MutatorError | TransportError>>()
+    );
+    const pendingFormEnds = yield* Ref.make(
+      new Map<number, Deferred.Deferred<void, MutatorError | TransportError>>()
+    );
     const requestIds = yield* Ref.make(0);
 
     // A request left in flight when this mirror's scope closes can never be
     // answered (its host may still be alive, but nobody will read the reply)
     // — fail it rather than leave the caller hanging forever.
     yield* Effect.addFinalizer(() =>
-      Effect.all([failPending(pending), failPending(pendingSettled), failPending(pendingReads)], {
-        discard: true,
-      })
+      Effect.all(
+        [
+          failPending(pending),
+          failPending(pendingSettled),
+          failPending(pendingReads),
+          failPending(pendingForms),
+          failPending(pendingFormEnds),
+        ],
+        { discard: true }
+      )
     );
 
     // Take a request's deferred out of its map and complete it. A no-op when the
@@ -422,6 +465,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                             failPending(pending),
                             failPending(pendingSettled),
                             failPending(pendingReads),
+                            failPending(pendingForms),
+                            failPending(pendingFormEnds),
                           ],
                           { discard: true }
                         )
@@ -477,9 +522,28 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                     resolveIn(pendingSettled, message.requestId, (deferred) =>
                       Deferred.fail(deferred, error)
                     )
+                  ),
+                  // A form begin answered as an ordinary `Mutate`: only a host
+                  // that predates `FORM_MUTATION_MUTATOR` does that (#536).
+                  Effect.andThen(
+                    resolveIn(pendingForms, message.requestId, (deferred) =>
+                      Deferred.fail(deferred, hostPredatesFormMutations)
+                    )
                   )
                 );
               }
+              case "FormMutationBegun":
+                return resolveIn(pendingForms, message.requestId, (deferred) =>
+                  Deferred.succeed(deferred, undefined)
+                );
+              case "FormMutationFailed":
+                return resolveIn(pendingForms, message.requestId, (deferred) =>
+                  Deferred.fail(deferred, new MutatorError({ message: message.message }))
+                );
+              case "FormMutationEnded":
+                return resolveIn(pendingFormEnds, message.requestId, (deferred) =>
+                  Deferred.succeed(deferred, undefined)
+                );
               case "MutateSettled":
                 return resolveIn(pendingSettled, message.requestId, (deferred) =>
                   Deferred.succeed(deferred, outcomeOf(message))
@@ -645,11 +709,55 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         return key;
       });
 
+    // Ask the host to end a form submission and wait for it to have done so;
+    // a host that is gone took the entry with it, so that is an end too.
+    const endForm = (requestId: number, ruling: ClientEngine.FormRuling | undefined) =>
+      Effect.gen(function* () {
+        const deferred = yield* Deferred.make<void, MutatorError | TransportError>();
+        yield* Ref.update(pendingFormEnds, (map) => new Map(map).set(requestId, deferred));
+        yield* channel.post({
+          _tag: "EndFormMutation",
+          mirrorId,
+          requestId,
+          ...(ruling === undefined ? {} : { ruling }),
+        });
+        yield* Deferred.await(deferred);
+      }).pipe(Effect.ignore);
+
+    const beginFormMutation = (form: ClientEngine.FormClient, mutator: string, args: unknown) =>
+      Effect.gen(function* () {
+        const encoded = yield* encodeArgs(mutator, args);
+        const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
+        const deferred = yield* Deferred.make<void, MutatorError | TransportError>();
+        yield* Ref.update(pendingForms, (map) => new Map(map).set(requestId, deferred));
+        const begin: MirrorProtocol.FormMutationBegin = { mirrorId, form, mutator, args: encoded };
+        yield* channel.post({
+          _tag: "Mutate",
+          requestId,
+          mutator: MirrorProtocol.FORM_MUTATION_MUTATOR,
+          args: begin,
+        });
+        yield* Deferred.await(deferred);
+        // Exactly one of settle or abandon ends it; later calls do nothing.
+        const open = yield* Ref.make(true);
+        const end = (ruling: ClientEngine.FormRuling | undefined) =>
+          Ref.getAndSet(open, false).pipe(
+            Effect.flatMap((wasOpen) => (wasOpen ? endForm(requestId, ruling) : Effect.void))
+          );
+        const submission: ClientEngine.FormSubmission = {
+          form,
+          settle: (ruling) => end(ruling),
+          abandon: end(undefined),
+        };
+        return submission;
+      });
+
     return {
       mutate: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pending, mutator, encoded))
         ),
+      beginFormMutation,
       mutateWithAck: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pendingSettled, mutator, encoded))
