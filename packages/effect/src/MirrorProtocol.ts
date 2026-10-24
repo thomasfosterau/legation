@@ -87,6 +87,45 @@ export const relatedKey = (
   return `related:${collection}:${Subset.hash(subset)}:${Arr.sort(parts, Order.String).join("+")}`;
 };
 
+// ─── Enhanced form submits (#536) ─────────────────────────────────────────────
+
+/**
+ * The reserved mutator name an enhanced form submit's begin travels under
+ * (ADR-0030 #215 §4, #536). A mirror asks its host to begin a form mutation
+ * with a `Mutate` naming this mutator, its args a {@link FormMutationBegin}.
+ * A host that knows it answers `FormMutationBegun` or `FormMutationFailed`
+ * and journals nothing. It travels as a `Mutate`, not a tag of its own, so a
+ * host that predates it answers too: its engine has no such mutator, so it
+ * replies `MutateError` and journals nothing, and the mirror reports that
+ * the host is too old instead of waiting on a message the host dropped as
+ * foreign traffic. No app mutator may take this name.
+ */
+export const FORM_MUTATION_MUTATOR = "@thomasfosterau/legation-effect/beginFormMutation";
+
+/** The args of a {@link FORM_MUTATION_MUTATOR} `Mutate`: the form client and the Mutation it runs. */
+export interface FormMutationBegin {
+  /** The mirror the entry belongs to; its `Disconnect` (or liveness sweep) abandons it. */
+  readonly mirrorId: string;
+  readonly form: ClientEngine.FormClient;
+  readonly mutator: string;
+  /** The Mutation's args in encoded (wire) form; the host decodes them. */
+  readonly args: unknown;
+}
+
+/** Wire codec for {@link FormMutationBegin}. */
+export const FormMutationBeginSchema = Schema.Struct({
+  mirrorId: Schema.String,
+  form: Schema.Struct({ clientId: Schema.String, mutationId: Schema.Number }),
+  mutator: Schema.String,
+  args: Schema.Unknown,
+});
+
+/** Wire codec for {@link ClientEngine.FormRuling}. */
+export const FormRulingSchema = Schema.Union([
+  Schema.Struct({ phase: Schema.Literal("acknowledged") }),
+  Schema.Struct({ phase: Schema.Literal("rejected"), reason: Schema.String }),
+]);
+
 // ─── Mirror → host ────────────────────────────────────────────────────────────
 
 /** A message a mirror sends to the host. */
@@ -149,7 +188,19 @@ export type MirrorMessage =
   /** A mirror leaving: release every subscription it held. */
   | { readonly _tag: "Disconnect"; readonly mirrorId: string }
   /** Liveness ping: lets the host reclaim subsets from mirrors that crash. */
-  | { readonly _tag: "Heartbeat"; readonly mirrorId: string };
+  | { readonly _tag: "Heartbeat"; readonly mirrorId: string }
+  /**
+   * End an enhanced form submission begun with a {@link FORM_MUTATION_MUTATOR}
+   * `Mutate` (#536): `ruling` settles it on the form action's receipt, and its
+   * absence abandons it. `requestId` is the begin's. Answered by
+   * `FormMutationEnded`, also when the host no longer holds the entry.
+   */
+  | {
+      readonly _tag: "EndFormMutation";
+      readonly mirrorId: string;
+      readonly requestId: number;
+      readonly ruling?: ClientEngine.FormRuling;
+    };
 
 /** Wire codec for {@link MirrorMessage}. */
 export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
@@ -210,6 +261,12 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("UnsubscribeMutationStates"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Disconnect"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("Heartbeat"), mirrorId: Schema.String }),
+  Schema.Struct({
+    _tag: Schema.tag("EndFormMutation"),
+    mirrorId: Schema.String,
+    requestId: Schema.Number,
+    ruling: Schema.optional(FormRulingSchema),
+  }),
 ]) as Schema.Codec<MirrorMessage>;
 
 // ─── Host → mirrors ───────────────────────────────────────────────────────────
@@ -293,7 +350,18 @@ export type HostMessage =
   | {
       readonly _tag: "PulledRegistrations";
       readonly registrations: ReadonlyArray<PulledRegistration>;
-    };
+    }
+  /** A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client (#536). */
+  | { readonly _tag: "FormMutationBegun"; readonly requestId: number }
+  /**
+   * A {@link FORM_MUTATION_MUTATOR} begin the host refused (unknown Mutation,
+   * args that do not decode, a store failure): nothing was overlaid. A
+   * dedicated tag, so that `MutateError` for a begin means only "this host
+   * predates enhanced form submits".
+   */
+  | { readonly _tag: "FormMutationFailed"; readonly requestId: number; readonly message: string }
+  /** The answer to `EndFormMutation`, correlated by the begin's `requestId`. */
+  | { readonly _tag: "FormMutationEnded"; readonly requestId: number };
 
 /** One registration's pulled summary, keyed as the host keys it. */
 export interface PulledRegistration {
@@ -365,6 +433,13 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
       })
     ),
   }),
+  Schema.Struct({ _tag: Schema.tag("FormMutationBegun"), requestId: Schema.Number }),
+  Schema.Struct({
+    _tag: Schema.tag("FormMutationFailed"),
+    requestId: Schema.Number,
+    message: Schema.String,
+  }),
+  Schema.Struct({ _tag: Schema.tag("FormMutationEnded"), requestId: Schema.Number }),
 ]) as Schema.Codec<HostMessage>;
 
 /** Build a MirrorUpdate from materialized engine rows. */
