@@ -62,6 +62,8 @@ import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
 import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
+import * as R from "effect/Record";
+import * as Result from "effect/Result";
 import type * as Schema from "effect/Schema";
 
 /** A definition-time mismatch between a resource graph and the node model. */
@@ -127,18 +129,13 @@ const oneEdgesOf = (
   resource: Resource.Any,
   options: FromResourceOptions
 ): Record<string, Edge.One> => {
-  const edges: Record<string, Edge.One> = {};
-  for (const [name, descriptor] of Object.entries(resource.relationships)) {
-    if (descriptor.kind === "one" || descriptor.kind === "optional") {
-      edges[name] = Edge.one(descriptor.ref().type, {
-        via: options.via?.[name] ?? `${name}Id`,
-      });
-    }
-  }
-  for (const [name, declared] of Object.entries(options.edges ?? {})) {
-    edges[name] = Edge.one(declared.target, { via: declared.via });
-  }
-  return edges;
+  const related = R.filterMap(resource.relationships, (descriptor, name) =>
+    descriptor.kind === "one" || descriptor.kind === "optional"
+      ? Result.succeed(Edge.one(descriptor.ref().type, { via: options.via?.[name] ?? `${name}Id` }))
+      : Result.failVoid
+  );
+  const declared = R.map(options.edges ?? {}, (edge) => Edge.one(edge.target, { via: edge.via }));
+  return { ...related, ...declared };
 };
 
 /**
@@ -205,12 +202,12 @@ const edgesOf = (
   options: FromResourceOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
 ): Record<string, Edge.Edge> => {
-  const edges: Record<string, Edge.Edge> = { ...oneEdgesOf(resource, options) };
-  for (const [name, descriptor] of Object.entries(resource.relationships)) {
-    if (descriptor.kind !== "many" && descriptor.kind !== "paginated") continue;
-    edges[name] = collectionEdge(resource, name, descriptor, options, oneEdgesOfTarget);
-  }
-  return edges;
+  const collections = R.filterMap(resource.relationships, (descriptor, name) =>
+    descriptor.kind === "many" || descriptor.kind === "paginated"
+      ? Result.succeed(collectionEdge(resource, name, descriptor, options, oneEdgesOfTarget))
+      : Result.failVoid
+  );
+  return { ...oneEdgesOf(resource, options), ...collections };
 };
 
 /**
@@ -222,11 +219,10 @@ const attributesOf = (
   resource: Resource.Any,
   edges: Record<string, Edge.Edge>
 ): Schema.Struct.Fields => {
-  const attributes: Record<string, Schema.Constraint> = { ...resource.fields.attributes.fields };
-  for (const edge of Object.values(edges)) {
-    if (edge.kind === "one") delete attributes[edge.via];
-  }
-  return attributes;
+  const keys = new Set(
+    Object.values(edges).flatMap((edge) => (edge.kind === "one" ? [edge.via] : []))
+  );
+  return R.filter(resource.fields.attributes.fields, (_, field) => !keys.has(field));
 };
 
 /** One entry of `Resource.filterable`, as the bridge reads it. */
@@ -249,7 +245,7 @@ const declaredFilterable = (
   const declared: Record<string, FilterPolicy.FilterableInput> = {};
   const attributes = resource.fields.attributes.fields;
   const entries = Object.entries(Resource.filterable(resource)) as Array<[string, DeclaredField]>;
-  for (const [key, entry] of entries) {
+  entries.forEach(([key, entry]) => {
     const edge = edges[key];
     const viaRelationship = attributes[key] === undefined && edge?.kind === "one";
     const field = viaRelationship ? edge.via : key;
@@ -263,7 +259,7 @@ const declaredFilterable = (
     declared[field] = viaRelationship
       ? { operators: entry.operators, kind: "text" }
       : entry.operators;
-  }
+  });
   return declared;
 };
 

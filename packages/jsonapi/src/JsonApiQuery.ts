@@ -251,23 +251,17 @@ const isFalse = (predicate: Predicate.Predicate): boolean =>
 
 /** Kleene `And` over folded members: any false is false; true members vanish. */
 const foldAnd = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
-  const kept: Array<Predicate.Predicate> = [];
-  for (const member of members) {
-    const folded = foldConstants(member);
-    if (isFalse(folded)) return FALSE;
-    if (!isTrue(folded)) kept.push(folded);
-  }
+  const folded = members.map(foldConstants);
+  if (folded.some(isFalse)) return FALSE;
+  const kept = folded.filter((member) => !isTrue(member));
   return Arr.isReadonlyArrayEmpty(kept) ? Predicate.always : Predicate.and(...kept);
 };
 
 /** Kleene `Or` over folded members: any true is true; false members vanish. */
 const foldOr = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
-  const kept: Array<Predicate.Predicate> = [];
-  for (const member of members) {
-    const folded = foldConstants(member);
-    if (isTrue(folded)) return Predicate.always;
-    if (!isFalse(folded)) kept.push(folded);
-  }
+  const folded = members.map(foldConstants);
+  if (folded.some(isTrue)) return Predicate.always;
+  const kept = folded.filter((member) => !isFalse(member));
   return Arr.isReadonlyArrayEmpty(kept) ? FALSE : Predicate.or(...kept);
 };
 
@@ -339,14 +333,17 @@ const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top => {
  * `fields[type]` still names it but no filter reaches it.
  */
 const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
-  const attributes: Record<string, Schema.Top> = {};
-  for (const [field, declared] of Object.entries(node.filterable)) {
-    attributes[field] = literalSchema(declared.kind).pipe(Filter.able(declared.operators));
-  }
-  for (const field of Object.keys(node.attributes)) {
-    attributes[field] ??= Schema.Unknown;
-  }
-  return attributes;
+  const filterable: Record<string, Schema.Top> = R.map(node.filterable, (declared) =>
+    literalSchema(declared.kind).pipe(Filter.able(declared.operators))
+  );
+  // Declared filterable fields first, then the other attributes, untyped.
+  return {
+    ...filterable,
+    ...R.map(
+      R.filter(node.attributes, (_, field) => !R.has(filterable, field)),
+      (): Schema.Top => Schema.Unknown
+    ),
+  };
 };
 
 /**
@@ -371,13 +368,10 @@ const relationshipsOf = (
   node: Node.AnyNode,
   resources: ReadonlyMap<string, Resource.Any>
 ): Record<string, Relationship.Descriptor> => {
-  const relationships: Record<string, Relationship.Descriptor> = {};
-  for (const [name, edge] of Object.entries(node.edges)) {
+  return R.map(node.edges, (edge): Relationship.Descriptor => {
     const target = () => resourceIn(resources, edge.target);
-    relationships[name] =
-      edge.kind === "one" ? Relationship.one(target) : Relationship.many(target);
-  }
-  return relationships;
+    return edge.kind === "one" ? Relationship.one(target) : Relationship.many(target);
+  });
 };
 
 const resourceGraphs = new WeakMap<Node.NodeRegistry, ReadonlyMap<string, Resource.Any>>();
@@ -393,15 +387,15 @@ export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resou
   const cached = resourceGraphs.get(nodes);
   if (cached !== undefined) return cached;
   const resources = new Map<string, Resource.Any>();
-  for (const node of nodes.nodes.values()) {
+  nodes.nodes.forEach((node) =>
     resources.set(
       node.type,
       Resource.make(node.type, {
         attributes: attributesOf(node),
         relationships: relationshipsOf(node, resources),
       })
-    );
-  }
+    )
+  );
   resourceGraphs.set(nodes, resources);
   return resources;
 };
@@ -576,7 +570,7 @@ const recordOf = (
 ): Record<string, string | ReadonlyArray<string>> => {
   if (!(params instanceof URLSearchParams)) return { ...params };
   const record: Record<string, string | ReadonlyArray<string>> = {};
-  for (const [key, value] of params) {
+  params.forEach((value, key) => {
     const existing = record[key];
     record[key] =
       existing === undefined
@@ -584,7 +578,7 @@ const recordOf = (
         : P.isString(existing)
           ? [existing, value]
           : [...existing, value];
-  }
+  });
   return record;
 };
 
@@ -635,29 +629,33 @@ const includeTokens = (value: string | ReadonlyArray<string> | undefined): Reado
 const checkInclude = (
   node: Node.AnyNode,
   value: string | ReadonlyArray<string> | undefined
-): Effect.Effect<void, QueryError> => {
-  for (const token of includeTokens(value)) {
-    if (token.includes(".")) {
-      return Effect.fail(
-        invalid(
-          node.type,
-          "include",
-          `nested include path "${token}" is not supported; a read includes a node's own edges only (ADR-0028 D1)`
+): Effect.Effect<void, QueryError> =>
+  failFirst(includeTokens(value), (token) =>
+    token.includes(".")
+      ? Option.some(
+          invalid(
+            node.type,
+            "include",
+            `nested include path "${token}" is not supported; a read includes a node's own edges only (ADR-0028 D1)`
+          )
         )
-      );
-    }
-    if (node.edges[token] === undefined) {
-      return Effect.fail(
-        invalid(
-          node.type,
-          "include",
-          `"${token}" is not an edge of "${node.type}" (edges: ${Object.keys(node.edges).join(", ")})`
-        )
-      );
-    }
-  }
-  return Effect.void;
-};
+      : node.edges[token] === undefined
+        ? Option.some(
+            invalid(
+              node.type,
+              "include",
+              `"${token}" is not an edge of "${node.type}" (edges: ${Object.keys(node.edges).join(", ")})`
+            )
+          )
+        : Option.none()
+  );
+
+/** Fail with the first item's error, in order; succeed when no item has one. */
+const failFirst = <A>(
+  items: Iterable<A>,
+  errorOf: (item: A) => Option.Option<QueryError>
+): Effect.Effect<void, QueryError> =>
+  Option.match(Arr.findFirst(items, errorOf), { onNone: () => Effect.void, onSome: Effect.fail });
 
 /** One segment of a Standard Schema issue path: a key, or an object carrying one. */
 type PathSegment = PropertyKey | { readonly key: PropertyKey };
@@ -690,14 +688,13 @@ const projectionError = (node: Node.AnyNode, type: string): QueryError | undefin
 const checkFields = (
   node: Node.AnyNode,
   record: Readonly<Record<string, unknown>>
-): Effect.Effect<void, QueryError> => {
-  for (const key of Object.keys(record)) {
+): Effect.Effect<void, QueryError> =>
+  failFirst(Object.keys(record), (key) => {
     const match = /^fields\[(.*)\]$/.exec(key);
-    const error = match === null ? undefined : projectionError(node, match[1] ?? "");
-    if (error !== undefined) return Effect.fail(error);
-  }
-  return Effect.void;
-};
+    return Option.fromUndefinedOr(
+      match === null ? undefined : projectionError(node, match[1] ?? "")
+    );
+  });
 
 /**
  * `page[offset]` and `page[after]` are different pagination idioms — one
@@ -855,10 +852,17 @@ export const singleRowParams = (
   id: string,
   params: URLSearchParams
 ): Effect.Effect<URLSearchParams, QueryError> => {
-  for (const key of params.keys()) {
-    if (key === "include" || key.startsWith("fields[")) continue;
+  const extra = Arr.findFirst(
+    params.keys(),
+    (key) => key !== "include" && !key.startsWith("fields[")
+  );
+  if (Option.isSome(extra)) {
     return Effect.fail(
-      invalid(collection, key, `a single-resource request takes "include" and "fields[…]" only`)
+      invalid(
+        collection,
+        extra.value,
+        `a single-resource request takes "include" and "fields[…]" only`
+      )
     );
   }
   const widened = new URLSearchParams(params);
@@ -935,9 +939,9 @@ const filterOf = (
   declaration: Filter.LiteralCodecs,
   where: Predicate.Predicate
 ): Filter.Node | undefined => {
-  let predicate = foldConstants(where);
-  for (let pass = 0; pass < NORMAL_FORM_PASSES; pass++) {
-    if (isTrue(predicate)) return undefined;
+  const settle = (predicate: Predicate.Predicate, pass: number): Option.Option<Filter.Node> => {
+    if (pass >= NORMAL_FORM_PASSES) return Option.some(astOf(collection, predicate));
+    if (isTrue(predicate)) return Option.none();
     const ast = Filter.normalise(astOf(collection, predicate), declaration);
     // Safe by construction, not merely by convention: `ast` was normalised
     // from `astOf`'s output, whose every literal is copied verbatim from a
@@ -948,10 +952,10 @@ const filterOf = (
     const back = fromFilterAst(ast);
     if (Result.isFailure(back)) throw back.failure;
     const next = foldConstants(back.success);
-    if (JSON.stringify(next) === JSON.stringify(predicate)) return ast;
-    predicate = next;
-  }
-  return astOf(collection, predicate);
+    if (JSON.stringify(next) === JSON.stringify(predicate)) return Option.some(ast);
+    return settle(next, pass + 1);
+  };
+  return Option.getOrUndefined(settle(foldConstants(where), 0));
 };
 
 /**
@@ -1016,10 +1020,10 @@ export const canonical = (
       query: read.collection,
     });
   }
-  for (const type of Object.keys(fields ?? {})) {
+  Object.keys(fields ?? {}).forEach((type) => {
     const error = projectionError(node, type);
     if (error !== undefined) throw error;
-  }
+  });
   const encoded = Result.try({
     try: () => {
       const declaration = Resource.filterable(resourceIn(resourcesOf(nodes), node.type));
@@ -1101,7 +1105,7 @@ const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
   const types = new Map<string, Set<string>>();
   collectLiteralTypes(ast, types);
   const resolved = new Map<string, string>();
-  for (const [field, kinds] of types) {
+  types.forEach((kinds, field) => {
     const [kind, ...rest] = kinds;
     if (Arr.isReadonlyArrayNonEmpty(rest)) {
       throw new QueryError({
@@ -1110,7 +1114,7 @@ const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
       });
     }
     resolved.set(field, kind ?? "string");
-  }
+  });
   return resolved;
 };
 
@@ -1134,10 +1138,10 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
     .join("\n");
   const cached = flatFilterCodecs.get(signature);
   if (cached !== undefined) return cached;
-  const attributes: Record<string, Schema.Top> = {};
-  for (const [field, type] of types) {
-    attributes[field] = scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able());
-  }
+  const attributes = R.fromIterableWith(types, ([field, type]): [string, Schema.Top] => [
+    field,
+    scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able()),
+  ]);
   const codec = UrlQuery.Filter(Resource.make("query", { attributes })) as FlatFilterCodec;
   flatFilterCodecs.set(signature, codec);
   return codec;
@@ -1179,15 +1183,20 @@ export const buildQueryString = (options?: JsonApiRequestOptions): string => {
   const pairs: Array<UrlQuery.Pair> = [];
   if (options.include && Arr.isReadonlyArrayNonEmpty(options.include))
     pairs.push(["include", options.include.join(",")]);
-  for (const [type, names] of Object.entries(options.fields ?? {})) {
-    pairs.push([`fields[${type}]`, names.join(",")]);
-  }
+  pairs.push(
+    ...Object.entries(options.fields ?? {}).map(([type, names]): UrlQuery.Pair => [
+      `fields[${type}]`,
+      names.join(","),
+    ])
+  );
   if (options.filter !== undefined) pairs.push(...Object.entries(flatFilter(options.filter)));
   if (options.sort && Arr.isReadonlyArrayNonEmpty(options.sort))
     pairs.push(["sort", encodeSort(options.sort)]);
-  for (const [key, value] of Object.entries(options.page ?? {})) {
-    if (value !== undefined) pairs.push([`page[${key}]`, String(value)]);
-  }
+  pairs.push(
+    ...Object.entries(options.page ?? {}).flatMap(([key, value]): Array<UrlQuery.Pair> =>
+      value === undefined ? [] : [[`page[${key}]`, String(value)]]
+    )
+  );
   const query = UrlQuery.serialise(pairs);
   return query === "" ? "" : `?${query}`;
 };

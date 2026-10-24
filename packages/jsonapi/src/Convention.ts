@@ -30,6 +30,7 @@
  * instead — the backend then pushes a whole batch as one request.
  */
 
+import * as Iterable from "effect/Iterable";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Str from "effect/String";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -140,14 +141,10 @@ const hasAtomicMember = (ast: SchemaAST.AST, depth = 0): boolean => {
  * makes an endpoint the atomic operations endpoint — not its path, which is
  * configurable.
  */
-export const isAtomicEndpoint = (endpoint: HttpApiEndpoint.Top): boolean => {
-  for (const { schemas } of endpoint.payload.values()) {
-    for (const schema of schemas) {
-      if (hasAtomicMember(schema.ast)) return true;
-    }
-  }
-  return false;
-};
+export const isAtomicEndpoint = (endpoint: HttpApiEndpoint.Top): boolean =>
+  Iterable.some(endpoint.payload.values(), ({ schemas }) =>
+    Iterable.some(schemas, (schema) => hasAtomicMember(schema.ast))
+  );
 
 const refOf = (group: HttpApiGroup.Top, endpoint: HttpApiEndpoint.Top): EndpointRef => ({
   groupId: group.identifier,

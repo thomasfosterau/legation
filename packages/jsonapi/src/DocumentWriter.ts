@@ -61,6 +61,7 @@
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
+import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
 import type { Related } from "@thomasfosterau/legation-effect/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
@@ -160,11 +161,10 @@ const envOf = (input: Input): Env => ({
 
 /** The node's declared attributes off the row value, in declaration order; absent ones are left out. */
 const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown>>) => {
-  const attributes: Record<string, unknown> = {};
-  for (const field of Object.keys(node.attributes)) {
-    if (value[field] !== undefined) attributes[field] = value[field];
-  }
-  return attributes;
+  return R.filterMap(node.attributes, (_, field) => {
+    const attribute = value[field];
+    return attribute === undefined ? Result.failVoid : Result.succeed(attribute);
+  });
 };
 
 /** A row as the writer sees it: its id and value, the root rows' `related`, and everything else's linkage. */
@@ -222,11 +222,10 @@ const relationshipOf = (
 
 /** The resource object of one row of a node. */
 const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
-  const relationships: Record<string, RelationshipValue> = {};
-  for (const name of Object.keys(node.edges)) {
+  const relationships = R.filterMap(node.edges, (_, name) => {
     const relationship = relationshipOf(env, node, row, name);
-    if (relationship !== undefined) relationships[name] = relationship;
-  }
+    return relationship === undefined ? Result.failVoid : Result.succeed(relationship);
+  });
   return {
     type: node.type,
     id: row.id,
@@ -245,13 +244,11 @@ const includedOf = (
   const edge = node.edges[name];
   const target = edge === undefined ? undefined : env.nodes.nodes.get(edge.target);
   if (target === undefined) return [];
-  const included: Array<ResourceValue> = [];
-  for (const row of rows) {
-    for (const related of relatedValuesOf(row.related[name])) {
-      included.push(resourceOf(env, target, { id: idOf(related), value: related }));
-    }
-  }
-  return included;
+  return rows.flatMap((row) =>
+    relatedValuesOf(row.related[name]).map((related) =>
+      resourceOf(env, target, { id: idOf(related), value: related })
+    )
+  );
 };
 
 /** The resource's attributes narrowed to its type's `fields[]` entry, when one is given. */
@@ -261,10 +258,7 @@ const project = (
 ): ResourceValue => {
   const names = fields?.[resource.type];
   if (names === undefined) return resource;
-  const attributes: Record<string, unknown> = {};
-  for (const [field, value] of Object.entries(resource.attributes)) {
-    if (names.includes(field)) attributes[field] = value;
-  }
+  const attributes = R.filter(resource.attributes, (_, field) => names.includes(field));
   return { ...resource, attributes };
 };
 

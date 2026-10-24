@@ -106,12 +106,9 @@ const checkDeclaration = (
  * edges resolved for linkage.
  */
 const manyEdgesOf = (resource: Resource.Any, node: Node.AnyNode): ReadonlyArray<string> => {
-  const names: Array<string> = [];
-  for (const [name, descriptor] of descriptorsOf(resource)) {
-    checkDeclaration(resource, node, name, descriptor);
-    if (descriptor.kind === "many") names.push(name);
-  }
-  return names;
+  const descriptors = descriptorsOf(resource);
+  descriptors.forEach(([name, descriptor]) => checkDeclaration(resource, node, name, descriptor));
+  return descriptors.flatMap(([name, descriptor]) => (descriptor.kind === "many" ? [name] : []));
 };
 
 /** The linkage plan of a resource over its node (a definition-time check of the whole declaration). */
@@ -121,22 +118,23 @@ export const planOf = (
   node: Node.AnyNode
 ): Plan => {
   const root = manyEdgesOf(resource, node);
-  const included = new Map<string, ReadonlyArray<string>>();
-  for (const [name, descriptor] of descriptorsOf(resource)) {
-    if (descriptor.kind === "paginated") continue;
-    const target = descriptor.ref();
-    const targetNode = nodes.nodes.get(target.type);
-    if (targetNode === undefined) continue;
-    included.set(name, manyEdgesOf(target, targetNode));
-  }
+  const included = new Map<string, ReadonlyArray<string>>(
+    descriptorsOf(resource).flatMap(([name, descriptor]) => {
+      if (descriptor.kind === "paginated") return [];
+      const target = descriptor.ref();
+      const targetNode = nodes.nodes.get(target.type);
+      return targetNode === undefined ? [] : [[name, manyEdgesOf(target, targetNode)] as const];
+    })
+  );
   return { root, included };
 };
 
 /** The read to run: the URL's read with the root linkage edges selected beside its includes. */
 export const withLinkage = (plan: Plan, read: Query.Read): Query.Read => {
-  const include: Record<string, true | Query.IncludeOptions> = {};
-  for (const name of plan.root) include[name] = true;
-  Object.assign(include, read.include);
+  const include: Record<string, true | Query.IncludeOptions> = {
+    ...R.fromIterableWith(plan.root, (name): [string, true] => [name, true]),
+    ...read.include,
+  };
   return R.isEmptyReadonlyRecord(include) ? read : { ...read, include };
 };
 
@@ -154,16 +152,13 @@ export const collectionsOf = (
   plan: Plan,
   read: Query.Read
 ): ReadonlyArray<string> => {
-  const collections = new Set<string>();
   const included = read.include ?? {};
-  for (const name of plan.root) {
+  const roots = plan.root.flatMap((name) => {
     const edge = node.edges[name];
-    if (included[name] === undefined && edge !== undefined) collections.add(edge.target);
-  }
-  for (const name of Object.keys(included)) {
-    for (const target of includedTargets(nodes, node, plan, name)) collections.add(target);
-  }
-  return [...collections];
+    return included[name] === undefined && edge !== undefined ? [edge.target] : [];
+  });
+  const nested = Object.keys(included).flatMap((name) => includedTargets(nodes, node, plan, name));
+  return [...new Set([...roots, ...nested])];
 };
 
 /** The targets of the declared `many` edges of included edge `name`'s type. */
@@ -189,13 +184,11 @@ const includedIds = (
   rows: ReadonlyArray<Related.RelatedRow>,
   name: string
 ): ReadonlySet<string> => {
-  const ids = new Set<string>();
-  for (const row of rows) {
-    for (const related of DocumentWriter.relatedValuesOf(row.related[name])) {
-      ids.add(DocumentWriter.idOf(related));
-    }
-  }
-  return ids;
+  return new Set(
+    rows.flatMap((row) =>
+      DocumentWriter.relatedValuesOf(row.related[name]).map(DocumentWriter.idOf)
+    )
+  );
 };
 
 /** One subset of the included-linkage batch: an edge's rows for a set of included parents. */
@@ -219,7 +212,7 @@ const addLinkageQuery = (
   const key = `${type}\0${edge}`;
   const existing = queries.get(key);
   if (existing !== undefined) {
-    for (const id of parents) existing.parents.add(id);
+    parents.forEach((id) => existing.parents.add(id));
     return;
   }
   const relationship = Collection.relationshipsOf(nodes.collections, type).get(edge);
@@ -243,14 +236,14 @@ const linkageQueries = (
   rows: ReadonlyArray<Related.RelatedRow>
 ): ReadonlyArray<LinkageQuery> => {
   const queries = new Map<string, LinkageQuery>();
-  for (const name of Object.keys(read.include ?? {})) {
+  Object.keys(read.include ?? {}).forEach((name) => {
     const edges = plan.included.get(name) ?? [];
     const parents = includedIds(rows, name);
-    if (Arr.isReadonlyArrayEmpty(edges) || parents.size === 0) continue;
+    if (Arr.isReadonlyArrayEmpty(edges) || parents.size === 0) return;
     const type = node.edges[name]?.target;
-    if (type === undefined) continue;
-    for (const edge of edges) addLinkageQuery(nodes, queries, type, edge, parents);
-  }
+    if (type === undefined) return;
+    edges.forEach((edge) => addLinkageQuery(nodes, queries, type, edge, parents));
+  });
   return [...queries.values()];
 };
 
@@ -267,14 +260,14 @@ const assignLinkage = (
     byId.set(parent, edges);
     return (edges[edge] ??= []);
   };
-  for (const query of queries) {
-    for (const parent of query.parents) bucket(query.type, parent, query.edge);
-    for (const row of fetched) {
-      if (row.collection !== query.collection) continue;
+  queries.forEach((query) => {
+    query.parents.forEach((parent) => bucket(query.type, parent, query.edge));
+    fetched.forEach((row) => {
+      if (row.collection !== query.collection) return;
       const parent = String((row.value as Record<string, unknown>)[query.field]);
       if (query.parents.has(parent)) bucket(query.type, parent, query.edge).push(row.value);
-    }
-  }
+    });
+  });
   return linkage;
 };
 

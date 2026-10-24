@@ -122,7 +122,7 @@ export const derive = (resources: ResourceMap): Derived => {
     operations.set(name, { operation, type });
   };
 
-  for (const resource of resources.values()) {
+  resources.forEach((resource) => {
     const type = resource.type;
     collections.push(collectionFor(type));
 
@@ -158,7 +158,7 @@ export const derive = (resources: ResourceMap): Derived => {
     if (resource.delete !== undefined) {
       add(type, "delete", DeleteArgs, (args, writer) => writer.del(type, args.id));
     }
-  }
+  });
 
   return {
     collections,

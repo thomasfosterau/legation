@@ -138,16 +138,16 @@ export default defineConfig({
       // not headroom. Once a rule's count reaches zero its line is deleted,
       // so it is back at the preset's `error`. The remaining sites are listed
       // in #497 (see AGENTS.md "Effect").
-      "effect/avoid-native-object-helpers": "warn", // 701 sites
+      "effect/avoid-native-object-helpers": "warn", // 692 sites
       "effect/require-safety-comment-for-type-assertion": "warn", // 622 sites
-      "effect/imperative-loops": "warn", // 658 sites
-      "effect/yield-in-for-loop": "warn", // 637 sites
+      "effect/imperative-loops": "warn", // 582 sites
+      "effect/yield-in-for-loop": "warn", // 619 sites
       "effect/avoid-direct-tag-checks": "warn", // 170 sites
       "effect/avoid-direct-json": "warn", // 161 sites
       "effect/no-conditional-empty-object-spread": "warn", // 146 sites
       "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
-      "effect/no-known-value-widening": "warn", // 101 sites
+      "effect/no-known-value-widening": "warn", // 98 sites
       "effect/avoid-untagged-errors": "warn", // 75 sites
       "effect/require-effect-concurrency": "warn", // 73 sites
       "effect/effect-promise-vs-trypromise": "warn", // 66 sites
