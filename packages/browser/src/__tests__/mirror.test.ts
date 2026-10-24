@@ -664,16 +664,21 @@ describe("EngineHost.Host.registrations", () => {
           expect(edged.url).toBeUndefined();
 
           // The same verdicts the Client's own ledger gives, from the host's side.
-          for (const read of [{ collection: "todos" }, withAuthor]) {
-            const verdict = yield* coverageOf(read);
-            expect(verdict._tag, JSON.stringify(read)).toBe("Covered");
-            // The host tells the mirror which registrations are pulled, so the Client agrees once it hears.
-            const local = yield* eventually(
-              client.coverageOf(read),
-              (current) => current._tag === "Covered"
-            );
-            expect(verdict._tag).toBe(local._tag);
-          }
+          yield* Effect.forEach(
+            [{ collection: "todos" }, withAuthor],
+            (read) =>
+              Effect.gen(function* () {
+                const verdict = yield* coverageOf(read);
+                expect(verdict._tag, JSON.stringify(read)).toBe("Covered");
+                // The host tells the mirror which registrations are pulled, so the Client agrees once it hears.
+                const local = yield* eventually(
+                  client.coverageOf(read),
+                  (current) => current._tag === "Covered"
+                );
+                expect(verdict._tag).toBe(local._tag);
+              }),
+            { concurrency: 1, discard: true }
+          );
           expect((yield* coverageOf({ collection: "users" }))._tag).toBe("Uncovered");
 
           // A page with no Client at all registers by URL: listed the same

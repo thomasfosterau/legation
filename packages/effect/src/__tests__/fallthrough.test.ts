@@ -111,13 +111,18 @@ const seed = (handler: Transport.ServerHandler) =>
     const writer = Client.fromView(nodes, ClientView.fromEngine(engine));
     yield* writer.mutate("product/set", { id: "p-1", name: "Desk" });
     yield* writer.mutate("product/set", { id: "p-2", name: "Lamp" });
-    for (const [id, at] of [
-      ["r-1", "2026-01-01"],
-      ["r-2", "2026-02-01"],
-      ["r-3", "2026-03-01"],
-    ] as const) {
-      yield* writer.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-    }
+    yield* Effect.forEach(
+      [
+        ["r-1", "2026-01-01"],
+        ["r-2", "2026-02-01"],
+        ["r-3", "2026-03-01"],
+      ] as const,
+      ([id, at]) =>
+        Effect.gen(function* () {
+          yield* writer.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
+        }),
+      { concurrency: 1, discard: true }
+    );
     yield* engine.push.pipe(Effect.orDie);
   });
 

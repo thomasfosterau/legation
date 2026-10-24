@@ -182,13 +182,18 @@ describe("Client over an owned engine", () => {
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
-        for (const [id, at] of [
-          ["r-1", "2026-01-01"],
-          ["r-2", "2026-03-01"],
-          ["r-3", "2026-02-01"],
-        ] as const) {
-          yield* client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-        }
+        yield* Effect.forEach(
+          [
+            ["r-1", "2026-01-01"],
+            ["r-2", "2026-03-01"],
+            ["r-3", "2026-02-01"],
+          ] as const,
+          ([id, at]) =>
+            Effect.gen(function* () {
+              yield* client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         const latest = yield* Ref.make<ReadonlyArray<{ id: string }>>([]);
         yield* Effect.forkScoped(
@@ -560,7 +565,10 @@ const stubUrls: Client.UrlReads = {
       for (const [key, value] of searchParams) {
         const filter = /^filter\[(\w+)\]$/.exec(key);
         if (filter !== null) where[defined(filter[1])] = value;
-        else if (key === "include") for (const edge of value.split(",")) include[edge] = true;
+        else if (key === "include")
+          Arr.forEach(value.split(","), (edge) => {
+            include[edge] = true;
+          });
         else {
           return Effect.fail(
             new QueryError({ message: `Unsupported ${key}`, query: collection, parameter: key })

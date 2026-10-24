@@ -123,9 +123,14 @@ describe("per-parent windowed subsets", () => {
         const engine = yield* makeEngine(server.handler, "group-reg");
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
-        for (const id of ["p-1", "p-2"]) {
-          yield* client.mutate("product/set", { id, name: id, featured: true });
-        }
+        yield* Effect.forEach(
+          ["p-1", "p-2"],
+          (id) =>
+            Effect.gen(function* () {
+              yield* client.mutate("product/set", { id, name: id, featured: true });
+            }),
+          { concurrency: 1, discard: true }
+        );
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
@@ -138,11 +143,11 @@ describe("per-parent windowed subsets", () => {
           engine.activeSubscriptions,
           (all) => reviewWindows(all).length === 2
         );
-        for (const window of reviewWindows(subs)) {
+        Arr.forEach(reviewWindows(subs), (window) => {
           expect(window.limit).toBe(2);
           expect(window.orderBy).toEqual([{ field: "createdAt", direction: "desc" }]);
           expect(window.where._tag).toBe("Compare");
-        }
+        });
       })
     )
   );

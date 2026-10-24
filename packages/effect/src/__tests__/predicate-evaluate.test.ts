@@ -5,6 +5,7 @@
  * Postgres over a generated corpus; this file pins the specification's own
  * examples so a regression names the rule it broke.
  */
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -42,7 +43,7 @@ describe("Predicate.evaluate (ADR-0028)", () => {
       ["ne(status, null) desugars to negated IsNull", Predicate.ne("status", null), "F", "F", "T"],
     ];
 
-    for (const [name, predicate, onN, onA, onC] of table) {
+    Arr.forEach(table, ([name, predicate, onN, onA, onC]) => {
       it(`${name}: n=${onN} a=${onA} c=${onC}`, () => {
         expect([verdict(predicate, n), verdict(predicate, a), verdict(predicate, c)]).toEqual([
           onN,
@@ -54,7 +55,7 @@ describe("Predicate.evaluate (ADR-0028)", () => {
           [onN, onA, onC].map((v) => v === "T")
         );
       });
-    }
+    });
   });
 
   describe("Kleene connectives", () => {
@@ -81,14 +82,14 @@ describe("Predicate.evaluate (ADR-0028)", () => {
     const NOT: Record<V, V> = { T: "F", U: "U", F: "T" };
 
     it("AND and OR follow the tables; unknown is not absorbing", () => {
-      for (const l of values) {
-        for (const r of values) {
+      Arr.forEach(values, (l) => {
+        Arr.forEach(values, (r) => {
           expect({
             and: `${l} AND ${r} = ${verdict(Predicate.and(leaf[l], leaf[r]), row)}`,
             or: `${l} OR ${r} = ${verdict(Predicate.or(leaf[l], leaf[r]), row)}`,
           }).toEqual({ and: `${l} AND ${r} = ${AND[l][r]}`, or: `${l} OR ${r} = ${OR[l][r]}` });
-        }
-      }
+        });
+      });
     });
 
     it("NOT maps over the option", () => {

@@ -4,6 +4,7 @@
  * engine end to end like the memory store.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -282,7 +283,9 @@ const reopen = (kv: Faulty) =>
 /** A new store handle over a copy of the persisted bytes, as a restarted process would see. */
 const structuredCloneOf = (kv: Faulty): Faulty => {
   const copy = faultyStore();
-  for (const [key, value] of kv.data) copy.data.set(key, value);
+  Arr.forEach(kv.data, ([key, value]) => {
+    copy.data.set(key, value);
+  });
   return copy;
 };
 

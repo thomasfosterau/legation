@@ -31,7 +31,9 @@ const makeHub = () => {
   const listeners = new Set<(event: { readonly data: unknown }) => void>();
   const connect = (): BusBrokers.WebSocketLike => ({
     send: (data) => {
-      for (const listener of listeners) listener({ data });
+      Arr.forEach(listeners, (listener) => {
+        listener({ data });
+      });
     },
     addEventListener: (_type, listener) => listeners.add(listener),
     removeEventListener: (_type, listener) => listeners.delete(listener),
@@ -334,10 +336,15 @@ describe("makeRedisBroker (Redis Streams)", () => {
       // subscribe's bounded attempt, then the reader's first step.
       expect(yield* Queue.take(fake.events)).toBe("refused");
       expect(yield* Queue.take(fake.events)).toBe("refused");
-      for (const gap of [200, 400, 800, 1600, 3200, 5000, 5000]) {
-        yield* TestClock.adjust(`${gap} millis`);
-        expect(yield* Queue.take(fake.events)).toBe("refused");
-      }
+      yield* Effect.forEach(
+        [200, 400, 800, 1600, 3200, 5000, 5000],
+        (gap) =>
+          Effect.gen(function* () {
+            yield* TestClock.adjust(`${gap} millis`);
+            expect(yield* Queue.take(fake.events)).toBe("refused");
+          }),
+        { concurrency: 1, discard: true }
+      );
       const times = yield* Ref.get(fake.refusedAt);
       const origin = defined(times[0]);
       // subscribe's attempt at 0, the reader's first step at 0, then each retry after its back-off.

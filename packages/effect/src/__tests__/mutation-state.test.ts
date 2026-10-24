@@ -7,6 +7,7 @@
  * module doc and `overlay-delta-scaling.test.ts`'s sibling scaling proof.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as MutationState from "../MutationState.js";
@@ -183,7 +184,9 @@ describe("MutationState (#116)", () => {
       { maxTerminal: 4 }
     );
     expect(HashMap.size(next)).toBe(4);
-    for (const state of HashMap.values(next)) expect(state.phase).toBe("acknowledged");
+    Arr.forEach(HashMap.values(next), (state) => {
+      expect(state.phase).toBe("acknowledged");
+    });
 
     // A later, distinctly-timestamped settle evicts across the earlier
     // batch's survivors — genuinely oldest-settled, not a same-timestamp tie.

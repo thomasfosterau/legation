@@ -262,13 +262,18 @@ describe("a bridged registry over a real engine", () => {
         );
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-1" });
-        for (const [id, at] of [
-          ["r-1", "2026-01-01"],
-          ["r-2", "2026-03-01"],
-          ["r-3", "2026-02-01"],
-        ] as const) {
-          yield* client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-        }
+        yield* Effect.forEach(
+          [
+            ["r-1", "2026-01-01"],
+            ["r-2", "2026-03-01"],
+            ["r-3", "2026-02-01"],
+          ] as const,
+          ([id, at]) =>
+            Effect.gen(function* () {
+              yield* client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         const latest = yield* Ref.make<ReadonlyArray<{ id: string }>>([]);
         yield* Effect.forkScoped(

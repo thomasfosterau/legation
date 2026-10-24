@@ -6,6 +6,7 @@
  * leaves the aggregate value unchanged.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -377,20 +378,20 @@ const checkIncrementalSeed = (seed: number): void => {
     INCREMENTAL_AGGS.map((agg) => [agg, Aggregate.initGroupedState(agg, [], INCREMENTAL_GROUP_BY)])
   );
 
-  for (const op of ops) {
+  Arr.forEach(ops, (op) => {
     if (op._tag === "Del") truth.delete(op.id);
     else truth.set(op.id, op.value);
 
-    for (const agg of INCREMENTAL_AGGS) {
+    Arr.forEach(INCREMENTAL_AGGS, (agg) => {
       states.set(agg, applyOpToState(defined(states.get(agg)), agg, op));
       groupedStates.set(agg, applyOpToGroupedState(defined(groupedStates.get(agg)), agg, op));
-    }
+    });
 
     const rows = matchingRows(truth);
-    for (const agg of INCREMENTAL_AGGS) {
+    Arr.forEach(INCREMENTAL_AGGS, (agg) => {
       expectAggMatches(agg, defined(states.get(agg)), defined(groupedStates.get(agg)), rows);
-    }
-  }
+    });
+  });
 };
 
 describe("Aggregate incremental state (#110)", () => {

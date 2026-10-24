@@ -15,6 +15,7 @@
  * route (#282).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -60,9 +61,9 @@ const makeStorage = (): DurableObjectStorage => {
     delete: async (key: string) => data.delete(key),
     list: async (options?: { prefix?: string }) => {
       const out = new Map<string, unknown>();
-      for (const [key, value] of data) {
+      Arr.forEach(data, ([key, value]) => {
         if (options?.prefix === undefined || key.startsWith(options.prefix)) out.set(key, value);
-      }
+      });
       return out;
     },
   } as DurableObjectStorage;
@@ -202,10 +203,13 @@ const makeShardCalls = () => {
   return {
     record: (call: ShardCall) => {
       calls.push(call);
-      for (const waiter of waiters.filter((w) => w.match(call))) {
-        waiters.splice(waiters.indexOf(waiter), 1);
-        waiter.done();
-      }
+      Arr.forEach(
+        waiters.filter((w) => w.match(call)),
+        (waiter) => {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          waiter.done();
+        }
+      );
     },
     /** How many calls have completed so far: a mark to pass to `next`. */
     count: () => calls.length,

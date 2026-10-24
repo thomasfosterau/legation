@@ -117,7 +117,9 @@ const fakeScope = (options: { readonly firesOnRegister?: boolean } = {}) => {
         held.push(promise);
       },
     };
-    for (const listener of listeners) listener(event);
+    Arr.forEach(listeners, (listener) => {
+      listener(event);
+    });
     return { held };
   };
   const sync: BackgroundSync.SyncManager = {

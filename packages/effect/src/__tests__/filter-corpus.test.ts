@@ -89,18 +89,18 @@ describe("FilterCorpus", () => {
 
   it("covers every literal kind, NULL, absent, boundary numerics, and astral text", () => {
     const seen = new Set<string>();
-    for (const row of corpus.rows) {
-      for (const column of corpus.columns) {
+    Arr.forEach(corpus.rows, (row) => {
+      Arr.forEach(corpus.columns, (column) => {
         if (!(column.name in row.value)) seen.add(`${column.name}:absent`);
         else if (row.value[column.name] === null) seen.add(`${column.name}:null`);
         else seen.add(`${column.name}:${column.kind}`);
-      }
-    }
-    for (const column of corpus.columns) {
+      });
+    });
+    Arr.forEach(corpus.columns, (column) => {
       expect(seen).toContain(`${column.name}:absent`);
       expect(seen).toContain(`${column.name}:null`);
       expect(seen).toContain(`${column.name}:${column.kind}`);
-    }
+    });
     const strings = corpus.rows.map((row) => row.value.s).filter(P.isString);
     expect(strings).toContain("");
     expect(strings.some((s) => /[\u{10000}-\u{10FFFF}]/u.test(s))).toBe(true);
@@ -131,12 +131,12 @@ describe("FilterCorpus", () => {
       nulls: false,
       astral: false,
     });
-    for (const row of restricted.rows) {
-      for (const column of restricted.columns) {
+    Arr.forEach(restricted.rows, (row) => {
+      Arr.forEach(restricted.columns, (column) => {
         expect(row.value[column.name]).not.toBeNull();
         expect(row.value[column.name]).not.toBeUndefined();
-      }
-    }
+      });
+    });
     const astral = restricted.rows.filter(
       (row) => P.isString(row.value.s) && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
     );
@@ -171,11 +171,11 @@ describe("FilterCorpus", () => {
   });
 
   it("generates 1–2 orderBy terms over distinct columns", () => {
-    for (const orderBy of corpus.orderBys) {
+    Arr.forEach(corpus.orderBys, (orderBy) => {
       expect(orderBy.length).toBeGreaterThanOrEqual(1);
       expect(orderBy.length).toBeLessThanOrEqual(2);
       expect(new Set(orderBy.map((term) => term.field)).size).toBe(orderBy.length);
-    }
+    });
   });
 
   it("minimises a disagreement to the smallest reproducing predicate and rows", async () => {

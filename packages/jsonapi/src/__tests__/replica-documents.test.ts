@@ -10,6 +10,7 @@
  * shape of `/{type}/{id}`, and the grammar's rejection of a bad URL.
  */
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -179,27 +180,32 @@ describe("ReplicaDocuments over the replica", () => {
       Effect.gen(function* () {
         const rest = yield* makeRest();
         const docs = ReplicaDocuments.make({ nodes, resources: declared });
-        for (const url of [
-          "/products?sort=name",
-          "/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents",
-          "/products?sort=name&page[limit]=2",
-          "/products?sort=name&page[limit]=2&page[after]=p-1",
-          // Offset pagination (#209): the same "same URL, same result"
-          // obligation, for the idiom every audited app actually pages by.
-          "/products?sort=name&page[offset]=0&page[limit]=2",
-          "/products?sort=name&page[offset]=1&page[limit]=2",
-          "/products?sort=name&page[offset]=10&page[limit]=2",
-          "/products?fields[products]=name&include=variants&fields[variants]=",
-          "/variants?include=offers",
-        ]) {
-          const local = yield* docs.fromUrl(view, url);
-          const served = yield* restList(
-            rest,
-            defined(declared.get(defined(url.split("?")[0]).slice(1))),
-            url
-          );
-          expect(bytes(local), url).toBe(bytes(served));
-        }
+        yield* Effect.forEach(
+          [
+            "/products?sort=name",
+            "/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents",
+            "/products?sort=name&page[limit]=2",
+            "/products?sort=name&page[limit]=2&page[after]=p-1",
+            // Offset pagination (#209): the same "same URL, same result"
+            // obligation, for the idiom every audited app actually pages by.
+            "/products?sort=name&page[offset]=0&page[limit]=2",
+            "/products?sort=name&page[offset]=1&page[limit]=2",
+            "/products?sort=name&page[offset]=10&page[limit]=2",
+            "/products?fields[products]=name&include=variants&fields[variants]=",
+            "/variants?include=offers",
+          ],
+          (url) =>
+            Effect.gen(function* () {
+              const local = yield* docs.fromUrl(view, url);
+              const served = yield* restList(
+                rest,
+                defined(declared.get(defined(url.split("?")[0]).slice(1))),
+                url
+              );
+              expect(bytes(local), url).toBe(bytes(served));
+            }),
+          { concurrency: 1, discard: true }
+        );
         // The included variants carry the linkage their own declaration
         // requires (`offers`), resolved from the replica in the third batch —
         // empty for a variant without offers, never omitted.
@@ -401,11 +407,11 @@ describe("ReplicaDocuments over the replica", () => {
           yield* Effect.flip(docs.collection(view, { read: { collection: "reviews" } })),
           yield* Effect.flip(docs.data(view, { read: { collection: "reviews" }, id: "r-1" })),
         ];
-        for (const failure of failures) {
+        Arr.forEach(failures, (failure) => {
           expect(failure).toBeInstanceOf(QueryError);
           expect(failure.message).toMatch(/No resource declares "reviews"/);
           expect(failure.query).toBe("reviews");
-        }
+        });
         // Nothing died: the failures were typed, so a façade can route the request on.
         const exit = yield* Effect.exit(docs.fromUrl(view, "/reviews"));
         expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => r._tag === "Fail")).toBe(

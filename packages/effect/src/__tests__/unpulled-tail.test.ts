@@ -265,7 +265,14 @@ const counterSetUp = (ids: ReadonlyArray<string>, unpulledLimit?: number) =>
     const engine = yield* makeCounterEngine(server, store, unpulledLimit, pullsRefused);
     yield* engine.subscribe(countersSubset);
     yield* engine.pull;
-    for (const id of ids) yield* engine.mutate("counter/inc", { id });
+    yield* Effect.forEach(
+      ids,
+      (id) =>
+        Effect.gen(function* () {
+          yield* engine.mutate("counter/inc", { id });
+        }),
+      { concurrency: 1, discard: true }
+    );
     yield* engine.push;
     return { server, refused, removals, store, engine, pullsRefused };
   });

@@ -166,15 +166,15 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
         .pipe(Random.withSeed(161))
     );
     let representable = 0;
-    for (const predicate of predicates) {
+    Arr.forEach(predicates, (predicate) => {
       const ast = JsonApiQuery.toFilterAst(predicate);
       // Only an empty list has no grammar form; the corpus never emits
       // null literals or Exists.
       expect(Option.isSome(ast) || hasEmptyList(predicate)).toBe(true);
-      if (Option.isNone(ast)) continue;
+      if (Option.isNone(ast)) return;
       representable++;
       expect(JsonApiQuery.fromFilterAst(ast.value)).toEqual(Result.succeed(predicate));
-    }
+    });
     expect(representable).toBeGreaterThan(200);
   });
 
@@ -216,7 +216,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
       randomDate.pipe(Effect.replicateEffect(200), Random.withSeed(218))
     );
 
-    for (const date of dates) {
+    Arr.forEach(dates, (date) => {
       const ast = Filter.gt("createdAt", date);
 
       // The encode step itself: exact, not merely "does not throw".
@@ -234,7 +234,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
       // this is where a façade read and a REST read would part ways.
       const url = `/reviews?${new URLSearchParams(wire).toString()}`;
       expect(parse(url).read.where).toEqual(predicate);
-    }
+    });
   });
 });
 
@@ -397,13 +397,13 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
     Effect.sync(() => {
       requests.push(url.pathname + url.search);
       let rows = [...store.values()];
-      for (const [key, value] of url.searchParams) {
+      Arr.forEach(url.searchParams, ([key, value]) => {
         const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
-        if (match === null) continue;
+        if (match === null) return;
         const field = defined(match[1]);
         const allowed = value.split(",");
         rows = rows.filter((row) => allowed.includes(String(row.attributes[field])));
-      }
+      });
       return HttpClientResponse.fromWeb(
         request,
         new Response(JSON.stringify({ data: rows }), { status: 200, headers })
@@ -537,15 +537,18 @@ describe("JsonApiQuery.parseRead", () => {
       first: 1,
     });
     // The spec's related-resource and relationship URLs are not reads here.
-    for (const url of [
-      "/products/p-1/variants",
-      "/products/p-1/relationships/variants",
-      "/api/products/p-1/variants?include=product",
-    ]) {
-      const failure = parseFailure(url);
-      expect(failure).toBeInstanceOf(QueryError);
-      expect(failure.message).toMatch(/Nested resource path/);
-    }
+    Arr.forEach(
+      [
+        "/products/p-1/variants",
+        "/products/p-1/relationships/variants",
+        "/api/products/p-1/variants?include=product",
+      ],
+      (url) => {
+        const failure = parseFailure(url);
+        expect(failure).toBeInstanceOf(QueryError);
+        expect(failure.message).toMatch(/Nested resource path/);
+      }
+    );
   });
 
   it("includes a paginated edge like any other; only its window has no URL form", () => {
@@ -791,7 +794,7 @@ describe("JsonApiQuery.canonical", () => {
       }).pipe(Random.withSeed(161))
     );
     const reads: Array<Query.Read> = [];
-    for (const [index, where] of generated.predicates.entries()) {
+    Arr.forEach(generated.predicates.entries(), ([index, where]) => {
       const read: Query.Read = { collection: "corpus", where };
       const first = generated.firsts[index];
       reads.push({
@@ -800,7 +803,7 @@ describe("JsonApiQuery.canonical", () => {
         ...(first === 0 ? {} : { first }),
         ...(index % 4 === 0 ? { after: `row-${index}` } : {}),
       });
-    }
+    });
     reads.push(
       {
         collection: "products",
@@ -813,7 +816,7 @@ describe("JsonApiQuery.canonical", () => {
       { collection: "products", where: Predicate.eq("id", "p-1"), first: 1 },
       { collection: "categories", order: ["name"] }
     );
-    for (const read of reads) {
+    Arr.forEach(reads, (read) => {
       // The first pass puts the read in the grammar's normal form (member
       // order, folded constants); from there the round trip is exact.
       const url = JsonApiQuery.canonical(nodes, read);
@@ -822,11 +825,11 @@ describe("JsonApiQuery.canonical", () => {
       expect(parse(JsonApiQuery.canonical(nodes, normal)).read).toEqual(normal);
       // The two reads compile to one plan.
       expect(Query.plan(nodes, normal).root.collection).toBe(read.collection);
-    }
+    });
     // The hand-written reads are already in normal form.
-    for (const read of reads.slice(-3)) {
+    Arr.forEach(reads.slice(-3), (read) => {
       expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
-    }
+    });
   });
 });
 

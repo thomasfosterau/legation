@@ -60,7 +60,14 @@ const withDatabase = <A>(
     Effect.gen(function* () {
       const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
       const sql = Context.get(context, SqlClient);
-      for (const statement of schema) yield* sql.unsafe(statement).unprepared;
+      yield* Effect.forEach(
+        schema,
+        (statement) =>
+          Effect.gen(function* () {
+            yield* sql.unsafe(statement).unprepared;
+          }),
+        { concurrency: 1, discard: true }
+      );
       return yield* use(sql);
     })
   );

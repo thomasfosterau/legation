@@ -8,6 +8,7 @@
  * `engineEvents` mid-burst).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -435,16 +436,21 @@ describe("paced compaction renumbers the journal (#249)", () => {
     Effect.gen(function* () {
       const { engine, store, applied } = yield* setupLossy;
       const paced = yield* Paced.coalesce(engine, "todo/set");
-      for (const [key, title] of [
-        ["a", "a1"],
-        ["b", "b1"],
-        ["a", "a2"],
-        ["c", "c1"],
-        ["b", "b2"],
-        ["a", "a3"],
-      ] as const) {
-        yield* paced.call(key, todo(key, title));
-      }
+      yield* Effect.forEach(
+        [
+          ["a", "a1"],
+          ["b", "b1"],
+          ["a", "a2"],
+          ["c", "c1"],
+          ["b", "b2"],
+          ["a", "a3"],
+        ] as const,
+        ([key, title]) =>
+          Effect.gen(function* () {
+            yield* paced.call(key, todo(key, title));
+          }),
+        { concurrency: 1, discard: true }
+      );
 
       // Survivors sit in the order they were journaled (c1, b2, a3), renumbered 1..3.
       const pending = yield* store.pendingMutations;
@@ -698,9 +704,9 @@ describe("paced compaction renumbers the journal (#249)", () => {
         expect(yield* store.pendingMutations).toEqual([]);
         // Nothing lost: the last value called for every key is the last the
         // server applied for it, and nothing was applied twice in a row.
-        for (const [key, title] of lastCall) {
+        Arr.forEach(lastCall, ([key, title]) => {
           expect(applied.filter((t) => t.startsWith(`${key}-`)).at(-1)).toBe(title);
-        }
+        });
         expect(new Set(applied).size).toBe(applied.length);
       }).pipe(Effect.scoped),
     30_000

@@ -16,6 +16,7 @@
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
 import { describe, test } from "vite-plus/test";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
@@ -69,7 +70,7 @@ const makeBulkSeededStore = (
       clearRows: Effect.sync(() => collections.clear()),
       applyRowOps: (ops: ReadonlyArray<PatchOp>) =>
         Effect.sync(() => {
-          for (const op of ops) {
+          Arr.forEach(ops, (op) => {
             if (op._tag === "Clear") collections.clear();
             else if (op._tag === "Put")
               collectionOf(op.collection).set(op.id, {
@@ -78,7 +79,7 @@ const makeBulkSeededStore = (
                 value: op.value,
               });
             else collections.get(op.collection)?.delete(op.id);
-          }
+          });
         }),
       appendMutation: (mutation) => Effect.sync(() => void (journal = journal.concat(mutation))),
       pendingMutations: Effect.sync(() => journal),

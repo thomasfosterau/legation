@@ -4,6 +4,7 @@
  * degenerate-looking cases (adjacent digits, no bound on one side) that
  * trip up naive lexicographic-string implementations (module doc).
  */
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vite-plus/test";
 import * as FractionalIndex from "../FractionalIndex.js";
 import { defined } from "./defined.js";
@@ -71,10 +72,10 @@ describe("FractionalIndex", () => {
     const keys = FractionalIndex.generateNBetween(lo, hi, 25);
     expect(keys.length).toBe(25);
     let previous = lo;
-    for (const key of keys) {
+    Arr.forEach(keys, (key) => {
       expect(FractionalIndex.compare(previous, key)).toBeLessThan(0);
       previous = key;
-    }
+    });
     expect(FractionalIndex.compare(previous, hi)).toBeLessThan(0);
   });
 
