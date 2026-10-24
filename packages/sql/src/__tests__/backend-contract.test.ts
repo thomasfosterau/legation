@@ -187,9 +187,14 @@ const makeContractBackend = (
   Effect.gen(function* () {
     const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
     const sql = Context.get(context, SqlClient);
-    for (const statement of CONTRACT_DDL) {
-      yield* sql.unsafe(statement).unprepared;
-    }
+    yield* Effect.forEach(
+      CONTRACT_DDL,
+      (statement) =>
+        Effect.gen(function* () {
+          yield* sql.unsafe(statement).unprepared;
+        }),
+      { concurrency: 1, discard: true }
+    );
     return SqlBackend.make({
       executor: makeExecutor(sql),
       tables: {
@@ -528,7 +533,14 @@ const withPgContract = <A>(url: string, use: (sql: SqlClient) => Effect.Effect<A
         PgClient.layer({ url: Redacted.make(url), maxConnections: 4 })
       );
       const sql = Context.get(built, SqlClient);
-      for (const statement of PG_DDL) yield* sql.unsafe(statement).unprepared;
+      yield* Effect.forEach(
+        PG_DDL,
+        (statement) =>
+          Effect.gen(function* () {
+            yield* sql.unsafe(statement).unprepared;
+          }),
+        { concurrency: 1, discard: true }
+      );
       return yield* use(sql).pipe(
         Effect.ensuring(sql.unsafe(PG_TABLES).unprepared.pipe(Effect.ignore))
       );

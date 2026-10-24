@@ -68,26 +68,26 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   // `filter[f][eq|in]=…` — enough for the id windows the engine pushes.
   const list = (type: string, params: URLSearchParams): Response => {
     let rows = [...store.values()].filter((r) => r.type === type);
-    for (const [key, value] of params) {
+    Arr.forEach(params, ([key, value]) => {
       const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
-      if (match === null) continue;
+      if (match === null) return;
       const field = defined(match[1]);
       const allowed = value.split(",");
       rows = rows.filter((r) =>
         field === "id" ? allowed.includes(r.id) : allowed.includes(String(r.attributes[field]))
       );
-    }
+    });
     const include = params.get("include");
     if (include === null) return doc(rows);
     const seen = new Map<string, Stored>();
-    for (const r of rows) {
-      for (const name of include.split(",")) {
-        for (const link of links(r.relationships?.[name])) {
+    Arr.forEach(rows, (r) => {
+      Arr.forEach(include.split(","), (name) => {
+        Arr.forEach(links(r.relationships?.[name]), (link) => {
           const target = store.get(`${link.type}:${link.id}`);
           if (target !== undefined) seen.set(`${link.type}:${link.id}`, target);
-        }
-      }
-    }
+        });
+      });
+    });
     return new Response(JSON.stringify({ data: rows, included: [...seen.values()] }), {
       status: 200,
       headers,

@@ -612,10 +612,15 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     yield* Deferred.await(gates[0].returned);
 
     const pushFibers = [pushA, pushB] as const;
-    for (const index of order === "rejected-first" ? [1, 0] : [0, 1]) {
-      yield* Deferred.succeed(gates[index].deliver, undefined);
-      yield* Fiber.join(defined(pushFibers[index]));
-    }
+    yield* Effect.forEach(
+      order === "rejected-first" ? [1, 0] : [0, 1],
+      (index) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(gates[index].deliver, undefined);
+          yield* Fiber.join(defined(pushFibers[index]));
+        }),
+      { concurrency: 1, discard: true }
+    );
 
     // The client settles as the server committed: rejected, with no effects shown.
     expect(yield* handle.acknowledged).toEqual({ _tag: "rejected", reason: "forbidden" });

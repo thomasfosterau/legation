@@ -21,9 +21,9 @@ describe("OrderedTree", () => {
 
   it("inserts maintain sorted order", () => {
     let tree: OrderedTree.Tree<number> = undefined;
-    for (const value of [5, 3, 8, 1, 4, 7, 9, 2, 6]) {
+    Arr.forEach([5, 3, 8, 1, 4, 7, 9, 2, 6], (value) => {
       tree = OrderedTree.insert(tree, value, numberCompare);
-    }
+    });
     expect(OrderedTree.toArray(tree)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(OrderedTree.size(tree)).toBe(9);
   });

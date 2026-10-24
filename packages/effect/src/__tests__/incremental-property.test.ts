@@ -15,6 +15,7 @@
  * step, and values print. Uses a deterministic mulberry32 PRNG so a failure is
  * reproducible from its printed seed.
  */
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vite-plus/test";
 import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
@@ -318,8 +319,12 @@ const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> 
     return [{ _tag: "update", row: defined(delta.added[0]), previous: defined(delta.removed[0]) }];
   }
   const changes: Array<RowChange<Row>> = [];
-  for (const row of delta.added) changes.push({ _tag: "enter", row });
-  for (const row of delta.removed) changes.push({ _tag: "exit", id: row.id, previous: row });
+  Arr.forEach(delta.added, (row) => {
+    changes.push({ _tag: "enter", row });
+  });
+  Arr.forEach(delta.removed, (row) => {
+    changes.push({ _tag: "exit", id: row.id, previous: row });
+  });
   return changes;
 };
 

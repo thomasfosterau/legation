@@ -21,6 +21,7 @@
  * convention of a tiny seeded PRNG instead, so a failure prints a
  * reproducible seed.
  */
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
@@ -81,7 +82,9 @@ const applyRebuild = (
     [...truth.entries()].map(([id, value]) => ({ id, value }))
   );
   folded.clear();
-  for (const row of LiveView.result(next)) folded.set(row.id, row.value);
+  Arr.forEach(LiveView.result(next), (row) => {
+    folded.set(row.id, row.value);
+  });
   return next;
 };
 
@@ -105,11 +108,11 @@ const applyMutation = (
     next = LiveView.put(view, { id, value });
   }
   const after = LiveView.result(next);
-  for (const change of RowChange.diff(before, after)) {
+  Arr.forEach(RowChange.diff(before, after), (change) => {
     if (change._tag === "enter" || change._tag === "update")
       folded.set(change.row.id, change.row.value);
     else if (change._tag === "exit") folded.delete(change.id);
-  }
+  });
   return next;
 };
 
@@ -124,9 +127,9 @@ interface LateObserver {
  * from yet). */
 const seedLateObserver = (view: LiveView.LiveView, startedAtStep: number): LateObserver => {
   const folded = new Map<string, unknown>();
-  for (const change of RowChange.enters(LiveView.result(view))) {
+  Arr.forEach(RowChange.enters(LiveView.result(view)), (change) => {
     if (change._tag === "enter") folded.set(change.row.id, change.row.value);
-  }
+  });
   return { startedAtStep, folded };
 };
 

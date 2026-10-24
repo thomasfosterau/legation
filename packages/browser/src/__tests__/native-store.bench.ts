@@ -175,7 +175,7 @@ const countingStore = () => {
     let rowBytes = 0;
     let otherSets = 0;
     let otherBytes = 0;
-    for (const [key, n] of sets) {
+    Arr.forEach(sets, ([key, n]) => {
       const b = bytes.get(key) ?? 0;
       if (key.startsWith("legation/row/")) {
         rowSets += n;
@@ -184,7 +184,7 @@ const countingStore = () => {
         otherSets += n;
         otherBytes += b;
       }
-    }
+    });
     const indexBytes = bytes.get(`legation/rowIndex/${COLLECTION}`) ?? 0;
     return { rowSets, rowBytes, otherSets, otherBytes, indexBytes };
   };
@@ -298,7 +298,9 @@ const index = CollectionIndex.empty(["qty", "name", "note"]);
 
 const fullScan = (where: Predicate.Predicate) => {
   const out: Array<{ id: string; value: unknown }> = [];
-  for (const row of rowsById.values()) if (Predicate.test(where, row.value)) out.push(row);
+  Arr.forEach(rowsById.values(), (row) => {
+    if (Predicate.test(where, row.value)) out.push(row);
+  });
   return out;
 };
 
@@ -413,11 +415,16 @@ const sectionC = async () => {
       const [seedTime] = yield* Effect.timed(store.applyRowOps(putOps(idbRows)));
       row(`seed ${IDB_ROWS} rows`, seedTime);
 
-      for (const k of [1, 100, 1000]) {
-        counted.reset();
-        const [pullTime] = yield* Effect.timed(store.applyRowOps(putOps(idbRows.slice(0, k))));
-        row(`pull touching ${k} rows`, pullTime);
-      }
+      yield* Effect.forEach(
+        [1, 100, 1000],
+        (k) =>
+          Effect.gen(function* () {
+            counted.reset();
+            const [pullTime] = yield* Effect.timed(store.applyRowOps(putOps(idbRows.slice(0, k))));
+            row(`pull touching ${k} rows`, pullTime);
+          }),
+        { concurrency: 1, discard: true }
+      );
       // The three-step commit the engine performs today (`applyPull`).
       counted.reset();
       const [commitTime] = yield* Effect.timed(
@@ -508,7 +515,9 @@ const sectionD = async () => {
   const [, seedMs] = await timed(async () => {
     const tx = db.transaction(COLLECTION, "readwrite");
     const store = tx.objectStore(COLLECTION);
-    for (const row of idbRows) store.put(toRecord(row));
+    Arr.forEach(idbRows, (row) => {
+      store.put(toRecord(row));
+    });
     await complete(tx);
   });
   table.push({ what: `seed ${IDB_ROWS} rows, one transaction`, ms: ms(seedMs) });
@@ -608,7 +617,9 @@ const sectionD = async () => {
     const [, pullMs] = await timed(async () => {
       const tx = db.transaction([COLLECTION, "journal", "meta"], "readwrite");
       const items = tx.objectStore(COLLECTION);
-      for (const row of idbRows.slice(0, k)) items.put(toRecord(row));
+      Arr.forEach(idbRows.slice(0, k), (row) => {
+        items.put(toRecord(row));
+      });
       tx.objectStore("journal").delete(IDBKeyRange.bound(["c1", 0], ["c1", 5]));
       tx.objectStore("meta").put({ key: "cookie", value: `cookie-${k}` });
       await complete(tx);

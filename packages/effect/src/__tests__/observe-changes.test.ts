@@ -146,14 +146,14 @@ const foldBatches = (
   batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
 ): Map<string, unknown> => {
   const folded = new Map<string, unknown>();
-  for (const batch of batches) {
-    for (const change of batch) {
+  Arr.forEach(batches, (batch) => {
+    Arr.forEach(batch, (change) => {
       if (change._tag === "reset") folded.clear();
       else if (change._tag === "enter" || change._tag === "update") {
         folded.set(change.row.id, change.row.value);
       } else if (change._tag === "exit") folded.delete(change.id);
-    }
-  }
+    });
+  });
   return folded;
 };
 

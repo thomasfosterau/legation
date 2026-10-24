@@ -11,6 +11,7 @@
  * #153) with NULL, absent and astral text on — ADR-0028's acceptance
  * criterion for the index.
  */
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 import * as CollectionIndex from "../CollectionIndex.js";
@@ -264,10 +265,10 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
 
     // Incremental maintenance agrees with the rebuild: move every row through
     // a NULL and back, then re-check a slice of the predicates.
-    for (const row of corpus.rows) {
+    Arr.forEach(corpus.rows, (row) => {
       CollectionIndex.upsertRow(index, row.id, {});
       CollectionIndex.upsertRow(index, row.id, row.value);
-    }
+    });
     expect(disagreements(corpus.predicates.slice(0, 100))).toEqual([]);
   });
 });

@@ -534,10 +534,15 @@ describe("FilterPolicy: on SyncServer", () => {
             /"Exists" is not allowed/,
           ],
         ];
-        for (const [where, pattern] of cases) {
-          const error = yield* Effect.flip(pull(where));
-          expect(causeOf(error).message).toMatch(pattern);
-        }
+        yield* Effect.forEach(
+          cases,
+          ([where, pattern]) =>
+            Effect.gen(function* () {
+              const error = yield* Effect.flip(pull(where));
+              expect(causeOf(error).message).toMatch(pattern);
+            }),
+          { concurrency: 1, discard: true }
+        );
         const unsortable = yield* Effect.flip(
           pull(Predicate.always, [{ field: "priceCents", direction: "asc" }])
         );

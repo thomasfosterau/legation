@@ -14,6 +14,7 @@
  * reproducible randomized interleavings across many seeds.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -185,18 +186,25 @@ const referenceOverlay = (
 ): Effect.Effect<Map<string, unknown>, unknown> =>
   Effect.gen(function* () {
     const rows = new Map<string, unknown>();
-    for (const row of yield* store.listRows("todos")) rows.set(row.id, row.value);
+    Arr.forEach(yield* store.listRows("todos"), (row) => {
+      rows.set(row.id, row.value);
+    });
     const writer = {
       put: (_collection: string, id: string, value: unknown) =>
         Effect.sync(() => rows.set(id, value)),
       del: (_collection: string, id: string) => Effect.sync(() => rows.delete(id)),
       get: (_collection: string, id: string) => Effect.sync(() => rows.get(id)),
     };
-    for (const mutation of [...tail, ...(yield* store.pendingMutations)]) {
-      const handler = mutators.handlers.get(mutation.mutator);
-      if (handler === undefined) continue;
-      yield* handler(mutation.args, writer);
-    }
+    yield* Effect.forEach(
+      [...tail, ...(yield* store.pendingMutations)],
+      (mutation) =>
+        Effect.gen(function* () {
+          const handler = mutators.handlers.get(mutation.mutator);
+          if (handler === undefined) return;
+          yield* handler(mutation.args, writer);
+        }),
+      { concurrency: 1, discard: true }
+    );
     return rows;
   });
 

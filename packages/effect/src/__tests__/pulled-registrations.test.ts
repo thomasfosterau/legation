@@ -239,7 +239,14 @@ const reconcile = (
 ) =>
   Effect.gen(function* () {
     const requested = yield* Coverage.requestedOf(nodes.collections, plan, engine.query);
-    for (const window of requested.windows) yield* marks.wrap(key).subscribe(window);
+    yield* Effect.forEach(
+      requested.windows,
+      (window) =>
+        Effect.gen(function* () {
+          yield* marks.wrap(key).subscribe(window);
+        }),
+      { concurrency: 1, discard: true }
+    );
   });
 
 /** The coverage verdict of `requested` over the registration `key` held in `marks`. */

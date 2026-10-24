@@ -8,6 +8,7 @@
  * (unpulled-tail.test.ts).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -103,11 +104,11 @@ const batchOver = (
           return Effect.fail(new StoreError({ message: "batch aborted" }));
         }
         const commit = Effect.sync(() => {
-          for (const op of ops) {
+          Arr.forEach(ops, (op) => {
             writes.push(op.key);
             if (op._tag === "Set") data.set(op.key, op.value);
             else data.delete(op.key);
-          }
+          });
           state.afterCommit?.();
         });
         if (state.commitThenFailNext) {
@@ -160,9 +161,14 @@ const pullOnRecordPath = (store: ClientStore, release: PullRelease) =>
     yield* store.beginRelease(release);
     yield* store.applyRowOps(release.patch);
     if (release.cookie !== undefined) yield* store.setCookie(release.cookie);
-    for (const [clientId, upTo] of Object.entries(release.lastMutationIds)) {
-      yield* store.acknowledge(clientId, upTo);
-    }
+    yield* Effect.forEach(
+      Object.entries(release.lastMutationIds),
+      ([clientId, upTo]) =>
+        Effect.gen(function* () {
+          yield* store.acknowledge(clientId, upTo);
+        }),
+      { concurrency: 1, discard: true }
+    );
     yield* store.releaseUnpulled(release.lastMutationIds);
   });
 
@@ -174,9 +180,14 @@ const acknowledgeOnRecordPath = (
 ) =>
   Effect.gen(function* () {
     yield* store.parkUnpulled(parked);
-    for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
-      yield* store.acknowledge(clientId, upTo);
-    }
+    yield* Effect.forEach(
+      Object.entries(lastMutationIds),
+      ([clientId, upTo]) =>
+        Effect.gen(function* () {
+          yield* store.acknowledge(clientId, upTo);
+        }),
+      { concurrency: 1, discard: true }
+    );
   });
 
 // ─── Store level ─────────────────────────────────────────────────────────────
@@ -252,9 +263,14 @@ describe("the atomic batch on the key-value store (#393)", () => {
 
       const history = [mutation("c", 1), mutation("c", 2), mutation("c", 3)];
       for (const store of [batchStore, recordStore]) {
-        for (const m of history) {
-          yield* store.appendMutation(m);
-        }
+        yield* Effect.forEach(
+          history,
+          (m) =>
+            Effect.gen(function* () {
+              yield* store.appendMutation(m);
+            }),
+          { concurrency: 1, discard: true }
+        );
         yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
       }
 

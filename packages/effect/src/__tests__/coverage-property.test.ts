@@ -14,6 +14,7 @@
  * overrides the seed to reproduce a failure.
  */
 import { describe, expect, it } from "vite-plus/test";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
 import * as Coverage from "../Coverage.js";
@@ -198,7 +199,7 @@ describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
   });
 
   it("the verdict is invariant under conjunct order", () => {
-    for (const pair of pairs) {
+    Arr.forEach(pairs, (pair) => {
       const members = Coverage.canonicalConjuncts(pair.requested.where).map(
         (conjunct) => conjunct.predicate
       );
@@ -206,7 +207,7 @@ describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
       expect(Coverage.covers(pair.subscribed, reversed)).toBe(
         Coverage.covers(pair.subscribed, pair.requested)
       );
-    }
+    });
   });
 
   it("a windowed subscription never covers a strictly narrower predicate", () => {
@@ -227,7 +228,7 @@ describe("the harness corpus as subscriptions", () => {
   const corpus = Effect.runSync(FilterCorpus.generateCorpus({ seed }));
 
   it("every corpus predicate, unwindowed, covers itself under every corpus window", () => {
-    for (const [index, where] of corpus.predicates.entries()) {
+    Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
       const subscribed = Subset.make({ collection: "corpus", where });
       const orderBy = defined(corpus.orderBys[index % corpus.orderBys.length]);
       const requested = Subset.make({
@@ -238,11 +239,11 @@ describe("the harness corpus as subscriptions", () => {
       });
       expect(Coverage.covers(subscribed, requested)).toBe(true);
       expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
-    }
+    });
   });
 
   it("every corpus predicate, unwindowed, covers itself conjoined with its neighbour", () => {
-    for (const [index, where] of corpus.predicates.entries()) {
+    Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
       const neighbour = defined(corpus.predicates[(index + 1) % corpus.predicates.length]);
       const subscribed = Subset.make({ collection: "corpus", where });
       const requested = Subset.make({
@@ -252,7 +253,7 @@ describe("the harness corpus as subscriptions", () => {
       });
       expect(Coverage.covers(subscribed, requested)).toBe(true);
       expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
-    }
+    });
   });
 });
 

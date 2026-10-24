@@ -634,11 +634,11 @@ describe("Related delta-maintenance (issue #111)", () => {
     let lastResult: ReadonlyArray<Related.RelatedRow> = [];
 
     const primeAdded = (collections: ReadonlyArray<string>) => {
-      for (const collection of collections) {
+      Arr.forEach(collections, (collection) => {
         const rows = [...truth[collection as ForeignCollection].values()];
         const { result } = engine.applyForeign(collection, rows);
         if (result !== undefined) lastResult = result;
-      }
+      });
     };
 
     for (let step = 0; step < 400; step++) {

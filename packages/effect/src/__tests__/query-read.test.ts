@@ -171,13 +171,18 @@ describe("Query.run / Query.observe", () => {
       const view = ClientView.fromEngine(engine);
 
       yield* engine.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-1" });
-      for (const [id, at] of [
-        ["r-1", "2026-01-01"],
-        ["r-2", "2026-03-01"],
-        ["r-3", "2026-02-01"],
-      ] as const) {
-        yield* engine.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-      }
+      yield* Effect.forEach(
+        [
+          ["r-1", "2026-01-01"],
+          ["r-2", "2026-03-01"],
+          ["r-3", "2026-02-01"],
+        ] as const,
+        ([id, at]) =>
+          Effect.gen(function* () {
+            yield* engine.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
+          }),
+        { concurrency: 1, discard: true }
+      );
 
       const plain = yield* Query.run(view, nodes, Query.make({ collection: "reviews" }));
       expect(plain).toHaveLength(3);

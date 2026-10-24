@@ -140,8 +140,8 @@ export default defineConfig({
       // in #497 (see AGENTS.md "Effect").
       "effect/avoid-native-object-helpers": "warn", // 691 sites
       "effect/require-safety-comment-for-type-assertion": "warn", // 622 sites
-      "effect/imperative-loops": "warn", // 459 sites
-      "effect/yield-in-for-loop": "warn", // 583 sites
+      "effect/imperative-loops": "warn", // 367 sites
+      "effect/yield-in-for-loop": "warn", // 536 sites
       "effect/avoid-direct-tag-checks": "warn", // 170 sites
       "effect/avoid-direct-json": "warn", // 161 sites
       "effect/no-conditional-empty-object-spread": "warn", // 146 sites

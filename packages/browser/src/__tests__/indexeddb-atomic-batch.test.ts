@@ -7,6 +7,7 @@
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Hydration } from "@thomasfosterau/legation-effect";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -354,12 +355,12 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
             })
           );
           const attempts: ReadonlyArray<Exit.Exit<unknown, unknown>> = [read, write, batch];
-          for (const attempt of attempts) {
+          Arr.forEach(attempts, (attempt) => {
             expect(Exit.isFailure(attempt)).toBe(true);
             expect(String(attempt)).toContain(
               "the IndexedDB database was upgraded by another connection; reload to continue"
             );
-          }
+          });
         }).pipe(Effect.provide(storeLayer(database)));
       })
   );

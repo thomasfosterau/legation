@@ -162,7 +162,14 @@ const makeEngine = (
     Effect.gen(function* () {
       yield* runner.query(`DELETE FROM ${dialect.quote(TABLE)}`, []);
       const insert = insertText(dialect);
-      for (const row of rows) yield* runner.query(insert, rowParams(row, encode));
+      yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            yield* runner.query(insert, rowParams(row, encode));
+          }),
+        { concurrency: 1, discard: true }
+      );
     }),
   where: (predicate) => {
     const { text, params } = Sql.compileSelect({

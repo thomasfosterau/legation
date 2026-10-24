@@ -81,7 +81,14 @@ const withDatabase = <A>(
         PgClient.layer({ url: Redacted.make(url), maxConnections: 4 })
       );
       const sql = Context.get(built, SqlClient);
-      for (const statement of schema) yield* sql.unsafe(statement).unprepared;
+      yield* Effect.forEach(
+        schema,
+        (statement) =>
+          Effect.gen(function* () {
+            yield* sql.unsafe(statement).unprepared;
+          }),
+        { concurrency: 1, discard: true }
+      );
       return yield* use(sql).pipe(
         Effect.ensuring(sql.unsafe(DROP_TABLES).unprepared.pipe(Effect.ignore))
       );

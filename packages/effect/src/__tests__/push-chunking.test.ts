@@ -213,12 +213,17 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
           ],
         ],
       ];
-      for (const [count, expected] of cases) {
-        const { engine, log } = yield* journaled(count, 16);
-        yield* engine.push;
-        expect(log).toEqual(expected);
-        expect(yield* counterValue(engine)).toBe(count);
-      }
+      yield* Effect.forEach(
+        cases,
+        ([count, expected]) =>
+          Effect.gen(function* () {
+            const { engine, log } = yield* journaled(count, 16);
+            yield* engine.push;
+            expect(log).toEqual(expected);
+            expect(yield* counterValue(engine)).toBe(count);
+          }),
+        { concurrency: 1, discard: true }
+      );
     }).pipe(Effect.scoped)
   );
 

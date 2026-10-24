@@ -137,7 +137,14 @@ const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
         yield* Layer.build(SqliteClient.layer({ filename })),
         SqlClient
       );
-      for (const statement of DDL) yield* writerSql.unsafe(statement).unprepared;
+      yield* Effect.forEach(
+        DDL,
+        (statement) =>
+          Effect.gen(function* () {
+            yield* writerSql.unsafe(statement).unprepared;
+          }),
+        { concurrency: 1, discard: true }
+      );
 
       const parkedSignal = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();

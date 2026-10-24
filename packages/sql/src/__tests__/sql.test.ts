@@ -5,6 +5,7 @@
  * declaration, and the NULL-bearing forms whose three-valued text must match
  * `Predicate.evaluate`.
  */
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "@effect/vitest";
 import { Predicate } from "@thomasfosterau/legation-effect";
 import * as Sql from "../Sql.js";
@@ -127,7 +128,7 @@ describe("Sql.compileWhere", () => {
   });
 
   it("emits the collation clause for declared-text operands only", () => {
-    for (const dialect of [Sql.sqlite, Sql.postgres]) {
+    Arr.forEach([Sql.sqlite, Sql.postgres], (dialect) => {
       const clause = `COLLATE ${dialect.textCollation}`;
       const ph = dialect.placeholder(1);
       expect(Sql.compileWhere(Predicate.gt("s", "￿"), dialect, { kinds }).text).toBe(
@@ -141,7 +142,7 @@ describe("Sql.compileWhere", () => {
         `"b" > ${ph}`
       );
       expect(Sql.compileWhere(Predicate.isNull("s"), dialect, { kinds }).text).toBe(`"s" IS NULL`);
-    }
+    });
   });
 
   it("never collates without a declaration, whatever the literal", () => {

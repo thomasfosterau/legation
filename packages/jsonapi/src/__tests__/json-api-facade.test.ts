@@ -237,7 +237,14 @@ const makeFacade = (
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { client, engine, store, arm, rootReads, racePut } = yield* makeReplica;
-    for (const url of pins) yield* client.subscribe(url);
+    yield* Effect.forEach(
+      pins,
+      (url) =>
+        Effect.gen(function* () {
+          yield* client.subscribe(url);
+        }),
+      { concurrency: 1, discard: true }
+    );
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them (#426): pull until the relational pin of the fixture is covered, so the replica holds
     // the rows a covered read links to. Each pull is in memory, so no time passes between them.
@@ -605,10 +612,15 @@ describe("JsonApiFacade", () => {
           new Request("http://shop.test/jsonapi/products", { headers: { accept: "*/*" } }),
           new Request("http://shop.test/jsonapi/products"),
         ];
-        for (const request of passes) {
-          expect(handler.matches(request), request.url).toBe(false);
-          expect(yield* handler.handle(request), request.url).toBeUndefined();
-        }
+        yield* Effect.forEach(
+          passes,
+          (request) =>
+            Effect.gen(function* () {
+              expect(handler.matches(request), request.url).toBe(false);
+              expect(yield* handler.handle(request), request.url).toBeUndefined();
+            }),
+          { concurrency: 1, discard: true }
+        );
         // Accept lists and parameters are read as media types.
         expect(
           handler.matches(

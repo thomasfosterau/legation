@@ -10,6 +10,7 @@
  * the operation and `fail` a server fault (500).
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -320,13 +321,20 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
         };
         const staged: Store = new Map([...store].map(([type, rows]) => [type, new Map(rows)]));
         const entries: Array<Entry> = [];
-        for (const [index, operation] of payload["atomic:operations"].entries()) {
-          const clientId = raw["atomic:operations"][index]?.data?.id;
-          entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
-        }
+        yield* Effect.forEach(
+          payload["atomic:operations"].entries(),
+          ([index, operation]) =>
+            Effect.gen(function* () {
+              const clientId = raw["atomic:operations"][index]?.data?.id;
+              entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
+            }),
+          { concurrency: 1, discard: true }
+        );
         // Commit.
         store.clear();
-        for (const [type, rows] of staged) store.set(type, rows);
+        Arr.forEach(staged, ([type, rows]) => {
+          store.set(type, rows);
+        });
         return Atomic.results(entries);
       }).pipe(Semaphore.withPermits(lock, 1))
     )
