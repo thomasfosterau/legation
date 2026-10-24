@@ -150,8 +150,12 @@ export const invalidateOnChanges = (
         // would let such aggregates serve stale content indefinitely. Do
         // not optimise it away.
         const tags = new Set<string>();
-        for (const collection of touched.collections) tags.add(tagFor(collection));
-        for (const row of touched.rows) tags.add(fineTagFor(row.collection, row.id));
+        Arr.forEach(touched.collections, (collection) => {
+          tags.add(tagFor(collection));
+        });
+        Arr.forEach(touched.rows, (row) => {
+          tags.add(fineTagFor(row.collection, row.id));
+        });
         return tags.size === 0
           ? Effect.void
           : options.store

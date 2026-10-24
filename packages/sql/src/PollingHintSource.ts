@@ -98,14 +98,19 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
       const previous = yield* Ref.get(state);
       const next = new Map(previous);
       const changed: Array<Backend.ChangeHint> = [];
-      for (const collection of collections) {
-        const signature = yield* signatureFor(collection);
-        if (signature === undefined) continue;
-        if (previous.has(collection) && previous.get(collection) !== signature) {
-          changed.push({ collection, ids: [] });
-        }
-        next.set(collection, signature);
-      }
+      yield* Effect.forEach(
+        collections,
+        (collection) =>
+          Effect.gen(function* () {
+            const signature = yield* signatureFor(collection);
+            if (signature === undefined) return;
+            if (previous.has(collection) && previous.get(collection) !== signature) {
+              changed.push({ collection, ids: [] });
+            }
+            next.set(collection, signature);
+          }),
+        { concurrency: 1, discard: true }
+      );
       yield* Ref.set(state, next);
       yield* bus.publish(changed);
     });

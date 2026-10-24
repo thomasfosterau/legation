@@ -11,6 +11,7 @@
  * reset patch (Clear + full Puts).
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -46,18 +47,18 @@ export const diff = (previous: Cvr, next: NextView): CvrDiff => {
   const puts: Array<{ collection: string; id: RowId }> = [];
   const dels: Array<{ collection: string; id: RowId }> = [];
 
-  for (const [collection, nextRows] of next.rows) {
+  Arr.forEach(next.rows, ([collection, nextRows]) => {
     const prevRows = previous.rows.get(collection);
-    for (const [id, version] of nextRows) {
+    Arr.forEach(nextRows, ([id, version]) => {
       if (prevRows?.get(id) !== version) puts.push({ collection, id });
-    }
-  }
-  for (const [collection, prevRows] of previous.rows) {
+    });
+  });
+  Arr.forEach(previous.rows, ([collection, prevRows]) => {
     const nextRows = next.rows.get(collection);
-    for (const id of prevRows.keys()) {
+    Arr.forEach(prevRows.keys(), (id) => {
       if (!nextRows?.has(id)) dels.push({ collection, id });
-    }
-  }
+    });
+  });
   return { puts, dels };
 };
 

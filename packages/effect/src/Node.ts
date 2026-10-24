@@ -203,9 +203,9 @@ export const make = <
   const identity = options.id ?? "id";
   if (options.id !== undefined) assertTextIdentity(type, options.id, options.attributes);
   const viaFields: Record<string, Schema.Top> = {};
-  for (const edge of Object.values(edges)) {
+  Arr.forEach(Object.values(edges), (edge) => {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
-  }
+  });
   const declaration = FilterPolicy.resolve({
     collection: type,
     attributes: options.attributes,
@@ -264,9 +264,9 @@ const assertTextIdentity = (
  */
 export const derivableSet = (node: AnyNode): ReadonlySet<string> => {
   const fields = new Set<string>(node.hintKeys);
-  for (const edge of Object.values(node.edges)) {
+  Arr.forEach(Object.values(node.edges), (edge) => {
     if (edge.kind === "one") fields.add(edge.via);
-  }
+  });
   return fields;
 };
 
@@ -327,7 +327,7 @@ const toCollection = (
   nodes: ReadonlyMap<string, AnyNode>
 ): Collection.AnyCollection => {
   const relationships: Array<Collection.Relationship> = [];
-  for (const [name, edge] of Object.entries(node.edges)) {
+  Arr.forEach(Object.entries(node.edges), ([name, edge]) => {
     if (edge.kind === "one") {
       relationships.push({
         name,
@@ -348,7 +348,7 @@ const toCollection = (
         ...(edge.kind === "paginated" ? { order: Subset.parseOrder(edge.order) } : {}),
       });
     }
-  }
+  });
   return Collection.make({
     name: node.type,
     // oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- `AnyNode` erases fields to the open `Schema.Struct.Fields`, whose services are `unknown`; `Collection.make` needs a service-free codec, which node rows are by construction but the exported types cannot state.
@@ -371,9 +371,9 @@ const toCollection = (
  */
 const rowFields = (node: AnyNode): ReadonlySet<string> => {
   const fields = new Set<string>([node.id, ...Object.keys(node.attributes)]);
-  for (const edge of Object.values(node.edges)) {
+  Arr.forEach(Object.values(node.edges), (edge) => {
     if (edge.kind === "one") fields.add(edge.via);
-  }
+  });
   return fields;
 };
 
@@ -387,10 +387,10 @@ const rowFields = (node: AnyNode): ReadonlySet<string> => {
 const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): AnyNode => {
   const sortable = new Set<string>(node.sortable);
   const fields = rowFields(node);
-  for (const source of definitions) {
-    for (const [name, edge] of Object.entries(source.edges)) {
-      if (edge.kind !== "paginated" || edge.target !== node.type) continue;
-      for (const term of Subset.parseOrder(edge.order)) {
+  Arr.forEach(definitions, (source) =>
+    Arr.forEach(Object.entries(source.edges), ([name, edge]) => {
+      if (edge.kind !== "paginated" || edge.target !== node.type) return;
+      Arr.forEach(Subset.parseOrder(edge.order), (term) => {
         if (!fields.has(term.field)) {
           throw new FilterDeclarationError({
             collection: node.type,
@@ -399,9 +399,9 @@ const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): Any
           });
         }
         sortable.add(term.field);
-      }
-    }
-  }
+      });
+    })
+  );
   return sortable.size === node.sortable.length ? node : { ...node, sortable: [...sortable] };
 };
 
@@ -415,14 +415,14 @@ const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): Any
  */
 export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
   const declared = new Map<string, AnyNode>();
-  for (const node of definitions) {
+  Arr.forEach(definitions, (node) => {
     if (declared.has(node.type)) {
       throw new DuplicateNameError({ kind: "collection", name: node.type });
     }
     declared.set(node.type, node);
-  }
-  for (const node of definitions) {
-    for (const [name, edge] of Object.entries(node.edges)) {
+  });
+  Arr.forEach(definitions, (node) => {
+    Arr.forEach(Object.entries(node.edges), ([name, edge]) => {
       if (!declared.has(edge.target)) {
         throw new UnknownCollectionError({
           from: node.type,
@@ -431,10 +431,12 @@ export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
         });
       }
       if (edge.kind !== "one") inverseVia(node, name, edge, declared);
-    }
-  }
+    });
+  });
   const nodes = new Map<string, AnyNode>();
-  for (const node of definitions) nodes.set(node.type, withEdgeOrders(node, definitions));
+  Arr.forEach(definitions, (node) => {
+    nodes.set(node.type, withEdgeOrders(node, definitions));
+  });
   const collections = Collection.registry(
     [...nodes.values()].map((node) => toCollection(node, nodes))
   );

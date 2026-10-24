@@ -558,7 +558,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         const keys = [...(yield* Ref.get(active))]
           .filter(([, entry]) => entry.mirrors.has(mirrorId))
           .map(([key]) => key);
-        for (const key of keys) yield* release(mirrorId, key);
+        yield* Effect.forEach(
+          keys,
+          (key) =>
+            Effect.gen(function* () {
+              yield* release(mirrorId, key);
+            }),
+          { concurrency: 1, discard: true }
+        );
         yield* forget(mirrorId);
       });
 
@@ -674,7 +681,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       const stale = [...(yield* Ref.get(lastSeen))]
         .filter(([, seen]) => seen < cutoff)
         .map(([mirrorId]) => mirrorId);
-      for (const mirrorId of stale) yield* handleDisconnect(mirrorId);
+      yield* Effect.forEach(
+        stale,
+        (mirrorId) =>
+          Effect.gen(function* () {
+            yield* handleDisconnect(mirrorId);
+          }),
+        { concurrency: 1, discard: true }
+      );
     });
     yield* Effect.forkScoped(
       Effect.forever(sweep.pipe(Effect.andThen(Effect.sleep(sweepInterval))))

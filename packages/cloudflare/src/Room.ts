@@ -26,6 +26,7 @@ import type {
   DurableObjectState,
   WebSocket,
 } from "@cloudflare/workers-types";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -245,9 +246,9 @@ export const makeRoomClass = <Env>(
         // affected client groups' pull loops) AND nudge every socket —
         // a contentless frame is all a hibernated client needs.
         await Effect.runPromise(onRoomClock(config.clock, runtime.notify([...topics.topics])));
-        for (const socket of this.state.getWebSockets()) {
+        Arr.forEach(this.state.getWebSockets(), (socket) => {
           (socket as RoomSocket).send(JSON.stringify(pokeFrame));
-        }
+        });
         return new Response(null, { status: 204 });
       }
       if (url.pathname === routes.push) {

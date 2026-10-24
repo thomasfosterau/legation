@@ -97,17 +97,22 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
           const now = yield* Clock.currentTimeMillis;
           // Lazy lease sweep: expired rooms drop out as publishes pass by.
           const live = new Map<string, Lease>();
-          for (const [roomId, lease] of yield* Ref.get(leases)) {
+          Arr.forEach(yield* Ref.get(leases), ([roomId, lease]) => {
             if (lease.expiresAt > now) live.set(roomId, lease);
-          }
+          });
           yield* Ref.set(leases, live);
           const hubMap = yield* Ref.get(hubs);
-          for (const [roomId, lease] of live) {
-            const matched = [...wanted].filter((topic) => lease.topics.has(topic));
-            if (Arr.isReadonlyArrayEmpty(matched)) continue;
-            const hub = hubMap.get(roomId);
-            if (hub !== undefined) yield* PubSub.publish(hub, matched);
-          }
+          yield* Effect.forEach(
+            live,
+            ([roomId, lease]) =>
+              Effect.gen(function* () {
+                const matched = [...wanted].filter((topic) => lease.topics.has(topic));
+                if (Arr.isReadonlyArrayEmpty(matched)) return;
+                const hub = hubMap.get(roomId);
+                if (hub !== undefined) yield* PubSub.publish(hub, matched);
+              }),
+            { concurrency: 1, discard: true }
+          );
         }),
       pokes: (roomId) =>
         Effect.gen(function* () {

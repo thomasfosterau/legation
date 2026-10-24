@@ -21,6 +21,8 @@
  * a client built before #155 may still send.
  */
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as SchemaAST from "effect/SchemaAST";
 import { AuthorizationError, FilterDeclarationError } from "./Errors.js";
@@ -130,14 +132,12 @@ const kindOfLiteral = (literal: SchemaAST.LiteralValue): LiteralKind | undefined
 
 /** The one kind shared by a union's non-null members (`NullOr`, `optional`, `Literals`). */
 const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undefined => {
-  const kinds = new Set<LiteralKind>();
-  for (const member of members) {
-    if (member._tag === "Null" || member._tag === "Undefined") continue;
-    const kind = kindOfAst(member);
-    if (kind === undefined) return undefined;
-    kinds.add(kind);
-  }
-  return kinds.size === 1 ? [...kinds][0] : undefined;
+  const kinds = members
+    .filter((member) => member._tag !== "Null" && member._tag !== "Undefined")
+    .map(kindOfAst);
+  if (kinds.includes(undefined)) return undefined;
+  const distinct = new Set(kinds);
+  return distinct.size === 1 ? [...distinct][0] : undefined;
 };
 
 const kindOfAst = (ast: SchemaAST.AST): LiteralKind | undefined => {
@@ -202,11 +202,13 @@ export interface ResolveOptions {
 export const resolve = (options: ResolveOptions): FilterDeclaration => {
   const known = new Set<string>([...options.keyFields, ...Object.keys(options.attributes)]);
   const filterable: Record<string, FilterableField> = {};
-  for (const [field, input] of Object.entries(options.filterable ?? {})) {
+  Arr.forEach(Object.entries(options.filterable ?? {}), ([field, input]) => {
     assertRowField(options, known, field, "filterable");
     filterable[field] = resolveField(options, field, normaliseInput(input));
-  }
-  for (const field of options.sortable ?? []) assertRowField(options, known, field, "sortable");
+  });
+  Arr.forEach(options.sortable ?? [], (field) => {
+    assertRowField(options, known, field, "sortable");
+  });
   return withKeyDefaults(
     options.keyFields,
     filterable,
@@ -280,8 +282,10 @@ export const withKeyDefaults = (
   identity: string = "id"
 ): FilterDeclaration => {
   const merged: Record<string, FilterableField> = {};
-  for (const field of keyFields) merged[field] = keyDefaults;
-  for (const [field, declared] of Object.entries(filterable)) {
+  Arr.forEach(keyFields, (field) => {
+    merged[field] = keyDefaults;
+  });
+  Arr.forEach(Object.entries(filterable), ([field, declared]) => {
     const base = merged[field];
     merged[field] =
       base === undefined
@@ -290,7 +294,7 @@ export const withKeyDefaults = (
             kind: declared.kind,
             operators: [...new Set([...base.operators, ...declared.operators])],
           };
-  }
+  });
   return { filterable: merged, sortable: [...new Set([identity, ...sortable])] };
 };
 
@@ -369,11 +373,11 @@ const inCheck = (
 ): AuthorizationError | undefined => {
   const failed = fieldCheck(collection, declaration, node.field, operator);
   if (failed !== undefined) return failed;
-  for (const value of node.values) {
-    const mismatch = literalCheck(collection, declaration, node.field, operator, value);
-    if (mismatch !== undefined) return mismatch;
-  }
-  return undefined;
+  return Option.getOrUndefined(
+    Arr.findFirst(node.values, (value) =>
+      Option.fromUndefinedOr(literalCheck(collection, declaration, node.field, operator, value))
+    )
+  );
 };
 
 /** Whether a `Compare` is the wire form of `isnull` (a null literal on `eq` / `ne`; ADR-0028 §5). */
@@ -452,11 +456,11 @@ const connectiveCheck = (
   declaration: FilterDeclaration,
   predicates: ReadonlyArray<Predicate>
 ): AuthorizationError | undefined => {
-  for (const predicate of predicates) {
-    const failed = checkWhere(collection, declaration, predicate);
-    if (failed !== undefined) return failed;
-  }
-  return undefined;
+  return Option.getOrUndefined(
+    Arr.findFirst(predicates, (predicate) =>
+      Option.fromUndefinedOr(checkWhere(collection, declaration, predicate))
+    )
+  );
 };
 
 /** `Not`: `Not(In)` is `nin`, a negated null test is `isnull`, anything else recurses. */
@@ -478,15 +482,13 @@ export const checkOrderBy = (
   declaration: FilterDeclaration,
   orderBy: ReadonlyArray<OrderBy>
 ): AuthorizationError | undefined => {
-  for (const term of orderBy) {
-    if (!declaration.sortable.includes(term.field)) {
-      return deny(
+  const unsortable = orderBy.find((term) => !declaration.sortable.includes(term.field));
+  return unsortable === undefined
+    ? undefined
+    : deny(
         collection,
-        `field "${term.field}" is not sortable (sortable: ${declaration.sortable.join(", ")})`
+        `field "${unsortable.field}" is not sortable (sortable: ${declaration.sortable.join(", ")})`
       );
-    }
-  }
-  return undefined;
 };
 
 /** {@link checkWhere} then {@link checkOrderBy} over one subset's client-authored parts. */

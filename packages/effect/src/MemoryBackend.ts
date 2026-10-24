@@ -231,13 +231,10 @@ const recordRead = (
  * matches an old version, even if it was deleted in between.
  */
 const readsStale = (s: MemoryState, reads: ReadSet): boolean => {
-  for (const [collection, ids] of reads) {
+  return [...reads].some(([collection, ids]) => {
     const rows = s.rows.get(collection);
-    for (const [id, seen] of ids) {
-      if (rows?.get(id)?.version !== seen) return true;
-    }
-  }
-  return false;
+    return [...ids].some(([id, seen]) => rows?.get(id)?.version !== seen);
+  });
 };
 
 /** The client's committed `lastMutationId` in a group; 0 before its first mutation. */
@@ -258,7 +255,7 @@ const commitMutation = (
 ): MemoryState => {
   const working = new Map<string, Map<string, MemoryRow>>();
   let versionCounter = s.versionCounter;
-  for (const { collection, id, write } of log) {
+  Arr.forEach(log, ({ collection, id, write }) => {
     const collectionRows =
       working.get(collection) ?? new Map<string, MemoryRow>(s.rows.get(collection) ?? []);
     working.set(collection, collectionRows);
@@ -268,9 +265,11 @@ const commitMutation = (
     } else {
       collectionRows.delete(id);
     }
-  }
+  });
   const rows = new Map(s.rows);
-  for (const [collection, collectionRows] of working) rows.set(collection, collectionRows);
+  Arr.forEach(working, ([collection, collectionRows]) => {
+    rows.set(collection, collectionRows);
+  });
   const lastIds = new Map(s.lastMutationIds);
   const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
   groupIds.set(
@@ -337,9 +336,9 @@ const foldStage = (
   touched: Map<string, Set<string>>,
   puts: Map<string, Map<string, unknown>>
 ): void => {
-  for (const [collection, writes] of stage.overlay) {
+  Arr.forEach(stage.overlay, ([collection, writes]) => {
     const ids = touched.get(collection) ?? new Set<string>();
-    for (const [id, write] of writes) {
+    Arr.forEach(writes, ([id, write]) => {
       ids.add(id);
       const values = puts.get(collection) ?? new Map<string, unknown>();
       if (write._tag === "put") {
@@ -348,9 +347,9 @@ const foldStage = (
         values.delete(id);
       }
       puts.set(collection, values);
-    }
+    });
     touched.set(collection, ids);
-  }
+  });
 };
 
 /** Build a memory backend with the given authoritative handlers. */
@@ -556,16 +555,16 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         }
         const final = yield* Ref.get(state);
         const olds = new Map<string, Map<string, unknown>>();
-        for (const [collection, ids] of touched) {
+        Arr.forEach(touched, ([collection, ids]) => {
           const rows = before.rows.get(collection);
-          if (rows === undefined) continue;
+          if (rows === undefined) return;
           const map = new Map<string, unknown>();
-          for (const id of ids) {
+          Arr.forEach(ids, (id) => {
             const row = rows.get(id);
             if (row !== undefined) map.set(id, row.value);
-          }
+          });
           if (map.size > 0) olds.set(collection, map);
-        }
+        });
         const hints = buildChangeHints(touched, puts, olds);
         return {
           lastMutationIds: Object.fromEntries(
@@ -586,13 +585,15 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         ),
       rejections: (context) =>
         Ref.get(state).pipe(
-          Effect.map((s) => {
-            const result: Array<RejectedMutation> = [];
-            for (const [clientId, ids] of s.rejections.get(context.clientGroupId) ?? new Map()) {
-              for (const [mutationId, reason] of ids) result.push({ clientId, mutationId, reason });
-            }
-            return result;
-          })
+          Effect.map((s) =>
+            [...(s.rejections.get(context.clientGroupId) ?? [])].flatMap(([clientId, ids]) =>
+              [...ids].map(([mutationId, reason]): RejectedMutation => ({
+                clientId,
+                mutationId,
+                reason,
+              }))
+            )
+          )
         ),
       evaluate: (_context, subset) =>
         Effect.gen(function* () {
@@ -616,10 +617,10 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           Effect.map((s) => {
             const collectionRows = s.rows.get(collection);
             const result: Array<{ id: string; version: number; value: unknown }> = [];
-            for (const id of ids) {
+            Arr.forEach(ids, (id) => {
               const row = collectionRows?.get(id);
               if (row !== undefined) result.push(row);
-            }
+            });
             return result;
           })
         ),

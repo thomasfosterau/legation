@@ -33,6 +33,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
@@ -278,14 +279,20 @@ const randomField = (
 const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
   Effect.gen(function* () {
     const value: Record<string, Predicate.Literal> = {};
-    for (const [c, column] of plan.columns.entries()) {
-      const pool = plan.pools[c] ?? [];
-      let field: Predicate.Literal | undefined;
-      if (index < plan.pinned) field = index === 0 ? null : undefined;
-      else if (index < plan.pinned + plan.sweep) field = pool[(index - plan.pinned) % pool.length];
-      else field = yield* randomField(pool, plan.nulls);
-      if (field !== undefined) value[column.name] = field;
-    }
+    yield* Effect.forEach(
+      plan.columns.entries(),
+      ([c, column]) =>
+        Effect.gen(function* () {
+          const pool = plan.pools[c] ?? [];
+          let field: Predicate.Literal | undefined;
+          if (index < plan.pinned) field = index === 0 ? null : undefined;
+          else if (index < plan.pinned + plan.sweep)
+            field = pool[(index - plan.pinned) % pool.length];
+          else field = yield* randomField(pool, plan.nulls);
+          if (field !== undefined) value[column.name] = field;
+        }),
+      { concurrency: 1, discard: true }
+    );
     return { id: `r${String(index).padStart(3, "0")}`, value };
   });
 
@@ -600,9 +607,9 @@ export const shrinkPredicate = (
         out.push(...children.map((_, i) => rebuild(...without(children, i))));
       }
       children.forEach((child, i) => {
-        for (const shrunk of shrinkPredicate(child)) {
+        Arr.forEach(shrinkPredicate(child), (shrunk) => {
           out.push(rebuild(...replaceAt(children, i, shrunk)));
-        }
+        });
       });
       return out;
     }
@@ -631,34 +638,33 @@ const MAX_SHRINK_STEPS = 1000;
 export const minimise = <E, R>(
   failing: Case,
   disagrees: (candidate: Case) => Effect.Effect<boolean, E, R>
-): Effect.Effect<Case, E, R> =>
-  Effect.gen(function* () {
-    let current = failing;
-    let steps = 0;
-    while (steps < MAX_SHRINK_STEPS) {
-      const candidates: Array<Case> = [
-        ...shrinkPredicate(current.predicate).map((predicate) => ({
-          predicate,
-          rows: current.rows,
-        })),
-        ...current.rows.map((_, i) => ({
-          predicate: current.predicate,
-          rows: without(current.rows, i),
-        })),
-      ];
-      let accepted: Case | undefined;
-      for (const candidate of candidates) {
-        steps++;
-        if (yield* disagrees(candidate)) {
-          accepted = candidate;
-          break;
-        }
-      }
-      if (accepted === undefined) break;
-      current = accepted;
-    }
-    return current;
-  });
+): Effect.Effect<Case, E, R> => {
+  // One round: the first shrunk candidate that still disagrees replaces
+  // `current`; every candidate tried counts against the step budget.
+  const round = (current: Case, steps: number): Effect.Effect<Case, E, R> => {
+    if (steps >= MAX_SHRINK_STEPS) return Effect.succeed(current);
+    const candidates: Array<Case> = [
+      ...shrinkPredicate(current.predicate).map((predicate) => ({
+        predicate,
+        rows: current.rows,
+      })),
+      ...current.rows.map((_, i) => ({
+        predicate: current.predicate,
+        rows: without(current.rows, i),
+      })),
+    ];
+    let tried = 0;
+    return Effect.findFirst(candidates, (candidate) => {
+      tried++;
+      return disagrees(candidate);
+    }).pipe(
+      Effect.flatMap((accepted) =>
+        Option.isSome(accepted) ? round(accepted.value, steps + tried) : Effect.succeed(current)
+      )
+    );
+  };
+  return round(failing, 0);
+};
 
 // ─── Reporting ───────────────────────────────────────────────────────────────
 
@@ -702,11 +708,11 @@ export const formatDisagreement = (disagreement: Disagreement): string => {
     lines.push(`orderBy: ${print(disagreement.orderBy)}`);
   }
   lines.push("rows:");
-  for (const row of disagreement.rows) {
+  Arr.forEach(disagreement.rows, (row) => {
     lines.push(`  ${row.id} ${print(row.value)}`);
-  }
-  for (const [name, ids] of Object.entries(disagreement.results)) {
+  });
+  Arr.forEach(Object.entries(disagreement.results), ([name, ids]) => {
     lines.push(`${name}: ${JSON.stringify(ids)}`);
-  }
+  });
   return lines.join("\n");
 };

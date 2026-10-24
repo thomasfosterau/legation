@@ -425,12 +425,12 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // with nothing to decode is returned as is (no copy).
   const decodeRow = (collection: string, row: SqlRow): SqlRow => {
     let decoded: Record<string, unknown> | undefined;
-    for (const field of booleanColumns[collection] ?? []) {
+    Arr.forEach(booleanColumns[collection] ?? [], (field) => {
       const value = row[field];
-      if (value !== 0 && value !== 1) continue;
+      if (value !== 0 && value !== 1) return;
       decoded ??= { ...row };
       decoded[field] = value === 1;
-    }
+    });
     return decoded ?? row;
   };
 
@@ -787,14 +787,19 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     Effect.gen(function* () {
       if (floors.size === 0) return;
       const ledger = yield* readLedger(clientGroupId);
-      for (const [clientId, floor] of floors) {
-        const row = ledger.get(clientId);
-        if (row === undefined || row.rejections.size === 0) continue;
-        const kept = new Map([...row.rejections].filter(([mutationId]) => mutationId >= floor));
-        if (kept.size !== row.rejections.size) {
-          yield* writeRejections(clientGroupId, clientId, kept);
-        }
-      }
+      yield* Effect.forEach(
+        floors,
+        ([clientId, floor]) =>
+          Effect.gen(function* () {
+            const row = ledger.get(clientId);
+            if (row === undefined || row.rejections.size === 0) return;
+            const kept = new Map([...row.rejections].filter(([mutationId]) => mutationId >= floor));
+            if (kept.size !== row.rejections.size) {
+              yield* writeRejections(clientGroupId, clientId, kept);
+            }
+          }),
+        { concurrency: 1, discard: true }
+      );
     });
 
   // Create the client's ledger row at 0 when it has none. `DO NOTHING` leaves a
@@ -1027,34 +1032,39 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // Numbered per handler run, as trunk did: a replay runs no savepoint and
         // takes no number.
         let savepointCounter = 0;
-        for (const mutation of mutations) {
-          // Ids start at 1 and the ledger at 0, so a non-positive id is never
-          // new: skip it without writing a ledger row for it.
-          if (mutation.mutationId <= 0) continue;
-          const settled = yield* applyOne(context, mutation, savepointCounter);
-          if (settled._tag === "replayed") {
-            // A copy the ledger covers runs no handler. It reports the committed
-            // rejection, if there is one, so every copy agrees (#366).
-            if (settled.rejection !== undefined) {
-              rejected.push({
-                clientId: mutation.clientId,
-                mutationId: mutation.mutationId,
-                reason: settled.rejection,
-              });
-            }
-            continue;
-          }
-          savepointCounter++;
-          if (settled._tag === "applied") {
-            hints.push(...settled.hints);
-          } else {
-            rejected.push({
-              clientId: mutation.clientId,
-              mutationId: mutation.mutationId,
-              reason: settled.reason,
-            });
-          }
-        }
+        yield* Effect.forEach(
+          mutations,
+          (mutation) =>
+            Effect.gen(function* () {
+              // Ids start at 1 and the ledger at 0, so a non-positive id is never
+              // new: skip it without writing a ledger row for it.
+              if (mutation.mutationId <= 0) return;
+              const settled = yield* applyOne(context, mutation, savepointCounter);
+              if (settled._tag === "replayed") {
+                // A copy the ledger covers runs no handler. It reports the committed
+                // rejection, if there is one, so every copy agrees (#366).
+                if (settled.rejection !== undefined) {
+                  rejected.push({
+                    clientId: mutation.clientId,
+                    mutationId: mutation.mutationId,
+                    reason: settled.rejection,
+                  });
+                }
+                return;
+              }
+              savepointCounter++;
+              if (settled._tag === "applied") {
+                hints.push(...settled.hints);
+              } else {
+                rejected.push({
+                  clientId: mutation.clientId,
+                  mutationId: mutation.mutationId,
+                  reason: settled.reason,
+                });
+              }
+            }),
+          { concurrency: 1, discard: true }
+        );
         // Enrich once, after all writes, so the reads see the final tx state
         // (a row a later mutation deleted is correctly absent from `values`).
         return {

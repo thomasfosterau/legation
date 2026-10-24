@@ -293,10 +293,10 @@ const commitOps = (
       const entries = transaction.objectStore(ENTRIES_STORE);
       // Every request is issued synchronously here: IndexedDB commits a transaction once control
       // returns to the event loop with no request pending, so nothing may await between them.
-      for (const op of ops) {
+      Arr.forEach(ops, (op) => {
         if (op._tag === "Set") entries.put({ key: op.key, value: op.value });
         else entries.delete(op.key);
-      }
+      });
     });
     if (Result.isFailure(issued)) {
       fail(issued.failure);

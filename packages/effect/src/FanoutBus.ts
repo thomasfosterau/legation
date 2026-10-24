@@ -72,14 +72,17 @@ const topicsForHint = (
   const olds = new Map(hint.oldValues?.map(({ id, value }) => [id, value]) ?? []);
   const topics = new Set<FanoutTopics.Topic>([FanoutTopics.coarse(hint.collection)]);
   const ids = Arr.isReadonlyArrayNonEmpty(hint.ids) ? hint.ids : [...values.keys()];
-  for (const id of ids) {
-    for (const topic of FanoutTopics.topicsForWrite(hint.collection, derivable, {
-      oldValue: olds.get(id),
-      newValue: values.get(id),
-    })) {
-      topics.add(topic);
-    }
-  }
+  Arr.forEach(ids, (id) => {
+    Arr.forEach(
+      FanoutTopics.topicsForWrite(hint.collection, derivable, {
+        oldValue: olds.get(id),
+        newValue: values.get(id),
+      }),
+      (topic) => {
+        topics.add(topic);
+      }
+    );
+  });
   return topics;
 };
 
@@ -127,11 +130,11 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
     return {
       publish: (hints) => {
         const topics = new Set<FanoutTopics.Topic>();
-        for (const hint of hints) {
-          for (const topic of topicsForHint(hint, derivable.get(hint.collection))) {
+        Arr.forEach(hints, (hint) => {
+          Arr.forEach(topicsForHint(hint, derivable.get(hint.collection)), (topic) => {
             topics.add(topic);
-          }
-        }
+          });
+        });
         // Freshen the lease alongside the write — a busy room never expires.
         return bounded("publish", options.broker.publish(topics)).pipe(Effect.andThen(registerNow));
       },
