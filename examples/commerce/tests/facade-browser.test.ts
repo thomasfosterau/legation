@@ -71,6 +71,11 @@
  * checks that boot completed and fails with that message rather than with
  * whatever its first step trips over.
  *
+ * Teardown closes the browser, then the app, each under its own budget
+ * (`BROWSER_CLOSE_BUDGET_MS`, `APP_CLOSE_BUDGET_MS`), measured under load. An
+ * overrun names its step, and the app still closes after the browser's
+ * overran.
+ *
  * Identity is the app's own: the test signs up through the account page's
  * form (Better Auth), the Kit process aligns the client-group binding, and
  * the read proxy vouches for the session — the browser never sets
@@ -132,15 +137,15 @@ const deadlineIn = (ms: number): number => Date.now() + ms;
 const remaining = (deadline: number): number => Math.max(deadline - Date.now(), 1);
 
 /**
- * `work`, or a rejection naming `step` once `deadline` passes: a bound for a
- * page-side wait (a promise awaited inside `page.evaluate`) that has no
- * timeout of its own.
+ * `work`, or a rejection naming `phase` and `step` once `deadline` passes: a
+ * bound for a wait that has no timeout of its own (a promise awaited inside
+ * `page.evaluate`, `browser.close()`, the app's shutdown).
  */
-const within = <A>(step: string, deadline: number, work: Promise<A>): Promise<A> => {
+const within = <A>(phase: string, step: string, deadline: number, work: Promise<A>): Promise<A> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`boot: ${step} did not happen within the boot budget`)),
+      () => reject(new Error(`${phase}: ${step} did not happen within the ${phase} budget`)),
       remaining(deadline)
     );
   });
@@ -216,6 +221,20 @@ const signals = makeSignals();
  * of magnitude over what was measured.
  */
 const BOOT_BUDGET_MS = 60_000;
+/**
+ * Teardown's budget for closing the browser: a safety bound on Playwright's
+ * `browser.close()`, not a timing assumption. On a 4-core host it took
+ * 0.3–2.3 s at a load average of 40–60, and 16 s and 22 s at 82–89 (#522),
+ * so this leaves room over the worst measured.
+ */
+const BROWSER_CLOSE_BUDGET_MS = 60_000;
+/**
+ * Teardown's budget for closing the app. Its sync server shuts down within
+ * `NodeHttpServer`'s 20 s graceful-shutdown bound, which it used to reach on
+ * every run: the front left the carriers' connections open (#522). With
+ * them closed first it took 5 ms–2.5 s at a load average of 50–89.
+ */
+const APP_CLOSE_BUDGET_MS = 30_000;
 /** The signed-up user's id (Better Auth's), set once boot has completed. */
 let userId: string | undefined;
 
@@ -263,12 +282,23 @@ describe("the façade in a browser: plain fetch over the service worker's replic
   }, 120_000);
 
   afterAll(async () => {
-    try {
-      await browser?.close();
-    } finally {
-      await app?.close();
+    // Each step has its own budget, so the app still closes when the
+    // browser's close overruns, and an overrun names its step.
+    const failures: Array<unknown> = [];
+    const step = async (name: string, budget: number, close: () => Promise<void>) => {
+      try {
+        await within("teardown", name, deadlineIn(budget), close());
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    if (browser !== undefined) {
+      await step("browser.close", BROWSER_CLOSE_BUDGET_MS, () => browser.close());
     }
-  }, 30_000);
+    if (app !== undefined) await step("app.close", APP_CLOSE_BUDGET_MS, () => app.close());
+    if (failures.length > 1) throw new AggregateError(failures, "teardown: both steps failed");
+    if (failures.length === 1) throw failures[0];
+  }, BROWSER_CLOSE_BUDGET_MS + APP_CLOSE_BUDGET_MS + 10_000);
 
   it("boots: signs up, the worker controls the page, the engine serves the shell's pins", async () => {
     await page.goto(`${app.origin}/account`);
@@ -295,6 +325,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     // the page is controlled without a reload — reload once if not.
     const workerReady = () =>
       within(
+        "boot",
         "the service worker's activation",
         deadline,
         page.evaluate(async () => {
