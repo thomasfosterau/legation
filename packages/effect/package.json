@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-effect",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An offline-first sync engine over a typed resource graph: Node (with its Edges), Collection, declarative Query reads, named Mutation writes, one Client per thread and one Server per backend",
   "keywords": [
     "cache",
