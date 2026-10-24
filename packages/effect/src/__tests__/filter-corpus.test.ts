@@ -48,6 +48,8 @@ const leaves = (
       return [];
     case "Exists":
       throw new Error("Exists must never be generated");
+    case "InSet":
+      throw new Error("InSet must never be generated");
   }
 };
 

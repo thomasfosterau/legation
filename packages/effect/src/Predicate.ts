@@ -60,6 +60,12 @@ export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";
  *   this row's `localField`. It is a relational node — a single-row evaluator
  *   can't decide it; a backend resolves it to an `In` over `localField` against
  *   the matching `foreignField` set (`resolveExists`).
+ * - `InSet` tests field membership in a **named set** (ADR-0015 amendment,
+ *   #205): the node carries the set's name, never its members, so an auth
+ *   filter's authored form is stable while the set moves. It is server-authored
+ *   only — the wire codec has no case for it — and the sync server binds it to
+ *   the resolved values (`bindSets`) before a subset reaches a backend. An
+ *   unbound `InSet` matches nothing.
  */
 export type Predicate =
   | { readonly _tag: "True" }
@@ -81,7 +87,8 @@ export type Predicate =
       readonly localField: string;
       readonly foreignField: string;
       readonly where: Predicate;
-    };
+    }
+  | { readonly _tag: "InSet"; readonly field: string; readonly set: string };
 
 /** The fields of an {@link Predicate} `Exists` node. */
 export interface ExistsNode {
@@ -95,7 +102,10 @@ const LiteralSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean
 
 /**
  * Wire codec for {@link Predicate}. `NotIn` and `IsNull` were added by
- * ADR-0028 (wire-additive: every older encoding still decodes).
+ * ADR-0028 (wire-additive: every older encoding still decodes). `InSet` has
+ * no case: a named-set reference is server-authored only (#205), so a client
+ * can never send one, and the server binds every one before a subset is
+ * stored or sent.
  */
 export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("True") }),
@@ -225,6 +235,13 @@ export const exists = (options: {
   foreignField: options.foreignField,
   where: options.where ?? always,
 });
+
+/**
+ * `field IN set(name)`: membership in a named, session-resolved set (#205).
+ * The predicate refers to the set by name; the sync server binds it to the
+ * values the set's resolver produced ({@link bindSets}). Server-authored only.
+ */
+export const inSet = (field: string, set: string): Predicate => ({ _tag: "InSet", field, set });
 
 // ─── Ordering ────────────────────────────────────────────────────────────────
 
@@ -409,6 +426,8 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  * - `Exists` → `Some(true)`. It is relational and can't be decided from one
  *   row: a backend resolves it to an `In` before evaluation (`resolveExists`),
  *   and on the client the rows were already narrowed by the server.
+ * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
+ *   The sync server binds every one before evaluation ({@link bindSets}).
  */
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
   switch (predicate._tag) {
@@ -417,6 +436,8 @@ export const evaluate = (predicate: Predicate, row: unknown): Option.Option<bool
       return TRUE;
     case "Compare":
       return evaluateCompare(predicate, row);
+    case "InSet":
+      return FALSE;
     case "In":
       return evaluateMembership(predicate.field, predicate.values, true, row);
     case "NotIn":
@@ -468,6 +489,7 @@ export const resolveExists = <E, R>(
     case "In":
     case "NotIn":
     case "IsNull":
+    case "InSet":
       return Effect.succeed(predicate);
   }
 };
@@ -502,6 +524,78 @@ export const hasExists = (predicate: Predicate): boolean => {
     case "In":
     case "NotIn":
     case "IsNull":
+    case "InSet":
       return false;
   }
+};
+
+// ─── Named sets (#205) ───────────────────────────────────────────────────────
+
+/** The names of the sets a predicate's `InSet` nodes refer to. */
+export const setNames = (predicate: Predicate): ReadonlySet<string> => {
+  const names = new Set<string>();
+  const visit = (node: Predicate): void => {
+    switch (node._tag) {
+      case "InSet":
+        names.add(node.set);
+        return;
+      case "And":
+      case "Or":
+        for (const inner of node.predicates) visit(inner);
+        return;
+      case "Not":
+        visit(node.predicate);
+        return;
+      case "Exists":
+        visit(node.where);
+        return;
+      case "True":
+      case "Compare":
+      case "In":
+      case "NotIn":
+      case "IsNull":
+        return;
+    }
+  };
+  visit(predicate);
+  return names;
+};
+
+/**
+ * Bind every `InSet` node to its resolved values: `InSet(field, name)`
+ * becomes `In(field, values)`. A name with no binding — its resolver failed,
+ * or it was never declared — **narrows, never widens** (ADR-0015 amendment,
+ * rule 5): it becomes the empty `In` (false) where it occurs positively, and
+ * `True` under an odd number of `Not`s, so the negation around it is false.
+ * Either way that branch admits no row, and the predicate's other branches
+ * still apply.
+ */
+export const bindSets = (
+  predicate: Predicate,
+  bindings: ReadonlyMap<string, ReadonlyArray<Literal>>
+): Predicate => {
+  const bind = (node: Predicate, negated: boolean): Predicate => {
+    switch (node._tag) {
+      case "InSet": {
+        const values = bindings.get(node.set);
+        if (values !== undefined) return isIn(node.field, values);
+        return negated ? always : isIn(node.field, []);
+      }
+      case "And":
+        return { _tag: "And", predicates: node.predicates.map((inner) => bind(inner, negated)) };
+      case "Or":
+        return { _tag: "Or", predicates: node.predicates.map((inner) => bind(inner, negated)) };
+      case "Not":
+        return not(bind(node.predicate, !negated));
+      case "Exists":
+        return { ...node, where: bind(node.where, negated) };
+      case "True":
+      case "Compare":
+      case "In":
+      case "NotIn":
+      case "IsNull":
+        return node;
+    }
+  };
+  return setNames(predicate).size === 0 ? predicate : bind(predicate, false);
 };

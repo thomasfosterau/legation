@@ -236,6 +236,7 @@ export const toFilterAst = (predicate: Predicate.Predicate): Option.Option<Filte
     case "Not":
       return Option.map(toFilterAst(predicate.predicate), Filter.not);
     case "Exists":
+    case "InSet":
       return Option.none();
   }
 };
