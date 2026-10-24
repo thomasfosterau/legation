@@ -99,15 +99,20 @@
  * reads it. On PostgreSQL an arm carries its row as JSON (`row_to_json`): the
  * two agree wherever JSON carries a column's value as the driver does
  * (`BackendContract` rule 14 checks it over the generated corpus), the README
- * lists the column types it does not, and a pull whose rows hold an integer
- * JSON cannot carry exactly (beyond ±(2^53 − 1), a `bigint` id or version) is
- * answered by `evaluate` per subset instead. The rows read back are finished
+ * lists the column types it does not, and a pull whose rows hold a number
+ * JSON cannot carry exactly (an integer beyond ±(2^53 − 1), a `numeric` with
+ * more digits than a double, such a number inside a `jsonb` column) is
+ * answered by `evaluate` per subset instead, with an {@link InexactJsonNumber}
+ * warning naming the column. Integer, double and text values belong in typed
+ * columns (`integer`, `double precision`, `text`) rather than in JSON. The rows read back are finished
  * by the same code as `evaluate`'s.
  */
 
 import * as Arr from "effect/Array";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -356,14 +361,84 @@ const decodeManyJson = (text: string) =>
   Schema.decodeEffect(ManyJsonRow)(text).pipe(Effect.mapError(undecodable));
 
 /**
- * Whether a row read back from JSON holds an integer JSON could not carry
- * exactly: one beyond ±(2^53 − 1), which `JSON.parse` rounds to the nearest
- * double (a `bigint` id, version or ordered column).
+ * Why a pull fell back from its batched statement to one `evaluate` per
+ * subset: a number in a JSON row (PostgreSQL's `row_to_json`) that JSON
+ * cannot carry exactly (#505). `JSON.parse` reads every JSON number as a
+ * double, so one with more significant digits than a double holds (a `bigint`
+ * past ±(2^53 − 1), a `numeric` of high precision, such a number inside a
+ * `json` / `jsonb` column) would read back as a different value than the
+ * database holds, and an integer past ±(2^53 − 1) is read by the driver as
+ * text, not a number. `evaluateMany` then answers the pull with `evaluate`
+ * per subset, whose values are the driver's, and logs this once per
+ * collection and column at `Warning` level, as the log's cause: declare the
+ * column `integer`, `double precision` or `text` in the read relation (a view
+ * can cast it) so the pull stays one statement.
+ *
+ * Logged, never raised: the pull still succeeds.
  */
-const holdsUnsafeInteger = (row: SqlRow): boolean =>
-  R.values(row).some(
-    (value) => P.isNumber(value) && Number.isInteger(value) && !Number.isSafeInteger(value)
+export class InexactJsonNumber extends Data.TaggedError("InexactJsonNumber")<{
+  readonly message: string;
+  /** The collection whose read relation holds the column. */
+  readonly collection: string;
+  /** The read relation's column the number sits in (top-level key of the row's JSON). */
+  readonly column: string;
+}> {}
+
+/**
+ * A JSON number's decimal value, as `<sign><digits>e<scale>` with the digits'
+ * leading and trailing zeros dropped (the value is `0.<digits> × 10^scale`),
+ * so two spellings of one value (`1.50`, `15e-1`) give the same key.
+ */
+const decimalKey = (token: string): string => {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
+  if (match === null) return token;
+  const [, sign = "", whole = "", fraction = "", exponent = "0"] = match;
+  const digits = `${whole}${fraction}`;
+  const significant = digits.replace(/^0+/, "");
+  const trimmed = significant.replace(/0+$/, "");
+  if (trimmed === "") return "0";
+  const scale = whole.length - (digits.length - significant.length) + Number(exponent);
+  return `${sign}${trimmed}e${scale}`;
+};
+
+/**
+ * Whether `JSON.parse` reads a JSON number token as exactly the value it
+ * spells, and as a number the driver would also give: its decimal value equals
+ * the double it parses to, and that double is not an integer past
+ * ±(2^53 − 1) (which the driver reads as text).
+ */
+const isExactJsonNumber = (token: string): boolean => {
+  const value = Number(token);
+  return (
+    (!Number.isInteger(value) || Number.isSafeInteger(value)) &&
+    decimalKey(token) === decimalKey(String(value))
   );
+};
+
+/** JSON's tokens, for {@link inexactColumn}: strings, numbers and punctuation. */
+const JSON_TOKEN = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\]:,]/g;
+
+/**
+ * The first column of a JSON row whose value holds a number JSON cannot carry
+ * exactly (see {@link InexactJsonNumber}), nested values included: the row's
+ * top-level key the number sits under.
+ */
+const inexactColumn = (text: string): Option.Option<string> => {
+  const tokens = Array.from(text.matchAll(JSON_TOKEN), (match) => match[0]);
+  const start = { depth: 0, key: "", previous: "" };
+  const [, found] = Arr.mapAccum(tokens, start, (state, token) => {
+    const opens = token === "{" || token === "[";
+    const closes = token === "}" || token === "]";
+    const depth = opens ? state.depth + 1 : closes ? state.depth - 1 : state.depth;
+    // A string followed by `:` directly inside the row's object is a column name.
+    const key = token === ":" && state.depth === 1 ? state.previous.slice(1, -1) : state.key;
+    const isNumber = token !== "" && token !== "-" && /^[-\d]/.test(token);
+    const inexact =
+      isNumber && !isExactJsonNumber(token) ? Option.some(key) : Option.none<string>();
+    return [{ depth, key, previous: token }, inexact] as const;
+  });
+  return Arr.findFirst(found, (inexact) => inexact);
+};
 
 /** Content-hash fallback version when no version column is mapped. */
 export const versionOf = Hash.contentHash;
@@ -575,7 +650,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       Effect.gen(function* () {
         const { subset } = yield* decodeManyIndex(row);
         if (P.isTagged(union, "Json")) {
-          return { subset, row: yield* decodeManyJson(String(row["row"])) };
+          const text = String(row["row"]);
+          return { subset, row: yield* decodeManyJson(text), inexact: inexactColumn(text) };
         }
         const columns = Option.match(arms[subset] ?? Option.none(), {
           onNone: () => [],
@@ -584,8 +660,30 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         return {
           subset,
           row: R.fromEntries(columns.map((name, position) => [name, row[`c${position}`]])),
+          inexact: Option.none<string>(),
         };
       });
+
+  // Warn once per collection and column for the backend's life that a pull
+  // fell back to `evaluate` for a number JSON cannot carry exactly.
+  const warnedInexact = MutableHashSet.empty<string>();
+  const warnInexact = ({
+    collection,
+    column,
+  }: {
+    readonly collection: string;
+    readonly column: string;
+  }) =>
+    Effect.suspend(() => {
+      const key = `${collection}\u0000${column}`;
+      if (MutableHashSet.has(warnedInexact, key)) return Effect.void;
+      MutableHashSet.add(warnedInexact, key);
+      const message =
+        `evaluateMany: column "${column}" of collection "${collection}" holds a number JSON cannot ` +
+        "carry exactly, so the pull falls back to one evaluate per subset; declare it integer, " +
+        "double precision or text in the read relation";
+      return Effect.logWarning(message, new InexactJsonNumber({ message, collection, column }));
+    });
 
   // One `UNION ALL` statement for every subset (#505): each arm selects its
   // subset's index and its row (`Dialect.unionRows`: its own columns by
@@ -621,12 +719,23 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         const read = yield* Effect.forEach(rows, readManyRow(union, arms), {
           concurrency: 1,
         });
-        // JSON carries an integer beyond ±(2^53 − 1) as a number it cannot
-        // hold exactly, so an id, version or ordered column that wide would
-        // read back as a different value than `evaluate`'s. Such a pull is
-        // answered by `evaluate` per subset instead. (A `Columns` arm hands
-        // the driver its values as `evaluate`'s statement does.)
-        if (P.isTagged(union, "Json") && read.some((row) => holdsUnsafeInteger(row.row))) {
+        // JSON carries a number with more digits than a double holds (a wide
+        // `bigint` or `numeric`, also inside a `jsonb` column) as one
+        // `JSON.parse` rounds, and an integer past ±(2^53 − 1) as a number where
+        // the driver gives text, so such a row would read back differently from
+        // `evaluate`'s. Such a pull is answered by `evaluate` per subset
+        // instead, with a warning naming the column (#505). (A `Columns` arm
+        // hands the driver its values as `evaluate`'s statement does.)
+        const inexact = Arr.getSomes(
+          read.map((row) =>
+            Option.map(row.inexact, (column) => ({
+              collection: subsets[row.subset]?.collection ?? "",
+              column,
+            }))
+          )
+        );
+        if (Arr.isReadonlyArrayNonEmpty(inexact)) {
+          yield* Effect.forEach(inexact, warnInexact, { concurrency: 1, discard: true });
           return yield* Effect.forEach(subsets, (subset) => evaluate(context, subset), {
             concurrency: 1,
           });
