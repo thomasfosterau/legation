@@ -129,7 +129,10 @@ const junctionKey = (tag: Junction, members: ReadonlyArray<Predicate.Predicate>)
   return `${tag}(${keys.join(",")})`;
 };
 
-type Leaf = Extract<Predicate.Predicate, { _tag: "True" | "Compare" | "In" | "NotIn" | "IsNull" }>;
+type Leaf = Extract<
+  Predicate.Predicate,
+  { _tag: "True" | "Compare" | "In" | "NotIn" | "IsNull" | "InSet" }
+>;
 
 /** The key of a leaf: operator, field and typed literal(s), lists in canonical order. */
 const leafKey = (leaf: Leaf): string => {
@@ -143,6 +146,8 @@ const leafKey = (leaf: Leaf): string => {
       return `${leaf._tag}(${JSON.stringify(leaf.field)},[${sortedUnique(leaf.values.map(literalKey)).join(",")}])`;
     case "IsNull":
       return `IsNull(${JSON.stringify(leaf.field)},${leaf.negated === true})`;
+    case "InSet":
+      return `InSet(${JSON.stringify(leaf.field)},${JSON.stringify(leaf.set)})`;
   }
 };
 
