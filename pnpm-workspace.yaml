@@ -48,7 +48,7 @@ catalog:
   # on any other component version, failing `pnpm install` itself. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  "@effect/tsgo": 0.55.0
+  "@effect/tsgo": 0.57.0
   "@electric-sql/pglite": ^0.5.10
   "@mpsuesser/oxlint-plugin-effect": ^0.6.0
   "@sveltejs/adapter-node": ^6.0.0
@@ -90,7 +90,7 @@ catalog:
   # exact versions (1.3.0 → oxlint 1.88.0, vitest 5.0.5). `vitest` and
   # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
   # its aliased core package. They move together with `@effect/tsgo` (above).
-  vite-plus: 1.3.0
+  vite-plus: 1.4.0
   vite: npm:@voidzero-dev/vite-plus-core@1.3.0
   vitest: 5.0.5
 
