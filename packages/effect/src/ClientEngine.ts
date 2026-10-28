@@ -162,6 +162,12 @@ export interface FormClient {
   readonly mutationId: number;
 }
 
+/** A form mutation's args in both forms: `encoded` as persisted, `decoded` as its handler runs on. */
+interface FormArgs {
+  readonly encoded: unknown;
+  readonly decoded: unknown;
+}
+
 /**
  * The part of a form action's receipt the engine settles on: the backend's
  * ruling. `Server.Receipt` (what `Server.mutate` answers) has this shape.
@@ -655,6 +661,12 @@ export interface ClientEngine {
     mutator: string,
     args: unknown
   ) => Effect.Effect<FormSubmission, MutatorError | StoreError>;
+  /**
+   * {@link beginFormMutation} for args already in encoded (wire) form, as a
+   * mirror forwards them (#536): validated by decoding against the Mutation's
+   * args schema, the counterpart of {@link mutateEncoded}.
+   */
+  readonly beginFormMutationEncoded: ClientEngine["beginFormMutation"];
   /**
    * Mutation lifecycle events: a `journaled` event for every journaled
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
@@ -3411,6 +3423,16 @@ export const make = (
         );
       });
 
+    // Validate encoded (wire) args by decoding them against the mutator's schema
+    // — shared by `mutateEncoded` and `beginFormMutationEncoded`.
+    const decodeFor = (mutator: string, encoded: unknown): Effect.Effect<unknown, MutatorError> =>
+      Effect.gen(function* () {
+        const definition = yield* definitionOf(mutator);
+        return yield* Schema.decodeUnknownEffect(definition.args)(encoded).pipe(
+          Effect.mapError(invalidArgs(mutator))
+        );
+      });
+
     // The client half of an enhanced form submit (ADR-0030 #215 §4). The entry
     // is overlaid under the form client's id but never journaled: the form
     // action delivers it. It holds one place of the tail's bound from the start
@@ -3419,14 +3441,15 @@ export const make = (
     // tail as it releases a pushed mutation (`acknowledgeLocked`).
     const engineScope = yield* Effect.scope;
     const signalPull = Effect.forkIn(pull.pipe(Effect.ignore), engineScope).pipe(Effect.asVoid);
-    const beginFormMutation = (form: FormClient, mutator: string, args: unknown) =>
+    // `args.encoded` is what the tail persists; `args.decoded` is what the
+    // local handler runs on.
+    const beginForm = (form: FormClient, mutator: string, args: FormArgs) =>
       Effect.gen(function* () {
-        const encoded = yield* encodeFor(mutator, args);
         const entry: Mutation = {
           clientId: form.clientId,
           mutationId: form.mutationId,
           mutator,
-          args: encoded,
+          args: args.encoded,
           createdAt: yield* Clock.currentTimeMillis,
         };
         const reserved = yield* reserveChunk(1);
@@ -3439,7 +3462,7 @@ export const make = (
                 ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked }
                 : { _tag: "Warm", view: cachedBefore };
             yield* Ref.update(formsInFlight, (forms) => [...forms, entry]);
-            return yield* applyMutationToOverlayLocked(mutator, args, base);
+            return yield* applyMutationToOverlayLocked(mutator, args.decoded, base);
           })
         ).pipe(Effect.onError(() => releaseChunk(reserved)));
         yield* publishChange(change);
@@ -3449,6 +3472,9 @@ export const make = (
         const end = (park: boolean) =>
           Effect.gen(function* () {
             if (!(yield* Ref.getAndSet(open, false))) return;
+            // Whether parking succeeds or the store fails it, the entry has
+            // left the in-flight list: rebuild the overlay and pull, so a
+            // failed park shows the server's state rather than a stale overlay.
             yield* Semaphore.withPermit(
               overlayLock,
               Effect.gen(function* () {
@@ -3458,11 +3484,15 @@ export const make = (
                   yield* store.parkUnpulled([entry]);
                   yield* Ref.set(unpulled, [...held, entry]);
                 }
-                yield* Ref.set(overlayCache, undefined);
-              })
-            ).pipe(Effect.ensuring(releaseChunk(reserved)));
-            yield* publishChange(REBUILD);
-            yield* signalPull;
+              }).pipe(Effect.ensuring(Ref.set(overlayCache, undefined)))
+            ).pipe(
+              Effect.ensuring(
+                releaseChunk(reserved).pipe(
+                  Effect.andThen(publishChange(REBUILD)),
+                  Effect.andThen(signalPull)
+                )
+              )
+            );
           });
         const submission: FormSubmission = {
           form,
@@ -3511,15 +3541,12 @@ export const make = (
           Effect.flatMap((encoded) => journal(mutator, encoded, args)),
           Effect.asVoid
         ),
+      // Decoding validates the encoded form; the journal keeps it as-is.
       mutateEncoded: (mutator, args) =>
-        Effect.gen(function* () {
-          const definition = yield* definitionOf(mutator);
-          // Decoding validates the encoded form; the journal keeps it as-is.
-          const decoded = yield* Schema.decodeUnknownEffect(definition.args)(args).pipe(
-            Effect.mapError(invalidArgs(mutator))
-          );
-          yield* journal(mutator, args, decoded);
-        }),
+        decodeFor(mutator, args).pipe(
+          Effect.flatMap((decoded) => journal(mutator, args, decoded)),
+          Effect.asVoid
+        ),
       mutateWithAck: (mutator, args) =>
         Effect.gen(function* () {
           const encoded = yield* encodeFor(mutator, args);
@@ -3527,7 +3554,15 @@ export const make = (
           const mutationId = yield* journal(mutator, encoded, args, deferred);
           return { mutationId, acknowledged: Deferred.await(deferred) };
         }),
-      beginFormMutation,
+      beginFormMutation: (form, mutator, args) =>
+        encodeFor(mutator, args).pipe(
+          Effect.flatMap((encoded) => beginForm(form, mutator, { encoded, decoded: args }))
+        ),
+      beginFormMutationEncoded: (form, mutator, args) =>
+        // Decoding validates the encoded form; the tail keeps it as-is.
+        decodeFor(mutator, args).pipe(
+          Effect.flatMap((decoded) => beginForm(form, mutator, { encoded: args, decoded }))
+        ),
       subscribe: subscribeSubset,
       seed,
       clearRows,

@@ -326,9 +326,10 @@ export const actions = {
   post-action `load` re-run is off by default (`refreshAll: false`); the
   overlay already shows the write. Offline, the submit fails as the network
   does (ADR-0030 open point 6).
-- The enhanced submit needs an engine on the page's thread: over a connected
-  host (`Client.connect`, a mirror) `beginFormMutation` fails with a
-  `TransportError`.
+- Over a connected host (`Client.connect`, a mirror of a service-worker or
+  elected-host engine) the host's engine holds the overlay for every tab. A
+  host from a release that predates this answers the submit with a
+  `TransportError` rather than leaving it waiting.
 
 **One path per write.** A form-action Mutation and a façade write (#169,
 `@thomasfosterau/legation-jsonapi`) are two interception points for the same

@@ -148,8 +148,10 @@ export interface Client {
    * (the form action delivers it), and settle the returned submission on the
    * action's receipt. An acknowledgement parks the effect in the unpulled
    * tail until the pull that covers the form client releases it; a rejection
-   * drops it. Needs an engine on this thread: over a connected host (a
-   * mirror) it fails with a `TransportError`.
+   * drops it. Over a connected host (`connect`) the host's engine holds the
+   * entry and every mirror sees its overlay (#536); a host that predates that
+   * answers with a `TransportError`, as does a view that carries no form
+   * submit at all.
    */
   readonly beginFormMutation: (
     form: ClientEngine.FormClient,
@@ -679,7 +681,7 @@ export const fromView = (
         ? Effect.fail(
             new TransportError({
               message:
-                "Client.beginFormMutation: an enhanced form submit needs an engine on this thread; a connected host does not carry it",
+                "Client.beginFormMutation: this view carries no enhanced form submit (it has neither an engine nor a host to ask)",
             })
           )
         : view.beginFormMutation(form, mutation, args),
