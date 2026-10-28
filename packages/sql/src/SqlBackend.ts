@@ -109,7 +109,6 @@
  */
 
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as MutableHashSet from "effect/MutableHashSet";
@@ -376,13 +375,16 @@ const decodeManyJson = (text: string) =>
  *
  * Logged, never raised: the pull still succeeds.
  */
-export class InexactJsonNumber extends Data.TaggedError("InexactJsonNumber")<{
-  readonly message: string;
-  /** The collection whose read relation holds the column. */
-  readonly collection: string;
-  /** The read relation's column the number sits in (top-level key of the row's JSON). */
-  readonly column: string;
-}> {}
+export class InexactJsonNumber extends Schema.TaggedError<InexactJsonNumber>()(
+  "InexactJsonNumber",
+  {
+    message: Schema.String,
+    /** The collection whose read relation holds the column. */
+    collection: Schema.String,
+    /** The read relation's column the number sits in (top-level key of the row's JSON). */
+    column: Schema.String,
+  }
+) {}
 
 /**
  * A JSON number's decimal value, as `<sign><digits>e<scale>` with the digits'
@@ -418,8 +420,11 @@ const isExactJsonNumber = (token: string): boolean => {
 /** JSON's tokens, for {@link inexactColumns}: strings, numbers and punctuation. */
 const JSON_TOKEN = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\]:,]/g;
 
-/** How a JSON token changes the nesting depth. */
-const JSON_NESTING: Readonly<Record<string, number>> = { "{": 1, "[": 1, "}": -1, "]": -1 };
+/** How a JSON token changes the nesting depth: `{` / `[` open, `}` / `]` close. */
+const nestingOf = (token: string): number => {
+  if (token === "{" || token === "[") return 1;
+  return token === "}" || token === "]" ? -1 : 0;
+};
 
 /** Whether a JSON token is a number `JSON.parse` cannot carry exactly. */
 const isInexactNumberToken = (token: string): boolean =>
@@ -437,7 +442,7 @@ const inexactColumns = (text: string): ReadonlyArray<string> => {
   const tokens = Array.from(text.matchAll(JSON_TOKEN), (match) => match[0]);
   const start = { depth: 0, key: "", previous: "" };
   const [, found] = Arr.mapAccum(tokens, start, (state, token) => {
-    const depth = state.depth + (JSON_NESTING[token] ?? 0);
+    const depth = state.depth + nestingOf(token);
     // A string followed by `:` directly inside the row's object is a column name.
     const key =
       token === ":" && state.depth === 1
