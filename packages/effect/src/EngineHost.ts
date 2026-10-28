@@ -186,6 +186,9 @@ const formKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestI
 /** Decode a {@link MirrorProtocol.FORM_MUTATION_MUTATOR} `Mutate`'s args. */
 const decodeFormBegin = Schema.decodeUnknownEffect(MirrorProtocol.FormMutationBegin);
 
+/** Read just the mirror a malformed form begin names, to refuse it to that mirror. */
+const decodeFormSender = Schema.decodeUnknownEffect(Schema.Struct({ mirrorId: Schema.String }));
+
 /**
  * Serve the engine over the channel. The inbound subscription is
  * established before this effect completes; message handling runs on a
@@ -568,33 +571,53 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const takeForm = (key: string) =>
       Ref.modify(forms, (map) => [HashMap.get(map, key), HashMap.remove(map, key)] as const);
 
-    const handleBeginForm = (message: MirrorProtocol.MirrorMessage & { readonly _tag: "Mutate" }) =>
-      decodeFormBegin(message.args).pipe(
-        Effect.tap((begin) => touch(begin.mirrorId)),
-        Effect.flatMap((begin) =>
-          engine
-            .beginFormMutation(begin.form, begin.mutator, begin.args)
-            .pipe(
-              Effect.flatMap((submission) =>
-                Ref.update(
-                  forms,
-                  HashMap.set(formKey(begin.mirrorId, message.requestId), submission)
-                )
-              )
-            )
+    // Begin a mirror's form mutation on the engine (#536). The args arrive
+    // encoded, so the engine decodes them against its own Mutation. Every
+    // reply names the mirror: replies are broadcast to all of them.
+    const beginForm = (requestId: number, begin: MirrorProtocol.FormMutationBegin) =>
+      touch(begin.mirrorId).pipe(
+        Effect.andThen(engine.beginFormMutationEncoded(begin.form, begin.mutator, begin.args)),
+        Effect.flatMap((submission) =>
+          Ref.update(forms, HashMap.set(formKey(begin.mirrorId, requestId), submission))
         ),
         Effect.matchEffect({
           onFailure: (error) =>
             channel.post({
               _tag: "FormMutationFailed",
-              requestId: message.requestId,
+              mirrorId: begin.mirrorId,
+              requestId,
               message: error.message,
             }),
           onSuccess: () =>
-            channel.post({ _tag: "FormMutationBegun", requestId: message.requestId }),
+            channel.post({ _tag: "FormMutationBegun", mirrorId: begin.mirrorId, requestId }),
         })
       );
 
+    // A begin whose args do not decode can still be refused to its mirror
+    // when they name one; otherwise there is nobody to answer.
+    const handleBeginForm = (message: MirrorProtocol.MirrorMessage & { readonly _tag: "Mutate" }) =>
+      decodeFormBegin(message.args).pipe(
+        Effect.matchEffect({
+          onSuccess: (begin) => beginForm(message.requestId, begin),
+          onFailure: (error) =>
+            decodeFormSender(message.args).pipe(
+              Effect.flatMap(({ mirrorId }) =>
+                channel.post({
+                  _tag: "FormMutationFailed",
+                  mirrorId,
+                  requestId: message.requestId,
+                  message: error.message,
+                })
+              ),
+              Effect.catch(() =>
+                Effect.logWarning("EngineHost: dropped a form begin that names no mirror")
+              )
+            ),
+        })
+      );
+
+    // End a mirror's form submission and say so, with the store's error when
+    // settling it failed; an entry the host no longer holds ends as a no-op.
     const handleEndForm = (
       message: MirrorProtocol.MirrorMessage & { readonly _tag: "EndFormMutation" }
     ) =>
@@ -603,12 +626,24 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           Option.match({
             onNone: () => Effect.void,
             onSome: (submission) =>
-              message.ruling === undefined
-                ? submission.abandon
-                : submission.settle(message.ruling).pipe(Effect.ignore),
+              message.ruling === undefined ? submission.abandon : submission.settle(message.ruling),
           })
         ),
-        Effect.andThen(channel.post({ _tag: "FormMutationEnded", requestId: message.requestId }))
+        Effect.matchEffect({
+          onFailure: (error) =>
+            channel.post({
+              _tag: "FormMutationEnded",
+              mirrorId: message.mirrorId,
+              requestId: message.requestId,
+              error: error.message,
+            }),
+          onSuccess: () =>
+            channel.post({
+              _tag: "FormMutationEnded",
+              mirrorId: message.mirrorId,
+              requestId: message.requestId,
+            }),
+        })
       );
 
     const abandonForms = (mirrorId: string) =>

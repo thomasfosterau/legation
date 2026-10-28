@@ -22,7 +22,7 @@ import { ClientStore } from "../ClientStore.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import type * as ClientView from "../ClientView.js";
 import * as EngineHost from "../EngineHost.js";
-import { MutationRejected, VersionNotSupportedError } from "../Errors.js";
+import { MutationRejected, StoreError, VersionNotSupportedError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as MirrorChannel from "../MirrorChannel.js";
 import * as MirrorProtocol from "../MirrorProtocol.js";
@@ -46,7 +46,16 @@ const incremented = (id: string, current: Option.Option<typeof Counter.Type>) =>
   n: Option.match(current, { onNone: () => 0, onSome: (row) => row.n }) + 1,
 });
 
-const mutators = Mutator.registry([
+// Its args encode `by` as a string: the host must decode what the mirror
+// encoded, not encode it a second time.
+const add = Mutator.make(
+  "counter/add",
+  Schema.Struct({ id: Schema.String, by: Schema.NumberFromString })
+);
+// Known to one mirror's registry but not to the host's engine.
+const unknownToHost = Mutator.make("counter/unknown", counterArgs);
+
+const handlers: Parameters<typeof Mutator.registry>[0] = [
   {
     mutator: increment,
     local: (args, writer) =>
@@ -61,6 +70,19 @@ const mutators = Mutator.registry([
   {
     mutator: refuse,
     local: (args, writer) => writer.put("counters", args.id, incremented(args.id, Option.none())),
+  },
+  {
+    mutator: add,
+    local: (args, writer) => writer.put("counters", args.id, { id: args.id, n: args.by }),
+  },
+];
+const mutators = Mutator.registry(handlers);
+// A mirror that knows one Mutation more than its host.
+const widerMutators = Mutator.registry([
+  ...handlers,
+  {
+    mutator: unknownToHost,
+    local: (args, writer) => writer.put("counters", args.id, { id: args.id, n: 9 }),
   },
 ]);
 
@@ -94,9 +116,14 @@ const makeServer = Effect.fn("makeServer")(function* () {
 // The host's engine, whose pulls are refused while `refusing` is set (a
 // version rejection, which the engine does not retry), so a test decides when
 // the covering pull happens. A Client connects to it over a loopback channel.
-const makeHosted = (server: Server.Server, refusing: Ref.Ref<boolean>) =>
+const makeHosted = (
+  server: Server.Server,
+  refusing: Ref.Ref<boolean>,
+  storeOf: (store: ClientStoreModule.ClientStore) => ClientStoreModule.ClientStore = (store) =>
+    store
+) =>
   Effect.gen(function* () {
-    const store = yield* ClientStoreModule.makeMemory;
+    const store = storeOf(yield* ClientStoreModule.makeMemory);
     const inner = yield* makeInMemory(server.handler, "group-a");
     const transport: ClientTransport = {
       ...inner,
@@ -267,6 +294,99 @@ describe("enhanced form submit over a connected host (#536)", () => {
         );
         expect(error._tag).toBe("TransportError");
         expect(error.message).toMatch(/predates enhanced form submits/);
+      })
+    )
+  );
+  it.effect("each mirror gets its own answer when two tabs begin with the same requestId", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* makeServer();
+        const refusing = yield* Ref.make(true);
+        const { engine, channel } = yield* makeHosted(server, refusing);
+        // Both mirrors number their requests from zero, and every host reply
+        // reaches both of them.
+        const tabA = yield* Client.connect({ nodes, mutations: mutators, channel });
+        const tabB = yield* Client.connect({ nodes, mutations: widerMutators, channel });
+
+        const [a, b] = yield* Effect.all(
+          [
+            Effect.exit(tabA.beginFormMutation(form, increment.name, { id: "a1" })),
+            Effect.exit(
+              tabB.beginFormMutation({ clientId: "form-2", mutationId: 1 }, unknownToHost.name, {
+                id: "b1",
+              })
+            ),
+          ],
+          { concurrency: "unbounded" }
+        );
+        expect(Exit.isSuccess(a)).toBe(true);
+        expect(Exit.isFailure(b)).toBe(true);
+        expect(Exit.match(b, { onSuccess: () => "", onFailure: (cause) => String(cause) })).toMatch(
+          /Unknown mutator: counter\/unknown/
+        );
+        expect(valuesOf(yield* engine.query(countersSubset))).toEqual([{ id: "a1", n: 1 }]);
+      })
+    )
+  );
+
+  it.effect("the host decodes the args the mirror encoded (a transforming schema)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* makeServer();
+        const refusing = yield* Ref.make(true);
+        const { engine, channel } = yield* makeHosted(server, refusing);
+        const client = yield* Client.connect({ nodes, mutations: mutators, channel });
+
+        const submission = yield* client.beginFormMutation(form, add.name, { id: "c6", by: 2 });
+        expect(valuesOf(yield* engine.query(countersSubset))).toEqual([{ id: "c6", n: 2 }]);
+        expect(yield* mirrorRows(client.view, 1)).toEqual([{ id: "c6", n: 2 }]);
+        yield* submission.abandon;
+      })
+    )
+  );
+
+  it.effect(
+    "a settlement the host's store fails reaches the caller, and the overlay drops it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* makeServer();
+          const refusing = yield* Ref.make(true);
+          const { engine, channel } = yield* makeHosted(server, refusing, (store) => ({
+            ...store,
+            parkUnpulled: () => Effect.fail(new StoreError({ message: "disk full" })),
+          }));
+          const client = yield* Client.connect({ nodes, mutations: mutators, channel });
+
+          const submission = yield* client.beginFormMutation(form, increment.name, { id: "c7" });
+          const error = yield* Effect.flip(submission.settle({ phase: "acknowledged" }));
+          expect(error).toEqual(new StoreError({ message: "disk full" }));
+          // The host rebuilt its overlay without the entry rather than leave it stale.
+          expect(valuesOf(yield* engine.query(countersSubset))).toEqual([]);
+          expect(yield* mirrorRows(client.view, 0)).toEqual([]);
+        })
+      )
+  );
+
+  it.effect("ending a submission after its mirror has closed is a no-op, not a hang", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* makeServer();
+        const refusing = yield* Ref.make(true);
+        const { engine, channel } = yield* makeHosted(server, refusing);
+
+        const mirrorScope = yield* Scope.make();
+        const client = yield* Client.connect({ nodes, mutations: mutators, channel }).pipe(
+          Scope.provide(mirrorScope)
+        );
+        const submission = yield* client.beginFormMutation(form, increment.name, { id: "c8" });
+        yield* Scope.close(mirrorScope, Exit.void);
+
+        // The channel stays open, but this mirror reads no replies any more.
+        yield* submission.settle({ phase: "acknowledged" });
+        yield* submission.abandon;
+        // Its `Disconnect` abandoned the entry on the host.
+        expect(yield* eventually(engine.observe(countersSubset), 0)).toEqual([]);
       })
     )
   );

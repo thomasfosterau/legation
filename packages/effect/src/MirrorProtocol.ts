@@ -352,17 +352,38 @@ export type HostMessage =
       readonly _tag: "PulledRegistrations";
       readonly registrations: ReadonlyArray<PulledRegistration>;
     }
-  /** A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client (#536). */
-  | { readonly _tag: "FormMutationBegun"; readonly requestId: number }
+  /**
+   * A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client
+   * (#536). The form replies carry the begin's `mirrorId` as well as its
+   * `requestId`: host messages are broadcast to every mirror, and each
+   * mirror numbers its requests from zero, so a `requestId` alone could
+   * complete another tab's request.
+   */
+  | { readonly _tag: "FormMutationBegun"; readonly mirrorId: string; readonly requestId: number }
   /**
    * A {@link FORM_MUTATION_MUTATOR} begin the host refused (unknown Mutation,
    * args that do not decode, a store failure): nothing was overlaid. A
    * dedicated tag, so that `MutateError` for a begin means only "this host
    * predates enhanced form submits".
    */
-  | { readonly _tag: "FormMutationFailed"; readonly requestId: number; readonly message: string }
-  /** The answer to `EndFormMutation`, correlated by the begin's `requestId`. */
-  | { readonly _tag: "FormMutationEnded"; readonly requestId: number };
+  | {
+      readonly _tag: "FormMutationFailed";
+      readonly mirrorId: string;
+      readonly requestId: number;
+      readonly message: string;
+    }
+  /**
+   * The answer to `EndFormMutation`, correlated by the begin's `requestId`.
+   * `error` is set when settling failed in the host's store (the entry could
+   * not be parked in the unpulled tail); the host rebuilt its overlay and
+   * pulled regardless.
+   */
+  | {
+      readonly _tag: "FormMutationEnded";
+      readonly mirrorId: string;
+      readonly requestId: number;
+      readonly error?: string;
+    };
 
 /** One registration's pulled summary, keyed as the host keys it. */
 export interface PulledRegistration {
@@ -434,13 +455,23 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
       })
     ),
   }),
-  Schema.Struct({ _tag: Schema.tag("FormMutationBegun"), requestId: Schema.Number }),
+  Schema.Struct({
+    _tag: Schema.tag("FormMutationBegun"),
+    mirrorId: Schema.String,
+    requestId: Schema.Number,
+  }),
   Schema.Struct({
     _tag: Schema.tag("FormMutationFailed"),
+    mirrorId: Schema.String,
     requestId: Schema.Number,
     message: Schema.String,
   }),
-  Schema.Struct({ _tag: Schema.tag("FormMutationEnded"), requestId: Schema.Number }),
+  Schema.Struct({
+    _tag: Schema.tag("FormMutationEnded"),
+    mirrorId: Schema.String,
+    requestId: Schema.Number,
+    error: Schema.optional(Schema.String),
+  }),
 ]) as Schema.Codec<HostMessage>;
 
 /** Build a MirrorUpdate from materialized engine rows. */
