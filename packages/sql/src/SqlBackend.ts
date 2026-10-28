@@ -415,29 +415,38 @@ const isExactJsonNumber = (token: string): boolean => {
   );
 };
 
-/** JSON's tokens, for {@link inexactColumn}: strings, numbers and punctuation. */
+/** JSON's tokens, for {@link inexactColumns}: strings, numbers and punctuation. */
 const JSON_TOKEN = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\]:,]/g;
 
+/** How a JSON token changes the nesting depth. */
+const JSON_NESTING: Readonly<Record<string, number>> = { "{": 1, "[": 1, "}": -1, "]": -1 };
+
+/** Whether a JSON token is a number `JSON.parse` cannot carry exactly. */
+const isInexactNumberToken = (token: string): boolean =>
+  /^-?\d/.test(token) && !isExactJsonNumber(token);
+
+/** A JSON string token's value (a column name, escapes decoded). */
+const decodeJsonString = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.String));
+
 /**
- * The first column of a JSON row whose value holds a number JSON cannot carry
- * exactly (see {@link InexactJsonNumber}), nested values included: the row's
- * top-level key the number sits under.
+ * The columns of a JSON row whose values hold a number JSON cannot carry
+ * exactly (see {@link InexactJsonNumber}), nested values included: each
+ * distinct top-level key such a number sits under, in order.
  */
-const inexactColumn = (text: string): Option.Option<string> => {
+const inexactColumns = (text: string): ReadonlyArray<string> => {
   const tokens = Array.from(text.matchAll(JSON_TOKEN), (match) => match[0]);
   const start = { depth: 0, key: "", previous: "" };
   const [, found] = Arr.mapAccum(tokens, start, (state, token) => {
-    const opens = token === "{" || token === "[";
-    const closes = token === "}" || token === "]";
-    const depth = opens ? state.depth + 1 : closes ? state.depth - 1 : state.depth;
+    const depth = state.depth + (JSON_NESTING[token] ?? 0);
     // A string followed by `:` directly inside the row's object is a column name.
-    const key = token === ":" && state.depth === 1 ? state.previous.slice(1, -1) : state.key;
-    const isNumber = token !== "" && token !== "-" && /^[-\d]/.test(token);
-    const inexact =
-      isNumber && !isExactJsonNumber(token) ? Option.some(key) : Option.none<string>();
+    const key =
+      token === ":" && state.depth === 1
+        ? Option.getOrElse(decodeJsonString(state.previous), () => state.previous)
+        : state.key;
+    const inexact = isInexactNumberToken(token) ? Option.some(key) : Option.none<string>();
     return [{ depth, key, previous: token }, inexact] as const;
   });
-  return Arr.findFirst(found, (inexact) => inexact);
+  return Arr.dedupe(Arr.getSomes(found));
 };
 
 /** Content-hash fallback version when no version column is mapped. */
@@ -651,7 +660,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         const { subset } = yield* decodeManyIndex(row);
         if (P.isTagged(union, "Json")) {
           const text = String(row["row"]);
-          return { subset, row: yield* decodeManyJson(text), inexact: inexactColumn(text) };
+          return { subset, row: yield* decodeManyJson(text), inexact: inexactColumns(text) };
         }
         const columns = Option.match(arms[subset] ?? Option.none(), {
           onNone: () => [],
@@ -660,7 +669,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         return {
           subset,
           row: R.fromEntries(columns.map((name, position) => [name, row[`c${position}`]])),
-          inexact: Option.none<string>(),
+          inexact: Arr.empty<string>(),
         };
       });
 
@@ -724,15 +733,13 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // `JSON.parse` rounds, and an integer past ±(2^53 − 1) as a number where
         // the driver gives text, so such a row would read back differently from
         // `evaluate`'s. Such a pull is answered by `evaluate` per subset
-        // instead, with a warning naming the column (#505). (A `Columns` arm
+        // instead, with a warning naming each such column (#505). (A `Columns` arm
         // hands the driver its values as `evaluate`'s statement does.)
-        const inexact = Arr.getSomes(
-          read.map((row) =>
-            Option.map(row.inexact, (column) => ({
-              collection: subsets[row.subset]?.collection ?? "",
-              column,
-            }))
-          )
+        const inexact = read.flatMap((row) =>
+          row.inexact.map((column) => ({
+            collection: subsets[row.subset]?.collection ?? "",
+            column,
+          }))
         );
         if (Arr.isReadonlyArrayNonEmpty(inexact)) {
           yield* Effect.forEach(inexact, warnInexact, { concurrency: 1, discard: true });

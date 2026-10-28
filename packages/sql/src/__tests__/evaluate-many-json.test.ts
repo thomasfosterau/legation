@@ -151,3 +151,24 @@ describe("SqlBackend.evaluateMany on a Json dialect (#505)", () => {
     )
   );
 });
+
+describe("SqlBackend.evaluateMany names every inexact column (#505)", () => {
+  it.effect("warns for each inexact column of a row, its JSON escapes decoded", () =>
+    withWarnings((warnings) =>
+      Effect.gen(function* () {
+        const statements = yield* Ref.make(0);
+        const backend = makeBackend(
+          [`{"id":"a","version":9007199254740993,"net\\"amount":0.1000000000000000000001}`],
+          [{ id: "a", version: "9007199254740993", 'net"amount': "0.1000000000000000000001" }],
+          statements
+        );
+        const evaluateMany = backend.evaluateMany;
+        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        expect(yield* evaluateMany(context, pull)).toEqual([
+          [{ id: "a", version: "9007199254740993" }],
+        ]);
+        expect(warnings.map(({ column }) => column)).toEqual(["version", 'net"amount']);
+      })
+    )
+  );
+});

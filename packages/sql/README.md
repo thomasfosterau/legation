@@ -105,12 +105,18 @@ What the executor guarantees:
   gives the same answer as `evaluate` in one statement.
   - A number JSON cannot carry exactly (an integer past ±(2^53 − 1), such as
     a wide `bigint` id or version; a `numeric` with more digits than a double
-    holds; such a number inside a `json` / `jsonb` column) is never read
-    rounded. The pull falls back to one `evaluate` per subset, and the backend
-    logs a warning, once per collection and column for the backend's life,
-    whose cause is a `SqlBackend.InexactJsonNumber` naming the collection and
-    the column (never the value). Declare the column with a typed column in
-    the read relation (a view can cast it) to keep the pull one statement.
+    holds; such a number inside a `json` / `jsonb` column) sends the pull to
+    one `evaluate` per subset, so it reads each value as the driver does, and
+    the backend logs a warning, once per collection and column for the
+    backend's life, whose cause is a `SqlBackend.InexactJsonNumber` naming the
+    collection and the column (never the value). A scalar `bigint` or
+    `numeric` column then arrives exactly, as the driver's text. A number
+    nested in a `json` / `jsonb` column does not: the driver parses that
+    column with `JSON.parse` too, so `evaluate` rounds it the same way, and
+    the fallback only keeps the pull equal to `evaluate`. Keep such values in
+    typed columns, or as JSON strings, if they must be read exactly. Declare
+    a scalar column with a typed column in the read relation (a view can cast
+    it) to keep the pull one statement.
   - Other types the driver does not read as JSON does (`bigint` and `numeric`
     within a double's range, which the driver reads as text; `timestamptz`,
     which it reads as a `Date`) reach the backend as JSON gives them, so a
