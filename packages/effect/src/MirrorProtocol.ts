@@ -102,29 +102,30 @@ export const relatedKey = (
  */
 export const FORM_MUTATION_MUTATOR = "@thomasfosterau/legation-effect/beginFormMutation";
 
-/** The args of a {@link FORM_MUTATION_MUTATOR} `Mutate`: the form client and the Mutation it runs. */
-export interface FormMutationBegin {
-  /** The mirror the entry belongs to; its `Disconnect` (or liveness sweep) abandons it. */
-  readonly mirrorId: string;
-  readonly form: ClientEngine.FormClient;
-  readonly mutator: string;
-  /** The Mutation's args in encoded (wire) form; the host decodes them. */
-  readonly args: unknown;
-}
-
-/** Wire codec for {@link FormMutationBegin}. */
-export const FormMutationBeginSchema = Schema.Struct({
+/**
+ * The args of a {@link FORM_MUTATION_MUTATOR} `Mutate`: the mirror the entry
+ * belongs to (its `Disconnect`, or the liveness sweep, abandons it), the form
+ * client, and the Mutation with its args in encoded (wire) form, which the
+ * host decodes.
+ */
+export const FormMutationBegin = Schema.Struct({
   mirrorId: Schema.String,
   form: Schema.Struct({ clientId: Schema.String, mutationId: Schema.Number }),
   mutator: Schema.String,
   args: Schema.Unknown,
 });
 
-/** Wire codec for {@link ClientEngine.FormRuling}. */
-export const FormRulingSchema = Schema.Union([
+/** The decoded {@link FormMutationBegin}. */
+export type FormMutationBegin = typeof FormMutationBegin.Type;
+
+/** Wire codec for {@link ClientEngine.FormRuling}: the ruling an `EndFormMutation` settles on. */
+export const FormRuling = Schema.Union([
   Schema.Struct({ phase: Schema.Literal("acknowledged") }),
   Schema.Struct({ phase: Schema.Literal("rejected"), reason: Schema.String }),
 ]);
+
+/** The decoded {@link FormRuling}; the same shape as {@link ClientEngine.FormRuling}. */
+export type FormRuling = typeof FormRuling.Type;
 
 // ─── Mirror → host ────────────────────────────────────────────────────────────
 
@@ -265,7 +266,7 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     _tag: Schema.tag("EndFormMutation"),
     mirrorId: Schema.String,
     requestId: Schema.Number,
-    ruling: Schema.optional(FormRulingSchema),
+    ruling: Schema.optional(FormRuling),
   }),
 ]) as Schema.Codec<MirrorMessage>;
 

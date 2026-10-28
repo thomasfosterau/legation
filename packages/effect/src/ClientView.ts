@@ -179,8 +179,10 @@ export interface ClientView {
   ) => Effect.Effect<MutationOutcome, ClientViewError>;
   /**
    * The client half of an enhanced form submit (ADR-0030 #215 §4): see
-   * {@link ClientEngineModule.ClientEngine.beginFormMutation}. Present only
-   * for an engine-backed view (`fromEngine`); a mirror does not carry it yet.
+   * {@link ClientEngineModule.ClientEngine.beginFormMutation}. An
+   * engine-backed view (`fromEngine`) begins it on its engine; a `Mirror`
+   * asks its host to (#536), which holds the in-flight entry for every
+   * mirror. Absent from a view that can do neither.
    */
   readonly beginFormMutation?: (
     form: ClientEngineModule.FormClient,
