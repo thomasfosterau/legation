@@ -99,18 +99,32 @@ What the executor guarantees:
 - **Rows as JSON in a pull.** Each arm of `evaluateMany`'s statement carries
   its row as JSON (`row_to_json`), since mappings' columns differ, and the
   backend orders, windows and versions the rows it reads back from that JSON.
-  A column JSON represents as the driver does (text, `integer`, `double
-  precision`, booleans, `NULL`) gives the same answer as `evaluate`. A pull
-  whose rows hold an integer past ±(2^53 − 1) (a `bigint` id, version or
-  ordered column that wide) falls back to one `evaluate` per subset, since
-  JSON would round it. Other types the driver does not read as JSON does
-  (`bigint` and `numeric`, which the driver reads as text; `timestamptz`,
-  which it reads as a `Date`) reach the backend as JSON gives them, so a
-  `versionColumn` or ordered column of those types gives the pull versions or
-  an order of a different type than `evaluate` and `getRows`: declare such
-  columns `integer`, `double precision` or `text` in the read relation (a view
-  can cast them). SQLite has no such caveat: its `UNION ALL` columns take any
-  type per row, so each arm carries the relation's own columns by position.
+  **Keep integer, double and text values in typed columns (`integer`,
+  `double precision`, `text`), not in JSON or wide numeric types:** those are
+  the types JSON carries exactly as the driver reads them, so a pull over them
+  gives the same answer as `evaluate` in one statement.
+  - A number JSON cannot carry exactly (an integer past ±(2^53 − 1), such as
+    a wide `bigint` id or version; a `numeric` with more digits than a double
+    holds; such a number inside a `json` / `jsonb` column) sends the pull to
+    one `evaluate` per subset, so it reads each value as the driver does, and
+    the backend logs a warning, once per collection and column for the
+    backend's life, whose cause is a `SqlBackend.InexactJsonNumber` naming the
+    collection and the column (never the value). A scalar `bigint` or
+    `numeric` column then arrives exactly, as the driver's text. A number
+    nested in a `json` / `jsonb` column does not: the driver parses that
+    column with `JSON.parse` too, so `evaluate` rounds it the same way, and
+    the fallback only keeps the pull equal to `evaluate`. Keep such values in
+    typed columns, or as JSON strings, if they must be read exactly. Declare
+    a scalar column with a typed column in the read relation (a view can cast
+    it) to keep the pull one statement.
+  - Other types the driver does not read as JSON does (`bigint` and `numeric`
+    within a double's range, which the driver reads as text; `timestamptz`,
+    which it reads as a `Date`) reach the backend as JSON gives them, so a
+    `versionColumn` or ordered column of those types gives the pull versions
+    or an order of a different type than `evaluate` and `getRows`. Cast them
+    to the typed columns above in the read relation.
+  - SQLite has no such caveat: its `UNION ALL` columns take any type per row,
+    so each arm carries the relation's own columns by position.
 - **Errors.** A failed statement or transaction fails as a `BackendError` with
   the statement's text, never its parameters, in the message, and the driver's
   `SqlError` as its `cause`.
