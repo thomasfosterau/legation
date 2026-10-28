@@ -3423,6 +3423,16 @@ export const make = (
         );
       });
 
+    // Validate encoded (wire) args by decoding them against the mutator's schema
+    // — shared by `mutateEncoded` and `beginFormMutationEncoded`.
+    const decodeFor = (mutator: string, encoded: unknown): Effect.Effect<unknown, MutatorError> =>
+      Effect.gen(function* () {
+        const definition = yield* definitionOf(mutator);
+        return yield* Schema.decodeUnknownEffect(definition.args)(encoded).pipe(
+          Effect.mapError(invalidArgs(mutator))
+        );
+      });
+
     // The client half of an enhanced form submit (ADR-0030 #215 §4). The entry
     // is overlaid under the form client's id but never journaled: the form
     // action delivers it. It holds one place of the tail's bound from the start
@@ -3531,15 +3541,12 @@ export const make = (
           Effect.flatMap((encoded) => journal(mutator, encoded, args)),
           Effect.asVoid
         ),
+      // Decoding validates the encoded form; the journal keeps it as-is.
       mutateEncoded: (mutator, args) =>
-        Effect.gen(function* () {
-          const definition = yield* definitionOf(mutator);
-          // Decoding validates the encoded form; the journal keeps it as-is.
-          const decoded = yield* Schema.decodeUnknownEffect(definition.args)(args).pipe(
-            Effect.mapError(invalidArgs(mutator))
-          );
-          yield* journal(mutator, args, decoded);
-        }),
+        decodeFor(mutator, args).pipe(
+          Effect.flatMap((decoded) => journal(mutator, args, decoded)),
+          Effect.asVoid
+        ),
       mutateWithAck: (mutator, args) =>
         Effect.gen(function* () {
           const encoded = yield* encodeFor(mutator, args);
@@ -3552,14 +3559,10 @@ export const make = (
           Effect.flatMap((encoded) => beginForm(form, mutator, { encoded, decoded: args }))
         ),
       beginFormMutationEncoded: (form, mutator, args) =>
-        Effect.gen(function* () {
-          const definition = yield* definitionOf(mutator);
-          // Decoding validates the encoded form; the tail keeps it as-is.
-          const decoded = yield* Schema.decodeUnknownEffect(definition.args)(args).pipe(
-            Effect.mapError(invalidArgs(mutator))
-          );
-          return yield* beginForm(form, mutator, { encoded: args, decoded });
-        }),
+        // Decoding validates the encoded form; the tail keeps it as-is.
+        decodeFor(mutator, args).pipe(
+          Effect.flatMap((decoded) => beginForm(form, mutator, { encoded: args, decoded }))
+        ),
       subscribe: subscribeSubset,
       seed,
       clearRows,
