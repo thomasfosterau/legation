@@ -655,7 +655,16 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         ...(outcome._tag === "rejected" ? { reason: outcome.reason } : {}),
       });
 
+    // A `Mutate` naming the reserved form mutator is an enhanced form submit's
+    // begin (#536), never journaled; any other is an ordinary mutation.
     const handleMutate = (message: MirrorProtocol.MirrorMessage & { readonly _tag: "Mutate" }) =>
+      message.mutator === MirrorProtocol.FORM_MUTATION_MUTATOR
+        ? handleBeginForm(message)
+        : handleJournaledMutate(message);
+
+    const handleJournaledMutate = (
+      message: MirrorProtocol.MirrorMessage & { readonly _tag: "Mutate" }
+    ) =>
       engine.mutateWithAck(message.mutator, message.args).pipe(
         Effect.flatMap((mutation) =>
           // Ack on journal (unchanged mirror behaviour), then await the backend
@@ -684,9 +693,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const handle = (message: MirrorProtocol.MirrorMessage) => {
       switch (message._tag) {
         case "Mutate":
-          return message.mutator === MirrorProtocol.FORM_MUTATION_MUTATOR
-            ? handleBeginForm(message)
-            : handleMutate(message);
+          return handleMutate(message);
         case "EndFormMutation":
           return touch(message.mirrorId).pipe(Effect.andThen(handleEndForm(message)));
         case "Subscribe":
