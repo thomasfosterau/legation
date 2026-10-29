@@ -44,6 +44,7 @@ import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legatio
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import type * as BackgroundSync from "./BackgroundSync.js";
+import type * as PushPoke from "./PushPoke.js";
 import * as BroadcastMirrorChannel from "./BroadcastMirrorChannel.js";
 
 /** Options for {@link start} and {@link run}. */
@@ -74,6 +75,14 @@ export interface ServiceWorkerHostOptions {
    * journal cannot drain now (offline, or a terminally failed push). Unset, no listener is served and `sync` events are not flushed.
    */
   readonly backgroundSync?: BackgroundSync.Listener;
+  /**
+   * Web Push as a poke carrier (#214): install `PushPoke.listen({ identity })`
+   * at the top level of the worker script and pass it here. The host attaches
+   * its engine, so a recognised push registers the Background Sync (or pulls,
+   * with `action: "pull"`) once the replica's identity checks out. Unset, the
+   * library's push is not answered.
+   */
+  readonly pushPoke?: PushPoke.Listener;
 }
 
 /** The default channel name; Mirror setups should use the same one. */
@@ -103,7 +112,14 @@ export const start = (
   options: ServiceWorkerHostOptions = {}
 ): Effect.Effect<Host, never, ClientEngine.ClientEngine | Scope.Scope> =>
   Effect.gen(function* () {
-    const { channelName = defaultChannelName, registry, nodes, urls, backgroundSync } = options;
+    const {
+      channelName = defaultChannelName,
+      registry,
+      nodes,
+      urls,
+      backgroundSync,
+      pushPoke,
+    } = options;
     const engine = yield* ClientEngine.ClientEngine;
     const channel = yield* BroadcastMirrorChannel.make(channelName);
     const host = yield* EngineHost.run({
@@ -115,6 +131,7 @@ export const start = (
     });
     yield* engine.runSync.pipe(Effect.ignore);
     if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);
+    if (pushPoke !== undefined) yield* pushPoke.serve(engine);
     return { engine, registrations: host.registrations };
   });
 

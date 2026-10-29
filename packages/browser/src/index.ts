@@ -24,6 +24,8 @@
  * - `BackgroundSync`: the worker's `sync` listener and the registration
  *   helper, so a journal written offline flushes after its tab has closed
  *   (#213) — composed into `ServiceWorkerHost` via `backgroundSync`
+ * - `PushPoke`: the worker's `push` listener for the library's contentless
+ *   Web Push poke (#214) — composed into `ServiceWorkerHost` via `pushPoke`
  */
 
 export * as IndexedDbClientStore from "./IndexedDbClientStore.js";
@@ -42,3 +44,4 @@ export * as CacheApiHttpCache from "./CacheApiHttpCache.js";
 export * as HttpCacheInvalidation from "./HttpCacheInvalidation.js";
 export * as BrowserConnectivity from "./BrowserConnectivity.js";
 export * as BackgroundSync from "./BackgroundSync.js";
+export * as PushPoke from "./PushPoke.js";
