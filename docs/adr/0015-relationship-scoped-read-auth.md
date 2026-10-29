@@ -86,9 +86,11 @@ onto these bindings unchanged (#219). `Exists` is not used on this path;
 it stays server-authored only.
 
 **4. The scope epoch is folded into the CVR cookie.** Every per-session
-conversation has a **scope epoch**: an opaque counter the server keeps per
-(client group, identity) beside its CVRs, and stamps into every cookie it
-mints for that session. When a session's resolved set changes, its epoch
+conversation has a **scope epoch**: a hash of the named sets a pull bound,
+by name with their members, which the server stamps into every cookie it
+mints for that session. (Decided 2026-10-24: a hash of the resolved values,
+not a counter kept beside the CVRs, so servers that share a CVR store agree
+on it without coordinating, and it moves exactly when the members do.) When a session's resolved set changes, its epoch
 moves. The next pull then presents a cookie from an older epoch, which the
 server treats as unknown, so the pull takes the **reset path** (`Clear` +
 full puts, the same path an unrecognised cookie or a bumped fleet
@@ -138,3 +140,15 @@ is ADR-0032's eligibility rule. No cookie is both.
   tests that a session gains rows after its set changes with no row in the
   collection changing, that an unresolvable set yields no rows, and that an
   undeclared collection stays unreachable.
+- As built (#205): `Authorization.ReadScope` (`AllowAll`, `Deny`,
+  `filter(predicate, sets)`), `Authorization.NamedSet` (`source`, `resolve`,
+  `maxAge`) and `Predicate.inSet(field, name)`. A filter may still return a
+  bare `Predicate`, read as a `Filter` without sets. The sync server caches
+  each session's resolutions; a hint touching a set's `source` marks it stale
+  and pokes the session, and a set older than its `maxAge` is resolved again
+  on the next pull. A cookie carries the epoch after a `~e` separator only
+  when the pull bound a set, so a pull that binds none (the anonymous
+  identity, ADR-0032) mints the same cookies as before. The source's
+  collection rides with the session's windows in the server's introspection,
+  so a room's fan-out registration leases its topic. The fallthrough read
+  (ADR-0025) resolves its sets afresh on each read.
