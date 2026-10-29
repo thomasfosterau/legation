@@ -191,6 +191,25 @@ const makeRest = Effect.gen(function* () {
   return { fetch, rows };
 });
 
+/** How many scheduler turns without a new pull count as settled. */
+const SETTLED_TURNS = 200;
+
+/** Wait until the engine has started no pull for {@link SETTLED_TURNS} turns, with every started pull applied. */
+const settle = (engine: ClientEngine.ClientEngine): Effect.Effect<void> => {
+  const loop = (last: string, quiet: number): Effect.Effect<void> =>
+    engine.pullCounts.pipe(
+      Effect.flatMap((counts) => {
+        const key = `${counts.started}/${counts.applied}`;
+        const idle = counts.started === counts.applied;
+        if (idle && key === last && quiet >= SETTLED_TURNS) return Effect.void;
+        return Effect.yieldNow.pipe(
+          Effect.andThen(loop(key, idle && key === last ? quiet + 1 : 0))
+        );
+      })
+    );
+  return loop("", 0);
+};
+
 /** The same rows in a `MemoryBackend` behind a `Server`, synced into an owned engine by the shell's pins. */
 const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly value: Json }>) =>
   Effect.gen(function* () {
@@ -232,6 +251,13 @@ const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly
     const client = Client.fromView(nodes, view);
     yield* Effect.forEach(shellReads(USER), (read) => client.subscribe(read), { discard: true });
     yield* engine.pull;
+    // The shell's reads with an `include` reconcile their narrowed foreign
+    // windows in the background and pull them on a forked fiber (`Related`), so
+    // the replica is still moving after `engine.pull` returns. Wait until no pull
+    // has started for a while and every started pull has been applied, so the
+    // tests below see one settled cookie and coverage instead of racing that
+    // fiber, whose timing depends on scheduling.
+    yield* settle(engine);
     return { view, client, store };
   });
 

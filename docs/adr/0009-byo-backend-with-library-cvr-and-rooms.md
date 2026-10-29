@@ -52,7 +52,7 @@ What stays runtime, checked by `verifyBackendContract` for every backend:
 
 Adoption:
 
-- `MemoryBackend` and `SqlBackend` build `applyMutations` through the combinator. `SqlBackend` does so on both orderings: claim-first inside `SqlExecutor.transaction`, and handler-then-bump on an executor without transactions (D1). On D1, `atomically` is a no-op wrapper and the bump is not atomic with the effects, exactly as before (#342).
+- `MemoryBackend` and `SqlBackend` build `applyMutations` through the combinator. `SqlBackend` does so on both orderings: claim-first inside `SqlExecutor.transaction`, and handler-then-bump on an executor without transactions (D1). On D1, `atomically` is still the executor's `transaction` (which D1 cannot make atomic) and the bump is not atomic with the effects, exactly as before (#342).
 - `JsonApiBackend` does not adopt it. Its unit of atomicity is the server's whole `atomic:operations` batch, not one mutation: a permanent rejection there drops the operation and resends the rest, and no mutation is acknowledged until the remainder applies. On the per-resource path there is nothing atomic to own: delivery is at-least-once, and it refuses a gap before any write of the push is sent. A per-mutation combinator would either lose the all-or-nothing batch or claim an atomicity the HTTP surface does not have. It keeps its own ledger and runs the contract suite as before.
 
 The runtime suite is unchanged in scope.

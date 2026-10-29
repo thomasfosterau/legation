@@ -1104,7 +1104,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   const serializable = transactional ? dialect.serializable : undefined;
 
   // The whole push is one executor transaction, with SERIALIZABLE set first
-  // where the dialect has it.
+  // where the dialect has it (and the executor has transactions).
   const atomically = <A>(
     _context: Backend.SyncContext,
     effect: Effect.Effect<A, BackendError>
@@ -1141,7 +1141,9 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     ReadonlyArray<Backend.ChangeHint>
   >({
     handlers: config.handlers,
-    atomically: transactional ? atomically : Backend.withoutTransaction,
+    // Always the executor's transaction, as before #177: an executor without
+    // transactions (D1) defines what its `transaction` does.
+    atomically,
     // The database isolates a batch (or, on D1, nothing does): a commit never
     // reports a conflict, so a handler runs once per opened unit.
     maxAttempts: 1,
