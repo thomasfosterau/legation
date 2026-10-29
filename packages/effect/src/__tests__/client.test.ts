@@ -215,7 +215,7 @@ describe("Client over an owned engine", () => {
         const handler = yield* makeHandler;
         const store = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-auto");
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           clientId: "client-auto",
@@ -425,7 +425,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
       Effect.gen(function* () {
         // No transport at all: the relational registration's initial pull
         // fails, which only delays rows — the pin must still hold.
-        const client = yield* Client.make({ nodes, mutations });
+        const { client } = yield* Client.make({ nodes, mutations });
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const pinned: Query.Read = { collection: "products", include: { reviews: true } };
         yield* client.subscribe(pinned);
@@ -739,7 +739,7 @@ describe("Client.make defaults (zero wiring)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         // Nothing provided: memory store, offline transport, no sync loop.
-        const client = yield* Client.make({ nodes, mutations });
+        const { client } = yield* Client.make({ nodes, mutations });
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const rows = yield* client.query({ collection: "products" });
@@ -765,7 +765,7 @@ describe("Client.make defaults (zero wiring)", () => {
         const store = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-options");
         // No context provides anywhere: everything arrives as options.
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           clientGroupId: "group-options",
@@ -789,7 +789,7 @@ describe("Client.make defaults (zero wiring)", () => {
         const optionStore = yield* ClientStore.makeMemory;
         const contextStore = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-precedence");
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           clientGroupId: "group-precedence",
@@ -806,6 +806,35 @@ describe("Client.make defaults (zero wiring)", () => {
         expect(yield* contextStore.pendingMutations.pipe(Effect.orDie)).toHaveLength(0);
         const confirmed = yield* client.query({ collection: "products" });
         expect(confirmed).toHaveLength(1);
+      })
+    )
+  );
+});
+
+describe("Client.make hands back what it built (#142)", () => {
+  it.effect("the engine and store it returns are the ones the Client runs over", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const passed = yield* ClientStore.makeMemory;
+        const { client, engine, store } = yield* Client.make({ nodes, mutations, store: passed });
+        expect(store).toBe(passed);
+
+        // A write through the Client is in the returned engine's view and in the
+        // returned store's journal: an engine-level capability (devtools) sees
+        // exactly what the app does.
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
+        expect(yield* engine.query(Subset.make({ collection: "products" }))).toHaveLength(1);
+        expect(yield* store.pendingMutations.pipe(Effect.orDie)).toHaveLength(1);
+      })
+    )
+  );
+
+  it.effect("returns the default store it built when none is given", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, store } = yield* Client.make({ nodes, mutations });
+        yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
+        expect(yield* store.pendingMutations.pipe(Effect.orDie)).toHaveLength(1);
       })
     )
   );

@@ -250,7 +250,7 @@ describe("a bridged registry over a real engine", () => {
         });
         const store = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(server.handler, "group-bridge");
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           clientId: "client-bridge",

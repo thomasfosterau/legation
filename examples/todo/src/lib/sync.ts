@@ -171,7 +171,7 @@ const rigLayer = Layer.effect(Rig)(
     const loopback = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
     const { transport, setOffline } = yield* Transport.simulateOffline(loopback);
 
-    const client = yield* Client.make({
+    const { client } = yield* Client.make({
       nodes,
       mutations,
       clientId: CLIENT_ID,

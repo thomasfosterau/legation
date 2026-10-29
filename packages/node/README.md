@@ -98,7 +98,7 @@ import { Effect } from "effect";
 import { mutations, nodes } from "./domain.js";
 
 const program = Effect.gen(function* () {
-  const client = yield* Client.make({
+  const { client } = yield* Client.make({
     nodes,
     mutations,
     clientGroupId: "todo-group",

@@ -116,7 +116,7 @@ describe("Server", () => {
             Ref.update(pulls, (n) => n + 1).pipe(Effect.andThen(inMemory.pull(request))),
         };
         yield* transport.setStatus("disconnected");
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           clientId: "client-oob",
@@ -205,7 +205,7 @@ describe("Server", () => {
                 inMemory.pull(request).pipe(Effect.tap(() => Ref.update(pulls, (n) => n + 1))),
             };
             if (!options.connected) yield* transport.setStatus("disconnected");
-            const client = yield* Client.make({
+            const { client } = yield* Client.make({
               nodes,
               mutations,
               clientId,

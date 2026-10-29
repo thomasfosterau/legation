@@ -30,10 +30,6 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation-effect";
-// The engine is built explicitly rather than through `Client.make`: the
-// devtools core (#120) is an engine-level capability, and `Client.make` does
-// not hand the engine back. `Client.fromView` wraps it — the same Client.
-import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
 import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
 import * as Devtools from "@thomasfosterau/legation-devtools";
 
@@ -198,22 +194,21 @@ const rigLayer = Layer.effect(Rig)(
       Effect.provide(BrowserKeyValueStore.layerLocalStorage)
     );
 
-    const engine = yield* ClientEngine.make({
+    // `Client.make` builds the engine and forks its sync loop, and hands the
+    // engine back with the Client, so the devtools core (#120) attaches to it.
+    const { client, engine } = yield* Client.make({
+      nodes,
+      mutations: clientMutations,
       clientId: CLIENT_ID,
       clientGroupId: CLIENT_GROUP_ID,
-      mutators: clientMutations,
+      store,
+      transport,
       // Both legs are opt-in: without `pushDebounce` a journaled mutation
       // waits for a reconnect, a poke, or an explicit push, so an online
       // client would sit on unflushed edits. `pullInterval` is the
       // correctness backstop for when no poke arrives.
       syncLoop: { pushDebounce: "300 millis", pullInterval: "15 seconds" },
-    }).pipe(
-      Effect.provideService(ClientStore.ClientStore, store),
-      Effect.provideService(Transport.ClientTransport, transport)
-    );
-    yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
-
-    const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+    });
     // Pin every collection for the tab's lifetime: a screen's `include` only
     // resolves against rows this client has actually synced.
     yield* Effect.forEach(shellReads, (read) => client.subscribe(read), { discard: true }).pipe(
