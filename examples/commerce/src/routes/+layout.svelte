@@ -1,16 +1,16 @@
 <script lang="ts">
   import { browser } from "$app/env";
   import { Effect, Fiber, Stream } from "effect";
-  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
+  import { fromRuntime, setClient } from "@thomasfosterau/legation-svelte";
   import type { ElectedHost } from "@thomasfosterau/legation-browser";
-  import { boot, bootMainThread, ssrStub, type AppRuntime } from "../lib/engine.js";
+  import { boot, bootMainThread, type AppRuntime } from "../lib/engine.js";
 
   const { data, children } = $props();
 
   // The tab's whole data layer is a Mirror over the service worker's
   // engine — boot broadcasts the config handshake and registers the shell
   // subsets. SSR renders come entirely from the hooks' `initial` seeds, so
-  // the server gets a loud stub instead of a runtime.
+  // the server gets no Client: a hook that reached for one there would fail.
   //
   // `?host=main` skips the service worker entirely and runs
   // `ElectedHost.run` on this tab instead (the shipped no-service-worker
@@ -34,7 +34,7 @@
       runtime = boot({ clientGroupId: data.clientGroupId, userId: data.user?.id });
     }
   }
-  setClientRuntime(runtime ?? ssrStub());
+  setClient(runtime === undefined ? undefined : fromRuntime(runtime));
 </script>
 
 <nav>

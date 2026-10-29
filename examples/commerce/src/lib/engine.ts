@@ -90,18 +90,3 @@ export const bootMainThread = (options: {
   if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
   return { runtime, role };
 };
-
-/**
- * SSR stub runtime: the rune hooks read the runtime from context at init but
- * only *use* it inside `$effect`, which never runs on the server — SSR
- * renders come entirely from the hooks' `initial` seeds. Any server-side
- * invocation is therefore a bug, and this stub makes it loud.
- */
-export const ssrStub = (): AppRuntime =>
-  new Proxy({} as AppRuntime, {
-    get(_target, property) {
-      throw new Error(
-        `engine runtime accessed during SSR (.${String(property)}) — render from initial seeds instead`
-      );
-    },
-  });

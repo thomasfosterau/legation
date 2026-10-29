@@ -24,9 +24,11 @@
  * ({@link setClientRuntime}) and register a `$effect`.
  */
 import { useLiveStream } from "@thomasfosterau/effect-svelte";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Stream from "effect/Stream";
@@ -37,7 +39,8 @@ import {
   type MutationState,
   type Undo,
 } from "@thomasfosterau/legation-effect/internal";
-import { getClientRuntime, type ClientRuntime } from "./Runtime.js";
+import { getClient, getClientRuntime, type ClientRuntime } from "./Runtime.js";
+import { unavailable } from "./unavailable.js";
 
 /** A live result: `current` re-renders whatever reads it on every emission. */
 export interface Live<A, E = never> {
@@ -106,18 +109,30 @@ const live = <A, E>(
   options?: LiveOptions<A>
 ): Live<A, E> => {
   let optedOut = $state(false);
-  const result = useLiveStream(
-    () => {
-      const toStream = makeStream();
-      if (toStream === undefined) {
-        optedOut = true;
-        return Stream.never;
-      }
-      optedOut = false;
-      return Stream.unwrap(Effect.map(Client.Client, (client) => toStream(client)));
-    },
-    { runtime, ...(options?.initial === undefined ? {} : { initial: options.initial }) }
-  );
+  // The thunk, read inside `$effect` for its reactive inputs; `undefined` opts out.
+  const pick = () => {
+    const toStream = makeStream();
+    optedOut = toStream === undefined;
+    return toStream;
+  };
+  const seed = options?.initial === undefined ? {} : { initial: options.initial };
+  // With no Client set (#147), a read that is not opted out fails at once with
+  // `ClientUnavailable`, run where nothing needs the Client; one that renders
+  // only from its seed (SSR, where no `$effect` runs) never gets this far.
+  const result = Option.isNone(getClient())
+    ? useLiveStream(() => (pick() === undefined ? Stream.never : Stream.die(unavailable())), {
+        runtime: Context.empty(),
+        ...seed,
+      })
+    : useLiveStream(
+        () => {
+          const toStream = pick();
+          return toStream === undefined
+            ? Stream.never
+            : Stream.unwrap(Effect.map(Client.Client, (client) => toStream(client)));
+        },
+        { runtime, ...seed }
+      );
   return {
     get current() {
       return optedOut ? AsyncResult.initial() : result.current;

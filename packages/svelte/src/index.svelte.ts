@@ -5,7 +5,7 @@
  * `@thomasfosterau/legation-effect`, plus the integrations where Svelte or SvelteKit can do
  * something the core cannot (reactive re-subscription, SSR hydration).
  *
- * One entry point, because the hooks are the API: `setClientRuntime` puts the
+ * One entry point, because the hooks are the API: `setClient` puts the
  * {@link Client} in context, and every read and write is a hook over it. This
  * module is `.svelte.ts` — the hooks own `$state`/`$effect`, so a bundler
  * compiles it through its Svelte plugin (the standard Svelte-library
