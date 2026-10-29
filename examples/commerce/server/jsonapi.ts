@@ -57,6 +57,15 @@ import { nodes } from "../src/lib/domain.js";
 import { api, NotFound, Unauthorized } from "../src/lib/api.js";
 import type { OperationRejected } from "../src/lib/api.js";
 import { CartItem, Category, Order, OrderItem, Product, Review, Variant } from "../src/lib/resources.js";
+import type { RuleRejected, Touched } from "./rules.js";
+import {
+  addCartItem,
+  checkRating,
+  placeOrder,
+  removeCartItem,
+  writeReview,
+} from "./rules.js";
+import type { CartItemRow, ReviewRow } from "./rules.js";
 import { authPolicy, CommerceSync } from "./runtime.js";
 
 export {
@@ -229,22 +238,67 @@ const variantsLive = HttpApiBuilder.group(api, "variants", (handlers) =>
   Effect.map(Rest, (rest) => handlers.handle("list", rest.list(Variant)))
 );
 
+/**
+ * A per-resource create's client id (#525): effect-jsonapi's `createPayload`
+ * carries `lid` but no `id`, so decoding drops it; recover it from the raw
+ * document (the body is cached, so re-reading it is free), as the atomic
+ * endpoint does. An online forward and an offline journal of one create then
+ * name the same row. Without one, the server mints an id.
+ */
+const clientIdOf = (prefix: string): Effect.Effect<string, never, HttpServerRequest.HttpServerRequest> =>
+  Effect.flatMap(Request.HttpServerRequest, (request) =>
+    request.json.pipe(
+      Effect.orDie,
+      Effect.map((raw) => {
+        const id = (raw as { readonly data?: { readonly id?: unknown } } | null)?.data?.id;
+        return typeof id === "string" && id.length > 0 ? id : `${prefix}-${crypto.randomUUID()}`;
+      })
+    )
+  );
+
+/** A shared rule (`rules.ts`) as a request step: a refusal is the error document `toError` names. */
+const restRule = <A, E, R>(
+  effect: Effect.Effect<A, RuleRejected | SqlError, R>,
+  toError: (rejected: RuleRejected) => E
+): Effect.Effect<A, E, R> =>
+  effect.pipe(
+    Effect.catchTag("RuleRejected", (rejected) => Effect.fail(toError(rejected))),
+    Effect.catchTag("SqlError", Effect.die)
+  );
+
+/** A create's refusal: someone else's client id is a 409, a broken rule a 400. */
+const createRefused = (rejected: RuleRejected): ApiError.Conflict | ApiError.BadRequest =>
+  rejected.status === 409
+    ? new ApiError.Conflict({ detail: rejected.detail })
+    : new ApiError.BadRequest({ detail: rejected.detail });
+
+/** A delete's refusal: someone else's row is not found. */
+const deleteRefused = (_rejected: RuleRejected): NotFound => new NotFound();
+
+/** Announce what a rule wrote, one broadcast per collection. */
+const announce = (touched: Touched) =>
+  Effect.forEach(touched, ({ collection, ids }) => broadcast(collection, ids), { discard: true });
+
 const reviewsLive = HttpApiBuilder.group(api, "reviews", (handlers) =>
   Effect.map(Rest, (rest) =>
     handlers.handle("list", rest.list(Review)).handle("create", ({ payload }) =>
       Effect.gen(function* () {
         const userId = yield* requireUser;
         const sql = yield* SqlClient;
-        const id = `r-${crypto.randomUUID()}`;
-        const { authorName, rating, body, createdAt } = payload.data.attributes;
-        const productId = payload.data.relationships.product.data.id;
-        yield* orDie(
-          sql`INSERT INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
-              VALUES (${id}, ${productId}, ${userId}, ${authorName}, ${rating}, ${body}, ${createdAt})`
+        const id = yield* clientIdOf("r");
+        const { row, touched } = yield* restRule(
+          sql.withTransaction(
+            writeReview({
+              userId,
+              id,
+              productId: payload.data.relationships.product.data.id,
+              ...payload.data.attributes,
+            })
+          ),
+          createRefused
         );
-        yield* broadcast("reviews", [id]);
-        const rows = yield* orDie(sql`SELECT * FROM reviews WHERE id = ${id}`);
-        return Handlers.data(reviewResource(rows[0]!));
+        yield* announce(touched);
+        return Handlers.data(reviewResource(row));
       })
     )
   )
@@ -259,25 +313,32 @@ const cartItemsLive = HttpApiBuilder.group(api, "cartItems", (handlers) =>
         Effect.gen(function* () {
           const userId = yield* requireUser;
           const sql = yield* SqlClient;
-          const variantId = payload.data.relationships.variant.data.id;
-          const variant = yield* orDie(sql`SELECT stock FROM variants WHERE id = ${variantId}`);
-          if (variant.length === 0) return yield* Effect.fail(new ApiError.BadRequest({}));
-          const id = `ci-${crypto.randomUUID()}`;
-          yield* orDie(
-            sql`INSERT INTO cartItems (id, userId, variantId, qty)
-                VALUES (${id}, ${userId}, ${variantId}, ${payload.data.attributes.qty})`
+          const id = yield* clientIdOf("ci");
+          const { row, touched } = yield* restRule(
+            sql.withTransaction(
+              addCartItem({
+                userId,
+                id,
+                variantId: payload.data.relationships.variant.data.id,
+                qty: payload.data.attributes.qty,
+              })
+            ),
+            createRefused
           );
-          yield* broadcast("cartItems", [id]);
-          const rows = yield* orDie(sql`SELECT * FROM cartItems WHERE id = ${id}`);
-          return Handlers.data(cartItemResource(rows[0]!));
+          yield* announce(touched);
+          return Handlers.data(cartItemResource(row));
         })
       )
       .handle("delete", ({ params }) =>
         Effect.gen(function* () {
           const userId = yield* requireUser;
           const sql = yield* SqlClient;
-          yield* orDie(sql`DELETE FROM cartItems WHERE id = ${params.id} AND userId = ${userId}`);
-          yield* broadcast("cartItems", [params.id]);
+          yield* announce(
+            yield* restRule(
+              sql.withTransaction(removeCartItem({ userId, id: params.id })),
+              deleteRefused
+            )
+          );
         })
       )
   )
@@ -287,57 +348,22 @@ const ordersLive = HttpApiBuilder.group(api, "orders", (handlers) =>
   Effect.map(Rest, (rest) =>
     handlers
       .handle("list", rest.list(Order))
-      // Order placement: recomputed from the authoritative cart, exactly like
-      // the sync mutator's server half — the client's payload only carries the
-      // metadata (createdAt); items/total/stock all derive server-side.
+      // Order placement: recomputed from the authoritative cart (`rules.ts`'s
+      // `placeOrder`) — the client's payload only carries the metadata
+      // (createdAt); items/total/stock all derive server-side.
       .handle("create", ({ payload }) =>
         Effect.gen(function* () {
           const userId = yield* requireUser;
           const sql = yield* SqlClient;
-          const orderId = `o-${crypto.randomUUID()}`;
-          const createdAt = payload.data.attributes.createdAt;
-          const result = yield* orDie(
+          const id = yield* clientIdOf("o");
+          const { row, touched } = yield* restRule(
             sql.withTransaction(
-              Effect.gen(function* () {
-                const cart = yield* sql<{
-                  id: string;
-                  variantId: string;
-                  qty: number;
-                  priceCents: number;
-                  stock: number;
-                }>`SELECT c.id, c.variantId, c.qty, v.priceCents, v.stock
-                   FROM cartItems c JOIN variants v ON v.id = c.variantId
-                   WHERE c.userId = ${userId}`;
-                if (cart.length === 0 || cart.some((line) => line.stock < line.qty)) {
-                  return undefined;
-                }
-                const total = cart.reduce((sum, line) => sum + line.priceCents * line.qty, 0);
-                yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
-                  VALUES (${orderId}, ${userId}, 'placed', ${total}, ${createdAt})`;
-                const itemIds: Array<string> = [];
-                for (const [index, line] of cart.entries()) {
-                  const itemId = `${orderId}-${index}`;
-                  itemIds.push(itemId);
-                  yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
-                    VALUES (${itemId}, ${orderId}, ${userId}, ${line.variantId}, ${line.qty}, ${line.priceCents})`;
-                  yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
-                }
-                yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
-                return {
-                  itemIds,
-                  cartIds: cart.map((line) => line.id),
-                  variantIds: cart.map((line) => line.variantId),
-                };
-              })
-            )
+              placeOrder({ userId, id, createdAt: payload.data.attributes.createdAt })
+            ),
+            createRefused
           );
-          if (result === undefined) return yield* Effect.fail(new ApiError.BadRequest({}));
-          yield* broadcast("orders", [orderId]);
-          yield* broadcast("orderItems", result.itemIds);
-          yield* broadcast("cartItems", result.cartIds);
-          yield* broadcast("variants", result.variantIds);
-          const rows = yield* orDie(sql`SELECT * FROM orders WHERE id = ${orderId}`);
-          return Handlers.data(orderResource(rows[0]!));
+          yield* announce(touched);
+          return Handlers.data(orderResource(row));
         })
       )
   )
@@ -377,18 +403,6 @@ interface Batch {
   /** collection → ids: one deduplicated broadcast per collection on commit. */
   readonly touched: Map<string, Set<string>>;
 }
-
-type ReviewRow = {
-  id: string;
-  productId: string;
-  userId: string;
-  authorName: string;
-  rating: number;
-  body: string;
-  createdAt: string;
-};
-type CartItemRow = { id: string; userId: string; variantId: string; qty: number };
-type OrderRow = { id: string; userId: string; status: string; totalCents: number; createdAt: string };
 
 /**
  * effect-jsonapi's typed `add` operation carries `lid` but no `id`, so a
@@ -475,20 +489,19 @@ const updateTargetId = (
         ? refId(batch, index, ref)
         : fail(422, index, "Missing target", "an update needs an id, a lid or a ref");
 
-/**
- * A client-generated id on `add` may only name a row the caller already owns
- * (an idempotent resend replaces it, like the mutators' INSERT OR REPLACE);
- * someone else's row is a 409.
- */
-const ownedOrFree = (
+/** A shared rule (`rules.ts`) as one batch operation: a refusal names the operation. */
+const atomicRule = <A>(
   index: number,
-  userId: string,
-  existing: { readonly userId: string } | undefined,
-  what: string
-): Effect.Effect<void, OperationFailed> =>
-  existing !== undefined && existing.userId !== userId
-    ? fail(409, index, "Id already in use", `${what} id belongs to another user`)
-    : Effect.void;
+  effect: Effect.Effect<A, RuleRejected | SqlError, SqlClient>
+): Effect.Effect<A, OperationFailed | SqlError, SqlClient> =>
+  Effect.catchTag(effect, "RuleRejected", (rejected) =>
+    fail(rejected.status, index, rejected.title, rejected.detail)
+  );
+
+/** Record what a rule wrote, for the batch's broadcast on commit. */
+const touchAll = (batch: Batch, touched: Touched): void => {
+  for (const { collection, ids } of touched) touch(batch, collection, ids);
+};
 
 const touch = (batch: Batch, collection: string, ids: ReadonlyArray<string>): void => {
   const set = batch.touched.get(collection) ?? new Set<string>();
@@ -505,23 +518,17 @@ const applyReview = (
     const sql = yield* SqlClient;
     const userId = yield* identityAt(batch, index);
     const load = (id: string) => sql<ReviewRow>`SELECT * FROM reviews WHERE id = ${id}`;
-    // `review/write`'s rule, verbatim.
-    const checkRating = (rating: number) =>
-      rating < 1 || rating > 5
-        ? fail(422, index, "Review rejected", "rating out of range")
-        : Effect.void;
     switch (op.op) {
       case "add": {
         const id = batch.clientIds[index] ?? `r-${crypto.randomUUID()}`;
-        const { authorName, rating, body, createdAt } = op.data.attributes;
-        yield* checkRating(rating);
         const productId = yield* refId(batch, index, op.data.relationships.product.data);
-        yield* ownedOrFree(index, userId, (yield* load(id))[0], "review");
-        yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
-          VALUES (${id}, ${productId}, ${userId}, ${authorName}, ${rating}, ${body}, ${createdAt})`;
+        const { row, touched } = yield* atomicRule(
+          index,
+          writeReview({ userId, id, productId, ...op.data.attributes })
+        );
         assignLid(batch, op.data.lid, "reviews", id);
-        touch(batch, "reviews", [id]);
-        return { data: reviewResource((yield* load(id))[0]!) };
+        touchAll(batch, touched);
+        return { data: reviewResource(row) };
       }
       case "update": {
         const id = yield* updateTargetId(batch, index, op.data, op.ref);
@@ -531,7 +538,7 @@ const applyReview = (
         }
         const attributes = op.data.attributes ?? {};
         const rating = attributes.rating ?? current.rating;
-        yield* checkRating(rating);
+        yield* atomicRule(index, checkRating(rating));
         const productRef = op.data.relationships?.product?.data;
         const productId =
           productRef === undefined ? current.productId : yield* refId(batch, index, productRef);
@@ -573,24 +580,14 @@ const applyCartItem = (
     switch (op.op) {
       case "add": {
         const id = batch.clientIds[index] ?? `ci-${crypto.randomUUID()}`;
-        const qty = op.data.attributes.qty;
         const variantId = yield* refId(batch, index, op.data.relationships.variant.data);
-        // The stock rule is `cart/add`'s, verbatim.
-        const variant = yield* sql<{
-          stock: number;
-        }>`SELECT stock FROM variants WHERE id = ${variantId}`;
-        if (variant.length === 0) {
-          return yield* fail(422, index, "Cart item rejected", "unknown variant");
-        }
-        if (variant[0]!.stock < qty) {
-          return yield* fail(422, index, "Cart item rejected", "insufficient stock");
-        }
-        yield* ownedOrFree(index, userId, (yield* load(id))[0], "cart item");
-        yield* sql`INSERT OR REPLACE INTO cartItems (id, userId, variantId, qty)
-          VALUES (${id}, ${userId}, ${variantId}, ${qty})`;
+        const { row, touched } = yield* atomicRule(
+          index,
+          addCartItem({ userId, id, variantId, qty: op.data.attributes.qty })
+        );
         assignLid(batch, op.data.lid, "cartItems", id);
-        touch(batch, "cartItems", [id]);
-        return { data: cartItemResource((yield* load(id))[0]!) };
+        touchAll(batch, touched);
+        return { data: cartItemResource(row) };
       }
       case "update": {
         const id = yield* updateTargetId(batch, index, op.data, op.ref);
@@ -614,14 +611,7 @@ const applyCartItem = (
       }
       case "remove": {
         const id = yield* refId(batch, index, op.ref);
-        const current = (yield* load(id))[0];
-        // A row already gone is a no-op, as `cart/remove` is (see above).
-        if (current === undefined) return Atomic.emptyResult;
-        if (current.userId !== userId) {
-          return yield* fail(404, index, "Cart item not found", `no cart item ${id} of yours`);
-        }
-        yield* sql`DELETE FROM cartItems WHERE id = ${id} AND userId = ${userId}`;
-        touch(batch, "cartItems", [id]);
+        touchAll(batch, yield* atomicRule(index, removeCartItem({ userId, id })));
         return Atomic.emptyResult;
       }
     }
@@ -640,51 +630,18 @@ const applyOrder = (
   op: Atomic.TargetsResource<BatchOperation, typeof Order>
 ): Effect.Effect<OperationEntry, OperationFailed | SqlError, SqlClient> =>
   Effect.gen(function* () {
-    const sql = yield* SqlClient;
     const userId = yield* identityAt(batch, index);
     if (op.op !== "add") {
       return yield* fail(422, index, "Order rejected", "orders are placed, never edited or removed");
     }
     const orderId = batch.clientIds[index] ?? `o-${crypto.randomUUID()}`;
-    const load = () => sql<OrderRow>`SELECT * FROM orders WHERE id = ${orderId}`;
-    const existing = (yield* load())[0];
-    yield* ownedOrFree(index, userId, existing, "order");
-    if (existing !== undefined) return { data: orderResource(existing) };
-
-    const cart = yield* sql<{
-      id: string;
-      variantId: string;
-      qty: number;
-      priceCents: number;
-      stock: number;
-    }>`SELECT c.id, c.variantId, c.qty, v.priceCents, v.stock
-       FROM cartItems c JOIN variants v ON v.id = c.variantId
-       WHERE c.userId = ${userId}`;
-    if (cart.length === 0) {
-      return yield* fail(422, index, "Order rejected", "cart is empty");
-    }
-    const short = cart.find((line) => line.stock < line.qty);
-    if (short !== undefined) {
-      return yield* fail(422, index, "Order rejected", `insufficient stock for ${short.variantId}`);
-    }
-    const total = cart.reduce((sum, line) => sum + line.priceCents * line.qty, 0);
-    yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
-      VALUES (${orderId}, ${userId}, 'placed', ${total}, ${op.data.attributes.createdAt})`;
-    const itemIds: Array<string> = [];
-    for (const [lineIndex, line] of cart.entries()) {
-      const itemId = `${orderId}-${lineIndex}`;
-      itemIds.push(itemId);
-      yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
-        VALUES (${itemId}, ${orderId}, ${userId}, ${line.variantId}, ${line.qty}, ${line.priceCents})`;
-      yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
-    }
-    yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
+    const { row, touched } = yield* atomicRule(
+      index,
+      placeOrder({ userId, id: orderId, createdAt: op.data.attributes.createdAt })
+    );
     assignLid(batch, op.data.lid, "orders", orderId);
-    touch(batch, "orders", [orderId]);
-    touch(batch, "orderItems", itemIds);
-    touch(batch, "cartItems", cart.map((line) => line.id));
-    touch(batch, "variants", cart.map((line) => line.variantId));
-    return { data: orderResource((yield* load())[0]!) };
+    touchAll(batch, touched);
+    return { data: orderResource(row) };
   });
 
 const applyOperation = (
