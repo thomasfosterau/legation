@@ -915,7 +915,15 @@ export const make = (
         const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
           Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
         );
-        if (custom !== undefined) return custom(args);
+        // A `writes` function that refuses its args (it throws, as
+        // `FacadeWrites.writesOf` does for args naming another type) fails as
+        // args that do not decode do, never as a defect.
+        if (custom !== undefined) {
+          return yield* Effect.try({
+            try: () => custom(args),
+            catch: backendError(`Invalid args for mutator "${mutation.mutator}"`),
+          });
+        }
         if (operation === undefined) return yield* UnknownMutator.make(mutation.mutator);
         return yield* writeOf(operation, args);
       });

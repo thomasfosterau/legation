@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -91,6 +92,16 @@ describe("FacadeWrites.writesOf (#529)", () => {
     );
   });
 
+  it("writes only the mutation's own type: args naming another are refused", () => {
+    const create = writes.get("notes/create");
+    const remove = writes.get("notes/delete");
+    expect(() =>
+      create?.({ type: "categories", id: "c-1", attributes: { name: "forged" } })
+    ).toThrow(FacadeWrites.InvalidWriteArgs);
+    expect(() => remove?.({ type: "categories", id: "c-1" })).toThrow(/writes "notes"/);
+    expect(create?.({ type: "notes", id: "n-1", attributes: { title: "T" } })?.type).toBe("notes");
+  });
+
   it("covers every derived mutation, and only those `writes` selects", () => {
     expect([...writes.keys()].toSorted()).toEqual(
       [
@@ -168,6 +179,25 @@ describe("a JsonApiBackend over a node-graph app (#529)", () => {
       ]);
 
       expect(sent.map(({ method, url }) => `${method} ${url}`)).toEqual(["POST /notes"]);
+
+      // A forged mutation: authorised as `notes/create`, its args name another
+      // type. The push fails as invalid args, and nothing reaches the server.
+      const forged = yield* Effect.exit(
+        backend.applyMutations({ clientGroupId: "g" }, [
+          {
+            clientId: "c",
+            mutationId: 2,
+            mutator: "notes/create",
+            args: { type: "categories", id: "c-9", attributes: { name: "forged" } },
+            createdAt: 0,
+          },
+        ])
+      );
+      expect(Exit.isFailure(forged)).toBe(true);
+      // A failure (the BackendError of invalid args), not a defect.
+      const reason = Exit.isFailure(forged) ? forged.cause.reasons[0] : undefined;
+      expect(reason?._tag === "Fail" && reason.error._tag).toBe("BackendError");
+      expect(sent).toHaveLength(1);
       expect(decodeJson(sent[0]?.body ?? "{}")).toEqual({
         data: {
           type: "notes",

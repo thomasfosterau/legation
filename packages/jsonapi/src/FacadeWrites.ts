@@ -318,12 +318,36 @@ const writeOf = (
   );
   return {
     operation,
-    type: args.type,
+    // The node's own type, never the args': the mutation's name is what the
+    // server authorised, so the write goes to that type's endpoint only.
+    type: node.type,
     id: args.id,
     attributes: R.filter(args.attributes, (_, field) => !HashSet.has(vias, field)),
     relationships,
   };
 };
+
+/**
+ * Refuse args whose `type` is not the mutation's own (#529): a `notes/create`
+ * naming `secrets` would otherwise write a type the mutation's name, which the
+ * server authorised, never covered. `JsonApiBackend` reports the refusal as
+ * invalid args, as it does args that do not decode.
+ */
+const sameType =
+  (type: string, mutator: string) =>
+  <A extends { readonly type: string }>(args: A): A => {
+    if (args.type !== type) {
+      throw new InvalidWriteArgs({
+        message: `"${mutator}" writes "${type}", but its args name "${args.type}"`,
+      });
+    }
+    return args;
+  };
+
+/** Graph-derived CRUD args that do not fit the mutation they were journaled under. */
+export class InvalidWriteArgs extends Schema.TaggedError<InvalidWriteArgs>()("InvalidWriteArgs", {
+  message: Schema.String,
+}) {}
 
 /**
  * The inverse of {@link graphIntentOf} (ADR-0030 §5): for every graph-derived
@@ -332,7 +356,8 @@ const writeOf = (
  * `JsonApiBackend`'s `writes`, so a node-graph app's journaled `{type}/create`,
  * `{type}/update` and `{type}/delete` reach the server as `POST`, `PATCH` and
  * `DELETE` (or atomic operations), with each `one` edge's `via` key rebuilt as
- * the relationship's linkage.
+ * the relationship's linkage. The write's `type` is always the mutation's own:
+ * args naming another type are refused ({@link InvalidWriteArgs}).
  */
 export const writesOf = (
   nodes: Node.NodeRegistry,
@@ -348,8 +373,14 @@ export const writesOf = (
         [
           name,
           operation === "delete"
-            ? flow(decodeDeleteArgs, (args): Write => ({ operation, ...args }))
-            : flow(decodeWriteArgs, (args) => writeOf(node, operation, args)),
+            ? flow(decodeDeleteArgs, sameType(entry.type, name), (args): Write => ({
+                operation,
+                type: entry.type,
+                id: args.id,
+              }))
+            : flow(decodeWriteArgs, sameType(entry.type, name), (args) =>
+                writeOf(node, operation, args)
+              ),
         ] as const,
       ];
     })
