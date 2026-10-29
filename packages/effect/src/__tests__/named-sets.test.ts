@@ -37,6 +37,7 @@ interface Follow {
 
 /** clientGroupId → identity (a real carrier derives it from a verified token). */
 const identities: Record<string, { readonly user?: string; readonly role: string }> = {
+  "group-switch": { user: "alice", role: "member" },
   "group-mod": { user: "mod", role: "moderator" },
   "group-alice": { user: "alice", role: "member" },
   "group-anon": { role: "anonymous" },
@@ -97,7 +98,10 @@ const policyOver = (backend: Backend, source: string) => {
   return Authorization.policy({ posts, follows: Authorization.allowAll });
 };
 
-const put = (collection: string, value: { readonly id: string }) => ({ collection, value });
+const put = <V extends { readonly id: string }>(collection: string, value: V) => ({
+  collection,
+  value: value as { readonly id: string },
+});
 
 const handlers: Record<string, MemoryBackend.BackendHandler> = {
   put: (args, writer) => {
@@ -113,12 +117,15 @@ const seed: ReadonlyArray<ReturnType<typeof put>> = [
   put("posts", { id: "alice-private", ownerId: "alice", visibility: "private" } satisfies Post),
 ];
 
-const setupWith = (source: string) =>
+const setupWith = (source: string, policy?: (backend: Backend) => Authorization.AuthPolicy) =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make(handlers);
     const server = yield* SyncServer.make.pipe(
       Effect.provideService(Backend, backend),
-      Effect.provideService(Authorization.AuthPolicy, policyOver(backend, source)),
+      Effect.provideService(
+        Authorization.AuthPolicy,
+        policy === undefined ? policyOver(backend, source) : policy(backend)
+      ),
       Effect.provideService(Authorization.IdentityResolver, {
         resolve: (clientGroupId) => Effect.succeed(identities[clientGroupId]),
       }),
@@ -140,10 +147,12 @@ const setupWith = (source: string) =>
         ],
       });
     yield* Effect.forEach(seed, write, { concurrency: 1, discard: true });
-    const pull = (clientGroupId: string, cookie?: string, collection = "posts") =>
+    const pull = (clientGroupId: string, cookie?: string, ...collections: Array<string>) =>
       server.handlePull({
         clientGroupId,
-        subscriptions: [Subset.make({ collection })],
+        subscriptions: (collections.length === 0 ? ["posts"] : collections).map((collection) =>
+          Subset.make({ collection })
+        ),
         ...(cookie === undefined ? {} : { cookie }),
       });
     return { server, write, pull };
@@ -256,6 +265,54 @@ describe("session-resolved read scopes (#205)", () => {
       const expired = yield* pull("group-alice", fresh.cookie);
       expect(expired.patch[0]?._tag).toBe("Clear");
       expect(putIds(expired)).toEqual(["alice-private", "bob-followers", "pub"]);
+    })
+  );
+
+  it.effect("never serves a set resolved for the group's previous identity", () =>
+    Effect.gen(function* () {
+      const { pull, write } = yield* setup;
+      yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
+      const asAlice = yield* pull("group-switch");
+      expect(putIds(asAlice)).toEqual(["alice-private", "bob-followers", "pub"]);
+
+      // The same client group now resolves to another user, within the set's
+      // maxAge and with no write to its source.
+      identities["group-switch"] = { user: "carol", role: "member" };
+      const asCarol = yield* pull("group-switch", asAlice.cookie);
+      expect(asCarol.patch[0]?._tag).toBe("Clear");
+      expect(putIds(asCarol)).toEqual(["pub"]);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          identities["group-switch"] = { user: "alice", role: "member" };
+        })
+      )
+    )
+  );
+
+  it.effect("keeps two collections' sets of one name apart", () =>
+    Effect.gen(function* () {
+      const setOf = (members: ReadonlyArray<string>): Authorization.NamedSet => ({
+        source: "follows",
+        maxAge: "1 hour",
+        resolve: () => Effect.succeed(members),
+      });
+      const { pull, write } = yield* setupWith("follows", () =>
+        Authorization.policy({
+          posts: () =>
+            Effect.succeed(
+              Authorization.filter(Predicate.inSet("ownerId", "ids"), { ids: setOf(["bob"]) })
+            ),
+          notes: () =>
+            Effect.succeed(
+              Authorization.filter(Predicate.inSet("ownerId", "ids"), { ids: setOf(["alice"]) })
+            ),
+        })
+      );
+      yield* write(put("notes", { id: "note-alice", ownerId: "alice" }));
+      yield* write(put("notes", { id: "note-bob", ownerId: "bob" }));
+      const response = yield* pull("group-alice", undefined, "posts", "notes");
+      expect(putIds(response)).toEqual(["bob-followers", "bob-private", "note-alice", "pub"]);
     })
   );
 });

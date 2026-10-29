@@ -223,6 +223,8 @@ const scopeEpochOf = (
  * which makes them stale, and whether one has.
  */
 interface CachedSet {
+  /** The identity the set was resolved for, canonically serialised. */
+  readonly identity: string;
   readonly values: Option.Option<ReadonlyArray<Predicate.Literal>>;
   readonly resolvedAt: number;
   readonly maxAgeMillis: number;
@@ -373,8 +375,12 @@ export const makeWithIntrospectionWith = (
             .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
 
     const pokeHub = yield* makePokeHub;
-    // Each session's named-set resolutions (#205), by client group, then set name.
+    // Each session's named-set resolutions (#205), by client group, then by the
+    // set's key: the collection whose scope declares it and its name, so two
+    // collections that declare different sets under one name never share an
+    // entry.
     const setCache = yield* Ref.make(new Map<string, ReadonlyMap<string, CachedSet>>());
+    const setKey = (collection: string, name: string) => JSON.stringify([collection, name]);
 
     // Bind a named set for a pull, from the session's cache while it is fresh:
     // not marked stale by a write to its source, and younger than its maxAge.
@@ -383,10 +389,19 @@ export const makeWithIntrospectionWith = (
     // pull's scope epoch is computed from.
     const cachedBinder =
       (bound: Map<string, Option.Option<ReadonlyArray<Predicate.Literal>>>): SetBinder =>
-      (context, name, set) =>
+      (context, collection, name, set) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const cached = (yield* Ref.get(setCache)).get(context.clientGroupId)?.get(name);
+          const key = setKey(collection, name);
+          // A session's cache holds one identity's resolutions. When the identity
+          // behind the client group changes (a sign-out, another user), every
+          // entry resolved for the previous one is dropped, never served.
+          const identity = Hash.canonicalJson(context.identity ?? null);
+          const sessionSets = [...((yield* Ref.get(setCache)).get(context.clientGroupId) ?? [])];
+          const sameIdentity = sessionSets.every(([, entry]) => entry.identity === identity);
+          const cached = sameIdentity
+            ? sessionSets.find(([entryKey]) => entryKey === key)?.[1]
+            : undefined;
           const fresh =
             cached !== undefined &&
             !cached.stale &&
@@ -395,20 +410,20 @@ export const makeWithIntrospectionWith = (
           const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
           if (!fresh) {
             const entry: CachedSet = {
+              identity,
               values,
               resolvedAt: now,
               maxAgeMillis: Duration.toMillis(set.maxAge),
               source: set.source,
               stale: false,
             };
-            yield* Ref.update(setCache, (all) =>
-              new Map(all).set(
-                context.clientGroupId,
-                new Map(all.get(context.clientGroupId) ?? []).set(name, entry)
-              )
-            );
+            yield* Ref.update(setCache, (all) => {
+              const current = [...(all.get(context.clientGroupId) ?? [])];
+              const kept = current.every(([, other]) => other.identity === identity) ? current : [];
+              return new Map(all).set(context.clientGroupId, new Map(kept).set(key, entry));
+            });
           }
-          bound.set(name, values);
+          bound.set(key, values);
           return values;
         });
 

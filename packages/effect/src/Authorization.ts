@@ -126,12 +126,13 @@ export const scopeOf = (output: ReadScope | Predicate): ReadScope => {
  */
 export type SetBinder = (
   context: SyncContext,
+  collection: string,
   name: string,
   set: NamedSet
 ) => Effect.Effect<Option.Option<ReadonlyArray<Predicates.Literal>>>;
 
 /** Resolve a set afresh, binding nothing when its resolver fails. */
-export const resolveSet: SetBinder = (context, _name, set) =>
+export const resolveSet: SetBinder = (context, _collection, _name, set) =>
   set.resolve(context).pipe(Effect.option);
 
 /** Per-collection auth filters. Subscribing to an unlisted collection fails. */
@@ -236,7 +237,7 @@ export const authorize = (
         case "Deny":
           return Effect.succeed({ ...subset, where: Predicates.isIn("id", []) });
         case "Filter":
-          return bindScope(scope, context, bindSet).pipe(
+          return bindScope(scope, context, subset.collection, bindSet).pipe(
             Effect.map((mandatory) => ({
               ...subset,
               where: Predicates.and(mandatory, subset.where),
@@ -256,6 +257,7 @@ export const authorize = (
 const bindScope = (
   scope: Extract<ReadScope, { readonly _tag: "Filter" }>,
   context: SyncContext,
+  collection: string,
   bindSet: SetBinder
 ): Effect.Effect<Predicate> =>
   Effect.forEach(
@@ -264,7 +266,9 @@ const bindScope = (
       const set = scope.sets[name];
       return set === undefined
         ? Effect.succeed([name, Option.none()] as const)
-        : bindSet(context, name, set).pipe(Effect.map((values) => [name, values] as const));
+        : bindSet(context, collection, name, set).pipe(
+            Effect.map((values) => [name, values] as const)
+          );
     },
     { concurrency: 1 }
   ).pipe(
