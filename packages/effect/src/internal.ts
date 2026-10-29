@@ -58,6 +58,7 @@ export * as RejectionMemory from "./RejectionMemory.js";
 export * as FilterCorpus from "./FilterCorpus.js";
 export * as Cvr from "./Cvr.js";
 export * as InvalidationBus from "./InvalidationBus.js";
+export * as InvalidationSink from "./InvalidationSink.js";
 export * as FanoutTopics from "./FanoutTopics.js";
 export * as FanoutBroker from "./FanoutBroker.js";
 export * as FanoutBus from "./FanoutBus.js";

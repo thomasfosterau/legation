@@ -108,6 +108,50 @@ the caller's identity — drop the cookie and the snapshot still carries the
 right rows while its cookie belongs to another room's CVR, which is a silent
 reset on every first paint. `binding-snapshot.test.ts` pins both sides of that.
 
+## Evicting server-side caches on a write
+
+`EdgeInvalidation` turns the hints a committed write publishes into evictions
+of the caches an app keeps on Cloudflare (#206): `kv` deletes the
+`{collection}:{id}` entry of every touched row from a KV read-through cache, and
+`cachePurge` purges the Workers cache by tag, with the same tag spelling the
+browser's Cache API invalidation uses (`collection:{name}`,
+`collection:{name}:{id}`, from `HttpCache` in `@thomasfosterau/legation-effect/internal`).
+The eviction is no longer an obligation of each mutation: it subscribes to the
+bus (`InvalidationSink.run`).
+
+**The cache lives in a different Worker than the write.** `cache.purge({ tags })`
+purges only the calling Worker's cache. In the usual shape the front door (the
+SvelteKit Worker serving every page) holds the cache, while writes land in the
+API Worker behind its service binding. So the API Worker forwards what each
+write touched, and the front door runs the sinks:
+
+```ts
+// API Worker, where the server and its bus run (a Durable Object room, say)
+yield * InvalidationSink.run(EdgeInvalidation.forward(env.FRONT_DOOR));
+
+// Front door Worker: an RPC entrypoint, reachable only through the binding
+export class Invalidation extends WorkerEntrypoint<Env> {
+  invalidate(payload: string): Promise<void> {
+    const sink = InvalidationSink.all([
+      EdgeInvalidation.kv(this.env.RESOURCES),
+      EdgeInvalidation.cachePurge(this.ctx.cache),
+    ]);
+    return Effect.runPromise(EdgeInvalidation.receive(sink)(payload));
+  }
+}
+```
+
+Expose the receiving end as an RPC method, not as a route on the front door's
+`fetch`: a `fetch` route is reachable from the internet, and anyone could then
+purge the cache.
+
+Every eviction is fire-and-forget. A failed KV delete, a failed forward, and a
+purge that rejects or resolves `{ success: false }` (which is how `cache.purge`
+reports a Cloudflare-side failure, so a `catch` alone misses it) are logged;
+none of them fails or delays the write, which committed before its hint was
+published. The cache's TTL is the backstop for a lost eviction. A large write is
+purged in calls of at most `maxTagsPerPurge` tags (default 30).
+
 ## License
 
 MIT
