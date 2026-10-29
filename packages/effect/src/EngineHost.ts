@@ -183,6 +183,22 @@ const livenessOf = (options: EngineHostOptions) => ({
 /** The key a mirror's enhanced form submission is held under (#536): its mirror and the begin's requestId. */
 const formKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestId}`;
 
+/** A `Mutate` or `Read`: what its replies are addressed by. */
+interface Request {
+  readonly requestId: number;
+  readonly mirrorId?: string;
+}
+
+/**
+ * A reply's address (#546): the request's `requestId`, and its `mirrorId` when
+ * the mirror sent one, so another tab with a request of the same number ignores
+ * the reply. A mirror that predates it sends none and gets none back.
+ */
+const replyTo = (request: Request): Request =>
+  request.mirrorId === undefined
+    ? { requestId: request.requestId }
+    : { requestId: request.requestId, mirrorId: request.mirrorId };
+
 /** Decode a {@link MirrorProtocol.FORM_MUTATION_MUTATOR} `Mutate`'s args. */
 const decodeFormBegin = Schema.decodeUnknownEffect(MirrorProtocol.FormMutationBegin);
 
@@ -542,7 +558,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // The server-fallthrough read (ADR-0025): the host owns the transport, so
     // it performs the read and answers point-in-time. Nothing is registered
     // and nothing enters the store — errors travel back as the result.
-    const handleRead = (requestId: number, subsets: ReadonlyArray<Subset.Subset>) =>
+    const handleRead = (request: Request, subsets: ReadonlyArray<Subset.Subset>) =>
       (engine.readThrough === undefined
         ? Effect.fail(new TransportError({ message: "Host transport does not support reads" }))
         : engine.readThrough(subsets)
@@ -550,7 +566,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         Effect.flatMap((rows) =>
           channel.post({
             _tag: "ReadResult",
-            requestId,
+            ...replyTo(request),
             rows: rows.map((row) => ({
               collection: row.collection,
               id: row.id,
@@ -559,7 +575,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           })
         ),
         Effect.catch((error) =>
-          channel.post({ _tag: "ReadResult", requestId, rows: [], error: error.message })
+          channel.post({ _tag: "ReadResult", ...replyTo(request), rows: [], error: error.message })
         )
       );
 
@@ -682,10 +698,10 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // The backend's authoritative outcome for a forwarded mutation, posted back
     // to the mirror so `Mirror.mutateWithAck` can resolve. Runs on a scoped
     // fibre because `acknowledged` only settles on a later push/pull.
-    const postSettled = (requestId: number, outcome: ClientEngine.MutationOutcome) =>
+    const postSettled = (request: Request, outcome: ClientEngine.MutationOutcome) =>
       channel.post({
         _tag: "MutateSettled",
-        requestId,
+        ...replyTo(request),
         outcome: outcome._tag,
         ...(outcome._tag === "rejected" ? { reason: outcome.reason } : {}),
       });
@@ -705,12 +721,12 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           // Ack on journal (unchanged mirror behaviour), then await the backend
           // outcome on a background fibre and forward it.
           channel
-            .post({ _tag: "MutateAck", requestId: message.requestId })
+            .post({ _tag: "MutateAck", ...replyTo(message) })
             .pipe(
               Effect.andThen(
                 Effect.forkScoped(
                   mutation.acknowledged.pipe(
-                    Effect.flatMap((outcome) => postSettled(message.requestId, outcome))
+                    Effect.flatMap((outcome) => postSettled(message, outcome))
                   )
                 )
               )
@@ -719,7 +735,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         Effect.catch((error) =>
           channel.post({
             _tag: "MutateError",
-            requestId: message.requestId,
+            ...replyTo(message),
             message: error.message,
           })
         )
@@ -778,7 +794,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             Effect.andThen(handleUnsubscribeUrl(message.mirrorId, message.url))
           );
         case "Read":
-          return handleRead(message.requestId, message.subsets);
+          return handleRead(message, message.subsets);
         case "SubscribeMutationStates":
           return touch(message.mirrorId).pipe(
             Effect.andThen(handleSubscribeMutationStates(message.mirrorId))

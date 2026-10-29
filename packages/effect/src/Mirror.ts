@@ -446,6 +446,22 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         ? resolveIn(pendingForms, message.requestId, complete)
         : Effect.void;
 
+    // Complete this mirror's waiting request in `ref` from a `Mutate` or `Read`
+    // reply (#546). Every tab hears the host's replies and numbers its requests
+    // from zero, so a reply addressed to another mirror is not ours, whatever
+    // its requestId. A reply with no mirror id comes from a host that predates
+    // the field, and is taken by its requestId as before.
+    const resolveReply = <A>(
+      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+      message: { readonly mirrorId?: string; readonly requestId: number },
+      complete: (
+        deferred: Deferred.Deferred<A, MutatorError | TransportError>
+      ) => Effect.Effect<boolean>
+    ) =>
+      message.mirrorId === undefined || message.mirrorId === mirrorId
+        ? resolveIn(ref, message.requestId, complete)
+        : Effect.void;
+
     // Mirror update loop: established before `make` returns.
     yield* Effect.forkScoped(
       Effect.forever(
@@ -519,7 +535,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                   new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
                 );
               case "MutateAck":
-                return resolveIn(pending, message.requestId, (deferred) =>
+                return resolveReply(pending, message, (deferred) =>
                   Deferred.succeed(deferred, undefined)
                 );
               case "MutateError": {
@@ -534,11 +550,11 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                   );
                 }
                 const error = new MutatorError({ message: message.message });
-                return resolveIn(pending, message.requestId, (deferred) =>
+                return resolveReply(pending, message, (deferred) =>
                   Deferred.fail(deferred, error)
                 ).pipe(
                   Effect.andThen(
-                    resolveIn(pendingSettled, message.requestId, (deferred) =>
+                    resolveReply(pendingSettled, message, (deferred) =>
                       Deferred.fail(deferred, error)
                     )
                   )
@@ -559,11 +575,11 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                   Deferred.fail(deferred, new MutatorError({ message: message.message }))
                 );
               case "MutateSettled":
-                return resolveIn(pendingSettled, message.requestId, (deferred) =>
+                return resolveReply(pendingSettled, message, (deferred) =>
                   Deferred.succeed(deferred, outcomeOf(message))
                 );
               case "ReadResult":
-                return resolveIn(pendingReads, message.requestId, (deferred) =>
+                return resolveReply(pendingReads, message, (deferred) =>
                   message.error === undefined
                     ? Deferred.succeed(
                         deferred,
@@ -632,7 +648,13 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     ) =>
       Ref.modify(requestIds, (id) => [id + 1, id + 1] as const).pipe(
         Effect.flatMap((requestId) =>
-          awaitReply(ref, requestId, { _tag: "Mutate", requestId, mutator, args: encoded })
+          awaitReply(ref, requestId, {
+            _tag: "Mutate",
+            requestId,
+            mirrorId,
+            mutator,
+            args: encoded,
+          })
         )
       );
 
@@ -836,7 +858,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             MutatorError | TransportError
           >();
           yield* Ref.update(pendingReads, (map) => new Map(map).set(requestId, deferred));
-          yield* channel.post({ _tag: "Read", requestId, subsets });
+          yield* channel.post({ _tag: "Read", requestId, mirrorId, subsets });
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),

@@ -134,6 +134,12 @@ export type MirrorMessage =
   | {
       readonly _tag: "Mutate";
       readonly requestId: number;
+      /**
+       * The requesting mirror (#546). Its replies echo it, so a mirror ignores a
+       * reply to another tab's request of the same `requestId`. Absent from a
+       * mirror that predates it.
+       */
+      readonly mirrorId?: string;
       readonly mutator: string;
       readonly args: unknown;
     }
@@ -181,6 +187,12 @@ export type MirrorMessage =
   | {
       readonly _tag: "Read";
       readonly requestId: number;
+      /**
+       * The requesting mirror (#546). Its replies echo it, so a mirror ignores a
+       * reply to another tab's request of the same `requestId`. Absent from a
+       * mirror that predates it.
+       */
+      readonly mirrorId?: string;
       readonly subsets: ReadonlyArray<Subset.Subset>;
     }
   /** Register interest in the mutation-state map (#116); see {@link MUTATION_STATES_KEY}. */
@@ -208,6 +220,7 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Mutate"),
     requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
     mutator: Schema.String,
     args: Schema.Unknown,
   }),
@@ -256,6 +269,7 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Read"),
     requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
     subsets: Schema.Array(Subset.SubsetSchema),
   }),
   Schema.Struct({ _tag: Schema.tag("SubscribeMutationStates"), mirrorId: Schema.String }),
@@ -294,8 +308,27 @@ export type HostMessage =
    * that raced the worker's boot.
    */
   | { readonly _tag: "HostReady" }
-  | { readonly _tag: "MutateAck"; readonly requestId: number }
-  | { readonly _tag: "MutateError"; readonly requestId: number; readonly message: string }
+  | {
+      readonly _tag: "MutateAck";
+      readonly requestId: number;
+      /**
+       * The mirror the request came from (#546), echoed from the request. A
+       * mirror ignores a reply addressed to another; a host that predates it
+       * sends none, and the reply is taken by `requestId` alone.
+       */
+      readonly mirrorId?: string;
+    }
+  | {
+      readonly _tag: "MutateError";
+      readonly requestId: number;
+      /**
+       * The mirror the request came from (#546), echoed from the request. A
+       * mirror ignores a reply addressed to another; a host that predates it
+       * sends none, and the reply is taken by `requestId` alone.
+       */
+      readonly mirrorId?: string;
+      readonly message: string;
+    }
   /**
    * The backend's authoritative outcome for a forwarded mutation, correlated by
    * `requestId`. Sent in addition to `MutateAck` (which still fires on journal),
@@ -304,6 +337,12 @@ export type HostMessage =
   | {
       readonly _tag: "MutateSettled";
       readonly requestId: number;
+      /**
+       * The mirror the request came from (#546), echoed from the request. A
+       * mirror ignores a reply addressed to another; a host that predates it
+       * sends none, and the reply is taken by `requestId` alone.
+       */
+      readonly mirrorId?: string;
       readonly outcome: "applied" | "rejected";
       readonly reason?: string;
     }
@@ -323,6 +362,12 @@ export type HostMessage =
   | {
       readonly _tag: "ReadResult";
       readonly requestId: number;
+      /**
+       * The mirror the request came from (#546), echoed from the request. A
+       * mirror ignores a reply addressed to another; a host that predates it
+       * sends none, and the reply is taken by `requestId` alone.
+       */
+      readonly mirrorId?: string;
       readonly rows: ReadonlyArray<{
         readonly collection: string;
         readonly id: string;
@@ -394,15 +439,21 @@ export interface PulledRegistration {
 /** Wire codec for {@link HostMessage}. */
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("HostReady") }),
-  Schema.Struct({ _tag: Schema.tag("MutateAck"), requestId: Schema.Number }),
+  Schema.Struct({
+    _tag: Schema.tag("MutateAck"),
+    requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
+  }),
   Schema.Struct({
     _tag: Schema.tag("MutateError"),
     requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
     message: Schema.String,
   }),
   Schema.Struct({
     _tag: Schema.tag("MutateSettled"),
     requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
     outcome: Schema.Literals(["applied", "rejected"]),
     reason: Schema.optional(Schema.String),
   }),
@@ -425,6 +476,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("ReadResult"),
     requestId: Schema.Number,
+    mirrorId: Schema.optional(Schema.String),
     rows: Schema.Array(
       Schema.Struct({
         collection: Schema.String,
