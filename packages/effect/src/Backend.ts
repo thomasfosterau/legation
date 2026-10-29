@@ -51,7 +51,10 @@
  *
  * `MemoryBackend.ts` is the reference implementation;
  * `BackendContract.verifyBackendContract` checks these guarantees against
- * any implementation.
+ * any implementation. {@link transaction} builds an `applyMutations` that
+ * keeps guarantee 1's ordering and bump rules by construction from a store's
+ * steps (#177); `MemoryBackend` and `SqlBackend` use it, and a hand-assembled
+ * backend remains possible.
  */
 
 import * as Arr from "effect/Array";
@@ -434,7 +437,7 @@ type Settled<Staged> =
  *
  * const result = Effect.runSync(
  *   applyMutations({ clientGroupId: "g" }, [
- *     { clientId: "c", mutationId: 1, mutator: "todo/noop", args: {}, timestamp: 0 },
+ *     { clientId: "c", mutationId: 1, mutator: "todo/noop", args: {}, createdAt: 0 },
  *   ])
  * );
  * console.log(result.lastMutationIds); // { c: 1 }
