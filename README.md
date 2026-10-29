@@ -129,7 +129,7 @@ const program = Effect.gen(function* () {
   });
 
   // 3. Client: one per thread, here over an in-process loopback transport.
-  const client = yield* Client.make({
+  const { client } = yield* Client.make({
     nodes,
     mutations,
     clientGroupId: "g1",

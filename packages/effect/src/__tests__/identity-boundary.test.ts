@@ -423,7 +423,7 @@ describe("switching identities on a shared device", () => {
         const store = yield* ClientStore.makeKeyValue();
         expect(yield* store.listRows("secrets")).toHaveLength(1);
 
-        const client = yield* Client.make({
+        const { client } = yield* Client.make({
           nodes,
           mutations,
           store,

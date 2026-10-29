@@ -250,7 +250,7 @@ const transportLayer = Layer.effect(Transport.ClientTransport)(
 
 const appLayer = Layer.effect(Client.Client)(
   Effect.gen(function* () {
-    const client = yield* Client.make({
+    const { client } = yield* Client.make({
       nodes,
       mutations,
       clientId: CLIENT_ID,

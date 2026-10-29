@@ -56,7 +56,7 @@ export const clientRuntime = (options: ClientRuntimeOptions): ClientRuntime => {
   return ManagedRuntime.make(
     Layer.effect(Client.Client)(
       Effect.gen(function* () {
-        const built = yield* Client.make(client);
+        const { client: built } = yield* Client.make(client);
         if (subscribe !== undefined) {
           yield* Effect.forEach(subscribe, (read) => built.subscribe(read), {
             discard: true,

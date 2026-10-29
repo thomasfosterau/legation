@@ -849,7 +849,7 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", ()
     nodes,
     mutations: Mutator.registry([]),
     urls: JsonApiQuery.urlReads(nodes),
-  });
+  }).pipe(Effect.map((made) => made.client));
 
   it.effect("subscribe(url) and subscribe(read) of one query are one subscription", () =>
     Effect.scoped(

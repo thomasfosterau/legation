@@ -72,7 +72,8 @@ const makeClient = Effect.gen(function* () {
     clientGroupId: CLIENT_GROUP_ID,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
-    Effect.provideService(Transport.ClientTransport, transport)
+    Effect.provideService(Transport.ClientTransport, transport),
+    Effect.map((made) => made.client)
   );
 });
 

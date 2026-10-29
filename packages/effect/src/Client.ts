@@ -780,13 +780,34 @@ const declaredIndexes = (
 };
 
 /**
+ * What {@link make} built (#142): the Client, and the engine and store it owns
+ * in this thread. An app reads and writes through `client`; `engine` and
+ * `store` are there for the engine-level capabilities a Client does not
+ * expose, such as attaching devtools (`Devtools.make(engine, store, …)`). A
+ * Client joined to an engine hosted elsewhere ({@link connect}) owns neither,
+ * so it has no such result.
+ */
+export interface Made {
+  /** The Client: the app's one object for reads and writes. */
+  readonly client: Client;
+  /** The engine the Client owns, its sync loop already running when `sync` is on. */
+  readonly engine: ClientEngine.ClientEngine;
+  /** The store the engine runs over: the one passed, the one in context, or the in-memory default. */
+  readonly store: ClientStore.ClientStore;
+}
+
+/**
  * A Client that owns the engine in this thread. Zero wiring works:
  * `Client.make({ nodes, mutations })` is a purely local Client over an
  * in-memory store. Add `transport: { url }` for the standard remote setup,
  * or pass/provide full `ClientStore`/`ClientTransport` implementations for
  * anything else — options win over context, context over defaults.
+ *
+ * Returns the Client with the engine and store it built ({@link Made}), so
+ * an app that needs an engine-level capability (devtools) need not build the
+ * engine by hand.
  */
-export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.Scope> =>
+export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Scope> =>
   Effect.gen(function* () {
     const store =
       options.store ??
@@ -826,7 +847,11 @@ export const make = (options: MakeOptions): Effect.Effect<Client, never, Scope.S
     // replica to is the bug this whole boundary exists to prevent.
     if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
     if (sync) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
-    return fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options));
+    return {
+      client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
+      engine,
+      store,
+    };
   });
 
 /** Options for a Client connected to an engine hosted elsewhere. */
