@@ -9,6 +9,10 @@
  * acknowledged with the author set from identity, or permanently rejected
  * ("rating out of range"), after which the review leaves covered reads.
  *
+ * Cart lines and orders take the same path (#525): each type and operation in
+ * `facadeWrites` has a server handler under its derived name, sharing
+ * `server/rules.ts` with the per-resource handlers and the atomic endpoint.
+ *
  * The browser half (the worker's listener, the clone it keeps before
  * forwarding) is wired in `src/service-worker.ts`; this test drives the
  * façade directly, as `replica-documents.test.ts` does for reads.
@@ -20,9 +24,10 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Client, ClientStore, Transport } from "@thomasfosterau/legation-effect";
 import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
 import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
-import { mutators, nodes, shellReads } from "../src/lib/domain.js";
+import { facadeWrites, mutators, nodes, shellReads } from "../src/lib/domain.js";
 import { makeFacade } from "../src/lib/facade.js";
 import { migrate } from "../server/db.js";
+import { makeHandlers } from "../server/handlers.js";
 import { bindClientGroup, syncLayer } from "../server/runtime.js";
 
 const USER = "u1";
@@ -70,7 +75,7 @@ const makeWorld = Effect.gen(function* () {
         )
       )
     );
-  return { facade, engine, online, serverReview, phaseOf };
+  return { facade, engine, online, sql, serverReview, phaseOf };
 }).pipe(Effect.orDie);
 
 const postReview = (id: string, rating: number, headers: Record<string, string> = {}) =>
@@ -88,6 +93,39 @@ const postReview = (id: string, rating: number, headers: Record<string, string> 
           createdAt: "2026-09-04T09:00:00Z",
         },
         relationships: { product: { data: { type: "products", id: "p-01" } } },
+      },
+    }),
+  });
+
+const postCartLine = (id: string, variantId: string, qty: number) =>
+  new Request("http://commerce.test/jsonapi/cartItems", {
+    method: "POST",
+    headers: { accept: MEDIA, "content-type": MEDIA },
+    body: JSON.stringify({
+      data: {
+        type: "cartItems",
+        id,
+        attributes: { qty },
+        relationships: { variant: { data: { type: "variants", id: variantId } } },
+      },
+    }),
+  });
+
+const deleteCartLine = (id: string) =>
+  new Request(`http://commerce.test/jsonapi/cartItems/${id}`, {
+    method: "DELETE",
+    headers: { accept: MEDIA },
+  });
+
+const postOrder = (id: string) =>
+  new Request("http://commerce.test/jsonapi/orders", {
+    method: "POST",
+    headers: { accept: MEDIA, "content-type": MEDIA },
+    body: JSON.stringify({
+      data: {
+        type: "orders",
+        id,
+        attributes: { status: "placed", totalCents: 1, createdAt: "2026-09-04T09:00:00Z" },
       },
     }),
   });
@@ -169,13 +207,97 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { facade } = yield* makeWorld;
-        const cartLine = new Request("http://commerce.test/jsonapi/cartItems", {
+        const product = new Request("http://commerce.test/jsonapi/products", {
           method: "POST",
           headers: { accept: MEDIA, "content-type": MEDIA },
-          body: JSON.stringify({ data: { type: "cartItems", id: "ci-9", attributes: { qty: 1 } } }),
+          body: JSON.stringify({ data: { type: "products", id: "p-9", attributes: {} } }),
         });
         expect(facade.matches(postReview("r-x", 5))).toBe(true);
-        expect(facade.matches(cartLine)).toBe(false);
+        expect(facade.matches(postCartLine("ci-x", "v-01a", 1))).toBe(true);
+        expect(facade.matches(deleteCartLine("ci-x"))).toBe(true);
+        expect(facade.matches(postOrder("o-x"))).toBe(true);
+        expect(facade.matches(product)).toBe(false);
+      })
+    )
+  );
+
+  it.effect("every write `facadeWrites` declares has a server handler under its derived name", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql } = yield* makeWorld;
+        const handled = Object.keys(makeHandlers(sql));
+        const declared = Object.entries(facadeWrites).flatMap(([type, operations]) =>
+          (operations ?? []).map((operation) => `${type}/${operation}`)
+        );
+        expect(declared.toSorted()).toEqual(
+          ["cartItems/create", "cartItems/delete", "orders/create", "reviews/create"].toSorted()
+        );
+        for (const name of declared) {
+          expect(handled).toContain(name);
+          expect([...mutators.mutators.keys()]).toContain(name);
+        }
+      })
+    )
+  );
+
+  it.effect("journals an offline cart line and its removal; the server applies both", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { facade, engine, sql, phaseOf } = yield* makeWorld;
+        const line = () => sql`SELECT userId, variantId, qty FROM cartItems WHERE id = 'ci-off-1'`;
+        const added = yield* facade.handle(postCartLine("ci-off-1", "v-01a", 2));
+        expect(added?.status).toBe(202);
+        const addId = (yield* json(added!)).meta.legation.mutationId;
+        yield* engine.push;
+        expect(yield* line()).toEqual([{ userId: USER, variantId: "v-01a", qty: 2 }]);
+        expect(yield* phaseOf(addId)).toEqual(Option.some({ phase: "acknowledged", reason: undefined }));
+
+        const removed = yield* facade.handle(deleteCartLine("ci-off-1"));
+        expect(removed?.status).toBe(202);
+        const removeId = (yield* json(removed!)).meta.legation.mutationId;
+        yield* engine.push;
+        expect(yield* line()).toEqual([]);
+        expect(yield* phaseOf(removeId)).toEqual(
+          Option.some({ phase: "acknowledged", reason: undefined })
+        );
+      })
+    )
+  );
+
+  it.effect("a cart line the stock rule refuses is rejected with its reason", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { facade, engine, sql, phaseOf } = yield* makeWorld;
+        // v-03b is out of stock: `cart/add`'s rule, under the derived name.
+        const response = yield* facade.handle(postCartLine("ci-off-2", "v-03b", 1));
+        const { mutationId } = (yield* json(response!)).meta.legation;
+        yield* engine.push;
+        expect(yield* sql`SELECT id FROM cartItems WHERE id = 'ci-off-2'`).toEqual([]);
+        expect(yield* phaseOf(mutationId)).toEqual(
+          Option.some({ phase: "rejected", reason: "insufficient stock" })
+        );
+      })
+    )
+  );
+
+  it.effect("journals an offline order; the server places it from the authoritative cart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { facade, engine, sql, phaseOf } = yield* makeWorld;
+        yield* sql`DELETE FROM cartItems WHERE userId = ${USER}`;
+        yield* sql`INSERT INTO cartItems (id, userId, variantId, qty) VALUES ('ci-o', ${USER}, 'v-02a', 2)`;
+        const response = yield* facade.handle(postOrder("o-off-1"));
+        expect(response?.status).toBe(202);
+        const { mutationId } = (yield* json(response!)).meta.legation;
+        yield* engine.push;
+        // The payload's total (1) is ignored: two of v-02a at 9900.
+        expect(
+          yield* sql`SELECT userId, status, totalCents FROM orders WHERE id = 'o-off-1'`
+        ).toEqual([{ userId: USER, status: "placed", totalCents: 19800 }]);
+        expect(yield* sql`SELECT id FROM cartItems WHERE userId = ${USER}`).toEqual([]);
+        expect(yield* phaseOf(mutationId)).toEqual(
+          Option.some({ phase: "acknowledged", reason: undefined })
+        );
       })
     )
   );

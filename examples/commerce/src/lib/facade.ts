@@ -11,9 +11,10 @@
  * the façade answers are the URLs the server serves, under one grammar —
  * the parity the façade presumes.
  *
- * **The writes** (ADR-0030, #510): with the engine's `mutateWithAck`, a
- * `POST /jsonapi/reviews` carrying a client id is journaled as the
- * graph-derived `reviews/create` while offline (or on
+ * **The writes** (ADR-0030, #510, #525): with the engine's `mutateWithAck`, a
+ * `POST /jsonapi/reviews`, `/cartItems` or `/orders` (or a
+ * `DELETE /jsonapi/cartItems/{id}`) carrying a client id is journaled as the
+ * graph-derived `{type}/{operation}` while offline (or on
  * `Prefer: respond-async`) and answered with a `202` write receipt; online
  * it is forwarded and the façade pulls after the server's `2xx`. The
  * receipt's `Location`, `/jsonapi/_legation/mutations/{id}`, is answered

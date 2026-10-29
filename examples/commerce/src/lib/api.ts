@@ -85,7 +85,7 @@ export const api = HttpApi.make("commerce")
     Group.make(
       Review,
       Endpoint.list(Review, { query: query("reviews") }),
-      Endpoint.create(Review, { errors: [Unauthorized] })
+      Endpoint.create(Review, { errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict] })
     )
   )
   .add(
@@ -95,9 +95,9 @@ export const api = HttpApi.make("commerce")
       // The row a JsonApiBackend reads before it deletes the row (#372).
       Endpoint.get(CartItem, { query: singleRowQuery("cartItems"), errors: [NotFound] }),
       Endpoint.create(CartItem, {
-        errors: [Unauthorized, ApiError.BadRequest],
+        errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict],
       }),
-      Endpoint.delete(CartItem, { errors: [Unauthorized] })
+      Endpoint.delete(CartItem, { errors: [Unauthorized, NotFound] })
     )
   )
   .add(
@@ -105,7 +105,7 @@ export const api = HttpApi.make("commerce")
       Order,
       Endpoint.list(Order, { query: query("orders") }),
       Endpoint.create(Order, {
-        errors: [Unauthorized, ApiError.BadRequest],
+        errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict],
       })
     )
   )

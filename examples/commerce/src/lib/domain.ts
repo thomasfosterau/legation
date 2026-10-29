@@ -339,14 +339,20 @@ export const ProfileUpdateArgs = ProfileSchema;
 
 /**
  * The writes the worker's JSON:API façade may journal (ADR-0030 §5): a
- * plain-fetch `POST /jsonapi/reviews` with a client id, journaled offline (or
- * on `Prefer: respond-async`) as the graph-derived `reviews/create`. Its
- * server half is `server/handlers.ts`'s `reviews/create`, under
- * `review/write`'s rules. Cart lines and orders stay forwarded only: their
- * per-resource server rules (stock, the authoritative cart) are not lifted
- * into derived-name handlers yet (#525).
+ * plain-fetch `POST /jsonapi/reviews`, `POST` or `DELETE /jsonapi/cartItems`,
+ * or `POST /jsonapi/orders` with a client id, journaled offline (or on
+ * `Prefer: respond-async`) as the graph-derived `{type}/{operation}`. Each has
+ * a server half of that name in `server/handlers.ts`, under the same rules
+ * (`server/rules.ts`) as the per-resource handlers and the atomic endpoint
+ * (#525): a name the server lacked would be a transient failure that aborts
+ * every later push. A cart line's quantity has no `PATCH` route, so
+ * `cartItems/update` is not journaled.
  */
-export const facadeWrites: CrudMutation.Writes = { reviews: ["create"] };
+export const facadeWrites: CrudMutation.Writes = {
+  reviews: ["create"],
+  cartItems: ["create", "delete"],
+  orders: ["create"],
+};
 
 export const mutators = Mutation.registry([
   // The graph-derived mutations the façade journals, beside the app's named intents.

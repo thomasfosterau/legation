@@ -10,7 +10,7 @@
  * `SqlExecutor.transaction` is `sql.withTransaction` on the same client.
  */
 import { Effect, Schema } from "effect";
-import type { SqlClient } from "effect/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation-effect";
 import type { SqlBackend } from "@thomasfosterau/legation-sql";
@@ -22,12 +22,16 @@ import {
   ProfileUpdateArgs,
   ReviewWriteArgs,
 } from "../src/lib/domain.js";
+import type { RuleRejected, Touched } from "./rules.js";
+import { addCartItem, placeOrder, removeCartItem, writeReview } from "./rules.js";
 
 /**
- * `reviews/create`'s args: the graph-derived create (`CrudMutation`), in the
- * graph row form the worker's JSON:API façade journals a `POST /jsonapi/reviews`
- * as. The author is the caller, never the payload; a `userId` sent along
- * must be the caller's.
+ * The graph-derived mutations' args (`CrudMutation`), in the graph row form the
+ * worker's JSON:API façade journals a reflected `POST` / `DELETE` as
+ * (ADR-0030 §5): attributes and `one`-edge `via` keys side by side. The owner
+ * is the caller, never the payload; a `userId` sent along must be the caller's.
+ * A create's other server-set fields (an order's status and total) are never
+ * read.
  */
 const ReviewCreateArgs = Schema.Struct({
   type: Schema.Literal("reviews"),
@@ -37,6 +41,27 @@ const ReviewCreateArgs = Schema.Struct({
     authorName: Schema.String,
     rating: Schema.Number,
     body: Schema.String,
+    createdAt: Schema.String,
+    userId: Schema.optional(Schema.String),
+  }),
+});
+
+const CartItemCreateArgs = Schema.Struct({
+  type: Schema.Literal("cartItems"),
+  id: Schema.String,
+  attributes: Schema.Struct({
+    variantId: Schema.String,
+    qty: Schema.Number,
+    userId: Schema.optional(Schema.String),
+  }),
+});
+
+const CartItemDeleteArgs = Schema.Struct({ type: Schema.Literal("cartItems"), id: Schema.String });
+
+const OrderCreateArgs = Schema.Struct({
+  type: Schema.Literal("orders"),
+  id: Schema.String,
+  attributes: Schema.Struct({
     createdAt: Schema.String,
     userId: Schema.optional(Schema.String),
   }),
@@ -77,6 +102,15 @@ const requireUser = (
   return Effect.succeed(identity);
 };
 
+/** A derived mutation's caller: the identity, which a `userId` sent along must match. */
+const callerOf = (
+  context: Backend.SyncContext,
+  claimed: string | undefined
+): Effect.Effect<string, MutationRejected> => {
+  const identity = typeof context.identity === "string" ? context.identity : undefined;
+  return requireUser(context, claimed ?? identity ?? "");
+};
+
 const hint = (collection: string, ids: ReadonlyArray<string>): Backend.ChangeHint => ({
   collection,
   ids,
@@ -92,124 +126,105 @@ const transient = <A, R>(
       : error
   );
 
-export const makeHandlers = (sql: SqlClient): Readonly<Record<string, SqlBackend.SqlHandler>> => ({
-  "cart/add": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(CartAddArgs, raw);
-      const userId = yield* requireUser(context, args.userId);
-      const variant = yield* sql<{ stock: number }>`
-        SELECT stock FROM variants WHERE id = ${args.variantId}`;
-      if (variant.length === 0) {
-        return yield* Effect.fail(new MutationRejected({ reason: "unknown variant" }));
-      }
-      if (variant[0]!.stock < args.qty) {
-        return yield* Effect.fail(new MutationRejected({ reason: "insufficient stock" }));
-      }
-      yield* sql`INSERT OR REPLACE INTO cartItems (id, userId, variantId, qty)
-        VALUES (${args.id}, ${userId}, ${args.variantId}, ${args.qty})`;
-      return [hint("cartItems", [args.id])];
-    }).pipe(transient),
+export const makeHandlers = (sql: SqlClient): Readonly<Record<string, SqlBackend.SqlHandler>> => {
+  /** A shared rule (`rules.ts`) as a push step: a refusal is a permanent rejection. */
+  const rule = <A>(
+    effect: Effect.Effect<A, RuleRejected | SqlError, SqlClient>
+  ): Effect.Effect<A, MutationRejected | SqlError> =>
+    effect.pipe(
+      Effect.catchTag("RuleRejected", (rejected) =>
+        Effect.fail(new MutationRejected({ reason: rejected.detail }))
+      ),
+      Effect.provideService(SqlClient, sql)
+    );
+  const hints = (touched: Touched): ReadonlyArray<Backend.ChangeHint> =>
+    touched.map(({ collection, ids }) => hint(collection, ids));
 
-  "cart/setQty": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(CartSetQtyArgs, raw);
-      const userId = yield* requireUser(context, args.userId);
-      yield* sql`UPDATE cartItems SET qty = ${args.qty}
-        WHERE id = ${args.id} AND userId = ${userId}`;
-      return [hint("cartItems", [args.id])];
-    }).pipe(transient),
+  const addLine = (input: Parameters<typeof addCartItem>[0]) =>
+    Effect.map(rule(addCartItem(input)), ({ touched }) => hints(touched));
+  const removeLine = (input: Parameters<typeof removeCartItem>[0]) =>
+    Effect.map(rule(removeCartItem(input)), hints);
+  const place = (input: Parameters<typeof placeOrder>[0]) =>
+    Effect.map(rule(placeOrder(input)), ({ touched }) => hints(touched));
+  const review = (input: Parameters<typeof writeReview>[0]) =>
+    Effect.map(rule(writeReview(input)), ({ touched }) => hints(touched));
 
-  "cart/remove": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(CartRemoveArgs, raw);
-      const userId = yield* requireUser(context, args.userId);
-      yield* sql`DELETE FROM cartItems WHERE id = ${args.id} AND userId = ${userId}`;
-      return [hint("cartItems", [args.id])];
-    }).pipe(transient),
+  return {
+    "cart/add": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(CartAddArgs, raw);
+        const userId = yield* requireUser(context, args.userId);
+        return yield* addLine({ userId, id: args.id, variantId: args.variantId, qty: args.qty });
+      }).pipe(transient),
 
-  // Recomputes the order from the authoritative cart (args.items only drove
-  // the client's optimistic overlay) — replay-as-conflict-resolution.
-  "order/place": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(OrderPlaceArgs, raw);
-      const userId = yield* requireUser(context, args.userId);
-      const cart = yield* sql<{
-        id: string;
-        variantId: string;
-        qty: number;
-        priceCents: number;
-        stock: number;
-      }>`SELECT c.id, c.variantId, c.qty, v.priceCents, v.stock
-         FROM cartItems c JOIN variants v ON v.id = c.variantId
-         WHERE c.userId = ${userId}`;
-      if (cart.length === 0) {
-        return yield* Effect.fail(new MutationRejected({ reason: "cart is empty" }));
-      }
-      const short = cart.find((line) => line.stock < line.qty);
-      if (short !== undefined) {
-        return yield* Effect.fail(
-          new MutationRejected({ reason: `insufficient stock for ${short.variantId}` })
-        );
-      }
-      const total = cart.reduce((sum, line) => sum + line.priceCents * line.qty, 0);
-      yield* sql`INSERT INTO orders (id, userId, status, totalCents, createdAt)
-        VALUES (${args.orderId}, ${userId}, 'placed', ${total}, ${args.createdAt})`;
-      const itemIds: Array<string> = [];
-      const touchedVariants: Array<string> = [];
-      for (const [index, line] of cart.entries()) {
-        const itemId = `${args.orderId}-${index}`;
-        itemIds.push(itemId);
-        touchedVariants.push(line.variantId);
-        yield* sql`INSERT INTO orderItems (id, orderId, userId, variantId, qty, priceCents)
-          VALUES (${itemId}, ${args.orderId}, ${userId}, ${line.variantId}, ${line.qty}, ${line.priceCents})`;
-        yield* sql`UPDATE variants SET stock = stock - ${line.qty} WHERE id = ${line.variantId}`;
-      }
-      yield* sql`DELETE FROM cartItems WHERE userId = ${userId}`;
-      return [
-        hint("orders", [args.orderId]),
-        hint("orderItems", itemIds),
-        hint("cartItems", cart.map((line) => line.id)),
-        hint("variants", touchedVariants),
-      ];
-    }).pipe(transient),
+    "cart/setQty": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(CartSetQtyArgs, raw);
+        const userId = yield* requireUser(context, args.userId);
+        yield* sql`UPDATE cartItems SET qty = ${args.qty}
+          WHERE id = ${args.id} AND userId = ${userId}`;
+        return [hint("cartItems", [args.id])];
+      }).pipe(transient),
 
-  "review/write": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(ReviewWriteArgs, raw);
-      const userId = yield* requireUser(context, args.userId);
-      if (args.rating < 1 || args.rating > 5) {
-        return yield* Effect.fail(new MutationRejected({ reason: "rating out of range" }));
-      }
-      yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
-        VALUES (${args.id}, ${args.productId}, ${userId}, ${args.authorName}, ${args.rating}, ${args.body}, ${args.createdAt})`;
-      return [hint("reviews", [args.id])];
-    }).pipe(transient),
+    "cart/remove": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(CartRemoveArgs, raw);
+        const userId = yield* requireUser(context, args.userId);
+        return yield* removeLine({ userId, id: args.id });
+      }).pipe(transient),
 
-  // The façade's journaled `POST /jsonapi/reviews` (ADR-0030 §5): `review/write`'s rules over
-  // the graph row form, plus the client id's ownership (a resend of the caller's own review
-  // replaces it; someone else's id is a rejection, as the atomic endpoint's `ownedOrFree`).
-  "reviews/create": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const { id, attributes } = yield* decode(ReviewCreateArgs, raw);
-      const identity = typeof context.identity === "string" ? context.identity : undefined;
-      const userId = yield* requireUser(context, attributes.userId ?? identity ?? "");
-      if (attributes.rating < 1 || attributes.rating > 5) {
-        return yield* Effect.fail(new MutationRejected({ reason: "rating out of range" }));
-      }
-      const existing = yield* sql<{ userId: string }>`SELECT userId FROM reviews WHERE id = ${id}`;
-      if (existing[0] !== undefined && existing[0].userId !== userId) {
-        return yield* Effect.fail(new MutationRejected({ reason: "review id belongs to another user" }));
-      }
-      yield* sql`INSERT OR REPLACE INTO reviews (id, productId, userId, authorName, rating, body, createdAt)
-        VALUES (${id}, ${attributes.productId}, ${userId}, ${attributes.authorName}, ${attributes.rating}, ${attributes.body}, ${attributes.createdAt})`;
-      return [hint("reviews", [id])];
-    }).pipe(transient),
+    // Recomputes the order from the authoritative cart (args.items only drove
+    // the client's optimistic overlay) — replay-as-conflict-resolution.
+    "order/place": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(OrderPlaceArgs, raw);
+        const userId = yield* requireUser(context, args.userId);
+        return yield* place({ userId, id: args.orderId, createdAt: args.createdAt });
+      }).pipe(transient),
 
-  "profile/update": (raw, _tx, context) =>
-    Effect.gen(function* () {
-      const args = yield* decode(ProfileUpdateArgs, raw);
-      const userId = yield* requireUser(context, args.id);
-      yield* sql`INSERT OR REPLACE INTO profiles (id, name) VALUES (${userId}, ${args.name})`;
-      return [hint("profiles", [userId])];
-    }).pipe(transient),
-});
+    "review/write": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(ReviewWriteArgs, raw);
+        const userId = yield* requireUser(context, args.userId);
+        return yield* review({ ...args, userId });
+      }).pipe(transient),
+
+    // The graph-derived mutations the façade journals (ADR-0030 §5, #525): the
+    // same rules as the named intents above, over the graph row form.
+    "reviews/create": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const { id, attributes } = yield* decode(ReviewCreateArgs, raw);
+        const userId = yield* callerOf(context, attributes.userId);
+        return yield* review({ ...attributes, id, userId });
+      }).pipe(transient),
+
+    "cartItems/create": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const { id, attributes } = yield* decode(CartItemCreateArgs, raw);
+        const userId = yield* callerOf(context, attributes.userId);
+        return yield* addLine({ userId, id, variantId: attributes.variantId, qty: attributes.qty });
+      }).pipe(transient),
+
+    "cartItems/delete": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const { id } = yield* decode(CartItemDeleteArgs, raw);
+        const userId = yield* callerOf(context, undefined);
+        return yield* removeLine({ userId, id });
+      }).pipe(transient),
+
+    "orders/create": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const { id, attributes } = yield* decode(OrderCreateArgs, raw);
+        const userId = yield* callerOf(context, attributes.userId);
+        return yield* place({ userId, id, createdAt: attributes.createdAt });
+      }).pipe(transient),
+
+    "profile/update": (raw, _tx, context) =>
+      Effect.gen(function* () {
+        const args = yield* decode(ProfileUpdateArgs, raw);
+        const userId = yield* requireUser(context, args.id);
+        yield* sql`INSERT OR REPLACE INTO profiles (id, name) VALUES (${userId}, ${args.name})`;
+        return [hint("profiles", [userId])];
+      }).pipe(transient),
+  };
+};

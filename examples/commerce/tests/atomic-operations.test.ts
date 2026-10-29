@@ -16,7 +16,10 @@
  *   a mid-batch stock violation is rejected on the wire, resent without the
  *   offending mutation, recorded as `rejected`, and every mutation is
  *   acknowledged — with nothing from the rejected batch persisted before the
- *   resend (#160's contract, end to end against this server).
+ *   resend (#160's contract, end to end against this server);
+ * - the per-resource `POST` handlers share those rules (`server/rules.ts`) and
+ *   keep a client `data.id` under the same ownership rule (#525), so an
+ *   online forward and an offline journal of one create name one row.
  */
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Layer } from "effect";
@@ -545,4 +548,123 @@ describe("JsonApiBackend deleting a cart item through the commerce api", () => {
         )
     );
   }
+});
+
+/** A per-resource request with a JSON:API body. */
+const send = (
+  client: HttpClient.HttpClient,
+  method: "POST" | "DELETE",
+  path: string,
+  document?: unknown
+) =>
+  Effect.scoped(
+    client
+      .execute(
+        (method === "POST" ? HttpClientRequest.post : HttpClientRequest.delete)(
+          `${BASE_URL}${path}`
+        ).pipe(
+          document === undefined
+            ? (request) => request
+            : HttpClientRequest.bodyText(JSON.stringify(document), "application/vnd.api+json"),
+          HttpClientRequest.setHeaders({
+            "Content-Type": "application/vnd.api+json",
+            Accept: "application/vnd.api+json",
+          })
+        )
+      )
+      .pipe(
+        Effect.flatMap((response) =>
+          Effect.map(
+            response.status === 204 ? Effect.succeed(undefined) : response.json,
+            (body): { readonly status: number; readonly body: any } => ({
+              status: response.status,
+              body,
+            })
+          )
+        )
+      )
+  ).pipe(Effect.orDie);
+
+describe("per-resource writes keep client ids under the shared rules (#525)", () => {
+  it.effect("a cart line keeps its id; a resend replaces it; another user's id is a 409", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, asUser } = yield* makeWorld();
+        const line = (qty: number) => ({ data: addCartItem({ id: "ci-own" }, "v-01a", qty).data });
+        const created = yield* send(asUser("u1"), "POST", "/jsonapi/cartItems", line(1));
+        expect(created.status).toBe(201);
+        expect(created.body.data.id).toBe("ci-own");
+        expect((yield* send(asUser("u1"), "POST", "/jsonapi/cartItems", line(2))).status).toBe(201);
+        expect(yield* sql`SELECT userId, qty FROM cartItems WHERE id = 'ci-own'`).toEqual([
+          { userId: "u1", qty: 2 },
+        ]);
+        const stolen = yield* send(asUser("u2"), "POST", "/jsonapi/cartItems", line(1));
+        expect(stolen.status).toBe(409);
+        expect(stolen.body.errors[0].detail).toBe("cart item id belongs to another user");
+        // The stock rule is the atomic endpoint's and `cart/add`'s.
+        const short = yield* send(asUser("u1"), "POST", "/jsonapi/cartItems", {
+          data: addCartItem({ id: "ci-short" }, "v-03b", 1).data,
+        });
+        expect(short.status).toBe(400);
+        expect(short.body.errors[0].detail).toBe("insufficient stock");
+        // Without a client id, the server mints one.
+        const minted = yield* send(asUser("u1"), "POST", "/jsonapi/cartItems", {
+          data: addCartItem({}, "v-02a", 1).data,
+        });
+        expect(minted.body.data.id).toMatch(/^ci-/);
+      })
+    )
+  );
+
+  it.effect("deleting another user's cart line is a 404; a missing line is a no-op", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, asUser } = yield* makeWorld();
+        yield* sql`INSERT INTO cartItems (id, userId, variantId, qty) VALUES ('ci-u2', 'u2', 'v-01a', 1)`;
+        expect((yield* send(asUser("u1"), "DELETE", "/jsonapi/cartItems/ci-u2")).status).toBe(404);
+        expect(yield* sql`SELECT id FROM cartItems WHERE id = 'ci-u2'`).toEqual([{ id: "ci-u2" }]);
+        expect((yield* send(asUser("u1"), "DELETE", "/jsonapi/cartItems/ci-gone")).status).toBe(204);
+        expect((yield* send(asUser("u2"), "DELETE", "/jsonapi/cartItems/ci-u2")).status).toBe(204);
+        expect(yield* sql`SELECT id FROM cartItems WHERE id = 'ci-u2'`).toEqual([]);
+      })
+    )
+  );
+
+  it.effect("an order and a review keep their ids; a resent order returns it unchanged", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, asUser } = yield* makeWorld();
+        yield* sql`DELETE FROM cartItems WHERE userId = 'u1'`;
+        yield* sql`INSERT INTO cartItems (id, userId, variantId, qty) VALUES ('ci-o', 'u1', 'v-02a', 2)`;
+        const order = {
+          data: {
+            type: "orders",
+            id: "o-own",
+            // Status and total are the payload's, and ignored: the cart decides.
+            attributes: { status: "placed", totalCents: 1, createdAt: "2026-09-02T00:00:00Z" },
+          },
+        };
+        const placed = yield* send(asUser("u1"), "POST", "/jsonapi/orders", order);
+        expect(placed.status).toBe(201);
+        expect(placed.body.data).toMatchObject({ id: "o-own", attributes: { totalCents: 19800 } });
+        // A resend after a lost response: the same order, not a second one.
+        const resent = yield* send(asUser("u1"), "POST", "/jsonapi/orders", order);
+        expect(resent.status).toBe(201);
+        expect(resent.body.data).toMatchObject({ id: "o-own", attributes: { totalCents: 19800 } });
+        expect(yield* sql`SELECT COUNT(*) AS n FROM orders WHERE userId = 'u1'`).toEqual([{ n: 1 }]);
+        expect((yield* send(asUser("u2"), "POST", "/jsonapi/orders", order)).status).toBe(409);
+
+        const review = (rating: number) => ({
+          data: { ...addReview({ id: "r-own" }).data, attributes: { ...reviewAttributes("Mine."), rating } },
+        });
+        const written = yield* send(asUser("u1"), "POST", "/jsonapi/reviews", review(4));
+        expect(written.status).toBe(201);
+        expect(written.body.data).toMatchObject({ id: "r-own", attributes: { userId: "u1", rating: 4 } });
+        const outOfRange = yield* send(asUser("u1"), "POST", "/jsonapi/reviews", review(9));
+        expect(outOfRange.status).toBe(400);
+        expect(outOfRange.body.errors[0].detail).toBe("rating out of range");
+        expect((yield* send(asUser("u2"), "POST", "/jsonapi/reviews", review(4))).status).toBe(409);
+      })
+    )
+  );
 });
