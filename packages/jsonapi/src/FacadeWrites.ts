@@ -17,6 +17,8 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { flow } from "effect/Function";
+import * as HashSet from "effect/HashSet";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -24,7 +26,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { CrudMutation } from "@thomasfosterau/legation-effect";
 import type { Node } from "@thomasfosterau/legation-effect";
-import type { Write } from "./JsonApiBackend.js";
+import type { JsonApiBackendConfig, Write } from "./JsonApiBackend.js";
 
 // ─── Prefer ──────────────────────────────────────────────────────────────────
 
@@ -277,3 +279,109 @@ export const graphIntentOf =
     const attributes = { ...write.attributes, ...R.fromEntries(vias.value) };
     return { mutator, args: { type: write.type, id: write.id, attributes } };
   };
+
+// ─── The inverse mapping ─────────────────────────────────────────────────────
+
+const decodeWriteArgs = Schema.decodeUnknownSync(CrudMutation.WriteArgs);
+const decodeDeleteArgs = Schema.decodeUnknownSync(CrudMutation.DeleteArgs);
+
+/**
+ * One graph-row write as a `JsonApiBackend` write: each `one` edge's `via` key
+ * moves out of the attributes into `relationships[edge].data` (`null` linkage
+ * when the key is `null`). A key the args do not carry leaves the relationship
+ * out, as a payload that did not link it.
+ */
+const writeOf = (
+  node: Node.AnyNode,
+  operation: "create" | "update",
+  args: CrudMutation.WriteArgs
+): Write => {
+  const oneEdges = R.toEntries(node.edges).flatMap(([name, edge]) =>
+    edge.kind === "one" ? [[name, edge] as const] : []
+  );
+  const vias = HashSet.fromIterable(oneEdges.map(([, edge]) => edge.via));
+  const relationships = R.fromEntries(
+    oneEdges.flatMap(([name, edge]) =>
+      Object.hasOwn(args.attributes, edge.via)
+        ? [
+            [
+              name,
+              {
+                data: P.isString(args.attributes[edge.via])
+                  ? { type: edge.target, id: args.attributes[edge.via] }
+                  : null,
+              },
+            ] as const,
+          ]
+        : []
+    )
+  );
+  return {
+    operation,
+    // The node's own type, never the args': the mutation's name is what the
+    // server authorised, so the write goes to that type's endpoint only.
+    type: node.type,
+    id: args.id,
+    attributes: R.filter(args.attributes, (_, field) => !HashSet.has(vias, field)),
+    relationships,
+  };
+};
+
+/**
+ * Refuse args whose `type` is not the mutation's own (#529): a `notes/create`
+ * naming `secrets` would otherwise write a type the mutation's name, which the
+ * server authorised, never covered. `JsonApiBackend` reports the refusal as
+ * invalid args, as it does args that do not decode.
+ */
+const sameType =
+  (type: string, mutator: string) =>
+  <A extends { readonly type: string }>(args: A): A => {
+    if (args.type !== type) {
+      throw new InvalidWriteArgs({
+        message: `"${mutator}" writes "${type}", but its args name "${args.type}"`,
+      });
+    }
+    return args;
+  };
+
+/** Graph-derived CRUD args that do not fit the mutation they were journaled under. */
+export class InvalidWriteArgs extends Schema.TaggedError<InvalidWriteArgs>()("InvalidWriteArgs", {
+  message: Schema.String,
+}) {}
+
+/**
+ * The inverse of {@link graphIntentOf} (ADR-0030 §5): for every graph-derived
+ * CRUD mutation (`CrudMutation`, filtered by `options.writes` as the registry
+ * is), how its args replay as one JSON:API write. Pass it as a
+ * `JsonApiBackend`'s `writes`, so a node-graph app's journaled `{type}/create`,
+ * `{type}/update` and `{type}/delete` reach the server as `POST`, `PATCH` and
+ * `DELETE` (or atomic operations), with each `one` edge's `via` key rebuilt as
+ * the relationship's linkage. The write's `type` is always the mutation's own:
+ * args naming another type are refused ({@link InvalidWriteArgs}).
+ */
+export const writesOf = (
+  nodes: Node.NodeRegistry,
+  options?: CrudMutation.Options
+): NonNullable<JsonApiBackendConfig["writes"]> =>
+  new Map(
+    CrudMutation.entries(nodes, options).flatMap((entry) => {
+      const node = nodes.nodes.get(entry.type);
+      if (node === undefined) return [];
+      const name = entry.mutator.name;
+      const operation = entry.operation;
+      return [
+        [
+          name,
+          operation === "delete"
+            ? flow(decodeDeleteArgs, sameType(entry.type, name), (args): Write => ({
+                operation,
+                type: entry.type,
+                id: args.id,
+              }))
+            : flow(decodeWriteArgs, sameType(entry.type, name), (args) =>
+                writeOf(node, operation, args)
+              ),
+        ] as const,
+      ];
+    })
+  );
