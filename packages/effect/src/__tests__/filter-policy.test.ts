@@ -413,7 +413,8 @@ describe("FilterPolicy: authorize", () => {
         products({ where: Predicate.eq("rating", 5) }),
         "server"
       );
-      expect(admitted.where).toEqual(Predicate.and(Predicate.always, Predicate.eq("rating", 5)));
+      // `allowAll` is the `AllowAll` scope (#205): the subset passes unnarrowed.
+      expect(admitted.where).toEqual(Predicate.eq("rating", 5));
     })
   );
 

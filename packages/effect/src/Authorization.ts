@@ -21,7 +21,12 @@
  */
 
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";
@@ -31,11 +36,103 @@ import * as Predicates from "./Predicate.js";
 import type { PullRequest, PushRequest, ReadRequest } from "./Protocol.js";
 import type { Subset } from "./Subset.js";
 
-/** Produce the mandatory predicate for a collection, per request. */
-export type AuthFilter = (context: SyncContext) => Effect.Effect<Predicate, AuthorizationError>;
+/**
+ * A named, session-resolved set an auth filter's predicate refers to by name
+ * (`Predicate.inSet(field, name)`, ADR-0015's #205 amendment): the viewer's
+ * following ids, the tenants they belong to. The name, not the members, is
+ * part of the predicate, so a subscription keeps its identity while the set
+ * moves.
+ */
+export interface NamedSet {
+  /**
+   * The collection the set is computed from. A committed write to it marks the
+   * set stale for every session that resolved it and pokes those sessions, so
+   * their next pull resolves it again.
+   */
+  readonly source: string;
+  /**
+   * Resolve the set's members for the request's identity. A failure binds the
+   * set to nothing: an unresolvable set narrows, never widens (rule 5).
+   */
+  readonly resolve: (
+    context: SyncContext
+  ) => Effect.Effect<ReadonlyArray<Predicates.Literal>, AuthorizationError>;
+  /**
+   * The safety net under droppable hints: a set resolved longer ago than this is
+   * resolved again on the next pull, even with no write to its source.
+   */
+  readonly maxAge: Duration.Input;
+}
 
-/** Allow every row (public collection) — must be opted into explicitly. */
-export const allowAll: AuthFilter = () => Effect.succeed(Predicates.always);
+/**
+ * What an auth filter decides for a request (ADR-0015's #205 amendment, the
+ * same shape as effect-auth's compiled read scope): every row of the collection
+ * (`AllowAll`, the role short-circuit), none of them (`Deny`), or the rows a
+ * predicate admits (`Filter`), which may refer to named sets by name.
+ */
+export type ReadScope =
+  | { readonly _tag: "AllowAll" }
+  | { readonly _tag: "Deny" }
+  | {
+      readonly _tag: "Filter";
+      readonly predicate: Predicate;
+      readonly sets: Readonly<Record<string, NamedSet>>;
+    };
+
+/** The {@link ReadScope} that admits every row. */
+export const AllowAll: ReadScope = { _tag: "AllowAll" };
+
+/** The {@link ReadScope} that admits no row. */
+export const Deny: ReadScope = { _tag: "Deny" };
+
+/**
+ * The {@link ReadScope} admitting the rows `predicate` matches, with the named
+ * sets its `inSet` nodes refer to. A name the predicate uses that `sets` does
+ * not declare binds to nothing.
+ */
+export const filter = (
+  predicate: Predicate,
+  sets: Readonly<Record<string, NamedSet>> = {}
+): ReadScope => ({ _tag: "Filter", predicate, sets });
+
+/**
+ * Produce a collection's read scope, per request. A bare `Predicate` is a
+ * `Filter` without named sets (the pre-#205 form, still accepted).
+ */
+export type AuthFilter = (
+  context: SyncContext
+) => Effect.Effect<ReadScope | Predicate, AuthorizationError>;
+
+/**
+ * Allow every row (public collection): a filter that returns `AllowAll`. It
+ * must be declared for the collection; an undeclared collection stays denied.
+ */
+export const allowAll: AuthFilter = () => Effect.succeed(AllowAll);
+
+/** The scope a filter's output stands for: a bare predicate is a `Filter` without sets. */
+export const scopeOf = (output: ReadScope | Predicate): ReadScope =>
+  isReadScope(output) ? output : filter(output);
+
+/** Whether a filter's output is a {@link ReadScope} rather than a bare predicate. */
+const isReadScope = (output: ReadScope | Predicate): output is ReadScope =>
+  P.isTagged(output, "AllowAll") || P.isTagged(output, "Deny") || P.isTagged(output, "Filter");
+
+/**
+ * How {@link authorize} binds a named set for one request: the members, or
+ * `Option.none()` when the set cannot be resolved, which narrows. The sync
+ * server passes one that caches per session and records what it bound, for the
+ * scope epoch; the default resolves each set afresh.
+ */
+export type SetBinder = (
+  context: SyncContext,
+  collection: string,
+  name: string,
+  set: NamedSet
+) => Effect.Effect<Option.Option<ReadonlyArray<Predicates.Literal>>>;
+
+/** Resolve a set afresh, binding nothing when its resolver fails. */
+export const resolveSet: SetBinder = (context, _collection, _name, set) =>
+  set.resolve(context).pipe(Effect.option);
 
 /** Per-collection auth filters. Subscribing to an unlisted collection fails. */
 export interface AuthPolicy {
@@ -116,10 +213,11 @@ export const authorize = (
   authPolicy: AuthPolicy,
   context: SyncContext,
   subset: Subset,
-  origin: SubsetOrigin = "client"
+  origin: SubsetOrigin = "client",
+  bindSet: SetBinder = resolveSet
 ): Effect.Effect<Subset, AuthorizationError> => {
-  const filter = authPolicy.filters.get(subset.collection);
-  if (filter === undefined) {
+  const declared = authPolicy.filters.get(subset.collection);
+  if (declared === undefined) {
     return Effect.fail(
       new AuthorizationError({
         message: `No auth filter declared for collection "${subset.collection}" (deny by default)`,
@@ -129,10 +227,56 @@ export const authorize = (
   }
   const admitted = origin === "client" ? checkFilterable(authPolicy, subset) : Effect.void;
   return admitted.pipe(
-    Effect.andThen(filter(context)),
-    Effect.map((mandatory) => ({ ...subset, where: Predicates.and(mandatory, subset.where) }))
+    Effect.andThen(declared(context)),
+    Effect.flatMap((output) => {
+      return Match.valueTags(scopeOf(output), {
+        AllowAll: () => Effect.succeed(subset),
+        Deny: () => Effect.succeed({ ...subset, where: Predicates.isIn("id", []) }),
+        Filter: (scope) =>
+          bindScope(scope, context, subset.collection, bindSet).pipe(
+            Effect.map((mandatory) => ({
+              ...subset,
+              where: Predicates.and(mandatory, subset.where),
+            }))
+          ),
+      });
+    })
   );
 };
+
+/**
+ * A `Filter` scope's predicate with every named set bound to its members. A
+ * set the predicate names that the scope does not declare, or that the binder
+ * cannot resolve, is left unbound, and `Predicate.bindSets` makes an unbound
+ * set narrow: its branch admits no row (rule 5).
+ */
+const bindScope = (
+  scope: Extract<ReadScope, { readonly _tag: "Filter" }>,
+  context: SyncContext,
+  collection: string,
+  bindSet: SetBinder
+): Effect.Effect<Predicate> =>
+  Effect.forEach(
+    Predicates.setNames(scope.predicate),
+    (name) => {
+      const set = scope.sets[name];
+      return set === undefined
+        ? Effect.succeed([name, Option.none()] as const)
+        : bindSet(context, collection, name, set).pipe(
+            Effect.map((values) => [name, values] as const)
+          );
+    },
+    { concurrency: 1 }
+  ).pipe(
+    Effect.map((entries) =>
+      Predicates.bindSets(
+        scope.predicate,
+        HashMap.fromIterable(
+          entries.flatMap(([name, values]) => Option.toArray(values).map((v) => [name, v] as const))
+        )
+      )
+    )
+  );
 
 /** Interception seam around push/pull/read handling. */
 export interface SyncMiddleware {

@@ -21,6 +21,8 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -60,6 +62,12 @@ export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";
  *   this row's `localField`. It is a relational node — a single-row evaluator
  *   can't decide it; a backend resolves it to an `In` over `localField` against
  *   the matching `foreignField` set (`resolveExists`).
+ * - `InSet` tests field membership in a **named set** (ADR-0015 amendment,
+ *   #205): the node carries the set's name, never its members, so an auth
+ *   filter's authored form is stable while the set moves. It is server-authored
+ *   only — the wire codec has no case for it — and the sync server binds it to
+ *   the resolved values (`bindSets`) before a subset reaches a backend. An
+ *   unbound `InSet` matches nothing.
  */
 export type Predicate =
   | { readonly _tag: "True" }
@@ -81,7 +89,8 @@ export type Predicate =
       readonly localField: string;
       readonly foreignField: string;
       readonly where: Predicate;
-    };
+    }
+  | { readonly _tag: "InSet"; readonly field: string; readonly set: string };
 
 /** The fields of an {@link Predicate} `Exists` node. */
 export interface ExistsNode {
@@ -95,7 +104,10 @@ const LiteralSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean
 
 /**
  * Wire codec for {@link Predicate}. `NotIn` and `IsNull` were added by
- * ADR-0028 (wire-additive: every older encoding still decodes).
+ * ADR-0028 (wire-additive: every older encoding still decodes). `InSet` has
+ * no case: a named-set reference is server-authored only (#205), so a client
+ * can never send one, and the server binds every one before a subset is
+ * stored or sent.
  */
 export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("True") }),
@@ -225,6 +237,13 @@ export const exists = (options: {
   foreignField: options.foreignField,
   where: options.where ?? always,
 });
+
+/**
+ * `field IN set(name)`: membership in a named, session-resolved set (#205).
+ * The predicate refers to the set by name; the sync server binds it to the
+ * values the set's resolver produced ({@link bindSets}). Server-authored only.
+ */
+export const inSet = (field: string, set: string): Predicate => ({ _tag: "InSet", field, set });
 
 // ─── Ordering ────────────────────────────────────────────────────────────────
 
@@ -409,6 +428,8 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  * - `Exists` → `Some(true)`. It is relational and can't be decided from one
  *   row: a backend resolves it to an `In` before evaluation (`resolveExists`),
  *   and on the client the rows were already narrowed by the server.
+ * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
+ *   The sync server binds every one before evaluation ({@link bindSets}).
  */
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
   switch (predicate._tag) {
@@ -417,6 +438,8 @@ export const evaluate = (predicate: Predicate, row: unknown): Option.Option<bool
       return TRUE;
     case "Compare":
       return evaluateCompare(predicate, row);
+    case "InSet":
+      return FALSE;
     case "In":
       return evaluateMembership(predicate.field, predicate.values, true, row);
     case "NotIn":
@@ -468,6 +491,7 @@ export const resolveExists = <E, R>(
     case "In":
     case "NotIn":
     case "IsNull":
+    case "InSet":
       return Effect.succeed(predicate);
   }
 };
@@ -502,6 +526,67 @@ export const hasExists = (predicate: Predicate): boolean => {
     case "In":
     case "NotIn":
     case "IsNull":
+    case "InSet":
       return false;
   }
+};
+
+// ─── Named sets (#205) ───────────────────────────────────────────────────────
+
+/** The sets a predicate's `InSet` nodes refer to, by name, with repeats. */
+const setsIn = (node: Predicate): ReadonlyArray<string> =>
+  Match.valueTags(node, {
+    InSet: (branch): ReadonlyArray<string> => [branch.set],
+    And: (branch) => branch.predicates.flatMap(setsIn),
+    Or: (branch) => branch.predicates.flatMap(setsIn),
+    Not: (branch) => setsIn(branch.predicate),
+    Exists: (branch) => setsIn(branch.where),
+    True: () => [],
+    Compare: () => [],
+    In: () => [],
+    NotIn: () => [],
+    IsNull: () => [],
+  });
+
+/** The names of the sets a predicate's `InSet` nodes refer to, each once. */
+export const setNames = (predicate: Predicate): ReadonlyArray<string> =>
+  Arr.dedupe(setsIn(predicate));
+
+/**
+ * Bind every `InSet` node to its resolved values: `InSet(field, name)`
+ * becomes `In(field, values)`. A name with no binding — its resolver failed,
+ * or it was never declared — **narrows, never widens** (ADR-0015 amendment,
+ * rule 5): it becomes the empty `In` (false) where it occurs positively, and
+ * `True` under an odd number of `Not`s, so the negation around it is false.
+ * Either way that branch admits no row, and the predicate's other branches
+ * still apply.
+ */
+export const bindSets = (
+  predicate: Predicate,
+  bindings: HashMap.HashMap<string, ReadonlyArray<Literal>>
+): Predicate => {
+  const bind = (node: Predicate, negated: boolean): Predicate =>
+    Match.valueTags(node, {
+      InSet: (branch): Predicate =>
+        Option.match(HashMap.get(bindings, branch.set), {
+          onSome: (values) => isIn(branch.field, values),
+          onNone: () => (negated ? always : isIn(branch.field, [])),
+        }),
+      And: (branch): Predicate => ({
+        _tag: "And",
+        predicates: branch.predicates.map((inner) => bind(inner, negated)),
+      }),
+      Or: (branch): Predicate => ({
+        _tag: "Or",
+        predicates: branch.predicates.map((inner) => bind(inner, negated)),
+      }),
+      Not: (branch): Predicate => not(bind(branch.predicate, !negated)),
+      Exists: (branch): Predicate => ({ ...branch, where: bind(branch.where, negated) }),
+      True: (leaf): Predicate => leaf,
+      Compare: (leaf): Predicate => leaf,
+      In: (leaf): Predicate => leaf,
+      NotIn: (leaf): Predicate => leaf,
+      IsNull: (leaf): Predicate => leaf,
+    });
+  return Arr.isReadonlyArrayEmpty(setNames(predicate)) ? predicate : bind(predicate, false);
 };

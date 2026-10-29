@@ -298,6 +298,11 @@ const compileNode = (predicate: Predicate.Predicate, compilation: Compilation): 
       return `NOT (${compileNode(predicate.predicate, compilation)})`;
     case "Exists":
       return compileExists(predicate, compilation);
+    case "InSet":
+      // An unbound named set is the empty set (#205): the sync server binds
+      // every `InSet` before a subset reaches a backend, so this is the
+      // fail-closed fallback, like `IN ()`.
+      return "1 = 0";
   }
 };
 

@@ -19,21 +19,27 @@
 
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import { Backend, type ChangeHint, evaluateAll, type SyncContext } from "./Backend.js";
 import {
   AuthPolicy,
   IdentityResolver,
+  type SetBinder,
   SyncMiddleware,
   authorize,
   checkFilterable,
   passthroughMiddleware,
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
+import * as Hash from "./Hash.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 import {
   AuthorizationError,
@@ -58,6 +64,7 @@ import * as Telemetry from "./Telemetry.js";
 // oxlint-disable-next-line effect/no-service-constructor-imports -- the poke hub is a private per-handler instance, not a service; exposing it as one would add a requirement to the public sync-server layers.
 import { ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
+import * as Subsets from "./Subset.js";
 
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
@@ -176,6 +183,66 @@ const cookieNamespaceOf = (cookie: string): string => {
   const index = cookie.indexOf(COOKIE_NAMESPACE_SEP);
   return index === -1 ? "" : cookie.slice(0, index);
 };
+
+/** Separator between a cookie's body and its scope epoch (#205). */
+const COOKIE_EPOCH_SEP = "~e";
+/** A cookie's trailing scope epoch: the separator, then the hex `scopeEpochOf` mints. */
+const COOKIE_EPOCH_PATTERN = /~e([0-9a-f]+)$/;
+
+/**
+ * The scope epoch a cookie was minted under (#205; `""` when the pull bound no
+ * named set, the cookie format before #205).
+ */
+const cookieEpochOf = (cookie: string): string =>
+  // Read only a trailing `~e<hex>`: a separator inside the fleet namespace must
+  // not be taken for an epoch, or every pull without one would reset.
+  COOKIE_EPOCH_PATTERN.exec(cookie)?.[1] ?? "";
+
+/**
+ * A pull's scope epoch (ADR-0015's #205 amendment): a hash of the named sets it
+ * bound, by name, with their members, so servers sharing a CVR store agree on
+ * it, and it moves exactly when a bound set's members do. `""` when the pull
+ * bound no set: such a cookie carries no epoch.
+ */
+const scopeEpochOf = (bound: HashMap.HashMap<string, BoundSet>): string =>
+  HashMap.isEmpty(bound)
+    ? ""
+    : Hash.contentHash(
+        HashMap.toEntries(bound)
+          .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([name, values]) => [
+            name,
+            Option.match(values, {
+              onNone: () => null,
+              onSome: (members) =>
+                [...members].map((member) => Hash.canonicalJson(member)).toSorted(),
+            }),
+          ])
+      );
+
+/** A bound named set's members: `None` when its resolution failed (it narrows). */
+type BoundSet = Option.Option<ReadonlyArray<Predicate.Literal>>;
+
+/** One session's cached named sets, by {@link setKey}. */
+type SessionSets = HashMap.HashMap<string, CachedSet>;
+
+/** A cached named set's key: the collection whose scope declares it, and its name. */
+const setKey = (collection: string, name: string): string => Hash.canonicalJson([collection, name]);
+
+/**
+ * One session's cached resolution of a named set (#205): the members (`None`
+ * when the resolver failed), when they were resolved, the collection a write to
+ * which makes them stale, and whether one has.
+ */
+interface CachedSet {
+  /** The identity the set was resolved for, canonically serialised. */
+  readonly identity: string;
+  readonly values: Option.Option<ReadonlyArray<Predicate.Literal>>;
+  readonly resolvedAt: number;
+  readonly maxAgeMillis: number;
+  readonly source: string;
+  readonly stale: boolean;
+}
 
 // ─── Fan-out matching ────────────────────────────────────────────────────────
 //
@@ -320,6 +387,101 @@ export const makeWithIntrospectionWith = (
             .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
 
     const pokeHub = yield* makePokeHub;
+    // Each session's named-set resolutions (#205), by client group, then by the
+    // set's key: the collection whose scope declares it and its name, so two
+    // collections that declare different sets under one name never share an
+    // entry.
+    const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
+    const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
+      Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
+    // How many writes each source collection has seen (#205). A resolution that
+    // overlaps a write to its source is cached as stale, so the write's hint,
+    // which found no entry to mark while the resolution was in flight, is not
+    // lost until the set's maxAge passes.
+    const sourceWrites = yield* Ref.make(HashMap.empty<string, number>());
+    const writesTo = (source: string) =>
+      Effect.map(Ref.get(sourceWrites), (counts) =>
+        Option.getOrElse(HashMap.get(counts, source), () => 0)
+      );
+
+    // Bind a named set for a pull, from the session's cache while it is fresh:
+    // not marked stale by a write to its source, and younger than its maxAge.
+    // Otherwise the set is resolved again and cached; a failed resolution binds
+    // nothing (it narrows). Every set bound is recorded in `bound`, which the
+    // pull's scope epoch is computed from.
+    const cachedBinder =
+      (bound: Ref.Ref<HashMap.HashMap<string, BoundSet>>): SetBinder =>
+      (context, collection, name, set) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const key = setKey(collection, name);
+          // A session's cache holds one identity's resolutions. When the identity
+          // behind the client group changes (a sign-out, another user), every
+          // entry resolved for the previous one is dropped, never served.
+          const identity = Hash.canonicalJson(context.identity ?? null);
+          const sessionSets = sessionSetsOf(yield* Ref.get(setCache), context.clientGroupId);
+          const sameIdentity = HashMap.every(sessionSets, (entry) => entry.identity === identity);
+          const cached = sameIdentity
+            ? Option.getOrUndefined(HashMap.get(sessionSets, key))
+            : undefined;
+          const fresh =
+            cached !== undefined &&
+            !cached.stale &&
+            cached.source === set.source &&
+            now - cached.resolvedAt < cached.maxAgeMillis;
+          const writesBefore = yield* writesTo(set.source);
+          const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
+          if (!fresh) {
+            // A write to the source landed while the set resolved: the members may
+            // predate it. Cache them as stale, so the next pull resolves again,
+            // and poke the session, whose windows do not yet lease the source.
+            const overlapped = (yield* writesTo(set.source)) !== writesBefore;
+            const entry: CachedSet = {
+              identity,
+              values,
+              resolvedAt: now,
+              maxAgeMillis: Duration.toMillis(set.maxAge),
+              source: set.source,
+              stale: overlapped,
+            };
+            yield* Ref.update(setCache, (all) => {
+              const current = sessionSetsOf(all, context.clientGroupId);
+              const kept = HashMap.every(current, (other) => other.identity === identity)
+                ? current
+                : HashMap.empty<string, CachedSet>();
+              return HashMap.set(all, context.clientGroupId, HashMap.set(kept, key, entry));
+            });
+            if (overlapped) {
+              yield* pokeHub.publish(context.clientGroupId, { reason: undefined });
+              yield* Metric.update(Telemetry.pokesTotal, 1);
+            }
+          }
+          yield* Ref.update(bound, HashMap.set(key, values));
+          return values;
+        });
+
+    // Mark every cached set whose source a hint touched stale, and return the
+    // client groups that held one, so they are poked (#205): their next pull
+    // resolves the set again, and resets if its members moved.
+    const staleSets = (touched: HashSet.HashSet<string>) =>
+      Ref.modify(
+        setCache,
+        (all): readonly [HashSet.HashSet<string>, HashMap.HashMap<string, SessionSets>] => {
+          const groups = HashSet.fromIterable(
+            HashMap.keys(
+              HashMap.filter(all, (sets) =>
+                HashMap.some(sets, (cached) => HashSet.has(touched, cached.source))
+              )
+            )
+          );
+          const next = HashMap.map(all, (sets) =>
+            HashMap.map(sets, (cached) =>
+              HashSet.has(touched, cached.source) ? { ...cached, stale: true } : cached
+            )
+          );
+          return [groups, HashSet.isEmpty(groups) ? all : next];
+        }
+      );
     // Active subscriptions per client group, for fan-out matching.
     const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
     // Each group's last-synced view (collection → id → version), for matching a
@@ -357,10 +519,28 @@ export const makeWithIntrospectionWith = (
               const touched = new Set(hints.map((hint) => hint.collection));
               const groups = yield* Ref.get(activeSubsets);
               const cvrs = yield* Ref.get(activeCvrs);
+              // A write to a named set's source may move the set (#205): those
+              // sessions are poked whatever their windows hold.
+              const sources = HashSet.fromIterable(touched);
+              yield* Ref.update(sourceWrites, (counts) =>
+                HashSet.reduce(sources, counts, (next, collection) =>
+                  HashMap.set(
+                    next,
+                    collection,
+                    Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
+                  )
+                )
+              );
+              const scoped = yield* staleSets(sources);
               yield* Effect.forEach(
                 groups,
                 ([clientGroupId, subsets]) =>
                   Effect.gen(function* () {
+                    if (HashSet.has(scoped, clientGroupId)) {
+                      yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                      yield* Metric.update(Telemetry.pokesTotal, 1);
+                      return;
+                    }
                     if (!collectionMatch(touched, subsets)) return;
                     if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
                       yield* pokeHub.publish(clientGroupId, { reason: undefined });
@@ -447,12 +627,13 @@ export const makeWithIntrospectionWith = (
     // `authorize` narrows without re-checking.
     const authorizeAll = (
       context: SyncContext,
-      request: PullRequest
+      request: PullRequest,
+      bindSet: SetBinder
     ): Effect.Effect<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> =>
       Effect.gen(function* () {
         const direct = yield* Effect.forEach(
           request.subscriptions,
-          (subset) => authorize(authPolicy, context, subset, "server"),
+          (subset) => authorize(authPolicy, context, subset, "server", bindSet),
           { concurrency: 1 }
         );
         const named = yield* Effect.forEach(
@@ -463,7 +644,8 @@ export const makeWithIntrospectionWith = (
                 authPolicy,
                 context,
                 yield* resolveNamed(context, entry),
-                "server"
+                "server",
+                bindSet
               );
             }),
           { concurrency: 1 }
@@ -526,11 +708,16 @@ export const makeWithIntrospectionWith = (
     // Resolve the CVR the presented cookie names. A cookie minted under a
     // different fleet namespace (a bumped deploy) is treated as unknown, so the
     // pull degrades to a reset patch exactly as an unrecognised cookie does (#48).
+    // So is a cookie minted under another scope epoch (#205): its CVR was
+    // computed under another scope, so no patch is computed against it, and a
+    // narrowed scope can never leave a row behind on the client.
     const resolvePrevious = (
-      cookie: string | undefined
+      cookie: string | undefined,
+      epoch: string
     ): Effect.Effect<Cvr.Cvr | undefined, StoreError> => {
       if (cookie === undefined) return Effect.succeed(undefined);
       if (cookieNamespaceOf(cookie) !== cookieNamespace) return Effect.succeed(undefined);
+      if (cookieEpochOf(cookie) !== epoch) return Effect.succeed(undefined);
       return cvrStore.get(cookie);
     };
 
@@ -546,12 +733,13 @@ export const makeWithIntrospectionWith = (
     const readPullOnce = (
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
-      cookie: string | undefined
+      cookie: string | undefined,
+      epoch: string
     ) =>
       Effect.gen(function* () {
         const before = yield* backend.lastMutationIds(context);
         const next = yield* evaluateView(context, authorized);
-        const previous = yield* resolvePrevious(cookie);
+        const previous = yield* resolvePrevious(cookie, epoch);
         const isReset = cookie !== undefined && previous === undefined;
         const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
         const after = yield* backend.lastMutationIds(context);
@@ -580,7 +768,8 @@ export const makeWithIntrospectionWith = (
     const readPullView = (
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
-      cookie: string | undefined
+      cookie: string | undefined,
+      epoch: string
     ) =>
       Effect.gen(function* () {
         // Read again while a push commits mid-read, up to PULL_VIEW_ATTEMPTS reads.
@@ -590,7 +779,7 @@ export const makeWithIntrospectionWith = (
           Effect.Success<ReturnType<typeof readPullOnce>>,
           Effect.Error<ReturnType<typeof readPullOnce>>
         > =>
-          Effect.flatMap(readPullOnce(context, authorized, cookie), (view) =>
+          Effect.flatMap(readPullOnce(context, authorized, cookie, epoch), (view) =>
             view.consistent || attempt >= PULL_VIEW_ATTEMPTS
               ? Effect.succeed(view)
               : read(attempt + 1)
@@ -615,15 +804,31 @@ export const makeWithIntrospectionWith = (
             yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
-            const authorized = yield* authorizeAll(context, checked);
+            // The named sets this pull binds (#205), for its scope epoch.
+            const binding = yield* Ref.make(HashMap.empty<string, BoundSet>());
+            const authorized = yield* authorizeAll(context, checked, cachedBinder(binding));
+            const bound = yield* Ref.get(binding);
+            const epoch = scopeEpochOf(bound);
+            // The session holds a lease on each bound set's source as it does on
+            // a window (ADR-0015's #205 amendment): the source's collection rides
+            // with the group's windows, so a room's fan-out registration (from
+            // introspection) leases its topic too.
+            const sources = HashMap.toValues(
+              HashMap.filter(
+                sessionSetsOf(yield* Ref.get(setCache), request.clientGroupId),
+                (_, key) => HashMap.has(bound, key)
+              )
+            ).map((cached) => cached.source);
+            const leased = Arr.dedupe(sources).map((collection) => Subsets.make({ collection }));
             yield* Ref.update(activeSubsets, (m) =>
-              new Map(m).set(request.clientGroupId, authorized)
+              new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
 
             const { next, patch, lastMutationIds } = yield* readPullView(
               context,
               authorized,
-              checked.cookie
+              checked.cookie,
+              epoch
             );
 
             // The permanent rejections this pull's watermark covers (#365). A
@@ -636,7 +841,8 @@ export const makeWithIntrospectionWith = (
               (entry) => entry.mutationId <= (lastMutationIds[entry.clientId] ?? 0)
             );
 
-            const cookie = yield* freshCookie;
+            const minted = yield* freshCookie;
+            const cookie = epoch === "" ? minted : `${minted}${COOKIE_EPOCH_SEP}${epoch}`;
             yield* cvrStore.set(cookie, { rows: next.rows });
             // Track this group's latest view so fan-out can match a delete against
             // the rows the group actually holds (CVR-precise deletes).
