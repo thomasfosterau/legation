@@ -12,7 +12,9 @@ afterEach(() => {
 });
 
 describe("client runtime context", () => {
-  it("a hook without setClientRuntime throws an actionable error", () => {
-    expect(() => mount(NoRuntime, { target: document.body })).toThrowError(/setClientRuntime/);
+  it("a hook without setClient throws an actionable error", () => {
+    expect(() => mount(NoRuntime, { target: document.body })).toThrowError(
+      /setClient\(createClient/
+    );
   });
 });

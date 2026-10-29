@@ -9,7 +9,7 @@ Svelte 5 bindings. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 ## Invariants
 
-- Hooks are called during component initialisation: they read the Client runtime from context (`setClientRuntime`) and register a `$effect`.
+- Hooks are called during component initialisation: they read the Client from context (`setClient`, or `setClientRuntime` for an app-built runtime) and register a `$effect`. With no Client set (`setClient(undefined)`, as on the server), a hook renders from its seed and fails with `ClientUnavailable` only when it needs the Client.
 - Inputs are thunks read inside `$effect`, so a read re-subscribes when the state it touches changes, keeping the previous value visible as a waiting result.
 
 ## Tests

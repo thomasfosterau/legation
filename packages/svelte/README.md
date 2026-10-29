@@ -16,7 +16,7 @@ Two entry points:
 
 | Import                                | What it is                                                                              |
 | ------------------------------------- | --------------------------------------------------------------------------------------- |
-| `@thomasfosterau/legation-svelte`     | `setClientRuntime` plus every hook — reads, aggregates, mutations, undo                 |
+| `@thomasfosterau/legation-svelte`     | `createClient` / `setClient` plus every hook — reads, aggregates, mutations, undo       |
 | `@thomasfosterau/legation-svelte/kit` | the SvelteKit surface: client-group cookie, SSR snapshot `load`, snapshot-hydrated boot |
 
 ## Install
@@ -32,6 +32,43 @@ Svelte app pulls nothing.
 ## Effect version
 
 Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. Tested against `4.0.2` (the version CI pins) and `4.0.0-rc.118` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+
+## Booting the Client
+
+`createClient` takes `Client.make`'s options and returns a handle; `setClient`
+puts it in context for every hook below it. The app builds no Effect runtime
+and imports nothing from `effect` to boot:
+
+```svelte
+<!-- +layout.svelte -->
+<script lang="ts">
+  import { onDestroy } from "svelte";
+  import { createClient, setClient } from "@thomasfosterau/legation-svelte";
+  import { mutations, nodes } from "$lib/domain";
+
+  // No Client during SSR: the hooks render from their seeds there.
+  const client =
+    typeof document !== "undefined"
+      ? createClient({ nodes, mutations, transport: { url: location.origin } })
+      : undefined;
+  setClient(client);
+  onDestroy(() => void client?.dispose());
+</script>
+```
+
+- **`client.dispose()`** releases the Client: its sync loop stops and its store
+  and transport close. Call it when the app tears down; a second call does
+  nothing more.
+- **On the server, pass no Client** (`setClient(undefined)`). Every hook then
+  renders from its `initial` seed, and only a hook that actually reaches for
+  the Client (a write, a read with no seed) fails, with `ClientUnavailable`.
+  No stand-in runtime is needed.
+- **Custom layers** (an in-page server, a service-worker mirror, a
+  simulated-offline transport, the Kit's snapshot-hydrated `clientRuntime`):
+  build the `ManagedRuntime` yourself and pass `setClient(fromRuntime(runtime))`,
+  or `setClientRuntime(runtime)`, which is the same thing. `getClient()` returns
+  the handle in context (`Option`), and `client.runtime` is the runtime the
+  hooks run over, for Effect code that needs the Client directly.
 
 ## The hooks
 
@@ -62,9 +99,10 @@ re-subscribing the previous value stays visible with `waiting: true`
 - **`useMutationState(() => mutator?)`** — every journaled mutation's lifecycle.
 - **`useUndo(manager)`** — `canUndo` / `canRedo` / `undo` / `redo` over an
   `Undo.UndoManager`.
-- **`setClientRuntime(runtime)`** / **`getClientRuntime()`** — the `Client` in
-  Svelte context. Call `setClientRuntime` once, high in the tree, before any
-  hook.
+- **`setClient(client)`** / **`getClient()`** — the `Client` in Svelte context
+  (see [Booting the Client](#booting-the-client)). Call `setClient` once, high
+  in the tree, before any hook. `setClientRuntime(runtime)` /
+  `getClientRuntime()` are the same over a runtime the app built itself.
 
 Every live hook accepts `{ initial }` to seed a synchronous `Success` before
 the first emission — during SSR (where `$effect` never runs) the seed is what
@@ -223,9 +261,9 @@ export const boot = (data: {
 ```svelte
 <!-- +layout.svelte -->
 <script lang="ts">
-  import { setClientRuntime } from "@thomasfosterau/legation-svelte";
+  import { fromRuntime, setClient } from "@thomasfosterau/legation-svelte";
   const { data, children } = $props();
-  setClientRuntime(boot(data));
+  setClient(fromRuntime(boot(data)));
 </script>
 ```
 
