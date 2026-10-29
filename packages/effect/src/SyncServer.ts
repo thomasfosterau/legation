@@ -21,6 +21,8 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -202,13 +204,11 @@ const cookieEpochOf = (cookie: string): string =>
  * it, and it moves exactly when a bound set's members do. `""` when the pull
  * bound no set: such a cookie carries no epoch.
  */
-const scopeEpochOf = (
-  bound: ReadonlyMap<string, Option.Option<ReadonlyArray<Predicate.Literal>>>
-): string =>
-  bound.size === 0
+const scopeEpochOf = (bound: HashMap.HashMap<string, BoundSet>): string =>
+  HashMap.isEmpty(bound)
     ? ""
     : Hash.contentHash(
-        [...bound]
+        HashMap.toEntries(bound)
           .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
           .map(([name, values]) => [
             name,
@@ -219,6 +219,12 @@ const scopeEpochOf = (
             }),
           ])
       );
+
+/** A bound named set's members: `None` when its resolution failed (it narrows). */
+type BoundSet = Option.Option<ReadonlyArray<Predicate.Literal>>;
+
+/** One session's cached named sets, by {@link setKey}. */
+type SessionSets = HashMap.HashMap<string, CachedSet>;
 
 /** A cached named set's key: the collection whose scope declares it, and its name. */
 const setKey = (collection: string, name: string): string => Hash.canonicalJson([collection, name]);
@@ -385,12 +391,18 @@ export const makeWithIntrospectionWith = (
     // set's key: the collection whose scope declares it and its name, so two
     // collections that declare different sets under one name never share an
     // entry.
-    const setCache = yield* Ref.make(new Map<string, ReadonlyMap<string, CachedSet>>());
+    const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
+    const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
+      Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
     // How many writes each source collection has seen (#205). A resolution that
     // overlaps a write to its source is cached as stale, so the write's hint,
     // which found no entry to mark while the resolution was in flight, is not
     // lost until the set's maxAge passes.
-    const sourceWrites = yield* Ref.make(new Map<string, number>());
+    const sourceWrites = yield* Ref.make(HashMap.empty<string, number>());
+    const writesTo = (source: string) =>
+      Effect.map(Ref.get(sourceWrites), (counts) =>
+        Option.getOrElse(HashMap.get(counts, source), () => 0)
+      );
 
     // Bind a named set for a pull, from the session's cache while it is fresh:
     // not marked stale by a write to its source, and younger than its maxAge.
@@ -398,7 +410,7 @@ export const makeWithIntrospectionWith = (
     // nothing (it narrows). Every set bound is recorded in `bound`, which the
     // pull's scope epoch is computed from.
     const cachedBinder =
-      (bound: Map<string, Option.Option<ReadonlyArray<Predicate.Literal>>>): SetBinder =>
+      (bound: Ref.Ref<HashMap.HashMap<string, BoundSet>>): SetBinder =>
       (context, collection, name, set) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
@@ -407,24 +419,23 @@ export const makeWithIntrospectionWith = (
           // behind the client group changes (a sign-out, another user), every
           // entry resolved for the previous one is dropped, never served.
           const identity = Hash.canonicalJson(context.identity ?? null);
-          const sessionSets = [...((yield* Ref.get(setCache)).get(context.clientGroupId) ?? [])];
-          const sameIdentity = sessionSets.every(([, entry]) => entry.identity === identity);
+          const sessionSets = sessionSetsOf(yield* Ref.get(setCache), context.clientGroupId);
+          const sameIdentity = HashMap.every(sessionSets, (entry) => entry.identity === identity);
           const cached = sameIdentity
-            ? sessionSets.find(([entryKey]) => entryKey === key)?.[1]
+            ? Option.getOrUndefined(HashMap.get(sessionSets, key))
             : undefined;
           const fresh =
             cached !== undefined &&
             !cached.stale &&
             cached.source === set.source &&
             now - cached.resolvedAt < cached.maxAgeMillis;
-          const writesBefore = (yield* Ref.get(sourceWrites)).get(set.source) ?? 0;
+          const writesBefore = yield* writesTo(set.source);
           const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
           if (!fresh) {
             // A write to the source landed while the set resolved: the members may
             // predate it. Cache them as stale, so the next pull resolves again,
             // and poke the session, whose windows do not yet lease the source.
-            const overlapped =
-              ((yield* Ref.get(sourceWrites)).get(set.source) ?? 0) !== writesBefore;
+            const overlapped = (yield* writesTo(set.source)) !== writesBefore;
             const entry: CachedSet = {
               identity,
               values,
@@ -434,42 +445,41 @@ export const makeWithIntrospectionWith = (
               stale: overlapped,
             };
             yield* Ref.update(setCache, (all) => {
-              const current = [...(all.get(context.clientGroupId) ?? [])];
-              const kept = current.every(([, other]) => other.identity === identity) ? current : [];
-              return new Map(all).set(context.clientGroupId, new Map(kept).set(key, entry));
+              const current = sessionSetsOf(all, context.clientGroupId);
+              const kept = HashMap.every(current, (other) => other.identity === identity)
+                ? current
+                : HashMap.empty<string, CachedSet>();
+              return HashMap.set(all, context.clientGroupId, HashMap.set(kept, key, entry));
             });
             if (overlapped) {
               yield* pokeHub.publish(context.clientGroupId, { reason: undefined });
               yield* Metric.update(Telemetry.pokesTotal, 1);
             }
           }
-          bound.set(key, values);
+          yield* Ref.update(bound, HashMap.set(key, values));
           return values;
         });
 
     // Mark every cached set whose source a hint touched stale, and return the
     // client groups that held one, so they are poked (#205): their next pull
     // resolves the set again, and resets if its members moved.
-    const staleSets = (touched: ReadonlySet<string>) =>
+    const staleSets = (touched: HashSet.HashSet<string>) =>
       Ref.modify(
         setCache,
-        (
-          all: Map<string, ReadonlyMap<string, CachedSet>>
-        ): readonly [ReadonlySet<string>, Map<string, ReadonlyMap<string, CachedSet>>] => {
-          const groups = new Set<string>();
-          const next = new Map(
-            [...all].map(([clientGroupId, sets]) => [
-              clientGroupId,
-              new Map(
-                [...sets].map(([name, cached]) => {
-                  if (!touched.has(cached.source)) return [name, cached] as const;
-                  groups.add(clientGroupId);
-                  return [name, { ...cached, stale: true }] as const;
-                })
-              ),
-            ])
+        (all): readonly [HashSet.HashSet<string>, HashMap.HashMap<string, SessionSets>] => {
+          const groups = HashSet.fromIterable(
+            HashMap.keys(
+              HashMap.filter(all, (sets) =>
+                HashMap.some(sets, (cached) => HashSet.has(touched, cached.source))
+              )
+            )
           );
-          return [groups, groups.size === 0 ? all : next];
+          const next = HashMap.map(all, (sets) =>
+            HashMap.map(sets, (cached) =>
+              HashSet.has(touched, cached.source) ? { ...cached, stale: true } : cached
+            )
+          );
+          return [groups, HashSet.isEmpty(groups) ? all : next];
         }
       );
     // Active subscriptions per client group, for fan-out matching.
@@ -511,17 +521,22 @@ export const makeWithIntrospectionWith = (
               const cvrs = yield* Ref.get(activeCvrs);
               // A write to a named set's source may move the set (#205): those
               // sessions are poked whatever their windows hold.
+              const sources = HashSet.fromIterable(touched);
               yield* Ref.update(sourceWrites, (counts) =>
-                Arr.reduce([...touched], new Map(counts), (next, collection) =>
-                  next.set(collection, (next.get(collection) ?? 0) + 1)
+                HashSet.reduce(sources, counts, (next, collection) =>
+                  HashMap.set(
+                    next,
+                    collection,
+                    Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
+                  )
                 )
               );
-              const scoped = yield* staleSets(touched);
+              const scoped = yield* staleSets(sources);
               yield* Effect.forEach(
                 groups,
                 ([clientGroupId, subsets]) =>
                   Effect.gen(function* () {
-                    if (scoped.has(clientGroupId)) {
+                    if (HashSet.has(scoped, clientGroupId)) {
                       yield* pokeHub.publish(clientGroupId, { reason: undefined });
                       yield* Metric.update(Telemetry.pokesTotal, 1);
                       return;
@@ -790,17 +805,21 @@ export const makeWithIntrospectionWith = (
             const checked = yield* middleware.onPull(context, request);
 
             // The named sets this pull binds (#205), for its scope epoch.
-            const bound = new Map<string, Option.Option<ReadonlyArray<Predicate.Literal>>>();
-            const authorized = yield* authorizeAll(context, checked, cachedBinder(bound));
+            const binding = yield* Ref.make(HashMap.empty<string, BoundSet>());
+            const authorized = yield* authorizeAll(context, checked, cachedBinder(binding));
+            const bound = yield* Ref.get(binding);
             const epoch = scopeEpochOf(bound);
             // The session holds a lease on each bound set's source as it does on
             // a window (ADR-0015's #205 amendment): the source's collection rides
             // with the group's windows, so a room's fan-out registration (from
             // introspection) leases its topic too.
-            const sources = [...((yield* Ref.get(setCache)).get(request.clientGroupId) ?? [])]
-              .filter(([name]) => bound.has(name))
-              .map(([, cached]) => cached.source);
-            const leased = [...new Set(sources)].map((collection) => Subsets.make({ collection }));
+            const sources = HashMap.toValues(
+              HashMap.filter(
+                sessionSetsOf(yield* Ref.get(setCache), request.clientGroupId),
+                (_, key) => HashMap.has(bound, key)
+              )
+            ).map((cached) => cached.source);
+            const leased = Arr.dedupe(sources).map((collection) => Subsets.make({ collection }));
             yield* Ref.update(activeSubsets, (m) =>
               new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
