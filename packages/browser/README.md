@@ -136,10 +136,11 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 | `HttpCacheInvalidation`  | `collectionChanges` and `invalidateOnChanges`: evict cached responses as collections change, by the `collection:{name}` tag.                                                |
 | `BrowserConnectivity`    | `withBrowserConnectivity(transport)`: adds `navigator.onLine` and return-to-visible signals to a `ClientTransport`.                                                         |
 | `BackgroundSync`         | `listen`, `register` and `identityUnchecked`: flush the journal after the tab has closed.                                                                                   |
+| `PushPoke`               | `listen`: turn the library's Web Push into a Background Sync registration or a pull, so a client with no open tab converges.                                                |
 
 ### ServiceWorkerHost
 
-`ServiceWorkerHost.run(options)` serves mirrors and runs the engine's sync loop (pull on poke, push and pull on reconnect). It never returns, so keep its scope open. The options are `channelName` (default `"legation"`), `registry` (the collection registry the mirrors' related reads resolve against: pass `nodes.collections` whenever a tab uses `include`), `nodes` and `urls` (for a page that pins a URL), and `backgroundSync`.
+`ServiceWorkerHost.run(options)` serves mirrors and runs the engine's sync loop (pull on poke, push and pull on reconnect). It never returns, so keep its scope open. The options are `channelName` (default `"legation"`), `registry` (the collection registry the mirrors' related reads resolve against: pass `nodes.collections` whenever a tab uses `include`), `nodes` and `urls` (for a page that pins a URL), `backgroundSync` and `pushPoke`.
 
 The engine comes from the context, which is why the example builds it with `ClientEngine.layer` from the `internal` entry point. `ServiceWorkerHost.start(options)` does the same and returns a `Host`: the `engine`, and `registrations`: every registration the host holds for its tabs, each with the pulled state of its windows. A covered read needs the windows its rows link to pulled (ADR-0029 amendment #426), so a registration made just now is listed before its rows have arrived. A worker that also serves JSON:API `GET`s from the replica (the façade, [ADR-0029](../../docs/adr/0029-replica-served-jsonapi-facade.md), `JsonApiFacade` in `@thomasfosterau/legation-jsonapi`) builds its coverage check from those registrations. The [`commerce` example](../../examples/commerce) runs this end to end, with its façade.
 
@@ -157,6 +158,41 @@ A tab's journal flushes on reconnect and on return-to-visible, but only while a 
 - **A foreign tag's event is left alone.** The listener answers only `BackgroundSync.defaultTag` (`"legation-flush"`) or the `tag` it was given.
 
 Periodic Background Sync is not wrapped: it has its own permission story and battery cost. A worker that wants one can call `ClientEngine.pull` from its own `periodicsync` listener.
+
+### PushPoke
+
+Web Push is the one mechanism that wakes a service worker that is not running (#214). A push-poke wakes it so the replica is current when the user opens the app, not after a round trip.
+
+**The server side** is `PushPoke.sink` in `@thomasfosterau/legation-effect/internal`, an `InvalidationSink` run with `InvalidationSink.run` where the bus is:
+
+```ts
+const sink =
+  yield *
+  PushPoke.sink({
+    // The app's endpoint registry: which subscriptions a change should wake.
+    targetsFor: (touched) => subscriptionsOfOwnersOf(touched),
+    keyOf: (subscription) => subscription.endpoint,
+    // The app signs and sends with its own VAPID keys; the library holds none.
+    send: (subscription, payload) => sendWebPush(subscription, payload),
+    coalesce: "5 minutes",
+    budget: { pushes: 6, per: "1 hour" },
+  });
+yield * InvalidationSink.run(sink);
+```
+
+- **The payload is contentless.** Every push is `PushPoke.payload`, a fixed marker: no topic, no collection, no row id. A payload crosses a third-party push service, and a collection name would tell it what a user subscribes to. The pull the poke prompts is the authenticated channel, and the only place the data travels.
+- **State your budget.** `coalesce` and `budget` are required and have no default. Browsers penalise a push that shows no notification (Chromium subscriptions require `userVisibleOnly`, and a worker that shows nothing for its pushes can lose the permission), and push services rate-limit each subscription. So wake a device for a change worth waking it for, not for every write: within `coalesce` a target gets one push, plus one more at the window's end if anything else changed, and past `budget.pushes` per `budget.per` it gets none until the period moves on. A skipped push costs nothing but a delay: the next pull converges. If your subscriptions are `userVisibleOnly`, show a notification from your own `push` handler for the pokes you send, or send them only where a notification is wanted anyway.
+
+**The worker side** is `PushPoke.listen`, installed at the top level of the worker script and passed to the host as `pushPoke`:
+
+```ts
+const pushPoke = PushPoke.listen({ identity: currentFingerprint });
+yield * ServiceWorkerHost.start({ backgroundSync, pushPoke, registry, nodes });
+```
+
+- **By default a push-poke only registers the Background Sync tag** (the flush path above), so the browser syncs when it judges the connection good: the kinder choice on a metered connection. `action: "pull"` pulls at once instead.
+- **Every other push is left alone.** The listener acts only on the library's marker, with no `waitUntil` on anything else, so the app's own `push` handler keeps working.
+- **`identity` is required**, as for `BackgroundSync.listen`. A push acts only if the replica is stamped for whoever is signed in now, and otherwise returns `"IdentityChanged"`, so a push for a superseded identity never pulls or registers under the new one.
 
 ### ElectedHost
 
