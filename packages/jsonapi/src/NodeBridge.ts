@@ -18,10 +18,24 @@
  * - `Relationship.many` / `Relationship.paginated` → `Edge.many` /
  *   `Edge.paginated`. The **inverse** — the one-edge on the target holding
  *   the key — is discovered when it is unambiguous, and named explicitly
- *   (`inverses`) when it is not.
+ *   when it is not: on the resource, with the `@legation/inverses`
+ *   annotation ({@link syncAnnotations}), or in the `inverses` option.
  * - `paginated` edges need an `order` (cursor pagination requires a stable
- *   order, and it is part of the edge's identity — ADR-0022), so it must
- *   be declared in the bridge options.
+ *   order, and it is part of the edge's identity — ADR-0022). It is read off
+ *   the relationship's own declaration, `Relationship.paginated(ref, { order })`
+ *   (#220), or given in the `order` option.
+ *
+ * **Sync metadata on the resource (#220).** What only the sync engine needs —
+ * an inverse name, the literal kind of a field no schema can tell (an
+ * `instant` stored as text) — is declared on the resource as
+ * `@legation/`-namespaced annotations: `Resource.make(…, { annotations:
+ * syncAnnotations({ inverses, kinds }) })`, or `Resource.annotate`, which
+ * `Resource.extend` keeps. The {@link FromResourceOptions} remain, as
+ * explicit overrides: an option entry wins over the resource's annotation or
+ * declaration for the same relationship or field. A to-one relationship's
+ * key field is still `` `${name}Id` `` or the `via` option until
+ * effect-jsonapi's storage-key slot (effect-jsonapi#509) reaches this
+ * package.
  *
  * **Acyclic resource graphs.** The library's resource types expand eagerly,
  * so mutually-referencing definitions (`Product ⇄ Review`) cannot be
@@ -64,7 +78,8 @@ import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
-import type * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 /** A definition-time mismatch between a resource graph and the node model. */
 export class ResourceBridgeError extends Data.TaggedError("ResourceBridgeError")<{
@@ -72,6 +87,72 @@ export class ResourceBridgeError extends Data.TaggedError("ResourceBridgeError")
   readonly relationship: string;
   readonly message: string;
 }> {}
+
+// ─── Sync annotations (#220) ──────────────────────────────────────────────────
+//
+// What only the sync engine needs to know about a resource is declared on the
+// resource itself, as `@legation/`-namespaced annotations (effect-jsonapi's
+// `Resource.make({ annotations })` / `Resource.annotate`), so an app declares
+// it next to the resource rather than in a per-resource options table.
+
+/** The annotation key naming the inverse edge of collection relationships, by relationship name. */
+export const InversesAnnotation = "@legation/inverses";
+
+/** The annotation key naming the literal kind of filterable fields, by row field. */
+export const KindsAnnotation = "@legation/kinds";
+
+/** The sync metadata a resource can declare about itself (#220). */
+export interface SyncAnnotations {
+  /**
+   * The inverse edge name on the target, by `many` / `paginated` relationship
+   * name — needed only where discovery is ambiguous or impossible.
+   */
+  readonly inverses?: Readonly<Record<string, string>>;
+  /**
+   * The literal kind of a filterable field, by row field, where its schema
+   * cannot tell it: an `instant` stored as text. The field must be declared
+   * filterable on the resource.
+   */
+  readonly kinds?: Readonly<Record<string, FilterPolicy.LiteralKind>>;
+}
+
+/** {@link SyncAnnotations} as resource annotations, under the bridge's keys. */
+export type SyncAnnotationRecord = {
+  readonly [InversesAnnotation]?: SyncAnnotations["inverses"];
+  readonly [KindsAnnotation]?: SyncAnnotations["kinds"];
+};
+
+/**
+ * The resource annotations that declare `sync`, to pass as (or merge into)
+ * `Resource.make`'s `annotations` or `Resource.annotate`'s.
+ */
+export const syncAnnotations = (sync: SyncAnnotations): SyncAnnotationRecord => {
+  let record: SyncAnnotationRecord = {};
+  if (sync.inverses !== undefined) record = { ...record, [InversesAnnotation]: sync.inverses };
+  if (sync.kinds !== undefined) record = { ...record, [KindsAnnotation]: sync.kinds };
+  return record;
+};
+
+const Inverses = Schema.Record(Schema.String, Schema.String);
+const Kinds = Schema.Record(
+  Schema.String,
+  Schema.Literals(["text", "integer", "double", "boolean", "instant"])
+);
+
+/**
+ * Read one of the bridge's annotations off a resource: absent reads as empty,
+ * and a value of the wrong shape is a definition-time defect.
+ */
+const annotationOf = <A>(
+  resource: Resource.Any,
+  key: string,
+  schema: Schema.Codec<A, unknown>
+): Option.Option<A> =>
+  Option.map(Option.fromUndefinedOr(Resource.annotations(resource)[key]), (value) =>
+    Option.getOrElse(Schema.decodeUnknownOption(schema)(value), () =>
+      fail(resource.type, key, `the "${key}" annotation does not have the shape the bridge reads`)
+    )
+  );
 
 /** Per-resource overrides for {@link fromResource} / {@link registry}. */
 export interface FromResourceOptions {
@@ -169,6 +250,18 @@ type CollectionRelationship = Extract<
 >;
 
 /**
+ * A paginated relationship's own canonical order (effect-jsonapi's
+ * `Relationship.paginated(ref, { order })`), as the engine spells an order:
+ * field names, `-` prefixed for descending.
+ */
+const declaredOrder = (descriptor: CollectionRelationship): Option.Option<ReadonlyArray<string>> =>
+  descriptor.kind === "paginated"
+    ? Option.map(Option.fromUndefinedOr(descriptor.order), (order) =>
+        order.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field))
+      )
+    : Option.none();
+
+/**
  * Bridge one collection-valued relationship to its edge: the inverse is
  * named in the options or discovered on the target; a paginated one also
  * needs its declared order.
@@ -183,14 +276,20 @@ const collectionEdge = (
   const target = descriptor.ref();
   const inverse =
     options.inverses?.[name] ??
+    Option.getOrUndefined(
+      Option.flatMapNullishOr(
+        annotationOf(resource, InversesAnnotation, Inverses),
+        (inverses) => inverses[name]
+      )
+    ) ??
     discoverInverse(resource.type, name, target.type, oneEdgesOfTarget(target));
   if (descriptor.kind === "many") return Edge.many(target.type, { inverse });
-  const order = options.order?.[name];
+  const order = options.order?.[name] ?? Option.getOrUndefined(declaredOrder(descriptor));
   if (order === undefined) {
     return fail(
       resource.type,
       name,
-      `a paginated relationship needs an edge order (cursor pagination requires a stable order) — declare it in options.order`
+      `a paginated relationship needs an edge order (cursor pagination requires a stable order) — declare it on the relationship, Relationship.paginated(ref, { order }), or in options.order`
     );
   }
   return Edge.paginated(target.type, { inverse, order });
@@ -264,6 +363,33 @@ const declaredFilterable = (
 };
 
 /**
+ * The declared filterable set with the resource's `@legation/kinds`
+ * annotation applied: each named field keeps its operators and takes the
+ * annotated kind. Naming a field the resource does not declare filterable is a
+ * definition-time defect.
+ */
+const withKinds = (
+  resource: Resource.Any,
+  declared: Record<string, FilterPolicy.FilterableInput>
+): Record<string, FilterPolicy.FilterableInput> =>
+  R.reduce(
+    Option.getOrElse(annotationOf(resource, KindsAnnotation, Kinds), () => ({})),
+    declared,
+    (current, kind, field) => {
+      const entry = current[field];
+      if (entry === undefined) {
+        return fail(
+          resource.type,
+          KindsAnnotation,
+          `"${field}" has a kind in "${KindsAnnotation}" but is not declared filterable on the resource`
+        );
+      }
+      const operators = "operators" in entry ? entry.operators : entry;
+      return { ...current, [field]: { operators, kind } };
+    }
+  );
+
+/**
  * The per-node options: hint keys from the bridge options; the filterable
  * set and sortable fields from the resource's declaration, each option
  * entry replacing the resource's for its field.
@@ -278,7 +404,10 @@ const nodeOptionsOf = (
   readonly sortable: ReadonlyArray<string>;
 } => ({
   ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
-  filterable: { ...declaredFilterable(resource, edges), ...options.filterable },
+  filterable: {
+    ...withKinds(resource, declaredFilterable(resource, edges)),
+    ...options.filterable,
+  },
   sortable: [...Resource.sortable(resource), ...(options.sortable ?? [])],
 });
 

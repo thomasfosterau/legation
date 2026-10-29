@@ -362,3 +362,104 @@ describe("NodeBridge filterable set (#154, #161)", () => {
     expect(Object.keys(NodeBridge.fromResource(Category).filterable)).toEqual(["id"]);
   });
 });
+
+describe("sync metadata read off the resource (#220)", () => {
+  it("takes a paginated relationship's order from its declaration; an option still wins", () => {
+    const Ordered = Resource.make("products", {
+      attributes: { name: Schema.NonEmptyString },
+      relationships: {
+        reviews: Relationship.paginated(() => Review, {
+          order: [
+            { field: "createdAt", direction: "desc" },
+            { field: "id", direction: "asc" },
+          ],
+        }),
+      },
+    });
+    const declared = NodeBridge.registry([Ordered, Review], { reviews: bridgeOptions.reviews });
+    expect(defined(declared.nodes.get("products")).edges["reviews"]).toEqual({
+      kind: "paginated",
+      target: "reviews",
+      inverse: "product",
+      order: ["-createdAt", "id"],
+    });
+    const overridden = NodeBridge.registry([Ordered, Review], {
+      reviews: bridgeOptions.reviews,
+      products: { order: { reviews: ["createdAt"] } },
+    });
+    expect(defined(overridden.nodes.get("products")).edges["reviews"]).toMatchObject({
+      order: ["createdAt"],
+    });
+  });
+
+  it("names an inverse with the @legation/inverses annotation; an option still wins", () => {
+    const Message = Resource.make("messages", {
+      attributes: { senderId: Schema.String, recipientId: Schema.String },
+    });
+    const Account = Resource.make("accounts", {
+      attributes: { name: Schema.String },
+      relationships: { messages: Relationship.many(() => Message) },
+      annotations: NodeBridge.syncAnnotations({ inverses: { messages: "recipient" } }),
+    });
+    const edges = {
+      sender: { target: "accounts", via: "senderId" },
+      recipient: { target: "accounts", via: "recipientId" },
+    };
+    const annotated = NodeBridge.registry([Message, Account], { messages: { edges } });
+    expect(defined(annotated.nodes.get("accounts")).edges["messages"]).toMatchObject({
+      inverse: "recipient",
+    });
+    const overridden = NodeBridge.registry([Message, Account], {
+      messages: { edges },
+      accounts: { inverses: { messages: "sender" } },
+    });
+    expect(defined(overridden.nodes.get("accounts")).edges["messages"]).toMatchObject({
+      inverse: "sender",
+    });
+  });
+
+  it("gives a filterable field its kind with the @legation/kinds annotation", () => {
+    const Article = Resource.make("articles", {
+      attributes: { publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])) },
+      annotations: NodeBridge.syncAnnotations({ kinds: { publishedAt: "instant" } }),
+    });
+    expect(NodeBridge.fromResource(Article).filterable["publishedAt"]).toEqual({
+      kind: "instant",
+      operators: ["gt", "lt"],
+    });
+    // An option entry still replaces the field's declaration.
+    expect(
+      NodeBridge.fromResource(Article, { filterable: { publishedAt: ["gt"] } }).filterable[
+        "publishedAt"
+      ]
+    ).toEqual({ kind: "text", operators: ["gt"] });
+  });
+
+  it("keeps a mismatched annotation a definition-time defect", () => {
+    const undeclared = Resource.make("articles", {
+      attributes: { publishedAt: Schema.String },
+      annotations: NodeBridge.syncAnnotations({ kinds: { publishedAt: "instant" } }),
+    });
+    expect(() => NodeBridge.fromResource(undeclared)).toThrow(NodeBridge.ResourceBridgeError);
+    expect(() => NodeBridge.fromResource(undeclared)).toThrow(/not declared filterable/);
+    const malformed = Resource.make("articles", {
+      attributes: { title: Schema.String },
+      annotations: { [NodeBridge.KindsAnnotation]: { title: "date" } },
+    });
+    expect(() => NodeBridge.fromResource(malformed)).toThrow(/does not have the shape/);
+  });
+
+  it("keeps the annotations through Resource.annotate and Resource.extend", () => {
+    const Base = Resource.annotate(
+      Resource.make("articles", {
+        attributes: { publishedAt: Schema.String.pipe(Filter.able(["gt"])) },
+      }),
+      NodeBridge.syncAnnotations({ kinds: { publishedAt: "instant" } })
+    );
+    const Extended = Resource.extend(Base, "features", { attributes: { title: Schema.String } });
+    expect(NodeBridge.fromResource(Extended).filterable["publishedAt"]).toEqual({
+      kind: "instant",
+      operators: ["gt"],
+    });
+  });
+});
