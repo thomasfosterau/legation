@@ -550,11 +550,9 @@ export const transaction =
           : []
       );
       const { lastMutationIds, hints } = yield* steps.finish(batch, applied);
-      return {
-        lastMutationIds,
-        hints,
-        ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
-      } satisfies ApplyResult;
+      const result: ApplyResult = { lastMutationIds, hints };
+      // `rejected` is set only when a mutation was rejected.
+      return Arr.isReadonlyArrayNonEmpty(rejected) ? { ...result, rejected } : result;
     });
     return steps.atomically(context, push());
   };
