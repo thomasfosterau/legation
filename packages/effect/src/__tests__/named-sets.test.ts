@@ -10,7 +10,10 @@
  *               (visibility = 'followers' AND ownerId IN set(followingIds))
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -48,7 +51,7 @@ const identityOf = (context: { readonly identity?: unknown }) =>
   context.identity as { readonly user?: string; readonly role: string } | undefined;
 
 /** Builds the scope over a backend: `followingIds` reads the follows collection. */
-const policyOver = (backend: Backend, source: string) => {
+const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> = Effect.void) => {
   const followingIds: Authorization.NamedSet = {
     source,
     maxAge: "1 hour",
@@ -70,7 +73,10 @@ const policyOver = (backend: Backend, source: string) => {
           entries.map((entry) => entry.id)
         );
         return rows.map((row) => (row.value as Follow).followee);
-      }).pipe(Effect.orDie);
+      }).pipe(
+        Effect.orDie,
+        Effect.tap(() => gate)
+      );
     },
   };
   const posts: Authorization.AuthFilter = (context) => {
@@ -117,10 +123,14 @@ const seed: ReadonlyArray<ReturnType<typeof put>> = [
   put("posts", { id: "alice-private", ownerId: "alice", visibility: "private" } satisfies Post),
 ];
 
-const setupWith = (source: string, policy?: (backend: Backend) => Authorization.AuthPolicy) =>
+const setupWith = (
+  source: string,
+  policy?: (backend: Backend) => Authorization.AuthPolicy,
+  options?: SyncServer.SyncServerOptions
+) =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make(handlers);
-    const server = yield* SyncServer.make.pipe(
+    const server = yield* SyncServer.makeWith(options).pipe(
       Effect.provideService(Backend, backend),
       Effect.provideService(
         Authorization.AuthPolicy,
@@ -150,8 +160,8 @@ const setupWith = (source: string, policy?: (backend: Backend) => Authorization.
     const pull = (clientGroupId: string, cookie?: string, ...collections: Array<string>) =>
       server.handlePull({
         clientGroupId,
-        subscriptions: (collections.length === 0 ? ["posts"] : collections).map((collection) =>
-          Subset.make({ collection })
+        subscriptions: (Arr.isReadonlyArrayEmpty(collections) ? ["posts"] : collections).map(
+          (collection) => Subset.make({ collection })
         ),
         ...(cookie === undefined ? {} : { cookie }),
       });
@@ -192,7 +202,7 @@ describe("session-resolved read scopes (#205)", () => {
       const pullUntilChanged = (attempt: number): Effect.Effect<PullResponse, unknown> =>
         pull("group-alice", first.cookie).pipe(
           Effect.flatMap((response) =>
-            response.patch.length > 0 || attempt >= 100
+            Arr.isReadonlyArrayNonEmpty(response.patch) || attempt >= 100
               ? Effect.succeed(response)
               : Effect.yieldNow.pipe(Effect.andThen(pullUntilChanged(attempt + 1)))
           )
@@ -205,11 +215,47 @@ describe("session-resolved read scopes (#205)", () => {
     })
   );
 
+  it.effect("resolves again after a write that overlapped the set's resolution", () =>
+    Effect.gen(function* () {
+      // The resolver reads the members, then waits; the write to the source lands
+      // and its hint is handled before the resolution is cached. The cached
+      // members predate the write, so the next pull must not trust them.
+      const gate = yield* Deferred.make<void>();
+      const { pull, write } = yield* setupWith("follows", (backend) =>
+        policyOver(backend, "follows", Deferred.await(gate))
+      );
+      const settle = Effect.forEach(Arr.range(1, 100), () => Effect.yieldNow, {
+        concurrency: 1,
+        discard: true,
+      });
+      const inFlight = yield* Effect.forkChild(pull("group-alice"));
+      yield* settle;
+      yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
+      yield* settle;
+      yield* Deferred.succeed(gate, undefined);
+      const first = yield* Fiber.join(inFlight);
+      expect(putIds(first)).toEqual(["alice-private", "pub"]);
+      const second = yield* pull("group-alice", first.cookie);
+      expect(putIds(second)).toEqual(["alice-private", "bob-followers", "pub"]);
+    })
+  );
+
   it.effect("diffs as usual while the set stays the same", () =>
     Effect.gen(function* () {
       const { pull } = yield* setup;
       const first = yield* pull("group-alice");
       const second = yield* pull("group-alice", first.cookie);
+      expect(second.patch).toEqual([]);
+    })
+  );
+
+  it.effect("reads no epoch out of a fleet namespace that contains its separator", () =>
+    Effect.gen(function* () {
+      // The anonymous scope binds no set, so its cookie carries no epoch; a `~e`
+      // inside the namespace must not be read as one, or every pull would reset.
+      const { pull } = yield* setupWith("follows", undefined, { cookieNamespace: "deploy~e1" });
+      const first = yield* pull("group-anon");
+      const second = yield* pull("group-anon", first.cookie);
       expect(second.patch).toEqual([]);
     })
   );

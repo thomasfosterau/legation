@@ -184,15 +184,17 @@ const cookieNamespaceOf = (cookie: string): string => {
 
 /** Separator between a cookie's body and its scope epoch (#205). */
 const COOKIE_EPOCH_SEP = "~e";
+/** A cookie's trailing scope epoch: the separator, then the hex `scopeEpochOf` mints. */
+const COOKIE_EPOCH_PATTERN = /~e([0-9a-f]+)$/;
 
 /**
  * The scope epoch a cookie was minted under (#205; `""` when the pull bound no
  * named set, the cookie format before #205).
  */
-const cookieEpochOf = (cookie: string): string => {
-  const index = cookie.lastIndexOf(COOKIE_EPOCH_SEP);
-  return index === -1 ? "" : cookie.slice(index + COOKIE_EPOCH_SEP.length);
-};
+const cookieEpochOf = (cookie: string): string =>
+  // Read only a trailing `~e<hex>`: a separator inside the fleet namespace must
+  // not be taken for an epoch, or every pull without one would reset.
+  COOKIE_EPOCH_PATTERN.exec(cookie)?.[1] ?? "";
 
 /**
  * A pull's scope epoch (ADR-0015's #205 amendment): a hash of the named sets it
@@ -212,10 +214,14 @@ const scopeEpochOf = (
             name,
             Option.match(values, {
               onNone: () => null,
-              onSome: (members) => [...members].map((member) => JSON.stringify(member)).toSorted(),
+              onSome: (members) =>
+                [...members].map((member) => Hash.canonicalJson(member)).toSorted(),
             }),
           ])
       );
+
+/** A cached named set's key: the collection whose scope declares it, and its name. */
+const setKey = (collection: string, name: string): string => Hash.canonicalJson([collection, name]);
 
 /**
  * One session's cached resolution of a named set (#205): the members (`None`
@@ -380,7 +386,11 @@ export const makeWithIntrospectionWith = (
     // collections that declare different sets under one name never share an
     // entry.
     const setCache = yield* Ref.make(new Map<string, ReadonlyMap<string, CachedSet>>());
-    const setKey = (collection: string, name: string) => JSON.stringify([collection, name]);
+    // How many writes each source collection has seen (#205). A resolution that
+    // overlaps a write to its source is cached as stale, so the write's hint,
+    // which found no entry to mark while the resolution was in flight, is not
+    // lost until the set's maxAge passes.
+    const sourceWrites = yield* Ref.make(new Map<string, number>());
 
     // Bind a named set for a pull, from the session's cache while it is fresh:
     // not marked stale by a write to its source, and younger than its maxAge.
@@ -407,21 +417,31 @@ export const makeWithIntrospectionWith = (
             !cached.stale &&
             cached.source === set.source &&
             now - cached.resolvedAt < cached.maxAgeMillis;
+          const writesBefore = (yield* Ref.get(sourceWrites)).get(set.source) ?? 0;
           const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
           if (!fresh) {
+            // A write to the source landed while the set resolved: the members may
+            // predate it. Cache them as stale, so the next pull resolves again,
+            // and poke the session, whose windows do not yet lease the source.
+            const overlapped =
+              ((yield* Ref.get(sourceWrites)).get(set.source) ?? 0) !== writesBefore;
             const entry: CachedSet = {
               identity,
               values,
               resolvedAt: now,
               maxAgeMillis: Duration.toMillis(set.maxAge),
               source: set.source,
-              stale: false,
+              stale: overlapped,
             };
             yield* Ref.update(setCache, (all) => {
               const current = [...(all.get(context.clientGroupId) ?? [])];
               const kept = current.every(([, other]) => other.identity === identity) ? current : [];
               return new Map(all).set(context.clientGroupId, new Map(kept).set(key, entry));
             });
+            if (overlapped) {
+              yield* pokeHub.publish(context.clientGroupId, { reason: undefined });
+              yield* Metric.update(Telemetry.pokesTotal, 1);
+            }
           }
           bound.set(key, values);
           return values;
@@ -491,6 +511,11 @@ export const makeWithIntrospectionWith = (
               const cvrs = yield* Ref.get(activeCvrs);
               // A write to a named set's source may move the set (#205): those
               // sessions are poked whatever their windows hold.
+              yield* Ref.update(sourceWrites, (counts) =>
+                Arr.reduce([...touched], new Map(counts), (next, collection) =>
+                  next.set(collection, (next.get(collection) ?? 0) + 1)
+                )
+              );
               const scoped = yield* staleSets(touched);
               yield* Effect.forEach(
                 groups,
