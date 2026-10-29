@@ -35,7 +35,7 @@ The per-client CVR bookkeeping has one exception, [ADR-0032](0032-shared-anonymo
 
 ## Amendment (2026-10-29, #177): which contract rules types carry
 
-A backend's `applyMutations` can now be built with `Backend.transaction(steps)`, a combinator that owns the mutation-id ledger. The store supplies its storage steps. `begin` starts a push and forgets the rejections below its floors. `open` opens the client's next mutation or reports the watermark. `run` runs the app's handler. `commit` writes the outcome with the bump. `release` gives back a unit after a transient failure. `finish` builds the result. The optional `atomically` wraps the push in the store's transaction. There is no brand and no checked constructor: a hand-assembled `Backend` still type-checks, so a bring-your-own backend author can still build one by hand.
+A backend's `applyMutations` can now be built with `Backend.transaction(steps)`, a combinator that owns the mutation-id ledger. The store supplies its storage steps. `begin` starts a push and forgets the rejections below its floors. `open` opens the client's next mutation or reports the watermark. `run` runs the app's handler. `commit` writes the outcome with the bump. `release` gives back a unit after a transient failure. `finish` builds the result. `atomically` wraps the push in the store's transaction (`Backend.withoutTransaction` for a store without one), and `maxAttempts` caps a handler re-run after a conflicting commit. There is no brand and no checked constructor: a hand-assembled `Backend` still type-checks, so a bring-your-own backend author can still build one by hand.
 
 What a backend built through the combinator gets by construction:
 
