@@ -60,6 +60,8 @@
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import type { RowId, RowVersion } from "./Collection.js";
 import { BackendError, type MutationRejected } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";
@@ -280,7 +282,7 @@ export type Opened<Unit> =
   | {
       readonly _tag: "Watermark";
       readonly lastMutationId: number;
-      readonly rejection: string | undefined;
+      readonly rejection: Option.Option<string>;
     };
 
 /**
@@ -302,7 +304,7 @@ export type Outcome<Staged> =
  */
 export type Commit =
   | { readonly _tag: "Committed" }
-  | { readonly _tag: "Replayed"; readonly rejection: string | undefined }
+  | { readonly _tag: "Replayed"; readonly rejection: Option.Option<string> }
   | { readonly _tag: "Conflicted" };
 
 /**
@@ -322,14 +324,13 @@ export interface TransactionSteps<Handler, Batch, Unit, Staged> {
   readonly handlers: Readonly<Record<string, Handler>>;
   /**
    * Run the whole push inside the store's transaction (`SqlExecutor.transaction`).
-   * Omitted, the steps run as they are, and each `commit` is the atomic unit.
+   * A store without one passes {@link withoutTransaction}, and each `commit` is
+   * then the atomic unit.
    */
-  readonly atomically?:
-    | (<A>(
-        context: SyncContext,
-        effect: Effect.Effect<A, BackendError>
-      ) => Effect.Effect<A, BackendError>)
-    | undefined;
+  readonly atomically: <A>(
+    context: SyncContext,
+    effect: Effect.Effect<A, BackendError>
+  ) => Effect.Effect<A, BackendError>;
   /**
    * Start a push: forget the remembered rejections below `floors` (the push's
    * lowest id per client, `RejectionMemory.floorsOf`) and take whatever per-push
@@ -360,9 +361,10 @@ export interface TransactionSteps<Handler, Batch, Unit, Staged> {
   readonly commit: (unit: Unit, outcome: Outcome<Staged>) => Effect.Effect<Commit, BackendError>;
   /**
    * Give a unit back after its handler failed transiently or named no handler:
-   * undo anything `open` moved. Best effort; omitted, nothing is undone.
+   * undo anything `open` moved. Best effort: `Effect.void` when `open` moves
+   * nothing.
    */
-  readonly release?: ((unit: Unit) => Effect.Effect<void>) | undefined;
+  readonly release: (unit: Unit) => Effect.Effect<void>;
   /** The push's result from what committed as applied, in push order. */
   readonly finish: (
     batch: Batch,
@@ -376,15 +378,33 @@ export interface TransactionSteps<Handler, Batch, Unit, Staged> {
   >;
   /**
    * How many times one mutation's handler runs while its commit keeps coming
-   * back `Conflicted` before it fails transiently. Defaults to 16.
+   * back `Conflicted` before it fails transiently. A store whose commit never
+   * conflicts passes 1.
    */
-  readonly maxAttempts?: number | undefined;
+  readonly maxAttempts: number;
 }
 
 /** How one pushed mutation settled under {@link transaction}. */
 type Settled<Staged> =
   | { readonly _tag: "Applied"; readonly staged: Staged }
-  | { readonly _tag: "Reported"; readonly rejection: string | undefined };
+  | { readonly _tag: "Reported"; readonly rejection: Option.Option<string> };
+
+/** What a watermark makes of a mutation: a replay when it covers the id, a gap when it is behind. */
+const fromWatermark = <Staged>(
+  mutation: Mutation,
+  lastMutationId: number,
+  rejection: Option.Option<string>
+): Effect.Effect<Settled<Staged>, BackendError> =>
+  mutation.mutationId <= lastMutationId
+    ? Effect.succeed({ _tag: "Reported", rejection })
+    : Effect.fail(
+        new BackendError({
+          message:
+            mutation.mutationId === lastMutationId + 1
+              ? `The store did not open mutation ${mutation.mutationId} of client ${mutation.clientId}, its next one`
+              : `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${lastMutationId + 1}`,
+        })
+      );
 
 /**
  * Build a backend's `applyMutations` from its storage steps (#177). The
@@ -412,18 +432,21 @@ type Settled<Staged> =
  * ```ts
  * import { Backend } from "@thomasfosterau/legation-effect";
  * import * as Effect from "effect/Effect";
+ * import * as Option from "effect/Option";
  *
  * // A ledger-only store: handlers stage nothing, commits bump an in-memory watermark.
  * const ledger = new Map<string, number>();
  * const applyMutations = Backend.transaction({
  *   handlers: { "todo/noop": () => Effect.void },
+ *   atomically: Backend.withoutTransaction,
+ *   maxAttempts: 1,
  *   begin: (context) => Effect.succeed(context),
  *   open: (_context, mutation) => {
  *     const last = ledger.get(mutation.clientId) ?? 0;
  *     return Effect.succeed(
  *       mutation.mutationId === last + 1
  *         ? ({ _tag: "Opened", unit: mutation } as const)
- *         : ({ _tag: "Watermark", lastMutationId: last, rejection: undefined } as const)
+ *         : ({ _tag: "Watermark", lastMutationId: last, rejection: Option.none() } as const)
  *     );
  *   },
  *   run: (_mutation, handler) => handler(),
@@ -432,6 +455,7 @@ type Settled<Staged> =
  *       ledger.set(mutation.clientId, mutation.mutationId);
  *       return { _tag: "Committed" } as const;
  *     }),
+ *   release: () => Effect.void,
  *   finish: () => Effect.sync(() => ({ lastMutationIds: Object.fromEntries(ledger), hints: [] })),
  * });
  *
@@ -448,63 +472,62 @@ export const transaction =
     steps: TransactionSteps<Handler, Batch, Unit, Staged>
   ): Backend["applyMutations"] =>
   (context, mutations) => {
-    const maxAttempts = steps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    const release = (unit: Unit): Effect.Effect<void> =>
-      steps.release === undefined ? Effect.void : steps.release(unit);
+    // Settle what a commit reported: run again after a conflict, up to the cap.
+    const afterCommit = (
+      batch: Batch,
+      mutation: Mutation,
+      attempt: number,
+      outcome: Outcome<Staged>,
+      committed: Commit
+    ): Effect.Effect<Settled<Staged>, BackendError> => {
+      if (P.isTagged(committed, "Conflicted")) {
+        return attempt >= steps.maxAttempts
+          ? Effect.fail(
+              new BackendError({
+                message:
+                  `serialization conflict: mutation ${mutation.mutationId} of client ${mutation.clientId} ` +
+                  `read rows that changed before its commit on each of ${steps.maxAttempts} attempts`,
+              })
+            )
+          : settle(batch, mutation, attempt + 1);
+      }
+      if (P.isTagged(committed, "Replayed")) {
+        return Effect.succeed({ _tag: "Reported", rejection: committed.rejection });
+      }
+      return Effect.succeed(
+        P.isTagged(outcome, "Applied")
+          ? { _tag: "Applied", staged: outcome.staged }
+          : { _tag: "Reported", rejection: Option.some(outcome.reason) }
+      );
+    };
 
-    const settle = (
+    const settle = Effect.fnUntraced(function* (
       batch: Batch,
       mutation: Mutation,
       attempt: number
-    ): Effect.Effect<Settled<Staged>, BackendError> =>
-      Effect.gen(function* () {
-        const opened = yield* steps.open(batch, mutation);
-        if (opened._tag === "Watermark") {
-          if (mutation.mutationId <= opened.lastMutationId) {
-            return { _tag: "Reported", rejection: opened.rejection } as const;
-          }
-          return yield* new BackendError({
-            message:
-              mutation.mutationId === opened.lastMutationId + 1
-                ? `The store did not open mutation ${mutation.mutationId} of client ${mutation.clientId}, its next one`
-                : `Mutation id gap for client ${mutation.clientId}: got ${mutation.mutationId}, expected ${opened.lastMutationId + 1}`,
-          });
-        }
-        const unit = opened.unit;
-        const handler = steps.handlers[mutation.mutator];
-        if (handler === undefined) {
-          yield* release(unit);
-          return yield* UnknownMutator.make(mutation.mutator);
-        }
-        const outcome = yield* steps.run(unit, handler, mutation).pipe(
-          Effect.map((staged): Outcome<Staged> => ({ _tag: "Applied", staged })),
-          Effect.catchTag("MutationRejected", (error) =>
-            Effect.succeed<Outcome<Staged>>({ _tag: "Rejected", reason: error.reason })
-          ),
-          Effect.onError(() => release(unit))
-        );
-        const committed = yield* steps.commit(unit, outcome);
-        switch (committed._tag) {
-          case "Conflicted": {
-            if (attempt >= maxAttempts) {
-              return yield* new BackendError({
-                message:
-                  `serialization conflict: mutation ${mutation.mutationId} of client ${mutation.clientId} ` +
-                  `read rows that changed before its commit on each of ${maxAttempts} attempts`,
-              });
-            }
-            return yield* settle(batch, mutation, attempt + 1);
-          }
-          case "Replayed":
-            return { _tag: "Reported", rejection: committed.rejection } as const;
-          case "Committed":
-            return outcome._tag === "Applied"
-              ? ({ _tag: "Applied", staged: outcome.staged } as const)
-              : ({ _tag: "Reported", rejection: outcome.reason } as const);
-        }
-      });
+    ): Effect.fn.Return<Settled<Staged>, BackendError> {
+      const opened = yield* steps.open(batch, mutation);
+      if (P.isTagged(opened, "Watermark")) {
+        return yield* fromWatermark<Staged>(mutation, opened.lastMutationId, opened.rejection);
+      }
+      const unit = opened.unit;
+      const handler = steps.handlers[mutation.mutator];
+      if (handler === undefined) {
+        yield* steps.release(unit);
+        return yield* UnknownMutator.make(mutation.mutator);
+      }
+      const outcome = yield* steps.run(unit, handler, mutation).pipe(
+        Effect.map((staged): Outcome<Staged> => ({ _tag: "Applied", staged })),
+        Effect.catchTag("MutationRejected", (error) =>
+          Effect.succeed<Outcome<Staged>>({ _tag: "Rejected", reason: error.reason })
+        ),
+        Effect.onError(() => steps.release(unit))
+      );
+      const committed = yield* steps.commit(unit, outcome);
+      return yield* afterCommit(batch, mutation, attempt, outcome, committed);
+    });
 
-    const push = Effect.gen(function* () {
+    const push = Effect.fnUntraced(function* () {
       const batch = yield* steps.begin(context, RejectionMemory.floorsOf(mutations));
       // Ids start at 1 and a watermark at 0, so a non-positive id is never new:
       // it opens nothing.
@@ -515,17 +538,15 @@ export const transaction =
         { concurrency: 1 }
       );
       const applied = settled.flatMap(({ outcome }) =>
-        outcome._tag === "Applied" ? [outcome.staged] : []
+        P.isTagged(outcome, "Applied") ? [outcome.staged] : []
       );
       const rejected = settled.flatMap(({ mutation, outcome }): Array<RejectedMutation> =>
-        outcome._tag === "Reported" && outcome.rejection !== undefined
-          ? [
-              {
-                clientId: mutation.clientId,
-                mutationId: mutation.mutationId,
-                reason: outcome.rejection,
-              },
-            ]
+        P.isTagged(outcome, "Reported")
+          ? Option.toArray(outcome.rejection).map((reason) => ({
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason,
+            }))
           : []
       );
       const { lastMutationIds, hints } = yield* steps.finish(batch, applied);
@@ -535,8 +556,14 @@ export const transaction =
         ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
       } satisfies ApplyResult;
     });
-    return steps.atomically === undefined ? push : steps.atomically(context, push);
+    return steps.atomically(context, push());
   };
 
-/** The default for {@link TransactionSteps.maxAttempts}. */
-const DEFAULT_MAX_ATTEMPTS = 16;
+/**
+ * The {@link TransactionSteps.atomically} of a store without a transaction:
+ * the push runs as it is, and each `commit` is the atomic unit.
+ */
+export const withoutTransaction = <A>(
+  _context: SyncContext,
+  effect: Effect.Effect<A, BackendError>
+): Effect.Effect<A, BackendError> => effect;

@@ -979,7 +979,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       return {
         _tag: "Watermark",
         lastMutationId: row?.last ?? 0,
-        rejection: row?.rejections.get(mutation.mutationId),
+        rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
       };
     });
 
@@ -1002,7 +1002,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           : {
               _tag: "Watermark",
               lastMutationId: last,
-              rejection: row?.rejections.get(mutation.mutationId),
+              rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
             };
       })
     );
@@ -1141,7 +1141,10 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     ReadonlyArray<Backend.ChangeHint>
   >({
     handlers: config.handlers,
-    atomically,
+    atomically: transactional ? atomically : Backend.withoutTransaction,
+    // The database isolates a batch (or, on D1, nothing does): a commit never
+    // reports a conflict, so a handler runs once per opened unit.
+    maxAttempts: 1,
     // The rejections this push has moved past are forgotten first (#366).
     begin: (context, floors) =>
       forgetRejections(context.clientGroupId, floors).pipe(
@@ -1155,7 +1158,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     release: transactional
       ? (unit) =>
           releaseClaim(unit.context.clientGroupId, unit.mutation.clientId, unit.mutation.mutationId)
-      : undefined,
+      : () => Effect.void,
     // Enrich once, after all writes, so the reads see the final tx state
     // (a row a later mutation deleted is correctly absent from `values`).
     finish: ({ context }, applied) =>

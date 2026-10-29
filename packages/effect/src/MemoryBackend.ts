@@ -45,12 +45,14 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
   Backend,
   buildChangeHints,
   transaction,
+  withoutTransaction,
   type Commit,
   type Opened,
   type Outcome,
@@ -432,7 +434,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             mutation.clientId,
             mutation.mutationId
           );
-          return [{ _tag: "Replayed", rejection }, s];
+          return [{ _tag: "Replayed", rejection: Option.fromUndefinedOr(rejection) }, s];
         }
         if (readsStale(s, unit.reads)) return [{ _tag: "Conflicted" }, s];
         const log = outcome._tag === "Applied" ? outcome.staged.log : [];
@@ -456,6 +458,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // transiently, like a serialization failure on PostgreSQL.
     const applyMutations = transaction<BackendHandler, MemoryBatch, MemoryUnit, Stage>({
       handlers,
+      atomically: withoutTransaction,
       maxAttempts: MAX_HANDLER_ATTEMPTS,
       begin: (context, floors) =>
         // The rejections below this push's floors are ones each client has
@@ -474,11 +477,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
               : {
                   _tag: "Watermark",
                   lastMutationId: last,
-                  rejection: rejectionOf(
-                    s,
-                    context.clientGroupId,
-                    mutation.clientId,
-                    mutation.mutationId
+                  rejection: Option.fromUndefinedOr(
+                    rejectionOf(s, context.clientGroupId, mutation.clientId, mutation.mutationId)
                   ),
                 };
           })
@@ -488,6 +488,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         return handle(mutation.args, stagingWriter(stage), unit.context).pipe(Effect.as(stage));
       },
       commit,
+      // Opening moves nothing: the bump is part of the commit.
+      release: () => Effect.void,
       finish: ({ context, before }, stages) =>
         Ref.get(state).pipe(
           Effect.map((final) => {

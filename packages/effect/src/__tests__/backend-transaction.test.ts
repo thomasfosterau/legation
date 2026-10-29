@@ -5,8 +5,16 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import { transaction, type Commit, type Outcome, type TransactionSteps } from "../Backend.js";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as R from "effect/Record";
+import {
+  transaction,
+  withoutTransaction,
+  type Commit,
+  type Outcome,
+  type TransactionSteps,
+} from "../Backend.js";
 import { BackendError, MutationRejected } from "../Errors.js";
 import type { Mutation } from "../Protocol.js";
 import * as UnknownMutator from "../UnknownMutator.js";
@@ -16,15 +24,17 @@ type Handler = (mutation: Mutation) => Effect.Effect<string, BackendError | Muta
 /** A store over a watermark per client, recording the steps the combinator takes. */
 const scriptedStore = (options: {
   readonly handlers: Readonly<Record<string, Handler>>;
-  readonly rejections?: ReadonlyMap<string, string> | undefined;
-  readonly commitResults?: Array<Commit> | undefined;
-  readonly refuseNext?: boolean | undefined;
+  readonly rejections: Readonly<Record<string, string>>;
+  readonly commitResults: Array<Commit>;
+  readonly refuseNext: boolean;
 }) => {
-  const watermarks = new Map<string, number>();
+  const watermarks: Record<string, number> = {};
   const steps: Array<string> = [];
   const commits: Array<Outcome<string>> = [];
   const config: TransactionSteps<Handler, null, Mutation, string> = {
     handlers: options.handlers,
+    atomically: withoutTransaction,
+    maxAttempts: 16,
     begin: (_context, floors) =>
       Effect.sync(() => {
         steps.push(`begin ${[...floors].map(([client, floor]) => `${client}:${floor}`).join(",")}`);
@@ -33,13 +43,13 @@ const scriptedStore = (options: {
     open: (_batch, mutation) =>
       Effect.sync(() => {
         steps.push(`open ${mutation.mutationId}`);
-        const last = watermarks.get(mutation.clientId) ?? 0;
-        return mutation.mutationId === last + 1 && options.refuseNext !== true
+        const last = watermarks[mutation.clientId] ?? 0;
+        return mutation.mutationId === last + 1 && !options.refuseNext
           ? ({ _tag: "Opened", unit: mutation } as const)
           : ({
               _tag: "Watermark",
               lastMutationId: last,
-              rejection: options.rejections?.get(`${mutation.clientId}:${mutation.mutationId}`),
+              rejection: R.get(options.rejections, `${mutation.clientId}:${mutation.mutationId}`),
             } as const);
       }),
     run: (mutation, handler) => handler(mutation),
@@ -47,14 +57,14 @@ const scriptedStore = (options: {
       Effect.sync((): Commit => {
         steps.push(`commit ${mutation.mutationId} ${outcome._tag}`);
         commits.push(outcome);
-        const scripted = options.commitResults?.shift() ?? { _tag: "Committed" };
-        if (scripted._tag === "Committed") watermarks.set(mutation.clientId, mutation.mutationId);
+        const scripted = options.commitResults.shift() ?? { _tag: "Committed" };
+        if (P.isTagged(scripted, "Committed")) watermarks[mutation.clientId] = mutation.mutationId;
         return scripted;
       }),
     release: (mutation) => Effect.sync(() => void steps.push(`release ${mutation.mutationId}`)),
     finish: (_batch, applied) =>
       Effect.sync(() => ({
-        lastMutationIds: Object.fromEntries(watermarks),
+        lastMutationIds: { ...watermarks },
         hints: applied.map((value) => ({ collection: value, ids: [] })),
       })),
   };
@@ -70,6 +80,7 @@ const mutation = (mutationId: number, mutator = "ok"): Mutation => ({
 });
 
 const context = { clientGroupId: "g" };
+const defaults = { rejections: {}, commitResults: [], refuseNext: false };
 const ok: Handler = () => Effect.succeed("staged");
 const reject: Handler = () => Effect.fail(new MutationRejected({ reason: "no" }));
 const fail: Handler = () => Effect.fail(new BackendError({ message: "down" }));
@@ -77,7 +88,10 @@ const fail: Handler = () => Effect.fail(new BackendError({ message: "down" }));
 describe("Backend.transaction", () => {
   it.effect("applies in order and reports each applied mutation's staged result", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok } });
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok },
+      });
       const result = yield* store.applyMutations(context, [mutation(1), mutation(2)]);
       expect(result.lastMutationIds).toEqual({ c: 2 });
       expect(result.hints).toEqual([
@@ -97,7 +111,10 @@ describe("Backend.transaction", () => {
 
   it.effect("commits a rejection with its reason and none of its staged result", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok, reject } });
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok, reject },
+      });
       const result = yield* store.applyMutations(context, [mutation(1, "reject"), mutation(2)]);
       expect(store.commits[0]).toEqual({ _tag: "Rejected", reason: "no" });
       expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "no" }]);
@@ -109,10 +126,11 @@ describe("Backend.transaction", () => {
   it.effect("skips a replay, reporting its committed rejection, without opening a unit", () =>
     Effect.gen(function* () {
       const store = scriptedStore({
+        ...defaults,
         handlers: { ok },
-        rejections: new Map([["c:1", "earlier"]]),
+        rejections: { "c:1": "earlier" },
       });
-      store.watermarks.set("c", 1);
+      store.watermarks["c"] = 1;
       const result = yield* store.applyMutations(context, [mutation(1), mutation(2)]);
       expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "earlier" }]);
       expect(store.steps).not.toContain("commit 1 Applied");
@@ -122,17 +140,22 @@ describe("Backend.transaction", () => {
 
   it.effect("refuses a gap with a BackendError and commits nothing", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok } });
-      const exit = yield* Effect.exit(store.applyMutations(context, [mutation(2)]));
-      expect(Exit.isFailure(exit)).toBe(true);
-      expect(JSON.stringify(exit)).toContain("Mutation id gap for client c: got 2, expected 1");
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok },
+      });
+      const error = yield* Effect.flip(store.applyMutations(context, [mutation(2)]));
+      expect(error.message).toBe("Mutation id gap for client c: got 2, expected 1");
       expect(store.commits).toEqual([]);
     })
   );
 
   it.effect("opens nothing for a non-positive id", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok } });
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok },
+      });
       yield* store.applyMutations(context, [mutation(0), mutation(-1)]);
       expect(store.steps.filter((step) => step.startsWith("open"))).toEqual([]);
     })
@@ -140,16 +163,22 @@ describe("Backend.transaction", () => {
 
   it.effect("releases the unit and commits nothing on a transient failure", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { fail } });
-      const exit = yield* Effect.exit(store.applyMutations(context, [mutation(1, "fail")]));
-      expect(Exit.isFailure(exit)).toBe(true);
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { fail },
+      });
+      const error = yield* Effect.flip(store.applyMutations(context, [mutation(1, "fail")]));
+      expect(error.message).toBe("down");
       expect(store.steps).toEqual(["begin c:1", "open 1", "release 1"]);
     })
   );
 
   it.effect("releases the unit and fails with UnknownMutator for a mutator without a handler", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok } });
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok },
+      });
       const error = yield* Effect.flip(store.applyMutations(context, [mutation(1, "missing")]));
       expect(UnknownMutator.isError(error)).toBe(true);
       expect(store.steps).toEqual(["begin c:1", "open 1", "release 1"]);
@@ -159,8 +188,9 @@ describe("Backend.transaction", () => {
   it.effect("reports a concurrent copy's committed rejection when the commit replays", () =>
     Effect.gen(function* () {
       const store = scriptedStore({
+        ...defaults,
         handlers: { ok },
-        commitResults: [{ _tag: "Replayed", rejection: "raced" }],
+        commitResults: [{ _tag: "Replayed", rejection: Option.some("raced") }],
       });
       const result = yield* store.applyMutations(context, [mutation(1)]);
       expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "raced" }]);
@@ -171,19 +201,24 @@ describe("Backend.transaction", () => {
   it.effect("reopens and reruns a conflicted commit, then fails transiently past the cap", () =>
     Effect.gen(function* () {
       const store = scriptedStore({
+        ...defaults,
         handlers: { ok },
         commitResults: Array.from({ length: 16 }, (): Commit => ({ _tag: "Conflicted" })),
       });
       const error = yield* Effect.flip(store.applyMutations(context, [mutation(1)]));
       expect(error.message).toContain("serialization conflict");
       expect(store.steps.filter((step) => step === "open 1")).toHaveLength(16);
-      expect(store.watermarks.get("c")).toBeUndefined();
+      expect(store.watermarks["c"]).toBeUndefined();
     })
   );
 
   it.effect("fails when the store will not open the client's next mutation", () =>
     Effect.gen(function* () {
-      const store = scriptedStore({ handlers: { ok }, refuseNext: true });
+      const store = scriptedStore({
+        ...defaults,
+        handlers: { ok },
+        refuseNext: true,
+      });
       const error = yield* Effect.flip(store.applyMutations(context, [mutation(1)]));
       expect(error.message).toContain("did not open mutation 1");
     })
