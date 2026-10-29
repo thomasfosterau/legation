@@ -14,6 +14,10 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
+import * as R from "effect/Record";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -21,6 +25,7 @@ import * as Cvr from "../Cvr.js";
 import { AuthorizationError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
+import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
 import type { PatchOp, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
@@ -32,23 +37,29 @@ interface Post {
   readonly visibility: "public" | "followers" | "private";
 }
 
-interface Follow {
-  readonly id: string;
-  readonly follower: string;
-  readonly followee: string;
-}
+const Follow = Schema.Struct({
+  id: Schema.String,
+  follower: Schema.String,
+  followee: Schema.String,
+});
+const decodeFollow = Schema.decodeUnknownOption(Follow);
+
+const Identity = Schema.Struct({ user: Schema.optional(Schema.String), role: Schema.String });
 
 /** clientGroupId → identity (a real carrier derives it from a verified token). */
-const identities: Record<string, { readonly user?: string; readonly role: string }> = {
+const identities = {
   "group-switch": { user: "alice", role: "member" },
   "group-mod": { user: "mod", role: "moderator" },
   "group-alice": { user: "alice", role: "member" },
   "group-anon": { role: "anonymous" },
   "group-broken": { user: "broken", role: "member" },
-};
+} satisfies Record<string, typeof Identity.Type>;
+
+/** The identities by any client group id: an unknown group has none. */
+const identityTable: R.ReadonlyRecord<string, typeof Identity.Type> = identities;
 
 const identityOf = (context: { readonly identity?: unknown }) =>
-  context.identity as { readonly user?: string; readonly role: string } | undefined;
+  Schema.decodeUnknownOption(Identity)(context.identity);
 
 /** Builds the scope over a backend: `followingIds` reads the follows collection. */
 const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> = Effect.void) => {
@@ -56,7 +67,9 @@ const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> 
     source,
     maxAge: "1 hour",
     resolve: (context) => {
-      const user = identityOf(context)?.user;
+      const user = Option.getOrUndefined(
+        Option.flatMapNullishOr(identityOf(context), (identity) => identity.user)
+      );
       if (user === undefined || user === "broken") {
         return Effect.fail(
           new AuthorizationError({ message: "cannot resolve following", collection: "posts" })
@@ -72,7 +85,9 @@ const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> 
           "follows",
           entries.map((entry) => entry.id)
         );
-        return rows.map((row) => (row.value as Follow).followee);
+        return rows.flatMap((row) =>
+          Option.toArray(decodeFollow(row.value)).map((follow) => follow.followee)
+        );
       }).pipe(
         Effect.orDie,
         Effect.tap(() => gate)
@@ -80,8 +95,9 @@ const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> 
     },
   };
   const posts: Authorization.AuthFilter = (context) => {
-    const identity = identityOf(context);
-    if (identity === undefined) return Effect.succeed(Authorization.Deny);
+    const decoded = identityOf(context);
+    if (Option.isNone(decoded)) return Effect.succeed(Authorization.Deny);
+    const identity = decoded.value;
     if (identity.role === "moderator") return Effect.succeed(Authorization.AllowAll);
     const isPublic = Predicate.eq("visibility", "public");
     if (identity.role === "anonymous" || identity.user === undefined) {
@@ -104,19 +120,24 @@ const policyOver = (backend: Backend, source: string, gate: Effect.Effect<void> 
   return Authorization.policy({ posts, follows: Authorization.allowAll });
 };
 
-const put = <V extends { readonly id: string }>(collection: string, value: V) => ({
-  collection,
-  value: value as { readonly id: string },
+const PutArgs = Schema.Struct({
+  collection: Schema.String,
+  value: Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]),
 });
+type Put = typeof PutArgs.Type;
+const putRow = Mutator.make("put", PutArgs);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
-  put: (args, writer) => {
-    const { collection, value } = args as ReturnType<typeof put>;
-    return writer.put(collection, value.id, value);
-  },
-};
+const put = (collection: string, value: Put["value"]): Put => ({ collection, value });
 
-const seed: ReadonlyArray<ReturnType<typeof put>> = [
+const handlers = MemoryBackend.validatedHandlers([
+  MemoryBackend.handler(putRow, ({ collection, value }, writer) =>
+    writer.put(collection, value.id, value)
+  ),
+]);
+
+const seed: ReadonlyArray<Put> = [
   put("posts", { id: "pub", ownerId: "bob", visibility: "public" } satisfies Post),
   put("posts", { id: "bob-followers", ownerId: "bob", visibility: "followers" } satisfies Post),
   put("posts", { id: "bob-private", ownerId: "bob", visibility: "private" } satisfies Post),
@@ -137,13 +158,14 @@ const setupWith = (
         policy === undefined ? policyOver(backend, source) : policy(backend)
       ),
       Effect.provideService(Authorization.IdentityResolver, {
-        resolve: (clientGroupId) => Effect.succeed(identities[clientGroupId]),
+        resolve: (clientGroupId) =>
+          Effect.succeed(Option.getOrUndefined(R.get(identityTable, clientGroupId))),
       }),
       Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
       Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
     );
     let mutationId = 0;
-    const write = (value: ReturnType<typeof put>) =>
+    const write = (value: Put) =>
       server.handlePush({
         clientGroupId: "group-writer",
         mutations: [
@@ -157,21 +179,29 @@ const setupWith = (
         ],
       });
     yield* Effect.forEach(seed, write, { concurrency: 1, discard: true });
-    const pull = (clientGroupId: string, cookie?: string, ...collections: Array<string>) =>
-      server.handlePull({
+    const pull = (clientGroupId: string, cookie?: string, ...collections: Array<string>) => {
+      const request = {
         clientGroupId,
         subscriptions: (Arr.isReadonlyArrayEmpty(collections) ? ["posts"] : collections).map(
           (collection) => Subset.make({ collection })
         ),
-        ...(cookie === undefined ? {} : { cookie }),
-      });
+      };
+      return server.handlePull(cookie === undefined ? request : { ...request, cookie });
+    };
     return { server, write, pull };
   });
 
 const setup = setupWith("follows");
 
+/** A named set over the follows source with fixed members. */
+const setOf = (members: ReadonlyArray<string>): Authorization.NamedSet => ({
+  source: "follows",
+  maxAge: "1 hour",
+  resolve: () => Effect.succeed(members),
+});
+
 const putIds = (response: PullResponse) =>
-  response.patch.flatMap((op: PatchOp) => (op._tag === "Put" ? [op.id] : [])).toSorted();
+  response.patch.flatMap((op: PatchOp) => (P.isTagged(op, "Put") ? [op.id] : [])).toSorted();
 
 describe("session-resolved read scopes (#205)", () => {
   it.effect("expresses the multi-tenant scope as one declaration per collection", () =>
@@ -338,11 +368,6 @@ describe("session-resolved read scopes (#205)", () => {
 
   it.effect("keeps two collections' sets of one name apart", () =>
     Effect.gen(function* () {
-      const setOf = (members: ReadonlyArray<string>): Authorization.NamedSet => ({
-        source: "follows",
-        maxAge: "1 hour",
-        resolve: () => Effect.succeed(members),
-      });
       const { pull, write } = yield* setupWith("follows", () =>
         Authorization.policy({
           posts: () =>

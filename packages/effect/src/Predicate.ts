@@ -21,6 +21,8 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -531,35 +533,24 @@ export const hasExists = (predicate: Predicate): boolean => {
 
 // ─── Named sets (#205) ───────────────────────────────────────────────────────
 
-/** The names of the sets a predicate's `InSet` nodes refer to. */
-export const setNames = (predicate: Predicate): ReadonlySet<string> => {
-  const names = new Set<string>();
-  const visit = (node: Predicate): void => {
-    switch (node._tag) {
-      case "InSet":
-        names.add(node.set);
-        return;
-      case "And":
-      case "Or":
-        for (const inner of node.predicates) visit(inner);
-        return;
-      case "Not":
-        visit(node.predicate);
-        return;
-      case "Exists":
-        visit(node.where);
-        return;
-      case "True":
-      case "Compare":
-      case "In":
-      case "NotIn":
-      case "IsNull":
-        return;
-    }
-  };
-  visit(predicate);
-  return names;
-};
+/** The sets a predicate's `InSet` nodes refer to, by name, with repeats. */
+const setsIn = (node: Predicate): ReadonlyArray<string> =>
+  Match.valueTags(node, {
+    InSet: (branch): ReadonlyArray<string> => [branch.set],
+    And: (branch) => branch.predicates.flatMap(setsIn),
+    Or: (branch) => branch.predicates.flatMap(setsIn),
+    Not: (branch) => setsIn(branch.predicate),
+    Exists: (branch) => setsIn(branch.where),
+    True: () => [],
+    Compare: () => [],
+    In: () => [],
+    NotIn: () => [],
+    IsNull: () => [],
+  });
+
+/** The names of the sets a predicate's `InSet` nodes refer to, each once. */
+export const setNames = (predicate: Predicate): ReadonlyArray<string> =>
+  Arr.dedupe(setsIn(predicate));
 
 /**
  * Bind every `InSet` node to its resolved values: `InSet(field, name)`
@@ -572,30 +563,30 @@ export const setNames = (predicate: Predicate): ReadonlySet<string> => {
  */
 export const bindSets = (
   predicate: Predicate,
-  bindings: ReadonlyMap<string, ReadonlyArray<Literal>>
+  bindings: HashMap.HashMap<string, ReadonlyArray<Literal>>
 ): Predicate => {
-  const bind = (node: Predicate, negated: boolean): Predicate => {
-    switch (node._tag) {
-      case "InSet": {
-        const values = bindings.get(node.set);
-        if (values !== undefined) return isIn(node.field, values);
-        return negated ? always : isIn(node.field, []);
-      }
-      case "And":
-        return { _tag: "And", predicates: node.predicates.map((inner) => bind(inner, negated)) };
-      case "Or":
-        return { _tag: "Or", predicates: node.predicates.map((inner) => bind(inner, negated)) };
-      case "Not":
-        return not(bind(node.predicate, !negated));
-      case "Exists":
-        return { ...node, where: bind(node.where, negated) };
-      case "True":
-      case "Compare":
-      case "In":
-      case "NotIn":
-      case "IsNull":
-        return node;
-    }
-  };
-  return setNames(predicate).size === 0 ? predicate : bind(predicate, false);
+  const bind = (node: Predicate, negated: boolean): Predicate =>
+    Match.valueTags(node, {
+      InSet: (branch): Predicate =>
+        Option.match(HashMap.get(bindings, branch.set), {
+          onSome: (values) => isIn(branch.field, values),
+          onNone: () => (negated ? always : isIn(branch.field, [])),
+        }),
+      And: (branch): Predicate => ({
+        _tag: "And",
+        predicates: branch.predicates.map((inner) => bind(inner, negated)),
+      }),
+      Or: (branch): Predicate => ({
+        _tag: "Or",
+        predicates: branch.predicates.map((inner) => bind(inner, negated)),
+      }),
+      Not: (branch): Predicate => not(bind(branch.predicate, !negated)),
+      Exists: (branch): Predicate => ({ ...branch, where: bind(branch.where, negated) }),
+      True: (leaf): Predicate => leaf,
+      Compare: (leaf): Predicate => leaf,
+      In: (leaf): Predicate => leaf,
+      NotIn: (leaf): Predicate => leaf,
+      IsNull: (leaf): Predicate => leaf,
+    });
+  return Arr.isReadonlyArrayEmpty(setNames(predicate)) ? predicate : bind(predicate, false);
 };

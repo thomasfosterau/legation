@@ -23,7 +23,10 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";
@@ -107,16 +110,12 @@ export type AuthFilter = (
 export const allowAll: AuthFilter = () => Effect.succeed(AllowAll);
 
 /** The scope a filter's output stands for: a bare predicate is a `Filter` without sets. */
-export const scopeOf = (output: ReadScope | Predicate): ReadScope => {
-  switch (output._tag) {
-    case "AllowAll":
-    case "Deny":
-    case "Filter":
-      return output;
-    default:
-      return filter(output);
-  }
-};
+export const scopeOf = (output: ReadScope | Predicate): ReadScope =>
+  isReadScope(output) ? output : filter(output);
+
+/** Whether a filter's output is a {@link ReadScope} rather than a bare predicate. */
+const isReadScope = (output: ReadScope | Predicate): output is ReadScope =>
+  P.isTagged(output, "AllowAll") || P.isTagged(output, "Deny") || P.isTagged(output, "Filter");
 
 /**
  * How {@link authorize} binds a named set for one request: the members, or
@@ -230,20 +229,17 @@ export const authorize = (
   return admitted.pipe(
     Effect.andThen(declared(context)),
     Effect.flatMap((output) => {
-      const scope = scopeOf(output);
-      switch (scope._tag) {
-        case "AllowAll":
-          return Effect.succeed(subset);
-        case "Deny":
-          return Effect.succeed({ ...subset, where: Predicates.isIn("id", []) });
-        case "Filter":
-          return bindScope(scope, context, subset.collection, bindSet).pipe(
+      return Match.valueTags(scopeOf(output), {
+        AllowAll: () => Effect.succeed(subset),
+        Deny: () => Effect.succeed({ ...subset, where: Predicates.isIn("id", []) }),
+        Filter: (scope) =>
+          bindScope(scope, context, subset.collection, bindSet).pipe(
             Effect.map((mandatory) => ({
               ...subset,
               where: Predicates.and(mandatory, subset.where),
             }))
-          );
-      }
+          ),
+      });
     })
   );
 };
@@ -261,7 +257,7 @@ const bindScope = (
   bindSet: SetBinder
 ): Effect.Effect<Predicate> =>
   Effect.forEach(
-    [...Predicates.setNames(scope.predicate)],
+    Predicates.setNames(scope.predicate),
     (name) => {
       const set = scope.sets[name];
       return set === undefined
@@ -275,7 +271,7 @@ const bindScope = (
     Effect.map((entries) =>
       Predicates.bindSets(
         scope.predicate,
-        new Map(
+        HashMap.fromIterable(
           entries.flatMap(([name, values]) => Option.toArray(values).map((v) => [name, v] as const))
         )
       )

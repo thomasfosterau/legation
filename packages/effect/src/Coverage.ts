@@ -147,7 +147,7 @@ const leafKey = (leaf: Leaf): string => {
     case "IsNull":
       return `IsNull(${JSON.stringify(leaf.field)},${leaf.negated === true})`;
     case "InSet":
-      return `InSet(${JSON.stringify(leaf.field)},${JSON.stringify(leaf.set)})`;
+      return `InSet(${literalKey(leaf.field)},${literalKey(leaf.set)})`;
   }
 };
 
