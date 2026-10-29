@@ -40,6 +40,17 @@
  * post-write value and omits the deleted row, without a re-list (#444). It uses
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  *
+ * **Types and runtime (#177, ADR-0009's amendment).** A backend whose
+ * `applyMutations` is built with `Backend.transaction` gets the ledger's
+ * ordering rules by construction: in-order application, idempotent skip and gap
+ * rejection (rules 1–3), and the bump travelling with each outcome, a rejection
+ * committing no effects (rules 4, 9 and 10). The store keeps one obligation:
+ * its `commit` (or `atomically`) must really be atomic and isolated. Types cannot
+ * see that, so this suite still runs every rule against every backend, built
+ * through the combinator or by hand. Evaluation (rules 6 and 14), row versions,
+ * `getRows`, isolation and the rejection list (rules 5, 7, 8, 12 and 13) are
+ * behaviour, and stay runtime only.
+ *
  * A backend that provides the optional `evaluateMany` (#505) must agree with
  * its own `evaluate`: rule 14 asks for rule 6's subsets, the generated corpus
  * included, in one call and checks each list against `evaluate` for that

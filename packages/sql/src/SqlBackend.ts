@@ -124,12 +124,7 @@ import {
   Predicate,
   type Mutator,
 } from "@thomasfosterau/legation-effect";
-import {
-  Hash,
-  RejectionMemory,
-  Subset,
-  UnknownMutator,
-} from "@thomasfosterau/legation-effect/internal";
+import { Hash, Subset, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).
@@ -144,24 +139,26 @@ const decodeArgs = (
     )
   );
 
-/** The `BackendError` for an id past the next expected one (a gap in the client's ids). */
-const gapError = (clientId: string, mutationId: number, last: number) =>
-  new BackendError({
-    message: `Mutation id gap for client ${clientId}: got ${mutationId}, expected ${last + 1}`,
-  });
-
 /** One pushed mutation, as `applyMutations` receives it. */
 type Mutation = Parameters<Backend.Backend["applyMutations"]>[1][number];
 
+/** A push's state: its context, and the counter that names each handler run's savepoint. */
+interface SqlBatch {
+  readonly context: Backend.SyncContext;
+  readonly savepoints: { next: number };
+}
+
 /**
- * How one pushed mutation settled: its handler applied it or rejected it, or a
- * copy the ledger covers was skipped. A replayed copy carries the committed
- * rejection's reason, when there is one (#366).
+ * One opened mutation: its context, its savepoint, and, without transactions,
+ * whether the ledger remembers a rejection for its id that a failed bump left
+ * behind (#425).
  */
-type Settlement =
-  | { readonly _tag: "applied"; readonly hints: ReadonlyArray<Backend.ChangeHint> }
-  | { readonly _tag: "rejected"; readonly reason: string }
-  | { readonly _tag: "replayed"; readonly rejection: string | undefined };
+interface SqlUnit {
+  readonly context: Backend.SyncContext;
+  readonly mutation: Mutation;
+  readonly savepoint: string;
+  readonly staleRejection: boolean;
+}
 
 /** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
 const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
@@ -956,27 +953,59 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       })
       .pipe(Effect.map((rows) => Arr.isReadonlyArrayNonEmpty(rows)));
 
-  // Claim `mutationId` before its handler runs. `undefined`: this call won the
-  // claim and must run the handler. A `replayed` settlement: the ledger already
-  // covers the id, so it is a replay to skip, reporting the committed rejection
-  // when there is one (#366). Otherwise the id is past the next expected one: a
-  // gap, a `BackendError`. A zero-row claim re-reads the ledger, which only ever
-  // rises, so a stale claim cannot move the watermark back.
-  const claimMutation = (
-    clientGroupId: string,
-    clientId: string,
-    mutationId: number
-  ): Effect.Effect<Settlement | undefined, BackendError> =>
+  // A unit for an opened mutation, with the next savepoint name of the push.
+  const unitOf = (batch: SqlBatch, mutation: Mutation, staleRejection: boolean): SqlUnit => {
+    const savepoint = q(`legation_sp_${batch.savepoints.next}`);
+    batch.savepoints.next += 1;
+    return { context: batch.context, mutation, savepoint, staleRejection };
+  };
+
+  // Open `mutationId` claim-first: claim it before its handler runs. A won claim
+  // opens the unit. A zero-row claim re-reads the ledger, which only ever rises,
+  // so a stale claim cannot move the watermark back, and reports the watermark
+  // with the committed rejection, if there is one (#366): `Backend.transaction`
+  // classifies it as a replay or a gap.
+  const openClaimFirst = (
+    batch: SqlBatch,
+    mutation: Mutation
+  ): Effect.Effect<Backend.Opened<SqlUnit>, BackendError> =>
     Effect.gen(function* () {
-      yield* ensureLedgerRow(clientGroupId, clientId);
-      if (yield* claimLedger(clientGroupId, clientId, mutationId)) return undefined;
-      const row = (yield* readLedger(clientGroupId)).get(clientId);
-      const last = row?.last ?? 0;
-      if (mutationId <= last) {
-        return { _tag: "replayed", rejection: row?.rejections.get(mutationId) };
+      const { clientGroupId } = batch.context;
+      yield* ensureLedgerRow(clientGroupId, mutation.clientId);
+      if (yield* claimLedger(clientGroupId, mutation.clientId, mutation.mutationId)) {
+        return { _tag: "Opened", unit: unitOf(batch, mutation, false) };
       }
-      return yield* gapError(clientId, mutationId, last);
+      const row = (yield* readLedger(clientGroupId)).get(mutation.clientId);
+      return {
+        _tag: "Watermark",
+        lastMutationId: row?.last ?? 0,
+        rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
+      };
     });
+
+  // Open `mutationId` handler-then-bump (executors without transactions, D1):
+  // the ledger is read and nothing is claimed, so a crash cannot leave an id
+  // claimed and unapplied. The bump comes at commit, after the handler.
+  const openBumpAfter = (
+    batch: SqlBatch,
+    mutation: Mutation
+  ): Effect.Effect<Backend.Opened<SqlUnit>, BackendError> =>
+    readLedger(batch.context.clientGroupId).pipe(
+      Effect.map((ledger): Backend.Opened<SqlUnit> => {
+        const row = ledger.get(mutation.clientId);
+        const last = row?.last ?? 0;
+        return mutation.mutationId === last + 1
+          ? {
+              _tag: "Opened",
+              unit: unitOf(batch, mutation, row?.rejections.has(mutation.mutationId) === true),
+            }
+          : {
+              _tag: "Watermark",
+              lastMutationId: last,
+              rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
+            };
+      })
+    );
 
   // The bump of the handler-then-bump order (executors without transactions).
   // It runs after the handler's writes, and it takes the larger of the stored and
@@ -1018,122 +1047,76 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       })
       .pipe(Effect.ignore);
 
-  // Run one mutation's handler inside a savepoint, so a permanent rejection drops
-  // its writes while the id's ledger write (the claim, or the bump after it)
-  // stays. A transient BackendError propagates and aborts the batch.
-  const runHandler = (context: Backend.SyncContext, mutation: Mutation, savepointIndex: number) =>
+  // Run one mutation's handler inside a savepoint, so a permanent rejection
+  // drops its writes (at commit) while the id's ledger write (the claim, or the
+  // bump after it) stays. A transient BackendError propagates and aborts the batch.
+  const runHandler = (
+    unit: SqlUnit,
+    handler: SqlHandler,
+    mutation: Mutation
+  ): Effect.Effect<ReadonlyArray<Backend.ChangeHint>, BackendError | MutationRejected> =>
     Effect.gen(function* () {
-      const handler = config.handlers[mutation.mutator];
       const definition = config.mutators.get(mutation.mutator);
-      if (handler === undefined || definition === undefined) {
-        return yield* UnknownMutator.make(mutation.mutator);
-      }
+      if (definition === undefined) return yield* UnknownMutator.make(mutation.mutator);
       const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
-
-      const savepoint = q(`legation_sp_${savepointIndex}`);
-      yield* executor.run({ text: `SAVEPOINT ${savepoint}`, params: [] });
-      const outcome = yield* handler(args, executor, context).pipe(
-        Effect.map((hs) => ({ _tag: "applied", hints: hs }) as const),
-        Effect.catchTag("MutationRejected", (error) =>
-          executor
-            .run({ text: `ROLLBACK TO SAVEPOINT ${savepoint}`, params: [] })
-            .pipe(Effect.map(() => ({ _tag: "rejected", reason: error.reason }) as const))
-        )
-      );
-      yield* executor.run({ text: `RELEASE SAVEPOINT ${savepoint}`, params: [] });
-      return outcome;
+      yield* executor.run({ text: `SAVEPOINT ${unit.savepoint}`, params: [] });
+      return yield* handler(args, executor, unit.context);
     });
 
-  // Claim-first, for an executor with transactions: the id is claimed, then its
-  // handler runs. A transient failure gives the claim back (best effort; the
-  // transaction's rollback does the same when it aborts the batch). A permanent
-  // rejection is remembered in the same transaction as the claim (#366).
-  const applyClaimFirst = (
-    context: Backend.SyncContext,
-    mutation: Mutation,
-    savepointIndex: number
-  ): Effect.Effect<Settlement, BackendError> =>
+  // Commit one mutation's outcome with its ledger write. An applied mutation
+  // keeps its savepoint's writes; a rejected one rolls them back, and its
+  // rejection is remembered in the same transaction as the claim (#366), or,
+  // without transactions, before the bump, so a copy that sees the id as covered
+  // also sees its rejection. Without transactions the bump comes last and takes
+  // the larger id (`bumpLastId`); it is not atomic with the handler's writes (#342).
+  const commitOutcome = (
+    unit: SqlUnit,
+    outcome: Backend.Outcome<ReadonlyArray<Backend.ChangeHint>>
+  ): Effect.Effect<Backend.Commit, BackendError> =>
     Effect.gen(function* () {
-      const replayed = yield* claimMutation(
-        context.clientGroupId,
-        mutation.clientId,
-        mutation.mutationId
-      );
-      if (replayed !== undefined) return replayed;
-      const outcome = yield* runHandler(context, mutation, savepointIndex).pipe(
-        Effect.onError(() =>
-          releaseClaim(context.clientGroupId, mutation.clientId, mutation.mutationId)
-        )
-      );
-      if (outcome._tag === "rejected") {
-        yield* recordRejection(
-          context.clientGroupId,
-          mutation.clientId,
-          mutation.mutationId,
-          outcome.reason
-        );
+      const { clientGroupId } = unit.context;
+      const { clientId, mutationId } = unit.mutation;
+      if (outcome._tag === "Rejected") {
+        yield* executor.run({ text: `ROLLBACK TO SAVEPOINT ${unit.savepoint}`, params: [] });
+        yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
+        yield* recordRejection(clientGroupId, clientId, mutationId, outcome.reason);
+      } else {
+        yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
+        if (!transactional && unit.staleRejection) {
+          // An earlier copy was rejected and recorded it, but its bump failed, so
+          // the id was never acknowledged and this copy applies it. The stale
+          // rejection goes before the bump: a bump that then fails leaves the id
+          // unacknowledged with no rejection to report, and a replay after the
+          // bump must not report one for an applied mutation (#425).
+          const row = (yield* readLedger(clientGroupId)).get(clientId);
+          const rejections = new Map(row?.rejections ?? []);
+          rejections.delete(mutationId);
+          yield* writeRejections(clientGroupId, clientId, rejections);
+        }
       }
-      return outcome;
+      if (!transactional) yield* bumpLastId(clientGroupId, clientId, mutationId);
+      return { _tag: "Committed" } as const;
     });
-
-  // Handler-then-bump, for an executor without transactions (D1): trunk's order.
-  // The ledger is read first, a covered id is skipped, and the id is bumped only
-  // after the handler has run. Nothing is claimed, so a crash cannot leave an id
-  // claimed and unapplied. A rejection is recorded before the bump, so a copy
-  // that sees the id as covered also sees its rejection (#366).
-  const applyBumpAfter = (
-    context: Backend.SyncContext,
-    mutation: Mutation,
-    savepointIndex: number
-  ): Effect.Effect<Settlement, BackendError> =>
-    Effect.gen(function* () {
-      const row = (yield* readLedger(context.clientGroupId)).get(mutation.clientId);
-      const last = row?.last ?? 0;
-      if (mutation.mutationId <= last) {
-        return { _tag: "replayed", rejection: row?.rejections.get(mutation.mutationId) };
-      }
-      if (mutation.mutationId > last + 1) {
-        return yield* gapError(mutation.clientId, mutation.mutationId, last);
-      }
-      const outcome = yield* runHandler(context, mutation, savepointIndex);
-      if (outcome._tag === "rejected") {
-        yield* recordRejection(
-          context.clientGroupId,
-          mutation.clientId,
-          mutation.mutationId,
-          outcome.reason
-        );
-      } else if (row?.rejections.has(mutation.mutationId)) {
-        // An earlier copy was rejected and recorded it, but its bump failed, so the
-        // id was never acknowledged and this copy applies it. The stale rejection
-        // goes before the bump: a bump that then fails leaves the id unacknowledged
-        // with no rejection to report, and a replay after the bump must not report
-        // one for an applied mutation (#425).
-        const rejections = new Map(row.rejections);
-        rejections.delete(mutation.mutationId);
-        yield* writeRejections(context.clientGroupId, mutation.clientId, rejections);
-      }
-      yield* bumpLastId(context.clientGroupId, mutation.clientId, mutation.mutationId);
-      return outcome;
-    });
-
-  // The ordering this executor uses; chosen once, outside the generator.
-  const applyOne = transactional ? applyClaimFirst : applyBumpAfter;
 
   // The transaction's isolation, set before any read so every read in it sees
   // the snapshot SERIALIZABLE gives (#353). An executor without transactions has
   // nothing to isolate, and SQLite has no such statement (its writers serialise).
   const serializable = transactional ? dialect.serializable : undefined;
 
-  const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
+  // The whole push is one executor transaction, with SERIALIZABLE set first
+  // where the dialect has it (and the executor has transactions).
+  const atomically = <A>(
+    _context: Backend.SyncContext,
+    effect: Effect.Effect<A, BackendError>
+  ): Effect.Effect<A, BackendError> =>
     executor.transaction(
-      Effect.gen(function* () {
-        if (serializable !== undefined) {
-          // PostgreSQL refuses this statement inside a subtransaction (a nested
-          // transaction, which the executor runs as a savepoint) or after another
-          // statement. A refusal fails the batch: the batch must never run at READ
-          // COMMITTED without saying so (#353). The client retries it.
-          yield* executor.run({ text: serializable, params: [] }).pipe(
+      serializable === undefined
+        ? effect
+        : executor.run({ text: serializable, params: [] }).pipe(
+            // PostgreSQL refuses this statement inside a subtransaction (a nested
+            // transaction, which the executor runs as a savepoint) or after another
+            // statement. A refusal fails the batch: the batch must never run at READ
+            // COMMITTED without saying so (#353). The client retries it.
             Effect.mapError(
               (cause) =>
                 new BackendError({
@@ -1143,58 +1126,52 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
                     "fails inside a nested transaction (a savepoint) or after another statement.",
                   cause,
                 })
-            )
-          );
-        }
-        // The rejections this push has moved past are forgotten first (#366).
-        yield* forgetRejections(context.clientGroupId, RejectionMemory.floorsOf(mutations));
-        const hints: Array<Backend.ChangeHint> = [];
-        const rejected: Array<Backend.RejectedMutation> = [];
-        // Numbered per handler run, as trunk did: a replay runs no savepoint and
-        // takes no number.
-        let savepointCounter = 0;
-        yield* Effect.forEach(
-          mutations,
-          (mutation) =>
-            Effect.gen(function* () {
-              // Ids start at 1 and the ledger at 0, so a non-positive id is never
-              // new: skip it without writing a ledger row for it.
-              if (mutation.mutationId <= 0) return;
-              const settled = yield* applyOne(context, mutation, savepointCounter);
-              if (settled._tag === "replayed") {
-                // A copy the ledger covers runs no handler. It reports the committed
-                // rejection, if there is one, so every copy agrees (#366).
-                if (settled.rejection !== undefined) {
-                  rejected.push({
-                    clientId: mutation.clientId,
-                    mutationId: mutation.mutationId,
-                    reason: settled.rejection,
-                  });
-                }
-                return;
-              }
-              savepointCounter++;
-              if (settled._tag === "applied") {
-                hints.push(...settled.hints);
-              } else {
-                rejected.push({
-                  clientId: mutation.clientId,
-                  mutationId: mutation.mutationId,
-                  reason: settled.reason,
-                });
-              }
-            }),
-          { concurrency: 1, discard: true }
-        );
-        // Enrich once, after all writes, so the reads see the final tx state
-        // (a row a later mutation deleted is correctly absent from `values`).
-        return {
-          lastMutationIds: yield* readLastIds(context.clientGroupId),
-          hints: yield* Effect.forEach(hints, enrichHint),
-          ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
-        };
-      })
+            ),
+            Effect.andThen(effect)
+          )
     );
+
+  // `Backend.transaction` owns the ledger rules (#177): order, replay and gap
+  // classification, the bump with each outcome, and reporting. This store
+  // supplies the claim (or the read, on D1), the savepoint, and the commit.
+  const applyMutations = Backend.transaction<
+    SqlHandler,
+    SqlBatch,
+    SqlUnit,
+    ReadonlyArray<Backend.ChangeHint>
+  >({
+    handlers: config.handlers,
+    // Always the executor's transaction, as before #177: an executor without
+    // transactions (D1) defines what its `transaction` does.
+    atomically,
+    // The database isolates a batch (or, on D1, nothing does): a commit never
+    // reports a conflict, so a handler runs once per opened unit.
+    maxAttempts: 1,
+    // The rejections this push has moved past are forgotten first (#366).
+    begin: (context, floors) =>
+      forgetRejections(context.clientGroupId, floors).pipe(
+        Effect.as({ context, savepoints: { next: 0 } })
+      ),
+    open: transactional ? openClaimFirst : openBumpAfter,
+    run: runHandler,
+    commit: commitOutcome,
+    // A transaction rolls a claim back with the handler's effects; this gives it
+    // back as well (best effort). Without transactions nothing was claimed.
+    release: transactional
+      ? (unit) =>
+          releaseClaim(unit.context.clientGroupId, unit.mutation.clientId, unit.mutation.mutationId)
+      : () => Effect.void,
+    // Enrich once, after all writes, so the reads see the final tx state
+    // (a row a later mutation deleted is correctly absent from `values`).
+    finish: ({ context }, applied) =>
+      Effect.all(
+        {
+          lastMutationIds: readLastIds(context.clientGroupId),
+          hints: Effect.forEach(applied.flat(), enrichHint),
+        },
+        { concurrency: 1 }
+      ),
+  });
 
   // The group's remembered rejections, from every client's ledger row (#365). A pull
   // reports the ones its watermark covers.
