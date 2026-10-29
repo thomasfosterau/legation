@@ -53,6 +53,10 @@ const makeBackend = Effect.gen(function* () {
 const policy = Authorization.policy({ products: Authorization.allowAll });
 const context = { clientGroupId: "g" };
 
+/** Every product, ordered by name. */
+const byName = (direction: "asc" | "desc") =>
+  Subset.make({ collection: "products", orderBy: [{ field: "name", direction }] });
+
 describe("SyncServer.readSubsets", () => {
   it.effect(
     "authorizes every subset before any backend call: a denied later subset costs nothing",
@@ -90,6 +94,51 @@ describe("SyncServer.readSubsets", () => {
       });
       expect(rows.map((row) => row.id)).toEqual(["p-3", "p-1"]);
       expect(calls()).toBe(2);
+    })
+  );
+
+  it.effect("evaluates a batch with one evaluateMany and fetches once per collection (#534)", () =>
+    Effect.gen(function* () {
+      const { backend: base } = yield* makeBackend;
+      const counts = { evaluate: 0, evaluateMany: 0 };
+      const fetchedFrom: Array<string> = [];
+      const backend: Backend.Backend = {
+        ...base,
+        evaluate: (ctx, subset) => {
+          counts.evaluate++;
+          return base.evaluate(ctx, subset);
+        },
+        evaluateMany: (ctx, subsets) => {
+          counts.evaluateMany++;
+          return Effect.forEach(subsets, (subset) => base.evaluate(ctx, subset), {
+            concurrency: 1,
+          });
+        },
+        getRows: (ctx, collection, ids) => {
+          fetchedFrom.push(collection);
+          return base.getRows(ctx, collection, ids);
+        },
+      };
+      const rows = yield* SyncServer.readSubsets(
+        {
+          backend,
+          authPolicy: Authorization.policy({
+            products: Authorization.allowAll,
+            notes: Authorization.allowAll,
+          }),
+        },
+        context,
+        {
+          clientGroupId: "g",
+          subsets: [byName("asc"), Subset.make({ collection: "notes" }), byName("desc")],
+        }
+      );
+      // Each subset's rows in its own evaluated order; a row two subsets share
+      // comes back once for each.
+      expect(rows.map((row) => row.id)).toEqual(["p-3", "p-1", "p-2", "p-2", "p-1", "p-3"]);
+      expect(counts.evaluateMany).toBe(1);
+      expect(counts.evaluate).toBe(0);
+      expect(fetchedFrom.toSorted()).toEqual(["notes", "products"]);
     })
   );
 });

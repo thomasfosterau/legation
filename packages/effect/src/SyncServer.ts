@@ -88,28 +88,58 @@ export interface ReadDeps {
   readonly middleware?: SyncMiddleware;
 }
 
+/** A row's key across collections, for the read's row lookup. */
+const rowKey = (collection: string, id: string): string => Hash.canonicalJson([collection, id]);
+
 /**
- * Evaluate one already-authorized subset to its current rows: `evaluate`
- * gives the `(id, version)` set in subset order, `getRows` the values, and
- * the rows are returned in the **evaluated order** — `getRows` promises
- * nothing about order (a SQL `IN` returns whatever the engine likes), and
- * the order is the window's identity (ADR-0026).
+ * Evaluate already-authorized subsets to their current rows (#534): one
+ * `Backend.evaluateAll` for the `(id, version)` sets, in subset order (a
+ * bounded number of statements on a backend with `evaluateMany`), then one
+ * `getRows` per collection over the union of its ids, as a pull's patch
+ * assembly fetches. Each subset's rows come back in its **evaluated order**:
+ * `getRows` promises nothing about order (a SQL `IN` returns whatever the engine
+ * likes), and the order is the window's identity (ADR-0026). A row two subsets
+ * share is returned once for each, as before.
  */
 const evaluateRows = (
   backend: Backend,
   context: SyncContext,
-  subset: Subset
+  subsets: ReadonlyArray<Subset>
 ): Effect.Effect<ReadonlyArray<ReadRow>, BackendError> =>
   Effect.gen(function* () {
-    const ids = (yield* backend.evaluate(context, subset)).map((entry) => entry.id);
-    const fetched = yield* backend.getRows(context, subset.collection, ids);
-    const byId = new Map(fetched.map((row) => [row.id, row] as const));
-    const rows: Array<ReadRow> = [];
-    Arr.forEach(ids, (id) => {
-      const row = byId.get(id);
-      if (row !== undefined) rows.push({ collection: subset.collection, ...row });
-    });
-    return rows;
+    const evaluated = yield* evaluateAll(backend, context, subsets);
+    const idsOf = (index: number): ReadonlyArray<string> =>
+      (evaluated[index] ?? []).map((entry) => entry.id);
+    const collections = Arr.dedupe(subsets.map((subset) => subset.collection));
+    const fetched = yield* Effect.forEach(
+      collections,
+      (collection) =>
+        backend
+          .getRows(
+            context,
+            collection,
+            Arr.dedupe(
+              subsets.flatMap((subset, index) =>
+                subset.collection === collection ? idsOf(index) : []
+              )
+            )
+          )
+          .pipe(Effect.map((rows) => [collection, rows] as const)),
+      { concurrency: 1 }
+    );
+    const byKey = HashMap.fromIterable(
+      fetched.flatMap(([collection, rows]) =>
+        rows.map((row): readonly [string, ReadRow] => [
+          rowKey(collection, row.id),
+          { collection, ...row },
+        ])
+      )
+    );
+    return subsets.flatMap((subset, index) =>
+      idsOf(index).flatMap((id) =>
+        Option.toArray(HashMap.get(byKey, rowKey(subset.collection, id)))
+      )
+    );
   });
 
 /**
@@ -119,7 +149,9 @@ const evaluateRows = (
  * `SyncMiddleware.onRead`, narrowed by the deny-by-default auth filters —
  * every subset before any is evaluated, so a denied subset anywhere in the
  * batch means no backend call at all — then each is evaluated to its
- * current rows in subset order. No cookie, no CVR read or write, no
+ * current rows in subset order, the evaluation batched through
+ * `Backend.evaluateAll` and the values through one `getRows` per collection
+ * (#534). No cookie, no CVR read or write, no
  * `lastMutationIds`. `handleRead` is this behind the protocol's identity
  * resolution; a derived REST handler is this behind an HTTP request's —
  * one read path, two carriers.
@@ -140,12 +172,7 @@ export const readSubsets = (
       (subset) => authorize(deps.authPolicy, context, subset, "server"),
       { concurrency: 1 }
     );
-    const rows = yield* Effect.forEach(
-      authorized,
-      (subset) => evaluateRows(deps.backend, context, subset),
-      { concurrency: 1 }
-    );
-    return rows.flat();
+    return yield* evaluateRows(deps.backend, context, authorized);
   });
 
 /**
