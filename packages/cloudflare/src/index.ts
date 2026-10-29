@@ -23,6 +23,7 @@ export * as BindingTransport from "./BindingTransport.js";
 export * as D1Executor from "./D1Executor.js";
 export * as DurableCvrStore from "./DurableCvrStore.js";
 export * as DurableFanoutBroker from "./DurableFanoutBroker.js";
+export * as EdgeInvalidation from "./EdgeInvalidation.js";
 export * as FanoutShard from "./FanoutShard.js";
 export * as Room from "./Room.js";
 export * as RoomProtocol from "./RoomProtocol.js";

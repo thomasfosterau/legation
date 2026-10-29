@@ -31,20 +31,19 @@
  * shifted" fallback), so it only ever contributes coarse tags.
  */
 
-import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
-import { Telemetry } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
+import { HttpCache, Telemetry } from "@thomasfosterau/legation-effect/internal";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 
-/** The default coarse tag convention: `collection:{name}`. */
-export const defaultTagFor = (collection: string): string => `collection:${collection}`;
+/** The default coarse tag convention: `collection:{name}` (`HttpCache.tagFor`, shared with the edge, #206). */
+export const defaultTagFor: (collection: string) => string = HttpCache.tagFor;
 
-/** The default fine, per-row tag convention: `collection:{name}:{id}`. */
-export const defaultFineTagFor = (collection: string, id: string): string =>
-  `${defaultTagFor(collection)}:${id}`;
+/** The default fine, per-row tag convention: `collection:{name}:{id}` (`HttpCache.fineTagFor`). */
+export const defaultFineTagFor: (collection: string, id: string) => string = HttpCache.fineTagFor;
 
 /**
  * The fine-tag row budget: a response enumerating more rows than this is
@@ -73,11 +72,8 @@ export const defaultFineTagFor = (collection: string, id: string): string =>
  */
 export const FINE_TAG_ROW_BUDGET = 43;
 
-/** The collections and individual rows one engine event touched. */
-export interface Touched {
-  readonly collections: ReadonlyArray<string>;
-  readonly rows: ReadonlyArray<{ readonly collection: string; readonly id: string }>;
-}
+/** The collections and individual rows one engine event touched (`HttpCache.Touched`). */
+export type Touched = HttpCache.Touched;
 
 const EMPTY_TOUCHED: Touched = { collections: [], rows: [] };
 
@@ -139,27 +135,14 @@ export const invalidateOnChanges = (
     const fineTagFor = options.fineTagFor ?? defaultFineTagFor;
     yield* Effect.forkScoped(
       Stream.runForEach(options.changes, (touched) => {
-        // Evict the union of the coarse and fine tags. The coarse eviction
-        // is NOT redundant with the fine one, even though every touched
-        // row's collection is already in `touched.collections`: a cached
-        // *aggregate* document (a list, an index page, sitemap.xml) can be
-        // staled by a row it does not yet contain — a newly-published row
-        // has no prior fine tag on that document to match, so only the
-        // coarse `collection:{name}` tag reaches it. Dropping the coarse
-        // eviction here (it looks redundant next to the fine one above it)
-        // would let such aggregates serve stale content indefinitely. Do
-        // not optimise it away.
-        const tags = new Set<string>();
-        Arr.forEach(touched.collections, (collection) => {
-          tags.add(tagFor(collection));
-        });
-        Arr.forEach(touched.rows, (row) => {
-          tags.add(fineTagFor(row.collection, row.id));
-        });
-        return tags.size === 0
+        // `evictionTags` is the union of the coarse and fine tags; the coarse
+        // half is not redundant (see its doc comment), so do not narrow it to
+        // the fine tags.
+        const tags = HttpCache.evictionTags(touched, { tagFor, fineTagFor });
+        return Arr.isReadonlyArrayEmpty(tags)
           ? Effect.void
           : options.store
-              .invalidateTags([...tags])
+              .invalidateTags(tags)
               .pipe(
                 Effect.catch((error) => Effect.logWarning("HTTP cache invalidation failed", error))
               );
