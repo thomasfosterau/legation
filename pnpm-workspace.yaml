@@ -26,16 +26,16 @@ catalog:
   # upgrades"). The published floor is `catalogs.peers` below, never this.
   # CI's "Tests (effect floor)" job rewrites exactly these entries to the
   # floor (`@effect/tsgo` and `@effect/language-service` excepted).
-  effect: 4.0.6
-  "@effect/platform-browser": 4.0.6
-  "@effect/platform-node": 4.0.6
+  effect: 4.1.0
+  "@effect/platform-browser": 4.1.0
+  "@effect/platform-node": 4.1.0
   # Not a direct dependency: the `overrides` entry below holds this transitive
   # dependency of `@effect/platform-node` (which ranges it with a caret) at the
   # pin, so the lockfile carries one Effect line.
-  "@effect/platform-node-shared": 4.0.6
-  "@effect/sql-pg": 4.0.6
-  "@effect/sql-sqlite-node": 4.0.6
-  "@effect/vitest": 4.0.6
+  "@effect/platform-node-shared": 4.1.0
+  "@effect/sql-pg": 4.1.0
+  "@effect/sql-sqlite-node": 4.1.0
+  "@effect/vitest": 4.1.0
   "@effect/language-service": ^0.87.3
   # Effect Language Service as a native (TypeScript-Go) binary — the TS7 side
   # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
