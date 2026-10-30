@@ -1,0 +1,12 @@
+{
+  // Lint-only: oxlint-tsgolint types each file under its nearest
+  // tsconfig.json, and the package's own excludes its tests. This gives them
+  // the type gate's program (package names mapped to `src/`, DOM lib)
+  // plus Node's globals.
+  "extends": "../../../../tsconfig.check.json",
+  "compilerOptions": {
+    // The tests read `process.env` (test fixtures run under Node).
+    "types": ["node"]
+  },
+  "include": ["./**/*"]
+}

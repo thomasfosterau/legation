@@ -70,7 +70,7 @@ export const packages = (() => {
     }
     ordered.set(name, pkg);
   };
-  for (const name of [...all.keys()].toSorted()) visit(name);
+  for (const name of [...all.keys()].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) visit(name);
   return ordered;
 })();
 

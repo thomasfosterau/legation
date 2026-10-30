@@ -50,7 +50,8 @@
     "@effect/platform-browser": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
-    "fake-indexeddb": "catalog:"
+    "fake-indexeddb": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "@effect/platform-browser": "catalog:peers",

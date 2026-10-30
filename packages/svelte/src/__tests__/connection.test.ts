@@ -79,7 +79,7 @@ describe("useConnection", () => {
     expect(text()).toContain("row:todo-1");
     expect(text()).not.toContain("row:todo-5");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -121,8 +121,8 @@ describe("useConnection", () => {
     await until(() => text().includes("b-count:4"));
     expect(text()).toContain("a-count:4");
 
-    unmount(a);
-    unmount(b);
+    await unmount(a);
+    await unmount(b);
     await runtime.dispose();
   });
 });

@@ -37,7 +37,7 @@ describe("createClient (#147)", () => {
     );
     await until(() => text().includes("from a handle"));
 
-    unmount(harness);
+    await unmount(harness);
     await client.dispose();
     // Disposing twice is harmless.
     await client.dispose();
@@ -51,6 +51,6 @@ describe("createClient (#147)", () => {
     expect(text()).toContain("client:none");
     await until(() => text().includes("failed:"));
     expect(text()).toContain("no Client here");
-    unmount(harness);
+    await unmount(harness);
   });
 });

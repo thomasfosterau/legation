@@ -33,7 +33,7 @@ describe("useMutationState (#116)", () => {
     await until(() => text().includes("all:1:acknowledged"));
     expect(text()).not.toContain("all:1:pending");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 });

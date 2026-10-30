@@ -38,7 +38,7 @@ const text = <E, R>(bytes: Stream.Stream<Uint8Array, E, R>) =>
 const runNode = (
   what: string,
   args: ReadonlyArray<string>,
-  env?: Record<string, string | undefined> | undefined
+  env?: Record<string, string | undefined>
 ) =>
   Effect.scoped(
     Effect.gen(function* () {

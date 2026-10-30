@@ -41,6 +41,7 @@
     "svelte-check": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

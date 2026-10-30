@@ -25,6 +25,7 @@
   "files": [
     "dist",
     "svelte",
+    "!svelte/tsconfig.json",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -54,7 +55,8 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
-    "svelte": "catalog:"
+    "svelte": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "effect": "catalog:peers",

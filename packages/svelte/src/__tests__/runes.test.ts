@@ -40,7 +40,7 @@ describe("rune hooks", () => {
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "3", title: "other" }));
     await until(() => text().includes("count:3"));
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -68,7 +68,7 @@ describe("rune hooks", () => {
     expect(text()).toContain("state:Success");
     expect(text()).not.toContain(":waiting");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -94,7 +94,7 @@ describe("rune hooks", () => {
     await until(() => text().includes("orphan:nobody"));
     expect(text()).toContain("seed:Grace");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -115,7 +115,7 @@ describe("rune hooks", () => {
     await until(() => text().includes("seed:Ada"));
     expect(text()).toContain("seed:Ada");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 });

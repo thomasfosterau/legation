@@ -41,7 +41,7 @@ describe("live read hooks", () => {
     await until(() => text().includes("count:2"));
     await until(() => text().includes('"u1":2'));
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -58,7 +58,7 @@ describe("live read hooks", () => {
     await until(() => text().includes("match"));
     expect(text()).not.toContain("other");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 });

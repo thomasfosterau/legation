@@ -76,8 +76,8 @@ describe("bindings over a tab mirror (ADR-0021)", () => {
     await until(() => text().includes("added"));
     await until(() => text().includes("count:1"));
 
-    unmount(buttons);
-    unmount(list);
+    await unmount(buttons);
+    await unmount(list);
     await runtime.dispose();
   });
 
@@ -114,7 +114,7 @@ describe("bindings over a tab mirror (ADR-0021)", () => {
     await until(() => text().includes("join:Ada"));
     expect(text()).toContain("join:Ada");
 
-    unmount(harness);
+    await unmount(harness);
     await runtime.dispose();
   });
 });

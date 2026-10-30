@@ -55,7 +55,8 @@
     "@effect/vitest": "catalog:",
     "@sveltejs/kit": "catalog:",
     "effect": "catalog:",
-    "svelte": "catalog:"
+    "svelte": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "@sveltejs/kit": "catalog:peers",
