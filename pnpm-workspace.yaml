@@ -49,7 +49,7 @@ catalog:
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
   "@effect/tsgo": 0.63.0
-  "@electric-sql/pglite": ^0.5.10
+  "@electric-sql/pglite": ^0.5.13
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
   # singleton below forces it onto the catalog's copy, which it lints fine on.
@@ -61,14 +61,14 @@ catalog:
   "@sveltejs/vite-plugin-svelte": ^7.3.1
   # Runtime dependencies of published packages: `pnpm pack` rewrites
   # `catalog:` to these ranges in the packed manifest.
-  "@thomasfosterau/effect-jsonapi": ^0.17.0
-  "@thomasfosterau/effect-svelte": ^0.5.0
+  "@thomasfosterau/effect-jsonapi": ^0.19.0
+  "@thomasfosterau/effect-svelte": ^0.6.0
   "@types/better-sqlite3": ^9.6.0
-  "@types/node": ^26.6.5
+  "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
   "@vitest/coverage-v8": 5.0.5
-  better-auth: ^1.7.10
+  better-auth: ^1.7.14
   better-sqlite3: ^13.0.3
   fake-indexeddb: ^6.2.6
   fallow: 3.37.0
