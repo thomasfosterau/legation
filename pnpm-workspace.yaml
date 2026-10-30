@@ -20,7 +20,7 @@ catalogMode: strict
 catalog:
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
-  "@cloudflare/workers-types": ^5.20261025.1
+  "@cloudflare/workers-types": ^5.20261029.1
   # The Effect dev pin: `effect` and every `@effect/*` runtime package move
   # together, at one exact version (CONTRIBUTING.md "Effect version
   # upgrades"). The published floor is `catalogs.peers` below, never this.
