@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-devtools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A devtools headless core over the introspection substrate (#120): journal/mutation timeline, subscriptions & collections, sync activity, and actions — with a Svelte panel on /svelte",
   "keywords": [
     "devtools",
