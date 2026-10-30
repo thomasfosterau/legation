@@ -10,7 +10,7 @@
 import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { recommended } from "@effect/tsgo/oxlint-presets";
-import effect from "@mpsuesser/oxlint-plugin-effect";
+import effect from "@enfect/oxlint";
 import { defineConfig } from "vite-plus";
 
 /** The published packages, by directory; each has a `build` task. */
@@ -57,11 +57,17 @@ const alias = {
 const cacheInputs = [{ auto: true }, "!node_modules/**", "!coverage/**", "pnpm-lock.yaml"];
 
 export default defineConfig({
-  // Staged-file checks run by `vp staged` (pre-commit). Oxfmt cannot format
-  // `.svelte`, so Svelte goes through lint alone.
+  // Staged-file checks run by `vp staged` (pre-commit). Format with fixes,
+  // lint without: with type-aware lint on, `vp check --fix` would apply the
+  // autofixes of type-aware rules (even ones at `warn`) to staged files at
+  // commit time, so the commit would differ from the tree that was verified.
+  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone.
   staged: {
-    "*.{js,mjs,ts,json,md,yml,yaml}": "vp check --fix",
-    "*.svelte": "vp lint --fix",
+    "*.{js,mjs,ts,json,md,yml,yaml}": [
+      "vp check --fix --no-lint",
+      "vp check --no-fmt --no-error-on-unmatched-pattern",
+    ],
+    "*.svelte": "vp lint",
   },
   // Oxfmt, the formatter of record. The options keep the style the
   // repository was written in under Prettier, so the migration reformatted
@@ -137,24 +143,52 @@ export default defineConfig({
       // committable while each site stays reported; a new site is a defect,
       // not headroom. Once a rule's count reaches zero its line is deleted,
       // so it is back at the preset's `error`. The remaining sites are listed
-      // in #497 (see AGENTS.md "Effect").
-      "effect/avoid-native-object-helpers": "warn", // 691 sites
-      "effect/require-safety-comment-for-type-assertion": "warn", // 622 sites
-      "effect/imperative-loops": "warn", // 367 sites
-      "effect/yield-in-for-loop": "warn", // 536 sites
-      "effect/avoid-direct-tag-checks": "warn", // 170 sites
+      // in #497 (see AGENTS.md "Effect"). Counts re-measured under
+      // `@enfect/oxlint` 0.9.0 (#561).
+      "effect/avoid-native-object-helpers": "warn", // 689 sites
+      "effect/require-safety-comment-for-type-assertion": "warn", // 621 sites
+      "effect/imperative-loops": "warn", // 366 sites
+      "effect/yield-in-for-loop": "warn", // 535 sites
+      "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/no-conditional-empty-object-spread": "warn", // 146 sites
+      "effect/no-conditional-empty-object-spread": "warn", // 145 sites
       "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
-      "effect/avoid-untagged-errors": "warn", // 75 sites
+      "effect/avoid-untagged-errors": "warn", // 76 sites
       "effect/require-effect-concurrency": "warn", // 73 sites
       "effect/effect-promise-vs-trypromise": "warn", // 66 sites
       "effect/prefer-match-over-switch": "warn", // 50 sites
       "effect/avoid-schema-suffix": "warn", // 41 sites
       "effect/require-schema-type-alias": "warn", // 30 sites
       "effect/avoid-data-tagged-error": "warn", // 24 sites
+
+      // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
+      // Turned on in #561. Each rule below is relaxed for a stated reason; a
+      // `warn` carries the count it was adopted with, and a new site is a
+      // defect (follow-up: #497).
+      // Effect 4 marks much of its HTTP surface `@stability unstable`; the
+      // native `tsc` gate already demotes this to a suggestion
+      // (tsconfig.base.json, #279) for the same reason: it fires on every such
+      // import and drowns real signal.
+      "effecttsgo/unstable-api-usage": "off",
+      // `unknown` in an error channel: the engine host's bridge effects and
+      // the façade's write paths carry a caught failure as `unknown` (the
+      // boundary `effect/no-unknown-parameters` names), as do test helpers
+      // that fail with whatever a backend raised. 54 sites (21 in src).
+      "effecttsgo/any-unknown-in-error-context": "warn",
+      // Two tests narrow a handler's channels to the shape they assert on.
+      "effecttsgo/unsafe-effect-type-assertion": "warn", // 2 sites
+      // `String(value)` on an untyped row value (a foreign key, a SQL
+      // detector's COUNT/MAX column, the comparator's last-resort text form)
+      // is the intended string form at that boundary. 7 sites (2 in tests).
+      "typescript/no-base-to-string": "warn",
+      // The public API spells `unknown | undefined` / `unknown | null` on
+      // purpose: TypeScript collapses the union, but the reader learns the
+      // value may be absent. The rule fires on exactly that spelling.
+      "typescript/no-redundant-type-constituents": "off",
+      // A test's Clock double spreads the real Clock to override one member.
+      "typescript/no-misused-spread": "warn", // 1 site
     },
     overrides: [
       // The Node runtime adapter (ADR-0006): `node:http` and the other
@@ -260,11 +294,16 @@ export default defineConfig({
         },
       },
     ],
-    // Type-aware linting is intentionally disabled: type checking stays the
-    // `check` task's job (native tsc, Effect-patched).
+    // Type-aware lint through oxlint-tsgolint (patched by `effect-tsgo patch
+    // --oxlint`, so `effecttsgo/*` rules run too). tsgolint types each file
+    // under its nearest tsconfig.json: the packages' own cover `src/` and the
+    // `src/__tests__/tsconfig.json` files (and `packages/devtools/svelte/`)
+    // extend tsconfig.check.json, so a clean tree with no `dist/` types the
+    // same program the `check` gate does. `typeCheck` reports compiler
+    // errors too; the Effect-patched `tsc` run stays the type gate of record.
     options: {
-      typeAware: false,
-      typeCheck: false,
+      typeAware: true,
+      typeCheck: true,
     },
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
   },

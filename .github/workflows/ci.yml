@@ -63,10 +63,10 @@ jobs:
             vp-task-v1-${{ runner.os }}-
 
       - name: Format and lint
-        run: vp check
+        run: pnpm exec vp check
 
       - name: Build
-        run: vp run build
+        run: pnpm exec vp run build
 
       # Packs every publishable package the way the release does and fails on
       # a `workspace:` / `catalog:` specifier left in a packed package.json
@@ -74,19 +74,19 @@ jobs:
       # file, or a publint (strict) or arethetypeswrong (ESM-only) finding on
       # the tarball (#250). No registry access.
       - name: Check and lint publish tarballs
-        run: vp run pack:check
+        run: pnpm exec vp run pack:check
 
       - name: Typecheck (packages and tests)
-        run: vp run check
+        run: pnpm exec vp run check
 
       - name: Typecheck examples
-        run: vp run check:examples
+        run: pnpm exec vp run check:examples
 
       - name: Install Chromium (the commerce façade's browser test)
         run: pnpm exec playwright-core install --with-deps chromium
 
       - name: Test with coverage
-        run: vp run test:coverage
+        run: pnpm exec vp run test:coverage
 
       - name: Audit dependencies
         run: pnpm audit --audit-level high
@@ -94,7 +94,7 @@ jobs:
       # Reads coverage/coverage-final.json from the step above for exact
       # per-function CRAP scores.
       - name: Fallow audit
-        run: fallow audit --ci --base origin/trunk
+        run: pnpm exec fallow audit --ci --base origin/trunk
 
   # The test suite against the lowest `effect` the published peer range admits
   # (`catalogs.peers.effect` in pnpm-workspace.yaml, `>=X` -> `X`), so each
@@ -140,7 +140,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: latest
+          # Never `latest`: setup-node resolves it to the first entry of the
+          # nodejs.org index, pre-releases included (a v27 alpha since
+          # 2026-10-29). `*` + `check-latest` is the newest stable release.
+          node-version: "*"
+          check-latest: true
           cache: pnpm
 
       - name: Point the catalog at the published floor
@@ -174,9 +178,7 @@ jobs:
       # so this re-resolves the effect entries (and rewrites the lockfile in
       # this checkout only).
       - name: Install dependencies (at the floor)
-        run: |
-          pnpm install --no-frozen-lockfile
-          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+        run: pnpm install --no-frozen-lockfile
 
       - name: Check that only the floor is installed
         env:
@@ -210,4 +212,4 @@ jobs:
         run: pnpm exec playwright-core install --with-deps chromium
 
       - name: Test
-        run: vp run test
+        run: pnpm exec vp run test

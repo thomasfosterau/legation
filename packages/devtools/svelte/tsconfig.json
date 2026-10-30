@@ -1,0 +1,8 @@
+{
+  // Lint-only, and kept out of the tarball (`!svelte/tsconfig.json` in
+  // `files`): oxlint-tsgolint types each file under its nearest tsconfig.json,
+  // and the package's own covers `src/` only. This maps the package names to
+  // `src/` as the type gate does, so a clean tree (no `dist/`) resolves them.
+  "extends": "../../../tsconfig.check.json",
+  "include": ["./**/*.ts"]
+}

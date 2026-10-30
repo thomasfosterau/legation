@@ -24,11 +24,11 @@ Branch off `trunk`, rebase rather than merge, squash-merge with a conventional p
 
 ## Git hooks
 
-Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pre-commit) is committed. **pre-commit** runs `vp staged` (format + lint on the staged files). There is no pre-push hook: run the gates yourself.
+Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pre-commit) is committed. **pre-commit** runs `vp staged` (format with fixes, then lint without fixes, on the staged files: with type-aware lint on, a lint autofix at commit time would make the commit differ from the tree you verified). There is no pre-push hook: run the gates yourself.
 
 ## CI expectations
 
-[ci.yml](.github/workflows/ci.yml) runs "Quality Gates", whose steps are the gate list in [AGENTS.md](AGENTS.md#verification), and "Tests (effect floor)" (below). [release.yml](.github/workflows/release.yml) runs changesets/action on `trunk`: it opens the version PR while unreleased changesets exist and publishes once it merges, via npm OIDC trusted publishing (see [PUBLISHING.md](PUBLISHING.md)).
+[ci.yml](.github/workflows/ci.yml) runs "Quality Gates", whose steps are the gate list in [AGENTS.md](AGENTS.md#verification), and "Tests (effect floor)" (below). [release.yml](.github/workflows/release.yml) runs changesets/action on `trunk`: it opens the version PR while unreleased changesets exist and publishes once it merges, via npm OIDC trusted publishing (see [PUBLISHING.md](PUBLISHING.md)). Every workflow defaults to `permissions: {}` with per-job grants, pins each action to a commit SHA, checks out without persisted credentials (except the Release job, whose Changesets step pushes), sets up Node as `node-version: "*"` with `check-latest` (never `latest`, which resolves to pre-releases), writes nothing to `GITHUB_PATH` (steps call `pnpm exec vp …`), and needs no secret outside the Release job, which runs only on pushes to `trunk`, so Dependabot PRs run CI safely. `uvx zizmor --offline .github` audits the workflows (config in `.github/zizmor.yml`).
 
 ## Pre-PR checklist
 

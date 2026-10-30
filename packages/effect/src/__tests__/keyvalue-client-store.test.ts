@@ -139,9 +139,9 @@ describe("ClientStore.makeKeyValue", () => {
       // A fresh store over the same KVS sees the drop persisted, not just the
       // in-memory index — same rehydration guarantee as `acknowledge`.
       const rehydrated = yield* ClientStoreModule.makeKeyValue();
-      expect((yield* rehydrated.pendingMutations).map((m) => m.mutationId).toSorted()).toEqual([
-        1, 1, 2,
-      ]);
+      expect(
+        (yield* rehydrated.pendingMutations).map((m) => m.mutationId).toSorted((a, b) => a - b)
+      ).toEqual([1, 1, 2]);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -297,7 +297,7 @@ const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
     const ns = pending.map((m) => (m.args as { n: number }).n);
     const isOld = ids.join() === "1,2,3,4,5" && ns.join() === "1,2,3,4,5";
     const isNew = ids.join() === "1,2,3" && ns.join() === "1,3,5";
-    expect(isOld || isNew, `${label}: ${ids} / ${ns}`).toBe(true);
+    expect(isOld || isNew, `${label}: ${ids.join()} / ${ns.join()}`).toBe(true);
     const nextId = yield* store.nextMutationId("c1");
     expect(nextId, label).toBe(isOld ? 6 : 4);
     yield* store.appendMutation(numbered(nextId));

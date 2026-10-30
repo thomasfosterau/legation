@@ -71,7 +71,7 @@ describe("read-thunk opt-out (#141)", () => {
     await run(runtime, (engine) => engine.pull);
     expect(pulls.at(-1)?.subscriptions).toHaveLength(0);
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -98,7 +98,7 @@ describe("read-thunk opt-out (#141)", () => {
     expect(text()).not.toContain("row:a-1");
     await untilSubscriptions(runtime, (n) => n === 0);
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -127,7 +127,7 @@ describe("read-thunk opt-out (#141)", () => {
     await until(() => text().includes("state:Initial"));
     expect(text()).not.toContain("row:match");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 
@@ -160,7 +160,7 @@ describe("read-thunk opt-out (#141)", () => {
     expect(text()).toContain("grouped-state:Initial");
     expect(text()).toContain("count:none");
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 });

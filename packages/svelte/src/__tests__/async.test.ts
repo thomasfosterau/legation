@@ -42,7 +42,7 @@ describe("Async Svelte over Live.promise", () => {
     await until(() => text().includes("awaited") && text().includes("loaded:1"));
     expect(text()).not.toContain("pending…");
 
-    unmount(harness);
+    await unmount(harness);
     await runtime.dispose();
   });
 
@@ -66,7 +66,7 @@ describe("Async Svelte over Live.promise", () => {
     await until(() => text().includes("seeded"));
     expect(text()).not.toContain("pending…");
 
-    unmount(harness);
+    await unmount(harness);
     await runtime.dispose();
   });
 });

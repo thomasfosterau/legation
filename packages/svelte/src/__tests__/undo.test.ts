@@ -49,7 +49,7 @@ describe("useUndo", () => {
     await until(() => text().includes("canUndo:true") && text().includes("canRedo:false"));
     expect(await titles()).toEqual(["after"]);
 
-    unmount(app);
+    await unmount(app);
     await runtime.dispose();
   });
 });

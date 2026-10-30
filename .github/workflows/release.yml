@@ -53,7 +53,7 @@ jobs:
       - name: Checkout
         # The Changesets action pushes the version branch, so it needs the
         # checkout's git credentials (the ephemeral, job-scoped GITHUB_TOKEN).
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked] the Changesets action pushes
         with:
           fetch-depth: 0
 
@@ -65,7 +65,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: latest
+          # Never `latest`: setup-node resolves it to the first entry of the
+          # nodejs.org index, pre-releases included (a v27 alpha since
+          # 2026-10-29). `*` + `check-latest` is the newest stable release.
+          node-version: "*"
+          check-latest: true
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -75,7 +79,7 @@ jobs:
       # this job holds `id-token: write`, so a new npm major should arrive
       # through a reviewed change (#265).
       - name: Upgrade npm (OIDC trusted publishing)
-        run: npm install -g npm@11
+        run: npm install -g npm@11 # zizmor: ignore[adhoc-packages] the publisher itself, major-pinned (#265)
 
       # --ignore-scripts stops a compromised dependency from running install
       # scripts in the privileged publish job (the Shai-Hulud vector). It also
@@ -84,9 +88,9 @@ jobs:
       # because `pnpm_config_verify_deps_before_run` is off for this job (see
       # the job `env` above).
       - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile --ignore-scripts
-          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+        # `pnpm run` puts node_modules/.bin on PATH for the scripts below, so
+        # nothing writes GITHUB_PATH.
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # When changesets are pending, this opens/updates a "chore: version
       # packages" PR (via `pnpm run version`). Once that PR is merged (no

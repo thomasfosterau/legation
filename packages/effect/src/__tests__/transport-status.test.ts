@@ -200,7 +200,9 @@ describe("Transport.withFallback", () => {
         const combined = yield* Transport.withFallback(primary.transport, fallback.transport);
 
         const pokes = yield* Stream.runCollect(Stream.take(combined.pokes, 2));
-        const reasons = [...pokes].map((poke) => poke.reason).toSorted();
+        const reasons = [...pokes]
+          .map((poke) => poke.reason)
+          .toSorted((a = "", b = "") => a.localeCompare(b));
         expect(reasons).toEqual(["fallback", "primary"]);
       })
     )
@@ -226,7 +228,9 @@ const awaitSeen = (
     const all = yield* Ref.get(seen);
     if (all.length >= count) return;
     return yield* Effect.die(
-      new Error(`awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all}`)
+      new Error(
+        `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`
+      )
     );
   });
 

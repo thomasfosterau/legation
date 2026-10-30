@@ -158,7 +158,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
             return casLedger(fragment) ? [{ last_mutation_id: fragment.params[0] }] : [];
           }
           if (/^SELECT .* FROM "sync_mutations" WHERE /.test(fragment.text)) {
-            const group = fragment.params[0];
+            const group = String(fragment.params[0]);
             return [...ledger.entries()]
               .filter(([key]) => key.startsWith(`${group}:`))
               .map(([key, last]) => ({

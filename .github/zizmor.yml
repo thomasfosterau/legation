@@ -1,0 +1,15 @@
+# zizmor (GitHub Actions static analysis) configuration. Run it with
+# `uvx zizmor --offline .github`; every workflow and the setup action should
+# report no findings beyond what is configured away here, each with its reason.
+rules:
+  dependabot-cooldown:
+    config:
+      # The owner's supply-chain policy: pnpm holds a new version for 8 hours
+      # (`minimumReleaseAge: 480` in pnpm-workspace.yaml) and Dependabot's
+      # cooldown, which counts whole days, waits 1, longer than pnpm, so a
+      # Dependabot PR never proposes a version pnpm would refuse.
+      days: 1
+  self-repository:
+    # `./.github/actions/setup` is the documented local-action path; the
+    # `$/` spelling buys nothing for a single-repo composite action.
+    disable: true

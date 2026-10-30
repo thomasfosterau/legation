@@ -43,8 +43,8 @@ describe("mutate hooks", () => {
     await until(() => outcome !== undefined);
     expect(outcome).toEqual({ _tag: "applied" });
 
-    unmount(buttons);
-    unmount(list);
+    await unmount(buttons);
+    await unmount(list);
     await runtime.dispose();
   });
 
@@ -71,8 +71,8 @@ describe("mutate hooks", () => {
     await run(runtime, (engine) => engine.pull);
     await until(() => !text().includes("doomed"));
 
-    unmount(buttons);
-    unmount(list);
+    await unmount(buttons);
+    await unmount(list);
     await runtime.dispose();
   });
 });
