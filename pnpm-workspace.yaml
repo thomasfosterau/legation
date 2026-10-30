@@ -78,7 +78,7 @@ catalog:
   # (`playwright-core install chromium` fetches it).
   playwright-core: 1.64.1
   publint: ^0.3.25
-  svelte: ^5.57.2
+  svelte: ^5.57.3
   svelte-check: ^4.7.7
   tsx: ^4.23.15
   # TypeScript 6/7 side by side: TS7 (the native Go compiler) ships no JS API
