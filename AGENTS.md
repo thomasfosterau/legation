@@ -86,7 +86,6 @@ Never guess at an Effect API. This repo is on the Effect v4 release-candidate li
 ## Agent sessions
 
 - The SessionStart hook (`.claude/hooks/session-start.sh`) installs dependencies against the lockfile with pnpm and puts `vp` (a re-exec shim that prefers the nearest worktree's `node_modules`), `fallow` and `tsx` on PATH for non-interactive shells. It hydrates no secrets, and none are needed.
-- `.claude/settings.json` enables the `@enfect/claude` plugin (Effect guidance, skills and post-write pattern checks), pinned by `ref` to a reviewed `mpsuesser/enfect` commit; moving it is a reviewed edit of that SHA.
 - A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` fails; it reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON, YAML or Markdown file you write or edit.
 - `vp run test` and `vp run test:coverage` need Chromium for the commerce façade's browser test, which fails rather than skips without it. Run `pnpm exec playwright-core install chromium` first; if the download is blocked, run `vp test run --project node --project svelte` and say in the PR body that the commerce browser test didn't run. The PostgreSQL overlap test skips locally without `DATABASE_URL` (CI sets it).
 
