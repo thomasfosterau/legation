@@ -105,10 +105,10 @@ interface Args {
   readonly title: string;
 }
 
-const argsSchema = Schema.Struct({ id: Schema.String, title: Schema.String });
+const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 const mutatorNames = ["todo/set", "todo/park", "todo/observe", "todo/reject"] as const;
 const mutators = new Map<string, Mutator.AnyMutator>(
-  mutatorNames.map((name) => [name, Mutator.make(name, argsSchema)])
+  mutatorNames.map((name) => [name, Mutator.make(name, TodoArgs)])
 );
 
 const mutation = (mutationId: number, mutator: string = "todo/set") => ({

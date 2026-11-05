@@ -100,7 +100,7 @@ export interface ExistsNode {
   readonly where: Predicate;
 }
 
-const LiteralSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
+const Literal = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
 
 /**
  * Wire codec for {@link Predicate}. `NotIn` and `IsNull` were added by
@@ -115,17 +115,17 @@ export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
     _tag: Schema.tag("Compare"),
     op: Schema.Literals(["eq", "ne", "gt", "gte", "lt", "lte"]),
     field: Schema.String,
-    value: LiteralSchema,
+    value: Literal,
   }),
   Schema.Struct({
     _tag: Schema.tag("In"),
     field: Schema.String,
-    values: Schema.Array(LiteralSchema),
+    values: Schema.Array(Literal),
   }),
   Schema.Struct({
     _tag: Schema.tag("NotIn"),
     field: Schema.String,
-    values: Schema.Array(LiteralSchema),
+    values: Schema.Array(Literal),
   }),
   Schema.Struct({
     _tag: Schema.tag("IsNull"),

@@ -141,8 +141,7 @@ import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 import * as Ledger from "./Ledger.js";
-import { ResourceObjectSchema } from "./schema.js";
-import type { ResourceObject } from "./types.js";
+import { ResourceObject } from "./schema.js";
 
 /**
  * One JSON:API write — the unit both delivery paths speak: a create (`POST`,
@@ -531,7 +530,7 @@ interface BatchEntry {
 /** The row an `atomic:results` entry carries, if it returned a resource. */
 const resultRow = (result: unknown): JsonApiRow | undefined => {
   const data = P.isObjectOrArray(result) ? (result as { data?: unknown }).data : undefined;
-  const resource = Schema.decodeUnknownOption(ResourceObjectSchema)(data);
+  const resource = Schema.decodeUnknownOption(ResourceObject)(data);
   return Option.isSome(resource) ? toRow(resourceToRow(resource.value).value) : undefined;
 };
 

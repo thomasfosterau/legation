@@ -13,7 +13,7 @@ wedging the queue: mutations behind it still apply, and the client drops the
 optimistic effect on the next rebase with no app code. A `BackendError` keeps
 today's transient behaviour (abort the batch, client retries).
 
-- `Backend.ApplyResult` gains an optional `rejected` list; `PushResponseSchema`
+- `Backend.ApplyResult` gains an optional `rejected` list; `PushResponse`
   gains an additive optional `rejected` field (older clients ignore it, and the
   per-mutation outcome surface #36 reads it).
 - `MemoryBackend` rolls a rejected mutation's staged writes back (snapshot),

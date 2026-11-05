@@ -43,12 +43,12 @@ interface Todo {
   readonly isDone: boolean;
 }
 
-const TodoSchema = Schema.Struct({
+const Todo = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   isDone: Schema.Boolean,
 });
-const todos = Collection.make({ name: "todos", schema: TodoSchema, id: (r) => r.id });
+const todos = Collection.make({ name: "todos", schema: Todo, id: (r) => r.id });
 
 const mutators = Mutator.registry([
   {

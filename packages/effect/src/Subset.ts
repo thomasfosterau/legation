@@ -20,13 +20,13 @@ import * as Predicate from "./Predicate.js";
 export type Direction = "asc" | "desc";
 
 /** Wire codec for one sort term: a top-level row field plus direction. */
-export const OrderBySchema = Schema.Struct({
+export const OrderBy = Schema.Struct({
   field: Schema.String,
   direction: Schema.Literals(["asc", "desc"]),
 });
 
 /** One sort term: a top-level row field plus direction. */
-export type OrderBy = typeof OrderBySchema.Type;
+export type OrderBy = typeof OrderBy.Type;
 
 /** Parse order tokens (`"name"`, `"-createdAt"`) into sort terms. */
 export const parseOrder = (tokens: ReadonlyArray<string> | undefined): ReadonlyArray<OrderBy> =>
@@ -38,13 +38,13 @@ export const parseOrder = (tokens: ReadonlyArray<string> | undefined): ReadonlyA
 
 /**
  * Wire codec for {@link Subset}. The schema is the source of truth: the
- * `Subset` type is derived from it (`typeof SubsetSchema.Type`) so the two
+ * `Subset` type is derived from it (`typeof Subset.Type`) so the two
  * cannot drift.
  */
-export const SubsetSchema = Schema.Struct({
+export const Subset = Schema.Struct({
   collection: Schema.String,
   where: Predicate.PredicateSchema,
-  orderBy: Schema.Array(OrderBySchema),
+  orderBy: Schema.Array(OrderBy),
   limit: Schema.optional(Schema.Number),
   /** Opaque continuation: sync rows ordered after this cursor. */
   cursor: Schema.optional(Schema.String),
@@ -55,7 +55,7 @@ export const SubsetSchema = Schema.Struct({
  * "load more" widens the subset (re-register with a larger limit or a
  * cursor at the last row) rather than fetching detached pages.
  */
-export type Subset = typeof SubsetSchema.Type;
+export type Subset = typeof Subset.Type;
 
 /** Define a subset; `where` defaults to the whole collection. */
 export const make = (options: {

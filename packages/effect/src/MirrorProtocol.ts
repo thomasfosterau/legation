@@ -42,13 +42,16 @@ import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 /** Wire codec for one selected edge of a `related` registration. */
-export const EdgeSelectSchema = Schema.Struct({
+export const EdgeSelect = Schema.Struct({
   name: Schema.String,
   first: Schema.optional(Schema.Number),
 });
 
+/** The type {@link EdgeSelect} decodes to. */
+export type EdgeSelect = typeof EdgeSelect.Type;
+
 /** Wire codec for one {@link MutationState.MutationState} entry (#116). */
-export const MutationStateSchema = Schema.Struct({
+export const MutationStateEntry = Schema.Struct({
   mutationId: Schema.Number,
   mutator: Schema.String,
   args: Schema.Unknown,
@@ -57,6 +60,9 @@ export const MutationStateSchema = Schema.Struct({
   journaledAt: Schema.Number,
   settledAt: Schema.optional(Schema.Number),
 });
+
+/** The type {@link MutationStateEntry} decodes to. */
+export type MutationStateEntry = typeof MutationStateEntry.Type;
 
 // ─── Broadcast keys ──────────────────────────────────────────────────────────
 
@@ -227,12 +233,12 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Subscribe"),
     mirrorId: Schema.String,
-    subset: Subset.SubsetSchema,
+    subset: Subset.Subset,
   }),
   Schema.Struct({
     _tag: Schema.tag("Unsubscribe"),
     mirrorId: Schema.String,
-    subset: Subset.SubsetSchema,
+    subset: Subset.Subset,
   }),
   Schema.Struct({
     _tag: Schema.tag("SubscribeNamed"),
@@ -250,15 +256,15 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     _tag: Schema.tag("SubscribeRelated"),
     mirrorId: Schema.String,
     collection: Schema.String,
-    subset: Subset.SubsetSchema,
-    edges: Schema.Array(EdgeSelectSchema),
+    subset: Subset.Subset,
+    edges: Schema.Array(EdgeSelect),
   }),
   Schema.Struct({
     _tag: Schema.tag("UnsubscribeRelated"),
     mirrorId: Schema.String,
     collection: Schema.String,
-    subset: Subset.SubsetSchema,
-    edges: Schema.Array(EdgeSelectSchema),
+    subset: Subset.Subset,
+    edges: Schema.Array(EdgeSelect),
   }),
   Schema.Struct({ _tag: Schema.tag("SubscribeUrl"), mirrorId: Schema.String, url: Schema.String }),
   Schema.Struct({
@@ -270,7 +276,7 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     _tag: Schema.tag("Read"),
     requestId: Schema.Number,
     mirrorId: Schema.optional(Schema.String),
-    subsets: Schema.Array(Subset.SubsetSchema),
+    subsets: Schema.Array(Subset.Subset),
   }),
   Schema.Struct({ _tag: Schema.tag("SubscribeMutationStates"), mirrorId: Schema.String }),
   Schema.Struct({ _tag: Schema.tag("UnsubscribeMutationStates"), mirrorId: Schema.String }),
@@ -488,7 +494,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   }),
   Schema.Struct({
     _tag: Schema.tag("MutationStatesUpdate"),
-    states: Schema.Array(MutationStateSchema),
+    states: Schema.Array(MutationStateEntry),
   }),
   Schema.Struct({
     _tag: Schema.tag("PulledRegistrations"),
@@ -498,7 +504,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
         pulled: Schema.Struct({
           windows: Schema.Array(
             Schema.Struct({
-              subset: Subset.SubsetSchema,
+              subset: Subset.Subset,
               // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- `pulled` is a wire field of the mirror protocol (and mirrors `Coverage.Window.pulled`); renaming it breaks the protocol.
               pulled: Schema.Boolean,
             })

@@ -9,7 +9,7 @@ Make the acknowledged-but-unpulled tail durable in `ClientStore` (#336). A push 
 - **Journal and tail.** `appendMutation` refuses an entry the unpulled tail already holds, with a `StoreError` and nothing written: a journal copy of a parked entry would be double-counted and pushed again. `Hydration.hydrate` skips the snapshot's journal entries the store's tail holds, so a hydration never makes that copy. `beginRelease` finishes an outstanding release before it records its own, so a pull is not refused by a release a failed roll-forward left behind.
 - **Identity reset.** The tail is cleared with the rows it was overlaid on, in the store's open-time reset and in the engine's runtime reset. The store drops any release record with it.
 - **Trim.** A push whose journal trim fails leaves the parked entries out of the journal in the same process, as an open does, so they are not pushed again or replayed twice.
-- **Hydration.** `Hydration.SnapshotSchema` gains an optional `unpulled` field. `dehydrate` writes it when the tail is not empty; `hydrate` parks it. A snapshot without the field loads with an empty tail.
+- **Hydration.** `Hydration.Snapshot` gains an optional `unpulled` field. `dehydrate` writes it when the tail is not empty; `hydrate` parks it. A snapshot without the field loads with an empty tail.
 - **Engine option.** `ClientEngine.make` takes an internal `unpulledLimit` (default 1024): the most acknowledged-but-unpulled mutations the overlay keeps (#286); a push never takes the tail past it (#429). Tests lower it to reach the bound quickly.
 - **IndexedDB.** The tail uses the existing key-value layout, so there is no new object store or index and the database version does not change.
 

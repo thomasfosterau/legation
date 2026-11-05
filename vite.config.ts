@@ -159,8 +159,6 @@ export default defineConfig({
       "effect/require-effect-concurrency": "warn", // 73 sites
       "effect/effect-promise-vs-trypromise": "warn", // 66 sites
       "effect/prefer-match-over-switch": "warn", // 50 sites
-      "effect/avoid-schema-suffix": "warn", // 41 sites
-      "effect/require-schema-type-alias": "warn", // 30 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a

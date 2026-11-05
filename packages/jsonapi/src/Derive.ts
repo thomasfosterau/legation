@@ -66,6 +66,9 @@ export const CreateArgs = Schema.Struct({
   relationships: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 
+/** The type {@link CreateArgs} decodes to. */
+export type CreateArgs = typeof CreateArgs.Type;
+
 /** Update: a partial attribute patch, merged over the current row. */
 export const UpdateArgs = Schema.Struct({
   type: Schema.String,
@@ -73,11 +76,17 @@ export const UpdateArgs = Schema.Struct({
   attributes: Schema.Record(Schema.String, Schema.Unknown),
 });
 
+/** The type {@link UpdateArgs} decodes to. */
+export type UpdateArgs = typeof UpdateArgs.Type;
+
 /** Delete: address one row. */
 export const DeleteArgs = Schema.Struct({
   type: Schema.String,
   id: Schema.String,
 });
+
+/** The type {@link DeleteArgs} decodes to. */
+export type DeleteArgs = typeof DeleteArgs.Type;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 

@@ -130,7 +130,7 @@ describe("Protocol schemas", () => {
         ],
         lastMutationIds: { "client-a": 4 },
       };
-      const encoded = yield* Schema.encodeEffect(Protocol.PullResponseSchema)(response);
+      const encoded = yield* Schema.encodeEffect(Protocol.PullResponse)(response);
       const decoded = yield* Protocol.decodePullResponse(JSON.parse(JSON.stringify(encoded)));
       expect(decoded).toEqual(response);
     })

@@ -8,7 +8,7 @@ before the first network round-trip.
 
 - `Hydration.dehydrate` reads a `ClientStore` into a plain `Snapshot` (confirmed
   rows flattened with their collection, the pull cookie, and the journal);
-  `Hydration.hydrate` writes one back, validating it through `SnapshotSchema` on
+  `Hydration.hydrate` writes one back, validating it through `Snapshot` on
   the way in so a `dehydrate → JSON → hydrate` round-trip is schema-checked and a
   malformed snapshot fails as a `StoreError`. `SnapshotFromJson` folds the JSON
   step into the decode. The module doc walks the SSR flow (server pulls once,

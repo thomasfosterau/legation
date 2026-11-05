@@ -32,7 +32,7 @@ import { AtomicKeyValue, type KeyValueEntry, type KeyValueOp } from "./AtomicKey
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
-import { MutationSchema, PatchOpSchema, type Mutation, type PatchOp } from "./Protocol.js";
+import { Mutation, PatchOp } from "./Protocol.js";
 
 /**
  * A confirmed row as persisted: encoded value + authoritative version. The
@@ -40,14 +40,14 @@ import { MutationSchema, PatchOpSchema, type Mutation, type PatchOp } from "./Pr
  * is carried through untouched, so additive schema changes round-trip
  * (ADR-0014: the engine never decodes row values on the read path).
  */
-export const StoredRowSchema = Schema.Struct({
+export const StoredRow = Schema.Struct({
   id: Schema.String,
   version: Schema.Union([Schema.String, Schema.Number]),
   value: Schema.Unknown,
 });
 
-/** {@inheritDoc StoredRowSchema} */
-export type StoredRow = typeof StoredRowSchema.Type;
+/** The type {@link StoredRow} decodes to. */
+export type StoredRow = typeof StoredRow.Type;
 
 /**
  * What a {@link ClientStore.compactPending} call did: the ids dropped, and the
@@ -1132,24 +1132,24 @@ const legacyRowsKey = (collection: string) => `rows/${collection}`;
 const LEGACY_JOURNAL_KEY = "journal";
 
 /** An entry in the compact ordered journal index — ids only, never the body. */
-const JournalIndexEntrySchema = Schema.Struct({
+const JournalIndexEntry = Schema.Struct({
   clientId: Schema.String,
   mutationId: Schema.Number,
 });
-type JournalIndexEntry = typeof JournalIndexEntrySchema.Type;
+type JournalIndexEntry = typeof JournalIndexEntry.Type;
 
 /** JSON codecs for the persisted values (envelope-validated on read). */
-const RowFromJson = Schema.fromJsonString(StoredRowSchema);
+const RowFromJson = Schema.fromJsonString(StoredRow);
 const IdsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
-const MutationFromJson = Schema.fromJsonString(MutationSchema);
-const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntrySchema));
+const MutationFromJson = Schema.fromJsonString(Mutation);
+const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntry));
 const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
 const ReleaseIntentFromJson = Schema.fromJsonString(
   Schema.Struct({
     lastMutationIds: Schema.Record(Schema.String, Schema.Number),
     cookie: Schema.optional(Schema.String),
-    patch: Schema.Array(PatchOpSchema),
+    patch: Schema.Array(PatchOp),
   })
 );
 /**
@@ -1162,18 +1162,18 @@ const CompactionIntentFromJson = Schema.fromJsonString(
     /** Body keys to clear first: every dropped id and every old id of a moved entry. */
     staleIds: Schema.Array(Schema.Number),
     /** The renumbered bodies, at their new ids. */
-    moved: Schema.Array(MutationSchema),
+    moved: Schema.Array(Mutation),
     /** The complete journal index once the compaction has applied. */
-    index: Schema.Array(JournalIndexEntrySchema),
+    index: Schema.Array(JournalIndexEntry),
     /** The value `clientId`'s counter takes once it has applied. */
     counter: Schema.Number,
   })
 );
 /** A quarantine body, and the index of fingerprints holding one. */
-const MutationsFromJson = Schema.fromJsonString(Schema.Array(MutationSchema));
+const MutationsFromJson = Schema.fromJsonString(Schema.Array(Mutation));
 const FingerprintsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 /** Legacy whole-blob codecs, read only on the migration / fallback path. */
-const RowMapFromJson = Schema.fromJsonString(Schema.Record(Schema.String, StoredRowSchema));
+const RowMapFromJson = Schema.fromJsonString(Schema.Record(Schema.String, StoredRow));
 const JournalFromJson = MutationsFromJson;
 
 /**

@@ -48,24 +48,24 @@ interface Person {
   readonly name: string;
 }
 
-const IssueSchema: Schema.Codec<Issue> = Schema.Struct({
+const Issue: Schema.Codec<Issue> = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   authorId: Schema.String,
 });
-const CommentSchema: Schema.Codec<CommentRow> = Schema.Struct({
+const Comment: Schema.Codec<CommentRow> = Schema.Struct({
   id: Schema.String,
   issueId: Schema.String,
   body: Schema.String,
 });
-const PersonSchema: Schema.Codec<Person> = Schema.Struct({
+const Person: Schema.Codec<Person> = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
 });
 
 const issuesCollection = Collection.make({
   name: "issues",
-  schema: IssueSchema,
+  schema: Issue,
   id: (row) => row.id,
   relationships: [
     {
@@ -86,12 +86,12 @@ const issuesCollection = Collection.make({
 });
 const commentsCollection = Collection.make({
   name: "comments",
-  schema: CommentSchema,
+  schema: Comment,
   id: (row) => row.id,
 });
 const peopleCollection = Collection.make({
   name: "people",
-  schema: PersonSchema,
+  schema: Person,
   id: (row) => row.id,
 });
 
@@ -207,7 +207,7 @@ describe("Collection.registry relationship validation", () => {
   it("throws on a duplicate relationship name within a collection", () => {
     const bad = Collection.make({
       name: "a",
-      schema: PersonSchema,
+      schema: Person,
       id: (r) => r.id,
       relationships: [
         { name: "dup", kind: "one", collection: "a", localField: "id", foreignField: "id" },
@@ -220,7 +220,7 @@ describe("Collection.registry relationship validation", () => {
   it("throws on a relationship pointing at an unknown collection", () => {
     const bad = Collection.make({
       name: "a",
-      schema: PersonSchema,
+      schema: Person,
       id: (r) => r.id,
       relationships: [
         { name: "ghost", kind: "one", collection: "nope", localField: "id", foreignField: "id" },

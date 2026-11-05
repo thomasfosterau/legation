@@ -13,7 +13,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { ProtocolError } from "./Errors.js";
-import { SubsetSchema } from "./Subset.js";
+import { Subset } from "./Subset.js";
 
 // ─── Mutations (upstream) ────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ import { SubsetSchema } from "./Subset.js";
  * `mutationId` is sequential per client, giving the backend exactly-once,
  * in-order application and giving the client precise acknowledgement.
  */
-export const MutationSchema = Schema.Struct({
+export const Mutation = Schema.Struct({
   clientId: Schema.String,
   mutationId: Schema.Number,
   mutator: Schema.String,
@@ -31,13 +31,13 @@ export const MutationSchema = Schema.Struct({
   createdAt: Schema.Number,
 });
 
-/** {@inheritDoc MutationSchema} */
-export type Mutation = typeof MutationSchema.Type;
+/** The type {@link Mutation} decodes to. */
+export type Mutation = typeof Mutation.Type;
 
 /** Push request: pending mutations in journal order. */
-export const PushRequestSchema = Schema.Struct({
+export const PushRequest = Schema.Struct({
   clientGroupId: Schema.String,
-  mutations: Schema.Array(MutationSchema),
+  mutations: Schema.Array(Mutation),
   /**
    * The client build's schema version (#48). Additive and optional: an old
    * client omits it and still decodes, a new server tolerates its absence. The
@@ -47,28 +47,28 @@ export const PushRequestSchema = Schema.Struct({
   schemaVersion: Schema.optional(Schema.String),
 });
 
-/** {@inheritDoc PushRequestSchema} */
-export type PushRequest = typeof PushRequestSchema.Type;
+/** The type {@link PushRequest} decodes to. */
+export type PushRequest = typeof PushRequest.Type;
 
 /**
  * A mutation the backend permanently rejected: its id is acknowledged, but its
  * effects were not applied, and `reason` is the backend's stated cause.
  */
-export const RejectedMutationSchema = Schema.Struct({
+export const RejectedMutation = Schema.Struct({
   clientId: Schema.String,
   mutationId: Schema.Number,
   reason: Schema.String,
 });
 
-/** {@inheritDoc RejectedMutationSchema} */
-export type RejectedMutation = typeof RejectedMutationSchema.Type;
+/** The type {@link RejectedMutation} decodes to. */
+export type RejectedMutation = typeof RejectedMutation.Type;
 
 /**
  * Push response: the highest mutation id the backend has applied, per
  * client. Mutations at or below these ids are acknowledged; effects arrive
  * via the next pull's patch, which is when the optimistic overlay drops.
  */
-export const PushResponseSchema = Schema.Struct({
+export const PushResponse = Schema.Struct({
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
   /**
    * Mutations the backend permanently rejected: their `lastMutationId` is
@@ -76,11 +76,11 @@ export const PushResponseSchema = Schema.Struct({
    * but their effects were not applied. Additive and optional, so older clients
    * ignore it; the per-mutation outcome surface (#36) reads it.
    */
-  rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
+  rejected: Schema.optional(Schema.Array(RejectedMutation)),
 });
 
-/** {@inheritDoc PushResponseSchema} */
-export type PushResponse = typeof PushResponseSchema.Type;
+/** The type {@link PushResponse} decodes to. */
+export type PushResponse = typeof PushResponse.Type;
 
 // ─── Patches (downstream) ────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ export type PushResponse = typeof PushResponseSchema.Type;
  * One patch operation. `Put` and `Del` address rows; `Clear` resets the
  * client's view (sent when the server does not recognize the cookie).
  */
-export const PatchOpSchema = Schema.Union([
+export const PatchOp = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Put"),
     collection: Schema.String,
@@ -100,32 +100,32 @@ export const PatchOpSchema = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("Clear") }),
 ]);
 
-/** {@inheritDoc PatchOpSchema} */
-export type PatchOp = typeof PatchOpSchema.Type;
+/** The type {@link PatchOp} decodes to. */
+export type PatchOp = typeof PatchOp.Type;
 
 /** A named-query subscription: resolved to a Subset server-side (Query.ts). */
-export const NamedSubscriptionSchema = Schema.Struct({
+export const NamedSubscription = Schema.Struct({
   name: Schema.String,
   args: Schema.Unknown,
 });
 
-/** {@inheritDoc NamedSubscriptionSchema} */
-export type NamedSubscription = typeof NamedSubscriptionSchema.Type;
+/** The type {@link NamedSubscription} decodes to. */
+export type NamedSubscription = typeof NamedSubscription.Type;
 
 /** Pull request: what the client has (cookie) and wants (subsets). */
-export const PullRequestSchema = Schema.Struct({
+export const PullRequest = Schema.Struct({
   clientGroupId: Schema.String,
   /** Cookie from the previous pull; absent on first sync. */
   cookie: Schema.optional(Schema.String),
-  subscriptions: Schema.Array(SubsetSchema),
+  subscriptions: Schema.Array(Subset),
   /** Named queries the server resolves to subsets (optional). */
-  namedSubscriptions: Schema.optional(Schema.Array(NamedSubscriptionSchema)),
-  /** {@inheritDoc PushRequestSchema.schemaVersion} */
+  namedSubscriptions: Schema.optional(Schema.Array(NamedSubscription)),
+  /** {@inheritDoc PushRequest.schemaVersion} */
   schemaVersion: Schema.optional(Schema.String),
 });
 
-/** {@inheritDoc PullRequestSchema} */
-export type PullRequest = typeof PullRequestSchema.Type;
+/** The type {@link PullRequest} decodes to. */
+export type PullRequest = typeof PullRequest.Type;
 
 /**
  * Pull response: patch to the new cookie, plus mutation acknowledgements.
@@ -139,19 +139,19 @@ export type PullRequest = typeof PullRequestSchema.Type;
  * server omits it, which the client reads as none. No protocol version bump
  * is needed, since neither side fails to decode the other's response.
  */
-export const PullResponseSchema = Schema.Struct({
+export const PullResponse = Schema.Struct({
   cookie: Schema.String,
-  patch: Schema.Array(PatchOpSchema),
+  patch: Schema.Array(PatchOp),
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
   /**
    * The permanently rejected mutations of this client group that
    * `lastMutationIds` covers, each with its reason. Omitted when none.
    */
-  rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
+  rejected: Schema.optional(Schema.Array(RejectedMutation)),
 });
 
-/** {@inheritDoc PullResponseSchema} */
-export type PullResponse = typeof PullResponseSchema.Type;
+/** The type {@link PullResponse} decodes to. */
+export type PullResponse = typeof PullResponse.Type;
 
 /**
  * Read request: a point-in-time batch subset evaluation (ADR-0025) — the
@@ -159,18 +159,18 @@ export type PullResponse = typeof PullResponseSchema.Type;
  * with **no CVR involvement**: no cookie, no registration, no
  * `lastMutationIds`.
  */
-export const ReadRequestSchema = Schema.Struct({
+export const ReadRequest = Schema.Struct({
   clientGroupId: Schema.String,
-  subsets: Schema.Array(SubsetSchema),
-  /** {@inheritDoc PushRequestSchema.schemaVersion} */
+  subsets: Schema.Array(Subset),
+  /** {@inheritDoc PushRequest.schemaVersion} */
   schemaVersion: Schema.optional(Schema.String),
 });
 
-/** {@inheritDoc ReadRequestSchema} */
-export type ReadRequest = typeof ReadRequestSchema.Type;
+/** The type {@link ReadRequest} decodes to. */
+export type ReadRequest = typeof ReadRequest.Type;
 
 /** Read response: the matching rows, point-in-time. */
-export const ReadResponseSchema = Schema.Struct({
+export const ReadResponse = Schema.Struct({
   rows: Schema.Array(
     Schema.Struct({
       collection: Schema.String,
@@ -181,16 +181,16 @@ export const ReadResponseSchema = Schema.Struct({
   ),
 });
 
-/** {@inheritDoc ReadResponseSchema} */
-export type ReadResponse = typeof ReadResponseSchema.Type;
+/** The type {@link ReadResponse} decodes to. */
+export type ReadResponse = typeof ReadResponse.Type;
 
 /** A contentless "pull soon" hint. */
-export const PokeSchema = Schema.Struct({
+export const Poke = Schema.Struct({
   reason: Schema.optional(Schema.String),
 });
 
-/** {@inheritDoc PokeSchema} */
-export type Poke = typeof PokeSchema.Type;
+/** The type {@link Poke} decodes to. */
+export type Poke = typeof Poke.Type;
 
 // ─── Decode helpers ──────────────────────────────────────────────────────────
 
@@ -204,18 +204,18 @@ const decodeWith =
 /**
  * Decode an untrusted push request; fails with `ProtocolError` when it doesn't match the schema.
  */
-export const decodePushRequest = decodeWith(PushRequestSchema, "push request");
+export const decodePushRequest = decodeWith(PushRequest, "push request");
 /**
  * Decode an untrusted pull request; fails with `ProtocolError` when it doesn't match the schema.
  */
-export const decodePullRequest = decodeWith(PullRequestSchema, "pull request");
+export const decodePullRequest = decodeWith(PullRequest, "pull request");
 /**
  * Decode an untrusted read request; fails with `ProtocolError` when it doesn't match the schema.
  */
-export const decodeReadRequest = decodeWith(ReadRequestSchema, "read request");
+export const decodeReadRequest = decodeWith(ReadRequest, "read request");
 /** Decode a push response; fails with `ProtocolError` when it doesn't match the schema. */
-export const decodePushResponse = decodeWith(PushResponseSchema, "push response");
+export const decodePushResponse = decodeWith(PushResponse, "push response");
 /** Decode a pull response; fails with `ProtocolError` when it doesn't match the schema. */
-export const decodePullResponse = decodeWith(PullResponseSchema, "pull response");
+export const decodePullResponse = decodeWith(PullResponse, "pull response");
 /** Decode one patch operation; fails with `ProtocolError` when it doesn't match the schema. */
-export const decodePatchOp = decodeWith(PatchOpSchema, "patch op");
+export const decodePatchOp = decodeWith(PatchOp, "patch op");

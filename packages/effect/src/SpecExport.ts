@@ -36,15 +36,15 @@ import * as Str from "effect/String";
 import type * as Collection from "./Collection.js";
 import type * as Mutator from "./Mutator.js";
 import {
-  MutationSchema,
-  NamedSubscriptionSchema,
-  PatchOpSchema,
-  PokeSchema,
-  PushResponseSchema,
-  RejectedMutationSchema,
+  Mutation,
+  NamedSubscription,
+  PatchOp,
+  Poke,
+  PushResponse,
+  RejectedMutation,
 } from "./Protocol.js";
 import type * as Query from "./Query.js";
-import { SubsetSchema } from "./Subset.js";
+import { Subset } from "./Subset.js";
 
 // ─── Inputs ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ const id = <S extends Schema.Top>(schema: S, identifier: string): S =>
   schema.annotate({ identifier }) as S;
 
 /** The serializable failure carried on sync operations (RpcTransport's). */
-const SyncErrorSchema = Schema.Struct({
+const SyncError = Schema.Struct({
   _tag: Schema.tag("SyncRpcError"),
   message: Schema.String,
 });
@@ -156,7 +156,7 @@ const specialize = (api: SyncApi) => {
 
   // Mutation: one variant per mutator, discriminated by `mutator` name.
   const mutation = Arr.isReadonlyArrayEmpty(mutatorNames)
-    ? id(MutationSchema, "Mutation")
+    ? id(Mutation, "Mutation")
     : id(
         Schema.Union(
           mutatorNames.map(({ def, schema }) =>
@@ -177,7 +177,7 @@ const specialize = (api: SyncApi) => {
 
   // PatchOp: a `Put` variant per collection (its row schema), plus Del/Clear.
   const patchOp = Arr.isReadonlyArrayEmpty(collectionNames)
-    ? id(PatchOpSchema, "PatchOp")
+    ? id(PatchOp, "PatchOp")
     : id(
         Schema.Union([
           ...collectionNames.map(({ def, schema }) =>
@@ -204,7 +204,7 @@ const specialize = (api: SyncApi) => {
 
   // NamedSubscription: one variant per query (its args schema).
   const namedSubscription = Arr.isReadonlyArrayEmpty(queryNames)
-    ? id(NamedSubscriptionSchema, "NamedSubscription")
+    ? id(NamedSubscription, "NamedSubscription")
     : id(
         Schema.Union(
           queryNames.map(({ def, schema }) =>
@@ -225,7 +225,7 @@ const specialize = (api: SyncApi) => {
     Schema.Struct({
       clientGroupId: Schema.String,
       cookie: Schema.optional(Schema.String),
-      subscriptions: Schema.Array(id(SubsetSchema, "Subset")),
+      subscriptions: Schema.Array(id(Subset, "Subset")),
       namedSubscriptions: Schema.optional(Schema.Array(namedSubscription)),
     }),
     "PullRequest"
@@ -235,18 +235,18 @@ const specialize = (api: SyncApi) => {
       cookie: Schema.String,
       patch: Schema.Array(patchOp),
       lastMutationIds: Schema.Record(Schema.String, Schema.Number),
-      rejected: Schema.optional(Schema.Array(RejectedMutationSchema)),
+      rejected: Schema.optional(Schema.Array(RejectedMutation)),
     }),
     "PullResponse"
   );
 
   const roots: [SchemaAST.AST, ...Array<SchemaAST.AST>] = [
     pushRequest.ast,
-    id(PushResponseSchema, "PushResponse").ast,
+    id(PushResponse, "PushResponse").ast,
     pullRequest.ast,
     pullResponse.ast,
-    id(PokeSchema, "Poke").ast,
-    id(SyncErrorSchema, "SyncRpcError").ast,
+    id(Poke, "Poke").ast,
+    id(SyncError, "SyncRpcError").ast,
   ];
 
   return {

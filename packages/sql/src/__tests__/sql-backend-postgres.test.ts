@@ -108,9 +108,9 @@ interface Args {
   readonly title: string;
 }
 
-const argsSchema = Schema.Struct({ id: Schema.String, title: Schema.String });
-const setTodo = Mutator.make("todo/set", argsSchema);
-const parkTodo = Mutator.make("todo/park", argsSchema);
+const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
+const setTodo = Mutator.make("todo/set", TodoArgs);
+const parkTodo = Mutator.make("todo/park", TodoArgs);
 
 const mutation = (mutationId: number, mutator: string) => ({
   clientId: CLIENT,

@@ -103,7 +103,7 @@ export const layerMemoryStore: Layer.Layer<CvrStore> = Layer.effect(CvrStore)(ma
  * The schema is the source of truth for the on-disk form and for decoding
  * untrusted stored bytes; `WireCvr` is derived from it.
  */
-const WireCvrSchema = Schema.fromJsonString(
+const WireCvr = Schema.fromJsonString(
   Schema.Struct({
     rows: Schema.Array(
       Schema.Tuple([
@@ -114,9 +114,9 @@ const WireCvrSchema = Schema.fromJsonString(
   })
 );
 
-type WireCvr = typeof WireCvrSchema.Type;
+type WireCvr = typeof WireCvr.Type;
 
-const decodeCvr = Schema.decodeUnknownEffect(WireCvrSchema);
+const decodeCvr = Schema.decodeUnknownEffect(WireCvr);
 
 const toWire = (cvr: Cvr): WireCvr => ({
   rows: [...cvr.rows].map(([collection, versions]) => [collection, [...versions]] as const),

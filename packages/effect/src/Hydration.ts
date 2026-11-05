@@ -39,7 +39,7 @@
  *
  * ## Validation
  *
- * `hydrate` decodes the snapshot through {@link SnapshotSchema} before writing,
+ * `hydrate` decodes the snapshot through {@link Snapshot} before writing,
  * so a `dehydrate → JSON.stringify → JSON.parse → hydrate` round-trip is
  * schema-checked end to end; a malformed snapshot fails as a `StoreError`.
  * Only the *envelopes* are validated — row values and mutation args stay
@@ -60,14 +60,13 @@ import {
   // oxlint-disable-next-line effect/no-service-constructor-imports -- the SSR render deliberately builds a private, request-scoped in-memory store (`snapshot` needs nothing from context); providing it via a Layer would change the public `R` or share the memoized store across requests.
   makeMemory,
   type ReplicaState,
-  type StoredRow,
-  StoredRowSchema,
+  StoredRow,
 } from "./ClientStore.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
 import type * as Node from "./Node.js";
-import { MutationSchema } from "./Protocol.js";
+import { Mutation } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
 // oxlint-disable-next-line effect/no-service-constructor-imports -- the in-process SSR path builds a private loop-back transport over the `ServerHandler` in context, per call; a Layer would change `snapshot`'s public requirements.
@@ -78,9 +77,9 @@ import { ClientTransport, makeInMemory, ServerHandler } from "./Transport.js";
  * to, so the flat `rows` array reconstructs the per-collection layout on
  * hydrate. `value` stays `Unknown` (envelope-validated only, ADR-0014).
  */
-export const SnapshotRowSchema = Schema.Struct({
+export const SnapshotRow = Schema.Struct({
   collection: Schema.String,
-  ...StoredRowSchema.fields,
+  ...StoredRow.fields,
 });
 
 /**
@@ -97,11 +96,11 @@ export const SnapshotRowSchema = Schema.Struct({
  * without them would issue those ids again, which the backend skips as
  * duplicates (a silent lost write).
  */
-export const SnapshotSchema = Schema.Struct({
-  rows: Schema.Array(SnapshotRowSchema),
+export const Snapshot = Schema.Struct({
+  rows: Schema.Array(SnapshotRow),
   cookie: Schema.optional(Schema.String),
-  journal: Schema.Array(MutationSchema),
-  unpulled: Schema.optional(Schema.Array(MutationSchema)),
+  journal: Schema.Array(Mutation),
+  unpulled: Schema.optional(Schema.Array(Mutation)),
   counters: Schema.optional(
     Schema.Record(
       Schema.String,
@@ -110,17 +109,20 @@ export const SnapshotSchema = Schema.Struct({
   ),
 });
 
-/** {@inheritDoc SnapshotSchema} */
-export type Snapshot = typeof SnapshotSchema.Type;
+/** The type {@link Snapshot} decodes to. */
+export type Snapshot = typeof Snapshot.Type;
 
-/** {@inheritDoc SnapshotRowSchema} */
-export type SnapshotRow = typeof SnapshotRowSchema.Type;
+/** The type {@link SnapshotRow} decodes to. */
+export type SnapshotRow = typeof SnapshotRow.Type;
 
 /**
  * JSON codec for a {@link Snapshot}: `decode` parses a JSON string and validates
  * it in one step (SSR/devtools ingest), `encode` produces the JSON string.
  */
-export const SnapshotFromJson = Schema.fromJsonString(SnapshotSchema);
+export const SnapshotFromJson = Schema.fromJsonString(Snapshot);
+
+/** The type {@link SnapshotFromJson} decodes to. */
+export type SnapshotFromJson = typeof SnapshotFromJson.Type;
 
 const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 
@@ -180,7 +182,7 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
 
 /**
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
- * {@link SnapshotSchema} (so a malformed snapshot fails as a `StoreError`), then
+ * {@link Snapshot} (so a malformed snapshot fails as a `StoreError`), then
  * put the rows, set the cookie if present, park the unpulled tail, raise the
  * store's mutation counters to the snapshot's, and append the journal, skipping
  * any entry the tail already holds. A snapshot without a tail parks nothing. An
@@ -213,7 +215,7 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
-    const decoded = yield* Schema.decodeUnknownEffect(SnapshotSchema)(snapshot).pipe(
+    const decoded = yield* Schema.decodeUnknownEffect(Snapshot)(snapshot).pipe(
       Effect.mapError(storeError("Invalid snapshot"))
     );
     yield* Effect.gen(function* () {
