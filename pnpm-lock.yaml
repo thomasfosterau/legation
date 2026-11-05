@@ -55,8 +55,8 @@ catalogs:
       specifier: ^7.3.1
       version: 7.3.1
     '@thomasfosterau/effect-jsonapi':
-      specifier: ^0.17.0
-      version: 0.17.0
+      specifier: ^0.20.0
+      version: 0.20.0
     '@thomasfosterau/effect-svelte':
       specifier: ^0.6.0
       version: 0.6.0
@@ -199,7 +199,7 @@ importers:
         version: 4.0.6(effect@4.0.6)
       '@thomasfosterau/effect-jsonapi':
         specifier: 'catalog:'
-        version: 0.17.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       '@thomasfosterau/legation-browser':
         specifier: workspace:*
         version: link:../../packages/browser
@@ -464,7 +464,7 @@ importers:
     dependencies:
       '@thomasfosterau/effect-jsonapi':
         specifier: 'catalog:'
-        version: 0.17.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       '@thomasfosterau/legation-effect':
         specifier: workspace:^
         version: link:../effect
@@ -1527,8 +1527,8 @@ packages:
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
 
-  '@thomasfosterau/effect-jsonapi@0.17.0':
-    resolution: {integrity: sha512-sVjo9MlfuXzIBNBk/M6Pc+PierjZTA3O51ggQ2EsEjdB+d6KSxHyK5qZml00Cah1xb03LuPc0QdXi8NZ6HYNTA==}
+  '@thomasfosterau/effect-jsonapi@0.20.0':
+    resolution: {integrity: sha512-vn/MBiwWhqeEWS/RxhgjgREg7ErpmGCCP8u1/ESz+bKAWX0Yes9CvruULkq2d6buIihpVSDL+SDDSzVJOY/vIw==}
     engines: {node: '>=22', pnpm: '>=11'}
     peerDependencies:
       effect: 4.0.6
@@ -3568,7 +3568,7 @@ snapshots:
     dependencies:
       '@testing-library/dom': 10.4.2
 
-  '@thomasfosterau/effect-jsonapi@0.17.0(effect@4.0.6)':
+  '@thomasfosterau/effect-jsonapi@0.20.0(effect@4.0.6)':
     dependencies:
       effect: 4.0.6
 
