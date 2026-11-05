@@ -58,7 +58,6 @@
  */
 
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -77,10 +76,13 @@ import * as Subset from "./Subset.js";
 import * as UnknownMutator from "./UnknownMutator.js";
 
 /** A backend broke one of the contract's guarantees. */
-export class ContractViolation extends Data.TaggedError("ContractViolation")<{
-  readonly rule: string;
-  readonly message: string;
-}> {}
+export class ContractViolation extends Schema.TaggedError<
+  ContractViolation,
+  { readonly brand: unique symbol }
+>()("ContractViolation", {
+  rule: Schema.String,
+  message: Schema.String,
+}) {}
 
 // ─── Park gates (rule 11) ────────────────────────────────────────────────────
 

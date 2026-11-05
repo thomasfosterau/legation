@@ -16,12 +16,12 @@
  */
 
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { Redis } from "effect/persistence";
 import type { BusBroker } from "./InvalidationBus.js";
@@ -88,7 +88,10 @@ const cursorAfter = (reply: XRevRangeReply): string => {
 const START_LOOKUP_BOUND = Duration.millis(500);
 
 /** The reader's start-position lookup did not answer within {@link START_LOOKUP_BOUND}. */
-class StartLookupTimeout extends Data.TaggedError("StartLookupTimeout") {}
+class StartLookupTimeout extends Schema.TaggedError<
+  StartLookupTimeout,
+  { readonly brand: unique symbol }
+>()("StartLookupTimeout", {}) {}
 
 /**
  * The margin added to the XREAD BLOCK time to bound one reader XREAD. Redis ends a healthy idle
@@ -98,7 +101,10 @@ class StartLookupTimeout extends Data.TaggedError("StartLookupTimeout") {}
 const XREAD_MARGIN_MS = 2_000;
 
 /** A reader XREAD got no reply within its bound (see {@link XREAD_MARGIN_MS}). */
-class XReadTimeout extends Data.TaggedError("XReadTimeout") {}
+class XReadTimeout extends Schema.TaggedError<XReadTimeout, { readonly brand: unique symbol }>()(
+  "XReadTimeout",
+  {}
+) {}
 
 /** The reader's first back-off after a failed step; it doubles on each consecutive failure. */
 const RETRY_BASE_MS = 200;

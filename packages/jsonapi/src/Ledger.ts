@@ -56,18 +56,18 @@ export const memory: LedgerStore = {
   write: () => Effect.void,
 };
 
-const RejectionSchema = Schema.Struct({
+const Rejection = Schema.Struct({
   clientId: Schema.String,
   mutationId: Schema.Number,
   reason: Schema.String,
 });
 
-const GroupLedgerSchema = Schema.Struct({
+const GroupLedger = Schema.Struct({
   lastMutationIds: Schema.Record(Schema.String, Schema.Number),
-  rejections: Schema.Array(RejectionSchema),
+  rejections: Schema.Array(Rejection),
 });
 
-const decodeGroup = Schema.decodeUnknownEffect(GroupLedgerSchema);
+const decodeGroup = Schema.decodeUnknownEffect(GroupLedger);
 
 /**
  * A ledger store over an Effect `KeyValueStore`: each client group's ledger is

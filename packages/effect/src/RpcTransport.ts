@@ -20,19 +20,22 @@ import { Rpc, RpcClient, RpcGroup, RpcSerialization } from "effect/rpc";
 import * as Socket from "effect/socket/Socket";
 import { TransportError } from "./Errors.js";
 import {
-  PokeSchema,
-  PullRequestSchema,
-  PullResponseSchema,
-  PushRequestSchema,
-  PushResponseSchema,
-  ReadRequestSchema,
-  ReadResponseSchema,
+  Poke,
+  PullRequest,
+  PullResponse,
+  PushRequest,
+  PushResponse,
+  ReadRequest,
+  ReadResponse,
 } from "./Protocol.js";
 import { ClientTransport, ServerHandler } from "./Transport.js";
 import * as Transport from "./Transport.js";
 
 /** The wire-serializable failure carried on sync RPCs. */
-export class SyncRpcError extends Schema.TaggedError<SyncRpcError>()("SyncRpcError", {
+export class SyncRpcError extends Schema.TaggedError<
+  SyncRpcError,
+  { readonly brand: unique symbol }
+>()("SyncRpcError", {
   message: Schema.String,
 }) {}
 
@@ -42,23 +45,23 @@ export class SyncRpcError extends Schema.TaggedError<SyncRpcError>()("SyncRpcErr
  */
 export const SyncRpcs = RpcGroup.make(
   Rpc.make("push", {
-    payload: PushRequestSchema,
-    success: PushResponseSchema,
+    payload: PushRequest,
+    success: PushResponse,
     error: SyncRpcError,
   }),
   Rpc.make("pull", {
-    payload: PullRequestSchema,
-    success: PullResponseSchema,
+    payload: PullRequest,
+    success: PullResponse,
     error: SyncRpcError,
   }),
   Rpc.make("read", {
-    payload: ReadRequestSchema,
-    success: ReadResponseSchema,
+    payload: ReadRequest,
+    success: ReadResponse,
     error: SyncRpcError,
   }),
   Rpc.make("pokes", {
     payload: { clientGroupId: Schema.String },
-    success: PokeSchema,
+    success: Poke,
     stream: true,
   })
 );

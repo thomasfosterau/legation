@@ -37,7 +37,7 @@ export interface SortTerm {
 }
 
 /** The pagination strategies the library models, as a decoded value. */
-const PageParamsSchema = Schema.Union([
+const PageParams = Schema.Union([
   Schema.Struct(Query.Page.Offset),
   Schema.Struct(Query.Page.Number),
   Schema.Struct(Query.Page.Cursor),
@@ -47,7 +47,7 @@ const PageParamsSchema = Schema.Union([
  * JSON:API `page` parameters: offset/limit, number/size, or cursor/size — the
  * strategies exposed by the library's `Query.Page`.
  */
-export type PageParams = typeof PageParamsSchema.Type;
+export type PageParams = typeof PageParams.Type;
 
 /**
  * JSON:API Request Options. `filter` is a filter-grammar AST (ADR-0028;

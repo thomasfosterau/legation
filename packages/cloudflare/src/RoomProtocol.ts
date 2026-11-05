@@ -35,37 +35,46 @@ export interface PokeFrame {
 export const pokeFrame: PokeFrame = { type: "poke" };
 
 /** Shard → room poke body: the matched topics. */
-export const ShardPokeSchema = Schema.Struct({
+export const ShardPoke = Schema.Struct({
   topics: Schema.Array(Schema.String),
 });
 
+/** The type {@link ShardPoke} decodes to. */
+export type ShardPoke = typeof ShardPoke.Type;
+
 /** Decode a shard-to-room poke body; fails with `ProtocolError` when it doesn't match. */
 export const decodeShardPoke = (input: unknown) =>
-  Schema.decodeUnknownEffect(ShardPokeSchema)(input).pipe(
+  Schema.decodeUnknownEffect(ShardPoke)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard poke", cause }))
   );
 
 /** Shard registration body: a room's leased topics. */
-export const RegisterSchema = Schema.Struct({
+export const Register = Schema.Struct({
   roomId: Schema.String,
   topics: Schema.Array(Schema.String),
   ttlMillis: Schema.Number,
 });
 
+/** The type {@link Register} decodes to. */
+export type Register = typeof Register.Type;
+
 /** Decode a room-to-shard register body; fails with `ProtocolError` when it doesn't match. */
 export const decodeRegister = (input: unknown) =>
-  Schema.decodeUnknownEffect(RegisterSchema)(input).pipe(
+  Schema.decodeUnknownEffect(Register)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard register", cause }))
   );
 
 /** Shard publish body: a write's derived topics. */
-export const PublishSchema = Schema.Struct({
+export const Publish = Schema.Struct({
   topics: Schema.Array(Schema.String),
 });
 
+/** The type {@link Publish} decodes to. */
+export type Publish = typeof Publish.Type;
+
 /** Decode a room-to-shard publish body; fails with `ProtocolError` when it doesn't match. */
 export const decodePublish = (input: unknown) =>
-  Schema.decodeUnknownEffect(PublishSchema)(input).pipe(
+  Schema.decodeUnknownEffect(Publish)(input).pipe(
     Effect.mapError((cause) => new ProtocolError({ message: "Invalid shard publish", cause }))
   );
 

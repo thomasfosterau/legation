@@ -21,14 +21,14 @@ import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import { ClientTransport } from "../Transport.js";
 
-const TodoSchema = Schema.Struct({
+const Todo = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   isDone: Schema.Boolean,
 });
-type Todo = typeof TodoSchema.Type;
+type Todo = typeof Todo.Type;
 
-const todoSet = Mutator.make("todo/set", TodoSchema);
+const todoSet = Mutator.make("todo/set", Todo);
 
 const mutators = Mutator.registry([
   { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
