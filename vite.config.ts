@@ -161,7 +161,6 @@ export default defineConfig({
       "effect/prefer-match-over-switch": "warn", // 50 sites
       "effect/avoid-schema-suffix": "warn", // 41 sites
       "effect/require-schema-type-alias": "warn", // 30 sites
-      "effect/avoid-data-tagged-error": "warn", // 24 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a

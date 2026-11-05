@@ -103,11 +103,11 @@
 
 import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation-effect";
 import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -385,10 +385,13 @@ export const flush = (
 // ─── The listener ────────────────────────────────────────────────────────────
 
 /** No host attached the listener within its `readyTimeout`. */
-export class HostNotReady extends Data.TaggedError("HostNotReady")<{
-  readonly tag: string;
-  readonly message: string;
-}> {}
+export class HostNotReady extends Schema.TaggedError<
+  HostNotReady,
+  { readonly brand: unique symbol }
+>()("HostNotReady", {
+  tag: Schema.String,
+  message: Schema.String,
+}) {}
 
 /** Options for {@link listen}. */
 export interface ListenOptions {

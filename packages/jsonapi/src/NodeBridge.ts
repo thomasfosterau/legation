@@ -75,18 +75,20 @@
 import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 /** A definition-time mismatch between a resource graph and the node model. */
-export class ResourceBridgeError extends Data.TaggedError("ResourceBridgeError")<{
-  readonly resource: string;
-  readonly relationship: string;
-  readonly message: string;
-}> {}
+export class ResourceBridgeError extends Schema.TaggedError<
+  ResourceBridgeError,
+  { readonly brand: unique symbol }
+>()("ResourceBridgeError", {
+  resource: Schema.String,
+  relationship: Schema.String,
+  message: Schema.String,
+}) {}
 
 // ─── Sync annotations (#220) ──────────────────────────────────────────────────
 //

@@ -10,10 +10,10 @@ import * as Schema from "effect/Schema";
  * as on the server, where a hook renders from its `initial` seed and fails
  * only when it needs the Client itself.
  */
-export class ClientUnavailable extends Schema.TaggedError<ClientUnavailable>()(
-  "ClientUnavailable",
-  { message: Schema.String }
-) {}
+export class ClientUnavailable extends Schema.TaggedError<
+  ClientUnavailable,
+  { readonly brand: unique symbol }
+>()("ClientUnavailable", { message: Schema.String }) {}
 
 /** The {@link ClientUnavailable} a hook fails with when no Client was set. */
 export const unavailable = (): ClientUnavailable =>

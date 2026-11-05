@@ -32,7 +32,10 @@ import { ClientTransport, ServerHandler } from "./Transport.js";
 import * as Transport from "./Transport.js";
 
 /** The wire-serializable failure carried on sync RPCs. */
-export class SyncRpcError extends Schema.TaggedError<SyncRpcError>()("SyncRpcError", {
+export class SyncRpcError extends Schema.TaggedError<
+  SyncRpcError,
+  { readonly brand: unique symbol }
+>()("SyncRpcError", {
   message: Schema.String,
 }) {}
 

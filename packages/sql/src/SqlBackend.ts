@@ -372,16 +372,16 @@ const decodeManyJson = (text: string) =>
  *
  * Logged, never raised: the pull still succeeds.
  */
-export class InexactJsonNumber extends Schema.TaggedError<InexactJsonNumber>()(
-  "InexactJsonNumber",
-  {
-    message: Schema.String,
-    /** The collection whose read relation holds the column. */
-    collection: Schema.String,
-    /** The read relation's column the number sits in (top-level key of the row's JSON). */
-    column: Schema.String,
-  }
-) {}
+export class InexactJsonNumber extends Schema.TaggedError<
+  InexactJsonNumber,
+  { readonly brand: unique symbol }
+>()("InexactJsonNumber", {
+  message: Schema.String,
+  /** The collection whose read relation holds the column. */
+  collection: Schema.String,
+  /** The read relation's column the number sits in (top-level key of the row's JSON). */
+  column: Schema.String,
+}) {}
 
 /**
  * A JSON number's decimal value, as `<sign><digits>e<scale>` with the digits'

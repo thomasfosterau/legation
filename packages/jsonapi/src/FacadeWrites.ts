@@ -345,7 +345,10 @@ const sameType =
   };
 
 /** Graph-derived CRUD args that do not fit the mutation they were journaled under. */
-export class InvalidWriteArgs extends Schema.TaggedError<InvalidWriteArgs>()("InvalidWriteArgs", {
+export class InvalidWriteArgs extends Schema.TaggedError<
+  InvalidWriteArgs,
+  { readonly brand: unique symbol }
+>()("InvalidWriteArgs", {
   message: Schema.String,
 }) {}
 

@@ -24,7 +24,10 @@ const touched: Touched = {
   rows: [{ collection: "medical-records", id: "visit-42" }],
 };
 
-class PushFailed extends Schema.TaggedError<PushFailed>()("PushFailed", {}) {}
+class PushFailed extends Schema.TaggedError<PushFailed, { readonly brand: unique symbol }>()(
+  "PushFailed",
+  {}
+) {}
 
 /** A sink over a fixed registry, recording every push it sends. */
 const recording = (

@@ -11,7 +11,6 @@
  */
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -143,7 +142,10 @@ const restList = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: 
     request: HttpServerRequest.fromWeb(new Request(`http://shop.test${url}`)),
   });
 
-class NotFound extends Data.TaggedError("NotFound") {}
+class NotFound extends Schema.TaggedError<NotFound, { readonly brand: unique symbol }>()(
+  "NotFound",
+  {}
+) {}
 
 const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: string) =>
   rest.get(resource, { notFound: () => new NotFound() })({

@@ -19,9 +19,12 @@ import {
 import { EdgeInvalidation } from "../index.js";
 
 /** A binding, a KV namespace or a purge that is unreachable. */
-class Unreachable extends Schema.TaggedError<Unreachable>()("Unreachable", {
-  what: Schema.String,
-}) {}
+class Unreachable extends Schema.TaggedError<Unreachable, { readonly brand: unique symbol }>()(
+  "Unreachable",
+  {
+    what: Schema.String,
+  }
+) {}
 
 /** A logger that records every warning, so a test can assert a failure was logged. */
 const recordWarnings = () => {
