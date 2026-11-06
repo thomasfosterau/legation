@@ -28,7 +28,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
-import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
+import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import * as PgExecutor from "../PgExecutor.js";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";

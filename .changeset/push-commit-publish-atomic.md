@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `SyncServer`'s push handler no longer loses a fan-out when it is interrupted.

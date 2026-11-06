@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 ADR-0025's read path is reusable outside the protocol carrier (#163).

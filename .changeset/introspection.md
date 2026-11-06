@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add engine and server introspection (#45).

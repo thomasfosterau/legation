@@ -34,7 +34,7 @@ import {
   Mutator,
   Predicate,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   ClientEngine,
   EngineAtoms,
@@ -43,7 +43,7 @@ import {
   Related,
   Subscriptions,
   Subset,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 ```
 
 ## The mapping
@@ -373,7 +373,7 @@ is an Effect `Stream` and, via `Derive.atom`, an atom on the standard surface,
 so `useQuery` / the Svelte `query` store bind it with no new machinery.
 
 ```ts
-import { Derive } from "@thomasfosterau/legation-effect/internal";
+import { Derive } from "@thomasfosterau/legation/internal";
 
 const teamOpenCounts$ = Derive.map(
   Derive.groupBy(

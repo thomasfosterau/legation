@@ -10,8 +10,8 @@
 
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import * as Effect from "effect/Effect";
-import { StoreError } from "@thomasfosterau/legation-effect";
-import type { Cvr } from "@thomasfosterau/legation-effect/internal";
+import { StoreError } from "@thomasfosterau/legation";
+import type { Cvr } from "@thomasfosterau/legation/internal";
 
 const KEY_PREFIX = "legation:cvr:";
 

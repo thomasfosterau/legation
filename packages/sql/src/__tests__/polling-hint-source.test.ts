@@ -13,7 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
-import { Authorization, Backend, MemoryBackend } from "@thomasfosterau/legation-effect";
+import { Authorization, Backend, MemoryBackend } from "@thomasfosterau/legation";
 import {
   Cvr,
   HintSource,
@@ -21,7 +21,7 @@ import {
   Subset,
   SyncServer,
   Telemetry,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as PollingHintSource from "../PollingHintSource.js";
 import type * as SqlBackend from "../SqlBackend.js";
 

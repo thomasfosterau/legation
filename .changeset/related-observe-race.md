@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 Fix a race in `Related.observeWith` that could leave a live join permanently

@@ -9,7 +9,7 @@
  * enhanced submit.
  *
  * All three are thin: the hydration itself is `Hydration` in
- * `@thomasfosterau/legation-effect` and the wiring is `Client.make`. What lives here is only
+ * `@thomasfosterau/legation` and the wiring is `Client.make`. What lives here is only
  * what SvelteKit adds — a cookie, a `load`'s shape, and the `ManagedRuntime` a
  * root layout puts in context.
  *

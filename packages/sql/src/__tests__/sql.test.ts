@@ -7,7 +7,7 @@
  */
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "@effect/vitest";
-import { Predicate } from "@thomasfosterau/legation-effect";
+import { Predicate } from "@thomasfosterau/legation";
 import * as Sql from "../Sql.js";
 
 const kinds: Sql.Kinds = {

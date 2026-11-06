@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page as kitPage } from "$app/state";
-  import { Aggregate } from "@thomasfosterau/legation-effect";
+  import { Aggregate } from "@thomasfosterau/legation";
   import { useAggregate, useConnection, useMutationWithAck, useQuery } from "@thomasfosterau/legation-svelte";
   import {
     productDetail,

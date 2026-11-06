@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 `Related.observeWith` now propagates row deltas through the join instead of

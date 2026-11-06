@@ -2,14 +2,14 @@
 
 Browser-runtime adapters for the legation engine: a service-worker engine host, an elected main-thread host, an IndexedDB client store, tab mirrors over BroadcastChannel, a Cache API HTTP cache, and Background Sync.
 
-Code that depends on browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`) lives here, not in [`@thomasfosterau/legation-effect`](../effect), so the core runs the same in browsers, workers, edge runtimes and Node ([ADR-0006](../../docs/adr/0006-dependency-based-package-boundaries.md)).
+Code that depends on browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`) lives here, not in [`@thomasfosterau/legation`](../effect), so the core runs the same in browsers, workers, edge runtimes and Node ([ADR-0006](../../docs/adr/0006-dependency-based-package-boundaries.md)).
 
 The recommended topology runs the engine in the per-origin service worker, and every tab mirrors it ([ADR-0010](../../docs/adr/0010-service-worker-hosted-client-engine.md)). Apps that cannot run a service worker run the same host on a tab's main thread, elected once per `clientGroupId` (see [ElectedHost](#electedhost)). Either way one engine per client group owns the durable store, and every other tab is a mirror.
 
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-browser @thomasfosterau/legation-effect effect @effect/platform-browser
+npm install @thomasfosterau/legation-browser @thomasfosterau/legation effect @effect/platform-browser
 ```
 
 ## Effect version
@@ -23,7 +23,7 @@ The shared domain, imported by the tab, the service worker and the server:
 ```ts
 // domain.ts
 import { Schema } from "effect";
-import { Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
+import { Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 export const Todo = Schema.Struct({
   id: Schema.String,
@@ -48,7 +48,7 @@ A tab holds no engine. It mirrors the one the service worker serves, over the `l
 
 ```ts
 // page.ts
-import { Client } from "@thomasfosterau/legation-effect";
+import { Client } from "@thomasfosterau/legation";
 import { BroadcastMirrorChannel } from "@thomasfosterau/legation-browser";
 import { Effect, Stream } from "effect";
 import { mutations, nodes, openTodos } from "./domain.js";
@@ -72,8 +72,8 @@ The service worker runs the engine. It is built from the same domain, over Index
 // service-worker.ts
 import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
-import { Transport } from "@thomasfosterau/legation-effect";
-import { ClientEngine, RpcTransport } from "@thomasfosterau/legation-effect/internal";
+import { Transport } from "@thomasfosterau/legation";
+import { ClientEngine, RpcTransport } from "@thomasfosterau/legation/internal";
 import {
   BackgroundSync,
   BrowserConnectivity,
@@ -163,7 +163,7 @@ Periodic Background Sync is not wrapped: it has its own permission story and bat
 
 Web Push is the one mechanism that wakes a service worker that is not running (#214). A push-poke wakes it so the replica is current when the user opens the app, not after a round trip.
 
-**The server side** is `PushPoke.sink` in `@thomasfosterau/legation-effect/internal`, an `InvalidationSink` run with `InvalidationSink.run` where the bus is:
+**The server side** is `PushPoke.sink` in `@thomasfosterau/legation/internal`, an `InvalidationSink` run with `InvalidationSink.run` where the bus is:
 
 ```ts
 const sink =
@@ -200,8 +200,8 @@ For apps without a service worker. `ElectedHost.run` elects exactly one tab per 
 
 ```ts
 // elected.ts
-import { ClientStore, Transport } from "@thomasfosterau/legation-effect";
-import { RpcTransport } from "@thomasfosterau/legation-effect/internal";
+import { ClientStore, Transport } from "@thomasfosterau/legation";
+import { RpcTransport } from "@thomasfosterau/legation/internal";
 import {
   BrowserConnectivity,
   ElectedHost,
@@ -253,7 +253,7 @@ A durable `ClientStore` over IndexedDB. Every engine state transition lands in I
 
 ```ts
 // idb.ts
-import type { Identity } from "@thomasfosterau/legation-effect";
+import type { Identity } from "@thomasfosterau/legation";
 import { IndexedDbClientStore } from "@thomasfosterau/legation-browser";
 
 // One replica for whoever is signed in. A sign-in change resets it, and the
@@ -276,7 +276,7 @@ The store opens its database without a version, so a database a later app build 
 
 ```ts
 // cache.ts
-import type { ClientEngine, HttpCache } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine, HttpCache } from "@thomasfosterau/legation/internal";
 import { CacheApiHttpCache, HttpCacheInvalidation } from "@thomasfosterau/legation-browser";
 import { Effect } from "effect";
 

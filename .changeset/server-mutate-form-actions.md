@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `server.mutate` (ADR-0030, amendment #215): run one named Mutation

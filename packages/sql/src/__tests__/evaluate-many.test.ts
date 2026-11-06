@@ -12,8 +12,8 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendError, Mutator, Predicate } from "@thomasfosterau/legation-effect";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
+import { BackendError, Mutator, Predicate } from "@thomasfosterau/legation";
+import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../SqlBackend.js";
 
 const context = { clientGroupId: "g" };

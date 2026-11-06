@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 A push acknowledgement no longer reverts the view before the pull lands (#286). The push used to trim a mutation's optimistic effects from the overlay as soon as the backend acknowledged it, so an observer saw the pre-mutation value until the next pull. The applied entries now stay overlaid until a pull reports them, and the pull reveals the confirmed row in one change. A permanently rejected mutation still leaves the view at its push, since the backend applied nothing.

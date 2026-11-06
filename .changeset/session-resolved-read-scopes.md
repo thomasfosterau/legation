@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Breaking: an auth filter now returns a `ReadScope` (ADR-0015's #205 amendment). The three outcomes are `Authorization.AllowAll`, `Authorization.Deny` and `Authorization.filter(predicate, sets)`. A bare `Predicate` is still accepted and means a filter with no named sets. `Authorization.allowAll` now returns `AllowAll` rather than an always-true predicate. Code that calls an `AuthFilter` itself must handle the wider return type (`Authorization.scopeOf` normalises it).

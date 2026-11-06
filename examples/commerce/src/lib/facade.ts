@@ -29,15 +29,15 @@
  * `tests/replica-documents.test.ts` checks the bytes).
  */
 import type { Effect, Stream } from "effect";
-import type { MutatorError, StoreError } from "@thomasfosterau/legation-effect";
+import type { MutatorError, StoreError } from "@thomasfosterau/legation";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
-import type { Query } from "@thomasfosterau/legation-effect";
+import type { Query } from "@thomasfosterau/legation";
 import type {
   ClientEngine,
   ClientView,
   Coverage,
   MutationState,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./api.js";
 import { resources as declared } from "./resources.js";

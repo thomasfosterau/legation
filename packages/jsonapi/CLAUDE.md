@@ -4,7 +4,7 @@ JSON:API loaders, derived sync and the replica-served façade. Read the root [AG
 
 ## Boundary
 
-- The JSON:API wire types, schemas and query encoding come from `@thomasfosterau/effect-jsonapi` (ADR-0016), a runtime dependency; never re-implement them here. Imports from the workspace: `@thomasfosterau/legation-effect` only.
+- The JSON:API wire types, schemas and query encoding come from `@thomasfosterau/effect-jsonapi` (ADR-0016), a runtime dependency; never re-implement them here. Imports from the workspace: `@thomasfosterau/legation` only.
 - In the engine's model a JSON:API `type` is a collection, a resource `id` a row id, a resource a row value (ADR-0008).
 
 ## Invariants

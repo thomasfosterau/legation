@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-svelte": patch
 ---
 

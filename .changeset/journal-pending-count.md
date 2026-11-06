@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Sampling the journal-depth gauge no longer reads the whole journal (#260).

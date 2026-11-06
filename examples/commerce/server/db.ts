@@ -12,7 +12,7 @@ import type { SqlClient } from "effect/sql/SqlClient";
 import { SqlClient as SqlClientService } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendError } from "@thomasfosterau/legation-effect";
+import { BackendError } from "@thomasfosterau/legation";
 import type { SqlBackend } from "@thomasfosterau/legation-sql";
 
 /** The SQLite client layer both server processes build their stack on. */

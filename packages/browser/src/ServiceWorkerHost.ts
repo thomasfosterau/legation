@@ -39,8 +39,8 @@
  * leaves the caller to keep the scope open.
  */
 
-import type { Client, Collection, Node } from "@thomasfosterau/legation-effect";
-import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legation-effect/internal";
+import type { Client, Collection, Node } from "@thomasfosterau/legation";
+import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legation/internal";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import type * as BackgroundSync from "./BackgroundSync.js";

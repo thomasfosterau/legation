@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 "@thomasfosterau/legation-cloudflare": patch
 ---
 

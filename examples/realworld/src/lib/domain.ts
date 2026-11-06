@@ -31,7 +31,7 @@
  */
 
 import { Schema } from "effect";
-import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation-effect";
+import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 

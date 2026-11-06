@@ -15,7 +15,7 @@
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { Collection, Mutator } from "@thomasfosterau/legation-effect";
+import { Collection, Mutator } from "@thomasfosterau/legation";
 import type { RelationshipRef, ResourceValue } from "./CollectionLoader.js";
 import type { Operation, ResourceMap } from "./Convention.js";
 

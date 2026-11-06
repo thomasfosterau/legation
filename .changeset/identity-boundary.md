@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
 ---
 
@@ -16,7 +16,7 @@ rows because they are the freshest thing on the device and nothing recorded
 which identity authorised them. A's unpushed journal made it worse: durable,
 causally ordered, and about to go out under B's cookies.
 
-- **`Identity` (`@thomasfosterau/legation-effect`, new)**: `Fingerprint`, the opaque
+- **`Identity` (`@thomasfosterau/legation`, new)**: `Fingerprint`, the opaque
   app-supplied token a replica is stamped with — a session-subject hash, **never
   PII and never a credential**, as the type's own docs say. `anonymous` is the
   signed-out principal; `unstamped` is a replica that has never been scoped, and

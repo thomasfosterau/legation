@@ -102,7 +102,7 @@ export interface InvalidationBus {
 
 /** The {@link InvalidationBus} service the sync server and hint sources use. */
 export const InvalidationBus = Context.Service<InvalidationBus>(
-  "@thomasfosterau/legation-effect/InvalidationBus"
+  "@thomasfosterau/legation/InvalidationBus"
 );
 
 /**

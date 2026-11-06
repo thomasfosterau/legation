@@ -150,7 +150,7 @@ export interface AuthPolicy {
 }
 
 /** The {@link AuthPolicy} service the sync server authorizes every request against. */
-export const AuthPolicy = Context.Service<AuthPolicy>("@thomasfosterau/legation-effect/AuthPolicy");
+export const AuthPolicy = Context.Service<AuthPolicy>("@thomasfosterau/legation/AuthPolicy");
 
 /** Options for {@link policy}. */
 export interface PolicyOptions {
@@ -300,7 +300,7 @@ export interface SyncMiddleware {
 
 /** The {@link SyncMiddleware} service; absent means {@link passthroughMiddleware}. */
 export const SyncMiddleware = Context.Service<SyncMiddleware>(
-  "@thomasfosterau/legation-effect/SyncMiddleware"
+  "@thomasfosterau/legation/SyncMiddleware"
 );
 
 /** The identity middleware (no interception). */
@@ -323,5 +323,5 @@ export interface IdentityResolver {
 
 /** The {@link IdentityResolver} service; absent leaves `SyncContext.identity` undefined. */
 export const IdentityResolver = Context.Service<IdentityResolver>(
-  "@thomasfosterau/legation-effect/IdentityResolver"
+  "@thomasfosterau/legation/IdentityResolver"
 );

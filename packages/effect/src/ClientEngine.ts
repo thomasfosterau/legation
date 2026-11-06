@@ -999,9 +999,7 @@ export interface ClientEngine {
  * The {@link ClientEngine} service, for integrations that take the engine from context
  * (`JsonApiSync.start`).
  */
-export const ClientEngine = Context.Service<ClientEngine>(
-  "@thomasfosterau/legation-effect/ClientEngine"
-);
+export const ClientEngine = Context.Service<ClientEngine>("@thomasfosterau/legation/ClientEngine");
 
 /**
  * Build a {@link ClientEngine} over the `ClientStore` and `ClientTransport` in context; the engine

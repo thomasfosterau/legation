@@ -1,6 +1,6 @@
 ---
 "@thomasfosterau/legation-sql": minor
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `@thomasfosterau/legation-sql`'s compilers are exact on Postgres and SQLite (ADR-0028 §4 and
@@ -37,6 +37,6 @@ longer describes itself as a superset pre-filter.
   the driver returns them. `SqlBackend` resolves an `Exists` like
   `MemoryBackend` does: NULL foreign values are left out and the rest are
   decoded by kind.
-- `@thomasfosterau/legation-effect`: `Predicate.LiteralKind` is the one home of the kind
+- `@thomasfosterau/legation`: `Predicate.LiteralKind` is the one home of the kind
   vocabulary; `FilterCorpus.Column.kind` uses it and the corpus's `"string"`
   kind is renamed `"text"` to match ADR-0028.

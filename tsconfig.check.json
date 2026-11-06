@@ -8,8 +8,8 @@
     "sourceMap": false,
     "noEmit": true,
     "paths": {
-      "@thomasfosterau/legation-effect": ["./packages/effect/src/index.ts"],
-      "@thomasfosterau/legation-effect/internal": ["./packages/effect/src/internal.ts"],
+      "@thomasfosterau/legation": ["./packages/effect/src/index.ts"],
+      "@thomasfosterau/legation/internal": ["./packages/effect/src/internal.ts"],
       "@thomasfosterau/legation-browser": ["./packages/browser/src/index.ts"],
       "@thomasfosterau/legation-cloudflare": ["./packages/cloudflare/src/index.ts"],
       "@thomasfosterau/legation-node": ["./packages/node/src/index.ts"],

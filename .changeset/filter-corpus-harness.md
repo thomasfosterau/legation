@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 "@thomasfosterau/legation-sql": patch
 ---
 
@@ -11,7 +11,7 @@ Differential filter harness (issue #153, ADR-0028).
   in the core. This is stricter than before: text order is code-point order,
   so a backend whose text columns carry a locale collation fails the contract
   by design — ADR-0028 requires `COLLATE "C"` (Postgres) or `BINARY` (SQLite).
-- `FilterCorpus` is a new `@thomasfosterau/legation-effect/internal` export: seeded corpus
+- `FilterCorpus` is a new `@thomasfosterau/legation/internal` export: seeded corpus
   generators over Effect's `Random` service (`Random.withSeed`), a minimiser
   that shrinks a disagreeing predicate/row pair, and a disagreement reporter.
 - `@thomasfosterau/legation-sql`'s tests gain the differential harness itself: `Predicate.test`

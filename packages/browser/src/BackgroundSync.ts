@@ -101,8 +101,8 @@
  * listener.
  */
 
-import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation-effect";
-import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
+import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation";
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

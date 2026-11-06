@@ -1,9 +1,9 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Paced mutations (#117): `Paced.debounce`/`Paced.throttle`/`Paced.coalesce`
-(`@thomasfosterau/legation-effect/internal`) pace rapid mutation intents — a text field
+(`@thomasfosterau/legation/internal`) pace rapid mutation intents — a text field
 autosaving per keystroke, a slider, a cart-quantity stepper — into a handful
 of journal entries instead of one per call, built entirely on
 `ClientEngine.mutateWithAck` and Effect's own timing primitives (no new

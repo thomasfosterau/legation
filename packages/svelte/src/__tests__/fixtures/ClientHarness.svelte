@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as Option from "effect/Option";
-  import type { Query } from "@thomasfosterau/legation-effect";
+  import type { Query } from "@thomasfosterau/legation";
   import { AsyncResult } from "effect/reactivity";
   import { getClient, setClient, useQuery, type ClientHandle } from "../../index.svelte.js";
 

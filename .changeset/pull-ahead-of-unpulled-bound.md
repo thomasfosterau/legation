@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 A push that takes the acknowledged-but-unpulled tail to half its bound now starts

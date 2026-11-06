@@ -10,12 +10,8 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
-import { Authorization, MemoryBackend, Mutation, Server } from "@thomasfosterau/legation-effect";
-import {
-  HttpCache,
-  InvalidationBus,
-  InvalidationSink,
-} from "@thomasfosterau/legation-effect/internal";
+import { Authorization, MemoryBackend, Mutation, Server } from "@thomasfosterau/legation";
+import { HttpCache, InvalidationBus, InvalidationSink } from "@thomasfosterau/legation/internal";
 import { EdgeInvalidation } from "../index.js";
 
 /** A binding, a KV namespace or a purge that is unreachable. */

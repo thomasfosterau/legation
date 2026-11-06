@@ -12,8 +12,8 @@
  * testable without browser globals.
  */
 
-import { StoreError, TransportError } from "@thomasfosterau/legation-effect";
-import { HttpCache } from "@thomasfosterau/legation-effect/internal";
+import { StoreError, TransportError } from "@thomasfosterau/legation";
+import { HttpCache } from "@thomasfosterau/legation/internal";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

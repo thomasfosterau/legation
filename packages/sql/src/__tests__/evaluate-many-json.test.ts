@@ -11,8 +11,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
-import { Mutator } from "@thomasfosterau/legation-effect";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
+import { Mutator } from "@thomasfosterau/legation";
+import { Subset } from "@thomasfosterau/legation/internal";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 

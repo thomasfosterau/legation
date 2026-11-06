@@ -1,7 +1,7 @@
 # @thomasfosterau/legation-sql
 
 A driver-agnostic SQL reference backend for the
-[`@thomasfosterau/legation-effect`](../effect) engine.
+[`@thomasfosterau/legation`](../effect) engine.
 
 - **`Sql`** — a pure translator from a `Subset` predicate to a parameterized
   `WHERE` clause (and a full `SELECT`), with SQLite (`?`) and PostgreSQL (`$n`)
@@ -194,7 +194,7 @@ settles those mutations as rejected (#365).
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-sql @thomasfosterau/legation-effect effect
+npm install @thomasfosterau/legation-sql @thomasfosterau/legation effect
 ```
 
 ## Effect version

@@ -445,9 +445,7 @@ export interface ClientStore {
 }
 
 /** The {@link ClientStore} service a Client or engine persists through. */
-export const ClientStore = Context.Service<ClientStore>(
-  "@thomasfosterau/legation-effect/ClientStore"
-);
+export const ClientStore = Context.Service<ClientStore>("@thomasfosterau/legation/ClientStore");
 
 /** A journal or tail entry's identity: its client and mutation id. */
 const entryKey = (entry: { readonly clientId: string; readonly mutationId: number }): string =>

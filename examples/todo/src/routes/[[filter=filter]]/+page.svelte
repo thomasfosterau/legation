@@ -14,7 +14,7 @@
   import { Effect } from "effect";
   import { AsyncResult } from "effect/reactivity";
   import { useAggregate, useQuery, useUndo } from "@thomasfosterau/legation-svelte";
-  import { Aggregate } from "@thomasfosterau/legation-effect";
+  import { Aggregate } from "@thomasfosterau/legation";
   import { type Todo, allTodos, activeTodos } from "#lib/domain.js";
   import { connectionState, getDemo, pendingState } from "#lib/demo.svelte.js";
 

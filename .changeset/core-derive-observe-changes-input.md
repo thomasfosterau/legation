@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `Derive`'s combinators (#114) now consume `observeChanges` directly when a

@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 With `syncLoop.pushDebounce` set, `ClientEngine.runSync` now auto-pushes a

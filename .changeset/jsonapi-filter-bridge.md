@@ -1,6 +1,6 @@
 ---
 "@thomasfosterau/legation-jsonapi": minor
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 The filter-grammar bridge (ADR-0028 §5, #161): `@thomasfosterau/legation-jsonapi` now

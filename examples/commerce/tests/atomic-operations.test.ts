@@ -30,7 +30,7 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
-import type { Backend } from "@thomasfosterau/legation-effect";
+import type { Backend } from "@thomasfosterau/legation";
 import { JsonApiBackend, JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 import { clientLayer, migrate } from "../server/db.js";
 import { api, jsonApiLive } from "../server/jsonapi.js";

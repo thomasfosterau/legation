@@ -8,7 +8,7 @@
  *   (`layerNamespaced`) — see CONTEXT.md, "Identity boundary"
  * - `BroadcastMirrorChannel`: the mirror seam's BroadcastChannel binding
  *   (the seam itself — `MirrorChannel` / `MirrorProtocol` / `EngineHost` /
- *   `Mirror` — is runtime-agnostic and lives in `@thomasfosterau/legation-effect`;
+ *   `Mirror` — is runtime-agnostic and lives in `@thomasfosterau/legation`;
  *   re-exported here for compatibility)
  * - `ServiceWorkerHost`: the recommended host composition (engine sync
  *   loop + mirror serving) for the per-origin service-worker singleton
@@ -39,7 +39,7 @@ export {
   MirrorChannel,
   MirrorProtocol,
   Mirror,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 export * as CacheApiHttpCache from "./CacheApiHttpCache.js";
 export * as HttpCacheInvalidation from "./HttpCacheInvalidation.js";
 export * as BrowserConnectivity from "./BrowserConnectivity.js";

@@ -36,7 +36,7 @@ import {
   MemoryBackend,
   Node,
   Predicate,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as RestHandlers from "../RestHandlers.js";
 

@@ -22,7 +22,7 @@
 
 import type { D1Database } from "@cloudflare/workers-types";
 import * as Effect from "effect/Effect";
-import { BackendError } from "@thomasfosterau/legation-effect";
+import { BackendError } from "@thomasfosterau/legation";
 import type { SqlBackend, Sql } from "@thomasfosterau/legation-sql";
 
 const asBackendError = (operation: string) => (cause: unknown) =>

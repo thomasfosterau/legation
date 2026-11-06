@@ -194,12 +194,12 @@ importers:
       '@thomasfosterau/effect-jsonapi':
         specifier: 'catalog:'
         version: 0.17.0(effect@4.0.6)
+      '@thomasfosterau/legation':
+        specifier: workspace:*
+        version: link:../../packages/effect
       '@thomasfosterau/legation-browser':
         specifier: workspace:*
         version: link:../../packages/browser
-      '@thomasfosterau/legation-effect':
-        specifier: workspace:*
-        version: link:../../packages/effect
       '@thomasfosterau/legation-jsonapi':
         specifier: workspace:*
         version: link:../../packages/jsonapi
@@ -261,12 +261,12 @@ importers:
       '@effect/platform-browser':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
+      '@thomasfosterau/legation':
+        specifier: workspace:*
+        version: link:../../packages/effect
       '@thomasfosterau/legation-devtools':
         specifier: workspace:*
         version: link:../../packages/devtools
-      '@thomasfosterau/legation-effect':
-        specifier: workspace:*
-        version: link:../../packages/effect
       '@thomasfosterau/legation-svelte':
         specifier: workspace:*
         version: link:../../packages/svelte
@@ -301,7 +301,7 @@ importers:
       '@effect/platform-browser':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:*
         version: link:../../packages/effect
       '@thomasfosterau/legation-svelte':
@@ -344,7 +344,7 @@ importers:
       '@effect/platform-browser':
         specifier: 'catalog:'
         version: 4.0.6(effect@4.0.6)
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:*
         version: link:../../packages/effect
       '@thomasfosterau/legation-svelte':
@@ -378,7 +378,7 @@ importers:
 
   packages/browser:
     dependencies:
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:
@@ -400,7 +400,7 @@ importers:
 
   packages/cloudflare:
     dependencies:
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
       '@thomasfosterau/legation-sql':
@@ -422,7 +422,7 @@ importers:
 
   packages/devtools:
     dependencies:
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:
@@ -456,7 +456,7 @@ importers:
       '@thomasfosterau/effect-jsonapi':
         specifier: 'catalog:'
         version: 0.17.0(effect@4.0.6)
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:
@@ -472,7 +472,7 @@ importers:
 
   packages/node:
     dependencies:
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:
@@ -494,7 +494,7 @@ importers:
 
   packages/sql:
     dependencies:
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:
@@ -522,7 +522,7 @@ importers:
       '@thomasfosterau/effect-svelte':
         specifier: 'catalog:'
         version: 0.6.0(effect@4.0.6)(svelte@5.57.3)
-      '@thomasfosterau/legation-effect':
+      '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
     devDependencies:

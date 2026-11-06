@@ -23,7 +23,7 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ClientEngine, Related, Subset } from "@thomasfosterau/legation-effect/internal";
+import { ClientEngine, Related, Subset } from "@thomasfosterau/legation/internal";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 

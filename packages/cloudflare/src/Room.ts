@@ -41,14 +41,14 @@ import {
   type Transport,
   type TransportError,
   type VersionNotSupportedError,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   Cvr,
   FanoutBus,
   InvalidationBus,
   type Subset,
   SyncServer,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as DurableCvrStore from "./DurableCvrStore.js";
 import * as DurableFanoutBroker from "./DurableFanoutBroker.js";
 import { type RoomSocket, upgradeResponse, webSocketPair } from "./Platform.js";

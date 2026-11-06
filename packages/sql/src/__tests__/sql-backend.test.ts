@@ -20,9 +20,9 @@ import {
   Mutator,
   Predicate,
   Server,
-} from "@thomasfosterau/legation-effect";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
-import type { Backend } from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
+import { Subset } from "@thomasfosterau/legation/internal";
+import type { Backend } from "@thomasfosterau/legation";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";
 import { defined } from "./defined.js";

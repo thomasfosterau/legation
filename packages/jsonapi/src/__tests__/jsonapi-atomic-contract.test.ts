@@ -39,8 +39,8 @@ import {
   Middleware,
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
-import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation-effect";
-import { BackendContract, Subset } from "@thomasfosterau/legation-effect/internal";
+import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation";
+import { BackendContract, Subset } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";

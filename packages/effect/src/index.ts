@@ -1,5 +1,5 @@
 /**
- * @thomasfosterau/legation-effect
+ * @thomasfosterau/legation
  *
  * An offline-first sync engine around seven concepts (ADR-0022, plus Hydration
  * from ADR-0020):
@@ -30,7 +30,7 @@
  * error classes.
  *
  * Implementation seams — the engine, the mirror machinery, protocol
- * codecs, server assembly — live behind `@thomasfosterau/legation-effect/internal` for
+ * codecs, server assembly — live behind `@thomasfosterau/legation/internal` for
  * adapter authors and the sibling `@thomasfosterau/legation-*` packages.
  */
 

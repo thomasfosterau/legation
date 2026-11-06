@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
+  import type { ClientEngine } from "@thomasfosterau/legation/internal";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useMutation, useMutationWithAck } from "../../index.svelte.js";
 

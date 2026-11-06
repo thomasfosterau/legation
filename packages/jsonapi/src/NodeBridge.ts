@@ -73,7 +73,7 @@
  */
 
 import { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation-effect";
+import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation";
 import * as Arr from "effect/Array";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";

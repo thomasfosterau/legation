@@ -66,7 +66,7 @@ export interface ClientTransport {
 
 /** The {@link ClientTransport} service a Client syncs over. */
 export const ClientTransport = Context.Service<ClientTransport>(
-  "@thomasfosterau/legation-effect/ClientTransport"
+  "@thomasfosterau/legation/ClientTransport"
 );
 
 /**
@@ -91,7 +91,7 @@ export interface ServerHandler {
 
 /** The {@link ServerHandler} service a carrier answers clients with. */
 export const ServerHandler = Context.Service<ServerHandler>(
-  "@thomasfosterau/legation-effect/ServerHandler"
+  "@thomasfosterau/legation/ServerHandler"
 );
 
 /**

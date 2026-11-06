@@ -1,4 +1,4 @@
-# @thomasfosterau/legation-effect
+# @thomasfosterau/legation
 
 An offline-first sync engine over a typed resource graph: Node (with its Edges), Collection, declarative Query reads, named Mutation writes, one Client per thread and one Server per backend.
 
@@ -7,7 +7,7 @@ Writes are named, schema-validated intents. They run optimistically on the clien
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-effect effect
+npm install @thomasfosterau/legation effect
 ```
 
 ## Effect version
@@ -30,7 +30,7 @@ import {
   Server,
   Transport,
   type Query,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 
 // 1. The domain, shared by client and server: a node graph, mutations, reads.
 const projects = Node.make("projects", {
@@ -118,7 +118,7 @@ In a real deployment the server runs in a process of its own and the client conn
 
 ## API
 
-Everything below is on the root entry, `@thomasfosterau/legation-effect`.
+Everything below is on the root entry, `@thomasfosterau/legation`.
 
 | Export          | What it is                                                                                                                                                                                                                                                                                                                                  |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -141,12 +141,12 @@ Everything below is on the root entry, `@thomasfosterau/legation-effect`.
 | `Predicate`     | The filter algebra (`eq`, `isIn`, `and`, `or`, `not`, `exists` and others). It is the full form of `Query`'s `where` and the form auth filters take.                                                                                                                                                                                        |
 | Errors          | Typed errors, including `StoreError`, `TransportError`, `QueryError`, `MutationRejected` and `AuthorizationError`.                                                                                                                                                                                                                          |
 
-### Adapter authors: `@thomasfosterau/legation-effect/internal`
+### Adapter authors: `@thomasfosterau/legation/internal`
 
-The engine seams live on a second entry point, `@thomasfosterau/legation-effect/internal`: `ClientEngine`, `ClientView`, `Subset`, `Mirror`, `EngineHost`, `MirrorChannel`, `MirrorProtocol`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the protocol and transport codecs. The sibling packages (`@thomasfosterau/legation-browser`, `@thomasfosterau/legation-node`, `@thomasfosterau/legation-jsonapi`, `@thomasfosterau/legation-cloudflare`) compose from it. It is not the app-facing API, and it moves faster than the root entry.
+The engine seams live on a second entry point, `@thomasfosterau/legation/internal`: `ClientEngine`, `ClientView`, `Subset`, `Mirror`, `EngineHost`, `MirrorChannel`, `MirrorProtocol`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the protocol and transport codecs. The sibling packages (`@thomasfosterau/legation-browser`, `@thomasfosterau/legation-node`, `@thomasfosterau/legation-jsonapi`, `@thomasfosterau/legation-cloudflare`) compose from it. It is not the app-facing API, and it moves faster than the root entry.
 
 ```ts
-import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
+import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
 
 // Adapter code is typed against the seams, not the app-facing surface.
 export type Engine = ClientEngine.ClientEngine;

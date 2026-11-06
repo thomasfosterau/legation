@@ -26,8 +26,8 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { KeyValueStore } from "effect/persistence";
-import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation-effect";
-import { ClientEngine, SyncRoom } from "@thomasfosterau/legation-effect/internal";
+import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation";
+import { ClientEngine, SyncRoom } from "@thomasfosterau/legation/internal";
 import {
   reflectAtomic,
   reflectResources,

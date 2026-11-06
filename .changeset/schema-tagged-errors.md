@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 "@thomasfosterau/legation-jsonapi": patch
 "@thomasfosterau/legation-browser": patch
 "@thomasfosterau/legation-sql": patch

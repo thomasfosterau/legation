@@ -33,12 +33,8 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Stream from "effect/Stream";
 import { AsyncResult } from "effect/reactivity";
-import { Aggregate, Client, Query } from "@thomasfosterau/legation-effect";
-import {
-  ClientEngine,
-  type MutationState,
-  type Undo,
-} from "@thomasfosterau/legation-effect/internal";
+import { Aggregate, Client, Query } from "@thomasfosterau/legation";
+import { ClientEngine, type MutationState, type Undo } from "@thomasfosterau/legation/internal";
 import { getClient, getClientRuntime, type ClientRuntime } from "./Runtime.js";
 import { unavailable } from "./unavailable.js";
 

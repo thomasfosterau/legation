@@ -58,5 +58,5 @@ export interface AtomicKeyValue {
  * `Effect.serviceOption` and falls back to its release-record path when absent.
  */
 export const AtomicKeyValue = Context.Service<AtomicKeyValue>(
-  "@thomasfosterau/legation-effect/AtomicKeyValue"
+  "@thomasfosterau/legation/AtomicKeyValue"
 );

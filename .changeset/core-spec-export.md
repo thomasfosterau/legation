@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add **`SpecExport`**: emit OpenAPI 3.1 and AsyncAPI 3.0 descriptions of an app's

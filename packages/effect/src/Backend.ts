@@ -201,8 +201,8 @@ export interface Backend {
  *
  * @example
  * ```ts
- * import { Backend, MemoryBackend } from "@thomasfosterau/legation-effect";
- * import { Subset } from "@thomasfosterau/legation-effect/internal";
+ * import { Backend, MemoryBackend } from "@thomasfosterau/legation";
+ * import { Subset } from "@thomasfosterau/legation/internal";
  * import * as Effect from "effect/Effect";
  *
  * const program = Effect.gen(function* () {
@@ -234,7 +234,7 @@ export const evaluateAll = (
 };
 
 /** The {@link Backend} service the sync server reads and writes through. */
-export const Backend = Context.Service<Backend>("@thomasfosterau/legation-effect/Backend");
+export const Backend = Context.Service<Backend>("@thomasfosterau/legation/Backend");
 
 /**
  * Build change hints from a push's touched ids and the values of its PUTs:
@@ -430,7 +430,7 @@ const fromWatermark = <Staged>(
  *
  * @example
  * ```ts
- * import { Backend } from "@thomasfosterau/legation-effect";
+ * import { Backend } from "@thomasfosterau/legation";
  * import * as Effect from "effect/Effect";
  * import * as Option from "effect/Option";
  *

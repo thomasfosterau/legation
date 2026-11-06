@@ -24,13 +24,8 @@ import {
   Predicate,
   Query,
   Transport,
-} from "@thomasfosterau/legation-effect";
-import {
-  ClientEngine,
-  ClientView,
-  Subset,
-  SyncRoom,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import { ClientEngine, ClientView, Subset, SyncRoom } from "@thomasfosterau/legation/internal";
 
 export interface Todo {
   readonly id: string;

@@ -84,7 +84,7 @@ export type Source<E> = Stream.Stream<ReadonlyArray<Row>, E>;
 // recover the native change feed without widening that public type: present,
 // it's used; absent (a raw stream, or another combinator's own page output),
 // the page-diff fallback below runs exactly as before.
-const CHANGES = Symbol.for("@thomasfosterau/legation-effect/Derive/changes");
+const CHANGES = Symbol.for("@thomasfosterau/legation/Derive/changes");
 
 interface ChangeTagged<E> {
   readonly [CHANGES]: Stream.Stream<ReadonlyArray<RowChange<Row>>, E>;

@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": patch
 ---
 
@@ -13,7 +13,7 @@ for the memory and key-value stores, and in one read transaction on IndexedDB.
 `dehydrate` uses it when the store offers it and reads member by member
 otherwise, so a third-party store behaves as before.
 
-The `AtomicKeyValue` seam on `@thomasfosterau/legation-effect/internal` gains an
+The `AtomicKeyValue` seam on `@thomasfosterau/legation/internal` gains an
 optional `readAll`, which the browser's IndexedDB binding supplies as one
 `readonly` transaction over the entries store. A key-value store with that seam
 decodes its snapshot from that single read.

@@ -1,7 +1,7 @@
 # @thomasfosterau/legation-jsonapi
 
 JSON:API v1.1 collection loaders for the
-[`@thomasfosterau/legation-effect`](../effect)
+[`@thomasfosterau/legation`](../effect)
 sync engine, built on [Effect](https://effect.website).
 
 In the engine's model (ADR-0008) a JSON:API **`type` is a collection**, a
@@ -26,10 +26,10 @@ resource-agnostic loaders on top (ADR-0016).
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation-effect effect
+npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation effect
 ```
 
-`effect` and `@thomasfosterau/legation-effect` are required alongside this package;
+`effect` and `@thomasfosterau/legation` are required alongside this package;
 `@thomasfosterau/effect-jsonapi` is a regular dependency.
 
 ## Effect version
@@ -47,8 +47,8 @@ over the existing REST API.
 ```ts
 import { Duration, Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import { Predicate } from "@thomasfosterau/legation-effect";
-import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Predicate } from "@thomasfosterau/legation";
+import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
 import { JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
 
@@ -234,7 +234,7 @@ the ledger share it:
 ``KeyValueStore.prefix(kv, `legation/identity/${Identity.keySegment(identity)}/`)``,
 where `identity` is the identity's `Identity.Fingerprint` (the string
 `IndexedDbClientStore`'s `identity` option takes), `Identity` comes from
-`@thomasfosterau/legation-effect` and `KeyValueStore` from `effect/persistence`.
+`@thomasfosterau/legation` and `KeyValueStore` from `effect/persistence`.
 Otherwise identities that share a `clientId` and `clientGroupId` share one
 ledger, and one identity's mutations can be skipped as already applied.
 
@@ -366,7 +366,7 @@ already-synced data, no extra request.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { ClientEngine, Subset } from "@thomasfosterau/legation-effect/internal";
+import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
 import { Relationships } from "@thomasfosterau/legation-jsonapi";
 
 const program = Effect.gen(function* () {
@@ -569,7 +569,7 @@ because everything it needs is this package's plus the standard `Request` /
 
 ```ts
 import { Effect } from "effect";
-import { ClientView, Coverage } from "@thomasfosterau/legation-effect/internal";
+import { ClientView, Coverage } from "@thomasfosterau/legation/internal";
 import { ServiceWorkerHost } from "@thomasfosterau/legation-browser";
 import { JsonApiFacade, JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
 import { api, resources } from "./my-json-api"; // the HttpApi and its Resource declarations
@@ -664,7 +664,7 @@ declares, with `Accept` and (for `POST` / `PATCH`) `Content-Type` naming
 endpoint, never a façade write, and a `PUT` is never intercepted.
 
 ```ts
-import { CrudMutation, Mutation } from "@thomasfosterau/legation-effect";
+import { CrudMutation, Mutation } from "@thomasfosterau/legation";
 
 // The engine's registry carries the graph-derived CRUD mutations the façade journals …
 const mutators = Mutation.registry([...myMutations, ...CrudMutation.entries(nodes, { writes })]);

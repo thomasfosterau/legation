@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 SSR primitives in `Hydration` (ADR-0020): `snapshot` produces a page snapshot

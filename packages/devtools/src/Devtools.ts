@@ -7,7 +7,7 @@
  * framework panel (`@thomasfosterau/legation-devtools/svelte`) is a thin idiomatic UI over
  * one shared, tested read model, never its own data-acquisition path.
  *
- * Fed exclusively by already-public substrate (the `@thomasfosterau/legation-effect/internal`
+ * Fed exclusively by already-public substrate (the `@thomasfosterau/legation/internal`
  * entrypoint, the same one `@thomasfosterau/legation-svelte` itself depends on):
  * `Introspection` (subscriptions, cookie, collections),
  * `ClientEngine.mutationStates` (#116, the journal/mutation timeline —
@@ -27,13 +27,13 @@
  */
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import type { ClientStore, StoreError } from "@thomasfosterau/legation-effect";
+import type { ClientStore, StoreError } from "@thomasfosterau/legation";
 import {
   Introspection,
   type ClientEngine,
   type MutationState,
   type Subset,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 
 /** One collection's name plus its confirmed row count, for the subscriptions
  * & collections panel's "rows in window" summary. */

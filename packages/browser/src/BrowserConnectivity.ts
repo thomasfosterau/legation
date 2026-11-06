@@ -42,8 +42,8 @@
  * the backoff.
  */
 
-import { Transport } from "@thomasfosterau/legation-effect";
-import type { Protocol } from "@thomasfosterau/legation-effect/internal";
+import { Transport } from "@thomasfosterau/legation";
+import type { Protocol } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";

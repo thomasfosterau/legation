@@ -98,7 +98,7 @@ describe("@thomasfosterau/legation-node without redis", () => {
     "loads the built package when redis cannot be resolved",
     () =>
       Effect.gen(function* () {
-        // The child loads `dist/`, so build it (and `@thomasfosterau/legation-effect`,
+        // The child loads `dist/`, so build it (and `@thomasfosterau/legation`,
         // which it references) first; a cache hit when `vp run build` already ran, as in CI.
         yield* runNode("vp run build of @thomasfosterau/legation-node", [
           "node_modules/vite-plus/bin/vp",

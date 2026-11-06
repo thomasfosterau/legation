@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 The Server facade (ADR-0022, program step 7): `Server.make({ backend,

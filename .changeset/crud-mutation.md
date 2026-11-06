@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `CrudMutation`: the graph-derived CRUD mutations (ADR-0030 §5). For every

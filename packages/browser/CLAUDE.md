@@ -4,7 +4,7 @@ Browser-runtime adapters. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 ## Boundary
 
-- Everything that touches browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`, the Cache API, service-worker and Background Sync APIs) lives here, never in `packages/effect` (ADR-0006). Imports from the workspace: `@thomasfosterau/legation-effect` only.
+- Everything that touches browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`, the Cache API, service-worker and Background Sync APIs) lives here, never in `packages/effect` (ADR-0006). Imports from the workspace: `@thomasfosterau/legation` only.
 - Peers: `effect`, `@effect/platform-browser` (both `catalog:peers`).
 - One entry (`src/index.ts`); `src/internal/` is private implementation, not exported.
 

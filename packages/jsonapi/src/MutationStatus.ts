@@ -31,8 +31,8 @@ import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Stream from "effect/Stream";
-import type { Node } from "@thomasfosterau/legation-effect";
-import type { MutationState } from "@thomasfosterau/legation-effect/internal";
+import type { Node } from "@thomasfosterau/legation";
+import type { MutationState } from "@thomasfosterau/legation/internal";
 import type * as RestHandlers from "./RestHandlers.js";
 
 /** The JSON:API type of a status resource; `_legation` and this type are never an app's. */

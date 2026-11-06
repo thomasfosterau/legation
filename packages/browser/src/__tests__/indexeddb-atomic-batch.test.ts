@@ -5,7 +5,7 @@
  * the browser's, so an abort here is a real one.
  */
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Hydration } from "@thomasfosterau/legation-effect";
+import { ClientStore, Hydration } from "@thomasfosterau/legation";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";

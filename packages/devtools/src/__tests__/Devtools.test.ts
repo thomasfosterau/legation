@@ -18,14 +18,14 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   ClientEngine,
   Cvr,
   InvalidationBus,
   Subset,
   SyncServer,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as Devtools from "../Devtools.js";
 
 interface Todo {

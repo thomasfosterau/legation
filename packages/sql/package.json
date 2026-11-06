@@ -43,7 +43,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/legation-effect": "workspace:^"
+    "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",

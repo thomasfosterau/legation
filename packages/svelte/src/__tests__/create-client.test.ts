@@ -8,8 +8,8 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import * as Effect from "effect/Effect";
-import type { Query } from "@thomasfosterau/legation-effect";
-import { Client } from "@thomasfosterau/legation-effect";
+import type { Query } from "@thomasfosterau/legation";
+import { Client } from "@thomasfosterau/legation";
 import { createClient } from "../index.svelte.js";
 import ClientHarness from "./fixtures/ClientHarness.svelte";
 import { mutators, nodes, until } from "./world.js";

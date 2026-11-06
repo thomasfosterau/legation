@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
-import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";

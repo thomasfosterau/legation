@@ -14,14 +14,14 @@ import {
   MemoryBackend,
   Mutator,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   ClientEngine,
   Cvr,
   InvalidationBus,
   PushPoke as Marker,
   SyncServer,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";

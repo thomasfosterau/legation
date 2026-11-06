@@ -237,7 +237,7 @@ export interface Client {
 /**
  * URL-keyed reads (ADR-0029 section 2): the bridge between a JSON:API URL
  * and a {@link Query.Read}, and the canonical URL that is a subscription's
- * identity. `@thomasfosterau/legation-effect` does not know the URL grammar — effect-jsonapi
+ * identity. `@thomasfosterau/legation` does not know the URL grammar — effect-jsonapi
  * owns it, behind `@thomasfosterau/legation-jsonapi` (ADR-0006) — so a Client takes this
  * as an option: `JsonApiQuery.urlReads(nodes)` from `@thomasfosterau/legation-jsonapi`
  * builds it from the node graph. A Client built without it fails a URL
@@ -694,7 +694,7 @@ export const fromView = (
  * The Client as a service — for runtimes and bindings that carry "the one
  * per-thread object" in context (ADR-0022).
  */
-export const Client = Context.Service<Client>("@thomasfosterau/legation-effect/Client");
+export const Client = Context.Service<Client>("@thomasfosterau/legation/Client");
 
 /** Options for a Client that owns its engine ({@link make}). */
 export interface MakeOptions extends ViewOptions {

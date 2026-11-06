@@ -2,7 +2,7 @@
  * @thomasfosterau/legation-svelte
  *
  * Idiomatic Svelte bindings for the legation engine — minimal wrappers over
- * `@thomasfosterau/legation-effect`, plus the integrations where Svelte or SvelteKit can do
+ * `@thomasfosterau/legation`, plus the integrations where Svelte or SvelteKit can do
  * something the core cannot (reactive re-subscription, SSR hydration).
  *
  * One entry point, because the hooks are the API: `setClient` puts the

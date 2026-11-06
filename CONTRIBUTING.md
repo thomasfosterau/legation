@@ -17,7 +17,7 @@ Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the sa
 
 Two workspace mechanics AGENTS.md doesn't repeat:
 
-- Packages import each other by published name (`@thomasfosterau/legation-effect`); pnpm links the workspace packages, and `pnpm pack` rewrites the `workspace:` and `catalog:` specifiers when a package is published.
+- Packages import each other by published name (`@thomasfosterau/legation`); pnpm links the workspace packages, and `pnpm pack` rewrites the `workspace:` and `catalog:` specifiers when a package is published.
 - `vp run build` builds the packages in dependency order (`vp pack`, one task per package); the tests resolve the package names to `src/` through aliases in the root `vite.config.ts`, so tests never need a prior build. The example apps and the commerce browser test consume `dist/`, so `vp run test` builds first.
 
 ## Branches

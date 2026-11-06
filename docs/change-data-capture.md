@@ -10,10 +10,10 @@ is not realtime.
 A **hint source** closes that gap: it produces `ChangeHint`s for out-of-band
 writes and publishes them to the `InvalidationBus`, so the same fan-out loop
 pokes affected clients. Every tier below feeds the one seam,
-`HintSource` (`@thomasfosterau/legation-effect`), and forks alongside the SyncServer:
+`HintSource` (`@thomasfosterau/legation`), and forks alongside the SyncServer:
 
 ```ts
-import { HintSource } from "@thomasfosterau/legation-effect/internal";
+import { HintSource } from "@thomasfosterau/legation/internal";
 
 // Fork a source onto the caller's scope; it stops when the scope closes.
 yield * HintSource.run(source);
@@ -33,7 +33,7 @@ to pay (ADR-0019).
 If the writer is your code, publish the hint directly. This needs nothing new:
 
 ```ts
-import { InvalidationBus } from "@thomasfosterau/legation-effect/internal";
+import { InvalidationBus } from "@thomasfosterau/legation/internal";
 
 // After an out-of-band write to the todos collection:
 yield * InvalidationBus.publish([{ collection: "todos", ids: ["1"] }]);
@@ -52,7 +52,7 @@ collection whose detector moved. It uses only the `SqlExecutor` seam you already
 provide to `SqlBackend` — no extra dependency.
 
 ```ts
-import { HintSource } from "@thomasfosterau/legation-effect/internal";
+import { HintSource } from "@thomasfosterau/legation/internal";
 import { PollingHintSource } from "@thomasfosterau/legation-sql";
 
 const source = PollingHintSource.make({
@@ -111,7 +111,7 @@ needs.
 
 ```ts
 import { Effect, Schema, Stream } from "effect";
-import { HintSource } from "@thomasfosterau/legation-effect/internal";
+import { HintSource } from "@thomasfosterau/legation/internal";
 
 const HintPayload = Schema.fromJsonString(
   Schema.Struct({ collection: Schema.String, id: Schema.String })

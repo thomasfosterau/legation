@@ -40,7 +40,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpCache, type InvalidationSink } from "@thomasfosterau/legation-effect/internal";
+import { HttpCache, type InvalidationSink } from "@thomasfosterau/legation/internal";
 
 /** The part of a Workers KV namespace binding the KV sink uses. Structural, so a test can pass a fake. */
 export interface KvNamespace {

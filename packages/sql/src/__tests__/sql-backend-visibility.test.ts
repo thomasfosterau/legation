@@ -25,8 +25,8 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { BackendError, Mutator } from "@thomasfosterau/legation-effect";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
+import { BackendError, Mutator } from "@thomasfosterau/legation";
+import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../SqlBackend.js";
 
 const context = { clientGroupId: "visibility-group" };

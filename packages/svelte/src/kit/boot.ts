@@ -15,7 +15,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { Client, ClientStore, Hydration, type Transport } from "@thomasfosterau/legation-effect";
+import { Client, ClientStore, Hydration, type Transport } from "@thomasfosterau/legation";
 import type { ClientRuntime } from "../Runtime.js";
 
 /** Options for {@link clientRuntime}. */
