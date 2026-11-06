@@ -22,8 +22,6 @@
     "@thomasfosterau/legation-browser": "workspace:*",
     "@thomasfosterau/legation": "workspace:*",
     "@thomasfosterau/legation-jsonapi": "workspace:*",
-    "@thomasfosterau/legation-node": "workspace:*",
-    "@thomasfosterau/legation-sql": "workspace:*",
     "@thomasfosterau/legation-svelte": "workspace:*",
     "@thomasfosterau/effect-jsonapi": "catalog:",
     "better-auth": "catalog:",

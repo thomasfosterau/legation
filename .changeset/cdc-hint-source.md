@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": minor
-"@thomasfosterau/legation-sql": minor
 ---
 
 Change data capture for out-of-band writes (ADR-0019). Writes that bypass the
@@ -14,7 +13,7 @@ SyncServer. `HintSource.fromStream` lifts a stream of hint batches and
 value-less hints is matched at the collection level by the existing fan-out
 matcher — sound, because over-matching a poke only costs an empty pull.
 
-`@thomasfosterau/legation-sql` gains `PollingHintSource`: a tier-2 polling source over the
+`@thomasfosterau/legation/sql` gains `PollingHintSource`: a tier-2 polling source over the
 existing `SqlExecutor` seam (no new dependency). It polls each table on an
 interval for a cheap change-detector — `COUNT(*)` plus `MAX(versionColumn)` when
 a version column is mapped — and pokes a collection whose detector moved.

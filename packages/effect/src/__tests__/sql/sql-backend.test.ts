@@ -23,9 +23,9 @@ import {
 } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import type { Backend } from "@thomasfosterau/legation";
-import * as Sql from "../Sql.js";
-import * as SqlBackend from "../SqlBackend.js";
-import { defined } from "./defined.js";
+import * as Sql from "../../sql/Sql.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
+import { defined } from "../defined.js";
 
 interface Mock {
   readonly executor: SqlBackend.SqlExecutor;

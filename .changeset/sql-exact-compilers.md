@@ -1,9 +1,8 @@
 ---
-"@thomasfosterau/legation-sql": minor
-"@thomasfosterau/legation": patch
+"@thomasfosterau/legation": minor
 ---
 
-`@thomasfosterau/legation-sql`'s compilers are exact on Postgres and SQLite (ADR-0028 §4 and
+`@thomasfosterau/legation/sql`'s compilers are exact on Postgres and SQLite (ADR-0028 §4 and
 §6, #156): every predicate node compiles to a SQL boolean expression whose
 three-valued result per row equals `Predicate.evaluate`, so the `WHERE`
 returns precisely the rows the JS evaluator returns `Some(true)` for. The

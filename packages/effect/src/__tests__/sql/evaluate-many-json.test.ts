@@ -13,8 +13,8 @@ import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 import { Mutator } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
-import * as Sql from "../Sql.js";
-import * as SqlBackend from "../SqlBackend.js";
+import * as Sql from "../../sql/Sql.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
 
 const context = { clientGroupId: "g" };
 

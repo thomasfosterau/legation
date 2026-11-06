@@ -3,13 +3,12 @@
   "entry": [
     "packages/effect/src/index.ts",
     "packages/effect/src/internal.ts",
+    "packages/effect/src/sql/index.ts",
     "packages/browser/src/index.ts",
     "packages/cloudflare/src/index.ts",
     "packages/devtools/src/index.ts",
     "packages/devtools/svelte/index.ts",
     "packages/jsonapi/src/index.ts",
-    "packages/node/src/index.ts",
-    "packages/sql/src/index.ts",
     "packages/svelte/src/index.svelte.ts",
     "packages/svelte/src/kit/index.ts",
     "packages/*/src/**/__tests__/**/*.test.ts",
@@ -24,7 +23,6 @@
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", ".claude/skills/**"],
   "ignoreDependencies": [
     "@thomasfosterau/legation",
-    "@thomasfosterau/legation-sql",
     "@arethetypeswrong/cli",
     "@changesets/cli",
     "@effect/language-service",
@@ -75,14 +73,6 @@
         "patterns": ["packages/jsonapi/**"]
       },
       {
-        "name": "node",
-        "patterns": ["packages/node/**"]
-      },
-      {
-        "name": "sql",
-        "patterns": ["packages/sql/**"]
-      },
-      {
         "name": "svelte",
         "patterns": ["packages/svelte/**"]
       }
@@ -98,7 +88,7 @@
       },
       {
         "from": "cloudflare",
-        "allow": ["effect", "sql"]
+        "allow": ["effect"]
       },
       {
         "from": "devtools",
@@ -106,14 +96,6 @@
       },
       {
         "from": "jsonapi",
-        "allow": ["effect"]
-      },
-      {
-        "from": "node",
-        "allow": ["effect"]
-      },
-      {
-        "from": "sql",
         "allow": ["effect"]
       },
       {

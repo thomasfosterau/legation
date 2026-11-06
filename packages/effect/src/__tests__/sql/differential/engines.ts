@@ -36,7 +36,7 @@ import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import { SqlClient } from "effect/sql/SqlClient";
-import * as Sql from "../../Sql.js";
+import * as Sql from "../../../sql/Sql.js";
 
 /** A three-valued verdict: `T` true, `F` false, `U` unknown (SQL NULL). */
 export type Verdict = "T" | "F" | "U";

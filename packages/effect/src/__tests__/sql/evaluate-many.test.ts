@@ -14,7 +14,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError, Mutator, Predicate } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
-import * as SqlBackend from "../SqlBackend.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
 
 const context = { clientGroupId: "g" };
 

@@ -8,7 +8,7 @@
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "@effect/vitest";
 import { Predicate } from "@thomasfosterau/legation";
-import * as Sql from "../Sql.js";
+import * as Sql from "../../sql/Sql.js";
 
 const kinds: Sql.Kinds = {
   s: "text",

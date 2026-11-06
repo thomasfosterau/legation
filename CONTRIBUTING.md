@@ -48,7 +48,7 @@ vp run build                               # every package's dist/
 vp run pack:check                          # pack + lint the publish tarballs
 vp run check                               # the type gate (packages and tests)
 vp run check:examples                      # each example app's own typecheck
-vp test run packages/sql                   # one package's tests (no build needed)
+vp test run packages/jsonapi               # one package's tests (no build needed)
 vp test run --project svelte               # one Vitest project
 vp run test:coverage                       # the suite + coverage map for fallow
 vp run bench                               # the benchmarks
@@ -67,7 +67,7 @@ Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest) (plai
 
 **Chromium.** The commerce façade's browser test (`examples/commerce/tests/facade-browser.test.ts`) fails, never skips, without Chromium. Install the revision `playwright-core` expects with `pnpm exec playwright-core install chromium`.
 
-**PostgreSQL test.** `packages/sql/src/__tests__/sql-backend-postgres.test.ts` runs the READ COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and drops them again when it finishes. Without the variable the suite is skipped locally with a warning; in CI (where `CI` is set) it fails instead. For example: `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch vp test run packages/sql`.
+**PostgreSQL test.** `packages/effect/src/__tests__/sql/sql-backend-postgres.test.ts` runs the READ COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and drops them again when it finishes. Without the variable the suite is skipped locally with a warning; in CI (where `CI` is set) it fails instead. For example: `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch vp test run packages/effect/src/__tests__/sql`.
 
 ### Refreshing the postgres image digest
 

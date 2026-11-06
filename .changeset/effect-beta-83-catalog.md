@@ -1,9 +1,7 @@
 ---
 "@thomasfosterau/legation": patch
 "@thomasfosterau/legation-browser": patch
-"@thomasfosterau/legation-node": patch
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-sql": patch
 ---
 
 Bump the pinned Effect version from `4.0.0-beta.75` to `4.0.0-beta.83` across all

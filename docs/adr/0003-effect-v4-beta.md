@@ -1,7 +1,7 @@
 # ADR-0003: Target Effect v4 beta
 
 Date: 2026-06-03
-Status: Accepted
+Status: Accepted. Amended in part by [ADR-0033](0033-owner-libraries-count-runtimes-do-not.md) (`@thomasfosterau/legation-node` was dropped)
 
 ## Context
 

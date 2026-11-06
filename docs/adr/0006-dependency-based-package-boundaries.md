@@ -1,7 +1,7 @@
 # ADR-0006: Dependency-based package boundaries (two-package monorepo)
 
 Date: 2026-06-03
-Status: Accepted — supersedes ADR-0001's five-package split
+Status: Accepted — supersedes ADR-0001's five-package split. Superseded in part by [ADR-0033](0033-owner-libraries-count-runtimes-do-not.md) (runtime platforms no longer count as dependencies)
 
 ## Context
 

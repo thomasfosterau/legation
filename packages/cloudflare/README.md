@@ -40,7 +40,8 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation @thomasfosterau/legation-sql effect
+npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation effect
+npm install --save-dev @cloudflare/workers-types
 ```
 
 ## Usage
@@ -48,7 +49,7 @@ npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation @thomas
 ```ts
 // worker.ts
 import { Authorization, Node } from "@thomasfosterau/legation";
-import { SqlBackend } from "@thomasfosterau/legation-sql";
+import { SqlBackend } from "@thomasfosterau/legation/sql";
 import { D1Executor, FanoutShard, Room, Worker } from "@thomasfosterau/legation-cloudflare";
 
 export class LegationShard extends FanoutShard.makeShardClass({

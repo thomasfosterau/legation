@@ -44,7 +44,7 @@ pub/sub, …) the hint reaches every instance, so a write on one node pokes
 subscribers on all of them. Carry `ids` (and, if cheap, row `values`) to let the
 fan-out matcher poke by predicate instead of by collection.
 
-## Tier 2 — polling (`@thomasfosterau/legation-sql`)
+## Tier 2 — polling (`@thomasfosterau/legation/sql`)
 
 When you cannot make every writer publish a hint, poll the database. The polling
 hint source reads a cheap change-detector per table on an interval and pokes a
@@ -53,7 +53,7 @@ provide to `SqlBackend` — no extra dependency.
 
 ```ts
 import { HintSource } from "@thomasfosterau/legation/internal";
-import { PollingHintSource } from "@thomasfosterau/legation-sql";
+import { PollingHintSource } from "@thomasfosterau/legation/sql";
 
 const source = PollingHintSource.make({
   executor, // the same SqlExecutor your SqlBackend uses

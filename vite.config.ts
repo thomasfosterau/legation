@@ -14,16 +14,7 @@ import effect from "@enfect/oxlint";
 import { defineConfig } from "vite-plus";
 
 /** The published packages, by directory; each has a `build` task. */
-const packages = [
-  "effect",
-  "browser",
-  "cloudflare",
-  "devtools",
-  "jsonapi",
-  "node",
-  "sql",
-  "svelte",
-] as const;
+const packages = ["effect", "browser", "cloudflare", "devtools", "jsonapi", "svelte"] as const;
 
 /** Every package's `build`, named explicitly: the root has no package deps. */
 const buildAll = packages.map((name) =>
@@ -41,12 +32,11 @@ const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
  */
 const alias = {
   "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
+  "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-cloudflare": source("packages/cloudflare/src/index.ts"),
-  "@thomasfosterau/legation-node": source("packages/node/src/index.ts"),
   "@thomasfosterau/legation-jsonapi": source("packages/jsonapi/src/index.ts"),
-  "@thomasfosterau/legation-sql": source("packages/sql/src/index.ts"),
   "@thomasfosterau/legation-svelte/kit": source("packages/svelte/src/kit/index.ts"),
   "@thomasfosterau/legation-svelte": source("packages/svelte/src/index.svelte.ts"),
   "@thomasfosterau/legation-devtools": source("packages/devtools/src/index.ts"),
@@ -190,16 +180,6 @@ export default defineConfig({
       "typescript/no-misused-spread": "warn", // 1 site
     },
     overrides: [
-      // The Node runtime adapter (ADR-0006): `node:http` and the other
-      // `node:*` modules are what this package exists to bind. Its server is
-      // a server, so the HttpClient service the rule offers does not apply.
-      {
-        files: ["packages/node/src/**"],
-        rules: {
-          "effect/avoid-node-imports": "off",
-          "effect/use-http-client-service": "off",
-        },
-      },
       // A benchmark's console output is its product: it prints the numbers
       // it measured, outside any Effect runtime.
       {

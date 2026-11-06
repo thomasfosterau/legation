@@ -4,8 +4,8 @@ The reference deployment on Cloudflare (ADR-0022 topology, ADR-0023 topic-derive
 
 ## Boundary
 
-- Durable Object rooms (`makeRoomClass`), topic fan-out shards (`makeShardClass`), the stateless Worker router (`routeSync`) and the D1 executor. Imports from the workspace: `@thomasfosterau/legation` and `@thomasfosterau/legation-sql` only.
-- `@cloudflare/workers-types` is types-only and stays an import in the emitted `.d.ts` (the build never bundles it); consumers have it.
+- Durable Object rooms (`makeRoomClass`), topic fan-out shards (`makeShardClass`), the stateless Worker router (`routeSync`) and the D1 executor. Imports from the workspace: `@thomasfosterau/legation` only (its `./internal` and `./sql` entries included).
+- `@cloudflare/workers-types` is types-only and stays an import in the emitted `.d.ts` (the build never bundles it), so it is an **optional peer** (`catalogs.peers`): a Worker project has it, and a consumer that type-checks this package's declarations needs it. Alchemy's Cloudflare provider (`@alchemy.run/cloudflare`) does not replace it: it re-exports none of the raw workerd types this package is written against (`D1Database`, `DurableObjectState`, `DurableObjectStorage`, `DurableObjectNamespace`, `WebSocket`), and its own declarations import `@cloudflare/workers-types` while declaring it only as a devDependency (checked at 2.0.0-beta.85), so peering on it would not supply them. The owner plans to replace this package with an Alchemy-based alternative.
 
 ## Invariants
 

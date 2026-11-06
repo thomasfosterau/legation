@@ -22,8 +22,8 @@ import {
   SyncServer,
   Telemetry,
 } from "@thomasfosterau/legation/internal";
-import * as PollingHintSource from "../PollingHintSource.js";
-import type * as SqlBackend from "../SqlBackend.js";
+import * as PollingHintSource from "../../sql/PollingHintSource.js";
+import type * as SqlBackend from "../../sql/SqlBackend.js";
 
 /** A detector reading the test drives between polls (an out-of-band write). */
 interface Detector {

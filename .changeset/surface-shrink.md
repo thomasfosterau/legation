@@ -1,9 +1,7 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": patch
-"@thomasfosterau/legation-node": patch
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-sql": patch
 "@thomasfosterau/legation-svelte": patch
 ---
 

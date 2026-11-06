@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": minor
-"@thomasfosterau/legation-sql": patch
 "@thomasfosterau/legation-jsonapi": patch
 ---
 

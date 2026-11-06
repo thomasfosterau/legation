@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": patch
-"@thomasfosterau/legation-sql": patch
 ---
 
 Differential filter harness (issue #153, ADR-0028).
@@ -14,7 +13,7 @@ Differential filter harness (issue #153, ADR-0028).
 - `FilterCorpus` is a new `@thomasfosterau/legation/internal` export: seeded corpus
   generators over Effect's `Random` service (`Random.withSeed`), a minimiser
   that shrinks a disagreeing predicate/row pair, and a disagreement reporter.
-- `@thomasfosterau/legation-sql`'s tests gain the differential harness itself: `Predicate.test`
+- `@thomasfosterau/legation/sql`'s tests gain the differential harness itself: `Predicate.test`
   and `Sql.compileWhere` on SQLite are compared against a Postgres oracle
   running in-process via PGlite, with the known JS divergences pinned until
   #155 closes them.
