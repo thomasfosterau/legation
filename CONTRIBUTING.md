@@ -13,7 +13,7 @@ pnpm install
 
 `pnpm install` also installs the Vite+ git hooks and runs `prepare`, which patches the native TypeScript compiler and Oxlint with `@effect/tsgo` so Effect diagnostics fail the type gate.
 
-Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the same hook as agent sessions.
+Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the same hook as agent sessions. The `Dev Container` workflow (`.github/workflows/devcontainer.yml`) builds it in CI whenever its inputs change; to try a change locally, `pnpm dlx @devcontainers/cli@0.89.0 up --workspace-folder .` (needs Docker).
 
 Two workspace mechanics AGENTS.md doesn't repeat:
 

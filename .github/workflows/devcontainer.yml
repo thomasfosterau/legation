@@ -1,0 +1,94 @@
+name: Dev Container
+
+# Builds and starts .devcontainer/devcontainer.json the way GitHub Codespaces
+# does (the devcontainers CLI: image, features, then `postCreateCommand`), then
+# checks that the container is actually provisioned. The SessionStart hook the
+# `postCreateCommand` runs is deliberately never fatal, so a green `up` alone
+# proves little: the `exec` assertions below are the real check.
+#
+# Runs only when something the container is built from changes.
+
+on:
+  pull_request:
+    branches: [trunk]
+    paths:
+      - ".devcontainer/**"
+      - ".claude/hooks/session-start.sh"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/devcontainer.yml"
+  push:
+    branches: [trunk]
+    paths:
+      - ".devcontainer/**"
+      - ".claude/hooks/session-start.sh"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/devcontainer.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: devcontainer-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
+
+# No permissions by default; the job reads the repository and nothing else. It
+# needs no secret and no OIDC token, so a Dependabot PR runs it safely. Every
+# action is pinned to a full commit SHA (Dependabot's `github-actions` updates
+# keep the pins current).
+permissions: {}
+
+jobs:
+  devcontainer:
+    name: build and provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The devcontainers CLI, pinned. `pnpm dlx` honours the workspace's
+      # `minimumReleaseAge`, so keep this at a release at least 8 hours old.
+      DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Only to run the CLI on the runner; the container installs its own.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "*"
+          check-latest: true
+      # `up` fails when the image, a feature or `postCreateCommand` fails.
+      - name: Build and start the container
+        run: |
+          set -o pipefail
+          pnpm dlx "$DEVCONTAINER_CLI" up --workspace-folder . --log-level info 2>&1 | tee "$RUNNER_TEMP/up.log"
+      # The hook logs and continues on every failure; any such line fails here.
+      - name: Assert the hook reported no failure
+        run: |
+          if grep -E '\[session-start\] .*(fail|unavailable|could not|cannot|broken)' "$RUNNER_TEMP/up.log"; then
+            echo "::error::the session-start hook reported a failure (above)"
+            exit 1
+          fi
+      # A login shell, as a Codespaces terminal is: `~/.local/bin` (where the
+      # hook links `vp` / `vpx`) is on PATH through the profile.
+      - name: Assert the container is provisioned
+        run: |
+          pin="$(sed -nE 's/^  vite-plus: "?([0-9]+\.[0-9]+\.[0-9]+)"?$/\1/p' pnpm-workspace.yaml | head -1)"
+          echo "catalog vite-plus pin: $pin"
+          run() { pnpm dlx "$DEVCONTAINER_CLI" exec --workspace-folder . bash -lc "$1"; }
+          set -x
+          run 'id; echo "HOME=$HOME"; pwd; echo "PATH=$PATH"; env | grep -E "^(VP_|VITE_PLUS|PNPM|COREPACK)" || true; type -a vp node pnpm; ls -l "$HOME/.local/bin"'
+          # The hook links the global CLI, not its node_modules fallback shim.
+          run 'test -L "$HOME/.local/bin/vp" && readlink -f "$HOME/.local/bin/vp"'
+          run "vp --version | tee /dev/stderr | grep -F 'v$pin'"
+          run 'node --version'
+          run 'test -d node_modules/.pnpm && test -x node_modules/.bin/vp'
+          run 'gh --version'
+          run 'rg --version'
+          run 'jq --version'
+          run 'claude --version'
