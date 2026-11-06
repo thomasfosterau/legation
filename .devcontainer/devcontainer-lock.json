@@ -1,14 +1,19 @@
 {
   "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {
+      "version": "1.0.5",
+      "resolved": "ghcr.io/anthropics/devcontainer-features/claude-code@sha256:cfc2e7d3e9fd3b9b01f8d5cb158508a884c8c0ede2e23ed10f32dea5d4ffe69a",
+      "integrity": "sha256:cfc2e7d3e9fd3b9b01f8d5cb158508a884c8c0ede2e23ed10f32dea5d4ffe69a"
+    },
+    "ghcr.io/devcontainer-community/devcontainer-features/jq:1": {
+      "version": "1.0.2",
+      "resolved": "ghcr.io/devcontainer-community/devcontainer-features/jq@sha256:7ed274da0067ed8c998d296ae9e19b691d297e69ce150f19680f26a2783d0b6e",
+      "integrity": "sha256:7ed274da0067ed8c998d296ae9e19b691d297e69ce150f19680f26a2783d0b6e"
+    },
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {
       "version": "1.0.15",
       "resolved": "ghcr.io/devcontainers-extra/features/ripgrep@sha256:0dfc0ac16f0d6aa754d006a138fd4cb4a62c245d308306edf8ad1b7a80b8fdf2",
       "integrity": "sha256:0dfc0ac16f0d6aa754d006a138fd4cb4a62c245d308306edf8ad1b7a80b8fdf2"
-    },
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "version": "2.5.7",
-      "resolved": "ghcr.io/devcontainers/features/common-utils@sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4",
-      "integrity": "sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {
       "version": "1.1.0",
