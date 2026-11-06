@@ -34,7 +34,7 @@ npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation effect
 
 ## Effect version
 
-Peers `effect ^4.0.0`. Tested against `4.0.6` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
 
 ## The happy path: sync an existing JSON:API
 

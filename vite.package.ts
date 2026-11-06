@@ -55,9 +55,9 @@ export const packageConfig = ({ entries }: PackageConfigOptions) =>
       // `.js` / `.d.ts`, the names `exports` has always pointed at (and the
       // `.svelte.js` suffix the Svelte bindings' rune module needs).
       fixedExtension: false,
-      // Nothing from npm is bundled, devDependencies included: a type-only
-      // import of `@cloudflare/workers-types` (ambient declarations, no
-      // exports) must stay an import in the emitted `.d.ts`, as tsc left it.
+      // Nothing from npm is bundled, devDependencies included: a peer (an
+      // `effect` module, Alchemy's provider) must stay an import in the
+      // emitted `.js` and `.d.ts`, so the consumer's single copy serves it.
       deps: { neverBundle: true },
       dts: true,
       sourcemap: true,

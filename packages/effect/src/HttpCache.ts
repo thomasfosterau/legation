@@ -69,7 +69,7 @@ export interface HttpCachePolicy {
 //
 // One spelling for every cache that evicts by what a write touched: the
 // browser's Cache API (`HttpCacheInvalidation` in `@thomasfosterau/legation-browser`)
-// and the edge (`EdgeInvalidation` in `@thomasfosterau/legation-cloudflare`).
+// and the edge (`EdgeInvalidation` in `@thomasfosterau/legation-alchemy-cloudflare`).
 
 /** The coarse tag of a collection: `collection:{name}`. Every response enumerating (part of) it carries it. */
 export const tagFor = (collection: string): string => `collection:${collection}`;

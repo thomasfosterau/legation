@@ -234,6 +234,12 @@ const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
       { method: "size", message: "Failed to get backing store size" },
       (store) => store.count()
     ),
+    keys: runRequest(
+      connection,
+      "readonly",
+      { method: "keys", message: "Failed to list keys in backing store" },
+      (store) => store.getAllKeys()
+    ).pipe(Effect.map((keys) => keys.filter(P.isString))),
   });
 };
 

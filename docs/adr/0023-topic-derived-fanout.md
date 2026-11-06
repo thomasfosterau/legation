@@ -1,7 +1,7 @@
 # ADR-0023: Topic-derived fan-out
 
 Date: 2026-07-03
-Status: Accepted (companion to ADR-0022)
+Status: Accepted (companion to ADR-0022). Amended in part by [ADR-0034](0034-alchemy-cloudflare-adapter.md) (the Cloudflare adapter is `@thomasfosterau/legation-alchemy-cloudflare`, and its shards answer their leased rooms for the publisher to poke).
 
 ## Context
 

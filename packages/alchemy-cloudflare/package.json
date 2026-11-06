@@ -1,8 +1,9 @@
 {
-  "name": "@thomasfosterau/legation-cloudflare",
+  "name": "@thomasfosterau/legation-alchemy-cloudflare",
   "version": "0.0.0",
-  "description": "Cloudflare Workers reference topology for the legation sync engine: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
+  "description": "Cloudflare deployment of the legation sync engine on Alchemy's Effect-native Cloudflare provider: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
   "keywords": [
+    "alchemy",
     "cloudflare",
     "d1",
     "durable-objects",
@@ -10,7 +11,7 @@
     "sync-engine",
     "typescript"
   ],
-  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/cloudflare#readme",
+  "homepage": "https://github.com/thomasfosterau/legation/tree/trunk/packages/alchemy-cloudflare#readme",
   "bugs": {
     "url": "https://github.com/thomasfosterau/legation/issues"
   },
@@ -19,7 +20,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thomasfosterau/legation.git",
-    "directory": "packages/cloudflare"
+    "directory": "packages/alchemy-cloudflare"
   },
   "files": [
     "dist",
@@ -45,18 +46,16 @@
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@effect/vitest": "catalog:",
+    "alchemy": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@cloudflare/workers-types": "catalog:peers",
-    "effect": "catalog:peers"
-  },
-  "peerDependenciesMeta": {
-    "@cloudflare/workers-types": {
-      "optional": true
-    }
+    "@alchemy.run/cloudflare": "catalog:alchemy-peers",
+    "alchemy": "catalog:alchemy-peers",
+    "effect": "catalog:alchemy-peers"
   }
 }

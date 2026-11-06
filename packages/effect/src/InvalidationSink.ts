@@ -16,7 +16,7 @@
  * The tag spelling is `HttpCache`'s convention (`collection:{name}`,
  * `collection:{name}:{id}`), shared with the browser's Cache API invalidation.
  * Runtime sinks live in their runtime's package: Cloudflare KV and
- * `cache.purge` in `@thomasfosterau/legation-cloudflare` (`EdgeInvalidation`).
+ * `cache.purge` in `@thomasfosterau/legation-alchemy-cloudflare` (`EdgeInvalidation`).
  */
 
 import * as Arr from "effect/Array";

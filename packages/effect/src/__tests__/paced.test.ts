@@ -755,6 +755,7 @@ describe("a committed compaction is never lost to a failure or an interrupt (#24
         fault.failing ? broken("remove", key) : Effect.sync(() => void data.delete(key)),
       clear: Effect.sync(() => data.clear()),
       size: Effect.sync(() => data.size),
+      keys: Effect.sync(() => [...data.keys()]),
     });
     const store = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, kvs)

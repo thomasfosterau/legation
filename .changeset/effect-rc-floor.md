@@ -2,7 +2,6 @@
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
 "@thomasfosterau/legation-jsonapi": minor
-"@thomasfosterau/legation-cloudflare": minor
 "@thomasfosterau/legation-svelte": minor
 "@thomasfosterau/legation-devtools": minor
 ---

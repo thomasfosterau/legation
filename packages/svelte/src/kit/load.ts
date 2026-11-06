@@ -12,7 +12,7 @@
  * provide the app's sync server as `ServerHandler` and pass no transport.
  * Separate Worker (the usual Cloudflare shape — a SvelteKit Worker in front
  * of a binding-only API Worker): pass a `transport` built from the request's
- * service binding (`BindingTransport` in `@thomasfosterau/legation-cloudflare`), and nothing
+ * service binding (`BindingTransport` in `@thomasfosterau/legation-alchemy-cloudflare`), and nothing
  * is required from context.
  */
 import type { Cookies } from "@sveltejs/kit";

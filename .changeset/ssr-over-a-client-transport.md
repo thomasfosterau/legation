@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": minor
-"@thomasfosterau/legation-cloudflare": minor
 "@thomasfosterau/legation-svelte": minor
 ---
 
@@ -15,7 +14,7 @@ over the in-context handler. `loadSnapshot` in `@thomasfosterau/legation-svelte/
 the same option, so an Effect-based `load` can render against a backend in
 another Worker.
 
-`@thomasfosterau/legation-cloudflare` adds `BindingTransport`: the sync protocol over a
+`@thomasfosterau/legation-alchemy-cloudflare` provides `BindingTransport`: the sync protocol over a
 service binding (`env.API.fetch`), for the ordinary two-Worker shape where the
 Worker rendering the page is not the Worker holding the database. It forwards
 the inbound cookie and origin so the bound Worker resolves the same caller —

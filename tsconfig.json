@@ -2,7 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/effect" },
-    { "path": "./packages/cloudflare" },
+    { "path": "./packages/alchemy-cloudflare" },
     { "path": "./packages/browser" },
     { "path": "./packages/jsonapi" },
     { "path": "./packages/svelte" },

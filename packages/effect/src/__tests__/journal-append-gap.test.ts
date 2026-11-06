@@ -91,6 +91,7 @@ const flakyJournalWrites = () => {
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   return { kvs, state };
 };
@@ -225,6 +226,7 @@ describe("ClientStore.appendNext (#258)", () => {
         remove: (key) => Effect.sync(() => void data.delete(key)),
         clear: Effect.sync(() => data.clear()),
         size: Effect.sync(() => data.size),
+        keys: Effect.sync(() => [...data.keys()]),
       });
       const store = yield* ClientStoreModule.makeKeyValue().pipe(
         Effect.provideService(KeyValueStore.KeyValueStore, kvs)
@@ -283,6 +285,7 @@ const controlledCounters = () => {
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   return { kvs, state };
 };
@@ -592,6 +595,7 @@ describe("memory store: journal writers exclude one another (#258 review)", () =
         remove: (k) => Effect.sync(() => void data.delete(k)),
         clear: Effect.sync(() => data.clear()),
         size: Effect.sync(() => data.size),
+        keys: Effect.sync(() => [...data.keys()]),
       });
       const kv = yield* ClientStoreModule.makeKeyValue().pipe(
         Effect.provideService(KeyValueStore.KeyValueStore, kvs)

@@ -1,7 +1,7 @@
 # ADR-0022: The resource-graph public API — Node, Collection, Query, Mutation, Client, Server
 
 Date: 2026-07-03
-Status: Accepted
+Status: Accepted. Amended in part by [ADR-0034](0034-alchemy-cloudflare-adapter.md) (the Cloudflare adapter is `@thomasfosterau/legation-alchemy-cloudflare`, on Alchemy's provider).
 
 ## Context
 

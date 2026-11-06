@@ -1,7 +1,6 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-jsonapi": minor
-"@thomasfosterau/legation-cloudflare": minor
 ---
 
 Schema constants are named after the domain type they decode, with a

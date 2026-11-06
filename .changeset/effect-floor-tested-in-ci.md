@@ -2,7 +2,6 @@
 "@thomasfosterau/legation": patch
 "@thomasfosterau/legation-browser": patch
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-cloudflare": patch
 "@thomasfosterau/legation-svelte": patch
 "@thomasfosterau/legation-devtools": patch
 ---

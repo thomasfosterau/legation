@@ -14,7 +14,7 @@ npm install @thomasfosterau/legation-browser @thomasfosterau/legation effect @ef
 
 ## Effect version
 
-Peers `effect ^4.0.0`. `@effect/platform-browser` is peered `^4.0.0` too. Tested against `4.0.6` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
+Peers `effect ^4.0.0`. `@effect/platform-browser` is peered `^4.0.0` too. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
 
 ## Usage
 
