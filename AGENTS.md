@@ -43,7 +43,7 @@ A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` a
 - `vp run test` — every Vitest project (`node`, `commerce-browser`, `svelte`); builds first. `vp test run packages/<name>` runs one package's tests without a build. The commerce browser test needs Chromium (see Agent sessions).
 - `vp run test:coverage` — the suite plus `coverage/coverage-final.json`, the map `fallow audit` reads.
 - `vp run bench` — the `*.bench.ts` benchmarks (not a gate).
-- `fallow audit --base origin/trunk` — the fallow gate (see the blocks at the end). `fallow dead-code`, `fallow dupes` and `fallow health` run the individual analyses.
+- `vp exec fallow audit --base origin/trunk` — the fallow gate (see the blocks at the end). `vp exec fallow dead-code`, `vp exec fallow dupes` and `vp exec fallow health` run the individual analyses.
 - `pnpm changeset` — add a changeset.
 
 Invoke everything through `vp` (`vp exec` instead of `npx`; `vp run <task>` instead of a bare `pnpm` script). The sanctioned non-`vp` invocations: `pnpm install`, `pnpm changeset`, `pnpm audit`, `pnpm exec playwright-core install chromium`, and `pnpm run version` / `pnpm run release` on the release path. Single-check variants are in [CONTRIBUTING.md](CONTRIBUTING.md#running-individual-checks).
@@ -59,7 +59,7 @@ Before you report work as done, run these in CI's order (`.github/workflows/ci.y
 5. `vp run check:examples`
 6. `vp run test:coverage` (the suite plus the coverage map the audit reads; needs Chromium, and `DATABASE_URL` for the PostgreSQL overlap test)
 7. `pnpm audit --audit-level high` (network)
-8. `fallow audit --base origin/trunk` (fetch `origin/trunk` first)
+8. `vp exec fallow audit --base origin/trunk` (fetch `origin/trunk` first)
 
 CI also runs the suite at the published `effect` floor ("Tests (effect floor)"). If a gate can't run here, say which and why in the PR body; never imply it ran.
 
@@ -85,8 +85,8 @@ Never guess at an Effect API. This repo is on the Effect v4 release-candidate li
 
 ## Agent sessions
 
-- The SessionStart hook (`.claude/hooks/session-start.sh`) installs dependencies against the lockfile with pnpm and puts `vp` (a re-exec shim that prefers the nearest worktree's `node_modules`), `fallow` and `tsx` on PATH for non-interactive shells. It hydrates no secrets, and none are needed.
-- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` fails; it reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON, YAML or Markdown file you write or edit.
+- The SessionStart hook (`.claude/hooks/session-start.sh`) installs the global Vite+ CLI at the catalog's `vite-plus` pin with the official installer (npm-provenance and SHA-512 checked; it needs `vite.plus` and `viteplus.dev` on the environment's allowlist), links `vp` and `vpx` into `~/.local/bin`, and runs `vp install --frozen-lockfile`. The global `vp` delegates to each checkout's own `vite-plus`, worktrees included. Everything else goes through Vite+: `vp exec fallow …` for fallow, `vpx <file>.ts` for TypeScript files (the commerce example's `dev:server`). Nothing else is put on PATH. If the installer can't run, `vp` falls back to this checkout's `node_modules` copy. It hydrates no secrets, and none are needed.
+- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` (run through `vp exec fallow`) fails; it runs only in this checkout and its `.claude/worktrees/*`, and for any other tree skips the audit with a notice without running that tree's tooling. It reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON, YAML or Markdown file you write or edit.
 - `vp run test` and `vp run test:coverage` need Chromium for the commerce façade's browser test, which fails rather than skips without it. Run `pnpm exec playwright-core install chromium` first; if the download is blocked, run `vp test run --project node --project svelte` and say in the PR body that the commerce browser test didn't run. The PostgreSQL overlap test skips locally without `DATABASE_URL` (CI sets it).
 
 ## Documentation surfaces

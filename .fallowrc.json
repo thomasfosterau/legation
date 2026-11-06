@@ -35,7 +35,6 @@
     "jsdom",
     "playwright-core",
     "publint",
-    "tsx",
     "typescript",
     "vite",
     "vite-plus",

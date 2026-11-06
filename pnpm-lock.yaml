@@ -99,9 +99,6 @@ catalogs:
     svelte-check:
       specifier: ^4.7.8
       version: 4.7.8
-    tsx:
-      specifier: ^4.23.15
-      version: 4.23.15
     typescript:
       specifier: npm:@typescript/typescript6@6.0.2
       version: 6.0.2
@@ -173,9 +170,6 @@ importers:
       svelte:
         specifier: 'catalog:'
         version: 5.57.3
-      tsx:
-        specifier: 'catalog:'
-        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
@@ -252,9 +246,6 @@ importers:
       svelte-check:
         specifier: 'catalog:'
         version: 4.7.8(@typescript/typescript6@6.0.2)(picomatch@4.0.7)(svelte@5.57.3)
-      tsx:
-        specifier: 'catalog:'
-        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
@@ -4041,6 +4032,7 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
+    optional: true
 
   escalade@3.2.0: {}
 
@@ -4528,6 +4520,7 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   typescript@5.6.1-rc: {}
 
