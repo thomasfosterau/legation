@@ -53,7 +53,8 @@ catalog:
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
   # singleton below forces it onto the catalog's copy, which it lints fine on.
-  # Moves with the toolchain group.
+  # Ungrouped in Dependabot: it ranges `@oxlint/plugins` `^1.85.0`, so no
+  # oxlint pins it.
   "@enfect/oxlint": 0.9.0
   "@sveltejs/adapter-node": ^6.0.1
   "@sveltejs/adapter-static": ^4.0.1

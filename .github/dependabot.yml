@@ -5,9 +5,11 @@
 # pnpm-workspace.yaml and its catalogs, which cover every package and the
 # example apps (they are workspace members), and updates pnpm-lock.yaml.
 #
-# Dependabot puts a dependency in the FIRST group that matches it, so the
-# groups run specific → general, and `exclude-patterns` keep a package out of
-# a broader group it would otherwise also match. Each lockstep group takes
+# A group exists only where its members must move at the same time (one
+# release train with exact cross-pins, or a hard compatibility table);
+# everything else, each GitHub Action included, updates on its own PR.
+# Dependabot puts a dependency in the FIRST group that matches it, so
+# `exclude-patterns` keep `@effect/tsgo` out of `effect`. Each group takes
 # every update type, majors included, so a set that must move together
 # always arrives as one PR:
 #
@@ -15,21 +17,19 @@
 #   `vitest` it carries (and `vite` is its aliased core), and `effect-tsgo
 #   patch` matches the native `tsc` and `oxlint` by gitHead / version and
 #   hard-errors (UnsupportedTargetPackageVersionError) on any pairing it has
-#   no artifact for. The TS6 alias (`typescript`), the language service and
-#   the Effect lint preset (`@enfect/oxlint`) ride along (pnpm-workspace.yaml
-#   catalog comments). Before merging, check the `components` table in
+#   no artifact for. Before merging, check the `components` table in
 #   node_modules/@effect/tsgo/dist/effect-tsgo.cjs; when a vite-plus bump
 #   outruns it, pick the `@effect/tsgo` release that covers the new oxlint /
-#   tsgolint by hand on the PR's branch.
+#   tsgolint by hand on the PR's branch. The Effect lint preset
+#   (`@enfect/oxlint`) and `@effect/language-service` are not in it: neither
+#   pins an oxlint or TypeScript version, so each updates on its own.
 # - effect: the Effect release line is a lockstep singleton set (`effect`,
 #   the `@effect/*` runtime packages and the `@effect/platform-node-shared`
 #   catalog entry the `overrides` pin uses). The published floor under
 #   `catalogs.peers` is hand-set; CI tests every PR at both the pin and the
 #   floor (`ci.yml`, "Tests (effect floor)").
-# - svelte, playwright, cloudflare, package-lint, changesets, fallow: the
-#   other sets whose members are released and tested together.
-# - minor-and-patch: everything else, minor and patch only, so PR volume
-#   stays low; a major outside a lockstep set arrives on its own.
+# - svelte: the compiler, SvelteKit, its adapters / Vite plugin and
+#   svelte-check peer on each other.
 #
 # Hand moves Dependabot cannot make (do them on the matching group's PR):
 # - the npm-alias catalog entries: `vite` (`npm:@voidzero-dev/vite-plus-core`,
@@ -62,6 +62,7 @@ updates:
       exclude:
         - "@thomasfosterau/*"
     groups:
+      # vite-plus pins vite / vitest / oxlint; the tsgo patch pairs with them.
       toolchain:
         applies-to: version-updates
         patterns:
@@ -69,18 +70,13 @@ updates:
           - "vite"
           - "vitest"
           - "@vitest/*"
-          - "oxlint"
-          - "oxfmt"
-          - "oxlint-tsgolint"
           - "@effect/tsgo"
-          - "@effect/language-service"
           - "@typescript/native"
           - "typescript"
           - "@typescript/typescript6"
-          - "@oxlint/*"
           - "@voidzero-dev/*"
-          - "@enfect/*"
         update-types: ["major", "minor", "patch"]
+      # One release train: every Effect runtime package at one version.
       effect:
         applies-to: version-updates
         patterns:
@@ -90,6 +86,7 @@ updates:
           - "@effect/tsgo"
           - "@effect/language-service"
         update-types: ["major", "minor", "patch"]
+      # The Svelte packages peer on each other's releases.
       svelte:
         applies-to: version-updates
         patterns:
@@ -97,41 +94,6 @@ updates:
           - "@sveltejs/*"
           - "svelte-check"
         update-types: ["major", "minor", "patch"]
-      playwright:
-        applies-to: version-updates
-        patterns:
-          - "playwright"
-          - "playwright-core"
-          - "@playwright/*"
-        update-types: ["major", "minor", "patch"]
-      cloudflare:
-        applies-to: version-updates
-        patterns:
-          - "@cloudflare/*"
-          - "wrangler"
-          - "miniflare"
-        update-types: ["major", "minor", "patch"]
-      package-lint:
-        applies-to: version-updates
-        patterns:
-          - "publint"
-          - "@arethetypeswrong/*"
-        update-types: ["major", "minor", "patch"]
-      changesets:
-        applies-to: version-updates
-        patterns:
-          - "@changesets/*"
-        update-types: ["major", "minor", "patch"]
-      fallow:
-        applies-to: version-updates
-        patterns:
-          - "fallow"
-        update-types: ["major", "minor", "patch"]
-      minor-and-patch:
-        applies-to: version-updates
-        patterns:
-          - "*"
-        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directories:
@@ -145,9 +107,6 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore"
+    # No groups: each action updates on its own PR.
     cooldown:
       default-days: 1
-    groups:
-      github-actions:
-        patterns:
-          - "*"
