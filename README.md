@@ -4,7 +4,7 @@ A modular sync engine built on [Effect](https://effect.website): mutation-log wr
 
 ## Status
 
-Pre-1.0: APIs will change. Targets the Effect v4 release-candidate line (peer `effect >=4.0.0-rc.118`; ADR-0003), ESM only.
+Pre-1.0: APIs will change. Targets Effect v4 (peer `effect ^4.0.0`, `^4.0.2` for legation-svelte; ADR-0003), ESM only.
 
 ## Architecture
 

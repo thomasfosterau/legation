@@ -60,7 +60,7 @@
   },
   "peerDependencies": {
     "@sveltejs/kit": "catalog:peers",
-    "effect": "catalog:peers",
+    "effect": "catalog:effect-svelte-peers",
     "svelte": "catalog:peers"
   },
   "peerDependenciesMeta": {

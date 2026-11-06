@@ -31,7 +31,7 @@ Svelte app pulls nothing.
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. Tested against `4.0.2` (the version CI pins) and `4.0.0-rc.118` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.0.2`, the floor its dependency `@thomasfosterau/effect-svelte` 0.6.0 requires (it drops to `^4.0.0` once an effect-svelte release peers that). Tested against `4.0.6` (the version CI pins), `4.0.2` (the floor) and `4.0.0` (CI's floor job runs every package's tests there on every PR); install one copy of `effect` in your app (ADR-0003).
 
 ## Booting the Client
 
