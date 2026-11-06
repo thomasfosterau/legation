@@ -41,12 +41,13 @@ isolated dependency.
     `RpcServer` over the core's `RpcTransport.SyncRpcs`); an app that serves it
     from Node composes those with `@effect/platform-node` itself, as the
     commerce example does.
-  - `@thomasfosterau/legation-cloudflare` stays a package of its own: it is
-    built against the workerd types, which it declares as an optional peer
-    (`@cloudflare/workers-types`). It was considered for renaming to
-    `@thomasfosterau/legation-alchemy-cloudflare`, peering on Alchemy's
-    Cloudflare provider; that provider re-exports none of the workerd types
-    this package is written against, so the rename was not made.
+  - `@thomasfosterau/legation-cloudflare` stays a package of its own for now:
+    it is built against the workerd types, which it declares as an optional
+    peer (`@cloudflare/workers-types`). Alchemy's Cloudflare provider
+    (`@alchemy.run/cloudflare`, 2.0.0-beta.85) re-exports none of those types,
+    so peering on it would not supply them. The owner has decided to replace
+    this package with an Alchemy-based alternative; that is a separate
+    change.
 
 ## Consequences
 
