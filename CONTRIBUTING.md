@@ -13,6 +13,8 @@ pnpm install
 
 `pnpm install` also installs the Vite+ git hooks and runs `prepare`, which patches the native TypeScript compiler and Oxlint with `@effect/tsgo` so Effect diagnostics fail the type gate.
 
+Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the same hook as agent sessions.
+
 Two workspace mechanics AGENTS.md doesn't repeat:
 
 - Packages import each other by published name (`@thomasfosterau/legation-effect`); pnpm links the workspace packages, and `pnpm pack` rewrites the `workspace:` and `catalog:` specifiers when a package is published.
