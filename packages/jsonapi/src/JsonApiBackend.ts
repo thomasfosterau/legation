@@ -117,20 +117,10 @@ import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
-import {
-  Backend,
-  BackendError,
-  MutationRejected,
-  Predicate,
-} from "@thomasfosterau/legation-effect";
-import {
-  Hash,
-  Protocol,
-  RejectionMemory,
-  UnknownMutator,
-} from "@thomasfosterau/legation-effect/internal";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
-import type { Mutator } from "@thomasfosterau/legation-effect";
+import { Backend, BackendError, MutationRejected, Predicate } from "@thomasfosterau/legation";
+import { Hash, Protocol, RejectionMemory, UnknownMutator } from "@thomasfosterau/legation/internal";
+import { Subset } from "@thomasfosterau/legation/internal";
+import type { Mutator } from "@thomasfosterau/legation";
 import {
   documentToRows,
   parseResponse,

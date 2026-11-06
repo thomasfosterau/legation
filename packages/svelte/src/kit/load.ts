@@ -17,13 +17,13 @@
  */
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
-import { Hydration, type Transport } from "@thomasfosterau/legation-effect";
+import { Hydration, type Transport } from "@thomasfosterau/legation";
 import type {
   MutatorError,
   StoreError,
   TransportError,
   VersionNotSupportedError,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import { clientGroupId, type ClientGroupOptions } from "./clientGroup.js";
 
 /** Options for {@link loadSnapshot}. */

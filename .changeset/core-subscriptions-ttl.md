@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `Subscriptions`: subscription lifecycle on top of `ClientEngine` —

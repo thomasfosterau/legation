@@ -6,8 +6,8 @@
  * host with one per client context (tab, window, worker) — BroadcastChannel
  * semantics mean a side never receives its own posts.
  */
-import { TransportError } from "@thomasfosterau/legation-effect";
-import { MirrorChannel } from "@thomasfosterau/legation-effect/internal";
+import { TransportError } from "@thomasfosterau/legation";
+import { MirrorChannel } from "@thomasfosterau/legation/internal";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";

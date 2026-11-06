@@ -34,7 +34,7 @@ import {
   Transport,
   type TransportError,
   type VersionNotSupportedError,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   ClientEngine,
   Cvr,
@@ -42,7 +42,7 @@ import {
   type Protocol,
   Subset,
   SyncServer,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as BindingTransport from "../BindingTransport.js";
 import { fakeBinding } from "./fakes.js";
 import { routes } from "../RoomProtocol.js";

@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Retry/backoff policies for the sync loop (#34). `ClientEngineOptions.retry`

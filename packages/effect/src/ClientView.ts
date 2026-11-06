@@ -201,7 +201,7 @@ export interface ClientView {
 export type Reader = Pick<ClientView, "query" | "observe">;
 
 /** The {@link ClientView} service: where a Client's reads and writes go, owned engine or mirror. */
-export const ClientView = Context.Service<ClientView>("@thomasfosterau/legation-effect/ClientView");
+export const ClientView = Context.Service<ClientView>("@thomasfosterau/legation/ClientView");
 
 /**
  * Present a {@link ClientEngine} as a {@link ClientView}. Subscriptions go

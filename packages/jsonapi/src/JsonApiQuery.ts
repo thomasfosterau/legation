@@ -93,8 +93,8 @@ import {
   Predicate,
   Query,
   QueryError,
-} from "@thomasfosterau/legation-effect";
-import type { Subset } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import type { Subset } from "@thomasfosterau/legation/internal";
 import type { JsonApiRequestOptions, SortTerm } from "./types.js";
 
 // ─── Filter AST ⇄ Predicate ──────────────────────────────────────────────────

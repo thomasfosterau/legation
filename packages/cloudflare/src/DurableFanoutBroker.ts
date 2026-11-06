@@ -22,7 +22,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
-import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation-effect/internal";
+import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation/internal";
 
 /** Options for {@link make}. */
 export interface MakeOptions {

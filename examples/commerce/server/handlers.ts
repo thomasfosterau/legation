@@ -12,7 +12,7 @@
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
-import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation-effect";
+import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation";
 import type { SqlBackend } from "@thomasfosterau/legation-sql";
 import {
   CartAddArgs,

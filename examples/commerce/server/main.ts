@@ -19,7 +19,7 @@ import { HttpRouter } from "effect/http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
-import { HintSource } from "@thomasfosterau/legation-effect/internal";
+import { HintSource } from "@thomasfosterau/legation/internal";
 import { HttpSyncServer } from "@thomasfosterau/legation-node";
 import { PollingHintSource } from "@thomasfosterau/legation-sql";
 import { jsonApiLive } from "./jsonapi.js";

@@ -20,10 +20,10 @@
     "packages/devtools/svelte.config.js",
     "scripts/*.mjs"
   ],
-  "publicPackages": ["@thomasfosterau/legation-*"],
+  "publicPackages": ["@thomasfosterau/legation", "@thomasfosterau/legation-*"],
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", ".claude/skills/**"],
   "ignoreDependencies": [
-    "@thomasfosterau/legation-effect",
+    "@thomasfosterau/legation",
     "@thomasfosterau/legation-sql",
     "@arethetypeswrong/cli",
     "@changesets/cli",

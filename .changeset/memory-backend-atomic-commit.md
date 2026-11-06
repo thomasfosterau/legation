@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `MemoryBackend` now meets Backend guarantee 1. Each mutation's writes are staged

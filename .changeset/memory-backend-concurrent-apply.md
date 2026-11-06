@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `MemoryBackend` no longer double-applies a mutation when two `applyMutations`

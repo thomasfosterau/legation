@@ -1,11 +1,11 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-svelte": minor
 ---
 
 `@legation/sveltekit` is merged into `@thomasfosterau/legation-svelte` as the
 `@thomasfosterau/legation-svelte/kit` subpath, and `Hydration` moves to the public
-`@thomasfosterau/legation-effect` surface.
+`@thomasfosterau/legation` surface.
 
 The split was never a dependency boundary: the SvelteKit package contained no
 Svelte code, and its whole `@sveltejs/kit` coupling was two `import type
@@ -26,7 +26,7 @@ namespaces are gone, so `setClientRuntime` and the hooks are flat named
 exports.
 
 Hydration is now a core concept rather than a SvelteKit one. `Hydration` is
-exported from `@thomasfosterau/legation-effect` (it was behind `/internal`) and speaks
+exported from `@thomasfosterau/legation` (it was behind `/internal`) and speaks
 `Query.Read` instead of `Subset`: `snapshot({ nodes, reads })` and
 `rowsFor(snapshot, nodes, read)`. `@thomasfosterau/legation-svelte/kit` keeps only the
 framework's share — the client-group cookie, a `load`-shaped wrapper, and

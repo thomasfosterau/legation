@@ -42,7 +42,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/legation-effect": "workspace:^",
+    "@thomasfosterau/legation": "workspace:^",
     "@thomasfosterau/legation-sql": "workspace:^"
   },
   "devDependencies": {

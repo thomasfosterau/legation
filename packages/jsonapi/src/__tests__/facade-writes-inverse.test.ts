@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { CrudMutation, Edge, Node } from "@thomasfosterau/legation-effect";
+import { CrudMutation, Edge, Node } from "@thomasfosterau/legation";
 import type { ResourceMap } from "../Convention.js";
 import * as FacadeWrites from "../FacadeWrites.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";

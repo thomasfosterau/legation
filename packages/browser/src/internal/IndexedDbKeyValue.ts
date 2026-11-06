@@ -8,8 +8,8 @@
  */
 
 import { IndexedDb } from "@effect/platform-browser";
-import { StoreError } from "@thomasfosterau/legation-effect";
-import { AtomicKeyValue } from "@thomasfosterau/legation-effect/internal";
+import { StoreError } from "@thomasfosterau/legation";
+import { AtomicKeyValue } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

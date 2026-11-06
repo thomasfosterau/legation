@@ -4,7 +4,7 @@ Svelte 5 bindings. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 ## Boundary
 
-- Deliberately thin: everything the engine can do alone is `@thomasfosterau/legation-effect`; this package adds reactive re-subscription and SSR hydration. Imports from the workspace: `@thomasfosterau/legation-effect` only. Peers: `effect`, `svelte`, optional `@sveltejs/kit`.
+- Deliberately thin: everything the engine can do alone is `@thomasfosterau/legation`; this package adds reactive re-subscription and SSR hydration. Imports from the workspace: `@thomasfosterau/legation` only. Peers: `effect`, `svelte`, optional `@sveltejs/kit`.
 - **Two entries**: `src/index.svelte.ts` (`.`) holds the rune hooks and must stay a `*.svelte.js` module in `dist/` (it calls `$state` / `$effect`, which only the consumer's Svelte compiler handles; `exports` has a `svelte` condition for it). `src/kit/index.ts` (`./kit`) is the SvelteKit surface and is plain TypeScript.
 
 ## Invariants

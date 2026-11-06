@@ -63,7 +63,7 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 
 | Package                                                      | Description                                                                                                                                                                                                                                                            |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/legation-effect`](packages/effect)         | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
+| [`@thomasfosterau/legation`](packages/effect)                | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
 | [`@thomasfosterau/legation-browser`](packages/browser)       | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                         |
 | [`@thomasfosterau/legation-node`](packages/node)             | Node adapters: serving the default RPC sync transport over HTTP/WebSocket (`HttpSyncServer`)                                                                                                                                                                           |
 | [`@thomasfosterau/legation-jsonapi`](packages/jsonapi)       | JSON:API v1.1 collection loaders: map documents into engine collection rows (a `type` is a collection, a resource a row)                                                                                                                                               |
@@ -75,7 +75,7 @@ Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-d
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-effect effect
+npm install @thomasfosterau/legation effect
 ```
 
 Add the adapter packages your runtime needs (each package README lists its peers). `effect` is a peer: install one copy in your app.
@@ -95,7 +95,7 @@ import {
   Server,
   Transport,
   type Query,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 
 // 1. The shared vocabulary: a one-node graph, a named mutation, a read.
 const Todo = Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean });

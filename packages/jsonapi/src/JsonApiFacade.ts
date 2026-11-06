@@ -110,21 +110,21 @@ import type * as Stream from "effect/Stream";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { MEDIA_TYPE, type Resource } from "@thomasfosterau/effect-jsonapi";
-import { Query } from "@thomasfosterau/legation-effect";
+import { Query } from "@thomasfosterau/legation";
 import type {
   CrudMutation,
   MutatorError,
   Node,
   QueryError,
   StoreError,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import type {
   ClientEngine,
   ClientView,
   Coverage,
   MutationState,
-} from "@thomasfosterau/legation-effect/internal";
-import { Subset } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
+import { Subset } from "@thomasfosterau/legation/internal";
 import * as Convention from "./Convention.js";
 import * as FacadeWrites from "./FacadeWrites.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";

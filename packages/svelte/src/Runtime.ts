@@ -25,7 +25,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import { getContext, hasContext, setContext } from "svelte";
-import { Client } from "@thomasfosterau/legation-effect";
+import { Client } from "@thomasfosterau/legation";
 import { unavailable } from "./unavailable.js";
 
 export { ClientUnavailable } from "./unavailable.js";

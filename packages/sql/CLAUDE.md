@@ -4,7 +4,7 @@ The SQL reference `Backend`. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 ## Boundary
 
-- Driver-agnostic: the backend runs over the tiny `SqlExecutor` seam (`query` / `run` / `transaction`, optional `transactional`); a driver is the consumer's choice. Imports from the workspace: `@thomasfosterau/legation-effect` only; `@effect/sql-*` drivers are test-only devDependencies. `PgExecutor` imports `effect/sql/SqlClient`, which ships in the `effect` peer, so the PostgreSQL executor lives here rather than in its own package (ADR-0006, #203): the driver that provides `SqlClient` is the app's.
+- Driver-agnostic: the backend runs over the tiny `SqlExecutor` seam (`query` / `run` / `transaction`, optional `transactional`); a driver is the consumer's choice. Imports from the workspace: `@thomasfosterau/legation` only; `@effect/sql-*` drivers are test-only devDependencies. `PgExecutor` imports `effect/sql/SqlClient`, which ships in the `effect` peer, so the PostgreSQL executor lives here rather than in its own package (ADR-0006, #203): the driver that provides `SqlClient` is the app's.
 
 ## Invariants
 

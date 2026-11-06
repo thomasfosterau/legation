@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Make the acknowledged-but-unpulled tail durable in `ClientStore` (#336). A push acknowledgement parks the applied mutations in the store, out of the pending journal, so they are never pushed again. Their effects stay overlaid until a pull reports them, and now also across a restart, a hydration snapshot and the BackgroundSync push-only flush. A restart between a push acknowledgement and the next pull no longer shows the confirmed rows without the mutation.

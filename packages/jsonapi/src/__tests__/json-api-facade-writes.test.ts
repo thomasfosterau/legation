@@ -35,9 +35,9 @@ import {
   Node,
   Server,
   Transport,
-} from "@thomasfosterau/legation-effect";
-import type { MutationState } from "@thomasfosterau/legation-effect/internal";
-import { ClientEngine, ClientView } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import type { MutationState } from "@thomasfosterau/legation/internal";
+import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 

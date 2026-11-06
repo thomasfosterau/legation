@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Relationship-scoped read authorization. Add an `IdentityResolver` seam: an

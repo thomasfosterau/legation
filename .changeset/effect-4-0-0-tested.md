@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": patch
 "@thomasfosterau/legation-node": patch
 "@thomasfosterau/legation-jsonapi": patch
@@ -12,7 +12,7 @@
 Tested against `effect` 4.0.0 (and the matching `@effect/*` companions); the
 peer floor is unchanged at `effect >=4.0.0-rc.118`.
 
-`@thomasfosterau/legation-effect` adapts to 4.0.0's stricter, type-only `Schema.brand`:
+`@thomasfosterau/legation` adapts to 4.0.0's stricter, type-only `Schema.brand`:
 
 - `Node.Id` keeps its signature and runtime behaviour; its internal brand
   identifier is cast to satisfy the new concrete-identifier check.

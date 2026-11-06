@@ -3,7 +3,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
-import { BackendError } from "@thomasfosterau/legation-effect";
+import { BackendError } from "@thomasfosterau/legation";
 import type * as Ledger from "../Ledger.js";
 
 /** Fail with a `BackendError` while `faults` has a fault left, counting one down. */

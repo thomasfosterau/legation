@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 `ClientStore.makeKeyValue` now drops, when it opens, any journal index entry

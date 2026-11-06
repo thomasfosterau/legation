@@ -1,11 +1,11 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
 ---
 
 Drive HTTP-cache invalidation from collection changes (#49).
 
-- **`PullCompleted` enrichment** (`@thomasfosterau/legation-effect`): the `PullCompleted`
+- **`PullCompleted` enrichment** (`@thomasfosterau/legation`): the `PullCompleted`
   `EngineEvent` now carries `collections` — the distinct collections the pulled
   patch touched (a `Clear` stands for every collection the client currently
   holds, since it resets the whole view). The field is always present. This lets

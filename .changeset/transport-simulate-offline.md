@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `Transport.simulateOffline`: a decorator wrapping any `ClientTransport`

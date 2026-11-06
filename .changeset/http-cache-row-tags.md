@@ -1,12 +1,12 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
 ---
 
 Per-row HTTP-cache tags (#207): row-granular cache invalidation, closing the
 collection-level ceiling noted in `.changeset/http-cache-invalidation.md`.
 
-- **Change feed carries row ids** (`@thomasfosterau/legation-effect`): the `PullCompleted`
+- **Change feed carries row ids** (`@thomasfosterau/legation`): the `PullCompleted`
   `EngineEvent` now also carries `rows` — the `(collection, id)` pairs the
   pulled patch's `Put`/`Del` ops touched (a `Clear` contributes to
   `collections` only, since it has no finite row list). Always present,

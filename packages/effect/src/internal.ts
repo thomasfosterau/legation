@@ -1,5 +1,5 @@
 /**
- * @thomasfosterau/legation-effect/internal
+ * @thomasfosterau/legation/internal
  *
  * The implementation seams behind the public surface (ADR-0022): the
  * engine, the mirror machinery, the plan vocabulary, protocol codecs,
@@ -22,7 +22,7 @@ export * as Protocol from "./Protocol.js";
 export * as RpcTransport from "./RpcTransport.js";
 export * as SpecExport from "./SpecExport.js";
 
-// `Hydration` is public (`@thomasfosterau/legation-effect`) — the SSR snapshot is app-facing.
+// `Hydration` is public (`@thomasfosterau/legation`) — the SSR snapshot is app-facing.
 
 // ─── Durable store seams ─────────────────────────────────────────────────────
 // The optional atomic batch a durable ClientStore uses when a host supplies it (#393).

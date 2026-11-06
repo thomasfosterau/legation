@@ -11,7 +11,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { KeyValueStore } from "effect/persistence";
-import { BackendError, type Backend } from "@thomasfosterau/legation-effect";
+import { BackendError, type Backend } from "@thomasfosterau/legation";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";

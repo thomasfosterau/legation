@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `Aggregate`: serialisable aggregate descriptors (`Count`, `Sum`, `Min`,

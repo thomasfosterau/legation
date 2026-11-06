@@ -1,6 +1,6 @@
 ---
 "@thomasfosterau/legation-svelte": minor
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Form actions run named Mutations (ADR-0030, amendment #215).
@@ -22,7 +22,7 @@ Form actions run named Mutations (ADR-0030, amendment #215).
 An action without the client-group cookie stays an out-of-band writer. The
 client-group cookie's default name is now exported as `CLIENT_GROUP_COOKIE`.
 
-`@thomasfosterau/legation-effect` adds the enhanced submit's client half:
+`@thomasfosterau/legation` adds the enhanced submit's client half:
 
 - `ClientEngine.beginFormMutation` and `Client.beginFormMutation` apply a
   Mutation's local handler to the overlay under a form client's id without

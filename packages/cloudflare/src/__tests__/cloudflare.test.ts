@@ -37,8 +37,8 @@ import {
   Mutation,
   Node,
   Transport,
-} from "@thomasfosterau/legation-effect";
-import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import { leases, makeShardClass } from "../FanoutShard.js";

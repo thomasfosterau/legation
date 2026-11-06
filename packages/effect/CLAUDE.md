@@ -1,4 +1,4 @@
-# packages/effect — `@thomasfosterau/legation-effect`
+# packages/effect — `@thomasfosterau/legation`
 
 The engine core. Read the root [AGENTS.md](../../AGENTS.md) first; this file carries only what is specific to this package.
 

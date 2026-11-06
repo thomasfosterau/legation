@@ -1,7 +1,7 @@
 # legation · SvelteKit · Northwind
 
 A relational admin dashboard over the classic Northwind dataset, driving
-[`@thomasfosterau/legation-effect`](../../packages/effect) through the
+[`@thomasfosterau/legation`](../../packages/effect) through the
 [`@thomasfosterau/legation-svelte`](../../packages/svelte) **rune hooks** on SvelteKit. Like the
 other client-only examples it runs the **real library server pipeline in the
 page** (`SyncServer` + `MemoryBackend` + `CvrStore` + `InvalidationBus`) over a

@@ -8,8 +8,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation-effect";
-import type { Related } from "@thomasfosterau/legation-effect/internal";
+import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation";
+import type { Related } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "../DocumentWriter.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import { defined } from "./defined.js";

@@ -140,7 +140,7 @@ const nodeEntries = (node: Node.AnyNode, writes: Writes | undefined): ReadonlyAr
  * @example
  * ```ts
  * import * as Schema from "effect/Schema";
- * import { CrudMutation, Edge, Mutation, Node } from "@thomasfosterau/legation-effect";
+ * import { CrudMutation, Edge, Mutation, Node } from "@thomasfosterau/legation";
  *
  * const products = Node.make("products", { attributes: { name: Schema.String } });
  * const reviews = Node.make("reviews", {

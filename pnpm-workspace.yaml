@@ -1,4 +1,4 @@
-# pnpm workspace — the `@thomasfosterau/legation-*` packages and the example
+# pnpm workspace — `@thomasfosterau/legation`, the `@thomasfosterau/legation-*` packages and the example
 # apps that drive them end to end.
 #
 # The `catalog:` protocol pins versions that MUST be singletons across the

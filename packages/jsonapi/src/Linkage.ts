@@ -40,8 +40,8 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as R from "effect/Record";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation-effect";
-import { type Related, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation";
+import { type Related, Subset } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 
 /** A batch of subsets evaluated to rows — the row source a read runs over. */

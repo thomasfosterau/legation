@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 "@thomasfosterau/legation-sql": patch
 "@thomasfosterau/legation-jsonapi": patch
 ---
@@ -16,7 +16,7 @@ obligation, not a generic rule: the harness cannot observe a backend mid-mutatio
 
 The unknown-mutator `BackendError` that `MemoryBackend`, `SqlBackend` and
 `JsonApiBackend` raise now carries a typed cause, built by `UnknownMutator.make`
-(`@thomasfosterau/legation-effect/internal`). Rule 10 and rule 4 (`contract/fail`, #382)
+(`@thomasfosterau/legation/internal`). Rule 10 and rule 4 (`contract/fail`, #382)
 recognise an unregistered mutator by that cause, so a backend that words the message
 differently is still caught. The exact message `Unknown mutator: <name>` stays as a
 fallback for a third-party backend that does not use the helper yet. Rule 4 now also
@@ -24,7 +24,7 @@ needs the probe to fail with a `BackendError`: a `failAlways` that dies with a d
 fails the rule instead of passing it.
 
 **Action required:** backend authors who run `verifyBackendContract` (imported from
-`@thomasfosterau/legation-effect/internal`) must register `BackendContract.failAlways`
+`@thomasfosterau/legation/internal`) must register `BackendContract.failAlways`
 and `BackendContract.writeThenFail`. The second is a handler that writes a row and then
 fails with `BackendError`, called with args `{ collection, id }`. An unregistered mutator
 fails rule 4 or rule 10. `BackendContract.memoryHandlers` already includes both. A

@@ -17,14 +17,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import {
-  Authorization,
-  Edge,
-  MemoryBackend,
-  Node,
-  QueryError,
-} from "@thomasfosterau/legation-effect";
-import { type ClientView, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Authorization, Edge, MemoryBackend, Node, QueryError } from "@thomasfosterau/legation";
+import { type ClientView, Subset } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";

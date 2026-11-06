@@ -123,8 +123,8 @@ import {
   MutationRejected,
   Predicate,
   type Mutator,
-} from "@thomasfosterau/legation-effect";
-import { Hash, Subset, UnknownMutator } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import { Hash, Subset, UnknownMutator } from "@thomasfosterau/legation/internal";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).

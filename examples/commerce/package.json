@@ -20,7 +20,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@thomasfosterau/legation-browser": "workspace:*",
-    "@thomasfosterau/legation-effect": "workspace:*",
+    "@thomasfosterau/legation": "workspace:*",
     "@thomasfosterau/legation-jsonapi": "workspace:*",
     "@thomasfosterau/legation-node": "workspace:*",
     "@thomasfosterau/legation-sql": "workspace:*",

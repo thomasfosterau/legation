@@ -51,7 +51,7 @@ import { HttpServerRequest as Request } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { ApiError, Atomic, Handlers, Lid, Middleware } from "@thomasfosterau/effect-jsonapi";
-import type { Backend } from "@thomasfosterau/legation-effect";
+import type { Backend } from "@thomasfosterau/legation";
 import { RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "../src/lib/domain.js";
 import { api, NotFound, Unauthorized } from "../src/lib/api.js";

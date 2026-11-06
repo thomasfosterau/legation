@@ -16,8 +16,8 @@ import {
   Node,
   Query,
   Transport,
-} from "@thomasfosterau/legation-effect";
-import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";

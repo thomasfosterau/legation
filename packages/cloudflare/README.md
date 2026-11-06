@@ -1,6 +1,6 @@
 # @thomasfosterau/legation-cloudflare
 
-The reference deployment of the [`@thomasfosterau/legation-effect`](../effect) sync engine on
+The reference deployment of the [`@thomasfosterau/legation`](../effect) sync engine on
 Cloudflare — per-user Durable Object rooms, topic-sharded fan-out, and a D1
 backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 
@@ -40,14 +40,14 @@ backend — following ADR-0022 (topology) and ADR-0023 (topic-derived fan-out).
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation-effect @thomasfosterau/legation-sql effect
+npm install @thomasfosterau/legation-cloudflare @thomasfosterau/legation @thomasfosterau/legation-sql effect
 ```
 
 ## Usage
 
 ```ts
 // worker.ts
-import { Authorization, Node } from "@thomasfosterau/legation-effect";
+import { Authorization, Node } from "@thomasfosterau/legation";
 import { SqlBackend } from "@thomasfosterau/legation-sql";
 import { D1Executor, FanoutShard, Room, Worker } from "@thomasfosterau/legation-cloudflare";
 
@@ -115,7 +115,7 @@ of the caches an app keeps on Cloudflare (#206): `kv` deletes the
 `{collection}:{id}` entry of every touched row from a KV read-through cache, and
 `cachePurge` purges the Workers cache by tag, with the same tag spelling the
 browser's Cache API invalidation uses (`collection:{name}`,
-`collection:{name}:{id}`, from `HttpCache` in `@thomasfosterau/legation-effect/internal`).
+`collection:{name}:{id}`, from `HttpCache` in `@thomasfosterau/legation/internal`).
 The eviction is no longer an obligation of each mutation: it subscribes to the
 bus (`InvalidationSink.run`).
 

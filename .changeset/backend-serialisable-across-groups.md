@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 Backend guarantee 1 now states that mutations from different client groups are serialisable (#353): a handler's reads see a state equivalent to some serial order of the committed mutations, so no committed write is lost to another group's concurrent commit of a row it read.

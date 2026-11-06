@@ -4,7 +4,7 @@ The reference deployment on Cloudflare (ADR-0022 topology, ADR-0023 topic-derive
 
 ## Boundary
 
-- Durable Object rooms (`makeRoomClass`), topic fan-out shards (`makeShardClass`), the stateless Worker router (`routeSync`) and the D1 executor. Imports from the workspace: `@thomasfosterau/legation-effect` and `@thomasfosterau/legation-sql` only.
+- Durable Object rooms (`makeRoomClass`), topic fan-out shards (`makeShardClass`), the stateless Worker router (`routeSync`) and the D1 executor. Imports from the workspace: `@thomasfosterau/legation` and `@thomasfosterau/legation-sql` only.
 - `@cloudflare/workers-types` is types-only and stays an import in the emitted `.d.ts` (the build never bundles it); consumers have it.
 
 ## Invariants

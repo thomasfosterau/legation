@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Query } from "@thomasfosterau/legation-effect";
+  import type { Query } from "@thomasfosterau/legation";
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useQuery } from "../../index.svelte.js";

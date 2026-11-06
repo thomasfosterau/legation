@@ -7,7 +7,7 @@ and a destructive clear-store behind a confirm).
 
 Architecture: a framework-agnostic headless core (`@thomasfosterau/legation-devtools`) that
 owns all data acquisition — built entirely over already-public substrate
-(`@thomasfosterau/legation-effect/internal`'s `Introspection`, `ClientEngine.mutationStates`,
+(`@thomasfosterau/legation/internal`'s `Introspection`, `ClientEngine.mutationStates`,
 `ClientEngine.engineEvents`/`syncFailures`, `ClientStore`) — plus thin,
 idiomatic panels per framework — today `@thomasfosterau/legation-devtools/svelte`. A panel
 just runs the core's Effects/Streams through its own framework's reactivity;
@@ -19,7 +19,7 @@ out of scope — a human design pass comes later.
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-devtools @thomasfosterau/legation-effect effect
+npm install @thomasfosterau/legation-devtools @thomasfosterau/legation effect
 ```
 
 Add `svelte` (an optional peer, `>=5.40`) for the `@thomasfosterau/legation-devtools/svelte` panel.

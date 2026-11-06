@@ -1,6 +1,6 @@
 ---
 "@thomasfosterau/legation-browser": minor
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 Built-in multi-tab leader election for the no-service-worker degraded
@@ -18,7 +18,7 @@ same journal, rows, and cookie — so the CVR conversation resumes rather
 than restarting. Environments without `navigator.locks` get a documented
 fallback (becomes host immediately), not a polyfill.
 
-`@thomasfosterau/legation-effect`'s `Mirror` now fails any request still in flight when
+`@thomasfosterau/legation`'s `Mirror` now fails any request still in flight when
 the host it was talking to is gone — either because the mirror's own scope
 closed, or because a second `HostReady` announces the host restarted — with
 a clear `TransportError` instead of leaving the caller's `mutate` /

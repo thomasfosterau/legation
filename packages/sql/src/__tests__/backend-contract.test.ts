@@ -31,7 +31,7 @@ import {
   Mutator,
   Server,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import {
   BackendContract,
   ClientEngine,
@@ -40,7 +40,7 @@ import {
   Paced,
   Subset,
   SyncServer,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as PgExecutor from "../PgExecutor.js";
 import * as Sql from "../Sql.js";
 import * as SqlBackend from "../SqlBackend.js";

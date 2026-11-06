@@ -24,7 +24,7 @@
  * vitest 5 prints a "Benchmark Warning … accessed module export getters too
  * many times" for the `CollectionIndex` benches: the hot loop calls
  * `Predicate.test` / `isNullish` / `compareLiterals` through the module
- * runner's export getters (vitest resolves `@thomasfosterau/legation-effect` to source), so
+ * runner's export getters (vitest resolves `@thomasfosterau/legation` to source), so
  * every call pays a getter. The overhead is the same for the scan and the
  * index, so the comparison stands; absolute numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
@@ -39,9 +39,9 @@ import * as P from "effect/Predicate";
 import type * as Ordering from "effect/Ordering";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Predicate } from "@thomasfosterau/legation-effect";
-import { CollectionIndex, Subset } from "@thomasfosterau/legation-effect/internal";
-import type { Protocol } from "@thomasfosterau/legation-effect/internal";
+import { ClientStore, Predicate } from "@thomasfosterau/legation";
+import { CollectionIndex, Subset } from "@thomasfosterau/legation/internal";
+import type { Protocol } from "@thomasfosterau/legation/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";

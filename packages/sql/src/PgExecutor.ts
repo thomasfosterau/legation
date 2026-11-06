@@ -39,7 +39,7 @@
 
 import * as Effect from "effect/Effect";
 import type { SqlClient } from "effect/sql/SqlClient";
-import { BackendError } from "@thomasfosterau/legation-effect";
+import { BackendError } from "@thomasfosterau/legation";
 import type * as Sql from "./Sql.js";
 import type * as SqlBackend from "./SqlBackend.js";
 

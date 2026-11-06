@@ -29,7 +29,7 @@ import {
   Mutation,
   Server,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
 import * as Devtools from "@thomasfosterau/legation-devtools";
 

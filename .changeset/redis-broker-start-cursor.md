@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-effect": patch
+"@thomasfosterau/legation": patch
 ---
 
 The Redis Streams broker (`makeRedisBroker`) resolves each subscription's start position once it succeeds, then reads on from the last entry it saw. A hint published between a block timeout and the next read is delivered: the read continues from a fixed ID (`XREVRANGE ... COUNT 1`, or `0-0` for an empty stream), not from `$`, which would move forward on each read. The `"$"` option keeps its meaning: a subscriber reads only hints published after its start position.

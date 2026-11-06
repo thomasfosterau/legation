@@ -17,7 +17,7 @@
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
-  import type { Transport } from "@thomasfosterau/legation-effect";
+  import type { Transport } from "@thomasfosterau/legation";
   import { allUsers, type User } from "#lib/domain.js";
   import { values } from "#lib/joins.js";
   import { createSession, setSession } from "#lib/session.svelte.js";

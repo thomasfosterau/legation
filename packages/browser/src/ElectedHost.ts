@@ -23,8 +23,8 @@
  * becomes the host immediately, which is only correct for a single tab —
  * see the package README's topology section.
  */
-import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation-effect";
-import { Client, ClientStore, TransportError } from "@thomasfosterau/legation-effect";
+import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation";
+import { Client, ClientStore, TransportError } from "@thomasfosterau/legation";
 import {
   ClientEngine,
   ClientView,
@@ -33,7 +33,7 @@ import {
   MirrorProtocol,
   Subscriptions,
   Subset,
-} from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation/internal";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";

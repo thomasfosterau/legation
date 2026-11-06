@@ -2,7 +2,7 @@
   import { page as kitPage } from "$app/state";
   import { useAggregateGrouped, useQuery } from "@thomasfosterau/legation-svelte";
   import { AsyncResult } from "effect/reactivity";
-  import { Aggregate } from "@thomasfosterau/legation-effect";
+  import { Aggregate } from "@thomasfosterau/legation";
   import {
     allCategories,
     allVariants,

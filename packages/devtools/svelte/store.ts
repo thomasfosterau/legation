@@ -17,7 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
 import * as Stream from "effect/Stream";
-import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation/internal";
 import type * as Devtools from "@thomasfosterau/legation-devtools";
 
 /** Subscribe to a `Stream` as a store; `initial` until the first emission. */

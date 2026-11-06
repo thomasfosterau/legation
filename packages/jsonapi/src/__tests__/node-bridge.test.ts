@@ -23,7 +23,7 @@ import {
   Node,
   Server,
   Transport,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
 

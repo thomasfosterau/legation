@@ -22,7 +22,7 @@
 import { error } from "@sveltejs/kit";
 import { Schema } from "effect";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
-import type { Query } from "@thomasfosterau/legation-effect";
+import type { Query } from "@thomasfosterau/legation";
 import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "./domain.js";
 

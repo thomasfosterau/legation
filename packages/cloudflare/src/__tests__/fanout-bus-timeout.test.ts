@@ -10,8 +10,8 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { Node } from "@thomasfosterau/legation-effect";
-import { FanoutBroker, FanoutBus } from "@thomasfosterau/legation-effect/internal";
+import { Node } from "@thomasfosterau/legation";
+import { FanoutBroker, FanoutBus } from "@thomasfosterau/legation/internal";
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);

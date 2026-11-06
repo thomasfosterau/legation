@@ -11,7 +11,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
-import { FanoutTopics } from "@thomasfosterau/legation-effect/internal";
+import { FanoutTopics } from "@thomasfosterau/legation/internal";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import { fakeBinding } from "./fakes.js";
 

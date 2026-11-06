@@ -24,8 +24,8 @@
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
-import { Predicate } from "@thomasfosterau/legation-effect";
-import { FilterCorpus, Subset } from "@thomasfosterau/legation-effect/internal";
+import { Predicate } from "@thomasfosterau/legation";
+import { FilterCorpus, Subset } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";

@@ -439,7 +439,7 @@ export interface QueryResolver {
 
 /** The {@link QueryResolver} service the sync server resolves named subscriptions with. */
 export const QueryResolver = Context.Service<QueryResolver>(
-  "@thomasfosterau/legation-effect/QueryResolver"
+  "@thomasfosterau/legation/QueryResolver"
 );
 
 /**

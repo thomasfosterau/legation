@@ -1,7 +1,7 @@
 ---
 "@thomasfosterau/legation-jsonapi": minor
 "@thomasfosterau/legation-browser": minor
-"@thomasfosterau/legation-effect": minor
+"@thomasfosterau/legation": minor
 ---
 
 The JSON:API façade (ADR-0029, issue #166): a fetch handler that answers a

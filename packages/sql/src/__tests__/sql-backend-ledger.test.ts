@@ -21,7 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
-import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation-effect";
+import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import * as SqlBackend from "../SqlBackend.js";
 import { defined } from "./defined.js";
 

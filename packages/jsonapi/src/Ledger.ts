@@ -13,7 +13,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
-import { BackendError } from "@thomasfosterau/legation-effect";
+import { BackendError } from "@thomasfosterau/legation";
 
 /** A permanent rejection the ledger remembers: the mutation and the reason it was refused. */
 export interface Rejection {

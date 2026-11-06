@@ -64,7 +64,7 @@
  * kinds through.
  */
 
-import type { Predicate } from "@thomasfosterau/legation-effect";
+import type { Predicate } from "@thomasfosterau/legation";
 import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 

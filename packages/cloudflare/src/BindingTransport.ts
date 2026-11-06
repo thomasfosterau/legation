@@ -42,8 +42,8 @@ import {
   TransportError,
   type Transport,
   type VersionNotSupportedError,
-} from "@thomasfosterau/legation-effect";
-import type { Protocol } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import type { Protocol } from "@thomasfosterau/legation/internal";
 import { routes } from "./RoomProtocol.js";
 
 /**

@@ -4,7 +4,7 @@
  * The worker side of Web Push as a poke carrier (#214): a `push` listener that
  * turns the library's push into convergence for a client with no open tab. The
  * server side, which sends the push within the app's stated budget, is
- * `PushPoke.sink` in `@thomasfosterau/legation-effect/internal`.
+ * `PushPoke.sink` in `@thomasfosterau/legation/internal`.
  *
  * ## What a recognised push does
  *
@@ -36,8 +36,8 @@
  * dispatches the event straight after.
  */
 
-import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
-import { PushPoke as Marker } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
+import { PushPoke as Marker } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

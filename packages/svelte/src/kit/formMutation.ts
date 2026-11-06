@@ -33,7 +33,7 @@ import {
   type Server,
   type TransportError,
   type VersionNotSupportedError,
-} from "@thomasfosterau/legation-effect";
+} from "@thomasfosterau/legation";
 import type { ClientRuntime } from "../Runtime.js";
 import { CLIENT_GROUP_COOKIE } from "./clientGroup.js";
 

@@ -1,12 +1,12 @@
 # @thomasfosterau/legation-svelte
 
 Idiomatic Svelte bindings for the
-[`@thomasfosterau/legation-effect`](../effect) engine.
+[`@thomasfosterau/legation`](../effect) engine.
 
 Coming from TanStack Query / SwiftData / SWR? [Coming from TanStack Query](../../docs/comparisons/coming-from-tanstack-query.md) maps those libraries' concepts onto this model.
 
 The package is deliberately thin. Everything the engine can do on its own —
-reads, mutations, hydration — is `@thomasfosterau/legation-effect`; what lives here is the
+reads, mutations, hydration — is `@thomasfosterau/legation`; what lives here is the
 Svelte shape of it, plus the two integrations a framework can do that the core
 cannot: **reactive re-subscription** (a read re-runs when the `$state` its
 thunk touches changes) and **SSR hydration** (a server-rendered page's rows
@@ -22,7 +22,7 @@ Two entry points:
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-svelte @thomasfosterau/legation-effect effect svelte
+npm install @thomasfosterau/legation-svelte @thomasfosterau/legation effect svelte
 ```
 
 `@sveltejs/kit` is an **optional** peer dependency (`^2.0.0 || ^3.0.0`) — only
@@ -174,7 +174,7 @@ importing it pulls none of this in.
 
 `@thomasfosterau/legation-svelte/kit` adds what SvelteKit shapes: the client-group cookie, an
 SSR snapshot for a server `load`, and the snapshot-hydrated Client boot. The
-hydration itself is core (`Hydration` in `@thomasfosterau/legation-effect`) and the wiring is
+hydration itself is core (`Hydration` in `@thomasfosterau/legation`) and the wiring is
 `Client.make` — this subpath is the framework's share of it, nothing more.
 It works with SvelteKit 2 and 3. The samples below import app modules through
 Kit 2's `$lib` alias. Kit 3 removes `$lib` in favour of a Node subpath import
@@ -182,7 +182,7 @@ declared in the app's `package.json` (`"imports": { "#lib/*": "./src/lib/*" }`),
 so there write `#lib/domain.js` instead; or keep `$lib` with the (deprecated)
 `alias: { $lib: "src/lib" }` option in the SvelteKit config.
 
-The SSR model (see `Hydration` in `@thomasfosterau/legation-effect`): each server render runs
+The SSR model (see `Hydration` in `@thomasfosterau/legation`): each server render runs
 a **request-scoped engine** against the app's sync server, under the
 **browser's client group id**, and ships the dehydrated snapshot (rows +
 CVR cookie) in the page data. The client hydrates the snapshot into its
@@ -224,7 +224,7 @@ export const load = serverLoad((event) =>
 // $lib/engine.ts — boot once, hand the runtime to the hooks.
 import { clientRuntime } from "@thomasfosterau/legation-svelte/kit";
 import { IndexedDbClientStore } from "@thomasfosterau/legation-browser";
-import { Identity } from "@thomasfosterau/legation-effect";
+import { Identity } from "@thomasfosterau/legation";
 import { mutations, nodes, shellReads } from "$lib/domain";
 
 export const boot = (data: {
@@ -272,7 +272,7 @@ seeding the rune hooks:
 
 ```svelte
 <script lang="ts">
-  import { Hydration } from "@thomasfosterau/legation-effect";
+  import { Hydration } from "@thomasfosterau/legation";
   import { useQuery } from "@thomasfosterau/legation-svelte";
   import { allProducts, nodes } from "$lib/domain";
   const { data } = $props();
@@ -287,7 +287,7 @@ seeding the rune hooks:
 A form action that can name the client group runs a named Mutation as one of
 that group's mutations (ADR-0030, amendment #215): the same definition the JS
 path journals, so a write is authored once. The mechanism is core
-(`server.mutate` in `@thomasfosterau/legation-effect`); `/kit` reads the
+(`server.mutate` in `@thomasfosterau/legation`); `/kit` reads the
 group cookie and the form's hidden fields, and gives the enhanced submit.
 
 Each rendered form carries a **form client**: a fresh id with mutation id

@@ -106,7 +106,7 @@ export const relatedKey = (
  * the host is too old instead of waiting on a message the host dropped as
  * foreign traffic. No app mutator may take this name.
  */
-export const FORM_MUTATION_MUTATOR = "@thomasfosterau/legation-effect/beginFormMutation";
+export const FORM_MUTATION_MUTATOR = "@thomasfosterau/legation/beginFormMutation";
 
 /**
  * The args of a {@link FORM_MUTATION_MUTATOR} `Mutate`: the mirror the entry

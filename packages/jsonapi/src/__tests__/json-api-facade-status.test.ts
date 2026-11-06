@@ -33,8 +33,8 @@ import {
   Node,
   Server,
   Transport,
-} from "@thomasfosterau/legation-effect";
-import { ClientEngine, ClientView, MutationState } from "@thomasfosterau/legation-effect/internal";
+} from "@thomasfosterau/legation";
+import { ClientEngine, ClientView, MutationState } from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 

@@ -4,7 +4,7 @@
  * data. Backed by fake-indexeddb, as the other IndexedDB tests are.
  */
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
-import { ClientStore } from "@thomasfosterau/legation-effect";
+import { ClientStore } from "@thomasfosterau/legation";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

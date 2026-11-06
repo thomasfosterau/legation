@@ -36,8 +36,8 @@
  */
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type { IndexedDb } from "@effect/platform-browser";
-import { Client, ClientStore, type StoreError, Transport } from "@thomasfosterau/legation-effect";
-import { ClientEngine, Paced, RpcTransport } from "@thomasfosterau/legation-effect/internal";
+import { Client, ClientStore, type StoreError, Transport } from "@thomasfosterau/legation";
+import { ClientEngine, Paced, RpcTransport } from "@thomasfosterau/legation/internal";
 import {
   BrowserConnectivity,
   ElectedHost,

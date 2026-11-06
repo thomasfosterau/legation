@@ -24,8 +24,8 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { CrudMutation } from "@thomasfosterau/legation-effect";
-import type { Node } from "@thomasfosterau/legation-effect";
+import { CrudMutation } from "@thomasfosterau/legation";
+import type { Node } from "@thomasfosterau/legation";
 import type { JsonApiBackendConfig, Write } from "./JsonApiBackend.js";
 
 // ─── Prefer ──────────────────────────────────────────────────────────────────

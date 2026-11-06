@@ -39,7 +39,7 @@ import { assets, immutable } from "$app/manifest";
 import { asset, type AssetPath } from "$app/paths";
 import { Effect, Layer } from "effect";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation-effect/internal";
+import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation/internal";
 import { CacheApiHttpCache } from "@thomasfosterau/legation-browser";
 import type { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "./lib/domain.js";

@@ -26,7 +26,9 @@ const packages = [
 ] as const;
 
 /** Every package's `build`, named explicitly: the root has no package deps. */
-const buildAll = packages.map((name) => `@thomasfosterau/legation-${name}#build`);
+const buildAll = packages.map((name) =>
+  name === "effect" ? "@thomasfosterau/legation#build" : `@thomasfosterau/legation-${name}#build`
+);
 
 const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
@@ -38,8 +40,8 @@ const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
  * edge on the test tasks.)
  */
 const alias = {
-  "@thomasfosterau/legation-effect/internal": source("packages/effect/src/internal.ts"),
-  "@thomasfosterau/legation-effect": source("packages/effect/src/index.ts"),
+  "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
+  "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-cloudflare": source("packages/cloudflare/src/index.ts"),
   "@thomasfosterau/legation-node": source("packages/node/src/index.ts"),

@@ -31,8 +31,8 @@
  * shifted" fallback), so it only ever contributes coarse tags.
  */
 
-import type { ClientEngine } from "@thomasfosterau/legation-effect/internal";
-import { HttpCache, Telemetry } from "@thomasfosterau/legation-effect/internal";
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
+import { HttpCache, Telemetry } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";

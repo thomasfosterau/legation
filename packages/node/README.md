@@ -5,7 +5,7 @@ Node-runtime adapter for the legation engine. `HttpSyncServer` serves the defaul
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-node @thomasfosterau/legation-effect effect @effect/platform-node
+npm install @thomasfosterau/legation-node @thomasfosterau/legation effect @effect/platform-node
 ```
 
 `@effect/platform-node` declares a peer on `redis` (`>=5.0.0 <7.0.0`), so a package manager that checks peers may warn when it is missing. This package doesn't need it: it imports `@effect/platform-node/NodeHttpServer` by subpath, never the package root (whose `NodeRedis` re-export imports `redis` at module load), so it loads without `redis` installed. If your app skips peers (`--legacy-peer-deps`, `auto-install-peers=false`), import by subpath in your own code too (`@effect/platform-node/NodeRuntime`, …): without `redis`, the root fails with `ERR_MODULE_NOT_FOUND: Cannot find package 'redis'`.
@@ -25,7 +25,7 @@ The shared domain, imported by both the server and the client:
 ```ts
 // domain.ts
 import { Schema } from "effect";
-import { Mutation, Node } from "@thomasfosterau/legation-effect";
+import { Mutation, Node } from "@thomasfosterau/legation";
 
 export const Todo = Schema.Struct({
   id: Schema.String,
@@ -48,7 +48,7 @@ The server. It provides a `Transport.ServerHandler` (the `Server`'s protocol han
 import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import { Authorization, MemoryBackend, Server, Transport } from "@thomasfosterau/legation-effect";
+import { Authorization, MemoryBackend, Server, Transport } from "@thomasfosterau/legation";
 import { HttpSyncServer } from "@thomasfosterau/legation-node";
 import { Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
@@ -93,7 +93,7 @@ The client. It runs in a browser, in a worker, or on Node, which provides a glob
 
 ```ts
 // client.ts
-import { Client } from "@thomasfosterau/legation-effect";
+import { Client } from "@thomasfosterau/legation";
 import { Effect } from "effect";
 import { mutations, nodes } from "./domain.js";
 
@@ -132,7 +132,7 @@ Two details matter when you wire this up:
 | `HttpSyncServer.HttpSyncServerOptions`   | `path`, the route the sync RPCs are served on, and an optional `serialization` layer. Wire framing defaults to NDJSON (`RpcSerialization.layerNdjson`).                            |
 | `HttpSyncServer.ListenOptions`           | `HttpSyncServerOptions` plus `port` and an optional `host`, for `layerServe`.                                                                                                      |
 
-The engine behind the handler is `@thomasfosterau/legation-effect`'s `Server`: build it with `Server.make({ backend, auth })`, provide `server.handler` as the `Transport.ServerHandler`, and mount it with one of the layers above. The `commerce` example runs a real sync server this way: [`examples/commerce`](../../examples/commerce).
+The engine behind the handler is `@thomasfosterau/legation`'s `Server`: build it with `Server.make({ backend, auth })`, provide `server.handler` as the `Transport.ServerHandler`, and mount it with one of the layers above. The `commerce` example runs a real sync server this way: [`examples/commerce`](../../examples/commerce).
 
 ## License
 

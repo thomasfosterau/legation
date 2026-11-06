@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "@thomasfosterau/effect-svelte": "catalog:",
-    "@thomasfosterau/legation-effect": "workspace:^"
+    "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
