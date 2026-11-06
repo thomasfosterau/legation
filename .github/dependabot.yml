@@ -39,7 +39,8 @@
 #   `@typescript/native` (`npm:typescript`, matching @effect/tsgo's gitHead);
 # - the `overrides` keys (`vite@*`, `vitest@*`, `effect`,
 #   `@effect/platform-node-shared`), which follow their catalog entries;
-# - `catalogs.peers`, the published floors (a `minor` changeset to move).
+# - `catalogs.peers` and `catalogs.*-peers`, the published floors (`^4.0.0`
+#   unless a dependency forces more; a `minor` changeset to raise).
 #
 # `cooldown` is 1 day (Dependabot takes whole days only), with the same
 # first-party exemption as `minimumReleaseAgeExclude`. pnpm-workspace.yaml's

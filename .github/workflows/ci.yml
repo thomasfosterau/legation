@@ -97,7 +97,7 @@ jobs:
         run: pnpm exec fallow audit --ci --base origin/trunk
 
   # The test suite against the lowest `effect` the published peer range admits
-  # (`catalogs.peers.effect` in pnpm-workspace.yaml, `>=X` -> `X`), so each
+  # (`catalogs.peers.effect` in pnpm-workspace.yaml, `^X` -> `X`), so each
   # package README's "tested against … the floor" claim holds on every PR.
   # Tests only: the full gate set runs once, at the pinned version, in Quality
   # Gates. Only the catalog entries versioned in lockstep with effect (`effect`
@@ -155,7 +155,7 @@ jobs:
             const file = "pnpm-workspace.yaml";
             const yaml = readFileSync(file, "utf8");
             // The `effect` entry under `catalogs.peers` (four-space indent).
-            const peer = yaml.match(/^ {4}effect: "?>=\s*([^"\s]+)"?$/m);
+            const peer = yaml.match(/^ {4}effect: "?(?:>=|\^)\s*([^"\s]+)"?$/m);
             if (peer === null) {
               console.error("::error::could not read the effect floor from catalogs.peers in pnpm-workspace.yaml");
               process.exit(1);

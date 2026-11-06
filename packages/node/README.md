@@ -12,7 +12,7 @@ npm install @thomasfosterau/legation-node @thomasfosterau/legation-effect effect
 
 ## Effect version
 
-Peers `effect >=4.0.0-rc.118`, the floor `@thomasfosterau/effect-jsonapi` publishes. `@effect/platform-node` is peered with the same floor. Tested against `4.0.2` (the version CI pins) and `4.0.0-rc.118` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
+Peers `effect ^4.0.0`. `@effect/platform-node` is peered `^4.0.0` too. Tested against `4.0.6` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
 
 On Bun, `@effect/platform-node` before 4.0.2 logs `Stream is already ended` and answers a 500 on every normal `/sync-ws` close. Install `effect` and `@effect/platform-node` 4.0.2 or later together for the fix: 4.0.2 peers `effect ^4.0.2`.
 

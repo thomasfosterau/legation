@@ -170,6 +170,14 @@ type CopySettled =
 /**
  * A backend waiting on a lock, if any: its statement and the backends blocking
  * it. A lock-wait check on `pg_stat_activity`, not a sleep.
+ *
+ * One read can pair a backend's lock wait with the statement before the one
+ * waiting: PostgreSQL copies each backend's `query` into a snapshot at the
+ * first statistics access of the reading transaction, but reads `wait_event`
+ * live from the backend's PGPROC (`pg_stat_get_activity`, pgstatfuncs.c). So
+ * a backend that moves from one statement to the next during the read is seen
+ * waiting in the old one. {@link awaitCopySettled} confirms a wait with a
+ * second, fresh read, as below.
  */
 const lockWaitOf = (sql: SqlClient) =>
   sql
@@ -197,6 +205,9 @@ const lockWaitOf = (sql: SqlClient) =>
 const awaitCopySettled = (sql: SqlClient, copy: Fiber.Fiber<unknown, unknown>) =>
   Effect.gen(function* () {
     if (copy.pollUnsafe() !== undefined) return { _tag: "Finished" } as CopySettled;
+    if ((yield* lockWaitOf(sql)) === undefined) return yield* Effect.fail("pending" as const);
+    // Read again: this read's snapshot is taken after the first saw the wait
+    // begin, so it shows the statement that is waiting (see lockWaitOf).
     const wait = yield* lockWaitOf(sql);
     if (wait !== undefined) return { _tag: "Blocked", ...wait } as CopySettled;
     return yield* Effect.fail("pending" as const);
