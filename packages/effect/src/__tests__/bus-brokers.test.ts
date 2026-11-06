@@ -205,8 +205,11 @@ const makeFakeRedis = Effect.gen(function* () {
   // commands, so a subscribe here is a test bug, not a code path.
   const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
 
+  // Nor does it reserve a dedicated connection (`connect`, Effect 4.1).
+  const connect = Effect.die(new Error("the Streams broker never reserves a connection"));
+
   return {
-    redis: yield* Redis.make({ send, subscribe }),
+    redis: yield* Redis.make({ send, subscribe, connect }),
     events,
     readerParked,
     releaseTimeoutReply,
@@ -671,6 +674,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const redis = yield* Redis.make({
         send: (() => Effect.never) as Redis.Redis["Service"]["send"],
         subscribe: () => Effect.die(new Error("the Streams broker never subscribes")),
+        connect: Effect.die(new Error("the Streams broker never reserves a connection")),
       });
       const broker = yield* BusBrokers.makeRedisBroker({ timeout: "2 seconds" }).pipe(
         Effect.provideService(Redis.Redis, redis)

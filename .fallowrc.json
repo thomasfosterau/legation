@@ -5,7 +5,7 @@
     "packages/effect/src/internal.ts",
     "packages/effect/src/sql/index.ts",
     "packages/browser/src/index.ts",
-    "packages/cloudflare/src/index.ts",
+    "packages/alchemy-cloudflare/src/index.ts",
     "packages/devtools/src/index.ts",
     "packages/devtools/svelte/index.ts",
     "packages/jsonapi/src/index.ts",
@@ -61,8 +61,8 @@
         "patterns": ["packages/browser/**"]
       },
       {
-        "name": "cloudflare",
-        "patterns": ["packages/cloudflare/**"]
+        "name": "alchemy-cloudflare",
+        "patterns": ["packages/alchemy-cloudflare/**"]
       },
       {
         "name": "devtools",
@@ -87,7 +87,7 @@
         "allow": ["effect"]
       },
       {
-        "from": "cloudflare",
+        "from": "alchemy-cloudflare",
         "allow": ["effect"]
       },
       {

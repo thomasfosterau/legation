@@ -47,7 +47,7 @@ import type { Protocol } from "@thomasfosterau/legation/internal";
 import { routes } from "./RoomProtocol.js";
 
 /**
- * The shape of a Cloudflare service binding (`env.API`). Declared structurally
+ * The object of a Cloudflare service binding (`env.API`). Declared structurally
  * so the transport needs no Workers types and a test can pass a plain
  * fetch-alike.
  */

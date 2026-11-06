@@ -45,6 +45,7 @@ const countingKv = () => {
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   /** How many reads of a journal body (`legation/journal/{client}/{id}`) were served. */
   const bodyReads = () => reads.filter((key) => key.startsWith("legation/journal/")).length;

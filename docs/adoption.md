@@ -75,7 +75,7 @@ browser's first pull continues from the server's cookie.
 **Entry condition.** Phase 1's node graph, and a sync `Server` the
 rendering process can reach: in-process, as the `ServerHandler` in
 context, or over a `transport` (for example `BindingTransport` from
-`@thomasfosterau/legation-cloudflare` for a separate API Worker).
+`@thomasfosterau/legation-alchemy-cloudflare` for a separate API Worker).
 
 **What to add.**
 

@@ -258,6 +258,7 @@ const faultyStore = () => {
       spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   return { store, data, budget, reads, flaky };
 };

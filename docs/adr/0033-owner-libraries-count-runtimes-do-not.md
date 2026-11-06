@@ -1,7 +1,7 @@
 # ADR-0033: Package boundaries count the owner's own libraries as dependencies, not runtime platforms
 
 Date: 2026-11-06
-Status: Accepted. Supersedes in part [ADR-0006](0006-dependency-based-package-boundaries.md) (its "runtime globals count as dependencies" rule).
+Status: Accepted. Supersedes in part [ADR-0006](0006-dependency-based-package-boundaries.md) (its "runtime globals count as dependencies" rule). Superseded in part by [ADR-0034](0034-alchemy-cloudflare-adapter.md) (`@thomasfosterau/legation-cloudflare` is replaced).
 
 ## Context
 

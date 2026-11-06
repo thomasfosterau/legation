@@ -14,7 +14,14 @@ import effect from "@enfect/oxlint";
 import { defineConfig } from "vite-plus";
 
 /** The published packages, by directory; each has a `build` task. */
-const packages = ["effect", "browser", "cloudflare", "devtools", "jsonapi", "svelte"] as const;
+const packages = [
+  "effect",
+  "alchemy-cloudflare",
+  "browser",
+  "devtools",
+  "jsonapi",
+  "svelte",
+] as const;
 
 /** Every package's `build`, named explicitly: the root has no package deps. */
 const buildAll = packages.map((name) =>
@@ -35,7 +42,7 @@ const alias = {
   "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
-  "@thomasfosterau/legation-cloudflare": source("packages/cloudflare/src/index.ts"),
+  "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
   "@thomasfosterau/legation-jsonapi": source("packages/jsonapi/src/index.ts"),
   "@thomasfosterau/legation-svelte/kit": source("packages/svelte/src/kit/index.ts"),
   "@thomasfosterau/legation-svelte": source("packages/svelte/src/index.svelte.ts"),
@@ -358,8 +365,21 @@ export default defineConfig({
           exclude: [
             "**/node_modules/**",
             "packages/svelte/src/__tests__/**",
+            "packages/alchemy-cloudflare/src/__tests__/**",
             "examples/commerce/tests/facade-browser.test.ts",
           ],
+        },
+      },
+      {
+        // The Alchemy adapter's suite, apart because it has its own `effect`
+        // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
+        // CI's "Tests (effect floor)" runs it at that floor and every other
+        // project at the core's.
+        extends: true,
+        test: {
+          name: "alchemy-cloudflare",
+          environment: "node",
+          include: ["packages/alchemy-cloudflare/src/**/*.test.ts"],
         },
       },
       {

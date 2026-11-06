@@ -18,24 +18,36 @@ packages:
 catalogMode: strict
 
 catalog:
+  # Alchemy's Cloudflare provider and the engine it runs on, one release train
+  # at exact versions (each `@alchemy.run/*` package pins `alchemy` exactly).
+  # legation-alchemy-cloudflare builds on the provider's Effect-native services
+  # (ADR-0034). 2.0.0-beta.85 is the release the apps pin; it requires
+  # `effect ^4.1.0`, hence `catalogs.alchemy-peers` below.
+  alchemy: 2.0.0-beta.85
+  "@alchemy.run/cloudflare": 2.0.0-beta.85
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
+  # Dev only: the declarations of `@alchemy.run/cloudflare` import the workerd
+  # types from it, which the provider declares only as a devDependency.
   "@cloudflare/workers-types": ^5.20261101.1
   # The Effect dev pin: `effect` and every `@effect/*` runtime package move
   # together, at one exact version (CONTRIBUTING.md "Effect version
   # upgrades"). The published floor is `catalogs.peers` below, never this.
   # CI's "Tests (effect floor)" job rewrites exactly these entries to the
   # floor (`@effect/tsgo` and `@effect/language-service` excepted).
-  effect: 4.0.6
-  "@effect/platform-browser": 4.0.6
-  "@effect/platform-node": 4.0.6
+  effect: 4.1.2
+  "@effect/platform-browser": 4.1.2
+  "@effect/platform-node": 4.1.2
   # Not a direct dependency: the `overrides` entry below holds this transitive
   # dependency of `@effect/platform-node` (which ranges it with a caret) at the
   # pin, so the lockfile carries one Effect line.
-  "@effect/platform-node-shared": 4.0.6
-  "@effect/sql-pg": 4.0.6
-  "@effect/sql-sqlite-node": 4.0.6
-  "@effect/vitest": 4.0.6
+  "@effect/platform-node-shared": 4.1.2
+  # Not a direct dependency either: `@alchemy.run/cloudflare` depends on it
+  # (`^4.1.0`), and the `overrides` entry below holds it at the pin.
+  "@effect/sql-d1": 4.1.2
+  "@effect/sql-pg": 4.1.2
+  "@effect/sql-sqlite-node": 4.1.2
+  "@effect/vitest": 4.1.2
   "@effect/language-service": ^0.87.3
   # Effect Language Service as a native (TypeScript-Go) binary — the TS7 side
   # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
@@ -116,13 +128,6 @@ catalogs:
     # (legation-jsonapi's dependency) peers `effect >=4.0.0-rc.118`.
     effect: ^4.0.0
     "@effect/platform-browser": ^4.0.0
-    # legation-cloudflare's OPTIONAL peer: its emitted `.d.ts` keep their
-    # type-only imports of the workerd types (`D1Database`, the Durable Object
-    # types). The 5.x line is the one it is type-checked against (the catalog
-    # dev pin above). `@alchemy.run/cloudflare` re-exports none of these types
-    # (2.0.0-beta.85 imports them from `@cloudflare/workers-types` itself, as a
-    # devDependency only), so it cannot stand in for this peer.
-    "@cloudflare/workers-types": ^5.0.0
     svelte: ">=5.40"
     "@sveltejs/kit": ^2.0.0 || ^3.0.0
   # legation-svelte alone: its runtime dependency
@@ -131,6 +136,15 @@ catalogs:
   # effect-svelte release peers `^4.0.0` (effect-svelte#231).
   effect-svelte-peers:
     effect: ^4.0.2
+  # legation-alchemy-cloudflare alone: `alchemy` and `@alchemy.run/cloudflare`
+  # 2.0.0-beta.85 peer `effect ^4.1.0` (they import Effect 4.1's modules), so
+  # its `effect` floor is 4.1.0. The Alchemy peers are exact: each
+  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.85 is the release
+  # the apps deploy with.
+  alchemy-peers:
+    effect: ^4.1.0
+    alchemy: 2.0.0-beta.85
+    "@alchemy.run/cloudflare": 2.0.0-beta.85
 
 overrides:
   # `effect` MUST be a singleton (see the header): force every resolution to
@@ -138,6 +152,7 @@ overrides:
   effect: "catalog:"
   # See its catalog entry.
   "@effect/platform-node-shared": "catalog:"
+  "@effect/sql-d1": "catalog:"
   # Vite+'s managed overrides (`vp migrate` writes the `@*` form): every
   # `vite` resolves to vite-plus's aliased core and every `vitest` to the pin
   # vite-plus carries. Dependabot cannot bump either key; they follow the
@@ -153,6 +168,10 @@ allowBuilds:
   better-sqlite3: true
   esbuild: true
   fallow: true
+  # workerd arrives with `@alchemy.run/cloudflare` (its local runtime). Its
+  # postinstall fetches the workerd binary, which nothing here runs: the
+  # Alchemy adapter's tests stub the provider's services in Node.
+  workerd: false
 
 peerDependencyRules:
   allowAny:

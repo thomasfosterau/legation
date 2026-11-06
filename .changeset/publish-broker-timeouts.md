@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": patch
-"@thomasfosterau/legation-cloudflare": patch
 ---
 
 The publish of a push's change hints is bounded by a timeout now that it runs

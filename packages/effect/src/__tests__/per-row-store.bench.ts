@@ -28,6 +28,7 @@ const countingStore = () => {
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   return { store, sets };
 };

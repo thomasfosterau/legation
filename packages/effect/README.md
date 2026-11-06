@@ -12,7 +12,7 @@ npm install @thomasfosterau/legation effect
 
 ## Effect version
 
-Peers `effect ^4.0.0`. Tested against `4.0.6` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
+Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR). Install one copy of `effect` in your app: two copies break `Context` identity.
 
 ## Usage
 
@@ -114,7 +114,7 @@ const program = Effect.gen(function* () {
 Effect.runPromise(Effect.scoped(program)).then((rows) => console.log(JSON.stringify(rows)));
 ```
 
-In a real deployment the server runs on its own (a Worker, or a process of its own) and the client connects with `transport: { url }`. See [`@thomasfosterau/legation-cloudflare`](../cloudflare) for the Cloudflare Workers topology, [SQL backend](#sql-backend-thomasfosteraulegationsql) below for a database-backed `Backend`, and [`@thomasfosterau/legation-browser`](../browser) for the browser hosts. The fuller examples are [`examples/todo`](../../examples/todo), one node with optimistic writes and offline use, and [`examples/commerce`](../../examples/commerce), the full deployment.
+In a real deployment the server runs on its own (a Worker, or a process of its own) and the client connects with `transport: { url }`. See [`@thomasfosterau/legation-alchemy-cloudflare`](../alchemy-cloudflare) for the Cloudflare Workers topology, [SQL backend](#sql-backend-thomasfosteraulegationsql) below for a database-backed `Backend`, and [`@thomasfosterau/legation-browser`](../browser) for the browser hosts. The fuller examples are [`examples/todo`](../../examples/todo), one node with optimistic writes and offline use, and [`examples/commerce`](../../examples/commerce), the full deployment.
 
 ## API
 
@@ -143,7 +143,7 @@ Everything below is on the root entry, `@thomasfosterau/legation`.
 
 ### Adapter authors: `@thomasfosterau/legation/internal`
 
-The engine seams live on a second entry point, `@thomasfosterau/legation/internal`: `ClientEngine`, `ClientView`, `Subset`, `Mirror`, `EngineHost`, `MirrorChannel`, `MirrorProtocol`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the protocol and transport codecs. The sibling packages (`@thomasfosterau/legation-browser`, `@thomasfosterau/legation-jsonapi`, `@thomasfosterau/legation-cloudflare`) compose from it. It is not the app-facing API, and it moves faster than the root entry.
+The engine seams live on a second entry point, `@thomasfosterau/legation/internal`: `ClientEngine`, `ClientView`, `Subset`, `Mirror`, `EngineHost`, `MirrorChannel`, `MirrorProtocol`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the protocol and transport codecs. The sibling packages (`@thomasfosterau/legation-browser`, `@thomasfosterau/legation-jsonapi`, `@thomasfosterau/legation-alchemy-cloudflare`) compose from it. It is not the app-facing API, and it moves faster than the root entry.
 
 ```ts
 import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";

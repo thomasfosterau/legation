@@ -22,7 +22,10 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { DurableObjectNamespace } from "@cloudflare/workers-types";
+import type * as Workers from "@alchemy.run/cloudflare/Workers";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as Option from "effect/Option";
 import {
   Authorization,
   Backend,
@@ -44,8 +47,9 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import * as BindingTransport from "../BindingTransport.js";
-import { fakeBinding } from "./fakes.js";
-import { routes } from "../RoomProtocol.js";
+import { fakeBinding } from "./harness.js";
+import type * as Room from "../Room.js";
+import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 import { defined } from "./defined.js";
 
@@ -73,35 +77,26 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
 // ─── The API Worker ──────────────────────────────────────────────────────────
 
 /**
- * An in-memory Durable Object namespace. Unlike a naive stub it rebuilds the
- * forwarded request at its new URL rather than handing a `Request` back as
- * `RequestInit`, so POST bodies survive the hop the way they do on Workers.
+ * An in-memory room namespace: each stub's `fetch` hands the forwarded request
+ * to `dispatch` as a web request, as Alchemy's stub hands it to the object.
  */
 const makeNamespace = (
   dispatch: (name: string, request: Request) => Promise<Response>
-): DurableObjectNamespace =>
-  fakeBinding<DurableObjectNamespace>({
-    idFromName: (name: string) => ({ name }),
-    get: (id: { name: string }) => ({
-      fetch: async (url: string, init?: RequestInit | Request) => {
-        if (!(init instanceof Request)) return dispatch(id.name, new Request(url, init));
-        const bodiless = init.method === "GET" || init.method === "HEAD";
-        const rebuilt = bodiless
-          ? new Request(url, { method: init.method, headers: init.headers })
-          : new Request(url, {
-              method: init.method,
-              headers: init.headers,
-              body: await init.arrayBuffer(),
-            });
-        return dispatch(id.name, rebuilt);
-      },
+): Workers.DurableObject<Room.RoomObject> =>
+  fakeBinding<Workers.DurableObject<Room.RoomObject>>({
+    getByName: (name: string) => ({
+      fetch: (request: HttpServerRequest.HttpServerRequest) =>
+        HttpServerRequest.toWeb(request).pipe(
+          Effect.flatMap((web) => Effect.promise(() => dispatch(name, web))),
+          Effect.map(HttpServerResponse.fromWeb),
+          Effect.orDie
+        ),
     }),
   });
 
 /** The session cookie the API Worker resolves a room from. */
-const sessionOf = (request: Request): string | undefined => {
-  const cookie = request.headers.get("cookie");
-  const match = cookie === null ? null : /(?:^|;\s*)session=([^;]+)/.exec(cookie);
+const sessionOf = (cookie: string | undefined): string | undefined => {
+  const match = cookie === undefined ? null : /(?:^|;\s*)session=([^;]+)/.exec(cookie);
   return match?.[1];
 };
 
@@ -147,7 +142,7 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
   const rooms = makeNamespace(async (room, request) => {
     served.add(room);
     const handler = await Effect.runPromise(handlerFor(room));
-    const path = new URL(request.url).pathname;
+    const path = routeOf(new URL(request.url).pathname);
     const body: unknown = await request.json();
     const badRequest = (error: TransportError | VersionNotSupportedError) =>
       Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
@@ -168,13 +163,27 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
   });
 
   const route = routeSync({
-    rooms: () => rooms,
-    roomIdOf: (request: Request) => sessionOf(request) ?? "anonymous",
+    rooms,
+    roomIdOf: (request) => Effect.succeed(sessionOf(request.headers.cookie) ?? "anonymous"),
   });
 
   return {
-    fetch: async (request) =>
-      (await route(request, {})) ?? new Response("not found", { status: 404 }),
+    fetch: (request) =>
+      Effect.runPromise(
+        route.pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(request)
+          ),
+          Effect.map((routed) =>
+            Option.match(routed, {
+              onNone: () => new Response("not found", { status: 404 }),
+              onSome: (response) => HttpServerResponse.toWeb(response),
+            })
+          ),
+          Effect.orDie
+        )
+      ),
     rooms: served,
   };
 });

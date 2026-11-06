@@ -63,6 +63,7 @@ const recordingKeyValue = () => {
       }),
     clear: Effect.sync(() => data.clear()),
     size: Effect.sync(() => data.size),
+    keys: Effect.sync(() => [...data.keys()]),
   });
   return { kv, data, writes, failGets };
 };
