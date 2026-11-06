@@ -4,8 +4,6 @@
 "@thomasfosterau/legation-cloudflare": patch
 "@thomasfosterau/legation-devtools": patch
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-node": patch
-"@thomasfosterau/legation-sql": patch
 "@thomasfosterau/legation-svelte": patch
 ---
 

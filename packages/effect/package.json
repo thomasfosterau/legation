@@ -9,8 +9,11 @@
     "fan-out",
     "mutation",
     "offline-first",
+    "postgres",
     "query",
     "service-worker",
+    "sql",
+    "sqlite",
     "subscription",
     "sync-engine",
     "typescript",
@@ -46,12 +49,19 @@
       "types": "./dist/internal.d.ts",
       "import": "./dist/internal.js"
     },
+    "./sql": {
+      "types": "./dist/sql/index.d.ts",
+      "import": "./dist/sql/index.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"

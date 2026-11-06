@@ -1,9 +1,7 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": patch
-"@thomasfosterau/legation-node": patch
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-sql": patch
 "@thomasfosterau/legation-cloudflare": patch
 "@thomasfosterau/legation-svelte": patch
 "@thomasfosterau/legation-devtools": patch
@@ -29,5 +27,5 @@ no use of `partition`/`separate`/`Option.partitionMap`, `Queue.State`,
 `MessageStorage` or `RpcMessage.ExitEncoded`. The RPC client's missed-pong
 handling now fails in-flight WebSocket calls rather than reporting a transient
 error; `RpcTransport.fromOrigin` already treats a failed WebSocket call as a
-`TransportError` and falls back to HTTP. `HttpSyncServer`'s WebSocket route now
+`TransportError` and falls back to HTTP. The RPC server's WebSocket route now
 closes with 1000/1001/1011, which nothing in the packages inspects.

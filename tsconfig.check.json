@@ -10,11 +10,10 @@
     "paths": {
       "@thomasfosterau/legation": ["./packages/effect/src/index.ts"],
       "@thomasfosterau/legation/internal": ["./packages/effect/src/internal.ts"],
+      "@thomasfosterau/legation/sql": ["./packages/effect/src/sql/index.ts"],
       "@thomasfosterau/legation-browser": ["./packages/browser/src/index.ts"],
       "@thomasfosterau/legation-cloudflare": ["./packages/cloudflare/src/index.ts"],
-      "@thomasfosterau/legation-node": ["./packages/node/src/index.ts"],
       "@thomasfosterau/legation-jsonapi": ["./packages/jsonapi/src/index.ts"],
-      "@thomasfosterau/legation-sql": ["./packages/sql/src/index.ts"],
       "@thomasfosterau/legation-svelte": ["./packages/svelte/src/index.svelte.ts"],
       "@thomasfosterau/legation-svelte/kit": ["./packages/svelte/src/kit/index.ts"],
       "@thomasfosterau/legation-devtools": ["./packages/devtools/src/index.ts"]

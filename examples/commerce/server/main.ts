@@ -20,8 +20,8 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
 import { HintSource } from "@thomasfosterau/legation/internal";
-import { HttpSyncServer } from "@thomasfosterau/legation-node";
-import { PollingHintSource } from "@thomasfosterau/legation-sql";
+import { PollingHintSource } from "@thomasfosterau/legation/sql";
+import { carriers } from "./carriers.js";
 import { jsonApiLive } from "./jsonapi.js";
 import { clientLayer, makeExecutor, migrate } from "./db.js";
 import { tables } from "./handlers.js";
@@ -29,11 +29,6 @@ import { CommerceSync, syncLayer } from "./runtime.js";
 
 const PORT = Number(process.env.SYNC_PORT ?? 3100);
 const DB_PATH = process.env.COMMERCE_DB ?? new URL("../commerce.db", import.meta.url).pathname;
-
-const carriers = Layer.mergeAll(
-  HttpSyncServer.layerWebSocket({ path: "/sync-ws" }),
-  HttpSyncServer.layerHttp({ path: "/sync" })
-);
 
 /**
  * Advance order statuses on a timer — an out-of-band writer by design. It

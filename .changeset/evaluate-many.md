@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation": minor
-"@thomasfosterau/legation-sql": minor
 ---
 
 Batch a pull's subsets (#505). `Backend` gains an optional `evaluateMany(context, subsets)`,

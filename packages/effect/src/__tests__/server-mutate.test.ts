@@ -6,7 +6,7 @@
  * the mutation-id ledger and the broadcast all apply as they do to a push.
  *
  * The SqlBackend half of "works over both backends" is in
- * `packages/sql/src/__tests__/backend-contract.test.ts`.
+ * `src/__tests__/sql/backend-contract.test.ts`.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";

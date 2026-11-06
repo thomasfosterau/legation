@@ -1,9 +1,7 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
-"@thomasfosterau/legation-node": minor
 "@thomasfosterau/legation-jsonapi": minor
-"@thomasfosterau/legation-sql": minor
 "@thomasfosterau/legation-cloudflare": minor
 "@thomasfosterau/legation-svelte": minor
 "@thomasfosterau/legation-devtools": minor
@@ -22,6 +20,5 @@ a single copy of `effect`. The published floor is `>=4.0.0-rc.118` (see
 because `@thomasfosterau/effect-jsonapi` accepts the repeated-key spelling at
 every list-valued position.
 
-**`@thomasfosterau/legation-node`** declares `engines.node: ">=22"`, the published floor; CI
-tests on the latest stable Node. The other packages run in browsers and
-workers too and deliberately declare no `engines` (ADR-0003).
+The packages run in browsers and workers and deliberately declare no `engines`
+(ADR-0003).

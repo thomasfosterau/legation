@@ -22,8 +22,8 @@ import * as Schema from "effect/Schema";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
-import * as SqlBackend from "../SqlBackend.js";
-import { defined } from "./defined.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
+import { defined } from "../defined.js";
 
 const CLIENT_GROUP = "g";
 const CLIENT = "c1";

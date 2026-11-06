@@ -41,7 +41,7 @@ import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { HttpSyncServer } from "@thomasfosterau/legation-node";
+import { carriers } from "../../server/carriers.js";
 import { clientLayer, migrate } from "../../server/db.js";
 import { jsonApiLive } from "../../server/jsonapi.js";
 import { CommerceSync, syncLayer } from "../../server/runtime.js";
@@ -97,10 +97,6 @@ const requireBuild = () => {
 const syncServer = (dbPath: string, calls: Calls) => {
   const counted = Layer.effect(CommerceSync)(
     Effect.map(CommerceSync, (sync) => countedBackend(sync, calls))
-  );
-  const carriers = Layer.mergeAll(
-    HttpSyncServer.layerWebSocket({ path: "/sync-ws" }),
-    HttpSyncServer.layerHttp({ path: "/sync" })
   );
   const database = Layer.effectDiscard(migrate).pipe(Layer.provideMerge(clientLayer(dbPath)));
   // The api's layer types leak an `unknown` requirement (effect-jsonapi's

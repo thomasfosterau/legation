@@ -20,9 +20,9 @@ import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Mutator, Predicate } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
-import * as PgExecutor from "../PgExecutor.js";
-import * as Sql from "../Sql.js";
-import * as SqlBackend from "../SqlBackend.js";
+import * as PgExecutor from "../../sql/PgExecutor.js";
+import * as Sql from "../../sql/Sql.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const context = { clientGroupId: "g" };

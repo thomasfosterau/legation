@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation": minor
 ---
 
 Action required: an executor without transactions must set `transactional: false`. The new optional `SqlExecutor.transactional` flag defaults to `true`, and with it `SqlBackend` now claims each mutation in the client's ledger row before its handler runs. An executor without transactions that leaves the default gets that claim-first order, where a crash can leave an id claimed and unapplied and the retry skips it. Set `transactional: false` to keep the handler-then-bump order.

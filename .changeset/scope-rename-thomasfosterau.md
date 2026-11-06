@@ -4,8 +4,6 @@
 "@thomasfosterau/legation-devtools": minor
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-jsonapi": minor
-"@thomasfosterau/legation-node": minor
-"@thomasfosterau/legation-sql": minor
 "@thomasfosterau/legation-svelte": minor
 ---
 

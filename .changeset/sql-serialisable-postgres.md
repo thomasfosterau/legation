@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation": minor
 ---
 
 `SqlBackend` now guarantees serialisable isolation across client groups (Backend guarantee 1, #353). Two behaviour changes follow, and the `Sql.Dialect` interface gains an optional field.

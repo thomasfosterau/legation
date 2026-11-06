@@ -42,8 +42,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/legation": "workspace:^",
-    "@thomasfosterau/legation-sql": "workspace:^"
+    "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
@@ -52,6 +51,12 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@cloudflare/workers-types": "catalog:peers",
     "effect": "catalog:peers"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/workers-types": {
+      "optional": true
+    }
   }
 }

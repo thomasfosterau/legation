@@ -1,7 +1,6 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-sql": patch
 ---
 
 Share the rejection-memory forgetting bound. `floorsOf` (a push's lowest mutation

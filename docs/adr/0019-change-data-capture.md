@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 
-Status: Accepted
+Status: Accepted. Amended in part by [ADR-0033](0033-owner-libraries-count-runtimes-do-not.md) (tier 2 ships in `@thomasfosterau/legation/sql`).
 
 ## Context
 

@@ -1,7 +1,6 @@
 ---
 "@thomasfosterau/legation": minor
 "@thomasfosterau/legation-browser": minor
-"@thomasfosterau/legation-node": minor
 "@thomasfosterau/legation-jsonapi": minor
 ---
 

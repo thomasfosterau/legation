@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation": minor
 ---
 
 Add `PgExecutor`, the `SqlExecutor` for PostgreSQL (#203). `PgExecutor.make(sql)`

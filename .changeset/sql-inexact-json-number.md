@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation": minor
 ---
 
 `evaluateMany` on PostgreSQL now recognises every number its JSON rows cannot

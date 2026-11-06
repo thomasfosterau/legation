@@ -41,9 +41,9 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation/internal";
-import * as PgExecutor from "../PgExecutor.js";
-import * as Sql from "../Sql.js";
-import * as SqlBackend from "../SqlBackend.js";
+import * as PgExecutor from "../../sql/PgExecutor.js";
+import * as Sql from "../../sql/Sql.js";
+import * as SqlBackend from "../../sql/SqlBackend.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {

@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-sql": minor
+"@thomasfosterau/legation": minor
 ---
 
 `TableMapping` can be derived from a `Collection` and can separate the

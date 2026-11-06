@@ -16,7 +16,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import { BackendContract } from "@thomasfosterau/legation/internal";
-import { SqlBackend } from "@thomasfosterau/legation-sql";
+import { SqlBackend } from "@thomasfosterau/legation/sql";
 import { makeExecutor } from "../server/db.js";
 
 /** Contract collections live in their own two-column tables (id + n). */
