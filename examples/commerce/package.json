@@ -9,7 +9,7 @@
   "description": "SvelteKit commerce catalog driving the legation engine end to end: SSR + hydration with CVR continuation, public/private auth split over IdentityResolver, live relational joins, cursor pagination, offline-first writes over WebSockets with HTTP fallback, and a no-JS baseline.",
   "scripts": {
     "dev": "vp dev",
-    "dev:server": "tsx server/main.ts",
+    "dev:server": "vpx server/main.ts",
     "build": "vp build",
     "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json",
@@ -39,7 +39,6 @@
     "@types/better-sqlite3": "catalog:",
     "@types/node": "catalog:",
     "svelte-check": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"

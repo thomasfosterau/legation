@@ -50,8 +50,8 @@ vp test run packages/sql                   # one package's tests (no build neede
 vp test run --project svelte               # one Vitest project
 vp run test:coverage                       # the suite + coverage map for fallow
 vp run bench                               # the benchmarks
-fallow audit --base origin/trunk           # the fallow gate
-fallow dead-code                           # unused files, exports, dependencies
+vp exec fallow audit --base origin/trunk   # the fallow gate
+vp exec fallow dead-code                   # unused files, exports, dependencies
 ```
 
 ## Tests

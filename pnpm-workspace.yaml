@@ -80,7 +80,6 @@ catalog:
   publint: ^0.3.25
   svelte: ^5.57.3
   svelte-check: ^4.7.8
-  tsx: ^4.23.15
   # TypeScript 6/7 side by side: TS7 (the native Go compiler) ships no JS API
   # until 7.1, so JS-API consumers (svelte-check, @effect/language-service,
   # tsdown's declaration bundler) stay on TS6 while native `tsc` builds
