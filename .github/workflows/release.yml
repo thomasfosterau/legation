@@ -1,39 +1,120 @@
 name: Release
 
-# Changesets release flow (PUBLISHING.md): on every push to `trunk`,
-# changesets/action either opens/updates the "chore: version packages" PR
-# (while unreleased changesets exist) or, once that PR has merged and no
-# changesets remain, publishes the packages to npm and tags the release.
-# Shaped like the effect-web library's release workflow.
+# Changesets release flow, split so that only publishing waits for approval.
+# On every push to `trunk`:
 #
-# Publishing uses npm OIDC trusted publishing: there is no NPM_TOKEN. The
-# workflow proves its identity to npm with a short-lived, workflow-bound
-# OIDC token. Provenance is left to npm (never forced).
+# - `select` (read-only) asks changesets/action/select-mode what the repo state
+#   calls for: `version` while unreleased changesets exist, `publish` once none
+#   remain and some package version is not on npm yet (`changeset
+#   publish-plan`), else `none`.
+# - `version` opens/updates the "chore: version packages" PR. It holds a
+#   write-scoped token but no `id-token`, so it cannot publish, and runs outside
+#   the `release` environment, so it needs no approval.
+# - `publish` is the only job in the protected `release` environment and the
+#   only one with `id-token: write`: it publishes to npm via OIDC trusted
+#   publishing and tags the release, after the owner approves it (once per
+#   release). See PUBLISHING.md.
+#
+# changesets/action's README recommends its sub-actions over the combined
+# action for trusted publishing, "to tighten publish permissions"; they need
+# Changesets CLI v3. The version and publish sub-actions push through the
+# GitHub API, so no checkout keeps git credentials.
 
 on:
   push:
     branches: [trunk]
 
-concurrency:
-  group: release-${{ github.ref }}
-
-# No permissions by default; the release job opts into exactly what it needs.
+# No permissions by default; each job opts into exactly what it needs.
 permissions: {}
 
 jobs:
-  release:
-    name: Version or publish
-    # Never run on forks (they have neither the environment nor the trusted
-    # publisher binding, so a fork cannot publish on the owner's behalf).
+  # Same setup as `publish` (see the comments there), minus the build.
+  select:
+    name: Select mode
     if: github.repository == 'thomasfosterau/legation'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    env: &id001
+      pnpm_config_verify_deps_before_run: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "*"
+          check-latest: true
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Select mode
+        id: mode
+        uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+
+  version:
+    name: Version packages
+    needs: select
+    if: needs.select.outputs.mode == 'version'
+    runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: release-version-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: write
+      pull-requests: write
+    env: *id001
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "*"
+          check-latest: true
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Create or update the version PR
+        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          script: pnpm run version
+          commit-message: "chore: version packages"
+          pr-title: "chore: version packages"
+
+  publish:
+    name: Publish to npm
+    # Never run on forks (they have neither the environment nor the trusted
+    # publisher binding, so a fork cannot publish on the owner's behalf).
+    # That guard is on `select` now: this job needs it, so it is skipped with it.
+    needs: select
+    if: needs.select.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One publish at a time; never cancel one that has started.
+    concurrency:
+      group: release-publish-${{ github.ref }}
+      cancel-in-progress: false
     # Requires manual approval via a protected GitHub Environment named
     # "release". See PUBLISHING.md for the one-time setup.
     environment: release
     permissions:
-      contents: write # push the version commit/tag and the "Version Packages" PR branch
-      pull-requests: write # open/update the "Version Packages" PR
+      contents: write # push the release tags and create the GitHub releases
       id-token: write # OIDC: prove this workflow's identity to npm (no token needed)
     env:
       # pnpm 11 defaults `verify-deps-before-run` to `install`: before any
@@ -51,10 +132,9 @@ jobs:
       pnpm_config_verify_deps_before_run: "false"
     steps:
       - name: Checkout
-        # The Changesets action pushes the version branch, so it needs the
-        # checkout's git credentials (the ephemeral, job-scoped GITHUB_TOKEN).
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked] the Changesets action pushes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # Installs the pnpm version pinned by the package.json "packageManager"
@@ -92,27 +172,22 @@ jobs:
         # nothing writes GITHUB_PATH.
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # When changesets are pending, this opens/updates a "chore: version
-      # packages" PR (via `pnpm run version`). Once that PR is merged (no
-      # changesets remain), it runs `pnpm run release`: `vp run build`, then
-      # scripts/publish.mjs packs every unpublished package with `pnpm pack`
-      # (which rewrites `workspace:` and `catalog:`; #267), runs the tarball
-      # checks CI's `pack:check` runs, and uploads each tarball with
-      # `npm publish` under OIDC trusted publishing. There is no NPM_TOKEN to
-      # steal, and provenance is left to npm (an explicit request fails from a
-      # private repository). The script reports each published package on
-      # `CHANGESETS_OUTPUT`; the action then pushes the tags and creates the
-      # GitHub releases.
+      # Once the version PR has merged (no changesets remain), this runs `pnpm
+      # run release`: `vp run build`, then scripts/publish.mjs packs every
+      # unpublished package with `pnpm pack` (which rewrites `workspace:` and
+      # `catalog:`; #267), runs the tarball checks CI's `pack:check` runs, and
+      # uploads each tarball with `npm publish` under OIDC trusted publishing.
+      # There is no NPM_TOKEN to steal, and provenance is left to npm (an
+      # explicit request fails from a private repository). The script reports
+      # each published package on `CHANGESETS_OUTPUT`; the action then pushes
+      # the tags and creates the GitHub releases.
       #
       # v2 of the action pairs with Changesets CLI v3 (`@changesets/cli` in
       # devDependencies) and renamed its inputs from v1's `version` / `publish`
       # / `commit` / `title`.
-      - name: Create release PR or publish to npm
-        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      - name: Publish to npm
+        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          version-script: pnpm run version
-          publish-script: pnpm run release
-          commit-message: "chore: version packages"
-          pr-title: "chore: version packages"
+          script: pnpm run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
