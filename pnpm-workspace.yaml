@@ -75,7 +75,7 @@ catalog:
   # Runtime dependencies of published packages: `pnpm pack` rewrites
   # `catalog:` to these ranges in the packed manifest.
   "@thomasfosterau/effect-jsonapi": ^0.17.0
-  "@thomasfosterau/effect-svelte": ^0.6.0
+  "@thomasfosterau/effect-svelte": ^0.6.1
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
@@ -124,18 +124,14 @@ catalogs:
     # `^4.0.0`, raised only when a dependency of the package that declares it
     # requires more, naming that dependency here. Our own code is written to
     # run on 4.0.0. Nothing here forces more: `@effect/platform-browser`
-    # 4.0.0 peers `effect ^4.0.0`, and `@thomasfosterau/effect-jsonapi`
-    # (legation-jsonapi's dependency) peers `effect >=4.0.0-rc.118`.
+    # 4.0.0 peers `effect ^4.0.0`, `@thomasfosterau/effect-jsonapi`
+    # (legation-jsonapi's dependency) peers `effect >=4.0.0-rc.118`, and
+    # `@thomasfosterau/effect-svelte` 0.6.1 (legation-svelte's) peers
+    # `effect ^4.0.0`.
     effect: ^4.0.0
     "@effect/platform-browser": ^4.0.0
     svelte: ">=5.40"
     "@sveltejs/kit": ^2.0.0 || ^3.0.0
-  # legation-svelte alone: its runtime dependency
-  # `@thomasfosterau/effect-svelte` 0.6.0 (the latest release `^0.6.0`
-  # admits) peers `effect >=4.0.2`. Lower it to `^4.0.0` once an
-  # effect-svelte release peers `^4.0.0` (effect-svelte#231).
-  effect-svelte-peers:
-    effect: ^4.0.2
   # legation-alchemy-cloudflare alone: `alchemy` and `@alchemy.run/cloudflare`
   # 2.0.0-beta.85 peer `effect ^4.1.0` (they import Effect 4.1's modules), so
   # its `effect` floor is 4.1.0. The Alchemy peers are exact: each
