@@ -111,7 +111,8 @@ updates:
           - "alchemy"
           - "@alchemy.run/*"
         update-types: ["major", "minor", "patch"]
-
+    assignees:
+      - thomasfosterau
   - package-ecosystem: "github-actions"
     directories:
       - "/"
@@ -127,6 +128,8 @@ updates:
     # No groups: each action updates on its own PR.
     cooldown:
       default-days: 1
+    assignees:
+      - thomasfosterau
   # The .devcontainer/ features and their lockfile (the image tag moves with
   # vite-plus by hand).
   - package-ecosystem: "devcontainers"
@@ -141,3 +144,5 @@ updates:
       prefix: "chore"
     cooldown:
       default-days: 1
+    assignees:
+      - thomasfosterau
