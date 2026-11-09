@@ -16,8 +16,8 @@ catalogs:
       specifier: ^3.0.3
       version: 3.0.3
     '@cloudflare/workers-types':
-      specifier: ^5.20261104.1
-      version: 5.20261104.1
+      specifier: ^5.20261108.1
+      version: 5.20261108.1
     '@effect/language-service':
       specifier: ^0.87.3
       version: 0.87.5
@@ -388,7 +388,7 @@ importers:
         version: 2.0.0-beta.85(@arethetypeswrong/core@0.18.5)(@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.3.0))(@effect/sql-pg@4.1.2(effect@4.1.2))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(alchemy@2.0.0-beta.85(@arethetypeswrong/core@0.18.5)(@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.3.0))(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(effect@4.1.2)(esbuild@0.28.2)(publint@0.3.25)(tsx@4.23.15)(ws@8.22.1))(effect@4.1.2)(esbuild@0.28.2)(publint@0.3.25)(tsx@4.23.15)(yaml@2.9.1)
       '@cloudflare/workers-types':
         specifier: 'catalog:'
-        version: 5.20261104.1
+        version: 5.20261108.1
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(vitest@5.0.5)
@@ -847,8 +847,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-types@5.20261104.1':
-    resolution: {integrity: sha512-XSPcK88JXnW/oC82wuXvaP7vgyk2myydugbgOd/RcLKwqkwW0cP09Ozp9ItACa4IAZ7uKtMIfxZpUTXajYVd1Q==}
+  '@cloudflare/workers-types@5.20261108.1':
+    resolution: {integrity: sha512-lCGPhVOCy4sepGLuuy6KGxlxt8pVD8kbAt+mkdPcdr29fi5YLtihOLGKeNtInnmgdkSGiKhPCkRv/iq5tXC1/w==}
 
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
@@ -3756,7 +3756,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20261026.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20261104.1': {}
+  '@cloudflare/workers-types@5.20261108.1': {}
 
   '@colors/colors@1.5.0':
     optional: true
@@ -3842,7 +3842,7 @@ snapshots:
 
   '@effect/sql-d1@4.1.2(effect@4.1.2)':
     dependencies:
-      '@cloudflare/workers-types': 5.20261104.1
+      '@cloudflare/workers-types': 5.20261108.1
       effect: 4.1.2
 
   '@effect/sql-pg@4.1.2(effect@4.1.2)':
