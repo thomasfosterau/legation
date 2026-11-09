@@ -89,7 +89,7 @@ catalog:
   # The commerce façade's browser test drives Chromium through it. Pinned
   # exact: each release expects one Chromium revision
   # (`playwright-core install chromium` fetches it).
-  playwright-core: 1.64.1
+  playwright-core: 1.65.0
   publint: ^0.3.25
   svelte: ^5.57.3
   svelte-check: ^4.7.8
