@@ -80,10 +80,13 @@ const subscribe = (handler: ServerHandler, group: string, subset: Subset.Subset)
   handler.handlePull({ clientGroupId: group, cookie: undefined, subscriptions: [subset] });
 
 /** Snapshot the poke counters, for before/after deltas. */
-const counts = Effect.all({
-  poked: Metric.value(Telemetry.pokesTotal),
-  suppressed: Metric.value(Telemetry.pokesSuppressedTotal),
-});
+const counts = Effect.all(
+  {
+    poked: Metric.value(Telemetry.pokesTotal),
+    suppressed: Metric.value(Telemetry.pokesSuppressedTotal),
+  },
+  { concurrency: 1 }
+);
 
 /** How many hint batches the fan-out has finished deciding. */
 const decidedBatches = Metric.value(Telemetry.fanoutLatencyMs).pipe(

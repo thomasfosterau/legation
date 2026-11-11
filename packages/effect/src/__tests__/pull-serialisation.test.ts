@@ -51,6 +51,7 @@ const fixedClock: Clock.Clock = {
 const allTodos = Subset.make({ collection: "todos" });
 
 const settle = Effect.forEach(Array.from({ length: 300 }), () => Effect.yieldNow, {
+  concurrency: 1,
   discard: true,
 });
 
@@ -87,10 +88,12 @@ interface GatedTransport {
 
 const makeGatedTransport: Effect.Effect<GatedTransport> = Effect.gen(function* () {
   const issued = yield* Effect.all(
-    Array.from({ length: PULLS }, () => Deferred.make<PullRequest>())
+    Array.from({ length: PULLS }, () => Deferred.make<PullRequest>()),
+    { concurrency: 1 }
   );
   const answers = yield* Effect.all(
-    Array.from({ length: PULLS }, () => Deferred.make<PullResponse, TransportError>())
+    Array.from({ length: PULLS }, () => Deferred.make<PullResponse, TransportError>()),
+    { concurrency: 1 }
   );
   const pokes = yield* Queue.unbounded<Poke>();
   const calls = yield* Ref.make(0);

@@ -50,7 +50,7 @@ const seed = (engine: ClientEngineModule.ClientEngine) =>
   Effect.forEach(
     Array.from({ length: ROWS }, (_, i) => i),
     (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),
-    { discard: true }
+    { concurrency: 1, discard: true }
   );
 
 const scenario = Effect.gen(function* () {
@@ -66,13 +66,18 @@ const scenario = Effect.gen(function* () {
   );
   yield* seed(engine);
   const seen = yield* Ref.make(0);
-  yield* Effect.forEach(Array.from({ length: OBSERVERS }), () =>
-    Effect.forkScoped(Stream.runForEach(engine.observe(top), () => Ref.update(seen, (n) => n + 1)))
+  yield* Effect.forEach(
+    Array.from({ length: OBSERVERS }),
+    () =>
+      Effect.forkScoped(
+        Stream.runForEach(engine.observe(top), () => Ref.update(seen, (n) => n + 1))
+      ),
+    { concurrency: 1 }
   );
   yield* Effect.forEach(
     Array.from({ length: MUTATIONS }, (_, i) => i),
     (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),
-    { discard: true }
+    { concurrency: 1, discard: true }
   );
 });
 

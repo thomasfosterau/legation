@@ -171,6 +171,7 @@ export const readSubsets = (
 ): Effect.Effect<ReadonlyArray<ReadRow>, AuthorizationError | BackendError> =>
   Effect.gen(function* () {
     yield* Effect.forEach(request.subsets, (subset) => checkFilterable(deps.authPolicy, subset), {
+      concurrency: 1,
       discard: true,
     });
     const onRead = deps.middleware?.onRead;
@@ -682,6 +683,7 @@ export const makeWithIntrospectionWith = (
       subsets: ReadonlyArray<Subset>
     ): Effect.Effect<void, AuthorizationError> =>
       Effect.forEach(subsets, (subset) => checkFilterable(authPolicy, subset), {
+        concurrency: 1,
         discard: true,
       });
 

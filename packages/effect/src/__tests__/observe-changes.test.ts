@@ -417,8 +417,10 @@ describe("ClientEngine.observeChanges", () => {
 
         // Storm: far more changes than the bound of 4 → the hub drops the
         // surplus while the consumer is stalled.
-        yield* Effect.forEach(Array.from({ length: 30 }), (_, i) =>
-          engine.mutate("todo/set", { id: `s${i + 1}`, title: `t${i + 1}` })
+        yield* Effect.forEach(
+          Array.from({ length: 30 }),
+          (_, i) => engine.mutate("todo/set", { id: `s${i + 1}`, title: `t${i + 1}` }),
+          { concurrency: 1 }
         );
         yield* Deferred.succeed(release, undefined);
         // The dropped items vanish silently — `PubSub.dropping` never tells a
@@ -439,7 +441,7 @@ describe("ClientEngine.observeChanges", () => {
           .query(todos)
           .pipe(Effect.map((rows) => rows.map((r) => r.id).toSorted()));
         yield* eventually(
-          Effect.all([foldedIds, expectedIds]),
+          Effect.all([foldedIds, expectedIds], { concurrency: 1 }),
           ([folded, expected]) => JSON.stringify(folded) === JSON.stringify(expected)
         );
 

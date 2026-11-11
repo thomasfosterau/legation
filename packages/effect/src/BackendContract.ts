@@ -1284,7 +1284,7 @@ export const verifyBackendContract = (
         );
       }
       const harness = makeHarness(backend, options, expected, options?.restoredPeerLedger ?? 0);
-      return Effect.forEach(rules, (rule) => rule(harness), { discard: true });
+      return Effect.forEach(rules, (rule) => rule(harness), { concurrency: 1, discard: true });
     })
   );
 };

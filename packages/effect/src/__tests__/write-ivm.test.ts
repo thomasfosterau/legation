@@ -139,8 +139,10 @@ describe("write-path selective re-evaluation", () => {
   it.live("a mutate on a warm cache patches the overlay in place, with no replay (#109)", () =>
     Effect.gen(function* () {
       const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
-      yield* Effect.forEach(Array.from({ length: 5 }), () =>
-        Effect.forkScoped(Stream.runForEach(engine.observe(todos), () => Effect.void))
+      yield* Effect.forEach(
+        Array.from({ length: 5 }),
+        () => Effect.forkScoped(Stream.runForEach(engine.observe(todos), () => Effect.void)),
+        { concurrency: 1 }
       );
       yield* settle;
       yield* Ref.set(listRowsCount, 0); // measure only the mutate-triggered work

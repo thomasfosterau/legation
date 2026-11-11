@@ -591,7 +591,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     reads: ReadonlyArray<Query.Read>,
     snapshot: Coverage.Snapshot
   ): Effect.Effect<Extract<Coverage.Verdict, { _tag: "Covered" }> | undefined> =>
-    Effect.forEach(reads, (read) => coverageOf(read, { snapshot })).pipe(
+    Effect.forEach(reads, (read) => coverageOf(read, { snapshot }), { concurrency: 1 }).pipe(
       Effect.map((verdicts) => {
         const first = verdicts[0];
         return first?._tag === "Covered" && verdicts.every((verdict) => verdict._tag === "Covered")

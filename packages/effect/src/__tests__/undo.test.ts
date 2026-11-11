@@ -254,7 +254,9 @@ describe("Undo (#46)", () => {
       });
 
       yield* manager.group(
-        Effect.all([manager.run(create("a")), manager.run(create("b")), manager.run(create("c"))])
+        Effect.all([manager.run(create("a")), manager.run(create("b")), manager.run(create("c"))], {
+          concurrency: 1,
+        })
       );
       expect(Arr.sort(titles(yield* engine.query(allTodos)), Order.String)).toEqual([
         "a",

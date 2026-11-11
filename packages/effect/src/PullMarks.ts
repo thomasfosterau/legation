@@ -177,10 +177,13 @@ export const make = (engine: ClientEngine): PullMarks => {
       unsubscribe: (subset) => unsubscribe(key, subset),
     }),
     pulled: (key) =>
-      Effect.all({ current: Ref.get(state), counts: engine.pullCounts }).pipe(
+      Effect.all({ current: Ref.get(state), counts: engine.pullCounts }, { concurrency: 1 }).pipe(
         Effect.map(({ current, counts }) => summarize(current, key, counts.applied))
       ),
-    registrations: Effect.all({ current: Ref.get(state), counts: engine.pullCounts }).pipe(
+    registrations: Effect.all(
+      { current: Ref.get(state), counts: engine.pullCounts },
+      { concurrency: 1 }
+    ).pipe(
       Effect.map(({ current, counts }) =>
         [...current.owners.keys()].toSorted().map((key) => ({
           key,

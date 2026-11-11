@@ -60,18 +60,23 @@ describe("BackgroundSync without Background Sync (#213)", () => {
   it.effect("registration degrades quietly wherever the API is missing or refused", () =>
     Effect.gen(function* () {
       const logs = recordLogs();
-      const outcomes = yield* Effect.all([
-        // No service worker at all (jsdom, like any page no worker controls).
-        BackgroundSync.register(),
-        // A registration with no `SyncManager` (Safari, Firefox).
-        BackgroundSync.register({ registration: Effect.succeed({}) }),
-        // The browser declined (permission withheld, no window, no active worker).
-        BackgroundSync.register({
-          registration: Effect.succeed({
-            sync: { register: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+      const outcomes = yield* Effect.all(
+        [
+          // No service worker at all (jsdom, like any page no worker controls).
+          BackgroundSync.register(),
+          // A registration with no `SyncManager` (Safari, Firefox).
+          BackgroundSync.register({ registration: Effect.succeed({}) }),
+          // The browser declined (permission withheld, no window, no active worker).
+          BackgroundSync.register({
+            registration: Effect.succeed({
+              sync: {
+                register: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
+              },
+            }),
           }),
-        }),
-      ]).pipe(Effect.provide(logs.layer));
+        ],
+        { concurrency: 1 }
+      ).pipe(Effect.provide(logs.layer));
       expect(outcomes).toEqual(["Unsupported", "Unsupported", "Refused"]);
       // Said, but only at debug level: nothing an app would surface.
       expect(logs.quiet.length).toBeGreaterThan(0);

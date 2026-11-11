@@ -223,14 +223,17 @@ const makeGate = Effect.gen(function* () {
   } satisfies Gate;
 });
 
-const makeGates = Effect.all({
-  a: makeGate,
-  b: makeGate,
-  first: makeGate,
-  stale: makeGate,
-  fresh: makeGate,
-  next: makeGate,
-});
+const makeGates = Effect.all(
+  {
+    a: makeGate,
+    b: makeGate,
+    first: makeGate,
+    stale: makeGate,
+    fresh: makeGate,
+    next: makeGate,
+  },
+  { concurrency: 1 }
+);
 
 /**
  * `test/gated`: park, then read the counter and increment it, then write the

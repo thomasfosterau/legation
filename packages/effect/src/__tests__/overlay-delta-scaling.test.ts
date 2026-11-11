@@ -78,28 +78,31 @@ describe("overlay delta-maintenance scaling (#109)", () => {
         yield* Effect.forEach(
           Array.from({ length: ROWS }, (_, i) => i),
           (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),
-          { discard: true }
+          { concurrency: 1, discard: true }
         );
         // Each observer completes its latch on its first emission, which it
         // can only make once it has materialized; awaiting them all means the
         // warm-up scans are done before the count is reset.
-        const materialized = yield* Effect.forEach(Array.from({ length: LIVE_QUERIES }), () =>
-          Effect.gen(function* () {
-            const first = yield* Deferred.make<void>();
-            yield* Effect.forkScoped(
-              Stream.runForEach(engine.observe(top), () => Deferred.succeed(first, undefined))
-            );
-            return first;
-          })
+        const materialized = yield* Effect.forEach(
+          Array.from({ length: LIVE_QUERIES }),
+          () =>
+            Effect.gen(function* () {
+              const first = yield* Deferred.make<void>();
+              yield* Effect.forkScoped(
+                Stream.runForEach(engine.observe(top), () => Deferred.succeed(first, undefined))
+              );
+              return first;
+            }),
+          { concurrency: 1 }
         );
-        yield* Effect.forEach(materialized, Deferred.await, { discard: true });
+        yield* Effect.forEach(materialized, Deferred.await, { concurrency: 1, discard: true });
 
         yield* Ref.set(listRowsCount, 0); // measure only the burst below
 
         yield* Effect.forEach(
           Array.from({ length: MUTATIONS }, (_, i) => i),
           (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),
-          { discard: true }
+          { concurrency: 1, discard: true }
         );
 
         // Every mutate patched the already-warm cache in place (#109): no

@@ -598,7 +598,10 @@ export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =
   // that builds this before its writes (`Effect.ensuring`) must still reach an
   // engine attached during them (#350).
   Effect.suspend(() =>
-    Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, { discard: true })
+    Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, {
+      concurrency: 1,
+      discard: true,
+    })
   );
 
 /** One row of a fallthrough read (ADR-0025). */
@@ -1287,7 +1290,9 @@ export const make = (
     // awaiting `acknowledged` never hangs and nothing leaks.
     yield* Effect.addFinalizer(() =>
       Ref.get(acks).pipe(
-        Effect.flatMap((map) => Effect.forEach([...map.values()], Deferred.interrupt)),
+        Effect.flatMap((map) =>
+          Effect.forEach([...map.values()], Deferred.interrupt, { concurrency: 1 })
+        ),
         Effect.asVoid
       )
     );
@@ -1889,8 +1894,13 @@ export const make = (
           })
         ),
         Effect.flatMap((settledIds) =>
-          Effect.forEach(settledIds, (id) =>
-            resolveAck(id, { _tag: "applied" }).pipe(Effect.andThen(emitEvent(id, "acknowledged")))
+          Effect.forEach(
+            settledIds,
+            (id) =>
+              resolveAck(id, { _tag: "applied" }).pipe(
+                Effect.andThen(emitEvent(id, "acknowledged"))
+              ),
+            { concurrency: 1 }
           )
         ),
         Effect.asVoid
@@ -2116,9 +2126,11 @@ export const make = (
                 MutationState.compacted(map, compaction, settledAt, options.mutationStateRetention)
               );
               yield* Effect.forEach(orphans, (deferred) => Deferred.interrupt(deferred), {
+                concurrency: 1,
                 discard: true,
               });
               yield* Effect.forEach(compaction.dropped, (id) => emitEvent(id, "dropped"), {
+                concurrency: 1,
                 discard: true,
               });
               yield* Effect.forEach(
@@ -2130,7 +2142,7 @@ export const make = (
                     previousMutationId: from,
                     mutationId: to,
                   }),
-                { discard: true }
+                { concurrency: 1, discard: true }
               );
               // Inside the lock `invalidateOverlay` would deadlock on it; the
               // cache is only ever cleared by setting it empty.
@@ -2181,7 +2193,9 @@ export const make = (
           // them here. Interrupt them so no `mutateWithAck` caller hangs —
           // the same treatment scope close gives them.
           yield* Ref.getAndSet(acks, new Map()).pipe(
-            Effect.flatMap((map) => Effect.forEach([...map.values()], Deferred.interrupt))
+            Effect.flatMap((map) =>
+              Effect.forEach([...map.values()], Deferred.interrupt, { concurrency: 1 })
+            )
           );
         }
         if (transition !== "Unchanged") {
@@ -2277,6 +2291,7 @@ export const make = (
         }
         yield* Ref.update(pushInFlight, (n) => n + 1);
         yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
+          concurrency: 1,
           discard: true,
         }).pipe(Effect.onError(() => Ref.update(pushInFlight, (n) => n - 1)));
         return pending;
@@ -2641,10 +2656,13 @@ export const make = (
           )?.total
       );
 
-    const pullCounts: Effect.Effect<PullCounts> = Effect.all({
-      started: Ref.get(pullsStarted),
-      applied: Ref.get(pullsApplied),
-    });
+    const pullCounts: Effect.Effect<PullCounts> = Effect.all(
+      {
+        started: Ref.get(pullsStarted),
+        applied: Ref.get(pullsApplied),
+      },
+      { concurrency: 1 }
+    );
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
       Ref.update(subscriptions, (current) =>

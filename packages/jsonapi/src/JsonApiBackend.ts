@@ -756,7 +756,7 @@ export const make = (
             )
           );
         },
-        { discard: true }
+        { concurrency: 1, discard: true }
       );
 
     const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
@@ -1202,12 +1202,15 @@ export const make = (
         };
         const replays = yield* replayedRejections(context, mutations);
         const pending = yield* pendingEach(context, mutations);
-        const decoded = yield* Effect.forEach(pending, (mutation) =>
-          Effect.gen(function* () {
-            const write = yield* writeFor(mutation).pipe(Effect.option);
-            if (Option.isSome(write)) yield* checkReadable(write.value);
-            return { mutation, write };
-          })
+        const decoded = yield* Effect.forEach(
+          pending,
+          (mutation) =>
+            Effect.gen(function* () {
+              const write = yield* writeFor(mutation).pipe(Effect.option);
+              if (Option.isSome(write)) yield* checkReadable(write.value);
+              return { mutation, write };
+            }),
+          { concurrency: 1 }
         );
 
         yield* Effect.forEach(

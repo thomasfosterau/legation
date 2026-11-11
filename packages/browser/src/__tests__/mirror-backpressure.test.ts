@@ -117,8 +117,10 @@ describe("Mirror backpressure (#44)", () => {
       // Storm: far more updates than the bound of 4. Wait for them to propagate
       // through the host→tab pipeline into the (still-stalled) hub, so it
       // genuinely overflows and drops keys rather than the observer keeping pace.
-      yield* Effect.forEach(Array.from({ length: 30 }), (_, i) =>
-        engine.mutate("todo/set", { id: `s${i}`, title: `s${i}` })
+      yield* Effect.forEach(
+        Array.from({ length: 30 }),
+        (_, i) => engine.mutate("todo/set", { id: `s${i}`, title: `s${i}` }),
+        { concurrency: 1 }
       );
       yield* eventually(mirror.query(allTodos), (rows) => rows.length === 31); // all in the Ref
       yield* sleepReal(50); // let the surplus keys hit the bounded hub and drop

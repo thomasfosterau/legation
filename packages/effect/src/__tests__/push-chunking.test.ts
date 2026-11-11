@@ -635,12 +635,14 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
         yield* engine.subscribe(countersSubset);
         for (let i = 0; i < 4 * SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
 
-        const pushes = yield* Effect.forEach([1, 2, 3], () =>
-          Effect.forkScoped(Effect.exit(engine.push))
+        const pushes = yield* Effect.forEach(
+          [1, 2, 3],
+          () => Effect.forkScoped(Effect.exit(engine.push)),
+          { concurrency: 1 }
         );
         for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
         yield* Deferred.succeed(gate, undefined);
-        const exits = yield* Effect.forEach(pushes, Fiber.join);
+        const exits = yield* Effect.forEach(pushes, Fiber.join, { concurrency: 1 });
 
         // Every push stops at the pull between its chunks, as nothing is released.
         expect(exits.every(Exit.isFailure)).toBe(true);

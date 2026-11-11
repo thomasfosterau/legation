@@ -85,7 +85,7 @@ const bootstrap = Effect.gen(function* () {
   yield* Effect.forEach(
     Array.from({ length: ROWS }, (_, i) => i),
     (i) => engine.mutate("row/set", { id: `r${i}`, n: i, team: i % 5 }),
-    { discard: true }
+    { concurrency: 1, discard: true }
   );
   yield* engine.push;
   yield* engine.pull; // confirms the seed, so churn starts from an empty journal

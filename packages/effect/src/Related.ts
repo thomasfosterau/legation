@@ -844,7 +844,10 @@ const trackWith = (
     yield* Effect.addFinalizer(() =>
       Ref.get(subscribed).pipe(
         Effect.flatMap((subs) =>
-          Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), { discard: true })
+          Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), {
+            concurrency: 1,
+            discard: true,
+          })
         )
       )
     );
