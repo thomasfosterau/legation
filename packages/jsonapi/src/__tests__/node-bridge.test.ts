@@ -363,6 +363,36 @@ describe("NodeBridge filterable set (#154, #161)", () => {
   });
 });
 
+// A mutually-recursive pair, authorable since effect-jsonapi#118: one interface per
+// resource in the cycle. The child's key is declared on its relationship, so the
+// bridge needs no `edges` option to discover the parent's inverse.
+const postAttributes = { title: Schema.String };
+const commentAttributes = { body: Schema.String };
+
+interface Post extends Resource.Resource<
+  "posts",
+  typeof postAttributes,
+  { readonly comments: Relationship.many<Comment> }
+> {}
+
+interface Comment extends Resource.Resource<
+  "comments",
+  typeof commentAttributes,
+  { readonly post: Relationship.one<Post, false, "post_ref"> }
+> {}
+
+const Post: Post = Resource.make("posts", {
+  attributes: postAttributes,
+  relationships: { comments: Relationship.many(() => Comment) },
+});
+
+const Comment: Comment = Resource.make("comments", {
+  attributes: commentAttributes,
+  relationships: { post: Relationship.one(() => Post, { key: "post_ref" }) },
+});
+
+const cyclic = NodeBridge.registry([Post, Comment]);
+
 describe("sync metadata read off the resource (#220)", () => {
   it("takes a paginated relationship's order from its declaration; an option still wins", () => {
     const Ordered = Resource.make("products", {
@@ -477,6 +507,20 @@ describe("sync metadata read off the resource (#220)", () => {
     });
     // The declared key is filterable by eq / in, as every bridged key field is.
     expect(article.filterable["category_ref"]).toMatchObject({ operators: ["eq", "in"] });
+  });
+
+  it("bridges a cyclic parent ⇄ child pair with no edges option (#220, effect-jsonapi#118)", () => {
+    const definition = defined(cyclic.nodes.get("posts"));
+    expect(definition.edges["comments"]).toEqual({
+      kind: "many",
+      target: "comments",
+      inverse: "post",
+    });
+    expect(defined(cyclic.nodes.get("comments")).edges["post"]).toEqual({
+      kind: "one",
+      target: "posts",
+      via: "post_ref",
+    });
   });
 
   it("keeps a mismatched annotation a definition-time defect", () => {
