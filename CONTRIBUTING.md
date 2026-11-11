@@ -1,6 +1,6 @@
 # Contributing to legation
 
-legation is a pnpm 11 + [Vite+](https://viteplus.dev) (`vp`) workspace on Node 22 or later. The command reference, the gate list, the package boundaries and the conventions live in [AGENTS.md](AGENTS.md) (the agent guidance, which applies to everyone): see [Commands](AGENTS.md#commands), [Verification](AGENTS.md#verification), [Common pitfalls](AGENTS.md#common-pitfalls) and [Conventions](AGENTS.md#conventions).
+legation is a pnpm 11 + [Vite+](https://viteplus.dev) (`vp`) workspace on Node 22 or later. This file covers setup, the commands, and the branch, pull-request and changeset rules. The package table is in [README.md](README.md#packages). The conventions, the pitfalls and the ordered gate list live in [AGENTS.md](AGENTS.md); they apply to everyone, not only agents. See [Common pitfalls](AGENTS.md#common-pitfalls), [Conventions](AGENTS.md#conventions) and [Verification](AGENTS.md#verification).
 
 ## Setup
 
@@ -15,14 +15,41 @@ pnpm install
 
 Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the same hook as agent sessions. The `Dev Container` workflow (`.github/workflows/devcontainer.yml`) builds it in CI whenever its inputs change; to try a change locally, `pnpm dlx @devcontainers/cli@0.89.0 up --workspace-folder .` (needs Docker).
 
-Two workspace mechanics AGENTS.md doesn't repeat:
+Two workspace mechanics:
 
 - Packages import each other by published name (`@thomasfosterau/legation`); pnpm links the workspace packages, and `pnpm pack` rewrites the `workspace:` and `catalog:` specifiers when a package is published.
 - `vp run build` builds the packages in dependency order (`vp pack`, one task per package); the tests resolve the package names to `src/` through aliases in the root `vite.config.ts`, so tests never need a prior build. The example apps and the commerce browser test consume `dist/`, so `vp run test` builds first.
 
-## Branches
+## Commands
 
-Branch off `trunk`, rebase rather than merge, squash-merge with a conventional prefix: see [AGENTS.md](AGENTS.md#branches-and-pull-requests).
+- `pnpm install` — dependencies, the Vite+ git hooks (pre-commit runs `vp staged`: format + lint on staged files) and the `prepare` step that patches the native `tsc` / `oxlint` with `@effect/tsgo`. CI uses `pnpm install --frozen-lockfile`.
+- `vp check` — format + lint (Oxfmt + Oxlint, with the Effect presets). Lint is type-aware through oxlint-tsgolint (`typeAware` + `typeCheck` in `vite.config.ts`); tsgolint types each file under its nearest `tsconfig.json`, which is why each `src/__tests__/` (and `packages/devtools/svelte/`) carries one extending `tsconfig.check.json`. `vp check --fix` / `vp fmt` fix what they can.
+- `vp run build` — `vp pack` → every package's `dist/`, in dependency order.
+- `vp run pack:check` — packs every publishable package with `pnpm pack` and fails on a `workspace:` / `catalog:` specifier left in a packed `package.json`, an internal range that doesn't match the dependency's version, an exact `effect` / `@effect/*` peer, a `svelte` export condition naming a file that isn't packed, or a `publint` (strict) or `attw` (ESM-only: `node10` and `node16-cjs` ignored) finding. Fix a finding; suppress one only in `attwSuppressions` in `scripts/pack.mjs`, with its reason. No registry access.
+- `vp run check` — the type gate: packages and tests in one native, Effect-patched `tsc` program (`tsconfig.check.json`). `vp run check:examples` — each example app's own `tsc` / `svelte-check`, against the built `dist/`.
+- `vp run test` — every Vitest project (`node`, `commerce-browser`, `svelte`); builds first. `vp test run packages/<name>` runs one package's tests without a build. The commerce browser test needs Chromium (see [Tests](#tests)).
+- `vp run test:coverage` — the suite plus `coverage/coverage-final.json`, the map `fallow audit` reads.
+- `vp run bench` — the `*.bench.ts` benchmarks (not a gate).
+- `vp exec fallow audit --base origin/trunk` — the fallow gate (see "Fallow local gate" in [AGENTS.md](AGENTS.md#fallow-local-gate)). `vp exec fallow dead-code`, `vp exec fallow dupes` and `vp exec fallow health` run the individual analyses.
+- `pnpm changeset` — add a changeset.
+
+Invoke everything through `vp` (`vp exec` instead of `npx`; `vp run <task>` instead of a bare `pnpm` script). The sanctioned non-`vp` invocations: `pnpm install`, `pnpm changeset`, `pnpm audit`, `pnpm exec playwright-core install chromium`, and `pnpm run version` / `pnpm run release` on the release path. Single-check variants are in [Running individual checks](#running-individual-checks).
+
+## Branches and pull requests
+
+- Branch off `trunk` as `issue-<n>-<slug>`; PR against `trunk`; squash-merge with a conventional prefix (`feat:`, `fix:`, `docs:`, `chore:`). Rebase onto `origin/trunk` before opening or updating a PR; never merge `trunk` into your branch (GitHub's Update-branch button merges).
+- Add a changeset (`pnpm changeset`) for every user-facing or package-impacting change, naming each package it touches; a doc-comment change that reaches the emitted `.d.ts` takes a `patch`. Docs-, CI- and tooling-only changes need none. Never publish or version by hand: the Release workflow opens the "chore: version packages" PR and the owner merges it ([PUBLISHING.md](PUBLISHING.md)).
+- Use the `gh` CLI for GitHub operations. New pull requests are assigned to the owner by `.github/workflows/auto-assign.yml` (Dependabot's by `assignees:` in `.github/dependabot.yml`).
+
+## Adding a package
+
+A new package adds:
+
+- a row in the root `README.md` package table;
+- its own `AGENTS.md` (boundary, invariants, terms), a `CLAUDE.md` that imports it (`@AGENTS.md`), and a `vite.config.ts` (`packageConfig` from `vite.package.ts`);
+- a `.fallowrc.json` entry, zone and rule;
+- an alias in the root `vite.config.ts` and a `paths` entry in `tsconfig.check.json`;
+- its name in the root `vite.config.ts` `packages` list (the `build` aggregate).
 
 ## Git hooks
 
@@ -35,9 +62,9 @@ Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pr
 ## Pre-PR checklist
 
 1. The gates in [AGENTS.md](AGENTS.md#verification), each with its final pass/fail.
-2. A changeset (`pnpm changeset`) where [AGENTS.md](AGENTS.md#branches-and-pull-requests) requires one.
+2. A changeset (`pnpm changeset`) where [Branches and pull requests](#branches-and-pull-requests) requires one.
 3. `git fetch origin trunk && git rebase origin/trunk`
-4. Docs: the package `README.md` for any exported change; the package `CLAUDE.md` for a new term or invariant.
+4. Docs: the package `README.md` for any exported change; the package `AGENTS.md` for a new term or invariant.
 
 ## Running individual checks
 

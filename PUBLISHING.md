@@ -4,7 +4,7 @@ Releases are automated with [Changesets](https://github.com/changesets/changeset
 
 ## The release flow
 
-1. **Add a changeset with your change.** Run `pnpm changeset`, pick the packages and the bump (`patch` / `minor` / `major`) and write a user-facing summary, then commit the generated file alongside your change. Which changes need one is set out in [AGENTS.md](AGENTS.md#branches-and-pull-requests).
+1. **Add a changeset with your change.** Run `pnpm changeset`, pick the packages and the bump (`patch` / `minor` / `major`) and write a user-facing summary, then commit the generated file alongside your change. Which changes need one is set out in [CONTRIBUTING.md](CONTRIBUTING.md#branches-and-pull-requests).
 2. **Merge to `trunk`.** The [`Release`](./.github/workflows/release.yml) workflow runs and, while changesets are pending, opens or updates a **"chore: version packages"** PR that applies the version bumps and rolls the changesets into each package's `CHANGELOG.md`. The version step is `pnpm run version`: `changeset version && vp fmt && pnpm install --lockfile-only`.
 3. **Merge the version PR and approve the `release` environment.** With no changesets left, the workflow runs `pnpm run release`, which builds every package (`vp run build`) and runs [`scripts/publish.mjs`](scripts/publish.mjs):
    1. Every public package under `packages/` whose current version is not on npm yet is taken in dependency order. Versions already on npm are skipped, so a re-run after a partial failure publishes only what is missing.

@@ -78,7 +78,7 @@
 #
 # This hook hydrates no secrets; nothing in this repo needs one. The commerce
 # façade's browser test also needs Chromium, which this hook does not fetch
-# (`pnpm exec playwright-core install chromium`; AGENTS.md "Agent sessions").
+# (`pnpm exec playwright-core install chromium`; AGENTS.md "Verification", .claude/CLAUDE.md "Sessions").
 #
 # ## Contract
 #
