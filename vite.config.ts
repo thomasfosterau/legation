@@ -150,12 +150,12 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/no-conditional-empty-object-spread": "warn", // 145 sites
+      "effect/no-conditional-empty-object-spread": "warn", // 144 sites
       "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
       "effect/avoid-untagged-errors": "warn", // 76 sites
-      "effect/require-effect-concurrency": "warn", // 73 sites
+      "effect/require-effect-concurrency": "warn", // 72 sites
       "effect/effect-promise-vs-trypromise": "warn", // 66 sites
       "effect/prefer-match-over-switch": "warn", // 50 sites
 

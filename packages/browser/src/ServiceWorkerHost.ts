@@ -39,9 +39,15 @@
  * leaves the caller to keep the scope open.
  */
 
-import type { Client, Collection, Node } from "@thomasfosterau/legation";
-import { ClientEngine, type Coverage, EngineHost } from "@thomasfosterau/legation/internal";
+import { type Client, ClientStore, type Collection, type Node } from "@thomasfosterau/legation";
+import {
+  ClientEngine,
+  type Coverage,
+  EngineHost,
+  type HostRequest,
+} from "@thomasfosterau/legation/internal";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type * as BackgroundSync from "./BackgroundSync.js";
 import type * as PushPoke from "./PushPoke.js";
@@ -83,6 +89,13 @@ export interface ServiceWorkerHostOptions {
    * library's push is not answered.
    */
   readonly pushPoke?: PushPoke.Listener;
+  /**
+   * Host-request handlers to serve beside the introspection kinds (#136),
+   * forwarded to {@link EngineHost.run} — `Devtools.hostRequests(engine,
+   * store)` from `@thomasfosterau/legation-devtools`, say, so a tab's
+   * devtools can drive this engine.
+   */
+  readonly requests?: ReadonlyArray<HostRequest.Handler>;
 }
 
 /** The default channel name; Mirror setups should use the same one. */
@@ -121,10 +134,16 @@ export const start = (
       pushPoke,
     } = options;
     const engine = yield* ClientEngine.ClientEngine;
+    // The engine's store, when it is still in context (as it is under
+    // `ClientEngine.layer`): given it, the host serves the introspection kinds,
+    // so a tab's `Introspection.fromMirror` (and devtools) can read this engine.
+    const store = yield* Effect.serviceOption(ClientStore.ClientStore);
     const channel = yield* BroadcastMirrorChannel.make(channelName);
     const host = yield* EngineHost.run({
       channel,
       engine,
+      ...Option.match(store, { onNone: () => ({}), onSome: (value) => ({ store: value }) }),
+      requests: options.requests ?? [],
       ...(registry === undefined ? {} : { registry }),
       ...(nodes === undefined ? {} : { nodes }),
       ...(urls === undefined ? {} : { urls }),

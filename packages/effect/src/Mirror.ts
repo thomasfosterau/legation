@@ -21,14 +21,18 @@ import * as Related from "./Related.js";
 import * as RowChange from "./RowChange.js";
 import * as Subset from "./Subset.js";
 import * as Telemetry from "./Telemetry.js";
+import * as HostRequest from "./HostRequest.js";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as HashMap from "effect/HashMap";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -55,6 +59,13 @@ export interface MirrorOptions {
    * mirror's `Ref`. Defaults to {@link DEFAULT_CHANGE_HUB_CAPACITY}.
    */
   readonly changeHubCapacity?: number;
+  /**
+   * How long {@link Mirror.request} waits for the host's answer before failing
+   * with a `HostRequestError` of reason `"Unanswered"` — what a host that
+   * predates the host-request envelope (it drops the request as foreign
+   * traffic) looks like from here. Defaults to 10 seconds.
+   */
+  readonly requestTimeout?: Duration.Input;
 }
 
 /**
@@ -134,6 +145,26 @@ const failPending = <A>(
  * synchronously from it, and writes are forwarded to the host's journal.
  */
 export interface Mirror {
+  /**
+   * Ask the host a single-reply request kind (ADR-0021 amendment): the input
+   * is encoded with the kind's request schema, and the host's `Value` decoded
+   * with its response schema. Fails with a `HostRequestError` carrying the
+   * host's reason (`UnknownKind`, `InvalidRequest`, `Failed`), or
+   * `Unanswered` when no answer arrives within `requestTimeout`, the host
+   * restarts (`HostReady`) first, or this mirror closes.
+   */
+  readonly request: HostRequest.Requester["request"];
+  /**
+   * Follow a streaming request kind's answer: each host `Item`, decoded,
+   * until its `End`. The request lives as long as the stream: a consumer that
+   * stops early or is interrupted sends `HostRequestCancel`, and the host
+   * interrupts its handler. A host restart (`HostReady`) or this mirror
+   * closing fails it with `Unanswered`; it is not replayed, so a caller that
+   * wants to keep following re-requests. No reply timeout applies, since a
+   * stream may rightly stay quiet: a host that predates the envelope leaves
+   * it silent.
+   */
+  readonly stream: HostRequest.Requester["stream"];
   /** Validate args locally, forward to the host journal, await the ack. */
   readonly mutate: (
     mutator: string,
@@ -390,6 +421,29 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // host's settlement error, if any.
     const pendingForms = yield* makePending<Option.Option<string>>();
     const requestIds = yield* Ref.make(0);
+    // Host requests in flight (ADR-0021 amendment), keyed by requestId (the
+    // same id space): each has a queue the replies addressed to this mirror
+    // are offered to. A terminal reply (`Value`, `End`, `Failure`) removes it.
+    interface InFlight {
+      readonly kind: string;
+      readonly replies: Queue.Queue<
+        MirrorProtocol.HostResponseOutcome,
+        HostRequest.HostRequestError
+      >;
+    }
+    const hostRequests = yield* Ref.make(HashMap.empty<number, InFlight>());
+    const requestTimeout = options.requestTimeout ?? "10 seconds";
+    // Fail every host request in flight with `Unanswered`: its host is gone.
+    const failHostRequests = (message: string) =>
+      Ref.getAndSet(hostRequests, HashMap.empty()).pipe(
+        Effect.flatMap((requests) =>
+          Effect.forEach(
+            HashMap.values(requests),
+            (request) => Queue.fail(request.replies, HostRequest.unanswered(request.kind, message)),
+            { concurrency: 1, discard: true }
+          )
+        )
+      );
     // Set as this mirror's scope begins to close, before the pending requests
     // are failed: a request registered after that is failed by `awaitReply`
     // itself, since no reply can reach it any more.
@@ -407,6 +461,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               failPending(pendingSettled),
               failPending(pendingReads),
               failPending(pendingForms),
+              failHostRequests("Mirror: closed while the request was in flight"),
             ],
             { discard: true }
           )
@@ -462,6 +517,62 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         ? resolveIn(ref, message.requestId, complete)
         : Effect.void;
 
+    // Offer a host reply to its request's queue; a terminal reply also takes the
+    // request out of the table, so a later cancel knows it has ended.
+    const deliverReply = (requestId: number, outcome: MirrorProtocol.HostResponseOutcome) =>
+      Ref.modify(hostRequests, (map) => {
+        const request = HashMap.get(map, requestId);
+        return [
+          request,
+          P.isTagged(outcome, "Item") ? map : HashMap.remove(map, requestId),
+        ] as const;
+      }).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (request) => Queue.offer(request.replies, outcome),
+          })
+        ),
+        Effect.asVoid
+      );
+
+    // Open a host request: register its queue under a fresh requestId and post
+    // it. Released, it posts `HostRequestCancel` unless the host already ended
+    // it. Opened after this mirror began closing, it fails at once.
+    const openHostRequest = <I, O>(kind: HostRequest.Kind<I, O>, input: I) =>
+      Effect.gen(function* () {
+        const payload = yield* HostRequest.encodeRequest(kind, input);
+        const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
+        const replies = yield* Queue.unbounded<
+          MirrorProtocol.HostResponseOutcome,
+          HostRequest.HostRequestError
+        >();
+        yield* Ref.update(hostRequests, HashMap.set(requestId, { kind: kind.name, replies }));
+        if (yield* Ref.get(closed)) {
+          yield* failHostRequests("Mirror: closed before the request was sent");
+        } else {
+          yield* channel
+            .post({ _tag: "HostRequest", mirrorId, requestId, kind: kind.name, payload })
+            .pipe(
+              Effect.catch((error) =>
+                Queue.fail(replies, HostRequest.unanswered(kind.name, error.message))
+              )
+            );
+        }
+        return { requestId, replies };
+      });
+    const closeHostRequest = (requestId: number) =>
+      Ref.modify(
+        hostRequests,
+        (map) => [HashMap.has(map, requestId), HashMap.remove(map, requestId)] as const
+      ).pipe(
+        Effect.flatMap((open) =>
+          open
+            ? channel.post({ _tag: "HostRequestCancel", mirrorId, requestId }).pipe(Effect.ignore)
+            : Effect.void
+        )
+      );
+
     // Mirror update loop: established before `make` returns.
     yield* Effect.forkScoped(
       Effect.forever(
@@ -494,6 +605,9 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                             failPending(pendingSettled),
                             failPending(pendingReads),
                             failPending(pendingForms),
+                            failHostRequests(
+                              "Mirror: the engine host restarted while the request was in flight"
+                            ),
                           ],
                           { discard: true }
                         )
@@ -578,6 +692,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                 return resolveReply(pendingSettled, message, (deferred) =>
                   Deferred.succeed(deferred, outcomeOf(message))
                 );
+              case "HostResponse":
+                return message.mirrorId === mirrorId
+                  ? deliverReply(message.requestId, message.outcome)
+                  : Effect.void;
               case "ReadResult":
                 return resolveReply(pendingReads, message, (deferred) =>
                   message.error === undefined
@@ -789,6 +907,43 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       );
 
     return {
+      request: (kind, input) =>
+        Effect.acquireUseRelease(
+          openHostRequest(kind, input),
+          ({ replies }) =>
+            Queue.take(replies).pipe(
+              Effect.timeoutOrElse({
+                duration: requestTimeout,
+                orElse: () =>
+                  Effect.fail(
+                    HostRequest.unanswered(
+                      kind.name,
+                      "Mirror: no answer from the engine host; it may predate host requests"
+                    )
+                  ),
+              }),
+              Effect.flatMap((outcome) => HostRequest.replyValue(kind, outcome))
+            ),
+          ({ requestId }, exit) =>
+            Exit.isSuccess(exit) ? Effect.void : closeHostRequest(requestId)
+        ),
+      stream: (kind, input) =>
+        Stream.unwrap(
+          Effect.acquireRelease(openHostRequest(kind, input), ({ requestId }) =>
+            closeHostRequest(requestId)
+          ).pipe(
+            Effect.map(({ replies }) =>
+              Stream.fromQueue(replies).pipe(
+                // An `Item` keeps the stream open; anything else is its last
+                // reply. `End` closes it, and a `Failure` (or a `Value` from a
+                // host that answered it as single-reply) is handled as a reply.
+                Stream.takeUntil((outcome) => !P.isTagged(outcome, "Item")),
+                Stream.filter((outcome) => !P.isTagged(outcome, "End")),
+                Stream.mapEffect((outcome) => HostRequest.replyValue(kind, outcome))
+              )
+            )
+          )
+        ),
       mutate: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pending, mutator, encoded))

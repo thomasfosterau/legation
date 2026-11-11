@@ -214,6 +214,9 @@ describe("retry integration (#34)", () => {
       expect(failure._tag).toBe("Some");
       assert(Option.isSome(failure), "a sync failure should be reported");
       expect(failure.value.operation).toBe("pull");
+      // The point-in-time record (#136) holds it too.
+      const recent = yield* engine.recentSyncFailures;
+      expect(recent.map((entry) => entry.operation)).toContain("pull");
       const after = (yield* Metric.value(Telemetry.syncFailuresTotal)).count;
       expect(after).toBeGreaterThan(before);
     })
