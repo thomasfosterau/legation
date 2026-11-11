@@ -511,6 +511,8 @@ type ReadPoint = "watermark" | "evaluate" | "rows";
 // For the rows read it parks before the rows are fetched.
 const parkedBackend = (inner: Backend, at: ReadPoint, parking: Parking): Backend => ({
   ...inner,
+  // The pull reads through `evaluate` here, where the park is (#210's counted read is off).
+  evaluateCounted: undefined,
   lastMutationIds: (context) =>
     inner
       .lastMutationIds(context)
@@ -739,6 +741,8 @@ describe("a pull's watermark and rows are one snapshot (#286)", () => {
           );
           const racing: Backend = {
             ...inner,
+            // The pull reads through `evaluate` here, where the push lands (#210's counted read is off).
+            evaluateCounted: undefined,
             lastMutationIds: (context) =>
               inner
                 .lastMutationIds(context)

@@ -132,6 +132,15 @@ export interface Client {
     read: QueryModule.Read,
     options?: Coverage.JudgeOptions
   ) => Effect.Effect<Coverage.Verdict>;
+  /**
+   * A subscription's **total** as the last pull reported it (#210): how many
+   * rows its `where` matches on the server, whatever its window. This is what
+   * a JSON:API façade over this Client writes as `meta.total` for a read a
+   * windowed subscription covers. `undefined` when no pull has reported one,
+   * and always over a Client connected to an engine elsewhere (`connect`),
+   * whose host holds the totals (`host.engine.totalOf`).
+   */
+  readonly totalOf: (subset: Subset.Subset) => Effect.Effect<number | undefined>;
   /** Journal a mutation and apply it optimistically; resolves on journal. */
   readonly mutate: (
     mutation: string,
@@ -667,6 +676,7 @@ export const fromView = (
           : Coverage.snapshotOf(options.snapshot, view.query)
       );
     },
+    totalOf: (subset) => view.totalOf?.(subset) ?? Effect.succeed(undefined),
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

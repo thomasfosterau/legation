@@ -597,3 +597,76 @@ before its linked windows are pulled) persists for that mirror until it is
 upgraded. A mirror that meets a host that predates it never sees a window
 pulled, so it forwards covered reads to the host's read path until the host is
 upgraded: correct, slower.
+
+## Amendment (#210): a façade-served listing carries `meta.total`, from a total each pull reports
+
+**Context.** The document writer emitted `data`, `included` and `links`, never
+`meta`. Every listing in the audited apps reads a total count from
+`meta` to decide whether pagination exists at all ("show all", "_n_ / _m_
+returned"). Since #209, an offset listing a subsuming subscription covers is
+answered from the replica, so such a listing would have reached the page
+without its count, silently. `Aggregate.count` is not an answer: it counts the
+synced rows, which for a windowed subscription is the window (24 for a
+4,000-row collection).
+
+**Decision (owner, 2026-10-23).** The unwindowed count rides the pull as
+subscription metadata. Reporting a total-requiring read as uncovered, or
+shipping only a `meta` channel, were not taken.
+
+1. **A pull reports each subscription's total.** The total of a subset is the
+   number of rows its `where` matches under the server's auth filter, whatever
+   its `orderBy`, `limit` and `cursor`. `PullResponse.totals` holds one number
+   per `PullRequest.subscriptions` entry, in order; named subscriptions get
+   none. It is additive and optional: an older client ignores it, and an older
+   server's pull has none. It is omitted when the backend cannot count, or when
+   the pull middleware changed the number of subscriptions, since then no total
+   can be placed against the client's list. This adds a member to the pull for
+   the façade's benefit: the engine itself reads no total.
+2. **The backend counts where it already reads.** `Backend.evaluateCounted`
+   (optional) answers the pull's subsets with `evaluate`'s entries and each
+   subset's total. The memory, SQL and JSON:API backends all read every row a
+   subset's `where` matches and cut the window locally (`Subset.applyCounted`),
+   so the total costs no extra statement or request; on SQL it is the same
+   `UNION ALL` statement as `evaluateMany` (#505). The JSON:API backend prefers
+   the upstream listing's own `meta.total` when it sends a non-negative integer.
+   `BackendContract` rule 15 checks that the entries are `evaluate`'s and that
+   each total is the size of `evaluate`'s answer for the unwindowed subset.
+3. **The engine keeps the last pull's totals, in memory.** `ClientEngine.totalOf`
+   (and `Client.totalOf` over an owned engine) finds a total by collection and
+   conjunct set (`Coverage.sameConjuncts`), so order and window play no part.
+   The totals are set before the pull counts as applied, so a window the #426
+   marks call pulled has its total. They are not persisted, as the marks are
+   not (#426 decision 4), and an identity reset clears them with the
+   subscriptions.
+4. **The façade writes `meta.total` on every collection document it serves.**
+   For a read an unwindowed subscription covers, the total is counted from the
+   replica (every matching row is there; with no window on the request either,
+   it is the length of the root rows the request already read). For a read only
+   a windowed subscription covers, it is that subscription's pulled total
+   (`Options.totalOf`: `host.engine.totalOf` in a worker). Coverage of a
+   windowed subscription already requires the same conjunct set (section 3,
+   rule 3), so the subscription's total is the request's. When no total is
+   known (no `totalOf`, a backend that cannot count, or no pull since start),
+   the read is **uncovered**: forwarded online, the 503 document offline. A
+   listing is never served without its total or with the window's row count in
+   its place. A single-resource document carries no `meta`.
+5. **The derived REST handler writes the same member.** `RestHandlers.list`
+   writes `meta.total` from `SyncServer.readTotal`: the read's root subset
+   through the same filterable check, `onRead` middleware and auth filters as
+   its rows, then `Backend.totalsOf` (`evaluateCounted`, or the unwindowed
+   subset evaluated and counted). So section 6 holds with `meta`: the same URL
+   gives the same document, total included.
+
+**The `meta` contract.** A collection document the façade serves carries
+exactly `meta: { total }`. App-specific `meta` members an app's own handler adds
+are not reproduced: the replica has nothing to compute them from. Such an
+endpoint should either not be routed through the façade (declare it outside the
+api the façade reflects), or accept that a replica-served answer omits them.
+The façade does not try to detect such members.
+
+**Consistency.** The total and the window come from the same backend read on
+the memory, SQL and JSON:API backends, inside the pull's watermark-checked pass
+(#286). The overlay is not counted: a façade answer from a windowed
+subscription carries the server's total beside rows that include the client's
+optimistic writes, until the next pull. An answer from an unwindowed
+subscription counts the replica, overlay included, as its rows do.

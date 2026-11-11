@@ -17,11 +17,13 @@ import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import {
   Authorization,
+  type Backend,
   Client,
   ClientStore,
   Edge,
@@ -131,6 +133,12 @@ const GROUP = "group-a";
  * where a second read would. `racePut` writes a row to the server and pulls it, as
  * another client's write does.
  */
+/** Every node's collection readable by anyone: the server's and the REST handler's policy alike. */
+const allowEverything = Authorization.policy(
+  Object.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
+  { collections: nodes.collections }
+);
+
 const makeReplica = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
@@ -154,10 +162,7 @@ const makeReplica = Effect.gen(function* () {
   const server = yield* Server.make({
     backend,
     auth: {
-      policy: Authorization.policy(
-        Object.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
-        { collections: nodes.collections }
-      ),
+      policy: allowEverything,
     },
   });
   const transport = yield* Transport.makeInMemory(server.handler, GROUP);
@@ -209,7 +214,7 @@ const makeReplica = Effect.gen(function* () {
       yield* engine.pull;
     }).pipe(Effect.orDie);
   const client = Client.fromView(nodes, view, { urls: JsonApiQuery.urlReads(nodes) });
-  return { client, engine, store, arm, rootReads, racePut };
+  return { client, engine, store, arm, rootReads, racePut, backend };
 });
 
 interface Facade {
@@ -224,6 +229,8 @@ interface Facade {
   readonly rootReads: Ref.Ref<number>;
   /** Write a row to the server and pull it into the replica: the pull a race lands. */
   readonly racePut: (collection: string, value: SeedRow) => Effect.Effect<void>;
+  /** The server's backend, for a derived REST handler over the same rows. */
+  readonly backend: Backend.Backend;
 }
 
 /** The relational pin of the fixture: products with their variants. */
@@ -233,10 +240,10 @@ const RELATIONAL_PIN = "/jsonapi/products?include=variants";
 /** A façade over the replica, with the shell's pins applied and pulled. */
 const makeFacade = (
   pins: ReadonlyArray<string>,
-  options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl">> = {}
+  options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl" | "totalOf">> = {}
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { client, engine, store, arm, rootReads, racePut } = yield* makeReplica;
+    const { client, engine, store, arm, rootReads, racePut, backend } = yield* makeReplica;
     yield* Effect.forEach(
       pins,
       (url) =>
@@ -265,12 +272,13 @@ const makeFacade = (
       api,
       view: client.view,
       coverageOf: client.coverageOf,
+      totalOf: client.totalOf,
       cookie: store.getCookie,
       online: () => online.current,
       ...options,
     });
     const docs = ReplicaDocuments.make({ nodes, prefix: "/jsonapi" });
-    return { handler, client, engine, docs, online, arm, rootReads, racePut };
+    return { handler, client, engine, docs, online, arm, rootReads, racePut, backend };
   }).pipe(Effect.orDie);
 
 const jsonApi = (url: string, init: RequestInit = {}): Request =>
@@ -305,7 +313,9 @@ describe("JsonApiFacade", () => {
         const cookie = defined(response).headers.get(JsonApiFacade.servedAtHeader);
         expect(cookie).not.toBeNull();
         expect(cookie ?? "").not.toBe("");
-        const local = yield* docs.fromUrl(client.view, url);
+        // The unwindowed pin holds every product, so the total is the filter over the
+        // replica (#210): the two audio products.
+        const local = yield* docs.fromUrl(client.view, url, { total: 2 });
         expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
         // The rows themselves: audio products by name descending, with linkage.
         const document = local as { data: ReadonlyArray<{ id: string }> };
@@ -414,16 +424,14 @@ describe("JsonApiFacade", () => {
           const url = "/jsonapi/products?sort=name&page[offset]=0&page[limit]=2";
           const response = yield* handler.handle(jsonApi(url));
           expect(defined(response).status).toBe(200);
-          const local = yield* docs.fromUrl(client.view, url);
-          // The byte-equal comparison above is honest about what it checks:
-          // the document writer emits no `meta` yet (a total count is #210),
-          // so "same URL, same result" here compares the members the writer
-          // emits today (data, included, links) — not a total this document
-          // does not carry. Once #210 lands, this gap closes on both sides
-          // at once, since both call the one writer.
-          const document = local as { data: ReadonlyArray<{ id: string }>; meta?: unknown };
-          expect(document.meta).toBeUndefined();
-          expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
+          // The window holds 2 of the 3 products; `meta.total` is the collection's 3,
+          // the pull's total for the pinned subscription, not the window's 2 (#210).
+          // SAFETY: a 200 from the façade is a collection document.
+          const served = (yield* body(defined(response))) as { meta?: { total: number } };
+          expect(served.meta).toEqual({ total: 3 });
+          const local = yield* docs.fromUrl(client.view, url, { total: 3 });
+          expect(bytes(served)).toBe(bytes(local));
+          const document = local as { data: ReadonlyArray<{ id: string }> };
           expect(document.data.map((row) => row.id)).toEqual(["p-3", "p-1"]);
         })
       )
@@ -458,6 +466,63 @@ describe("JsonApiFacade", () => {
   );
 
   it.effect(
+    "a windowed listing carries the collection's total: the same document the derived REST handler writes (#210)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { handler, backend } = yield* makeFacade([
+            "/jsonapi/products?sort=name&page[limit]=2",
+            "/jsonapi/variants",
+          ]);
+          const url = "/jsonapi/products?sort=name&page[limit]=2";
+          const response = yield* handler.handle(jsonApi(url));
+          expect(defined(response).status).toBe(200);
+          // SAFETY: a 200 from the façade is a collection document.
+          const local = (yield* body(defined(response))) as {
+            data: ReadonlyArray<{ id: string }>;
+            meta?: unknown;
+          };
+          // Two rows in the window, three products in the collection.
+          expect(local.data).toHaveLength(2);
+          expect(local.meta).toEqual({ total: 3 });
+          const rest = RestHandlers.make({
+            nodes,
+            backend,
+            policy: allowEverything,
+            context: () => Effect.succeed({ clientGroupId: "http" }),
+            prefix: "/jsonapi",
+          });
+          const served = yield* rest.list(defined(JsonApiQuery.resourcesOf(nodes).get("products")))(
+            {
+              request: HttpServerRequest.fromWeb(new Request(`http://shop.test${url}`)),
+            }
+          );
+          expect(bytes(local)).toBe(bytes(served));
+        })
+      )
+  );
+
+  it.effect(
+    "without a pulled total, a read only a windowed subscription covers is not served (#210)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const pins = ["/jsonapi/products?sort=name&page[limit]=2", "/jsonapi/variants"];
+          const noTotal = { totalOf: () => Effect.succeed(undefined) };
+          const url = "/jsonapi/products?sort=name&page[limit]=2";
+          // Online: forwarded, so the server's document (with its total) answers.
+          const { handler } = yield* makeFacade(pins, noTotal);
+          expect(yield* handler.handle(jsonApi(url))).toBeUndefined();
+          // Offline: the 503 document, never a page without its total.
+          const { handler: offline, online } = yield* makeFacade(pins, noTotal);
+          online.current = false;
+          const response = yield* offline.handle(jsonApi(url));
+          expect(defined(response).status).toBe(503);
+        })
+      )
+  );
+
+  it.effect(
     "an unwindowed subscription covers any offset — the limit-prefix rule needs no upper bound",
     () =>
       Effect.scoped(
@@ -469,7 +534,8 @@ describe("JsonApiFacade", () => {
           const url = "/jsonapi/products?sort=name&page[offset]=1&page[limit]=1";
           const response = yield* handler.handle(jsonApi(url));
           expect(defined(response).status).toBe(200);
-          const local = yield* docs.fromUrl(client.view, url);
+          // Counted from the replica, which the unwindowed pin holds whole (#210).
+          const local = yield* docs.fromUrl(client.view, url, { total: 3 });
           expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
           const document = local as { data: ReadonlyArray<{ id: string }> };
           expect(document.data.map((row) => row.id)).toEqual(["p-1"]);
@@ -687,6 +753,7 @@ describe("JsonApiFacade", () => {
             { type: "categories", id: "c-desk", attributes: { name: "Desk" } },
           ],
           links: { self: "/jsonapi/categories" },
+          meta: { total: 2 },
         });
       })
     )

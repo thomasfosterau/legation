@@ -72,6 +72,9 @@
     ],
     "links": {
       "self": "/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04"
+    },
+    "meta": {
+      "total": 6
     }
   }
 }

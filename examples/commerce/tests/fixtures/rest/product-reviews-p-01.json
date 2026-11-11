@@ -44,6 +44,9 @@
     ],
     "links": {
       "self": "/jsonapi/reviews?filter[productId]=p-01&sort=-createdAt"
+    },
+    "meta": {
+      "total": 2
     }
   }
 }

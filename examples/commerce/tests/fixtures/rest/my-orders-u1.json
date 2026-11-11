@@ -27,6 +27,9 @@
     ],
     "links": {
       "self": "/jsonapi/orders?filter[userId]=u1&sort=-createdAt"
+    },
+    "meta": {
+      "total": 2
     }
   }
 }

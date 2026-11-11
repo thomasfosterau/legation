@@ -59,6 +59,7 @@ const makeWorld = Effect.gen(function* () {
   const facade = makeFacade({
     view: client.view,
     coverageOf: client.coverageOf,
+    totalOf: client.totalOf,
     cookie: store.getCookie,
     online: () => online.current,
     mutate: engine.mutateWithAck,

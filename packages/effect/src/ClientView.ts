@@ -98,6 +98,13 @@ export interface ClientView {
    * the channel.
    */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
+  /**
+   * A subscription's total as the last pull reported it (#210):
+   * {@link ClientEngineModule.ClientEngine.totalOf}. Present only for an
+   * engine-backed view (`fromEngine`); a `Mirror` has no pulls of its own,
+   * so a façade answering from a mirror's replica has no totals to give.
+   */
+  readonly totalOf?: ((subset: Subset.Subset) => Effect.Effect<number | undefined>) | undefined;
   /** Register/release a subscription (synced by the engine host). */
   readonly subscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
   readonly unsubscribe: (subset: Subset.Subset) => Effect.Effect<void, ClientViewError>;
@@ -220,6 +227,7 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     observeWindow: (subset) => engine.observeWindow(subset),
     observeChanges: (subset, options) => engine.observeChanges(subset, options),
     pulled: (key) => marks.pulled(key),
+    totalOf: (subset) => engine.totalOf(subset),
     subscribe: (subset) => {
       const key = Subset.hash(subset);
       return marks.open(key, subset).pipe(

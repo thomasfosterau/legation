@@ -131,7 +131,7 @@ import type { ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 import * as Ledger from "./Ledger.js";
-import { ResourceObject } from "./schema.js";
+import { type JsonApiDocument, ResourceObject } from "./schema.js";
 
 /**
  * One JSON:API write — the unit both delivery paths speak: a create (`POST`,
@@ -574,6 +574,12 @@ const ledgerOf = (group: Group): Ledger.GroupLedger => ({
 });
 
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
+/** A listing's own `meta.total` (#210), when it reports a non-negative integer. */
+const reportedTotal = (document: JsonApiDocument): number | undefined => {
+  const total = P.hasProperty(document.meta, "total") ? document.meta.total : undefined;
+  return P.isNumber(total) && Number.isInteger(total) && total >= 0 ? total : undefined;
+};
+
 export const make = (
   config: JsonApiBackendConfig
 ): Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> =>
@@ -803,16 +809,33 @@ export const make = (
         );
       });
 
-    const entriesFrom = (values: ReadonlyArray<JsonApiRow>, subset: Subset.Subset) =>
-      Subset.apply(
+    // A subset's entries and total (#210) from the rows a listing (or the
+    // include cache) holds: the window is cut here, so the total is the
+    // matching rows before the cut, unless the listing reported its own
+    // `meta.total` (an upstream that pages its listings knows better).
+    const countedFrom = (
+      values: ReadonlyArray<JsonApiRow>,
+      subset: Subset.Subset,
+      reported?: number
+    ): Backend.CountedEntries => {
+      const { rows, total } = Subset.applyCounted(
         values.map((value) => ({ id: value.id, value })),
         subset
-      ).map((row) => ({ id: row.id, version: versionOf(row.value) }));
+      );
+      return {
+        entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
+        total: reported ?? total,
+      };
+    };
 
-    const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+    const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
+
+    const evaluateOne = (
+      subset: Subset.Subset
+    ): Effect.Effect<Backend.CountedEntries, BackendError> =>
       Effect.gen(function* () {
         const list = config.resources.get(subset.collection)?.list;
-        if (list === undefined) return [];
+        if (list === undefined) return NO_ROWS;
         // Correlated Exists is a relational join this REST backend can't resolve;
         // fail closed rather than silently skip the filter (denormalize, or use a
         // backend that resolves Exists).
@@ -831,7 +854,7 @@ export const make = (
           if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
             const cached = (yield* Ref.get(cache)).get(subset.collection);
             if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
-              return entriesFrom([...cached.values()], subset);
+              return countedFrom([...cached.values()], subset);
             }
           }
         }
@@ -842,7 +865,7 @@ export const make = (
         const encoded = yield* encoder
           .encode(subset)
           .pipe(Effect.mapError(backendError(`Subset on "${subset.collection}" has no URL form`)));
-        if (Option.isNone(encoded)) return [];
+        if (Option.isNone(encoded)) return NO_ROWS;
         const includeParam = (includes[subset.collection] ?? []).join(",");
         const query = appendQuery(
           encoded.value,
@@ -861,8 +884,15 @@ export const make = (
         yield* harvestIncluded(
           loaded.included.map((row) => ({ ...toRow(row.value), $collection: row.collection }))
         );
-        return entriesFrom(values, subset);
+        return countedFrom(values, subset, reportedTotal(document));
       });
+
+    const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+      Effect.map(evaluateOne(subset), (answer) => answer.entries);
+
+    // Each subset is the listing `evaluate` makes; the total comes with it (#210).
+    const evaluateCounted: NonNullable<Backend.Backend["evaluateCounted"]> = (_context, subsets) =>
+      Effect.forEach(subsets, evaluateOne, { concurrency: 1 });
 
     const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
       Effect.gen(function* () {
@@ -1381,6 +1411,7 @@ export const make = (
       lastMutationIds: lastMutationIdsOf,
       rejections: rememberedRejections,
       evaluate,
+      evaluateCounted,
       getRows,
     });
   });

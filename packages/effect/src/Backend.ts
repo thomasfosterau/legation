@@ -41,6 +41,10 @@
  *    backend can answer a pull's subsets in a bounded number of round trips;
  *    its result for each subset must equal `evaluate`'s for that subset, in
  *    the same order.
+ *    An optional `evaluateCounted` (#210) returns the same entries with each
+ *    subset's **total**: the number of rows its `where` matches, whatever its
+ *    window (`orderBy`, `limit`, `cursor`), so the total of a windowed
+ *    subscription is the collection's, not the window's.
  * 3. `getRows` returns encoded row values for explicit ids.
  * 4. `rejections` lists the permanent rejections a client group still remembers,
  *    each with its reason (#365). A pull reports those its watermark covers, so
@@ -66,6 +70,7 @@ import type { RowId, RowVersion } from "./Collection.js";
 import { BackendError, type MutationRejected } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";
 import * as RejectionMemory from "./RejectionMemory.js";
+import * as Subsets from "./Subset.js";
 import type { Subset } from "./Subset.js";
 import * as UnknownMutator from "./UnknownMutator.js";
 
@@ -105,6 +110,16 @@ export interface ChangeHint {
 export interface SubsetEntry {
   readonly id: RowId;
   readonly version: RowVersion;
+}
+
+/**
+ * A subset's entries with its total (#210): {@link Backend.evaluate}'s entries,
+ * and the number of rows its `where` matches before `cursor` and `limit` cut
+ * the window, i.e. what `evaluate` returns for {@link Subset.unwindowed}.
+ */
+export interface CountedEntries {
+  readonly entries: ReadonlyArray<SubsetEntry>;
+  readonly total: number;
 }
 
 /** A mutation the backend acknowledged but permanently rejected. */
@@ -181,6 +196,25 @@ export interface Backend {
       ) => Effect.Effect<ReadonlyArray<ReadonlyArray<SubsetEntry>>, BackendError>)
     | undefined;
 
+  /**
+   * Evaluate several **already-authorized** subsets with their totals (#210):
+   * one {@link CountedEntries} per subset, in the order of `subsets`, whose
+   * `entries` equal {@link Backend.evaluate}'s for that subset and whose
+   * `total` is the length of `evaluate`'s answer for the subset without its
+   * window ({@link Subset.unwindowed}). Optional: a backend that reads every
+   * matching row anyway (the memory and SQL backends filter, then window)
+   * provides it at no extra cost, and the sync server then reports each
+   * windowed subscription's total on the pull (`PullResponse.totals`).
+   * Without it a pull carries no totals. `BackendContract` checks both
+   * equalities on every backend that provides it.
+   */
+  readonly evaluateCounted?:
+    | ((
+        context: SyncContext,
+        subsets: ReadonlyArray<Subset>
+      ) => Effect.Effect<ReadonlyArray<CountedEntries>, BackendError>)
+    | undefined;
+
   /** Fetch encoded row values for explicit ids. Missing ids are omitted. */
   readonly getRows: (
     context: SyncContext,
@@ -191,6 +225,10 @@ export interface Backend {
     BackendError
   >;
 }
+
+/** A failure for a batch answer of the wrong length: `what` returned `got` lists for `want` subsets. */
+const wrongLength = (what: string, got: number, want: number) =>
+  new BackendError({ message: `${what} returned ${got} entry lists for ${want} subsets` });
 
 /**
  * Evaluate `subsets` to their entries, one list per subset in order: through
@@ -225,13 +263,62 @@ export const evaluateAll = (
     : many(context, subsets).pipe(
         Effect.filterOrFail(
           (lists) => lists.length === subsets.length,
-          (lists) =>
-            new BackendError({
-              message: `evaluateMany returned ${lists.length} entry lists for ${subsets.length} subsets`,
-            })
+          (lists) => wrongLength("evaluateMany", lists.length, subsets.length)
         )
       );
 };
+
+/**
+ * Evaluate `subsets` with their totals where the backend can count them
+ * (#210): through {@link Backend.evaluateCounted} when it provides one, every
+ * `total` set; else {@link evaluateAll}, every `total` `undefined`. Fails
+ * with a `BackendError` when `evaluateCounted` returns a different number of
+ * answers than it was given subsets.
+ */
+export const evaluateCountedAll = (
+  backend: Backend,
+  context: SyncContext,
+  subsets: ReadonlyArray<Subset>
+): Effect.Effect<
+  ReadonlyArray<{
+    readonly entries: ReadonlyArray<SubsetEntry>;
+    readonly total: number | undefined;
+  }>,
+  BackendError
+> => {
+  if (Arr.isReadonlyArrayEmpty(subsets)) return Effect.succeed([]);
+  const counted = backend.evaluateCounted;
+  if (counted === undefined) {
+    return Effect.map(evaluateAll(backend, context, subsets), (lists) =>
+      lists.map((entries) => ({ entries, total: undefined }))
+    );
+  }
+  return counted(context, subsets).pipe(
+    Effect.filterOrFail(
+      (answers) => answers.length === subsets.length,
+      (answers) => wrongLength("evaluateCounted", answers.length, subsets.length)
+    )
+  );
+};
+
+/**
+ * Each subset's total (#210): the number of rows its `where` matches,
+ * whatever its window. Through {@link Backend.evaluateCounted} when the
+ * backend provides one; else by evaluating each subset without its window
+ * ({@link Subset.unwindowed}) and counting, which reads every matching id.
+ */
+export const totalsOf = (
+  backend: Backend,
+  context: SyncContext,
+  subsets: ReadonlyArray<Subset>
+): Effect.Effect<ReadonlyArray<number>, BackendError> =>
+  backend.evaluateCounted === undefined
+    ? Effect.map(evaluateAll(backend, context, subsets.map(Subsets.unwindowed)), (lists) =>
+        lists.map((entries) => entries.length)
+      )
+    : Effect.map(evaluateCountedAll(backend, context, subsets), (answers) =>
+        answers.map((answer) => answer.total ?? answer.entries.length)
+      );
 
 /** The {@link Backend} service the sync server reads and writes through. */
 export const Backend = Context.Service<Backend>("@thomasfosterau/legation/Backend");

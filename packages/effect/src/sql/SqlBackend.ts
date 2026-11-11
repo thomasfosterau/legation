@@ -549,13 +549,15 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       );
   };
 
-  // A subset's entries from the rows its `WHERE` selected (`where` is the
-  // subset's predicate with its `Exists` nodes resolved).
-  const entriesOf = (
+  // A subset's entries and total from the rows its `WHERE` selected (`where`
+  // is the subset's predicate with its `Exists` nodes resolved). The
+  // statement selects every matching row and the window is cut here, so the
+  // total (#210) is the live matching rows before the cut.
+  const countedOf = (
     subset: Subset.Subset,
     where: Predicate.Predicate,
     rows: ReadonlyArray<SqlRow>
-  ): ReadonlyArray<Backend.SubsetEntry> => {
+  ): Backend.CountedEntries => {
     const idColumn = idOf(subset.collection);
     // A tombstoned row is dropped here, before ordering/limit/cursor: it is
     // not a live row to page over, and its absence from the returned
@@ -565,16 +567,24 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     const values = rows
       .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
       .filter((row) => isLive(subset.collection, row.value));
-    return Subset.apply(values, { ...subset, where }).map((row) => ({
-      id: row.id,
-      version: versionFor(subset.collection, row.value),
-    }));
+    const { rows: windowed, total } = Subset.applyCounted(values, { ...subset, where });
+    return {
+      entries: windowed.map((row) => ({
+        id: row.id,
+        version: versionFor(subset.collection, row.value),
+      })),
+      total,
+    };
   };
 
-  const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+  const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
+
+  const evaluateOne = (
+    subset: Subset.Subset
+  ): Effect.Effect<Backend.CountedEntries, BackendError> =>
     Effect.gen(function* () {
       const mapping = config.tables[subset.collection];
-      if (mapping === undefined) return [];
+      if (mapping === undefined) return NO_ROWS;
       const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
       const rows = yield* executor.query(
         Sql.compileSelect({
@@ -585,8 +595,11 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           foreignKinds,
         })
       );
-      return entriesOf(subset, where, rows);
+      return countedOf(subset, where, rows);
     });
+
+  const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+    Effect.map(evaluateOne(subset), (answer) => answer.entries);
 
   // A read relation's column names, for a `Columns` dialect (SQLite).
   // Looked up once per relation and kept for the backend's life: a read
@@ -704,8 +717,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // exactly as `evaluate` finishes them. Round trips: one statement, plus one
   // per `Exists` node (resolved first, as in `evaluate`), plus on SQLite one
   // column lookup per read relation the first time it is read.
-  const evaluateMany = (union: Sql.UnionRows) =>
-    ((context, subsets) =>
+  const evaluateCounted = (union: Sql.UnionRows) =>
+    ((_context, subsets) =>
       Effect.gen(function* () {
         const arms = yield* Effect.forEach(subsets, manyArm(union), { concurrency: 1 });
         const present = Arr.getSomes(arms);
@@ -745,23 +758,28 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         );
         if (Arr.isReadonlyArrayNonEmpty(inexact)) {
           yield* Effect.forEach(inexact, warnInexact, { concurrency: 1, discard: true });
-          return yield* Effect.forEach(subsets, (subset) => evaluate(context, subset), {
-            concurrency: 1,
-          });
+          return yield* Effect.forEach(subsets, evaluateOne, { concurrency: 1 });
         }
         const bySubset = Arr.groupBy(read, (row) => String(row.subset));
         return arms.map((arm) =>
           Option.match(arm, {
-            onNone: () => [],
+            onNone: () => NO_ROWS,
             onSome: ({ index, subset, where }) =>
-              entriesOf(
+              countedOf(
                 subset,
                 where,
                 (bySubset[String(index)] ?? []).map((row) => row.row)
               ),
           })
         );
-      })) satisfies NonNullable<Backend.Backend["evaluateMany"]>;
+      })) satisfies NonNullable<Backend.Backend["evaluateCounted"]>;
+
+  // The same statement, entries only (#505).
+  const evaluateMany = (union: Sql.UnionRows): NonNullable<Backend.Backend["evaluateMany"]> => {
+    const counted = evaluateCounted(union);
+    return (context, subsets) =>
+      Effect.map(counted(context, subsets), (answers) => answers.map((answer) => answer.entries));
+  };
 
   // Fetch the raw rows for explicit ids (shared by getRows and hint
   // enrichment). Reads see the push transaction's own writes. A tombstoned
@@ -1192,6 +1210,11 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     rejections: (context) => rememberedRejections(context.clientGroupId),
     evaluate,
     evaluateMany: dialect.unionRows === undefined ? undefined : evaluateMany(dialect.unionRows),
+    // Without a batched statement, each subset is its own (as `evaluate`).
+    evaluateCounted:
+      dialect.unionRows === undefined
+        ? (_context, subsets) => Effect.forEach(subsets, evaluateOne, { concurrency: 1 })
+        : evaluateCounted(dialect.unionRows),
     getRows,
   });
 };

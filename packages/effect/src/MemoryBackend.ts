@@ -54,6 +54,7 @@ import {
   transaction,
   withoutTransaction,
   type Commit,
+  type CountedEntries,
   type Opened,
   type Outcome,
   type RejectedMutation,
@@ -156,6 +157,23 @@ interface MemoryState {
    */
   readonly rejections: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<number, string>>>;
 }
+
+/**
+ * A subset's entries and total over a state (#210): its correlated `Exists`
+ * nodes resolved against the stored rows, then filter, sort and window, the
+ * total counted before the window.
+ */
+const countedOver = (s: MemoryState, subset: Subset.Subset): Effect.Effect<CountedEntries> =>
+  Effect.gen(function* () {
+    const collectionValues = (collection: string) =>
+      [...(s.rows.get(collection) ?? new Map<string, MemoryRow>()).values()].map((r) => r.value);
+    const where = yield* Predicate.resolveExists(subset.where, (node) =>
+      Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
+    );
+    const rows = [...(s.rows.get(subset.collection) ?? new Map<string, MemoryRow>()).values()];
+    const { rows: windowed, total } = Subset.applyCounted(rows, { ...subset, where });
+    return { entries: windowed.map((row) => ({ id: row.id, version: row.version })), total };
+  });
 
 const emptyState: MemoryState = {
   rows: new Map(),
@@ -527,22 +545,15 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           )
         ),
       evaluate: (_context, subset) =>
-        Effect.gen(function* () {
-          const s = yield* Ref.get(state);
-          const collectionValues = (collection: string) =>
-            [...(s.rows.get(collection) ?? new Map<string, MemoryRow>()).values()].map(
-              (r) => r.value
-            );
-          // Resolve correlated Exists nodes against in-memory storage.
-          const where = yield* Predicate.resolveExists(subset.where, (node) =>
-            Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
-          );
-          const rows = [...(s.rows.get(subset.collection) ?? new Map()).values()];
-          return Subset.apply(rows, { ...subset, where }).map((row) => ({
-            id: row.id,
-            version: row.version,
-          }));
-        }),
+        Ref.get(state).pipe(
+          Effect.flatMap((s) => countedOver(s, subset)),
+          Effect.map((answer) => answer.entries)
+        ),
+      // The total is free here: every matching row is read before the window (#210).
+      evaluateCounted: (_context, subsets) =>
+        Effect.flatMap(Ref.get(state), (s) =>
+          Effect.forEach(subsets, (subset) => countedOver(s, subset), { concurrency: 1 })
+        ),
       getRows: (_context, collection, ids) =>
         Ref.get(state).pipe(
           Effect.map((s) => {

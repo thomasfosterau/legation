@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { type Backend, evaluateAll } from "../Backend.js";
+import { type Backend, evaluateAll, evaluateCountedAll, totalsOf } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
@@ -229,6 +229,29 @@ describe("verifyBackendContract", () => {
       expect(failure.rule).toContain("evaluateMany");
     })
   );
+  it.effect(
+    "catches a backend whose evaluateCounted reports the window's size as the total (#210)",
+    () =>
+      Effect.gen(function* () {
+        const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+        const windowed: Backend = {
+          ...inner,
+          evaluateCounted: (context, subsets) =>
+            Effect.forEach(
+              subsets,
+              (subset) =>
+                inner
+                  .evaluate(context, subset)
+                  .pipe(Effect.map((entries) => ({ entries, total: entries.length }))),
+              { concurrency: 1 }
+            ),
+        };
+        const failure = yield* Effect.flip(BackendContract.verifyBackendContract(windowed));
+        expect(failure._tag).toBe("ContractViolation");
+        expect(failure.rule).toContain("evaluateCounted");
+        expect(failure.message).toContain("total");
+      })
+  );
 });
 
 describe("Backend.evaluateAll (#505)", () => {
@@ -262,6 +285,65 @@ describe("Backend.evaluateAll (#505)", () => {
         evaluateAll(short, { clientGroupId: "g" }, [Subset.make({ collection: "a" })])
       );
       expect(error.message).toContain("0 entry lists for 1 subsets");
+    })
+  );
+});
+
+describe("Backend totals (#210)", () => {
+  const seeded = Effect.fnUntraced(function* () {
+    const backend = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+    yield* Effect.forEach(
+      [1, 2, 3, 4, 5],
+      (n) =>
+        backend.applyMutations({ clientGroupId: "g" }, [
+          {
+            clientId: "c",
+            mutationId: n,
+            mutator: BackendContract.putRow.name,
+            args: { collection: "items", id: `i-${n}`, value: { id: `i-${n}`, n } },
+            createdAt: 0,
+          },
+        ]),
+      { concurrency: 1, discard: true }
+    );
+    return backend;
+  });
+  const window = Subset.make({
+    collection: "items",
+    orderBy: [{ field: "n", direction: "asc" }],
+    limit: 2,
+  });
+
+  it.effect("the memory backend counts the collection, not the window", () =>
+    Effect.gen(function* () {
+      const backend = yield* seeded();
+      const [answer] = yield* evaluateCountedAll(backend, { clientGroupId: "g" }, [window]);
+      expect(answer?.entries.map((entry) => entry.id)).toEqual(["i-1", "i-2"]);
+      expect(answer?.total).toBe(5);
+      expect(yield* totalsOf(backend, { clientGroupId: "g" }, [window])).toEqual([5]);
+    })
+  );
+
+  it.effect(
+    "without evaluateCounted a pull's evaluation has no totals, and totalsOf counts the unwindowed subset",
+    () =>
+      Effect.gen(function* () {
+        const backend: Backend = { ...(yield* seeded()), evaluateCounted: undefined };
+        const [answer] = yield* evaluateCountedAll(backend, { clientGroupId: "g" }, [window]);
+        expect(answer?.entries).toHaveLength(2);
+        expect(answer?.total).toBeUndefined();
+        expect(yield* totalsOf(backend, { clientGroupId: "g" }, [window])).toEqual([5]);
+      })
+  );
+
+  it.effect("fails when evaluateCounted returns an answer count other than the subsets'", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const short: Backend = { ...inner, evaluateCounted: () => Effect.succeed([]) };
+      const error = yield* Effect.flip(
+        evaluateCountedAll(short, { clientGroupId: "g" }, [Subset.make({ collection: "a" })])
+      );
+      expect(error.message).toContain("evaluateCounted returned 0 entry lists for 1 subsets");
     })
   );
 });

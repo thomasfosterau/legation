@@ -148,6 +148,17 @@ export const PullResponse = Schema.Struct({
    * `lastMutationIds` covers, each with its reason. Omitted when none.
    */
   rejected: Schema.optional(Schema.Array(RejectedMutation)),
+  /**
+   * Each subscription's **total** (#210, ADR-0029's #210 amendment): how many
+   * rows its subset's `where` matches under the server's auth filter,
+   * whatever its window. One entry per `PullRequest.subscriptions` entry, in
+   * that order, so a windowed subscription's total is the collection's and
+   * not the window's. Named subscriptions get none. Additive and optional:
+   * omitted when the backend cannot count (`Backend.evaluateCounted` absent)
+   * or the pull middleware changed the number of subscriptions; an older
+   * client ignores it.
+   */
+  totals: Schema.optional(Schema.Array(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))),
 });
 
 /** The type {@link PullResponse} decodes to. */

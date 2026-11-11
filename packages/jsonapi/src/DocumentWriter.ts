@@ -91,10 +91,25 @@ export interface ResourceValue {
   readonly relationships?: Readonly<Record<string, RelationshipValue>>;
 }
 
-/** A collection document: `{ data: [...], included?, links }`, with `included` exactly when the read has an `include`. */
+/**
+ * The `meta` a collection document carries (#210): `total`, how many rows the
+ * read's filter matches under the caller's auth filter, whatever its page. The
+ * derived REST handler and the façade write it from the same place, so the
+ * same URL carries the same total on either side (ADR-0029's #210 amendment).
+ */
+export type CollectionMeta = {
+  readonly total: number;
+};
+
+/**
+ * A collection document: `{ data: [...], included?, links, meta? }`, with
+ * `included` exactly when the read has an `include` and `meta` when the
+ * caller gave {@link Input.meta}.
+ */
 export type CollectionDocument = Handlers.DocumentValue<
   ReadonlyArray<ResourceValue>,
-  ResourceValue
+  ResourceValue,
+  CollectionMeta
 >;
 
 /** A single-resource document: `{ data: resource | null, included?, links }`, with `included` exactly when the read has an `include`. */
@@ -129,6 +144,11 @@ export interface Input {
   readonly fields?: JsonApiQuery.Projection;
   /** Prepended to every link (the api's mount path, e.g. `/jsonapi`); default `""`. */
   readonly prefix?: string;
+  /**
+   * A collection document's `meta` (#210): the read's total. Written as given;
+   * absent, the document has no `meta`. A single-resource document ignores it.
+   */
+  readonly meta?: CollectionMeta | undefined;
 }
 
 // ─── Row helpers (shared with the linkage derivation) ────────────────────────
@@ -360,14 +380,17 @@ export const collection = (input: Input): CollectionDocument => {
   const { data, included } = assemble({ ...input, rows: page }, nodeOf(input.nodes, input.read));
   const next = nextLink(input, page);
   const prev = prevLink(input);
-  return Handlers.collection(data, {
+  const options = {
     ...(included === undefined ? {} : { included }),
     links: {
       self: selfLink(input),
       ...(next === undefined ? {} : { next }),
       ...(prev === undefined ? {} : { prev }),
     },
-  });
+  };
+  return input.meta === undefined
+    ? Handlers.collection(data, options)
+    : Handlers.collection(data, { ...options, meta: input.meta });
 };
 
 /**

@@ -118,13 +118,8 @@ import type {
   QueryError,
   StoreError,
 } from "@thomasfosterau/legation";
-import type {
-  ClientEngine,
-  ClientView,
-  Coverage,
-  MutationState,
-} from "@thomasfosterau/legation/internal";
-import { Subset } from "@thomasfosterau/legation/internal";
+import type { ClientEngine, ClientView, MutationState } from "@thomasfosterau/legation/internal";
+import { Coverage, Subset } from "@thomasfosterau/legation/internal";
 import * as Convention from "./Convention.js";
 import * as FacadeWrites from "./FacadeWrites.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
@@ -173,6 +168,17 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    * failing, the header is empty.
    */
   readonly cookie?: Effect.Effect<string | undefined, unknown>;
+  /**
+   * A subscription's total as the last pull reported it (#210), for
+   * `meta.total` on a collection read a **windowed** subscription covers:
+   * `host.engine.totalOf` in a worker, `client.totalOf` over a Client. A read
+   * an unwindowed subscription covers is counted from the replica and needs
+   * none. Absent, or answering `undefined`, a read only a windowed subscription
+   * covers has no honest total, so it is treated as uncovered: forwarded online,
+   * the `503` offline document otherwise. A listing is never served without
+   * its total, or with the window's row count in place of it.
+   */
+  readonly totalOf?: ((subset: Subset.Subset) => Effect.Effect<number | undefined>) | undefined;
   /**
    * The resource declarations linkage follows — those the api's endpoints
    * are declared with, so the replica writes the relationships the server
@@ -576,14 +582,44 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     return route === undefined ? undefined : { route, url };
   };
 
-  /** Rules 1 to 4 for every read the request needs, judged over the request's root rows: covered by the ledger, or not the façade's to answer. */
+  /**
+   * Rules 1 to 4 for every read the request needs, judged over the request's
+   * root rows: the verdict of the first (the request's own read), or `undefined`
+   * when any is uncovered and the request is not the façade's to answer.
+   */
   const covered = (
     reads: ReadonlyArray<Query.Read>,
     snapshot: Coverage.Snapshot
-  ): Effect.Effect<boolean> =>
+  ): Effect.Effect<Extract<Coverage.Verdict, { _tag: "Covered" }> | undefined> =>
     Effect.forEach(reads, (read) => coverageOf(read, { snapshot })).pipe(
-      Effect.map((verdicts) => verdicts.every((verdict) => verdict._tag === "Covered"))
+      Effect.map((verdicts) => {
+        const first = verdicts[0];
+        return first?._tag === "Covered" && verdicts.every((verdict) => verdict._tag === "Covered")
+          ? first
+          : undefined;
+      })
     );
+
+  /**
+   * A covered collection read's total (#210): counted from the replica when
+   * the covering subscription is unwindowed (every matching row is there, so
+   * the request's filter over them is exact), else the windowed subscription's
+   * pulled total (`totalOf`); `undefined` when neither is known.
+   */
+  const totalFor = (
+    verdict: Extract<Coverage.Verdict, { _tag: "Covered" }>,
+    root: Subset.Subset,
+    read: ReadonlyArray<ClientEngine.LocalRow>
+  ): Effect.Effect<number | undefined> =>
+    Coverage.isWindowed(verdict.by.root)
+      ? (options.totalOf?.(root) ?? Effect.succeed(undefined))
+      : // An unwindowed request's rows are its whole filter: count the rows already read (#426).
+        !Coverage.isWindowed(root)
+        ? Effect.succeed(read.length)
+        : view.query(Subset.unwindowed(root)).pipe(
+            Effect.map((rows): number | undefined => rows.length),
+            Effect.orElseSucceed(() => undefined)
+          );
 
   /** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
   const pinned = (
@@ -600,6 +636,30 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   const rejected = (error: QueryError): Effect.Effect<never, Outcome> =>
     Effect.flatMap(cookie, (served) => Effect.fail(queryFailure(error, served)));
 
+  /** Not the façade's to answer: forwarded online, the `503` offline document otherwise. */
+  const uncovered: Effect.Effect<never, Outcome> = Effect.suspend(() =>
+    online()
+      ? Effect.fail(forward)
+      : Effect.flatMap(cookie, (served) => Effect.fail(respond(offlineResponse(served))))
+  );
+
+  /**
+   * The request's root rows, read once: coverage is judged over them and the
+   * document is written from them, so a pull between the two cannot add a root
+   * row whose edge windows are not pulled yet (#426). A listing also needs its
+   * total (#210). A root that cannot be read, an uncovered read, or a listing
+   * whose total is unknown is {@link uncovered}.
+   */
+  const coveredRows = (needed: ReadonlyArray<Query.Read>, root: Subset.Subset, listing: boolean) =>
+    Effect.gen(function* () {
+      const rows = yield* view.query(root).pipe(Effect.catch(() => uncovered));
+      const verdict = yield* covered(needed, { subset: root, rows });
+      if (verdict === undefined) return yield* uncovered;
+      if (!listing) return { rows, meta: undefined };
+      const total = yield* totalFor(verdict, root, rows);
+      return total === undefined ? yield* uncovered : { rows, meta: { total } };
+    });
+
   const answer = ({ route, url }: Candidate) =>
     Effect.gen(function* () {
       const docs = writers.get(options.prefix ?? route.prefix);
@@ -608,24 +668,13 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
-      // The request's root rows, read once: coverage is judged over them and the document is
-      // written from them, so a pull between the two cannot add a root row whose edge windows
-      // are not pulled yet (#426). A root that cannot be read is uncovered, as before.
       const root = yield* Query.tryPlan(nodes, parsed.read).pipe(Effect.mapError(() => forward));
-      const rows = yield* view
-        .query(root.root)
-        .pipe(
-          Effect.orElseSucceed((): ReadonlyArray<ClientEngine.LocalRow> | undefined => undefined)
-        );
-      if (rows === undefined || !(yield* covered(needed, { subset: root.root, rows }))) {
-        if (online()) return yield* Effect.fail(forward);
-        return yield* Effect.flatMap(cookie, (served) =>
-          Effect.fail(respond(offlineResponse(served)))
-        );
-      }
+      const { rows, meta } = yield* coveredRows(needed, root.root, parsed.id === undefined);
       const replica = pinned(view, root.root, rows);
       const write: Effect.Effect<ReplicaDocuments.Document, QueryError> =
-        parsed.id === undefined ? docs.collection(replica, parsed) : docs.data(replica, parsed);
+        parsed.id === undefined
+          ? docs.collection(replica, parsed, meta)
+          : docs.data(replica, parsed);
       const document = yield* write.pipe(Effect.catch(rejected));
       // No such row in a faithful replica: the 404 is the endpoint's own.
       if (parsed.id !== undefined && document.data === null) return yield* Effect.fail(forward);
