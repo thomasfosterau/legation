@@ -68,6 +68,15 @@ unsubscribed URL still comes back from the network with no such header.
 
 ## Phase 2: SSR
 
+> **With the engine in a service worker, this phase is not available yet.**
+> `clientRuntime` hydrates a store it builds in the page, but with
+> Phase 1's topology the store is the worker's. The tab-to-worker hand-off
+> is designed (a proposed host-request envelope in ADR-0021, #146) and not
+> yet built.
+> Until it is, a service-worker app seeds its hooks from the page's own
+> `load` (each hook's `initial` option), and the steps below apply to an app
+> whose engine runs in the page.
+
 The server renders a page's data from a snapshot of the same sync
 conversation the browser continues, so the first paint has data and the
 browser's first pull continues from the server's cookie.
@@ -97,21 +106,55 @@ loading state (`Hydration.rowsFor` gives the hooks their initial value),
 and the browser's first `/sync` pull returns a patch from the snapshot's
 cookie rather than starting a new conversation.
 
-## Phase 3: writes (not yet shipped)
+## Phase 3: writes
 
-Two paths will carry writes through the engine instead of around it:
+Writes go through the engine's journal instead of around it, so they are
+optimistic, survive going offline, and are acknowledged exactly once. There
+are two entry points with the same receipt semantics
+([ADR-0030](adr/0030-facade-writes.md)). Use one, or both.
 
-- **Façade writes** (#169, [ADR-0030](adr/0030-facade-writes.md)): a
-  plain-`fetch` `POST` / `PATCH` / `DELETE` on a reflected route.
-- **Form-action Mutations** (#215): a SvelteKit form action that runs a
-  named Mutation.
+**Façade writes**: an app whose browser code writes with plain `fetch`.
 
-Neither is implemented yet, so this guide does not describe their
-behaviour. Until they ship, writes go through the app's existing API as
-before. Those writes are **out-of-band** for the engine: they bypass the
-mutators, so they must announce themselves (`Server.broadcast`, or a hint
-source, [ADR-0019](adr/0019-change-data-capture.md)) for subscribers to be
-poked. Without that, subscribers converge only on their next pull.
+- **Entry condition.** Phase 1's façade, given the worker engine's journal
+  (`mutate: host.engine.mutateWithAck`, `pull: host.engine.pull`), and `writes`
+  naming each type and operation the server has a handler for. The engine's
+  registry carries the graph-derived CRUD mutations
+  (`CrudMutation.entries(nodes, { writes })`). The server must accept a
+  client-generated `id` on create, since a journaled create carries one.
+- **What changes.** Online and unasked, a write is forwarded unchanged and
+  nothing is journaled. It is journaled, and answered with a
+  `202 Accepted` **receipt**, in three cases: offline, after a forward that
+  rejected at the transport, or with `Prefer: respond-async`. The receipt's
+  `meta.legation.status` is `"pending"`, and its `Location` is the mutation
+  status URL. A receipt is never a ruling: `201` / `200` / `204` only ever
+  come from the server, and a later rejection drops the optimistic effect.
+  The [legation-jsonapi README](../packages/jsonapi/README.md#façade-writes-the-202-write-receipt-adr-0030)
+  has the full status table.
+- **You'll know it's working when** a `POST` with the network off comes back
+  `202` with `meta.legation.status: "pending"`, a covered `GET` shows the new
+  row at once, and after reconnecting, `GET` on the `Location` (with
+  `Prefer: wait=10`) reports `acknowledged`.
+
+**Form-action Mutations**: an app whose writes are SvelteKit form actions.
+
+- **Entry condition.** The page's `load` mints a form client
+  (`mintFormClient`). The action calls `runFormMutation(server, target,
+  mutation, args)` with the same named Mutation the JS path journals,
+  where `target` is `formMutationTarget(cookies, data)`. The enhanced form uses
+  `enhanceFormMutation` (`@thomasfosterau/legation-svelte/kit`).
+- **What changes.** A write is authored once. A resubmission of the same
+  rendered form is the same mutation, applied once. A JS page reconciles on
+  the action's receipt instead of re-running its `load`. An action that
+  cannot name the client group (no group cookie) stays an out-of-band writer.
+- **You'll know it's working when** submitting the same rendered form twice
+  applies once, and an enhanced submit updates the page optimistically before
+  the action returns.
+
+Writes the engine does not carry stay **out-of-band**: a hand-written
+endpoint, an import job, an admin tool. They bypass the mutators, so they
+must announce themselves (`Server.broadcast`, or a hint source,
+[ADR-0019](adr/0019-change-data-capture.md)) for subscribers to be poked.
+Without that, subscribers converge only on their next pull.
 
 ## Phase 4: offline
 
@@ -139,6 +182,37 @@ rows to the next user on a shared device.
   first user's rows. Their unpushed writes are quarantined, not pushed
   (`Client.quarantines`). Going from anonymous to signed in keeps the warm
   replica: it is the one benign transition.
+
+## Reads that are never covered
+
+Some reads will stay on the network whatever is subscribed, so plan for a
+permanently mixed app. These are not gaps to work around. A request the
+façade cannot cover is forwarded unchanged (online) or answered `503`
+offline, and a `Client.query` it cannot cover falls through to the server's
+read path ([ADR-0025](adr/0025-server-fallthrough-reads.md)). That
+fallthrough is the intended answer for each of them.
+
+| Read shape                                                | Why the replica cannot answer it                                                                                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Full-text search, fuzzy or ranked matching                | Not expressible in the filter grammar ([ADR-0028](adr/0028-filter-grammar-and-normative-semantics.md)); the server's index ranks.                                        |
+| Aggregate documents (`sitemap.xml`, `feed.json`, reports) | Not a JSON:API collection or resource the façade reflects; they are computed over everything, not a window.                                                              |
+| Rendered artefacts (OG images, PDFs)                      | Not data reads at all.                                                                                                                                                   |
+| Reads across a tenancy or identity boundary               | The replica holds only what this identity's auth filter admits; anything else is the server's to answer.                                                                 |
+| A filter or sort the resource does not declare            | Refused before evaluation ([Trap 2](#trap-2-declare-what-may-be-filtered-and-sorted)).                                                                                   |
+| A page deeper than the subscribed window                  | A windowed subscription covers only a prefix of itself ([ADR-0029 §3](adr/0029-replica-served-jsonapi-facade.md)); subscribe wider, or let deep pages go to the network. |
+| An endpoint whose document carries app-specific `meta`    | The replica cannot compute it; keep that endpoint out of the api the façade reflects.                                                                                    |
+
+## Caches: what to retire and what to keep
+
+An app that already caches its API will have up to three layers. They are
+not interchangeable with the replica, and an adopter that keeps or deletes
+the wrong one either serves stale data or loses its edge performance.
+
+| Cache                                                                                   | On adoption                                                                  | Why                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A client-side, URL-keyed read cache (IndexedDB, `localStorage`, a fetch wrapper's memo) | **Retire** it once its reads are subscribed.                                 | The replica replaces it outright: same rows, kept current by pulls and pokes, scoped to the identity (Phase 4). Two client caches disagree, and the URL-keyed one has no invalidation.                                                                                                                                                                                                 |
+| The browser Cache API under the service worker                                          | **Keep** it behind the façade, for what the façade forwards.                 | The façade answers first; what it forwards can still be cached stale-while-revalidate (`CacheApiHttpCache`), evicted by `collection:{name}` tag as collections change (`HttpCacheInvalidation`).                                                                                                                                                                                       |
+| Edge caches: a KV read-through cache, the Workers cache with `Cache-Tag` purges         | **Keep** them, and make them subscribers of the engine's invalidation hints. | They serve the reads that are never covered, and every first visit. `EdgeInvalidation` (`@thomasfosterau/legation-alchemy-cloudflare`, #206) turns each committed write's hints into KV deletes of `{collection}:{id}` and tag purges in the same `collection:{name}` / `collection:{name}:{id}` spelling; the API Worker forwards hints to the front-door Worker that owns the cache. |
 
 ## Trap 2: declare what may be filtered and sorted
 
