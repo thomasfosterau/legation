@@ -45,6 +45,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import type * as Collection from "./Collection.js";
@@ -135,21 +136,22 @@ type Leaf = Extract<
 >;
 
 /** The key of a leaf: operator, field and typed literal(s), lists in canonical order. */
-const leafKey = (leaf: Leaf): string => {
-  switch (leaf._tag) {
-    case "True":
-      return "True";
-    case "Compare":
-      return `Compare(${leaf.op},${JSON.stringify(leaf.field)},${literalKey(leaf.value)})`;
-    case "In":
-    case "NotIn":
-      return `${leaf._tag}(${JSON.stringify(leaf.field)},[${sortedUnique(leaf.values.map(literalKey)).join(",")}])`;
-    case "IsNull":
-      return `IsNull(${JSON.stringify(leaf.field)},${leaf.negated === true})`;
-    case "InSet":
-      return `InSet(${literalKey(leaf.field)},${literalKey(leaf.set)})`;
-  }
-};
+const leafKey: (leaf: Leaf) => string = Match.type<Leaf>().pipe(
+  Match.tag("True", () => "True"),
+  Match.tag(
+    "Compare",
+    (leaf) => `Compare(${leaf.op},${JSON.stringify(leaf.field)},${literalKey(leaf.value)})`
+  ),
+  Match.tag(
+    "In",
+    "NotIn",
+    (leaf) =>
+      `${leaf._tag}(${JSON.stringify(leaf.field)},[${sortedUnique(leaf.values.map(literalKey)).join(",")}])`
+  ),
+  Match.tag("IsNull", (leaf) => `IsNull(${JSON.stringify(leaf.field)},${leaf.negated === true})`),
+  Match.tag("InSet", (leaf) => `InSet(${literalKey(leaf.field)},${literalKey(leaf.set)})`),
+  Match.exhaustive
+);
 
 /**
  * A deterministic serialisation of a predicate for structural equality and
@@ -159,19 +161,18 @@ const leafKey = (leaf: Leaf): string => {
  * `IsNull` with `negated: false` keys as without it. Two predicates with
  * the same key are equal as `WHERE` clauses; the converse is not claimed.
  */
-export const structuralKey = (predicate: Predicate.Predicate): string => {
-  switch (predicate._tag) {
-    case "And":
-    case "Or":
-      return junctionKey(predicate._tag, predicate.predicates);
-    case "Not":
-      return `Not(${structuralKey(predicate.predicate)})`;
-    case "Exists":
-      return `Exists(${JSON.stringify(predicate.collection)},${JSON.stringify(predicate.localField)},${JSON.stringify(predicate.foreignField)},${structuralKey(predicate.where)})`;
-    default:
-      return leafKey(predicate);
-  }
-};
+export const structuralKey: (predicate: Predicate.Predicate) => string =
+  Match.type<Predicate.Predicate>().pipe(
+    // `junctionKey` and the recursive cases read `structuralKey` only when called.
+    Match.tag("And", "Or", (predicate) => junctionKey(predicate._tag, predicate.predicates)),
+    Match.tag("Not", (predicate) => `Not(${structuralKey(predicate.predicate)})`),
+    Match.tag(
+      "Exists",
+      (predicate) =>
+        `Exists(${JSON.stringify(predicate.collection)},${JSON.stringify(predicate.localField)},${JSON.stringify(predicate.foreignField)},${structuralKey(predicate.where)})`
+    ),
+    Match.orElse((leaf) => leafKey(leaf))
+  );
 
 // ─── Canonical conjuncts (rule 3) ────────────────────────────────────────────
 

@@ -156,7 +156,6 @@ export default defineConfig({
       "effect/no-known-value-widening": "warn", // 98 sites
       "effect/avoid-untagged-errors": "warn", // 76 sites
       "effect/effect-promise-vs-trypromise": "warn", // 66 sites
-      "effect/prefer-match-over-switch": "warn", // 50 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a

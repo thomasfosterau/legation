@@ -35,6 +35,7 @@ import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import { HttpCache, Telemetry } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
@@ -78,16 +79,13 @@ export type Touched = HttpCache.Touched;
 const EMPTY_TOUCHED: Touched = { collections: [], rows: [] };
 
 /** What an engine event touched, or nothing for other events. */
-const touchedBy = (event: ClientEngine.EngineEvent): Touched => {
-  switch (event._tag) {
-    case "PullCompleted":
-      return { collections: event.collections, rows: event.rows };
-    case "ViewRebuilt":
-      return { collections: event.collections ?? [], rows: [] };
-    default:
-      return EMPTY_TOUCHED;
-  }
-};
+const touchedBy: (event: ClientEngine.EngineEvent) => Touched =
+  Match.type<ClientEngine.EngineEvent>().pipe(
+    Match.withReturnType<Touched>(),
+    Match.tag("PullCompleted", (event) => ({ collections: event.collections, rows: event.rows })),
+    Match.tag("ViewRebuilt", (event) => ({ collections: event.collections ?? [], rows: [] })),
+    Match.orElse(() => EMPTY_TOUCHED)
+  );
 
 /**
  * Derive the change feed from an engine's event stream: the distinct

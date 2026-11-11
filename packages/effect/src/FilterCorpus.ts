@@ -33,6 +33,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
@@ -207,23 +208,20 @@ const INSTANTS: ReadonlyArray<string> = [
 ];
 const FOREIGN_INSTANTS: ReadonlyArray<string> = ["2001-09-09T01:46:40.000Z"];
 
-const poolFor = (kind: Predicate.LiteralKind, options: ResolvedOptions): Pool => {
-  switch (kind) {
-    case "text":
-      return {
-        rows: [...ASCII_STRINGS, ...BMP_STRINGS, ...(options.astral ? ASTRAL_STRINGS : [])],
-        foreign: FOREIGN_STRINGS,
-      };
-    case "integer":
-      return { rows: INTEGERS, foreign: FOREIGN_INTEGERS };
-    case "double":
-      return { rows: DOUBLES, foreign: FOREIGN_DOUBLES };
-    case "boolean":
-      return { rows: [true, false], foreign: [] };
-    case "instant":
-      return { rows: INSTANTS, foreign: FOREIGN_INSTANTS };
-  }
-};
+const poolFor: (kind: Predicate.LiteralKind, options: ResolvedOptions) => Pool = Match.fn(
+  (kind: Predicate.LiteralKind, _options: ResolvedOptions) => kind
+).pipe(
+  Match.withReturnType<Pool>(),
+  Match.when("text", (_kind, _, options) => ({
+    rows: [...ASCII_STRINGS, ...BMP_STRINGS, ...(options.astral ? ASTRAL_STRINGS : [])],
+    foreign: FOREIGN_STRINGS,
+  })),
+  Match.when("integer", () => ({ rows: INTEGERS, foreign: FOREIGN_INTEGERS })),
+  Match.when("double", () => ({ rows: DOUBLES, foreign: FOREIGN_DOUBLES })),
+  Match.when("boolean", () => ({ rows: [true, false], foreign: [] })),
+  Match.when("instant", () => ({ rows: INSTANTS, foreign: FOREIGN_INSTANTS })),
+  Match.exhaustive
+);
 
 // ─── Rows ────────────────────────────────────────────────────────────────────
 
@@ -599,12 +597,12 @@ const without = <A>(xs: ReadonlyArray<A>, index: number): Array<A> =>
  */
 export const shrinkPredicate = (
   predicate: Predicate.Predicate
-): ReadonlyArray<Predicate.Predicate> => {
-  switch (predicate._tag) {
-    case "And":
-    case "Or": {
-      const rebuild = predicate._tag === "And" ? Predicate.and : Predicate.or;
-      const children = predicate.predicates;
+): ReadonlyArray<Predicate.Predicate> =>
+  Match.value(predicate).pipe(
+    Match.withReturnType<ReadonlyArray<Predicate.Predicate>>(),
+    Match.tag("And", "Or", (junction) => {
+      const rebuild = junction._tag === "And" ? Predicate.and : Predicate.or;
+      const children = junction.predicates;
       const out: Array<Predicate.Predicate> = [];
       if (children.length > 1) {
         out.push(...children);
@@ -616,20 +614,19 @@ export const shrinkPredicate = (
         });
       });
       return out;
-    }
-    case "Not":
-      return [predicate.predicate, ...shrinkPredicate(predicate.predicate).map(Predicate.not)];
-    case "In":
-    case "NotIn": {
-      const rebuild = predicate._tag === "In" ? Predicate.isIn : Predicate.notIn;
-      return predicate.values.length > 1
-        ? predicate.values.map((_, i) => rebuild(predicate.field, without(predicate.values, i)))
+    }),
+    Match.tag("Not", (negation) => [
+      negation.predicate,
+      ...shrinkPredicate(negation.predicate).map(Predicate.not),
+    ]),
+    Match.tag("In", "NotIn", (list) => {
+      const rebuild = list._tag === "In" ? Predicate.isIn : Predicate.notIn;
+      return list.values.length > 1
+        ? list.values.map((_, i) => rebuild(list.field, without(list.values, i)))
         : [];
-    }
-    default:
-      return [];
-  }
-};
+    }),
+    Match.orElse(() => [])
+  );
 
 const MAX_SHRINK_STEPS = 1000;
 

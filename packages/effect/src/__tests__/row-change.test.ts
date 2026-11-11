@@ -22,6 +22,7 @@
  * reproducible seed.
  */
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
@@ -139,20 +140,20 @@ const applyToLateObserver = (
   batch: ReadonlyArray<RowChange.RowChange<LiveView.Row>>
 ): void => {
   for (const change of batch) {
-    switch (change._tag) {
-      case "reset":
+    Match.value(change).pipe(
+      Match.withReturnType<void>(),
+      Match.tag("reset", () => {
         observer.folded.clear();
-        break;
-      case "enter":
-      case "update":
-        observer.folded.set(change.row.id, change.row.value);
-        break;
-      case "exit":
-        observer.folded.delete(change.id);
-        break;
-      case "move":
-        break;
-    }
+      }),
+      Match.tag("enter", "update", (entered) => {
+        observer.folded.set(entered.row.id, entered.row.value);
+      }),
+      Match.tag("exit", (exited) => {
+        observer.folded.delete(exited.id);
+      }),
+      Match.tag("move", () => {}),
+      Match.exhaustive
+    );
   }
 };
 

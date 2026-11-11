@@ -19,6 +19,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -1224,44 +1225,56 @@ export const make = (
       reason?: string
     ): Effect.Effect<void> =>
       currentClientId.pipe(
-        Effect.flatMap((clientId) => {
-          switch (phase) {
-            case "journaled":
-              return emitEngineEvent({ _tag: "MutationJournaled", clientId, mutationId });
-            case "acknowledged":
-              return emitEngineEvent({ _tag: "MutationAcknowledged", clientId, mutationId });
-            case "rejected":
-              return emitEngineEvent({
+        Effect.flatMap((clientId) =>
+          Match.value(phase).pipe(
+            Match.when("journaled", () =>
+              emitEngineEvent({ _tag: "MutationJournaled", clientId, mutationId })
+            ),
+            Match.when("acknowledged", () =>
+              emitEngineEvent({ _tag: "MutationAcknowledged", clientId, mutationId })
+            ),
+            Match.when("rejected", () =>
+              emitEngineEvent({
                 _tag: "MutationRejected",
                 clientId,
                 mutationId,
                 reason: reason ?? "",
-              });
-            case "dropped":
-              return emitEngineEvent({ _tag: "MutationDropped", clientId, mutationId });
-          }
-        })
+              })
+            ),
+            Match.when("dropped", () =>
+              emitEngineEvent({ _tag: "MutationDropped", clientId, mutationId })
+            ),
+            Match.exhaustive
+          )
+        )
       );
     // Project the four mutation variants back to the #36 `MutationEvent` shape.
-    const toMutationEvent = (event: EngineEvent): MutationEvent | undefined => {
-      switch (event._tag) {
-        case "MutationJournaled":
-          return { clientId: event.clientId, mutationId: event.mutationId, phase: "journaled" };
-        case "MutationAcknowledged":
-          return { clientId: event.clientId, mutationId: event.mutationId, phase: "acknowledged" };
-        case "MutationRejected":
-          return {
-            clientId: event.clientId,
-            mutationId: event.mutationId,
-            phase: "rejected",
-            reason: event.reason,
-          };
-        case "MutationDropped":
-          return { clientId: event.clientId, mutationId: event.mutationId, phase: "dropped" };
-        default:
-          return undefined;
-      }
-    };
+    const toMutationEvent: (event: EngineEvent) => MutationEvent | undefined =
+      Match.type<EngineEvent>().pipe(
+        Match.withReturnType<MutationEvent | undefined>(),
+        Match.tag("MutationJournaled", (e) => ({
+          clientId: e.clientId,
+          mutationId: e.mutationId,
+          phase: "journaled",
+        })),
+        Match.tag("MutationAcknowledged", (e) => ({
+          clientId: e.clientId,
+          mutationId: e.mutationId,
+          phase: "acknowledged",
+        })),
+        Match.tag("MutationRejected", (e) => ({
+          clientId: e.clientId,
+          mutationId: e.mutationId,
+          phase: "rejected",
+          reason: e.reason,
+        })),
+        Match.tag("MutationDropped", (e) => ({
+          clientId: e.clientId,
+          mutationId: e.mutationId,
+          phase: "dropped",
+        })),
+        Match.orElse(() => undefined)
+      );
     // Sample the journal-depth gauge from the current pending count. Called on
     // every append (a new pending mutation), acknowledge (a trim) and paced
     // compaction, so it uses the store's count, which reads no pending bodies

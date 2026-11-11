@@ -10,6 +10,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -61,31 +62,28 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
     Effect.sync(() => {
       const segments = url.pathname.split("/").filter((s) => Str.isNonEmpty(s));
       const id = segments.length > 1 ? segments[1] : undefined;
-      let response: Response;
-      switch (request.method) {
-        case "GET":
-          response =
-            id === undefined
-              ? doc([...store.values()])
-              : store.has(id)
-                ? doc(store.get(id))
-                : empty(404);
-          break;
-        case "POST": {
+      const response: Response = Match.value(request.method).pipe(
+        Match.withReturnType<Response>(),
+        Match.when("GET", () =>
+          id === undefined
+            ? doc([...store.values()])
+            : store.has(id)
+              ? doc(store.get(id))
+              : empty(404)
+        ),
+        Match.when("POST", () => {
           const resource = readBody(request).data as StoredResource;
           if (forbidCreate?.(resource.id)) {
-            response = empty(403); // permanent rejection
-            break;
+            return empty(403); // permanent rejection
           }
           store.set(resource.id, {
             type: resource.type,
             id: resource.id,
             attributes: resource.attributes ?? {},
           });
-          response = doc(store.get(resource.id));
-          break;
-        }
-        case "PATCH": {
+          return doc(store.get(resource.id));
+        }),
+        Match.when("PATCH", () => {
           const patch = readBody(request).data as StoredResource;
           const existing = store.get(defined(id)) ?? {
             type: "todos",
@@ -97,16 +95,14 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
             attributes: { ...existing.attributes, ...patch.attributes },
           };
           store.set(defined(id), merged);
-          response = doc(merged);
-          break;
-        }
-        case "DELETE":
+          return doc(merged);
+        }),
+        Match.when("DELETE", () => {
           store.delete(defined(id));
-          response = empty(204);
-          break;
-        default:
-          response = empty(405);
-      }
+          return empty(204);
+        }),
+        Match.orElse(() => empty(405))
+      );
       return HttpClientResponse.fromWeb(request, response);
     })
   );

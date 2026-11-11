@@ -28,6 +28,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -574,142 +575,149 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         )
       );
 
+    // One host message applied to the mirror state, built once per mirror.
+    const onHostMessage = Match.type<MirrorProtocol.HostMessage>().pipe(
+      // A host (re)started: replay every interest we hold. Past the
+      // first HostReady we've ever seen, this also means whatever
+      // was in flight with the OLD host is unanswerable — its
+      // in-memory request bookkeeping is gone, so those replies are
+      // never coming (the old host may still have journaled the
+      // mutation before it died; the new host's sync loop picks
+      // that up from the durable store regardless of what this
+      // caller is told).
+      Match.tag("HostReady", () =>
+        Ref.get(interests).pipe(
+          Effect.flatMap((map) =>
+            Effect.forEach(
+              map.values(),
+              (interest) => channel.post(interest.subscribe).pipe(Effect.ignore),
+              { concurrency: 1 }
+            )
+          ),
+          Effect.andThen(Ref.getAndSet(seenHostReady, true)),
+          Effect.flatMap((hadSeenBefore) =>
+            hadSeenBefore
+              ? Effect.all(
+                  [
+                    failPending(pending),
+                    failPending(pendingSettled),
+                    failPending(pendingReads),
+                    failPending(pendingForms),
+                    failHostRequests(
+                      "Mirror: the engine host restarted while the request was in flight"
+                    ),
+                  ],
+                  { concurrency: 1, discard: true }
+                )
+              : Effect.void
+          ),
+          Effect.asVoid
+        )
+      ),
+      Match.tag("MirrorUpdate", (message) =>
+        Ref.update(rows, (map) =>
+          new Map(map).set(
+            message.key,
+            message.rows.map((row) => ({ id: row.id, value: row.value }))
+          )
+        ).pipe(Effect.andThen(publishKey(message.key)))
+      ),
+      Match.tag("RelatedUpdate", (message) =>
+        Ref.update(relatedRows, (map) =>
+          new Map(map).set(
+            message.key,
+            message.rows.map((row) => ({
+              id: row.id,
+              value: row.value,
+              related: row.related as Record<string, Related.RelatedValue>,
+            }))
+          )
+        ).pipe(Effect.andThen(publishKey(message.key)))
+      ),
+      Match.tag("MutationStatesUpdate", (message) =>
+        Ref.set(
+          mutationStatesRow,
+          HashMap.fromIterable(
+            message.states.map((state): readonly [number, MutationState.MutationState] => [
+              state.mutationId,
+              state,
+            ])
+          )
+        ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)))
+      ),
+      Match.tag("PulledRegistrations", (message) =>
+        Ref.set(
+          pulledKeys,
+          new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
+        )
+      ),
+      Match.tag("MutateAck", (message) =>
+        resolveReply(pending, message, (deferred) => Deferred.succeed(deferred, undefined))
+      ),
+      Match.tag("MutateError", (message) => {
+        // A host-side failure (never journaled): fail whichever caller
+        // is waiting — `mutate` or `mutateWithAck`. Only a host that
+        // predates #536 answers a form begin this way, with exactly
+        // this message; it carries no mirror id, but every tab whose
+        // begin it answers is talking to the same old host.
+        if (message.message === unknownFormMutator) {
+          return resolveIn(pendingForms, message.requestId, (deferred) =>
+            Deferred.fail(deferred, hostPredatesFormMutations)
+          );
+        }
+        const error = new MutatorError({ message: message.message });
+        return resolveReply(pending, message, (deferred) => Deferred.fail(deferred, error)).pipe(
+          Effect.andThen(
+            resolveReply(pendingSettled, message, (deferred) => Deferred.fail(deferred, error))
+          )
+        );
+      }),
+      // A form begin's or end's answer (#536), addressed to one mirror.
+      Match.tag("FormMutationBegun", (message) =>
+        resolveForm(message, (deferred) => Deferred.succeed(deferred, Option.none()))
+      ),
+      // An end succeeds, carrying the host's settlement error if any.
+      Match.tag("FormMutationEnded", (message) =>
+        resolveForm(message, (deferred) =>
+          Deferred.succeed(deferred, Option.fromUndefinedOr(message.error))
+        )
+      ),
+      Match.tag("FormMutationFailed", (message) =>
+        resolveForm(message, (deferred) =>
+          Deferred.fail(deferred, new MutatorError({ message: message.message }))
+        )
+      ),
+      Match.tag("MutateSettled", (message) =>
+        resolveReply(pendingSettled, message, (deferred) =>
+          Deferred.succeed(deferred, outcomeOf(message))
+        )
+      ),
+      Match.tag("HostResponse", (message) =>
+        message.mirrorId === mirrorId
+          ? deliverReply(message.requestId, message.outcome)
+          : Effect.void
+      ),
+      Match.tag("ReadResult", (message) =>
+        resolveReply(pendingReads, message, (deferred) =>
+          message.error === undefined
+            ? Deferred.succeed(
+                deferred,
+                message.rows.map((row) => ({ ...row, version: "" }))
+              )
+            : Deferred.fail(deferred, new TransportError({ message: message.error }))
+        )
+      ),
+      Match.exhaustive
+    );
+
     // Mirror update loop: established before `make` returns.
     yield* Effect.forkScoped(
       Effect.forever(
         inbox.take.pipe(
           Effect.flatMap(MirrorProtocol.decodeHostMessage),
-          Effect.flatMap((message) => {
-            if (message === undefined) return Effect.void;
-            switch (message._tag) {
-              case "HostReady":
-                // A host (re)started: replay every interest we hold. Past the
-                // first HostReady we've ever seen, this also means whatever
-                // was in flight with the OLD host is unanswerable — its
-                // in-memory request bookkeeping is gone, so those replies are
-                // never coming (the old host may still have journaled the
-                // mutation before it died; the new host's sync loop picks
-                // that up from the durable store regardless of what this
-                // caller is told).
-                return Ref.get(interests).pipe(
-                  Effect.flatMap((map) =>
-                    Effect.forEach(
-                      map.values(),
-                      (interest) => channel.post(interest.subscribe).pipe(Effect.ignore),
-                      { concurrency: 1 }
-                    )
-                  ),
-                  Effect.andThen(Ref.getAndSet(seenHostReady, true)),
-                  Effect.flatMap((hadSeenBefore) =>
-                    hadSeenBefore
-                      ? Effect.all(
-                          [
-                            failPending(pending),
-                            failPending(pendingSettled),
-                            failPending(pendingReads),
-                            failPending(pendingForms),
-                            failHostRequests(
-                              "Mirror: the engine host restarted while the request was in flight"
-                            ),
-                          ],
-                          { concurrency: 1, discard: true }
-                        )
-                      : Effect.void
-                  ),
-                  Effect.asVoid
-                );
-              case "MirrorUpdate":
-                return Ref.update(rows, (map) =>
-                  new Map(map).set(
-                    message.key,
-                    message.rows.map((row) => ({ id: row.id, value: row.value }))
-                  )
-                ).pipe(Effect.andThen(publishKey(message.key)));
-              case "RelatedUpdate":
-                return Ref.update(relatedRows, (map) =>
-                  new Map(map).set(
-                    message.key,
-                    message.rows.map((row) => ({
-                      id: row.id,
-                      value: row.value,
-                      related: row.related as Record<string, Related.RelatedValue>,
-                    }))
-                  )
-                ).pipe(Effect.andThen(publishKey(message.key)));
-              case "MutationStatesUpdate":
-                return Ref.set(
-                  mutationStatesRow,
-                  HashMap.fromIterable(
-                    message.states.map((state): readonly [number, MutationState.MutationState] => [
-                      state.mutationId,
-                      state,
-                    ])
-                  )
-                ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)));
-              case "PulledRegistrations":
-                return Ref.set(
-                  pulledKeys,
-                  new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
-                );
-              case "MutateAck":
-                return resolveReply(pending, message, (deferred) =>
-                  Deferred.succeed(deferred, undefined)
-                );
-              case "MutateError": {
-                // A host-side failure (never journaled): fail whichever caller
-                // is waiting — `mutate` or `mutateWithAck`. Only a host that
-                // predates #536 answers a form begin this way, with exactly
-                // this message; it carries no mirror id, but every tab whose
-                // begin it answers is talking to the same old host.
-                if (message.message === unknownFormMutator) {
-                  return resolveIn(pendingForms, message.requestId, (deferred) =>
-                    Deferred.fail(deferred, hostPredatesFormMutations)
-                  );
-                }
-                const error = new MutatorError({ message: message.message });
-                return resolveReply(pending, message, (deferred) =>
-                  Deferred.fail(deferred, error)
-                ).pipe(
-                  Effect.andThen(
-                    resolveReply(pendingSettled, message, (deferred) =>
-                      Deferred.fail(deferred, error)
-                    )
-                  )
-                );
-              }
-              // A form begin's or end's answer (#536), addressed to one mirror.
-              case "FormMutationBegun":
-                return resolveForm(message, (deferred) =>
-                  Deferred.succeed(deferred, Option.none())
-                );
-              case "FormMutationEnded":
-                // An end succeeds, carrying the host's settlement error if any.
-                return resolveForm(message, (deferred) =>
-                  Deferred.succeed(deferred, Option.fromUndefinedOr(message.error))
-                );
-              case "FormMutationFailed":
-                return resolveForm(message, (deferred) =>
-                  Deferred.fail(deferred, new MutatorError({ message: message.message }))
-                );
-              case "MutateSettled":
-                return resolveReply(pendingSettled, message, (deferred) =>
-                  Deferred.succeed(deferred, outcomeOf(message))
-                );
-              case "HostResponse":
-                return message.mirrorId === mirrorId
-                  ? deliverReply(message.requestId, message.outcome)
-                  : Effect.void;
-              case "ReadResult":
-                return resolveReply(pendingReads, message, (deferred) =>
-                  message.error === undefined
-                    ? Deferred.succeed(
-                        deferred,
-                        message.rows.map((row) => ({ ...row, version: "" }))
-                      )
-                    : Deferred.fail(deferred, new TransportError({ message: message.error }))
-                );
-            }
-          })
+          Effect.flatMap((message) =>
+            message === undefined ? Effect.void : onHostMessage(message)
+          )
         )
       )
     );

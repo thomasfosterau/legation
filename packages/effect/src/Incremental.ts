@@ -35,6 +35,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
 import * as Predicate from "./Predicate.js";
@@ -130,31 +131,36 @@ export const deltaFromChanges = (
 ): Delta => {
   const added: Array<Row> = [];
   const removed: Array<Row> = [];
-  for (const change of batch) {
-    switch (change._tag) {
-      case "reset":
-        for (const row of known.values()) removed.push(row);
-        known.clear();
-        break;
-      case "enter":
-        added.push(change.row);
-        known.set(change.row.id, change.row);
-        break;
-      case "update":
-        removed.push(change.previous);
-        added.push(change.row);
-        known.set(change.row.id, change.row);
-        break;
-      case "exit":
-        removed.push(change.previous);
-        known.delete(change.id);
-        break;
-      case "move":
-        break;
-    }
-  }
+  for (const change of batch) applyChange(change, known, added, removed);
   return { added, removed };
 };
+
+/** Fold one change into `known` and the delta's `added` / `removed` (mutated in place). */
+const applyChange = Match.fn(
+  (change: RowChange<Row>, _known: Map<string, Row>, _added: Array<Row>, _removed: Array<Row>) =>
+    change
+).pipe(
+  Match.withReturnType<void>(),
+  Match.tag("reset", (_change, _, known, _added, removed) => {
+    for (const row of known.values()) removed.push(row);
+    known.clear();
+  }),
+  Match.tag("enter", (change, _, known, added) => {
+    added.push(change.row);
+    known.set(change.row.id, change.row);
+  }),
+  Match.tag("update", (change, _, known, added, removed) => {
+    removed.push(change.previous);
+    added.push(change.row);
+    known.set(change.row.id, change.row);
+  }),
+  Match.tag("exit", (change, _, known, _added, removed) => {
+    removed.push(change.previous);
+    known.delete(change.id);
+  }),
+  Match.tag("move", () => {}),
+  Match.exhaustive
+);
 
 /** Materialize a result map to a page in a deterministic (id-ascending, code-point) order. */
 export const pageOf = (result: ReadonlyMap<string, Row>): ReadonlyArray<Row> =>

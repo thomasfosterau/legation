@@ -10,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Result from "effect/Result";
@@ -238,20 +239,13 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
   });
 });
 
-const hasEmptyList = (predicate: Predicate.Predicate): boolean => {
-  switch (predicate._tag) {
-    case "In":
-    case "NotIn":
-      return Arr.isReadonlyArrayEmpty(predicate.values);
-    case "And":
-    case "Or":
-      return predicate.predicates.some(hasEmptyList);
-    case "Not":
-      return hasEmptyList(predicate.predicate);
-    default:
-      return false;
-  }
-};
+const hasEmptyList = (predicate: Predicate.Predicate): boolean =>
+  Match.value(predicate).pipe(
+    Match.tag("In", "NotIn", (node) => Arr.isReadonlyArrayEmpty(node.values)),
+    Match.tag("And", "Or", (node) => node.predicates.some(hasEmptyList)),
+    Match.tag("Not", (node) => hasEmptyList(node.predicate)),
+    Match.orElse(() => false)
+  );
 
 describe("JsonApiQuery.foldConstants", () => {
   const FALSE = { _tag: "Or", predicates: [] } as const;

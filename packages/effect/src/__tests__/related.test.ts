@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Schema from "effect/Schema";
@@ -568,30 +569,30 @@ const randomOp = (rng: () => number, truth: GroundTruth): Op => {
     : { _tag: "deleteForeign", collection, id: pick(rng, [...pool.keys()]) };
 };
 
-const applyOp = (truth: GroundTruth, op: Op): void => {
-  switch (op._tag) {
-    case "putIssue":
-      truth.issues.set(op.id, { id: op.id, value: { id: op.id, authorId: op.authorId } });
-      return;
-    case "deleteIssue":
-      truth.issues.delete(op.id);
-      return;
-    case "putForeign": {
-      const map = truth[op.collection];
+const applyOp = (truth: GroundTruth, op: Op): void =>
+  Match.value(op).pipe(
+    Match.withReturnType<void>(),
+    Match.tag("putIssue", (put) => {
+      truth.issues.set(put.id, { id: put.id, value: { id: put.id, authorId: put.authorId } });
+    }),
+    Match.tag("deleteIssue", (del) => {
+      truth.issues.delete(del.id);
+    }),
+    Match.tag("putForeign", (put) => {
+      const map = truth[put.collection];
       const value =
-        op.collection === "people"
-          ? { id: op.id }
-          : op.collection === "comments"
-            ? { id: op.id, issueId: op.fk }
-            : { id: op.id, issueId: op.fk, rank: op.rank };
-      map.set(op.id, { id: op.id, value });
-      return;
-    }
-    case "deleteForeign":
-      truth[op.collection].delete(op.id);
-      return;
-  }
-};
+        put.collection === "people"
+          ? { id: put.id }
+          : put.collection === "comments"
+            ? { id: put.id, issueId: put.fk }
+            : { id: put.id, issueId: put.fk, rank: put.rank };
+      map.set(put.id, { id: put.id, value });
+    }),
+    Match.tag("deleteForeign", (del) => {
+      truth[del.collection].delete(del.id);
+    }),
+    Match.exhaustive
+  );
 
 const idsOf = (values: ReadonlyArray<unknown>) =>
   Arr.sort(

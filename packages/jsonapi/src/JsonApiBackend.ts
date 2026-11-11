@@ -108,6 +108,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -228,24 +229,22 @@ const appendQuery = (query: string, extra: string): string =>
  * `undefined` if it isn't id-pinned. Used to recognize auto-subscribed
  * relationship subsets that the include fast-path can serve from cache.
  */
-const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefined => {
-  switch (predicate._tag) {
-    case "In":
-      return predicate.field === "id"
-        ? new Set(predicate.values.map((value) => String(value)))
-        : undefined;
-    case "Compare":
-      return predicate.op === "eq" && predicate.field === "id"
-        ? new Set([String(predicate.value)])
-        : undefined;
-    case "And":
-      return Option.getOrUndefined(
-        Arr.findFirst(predicate.predicates, (inner) => Option.fromUndefinedOr(pinnedIds(inner)))
-      );
-    default:
-      return undefined;
-  }
-};
+const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefined =>
+  Match.value(predicate).pipe(
+    Match.withReturnType<ReadonlySet<string> | undefined>(),
+    Match.tag("In", (node) =>
+      node.field === "id" ? new Set(node.values.map((value) => String(value))) : undefined
+    ),
+    Match.tag("Compare", (node) =>
+      node.op === "eq" && node.field === "id" ? new Set([String(node.value)]) : undefined
+    ),
+    Match.tag("And", (node) =>
+      Option.getOrUndefined(
+        Arr.findFirst(node.predicates, (inner) => Option.fromUndefinedOr(pinnedIds(inner)))
+      )
+    ),
+    Match.orElse(() => undefined)
+  );
 
 /** What an applied write leaves in its row: the value it wrote, or a delete. */
 type WriteEffect = { readonly _tag: "put"; readonly value: unknown } | { readonly _tag: "delete" };
@@ -408,9 +407,10 @@ const rowAfter = (
   document ?? (Option.isSome(current) ? mergeWrite(current.value, write) : writtenValue(write));
 
 /** Express a derived CRUD mutator's decoded args as one JSON:API write. */
-const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, BackendError> => {
-  switch (operation.operation) {
-    case "create": {
+const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, BackendError> =>
+  Match.value(operation.operation).pipe(
+    Match.withReturnType<Effect.Effect<Write, BackendError>>(),
+    Match.when("create", () => {
       const a = args as {
         id: string;
         attributes: Record<string, unknown>;
@@ -423,8 +423,8 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
         attributes: a.attributes,
         ...(a.relationships !== undefined ? { relationships: a.relationships } : {}),
       });
-    }
-    case "update": {
+    }),
+    Match.when("update", () => {
       const a = args as { id: string; attributes: Record<string, unknown> };
       return Effect.succeed({
         operation: "update",
@@ -432,45 +432,41 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
         id: a.id,
         attributes: a.attributes,
       });
-    }
-    case "delete": {
+    }),
+    Match.when("delete", () => {
       const a = args as { id: string };
       return Effect.succeed({ operation: "delete", type: operation.type, id: a.id });
-    }
-    default:
-      return Effect.fail(
-        new BackendError({ message: `Operation "${operation.operation}" is not a write` })
-      );
-  }
-};
+    }),
+    Match.orElse((op) =>
+      Effect.fail(new BackendError({ message: `Operation "${op}" is not a write` }))
+    )
+  );
 
 /** One write as an atomic operation object (`add` / `update` / `remove`). */
-const operationOf = (write: Write): Record<string, unknown> => {
-  switch (write.operation) {
-    case "create":
-      return {
-        op: "add",
-        data: {
-          type: write.type,
-          id: write.id,
-          attributes: write.attributes ?? {},
-          ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
-        },
-      };
-    case "update":
-      return {
-        op: "update",
-        data: {
-          type: write.type,
-          id: write.id,
-          attributes: write.attributes ?? {},
-          ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
-        },
-      };
-    case "delete":
-      return { op: "remove", ref: { type: write.type, id: write.id } };
-  }
-};
+const operationOf = (write: Write): Record<string, unknown> =>
+  Match.value(write.operation).pipe(
+    Match.withReturnType<Record<string, unknown>>(),
+    Match.when("create", () => ({
+      op: "add",
+      data: {
+        type: write.type,
+        id: write.id,
+        attributes: write.attributes ?? {},
+        ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+      },
+    })),
+    Match.when("update", () => ({
+      op: "update",
+      data: {
+        type: write.type,
+        id: write.id,
+        attributes: write.attributes ?? {},
+        ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+      },
+    })),
+    Match.when("delete", () => ({ op: "remove", ref: { type: write.type, id: write.id } })),
+    Match.exhaustive
+  );
 
 /**
  * The index of the operation an error's `source.pointer` names — the
@@ -954,12 +950,17 @@ export const make = (
     ): Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected> =>
       Effect.gen(function* () {
         const resource = config.resources.get(write.type);
-        switch (write.operation) {
-          case "create": {
+        return yield* Match.value(write.operation).pipe(
+          Match.withReturnType<
+            Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected>
+          >(),
+          Match.when("create", () => {
             const ref = resource?.create;
             if (ref === undefined)
-              return yield* new BackendError({ message: `No create endpoint for "${write.type}"` });
-            return yield* sendWrite(
+              return Effect.fail(
+                new BackendError({ message: `No create endpoint for "${write.type}"` })
+              );
+            return sendWrite(
               HttpClientRequest.post(urlFor(config.baseUrl, ref.path)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
@@ -967,12 +968,14 @@ export const make = (
                 )
               )
             );
-          }
-          case "update": {
+          }),
+          Match.when("update", () => {
             const ref = resource?.update;
             if (ref === undefined)
-              return yield* new BackendError({ message: `No update endpoint for "${write.type}"` });
-            return yield* sendWrite(
+              return Effect.fail(
+                new BackendError({ message: `No update endpoint for "${write.type}"` })
+              );
+            return sendWrite(
               HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders),
                 HttpClientRequest.bodyJsonUnsafe(
@@ -980,19 +983,21 @@ export const make = (
                 )
               )
             );
-          }
-          case "delete": {
+          }),
+          Match.when("delete", () => {
             const ref = resource?.delete;
             if (ref === undefined)
-              return yield* new BackendError({ message: `No delete endpoint for "${write.type}"` });
-            yield* sendWrite(
+              return Effect.fail(
+                new BackendError({ message: `No delete endpoint for "${write.type}"` })
+              );
+            return sendWrite(
               HttpClientRequest.make("DELETE")(urlFor(config.baseUrl, ref.path, write.id)).pipe(
                 HttpClientRequest.setHeaders(jsonApiHeaders)
               )
-            );
-            return undefined;
-          }
-        }
+            ).pipe(Effect.as(undefined));
+          }),
+          Match.exhaustive
+        );
       });
 
     /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */

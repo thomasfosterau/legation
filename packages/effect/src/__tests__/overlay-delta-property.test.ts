@@ -17,6 +17,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -158,22 +159,20 @@ const randomStep = (rng: () => number, ids: ReadonlyArray<string>): Step => {
 const runStep = (
   engine: ClientEngineModule.ClientEngine,
   step: Step
-): Effect.Effect<void, unknown> => {
-  switch (step.kind) {
-    case "put":
-      return engine.mutate("todo/put", { id: step.id, value: step.value });
-    case "del":
-      return engine.mutate("todo/del", { id: step.id });
-    case "bump":
-      return engine.mutate("todo/bump", { id: step.id });
-    case "reject":
-      return engine.mutate("todo/reject", { id: step.id, value: step.value });
-    case "push":
-      return engine.push;
-    case "pull":
-      return engine.pull;
-  }
-};
+): Effect.Effect<void, unknown> =>
+  Match.value(step).pipe(
+    Match.discriminator("kind")("put", (put) =>
+      engine.mutate("todo/put", { id: put.id, value: put.value })
+    ),
+    Match.discriminator("kind")("del", (del) => engine.mutate("todo/del", { id: del.id })),
+    Match.discriminator("kind")("bump", (bump) => engine.mutate("todo/bump", { id: bump.id })),
+    Match.discriminator("kind")("reject", (reject) =>
+      engine.mutate("todo/reject", { id: reject.id, value: reject.value })
+    ),
+    Match.discriminator("kind")("push", () => engine.push),
+    Match.discriminator("kind")("pull", () => engine.pull),
+    Match.exhaustive
+  );
 
 // Independently re-derives "confirmed rows + acknowledged-but-unpulled tail +
 // pending journal, replayed on top" straight from the public `ClientStore`

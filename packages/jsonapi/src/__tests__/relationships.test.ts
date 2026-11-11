@@ -6,6 +6,7 @@ import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -100,26 +101,24 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
       const segments = url.pathname.split("/").filter((s) => Str.isNonEmpty(s));
       const type = defined(segments[0]);
       const id = segments[1];
-      let response: Response;
-      switch (request.method) {
-        case "GET":
-          response =
-            id === undefined
-              ? list(type, url.searchParams)
-              : store.has(`${type}:${id}`)
-                ? doc(store.get(`${type}:${id}`))
-                : empty(404);
-          break;
-        case "POST": {
+      const response: Response = Match.value(request.method).pipe(
+        Match.withReturnType<Response>(),
+        Match.when("GET", () =>
+          id === undefined
+            ? list(type, url.searchParams)
+            : store.has(`${type}:${id}`)
+              ? doc(store.get(`${type}:${id}`))
+              : empty(404)
+        ),
+        Match.when("POST", () => {
           const resource = readBody(request).data as Stored;
           store.set(`${type}:${resource.id}`, {
             ...resource,
             attributes: resource.attributes ?? {},
           });
-          response = doc(store.get(`${type}:${resource.id}`));
-          break;
-        }
-        case "PATCH": {
+          return doc(store.get(`${type}:${resource.id}`));
+        }),
+        Match.when("PATCH", () => {
           const patch = readBody(request).data as Stored;
           const existing = store.get(`${type}:${id}`) ?? { type, id: defined(id), attributes: {} };
           const merged = {
@@ -127,16 +126,14 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
             attributes: { ...existing.attributes, ...patch.attributes },
           };
           store.set(`${type}:${id}`, merged);
-          response = doc(merged);
-          break;
-        }
-        case "DELETE":
+          return doc(merged);
+        }),
+        Match.when("DELETE", () => {
           store.delete(`${type}:${id}`);
-          response = empty(204);
-          break;
-        default:
-          response = empty(405);
-      }
+          return empty(204);
+        }),
+        Match.orElse(() => empty(405))
+      );
       return HttpClientResponse.fromWeb(request, response);
     })
   );
