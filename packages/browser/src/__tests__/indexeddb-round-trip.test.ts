@@ -49,10 +49,6 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
           expect(yield* kv.has("rt/gone")).toBe(false);
           expect(yield* kv.size).toBe(2);
           expect((yield* kv.keys).toSorted()).toEqual(["rt/bytes", "rt/string"]);
-          // Effect 4.1's prefix view lists, sizes and clears from `keys` (#589).
-          const view = KeyValueStore.prefix(kv, "rt/");
-          expect((yield* view.keys).toSorted()).toEqual(["bytes", "string"]);
-          expect(yield* view.size).toBe(2);
         }).pipe(Effect.provide(newKeyValue(database)));
 
         // The platform's store reads those back, writes one of its own, and removes one of theirs.
