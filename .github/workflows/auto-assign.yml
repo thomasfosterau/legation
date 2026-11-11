@@ -1,0 +1,40 @@
+name: Auto-assign
+
+# Assigns the owner to every pull request that has no assignee, so each PR
+# lands in their queue whoever opened it. Dependabot's PRs are assigned by
+# `assignees:` in .github/dependabot.yml instead: a Dependabot-triggered run
+# gets a read-only token, so the job skips them.
+#
+# Known gap: the "chore: version packages" PR is opened by the Release
+# workflow's Changesets step with GITHUB_TOKEN, and events made with that
+# token trigger no other workflow, so this one never sees it.
+#
+# `pull_request` (not `pull_request_target`): nothing is checked out and no
+# code from the PR runs. A PR from a fork gets a read-only token and the
+# assignment fails without harm; this repository's PRs come from its own
+# branches.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+# No permissions by default; the job grants only what assigning needs.
+permissions: {}
+
+jobs:
+  assign:
+    name: assign the owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.actor != 'dependabot[bot]' && toJSON(github.event.pull_request.assignees) == '[]'
+    permissions:
+      # Assignees are an issue attribute: `gh pr edit --add-assignee` writes
+      # them through the issues API.
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Assign thomasfosterau
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr edit "$PR_URL" --add-assignee thomasfosterau

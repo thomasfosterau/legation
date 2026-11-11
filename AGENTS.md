@@ -1,17 +1,14 @@
 # AGENTS.md
 
-`CLAUDE.md` is a symlink to this file. legation publishes `@thomasfosterau/legation` and the `@thomasfosterau/legation-*` packages, an Effect v4 (release-candidate line) sync engine and its runtime, protocol and framework adapters. It is a **pnpm 11 + Vite+ (`vp`)** workspace: versions live in the `pnpm-workspace.yaml` catalogs, and every gate is a `vp` command or a `vp run` task defined in `vite.config.ts`. Read `CONTEXT.md` (the glossary) and the `docs/adr/` entries for the area you touch before changing it, and the package's own `CLAUDE.md` (`packages/<name>/CLAUDE.md`) for its boundary and invariants.
+Guidance for coding agents working in legation. It covers conventions, pitfalls, verification and the work tracker. Claude Code reads it through `.claude/CLAUDE.md`, which imports this file along with `CONTRIBUTING.md` and `README.md`.
 
-| Package                                       | Directory                     | Entries                      | Purpose / boundary                                                                                                                                                                     |
-| --------------------------------------------- | ----------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@thomasfosterau/legation`                    | `packages/effect`             | `.`, `./internal`, `./sql`   | Engine core. App surface on `.`, engine seams for adapter authors on `./internal` (ADR-0022), SQL reference `Backend` on `./sql` (ADR-0033). Peer: `effect` only.                      |
-| `@thomasfosterau/legation-browser`            | `packages/browser`            | `.`                          | Service-worker / elected host, IndexedDB client store, tab mirrors, Cache API HTTP cache.                                                                                              |
-| `@thomasfosterau/legation-jsonapi`            | `packages/jsonapi`            | `.`                          | JSON:API loaders, derived sync, façade (over `@thomasfosterau/effect-jsonapi`).                                                                                                        |
-| `@thomasfosterau/legation-alchemy-cloudflare` | `packages/alchemy-cloudflare` | `.`                          | Durable Object rooms, fan-out shards, D1 executor, on Alchemy's Cloudflare provider (ADR-0034). Peers: `alchemy` and `@alchemy.run/cloudflare` (exact 2.0.0-beta.85), `effect ^4.1.0`. |
-| `@thomasfosterau/legation-svelte`             | `packages/svelte`             | `.`, `./kit`                 | Rune hooks; SvelteKit surface on `./kit`.                                                                                                                                              |
-| `@thomasfosterau/legation-devtools`           | `packages/devtools`           | `.`, `./svelte` (raw source) | Headless devtools core; Svelte panel on `./svelte` (ships raw `.svelte` source).                                                                                                       |
+The project overview and the package table (each package's entries and boundary) are in [README.md](README.md#packages). Setup, the command reference and the branch, pull-request and changeset rules are in [CONTRIBUTING.md](CONTRIBUTING.md). legation is a **pnpm 11 + Vite+ (`vp`)** workspace: versions live in the `pnpm-workspace.yaml` catalogs, and every gate is a `vp` command or a `vp run` task defined in `vite.config.ts`.
 
-A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` and `vite.config.ts` (`packageConfig` from `vite.package.ts`), a `.fallowrc.json` entry, zone and rule, an alias in the root `vite.config.ts` and a `paths` entry in `tsconfig.check.json`, and its name in the root `vite.config.ts` `packages` list (the `build` aggregate).
+Before changing an area, read:
+
+- `CONTEXT.md` (the glossary);
+- the `docs/adr/` entries for that area;
+- the package's own `AGENTS.md` (`packages/<name>/AGENTS.md`), for its boundary and invariants.
 
 ## Common pitfalls
 
@@ -19,7 +16,7 @@ A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` a
 - **App-facing names go on `@thomasfosterau/legation`, engine seams on `@thomasfosterau/legation/internal`** (ADR-0022). Import accordingly in docs, READMEs and examples: `ClientEngine`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the other seams are not on the root entry, so a sample that imports them from it doesn't compile.
 - **`effect` is a peer, never a dependency**: two copies break `Context` identity. The dev pin is the catalog's `effect` entry (with every `@effect/*` runtime package at the same version, and `overrides` forcing the singleton); the published floor is `catalogs.peers.effect`. The `effect` peer (and each `@effect/*` peer) is `^4.0.0`; raise it, per package, only when a dependency of that package requires it, in a named catalog whose comment names the dependency (`catalogs.alchemy-peers`, legation-alchemy-cloudflare's `^4.1.0`, forced by `alchemy`). Our own code is written to run on 4.0.0. Each floor is tested in CI by its own job ("Tests (effect floor, …)"), so a package with its own floor keeps its tests in a Vitest project of its own (`alchemy-cloudflare`). To move either, follow CONTRIBUTING.md "Effect version upgrades".
 - **Dependabot groups only the lockstep sets** (`.github/dependabot.yml`: `toolchain`, `effect`, `svelte`, `alchemy`; everything else, `@enfect/oxlint` and each GitHub Action included, gets its own PR) with a 1-day `cooldown`, longer than pnpm's 480-minute `minimumReleaseAge`. By hand, on the matching PR: the npm-alias entries (`vite`, `typescript`, `@typescript/native`), the `overrides` keys, `catalogs.peers` and `catalogs.*-peers` (the exact Alchemy peers included), and an `@effect/tsgo` that supports a new vite-plus's oxlint.
-- **The Alchemy adapter is written against the provider's services** (`@alchemy.run/cloudflare`'s `Workers` and `D1` modules), never raw workerd types, and the app declares its Durable Object classes; the package exports the implementations (ADR-0034, `packages/alchemy-cloudflare/CLAUDE.md`).
+- **The Alchemy adapter is written against the provider's services** (`@alchemy.run/cloudflare`'s `Workers` and `D1` modules), never raw workerd types, and the app declares its Durable Object classes; the package exports the implementations (ADR-0034, `packages/alchemy-cloudflare/AGENTS.md`).
 - **Never edit a version in a `package.json`.** Versions live in the `pnpm-workspace.yaml` catalogs (`catalogMode: strict`); manifests carry only `catalog:`, `catalog:peers` and `workspace:` specifiers. After editing a catalog, run `pnpm install` and commit `pnpm-lock.yaml`, or CI fails with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`. `vite-plus`, `@effect/tsgo` and `@typescript/native` move together (the tsgo patch hard-errors at install on an unsupported `tsc` or `oxlint`); read their catalog comments first.
 - **`dist/` is the product.** Each package is a `vp pack` (tsdown) library with one bundle per entry; `exports` points at `dist/`, so the example apps and the commerce browser test consume it the way a consumer does. Tests and `vp run check` resolve the package names to `src/` instead (the root `vite.config.ts` aliases, `tsconfig.check.json` `paths`), so neither needs a build first.
 - **Publish only through the Release workflow** (`pnpm run release` → `scripts/publish.mjs`), never `npm publish` in a package directory: npm copies `workspace:` and `catalog:` into the published `package.json` verbatim (#267). `pnpm pack` rewrites them, and `scripts/pack.mjs` checks the tarball (publint strict, attw ESM-only, no exact `effect` peer, `svelte` conditions packed) before `npm publish <tarball>` uploads it under OIDC.
@@ -31,21 +28,7 @@ A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` a
 - **`exactOptionalPropertyTypes` is on**: an optional field a caller may forward `undefined` to is spelled `?: T | undefined`.
 - **Tests import from `@effect/vitest` or `vite-plus/test`**, never `vitest`. Service, error and test conventions are in CONTRIBUTING.md ("Effect Code", "Tests").
 - **Every export a consumer sees starts its doc comment with a one-sentence summary**, before any tag: hover shows only that text. Write ``@throws `X` when …``, never `@throws {@link X}`, which TypeScript misparses.
-
-## Commands
-
-- `pnpm install` — dependencies, the Vite+ git hooks (pre-commit runs `vp staged`: format + lint on staged files) and the `prepare` step that patches the native `tsc` / `oxlint` with `@effect/tsgo`. CI uses `pnpm install --frozen-lockfile`.
-- `vp check` — format + lint (Oxfmt + Oxlint, with the Effect presets). Lint is type-aware through oxlint-tsgolint (`typeAware` + `typeCheck` in `vite.config.ts`); tsgolint types each file under its nearest `tsconfig.json`, which is why each `src/__tests__/` (and `packages/devtools/svelte/`) carries one extending `tsconfig.check.json`. `vp check --fix` / `vp fmt` fix what they can.
-- `vp run build` — `vp pack` → every package's `dist/`, in dependency order.
-- `vp run pack:check` — packs every publishable package with `pnpm pack` and fails on a `workspace:` / `catalog:` specifier left in a packed `package.json`, an internal range that doesn't match the dependency's version, an exact `effect` / `@effect/*` peer, a `svelte` export condition naming a file that isn't packed, or a `publint` (strict) or `attw` (ESM-only: `node10` and `node16-cjs` ignored) finding. Fix a finding; suppress one only in `attwSuppressions` in `scripts/pack.mjs`, with its reason. No registry access.
-- `vp run check` — the type gate: packages and tests in one native, Effect-patched `tsc` program (`tsconfig.check.json`). `vp run check:examples` — each example app's own `tsc` / `svelte-check`, against the built `dist/`.
-- `vp run test` — every Vitest project (`node`, `commerce-browser`, `svelte`); builds first. `vp test run packages/<name>` runs one package's tests without a build. The commerce browser test needs Chromium (see Agent sessions).
-- `vp run test:coverage` — the suite plus `coverage/coverage-final.json`, the map `fallow audit` reads.
-- `vp run bench` — the `*.bench.ts` benchmarks (not a gate).
-- `vp exec fallow audit --base origin/trunk` — the fallow gate (see the blocks at the end). `vp exec fallow dead-code`, `vp exec fallow dupes` and `vp exec fallow health` run the individual analyses.
-- `pnpm changeset` — add a changeset.
-
-Invoke everything through `vp` (`vp exec` instead of `npx`; `vp run <task>` instead of a bare `pnpm` script). The sanctioned non-`vp` invocations: `pnpm install`, `pnpm changeset`, `pnpm audit`, `pnpm exec playwright-core install chromium`, and `pnpm run version` / `pnpm run release` on the release path. Single-check variants are in [CONTRIBUTING.md](CONTRIBUTING.md#running-individual-checks).
+- **Invoke everything through `vp`**, as [CONTRIBUTING.md "Commands"](CONTRIBUTING.md#commands) lists it: `vp exec` instead of `npx`, `vp run <task>` instead of a bare `pnpm` script.
 
 ## Verification
 
@@ -62,18 +45,19 @@ Before you report work as done, run these in CI's order (`.github/workflows/ci.y
 
 CI also runs the suite at the published `effect` floor ("Tests (effect floor)"). If a gate can't run here, say which and why in the PR body; never imply it ran.
 
-## Branches and pull requests
+The commerce façade's browser test fails, rather than skips, without Chromium: run `pnpm exec playwright-core install chromium` first. If the download is blocked, run `vp test run --project node --project svelte` and say in the PR body that the commerce browser test didn't run. The PostgreSQL overlap test skips locally without `DATABASE_URL` (CI sets it).
 
-- Branch off `trunk` as `issue-<n>-<slug>`; PR against `trunk`; squash-merge with a conventional prefix (`feat:`, `fix:`, `docs:`, `chore:`). Rebase onto `origin/trunk` before opening or updating a PR; never merge `trunk` into your branch (GitHub's Update-branch button merges).
-- Add a changeset (`pnpm changeset`) for every user-facing or package-impacting change, naming each package it touches; a doc-comment change that reaches the emitted `.d.ts` takes a `patch`. Docs-, CI- and tooling-only changes need none. Never publish or version by hand: the Release workflow opens the "chore: version packages" PR and the owner merges it ([PUBLISHING.md](PUBLISHING.md)).
+## Pull requests
+
+The branch, rebase, squash-merge and changeset rules are in [CONTRIBUTING.md "Branches and pull requests"](CONTRIBUTING.md#branches-and-pull-requests). For agents:
+
 - Standing approvals: once a branch has a pushed commit, open its PR without being asked; watch it to merge or close, investigating CI failures and review comments as they arrive; keep its body current with what the branch does.
-- GitHub writes go to `thomasfosterau/legation` only; pass `-R thomasfosterau/legation` whenever the cwd might be another checkout. Use the `gh` CLI for GitHub operations, even when GitHub MCP tools are available.
+- GitHub writes go to `thomasfosterau/legation` only; pass `-R thomasfosterau/legation` whenever the cwd might be another checkout.
+- Never publish or version by hand: the Release workflow opens the "chore: version packages" PR and the owner merges it ([PUBLISHING.md](PUBLISHING.md)).
 
 ## Work tracker
 
 GitHub Issues are the backlog: when you find work you can't do now, file an issue rather than leaving a TODO. The issue is the spec: read it with `gh issue view <n> --comments`; later comments override the body. Record decisions and findings as issue comments. Stop-and-report is a valid outcome: on a blocker outside the issue's scope, comment the evidence on the issue and stop. Scope cut mid-PR becomes a linked issue before merge.
-
-The vendored skills in `.claude/skills/` read their repo config from `docs/agents/`: `issue-tracker.md` (gh conventions), `triage-labels.md` (the label strings) and `domain.md` (which docs to read).
 
 ## Effect
 
@@ -82,19 +66,13 @@ Never guess at an Effect API. This repo is on the Effect v4 release-candidate li
 - On this line HTTP lives at `effect/http/*` and RPC at `effect/rpc`; there are no `effect/unstable/*` paths.
 - The Effect lint presets (`@effect/tsgo`'s and `@enfect/oxlint`'s `recommended`) run in `vp check`. A rule at `warn` under "ported-code allowances" in `vite.config.ts` carries the count left when the presets were adopted (the sites are listed in [#497](https://github.com/thomasfosterau/legation/issues/497)): a new site is a defect, not headroom, and a rule whose count reaches zero has its line deleted so it is back at `error`.
 
-## Agent sessions
-
-- The SessionStart hook (`.claude/hooks/session-start.sh`) installs the global Vite+ CLI at the catalog's `vite-plus` pin with the official installer (npm-provenance and SHA-512 checked; it needs `vite.plus` and `viteplus.dev` on the environment's allowlist), links `vp` and `vpx` into `~/.local/bin` (the CLI lives under `$VP_HOME` when set, as in the Vite+ container image, else `~/.local/share/vite-plus`), and runs `vp install --frozen-lockfile`. The global `vp` delegates to each checkout's own `vite-plus`, worktrees included. Everything else goes through Vite+: `vp exec fallow …` for fallow, `vpx <file>.ts` for TypeScript files (the commerce example's `dev:server`). Nothing else is put on PATH. If the installer can't run, `vp` falls back to this checkout's `node_modules` copy. It hydrates no secrets, and none are needed.
-- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` (run through `vp exec fallow`) fails; it runs only in this checkout and its `.claude/worktrees/*`, and for any other tree skips the audit with a notice without running that tree's tooling. It reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON, YAML or Markdown file you write or edit.
-- `vp run test` and `vp run test:coverage` need Chromium for the commerce façade's browser test, which fails rather than skips without it. Run `pnpm exec playwright-core install chromium` first; if the download is blocked, run `vp test run --project node --project svelte` and say in the PR body that the commerce browser test didn't run. The PostgreSQL overlap test skips locally without `DATABASE_URL` (CI sets it).
-
 ## Documentation surfaces
 
-- `README.md`: the landing page. Package `README.md`: the npm-facing API reference. Links into the repo stay relative (npm rewrites them against `repository`), but a consumer must not need them: everything they need is in the README.
-- Package `CLAUDE.md`: the package's boundary, invariants and terms (not published).
+- `README.md`: the landing page, with the project overview and the package table. Package `README.md`: the npm-facing API reference. Links into the repo stay relative (npm rewrites them against `repository`), but a consumer must not need them: everything they need is in the README.
+- `AGENTS.md` (this file): general agent guidance. Package `AGENTS.md`: the package's boundary, invariants and terms (not published). Each `CLAUDE.md` (`.claude/CLAUDE.md` at the root, `packages/<name>/CLAUDE.md`) holds only Claude Code-specific instructions and imports the general files with `@path`, so nothing is written twice.
 - `CONTEXT.md`: the domain glossary. `docs/adr/`: architecture decisions (historical records; fix only a wrong status or path, and record a new decision as a new ADR).
-- `CONTRIBUTING.md`: human setup, hooks, individual checks, Effect upgrades. `PUBLISHING.md`: the release pipeline and the owner's one-time setup. `SECURITY.md`: the reporting channel and supply-chain posture.
-- `docs/agents/`: config the vendored skills read. Decisions and findings go in issue comments.
+- `CONTRIBUTING.md`: setup, commands, branches and pull requests, hooks, individual checks, Effect upgrades. `PUBLISHING.md`: the release pipeline and the owner's one-time setup. `SECURITY.md`: the reporting channel and supply-chain posture.
+- `docs/agents/`: config the vendored agent skills read (`issue-tracker.md`, `triage-labels.md`, `domain.md`). Decisions and findings go in issue comments.
 
 ---
 
