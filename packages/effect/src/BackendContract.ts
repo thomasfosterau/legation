@@ -54,7 +54,9 @@
  * A backend that provides the optional `evaluateMany` (#505) must agree with
  * its own `evaluate`: rule 14 asks for rule 6's subsets, the generated corpus
  * included, in one call and checks each list against `evaluate` for that
- * subset. A backend without it passes that rule vacuously.
+ * subset. A backend without it passes that rule vacuously. Likewise rule 15
+ * for the optional `evaluateCounted` (#210): its entries are `evaluate`'s and
+ * its totals are the unwindowed subset's size.
  */
 
 import * as Arr from "effect/Array";
@@ -1113,27 +1115,61 @@ const sameEntries = (
 const describeEntries = (entries: ReadonlyArray<SubsetEntry>): string =>
   entries.map((entry) => `${entry.id}@${entry.version}`).join(", ");
 
-const rule14EvaluateManyEquivalence: Rule = (h) =>
-  Effect.gen(function* () {
-    const many = h.backend.evaluateMany;
-    if (many === undefined) return;
-    const rule = "evaluateMany equals per-subset evaluate";
-    const corpus = yield* contractCorpus;
+/**
+ * The subsets rules 14 and 15 ask for in one call: whole-collection subsets of
+ * both contract collections, two windows of one predicate (a limit, then a
+ * cursor too) and rule 6's generated corpus.
+ */
+const batchSubsets = (h: Harness): Effect.Effect<ReadonlyArray<Subset.Subset>> =>
+  Effect.map(contractCorpus, (corpus) => {
     const keep = Predicate.eq("tag", "keep");
     const byRank = [{ field: "rank", direction: "desc" as const }];
-    const subsets: ReadonlyArray<Subset.Subset> = [
+    return [
       Subset.make({ collection: h.evalRows }),
       Subset.make({ collection: h.rows }),
       Subset.make({ collection: h.evalRows, where: keep, orderBy: byRank, limit: 2 }),
       Subset.make({ collection: h.evalRows, where: keep, orderBy: byRank, limit: 2, cursor: "e5" }),
       ...corpusSubsets(h, corpus),
     ];
-    const batched = yield* h.expectOk(rule, many(h.context, subsets));
-    yield* h.check(
+  });
+
+/** A batch answer holds one entry per subset asked. */
+const checkOnePerSubset = (
+  h: Harness,
+  rule: string,
+  subsets: ReadonlyArray<Subset.Subset>,
+  answers: ReadonlyArray<unknown>,
+  what: string
+): Effect.Effect<void, ContractViolation> =>
+  h.check(
+    rule,
+    answers.length === subsets.length,
+    `Expected ${subsets.length} ${what}, one per subset, got ${answers.length}`
+  );
+
+/** A batch method asked for no subsets answers nothing. */
+const checkNoneForNone = (
+  h: Harness,
+  rule: string,
+  method: string,
+  asked: Effect.Effect<ReadonlyArray<unknown>, BackendError>
+): Effect.Effect<void, ContractViolation> =>
+  Effect.flatMap(h.expectOk(rule, asked), (none) =>
+    h.check(
       rule,
-      batched.length === subsets.length,
-      `Expected ${subsets.length} entry lists, one per subset, got ${batched.length}`
-    );
+      Arr.isReadonlyArrayEmpty(none),
+      `Asked for no subsets, ${method} gave ${none.length} answers`
+    )
+  );
+
+const rule14EvaluateManyEquivalence: Rule = (h) =>
+  Effect.gen(function* () {
+    const many = h.backend.evaluateMany;
+    if (many === undefined) return;
+    const rule = "evaluateMany equals per-subset evaluate";
+    const subsets = yield* batchSubsets(h);
+    const batched = yield* h.expectOk(rule, many(h.context, subsets));
+    yield* checkOnePerSubset(h, rule, subsets, batched, "entry lists");
     yield* Effect.forEach(
       subsets,
       (subset, index) =>
@@ -1148,12 +1184,50 @@ const rule14EvaluateManyEquivalence: Rule = (h) =>
         }),
       { concurrency: 1, discard: true }
     );
-    const none = yield* h.expectOk(rule, many(h.context, []));
-    yield* h.check(
-      rule,
-      Arr.isReadonlyArrayEmpty(none),
-      `Asked for no subsets, evaluateMany gave ${none.length} lists`
+    yield* checkNoneForNone(h, rule, "evaluateMany", many(h.context, []));
+  });
+
+/**
+ * 15. `evaluateCounted`, when the backend provides it (#210), answers rule 14's
+ *     subsets, asked in one call, each with `evaluate`'s entries for that
+ *     subset and a `total` equal to the number of entries `evaluate` gives
+ *     the subset without its window (`Subset.unwindowed`): the rows its
+ *     `where` matches, whatever its `orderBy`, `limit` and `cursor`. Asking for
+ *     no subsets gives no answers. A backend without `evaluateCounted` passes
+ *     vacuously: a pull then carries no totals.
+ */
+const rule15EvaluateCountedTotals: Rule = (h) =>
+  Effect.gen(function* () {
+    const counted = h.backend.evaluateCounted;
+    if (counted === undefined) return;
+    const rule = "evaluateCounted equals evaluate, with the unwindowed total";
+    const subsets = yield* batchSubsets(h);
+    const answers = yield* h.expectOk(rule, counted(h.context, subsets));
+    yield* checkOnePerSubset(h, rule, subsets, answers, "answers");
+    yield* Effect.forEach(
+      subsets,
+      (subset, index) =>
+        Effect.gen(function* () {
+          const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
+          const whole = yield* h.expectOk(
+            rule,
+            h.backend.evaluate(h.context, Subset.unwindowed(subset))
+          );
+          const answer = answers[index];
+          yield* h.check(
+            rule,
+            answer !== undefined && sameEntries(answer.entries, single),
+            `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateCounted gave [${describeEntries(answer?.entries ?? [])}]`
+          );
+          yield* h.check(
+            rule,
+            answer?.total === whole.length,
+            `Subset ${index} over "${subset.collection}": its where matches ${whole.length} rows, evaluateCounted reported a total of ${answer?.total}`
+          );
+        }),
+      { concurrency: 1, discard: true }
     );
+    yield* checkNoneForNone(h, rule, "evaluateCounted", counted(h.context, []));
   });
 
 /** The contract, in the order the rules build on one another's state. */
@@ -1172,6 +1246,7 @@ const rules: ReadonlyArray<Rule> = [
   rule12OwnWritesReachGetRows,
   rule13ListsRejections,
   rule14EvaluateManyEquivalence,
+  rule15EvaluateCountedTotals,
 ];
 
 // ─── Verification ────────────────────────────────────────────────────────────

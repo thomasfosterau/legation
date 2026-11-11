@@ -86,6 +86,9 @@
     ],
     "links": {
       "self": "/jsonapi/products?include=seller%2Cvariants&filter[id]=p-01"
+    },
+    "meta": {
+      "total": 1
     }
   }
 }

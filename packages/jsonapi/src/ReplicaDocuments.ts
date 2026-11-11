@@ -102,7 +102,13 @@ export interface ReplicaDocuments {
    */
   readonly collection: (
     view: ClientView.Reader,
-    parsed: JsonApiQuery.ParsedRead
+    parsed: JsonApiQuery.ParsedRead,
+    /**
+     * The document's `meta` (#210): the read's total, which the replica alone
+     * cannot know for a windowed subscription, so the caller supplies it (the
+     * façade, from the subscription's pulled total). Absent, no `meta`.
+     */
+    meta?: DocumentWriter.CollectionMeta
   ) => Effect.Effect<DocumentWriter.CollectionDocument, QueryError>;
   /**
    * Run a parsed read over the view and write its single-resource document:
@@ -124,7 +130,9 @@ export interface ReplicaDocuments {
    */
   readonly fromUrl: (
     view: ClientView.Reader,
-    url: string | URL
+    url: string | URL,
+    /** A collection document's `meta`, as {@link ReplicaDocuments.collection} takes it. */
+    meta?: DocumentWriter.CollectionMeta
   ) => Effect.Effect<Document, QueryError>;
   /**
    * The reads a request needs covered for its document to be faithful: the
@@ -268,16 +276,18 @@ export const make = (options: Options): ReplicaDocuments => {
       )
     );
 
-  const collection: ReplicaDocuments["collection"] = (view, parsed) =>
-    Effect.map(input(view, parsed), DocumentWriter.collection);
+  const collection: ReplicaDocuments["collection"] = (view, parsed, meta) =>
+    Effect.map(input(view, parsed), (written) =>
+      DocumentWriter.collection(meta === undefined ? written : { ...written, meta })
+    );
 
   const data: ReplicaDocuments["data"] = (view, parsed) =>
     Effect.map(input(view, parsed), DocumentWriter.data);
 
-  const fromUrl: ReplicaDocuments["fromUrl"] = (view, url) =>
+  const fromUrl: ReplicaDocuments["fromUrl"] = (view, url, meta) =>
     JsonApiQuery.parseRead(nodes, url).pipe(
       Effect.flatMap((parsed): Effect.Effect<Document, QueryError> =>
-        parsed.id === undefined ? collection(view, parsed) : data(view, parsed)
+        parsed.id === undefined ? collection(view, parsed, meta) : data(view, parsed)
       )
     );
 

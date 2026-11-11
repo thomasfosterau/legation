@@ -17,7 +17,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
-import { Authorization, Edge, MemoryBackend, Node, QueryError } from "@thomasfosterau/legation";
+import {
+  Authorization,
+  Edge,
+  MemoryBackend,
+  Node,
+  Query,
+  QueryError,
+} from "@thomasfosterau/legation";
 import { type ClientView, Subset } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
@@ -149,6 +156,19 @@ const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: s
 
 const bytes = (document: unknown) => JSON.stringify(document);
 
+/**
+ * A collection URL's total over this replica (#210): its filter over every row
+ * the replica holds, whatever the page. The replica holds every row here, so
+ * this is exact, and the REST handler's `meta.total` must equal it.
+ */
+const localTotal = (url: string) =>
+  Effect.gen(function* () {
+    const parsed = yield* JsonApiQuery.parseRead(nodes, url);
+    if (parsed.id !== undefined) return undefined;
+    const root = Query.plan(nodes, parsed.read).root;
+    return { total: (yield* view.query(Subset.unwindowed(root))).length };
+  });
+
 // ─── Declarations: the app's resources, beside the node graph's synthesis ────
 
 const Category = Resource.make("categories", { attributes: { name: Schema.String } });
@@ -192,7 +212,7 @@ describe("ReplicaDocuments over the replica", () => {
           ],
           (url) =>
             Effect.gen(function* () {
-              const local = yield* docs.fromUrl(view, url);
+              const local = yield* docs.fromUrl(view, url, yield* localTotal(url));
               const served = yield* restList(
                 rest,
                 defined(declared.get(defined(url.split("?")[0]).slice(1))),
@@ -242,7 +262,7 @@ describe("ReplicaDocuments over the replica", () => {
         const docs = ReplicaDocuments.make({ nodes, prefix: "/api" });
         const synthetic = JsonApiQuery.resourcesOf(nodes);
         const url = "/products?sort=name";
-        const local = yield* docs.fromUrl(view, url);
+        const local = yield* docs.fromUrl(view, url, yield* localTotal(url));
         const served = yield* restList(rest, defined(synthetic.get("products")), `/api${url}`);
         expect(bytes(local)).toBe(bytes(served));
         // The paginated `reviews` edge is a `many` relationship of the synthetic

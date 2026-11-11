@@ -30,6 +30,9 @@
     ],
     "links": {
       "self": "/jsonapi/categories?sort=name"
+    },
+    "meta": {
+      "total": 3
     }
   }
 }

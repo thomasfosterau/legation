@@ -26,9 +26,17 @@ import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import { Backend, type ChangeHint, evaluateAll, type SyncContext } from "./Backend.js";
+import {
+  Backend,
+  type ChangeHint,
+  evaluateAll,
+  evaluateCountedAll,
+  type SyncContext,
+  totalsOf,
+} from "./Backend.js";
 import {
   AuthPolicy,
   IdentityResolver,
@@ -173,6 +181,35 @@ export const readSubsets = (
       { concurrency: 1 }
     );
     return yield* evaluateRows(deps.backend, context, authorized);
+  });
+
+/**
+ * The **total** of a read's root subset (#210): how many rows its `where`
+ * matches under the request's identity, whatever its window. The same front
+ * half as {@link readSubsets} (the filterable check, `onRead` middleware,
+ * deny-by-default auth filters), then `Backend.totalsOf` in place of the
+ * evaluation. A read middleware that rewrites the one subset into several
+ * gets their totals summed, as {@link readSubsets} concatenates their rows.
+ * This is what the derived REST handler writes as `meta.total`, so it matches
+ * the total a pull reports for the same subscription.
+ */
+export const readTotal = (
+  deps: ReadDeps,
+  context: SyncContext,
+  subset: Subset
+): Effect.Effect<number, AuthorizationError | BackendError> =>
+  Effect.gen(function* () {
+    yield* checkFilterable(deps.authPolicy, subset);
+    const request: ReadRequest = { clientGroupId: context.clientGroupId, subsets: [subset] };
+    const onRead = deps.middleware?.onRead;
+    const checked = onRead === undefined ? request : yield* onRead(context, request);
+    const authorized = yield* Effect.forEach(
+      checked.subsets,
+      (each) => authorize(deps.authPolicy, context, each, "server"),
+      { concurrency: 1 }
+    );
+    const totals = yield* totalsOf(deps.backend, context, authorized);
+    return totals.reduce((sum, total) => sum + total, 0);
   });
 
 /**
@@ -684,18 +721,21 @@ export const makeWithIntrospectionWith = (
     // The subsets go to the backend together (`Backend.evaluateAll`), so a
     // backend with `evaluateMany` answers the pull in a bounded number of
     // round trips (#505); one without it is asked per subset.
+    // Each subset's total rides beside it (#210): `undefined` when the backend
+    // cannot count (`Backend.evaluateCounted` absent).
     const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
       Effect.gen(function* () {
-        const evaluated = yield* evaluateAll(backend, context, subsets);
+        const evaluated = yield* evaluateCountedAll(backend, context, subsets);
         const rows = new Map<string, Map<string, string | number>>();
         Arr.forEach(subsets, (subset, index) => {
           const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-          Arr.forEach(evaluated[index] ?? [], (entry) => {
+          Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
             collection.set(entry.id, entry.version);
           });
           rows.set(subset.collection, collection);
         });
-        return { rows } satisfies Cvr.NextView;
+        const view: Cvr.NextView = { rows };
+        return { view, totals: evaluated.map((answer) => answer.total) };
       });
 
     // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
@@ -765,12 +805,18 @@ export const makeWithIntrospectionWith = (
     ) =>
       Effect.gen(function* () {
         const before = yield* backend.lastMutationIds(context);
-        const next = yield* evaluateView(context, authorized);
+        const { view: next, totals } = yield* evaluateView(context, authorized);
         const previous = yield* resolvePrevious(cookie, epoch);
         const isReset = cookie !== undefined && previous === undefined;
         const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
         const after = yield* backend.lastMutationIds(context);
-        return { next, patch, lastMutationIds: after, consistent: sameWatermark(before, after) };
+        return {
+          next,
+          totals,
+          patch,
+          lastMutationIds: after,
+          consistent: sameWatermark(before, after),
+        };
       });
 
     // The pull's view as one snapshot (#286), for a backend that meets Backend
@@ -851,7 +897,7 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
 
-            const { next, patch, lastMutationIds } = yield* readPullView(
+            const { next, totals, patch, lastMutationIds } = yield* readPullView(
               context,
               authorized,
               checked.cookie,
@@ -878,12 +924,24 @@ export const makeWithIntrospectionWith = (
             );
             yield* Metric.update(Telemetry.patchOps, patch.length);
             yield* Metric.update(Telemetry.serverPullsTotal, 1);
-            return {
+            // The client's subscriptions' totals, in its order (#210). `authorized`
+            // holds the direct subscriptions first, one per entry of the request the
+            // middleware returned; when that is not the client's own count, no total
+            // can be placed against the client's list, and none is sent.
+            const direct = totals.slice(0, checked.subscriptions.length);
+            const placed =
+              checked.subscriptions.length === request.subscriptions.length &&
+              Arr.isReadonlyArrayNonEmpty(direct) &&
+              direct.every(P.isNumber)
+                ? direct
+                : undefined;
+            const response: PullResponse = {
               cookie,
               patch,
               lastMutationIds,
               ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
             };
+            return placed === undefined ? response : { ...response, totals: placed };
           }).pipe(Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPull)

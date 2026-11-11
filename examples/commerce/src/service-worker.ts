@@ -180,6 +180,8 @@ config.addEventListener("message", (event) => {
         facade = makeFacade({
           view,
           coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations),
+          // A windowed pin's total for `meta.total`, from the engine's last pull (#210).
+          totalOf: host.engine.totalOf,
           cookie: host.cookie,
           // Façade writes journal into this worker's engine, never over the mirror channel.
           mutate: host.engine.mutateWithAck,

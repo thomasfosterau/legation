@@ -77,6 +77,9 @@
     ],
     "links": {
       "self": "/jsonapi/cartItems?include=variant&filter[userId]=u1"
+    },
+    "meta": {
+      "total": 2
     }
   }
 }

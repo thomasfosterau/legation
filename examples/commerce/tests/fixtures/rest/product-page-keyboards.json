@@ -72,6 +72,9 @@
     ],
     "links": {
       "self": "/jsonapi/products?filter[categoryId]=c-keyboards&sort=id&page[limit]=4"
+    },
+    "meta": {
+      "total": 2
     }
   }
 }

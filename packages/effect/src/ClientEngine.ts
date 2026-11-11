@@ -29,6 +29,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Aggregate from "./Aggregate.js";
+import * as Coverage from "./Coverage.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore, NO_COMPACTION, freezePending, type CompactionResult } from "./ClientStore.js";
 import * as Hash from "./Hash.js";
@@ -977,6 +978,19 @@ export interface ClientEngine {
    */
   readonly pullCounts: Effect.Effect<PullCounts>;
   /**
+   * A subset's **total** as the last applied pull reported it (#210): how many
+   * rows the server's subset matches under its auth filter, whatever the
+   * window, so a windowed subscription's total is the collection's and not the
+   * window's. Found by the subscription with the same collection and the same
+   * conjunct set (`Coverage.sameConjuncts`), so order, `limit` and `cursor`
+   * play no part. `undefined` when the last pull carried no total for such a
+   * subscription: the server's backend cannot count, the pull middleware
+   * changed the subscription list, no pull has applied since the engine
+   * started, or an identity reset cleared them. Kept in memory only, like the
+   * pull marks of ADR-0029's #426 amendment.
+   */
+  readonly totalOf: (subset: Subset.Subset) => Effect.Effect<number | undefined>;
+  /**
    * Point-in-time fallthrough read over the transport (ADR-0025): the
    * server evaluates the subsets under its auth filters, with no CVR
    * involvement; results are returned to the caller and **never** written
@@ -1088,6 +1102,10 @@ export const make = (
     );
     const currentClientId: Effect.Effect<string> = Ref.get(clientIdRef);
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
+    // The last applied pull's totals, beside the subscriptions it sent (#210).
+    const totals = yield* Ref.make<
+      ReadonlyArray<{ readonly subset: Subset.Subset; readonly total: number }>
+    >([]);
     // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
     // prefetches of the same subset share one pull instead of racing N of them.
     const ensurePulls = yield* Ref.make(
@@ -2140,6 +2158,7 @@ export const make = (
           yield* store.clearCookie;
           yield* Ref.set(subscriptions, []);
           yield* Ref.set(namedSubs, []);
+          yield* Ref.set(totals, []);
           // Outcome deferreds were issued to the superseded identity's
           // session; that session is over and the backend will never settle
           // them here. Interrupt them so no `mutateWithAck` caller hangs —
@@ -2557,6 +2576,19 @@ export const make = (
               : {}),
           });
           const touched = yield* applyPull(response);
+          // The totals go in before the pull counts as applied, so a window the
+          // marks call pulled has its total (#210). One per subscription sent,
+          // in order; anything else carries none.
+          const reported = response.totals;
+          yield* Ref.set(
+            totals,
+            reported !== undefined && reported.length === subsets.length
+              ? subsets.flatMap((subset, index) => {
+                  const total = reported[index];
+                  return total === undefined ? [] : [{ subset, total }];
+                })
+              : []
+          );
           yield* Ref.set(pullsApplied, number);
           yield* Metric.update(Telemetry.pullsTotal, 1);
           yield* Metric.update(Telemetry.pullPatchOps, response.patch.length);
@@ -2580,6 +2612,17 @@ export const make = (
         })
       );
     }).pipe(Effect.withSpan(Telemetry.span.clientPull));
+
+    const totalOf: ClientEngine["totalOf"] = (subset) =>
+      Effect.map(
+        Ref.get(totals),
+        (entries) =>
+          entries.find(
+            (entry) =>
+              entry.subset.collection === subset.collection &&
+              Coverage.sameConjuncts(entry.subset.where, subset.where)
+          )?.total
+      );
 
     const pullCounts: Effect.Effect<PullCounts> = Effect.all({
       started: Ref.get(pullsStarted),
@@ -3589,6 +3632,7 @@ export const make = (
       push,
       pull,
       pullCounts,
+      totalOf,
       dropIfPending,
       reset,
       identity: store.getIdentity,

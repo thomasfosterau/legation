@@ -29,8 +29,8 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Resource } from "@thomasfosterau/effect-jsonapi";
-import { Client, ClientStore, MemoryBackend, type Query, Server, Transport } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
+import { Client, ClientStore, MemoryBackend, Query, Server, Transport } from "@thomasfosterau/legation";
+import { ClientEngine, ClientView, Subset } from "@thomasfosterau/legation/internal";
 import { JsonApiQuery, ReplicaDocuments, RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import {
   allCategories,
@@ -270,6 +270,23 @@ const makeWorlds = Effect.gen(function* () {
 
 const bytes = (document: unknown) => JSON.stringify(document);
 
+/**
+ * A collection read's `meta` over this replica (#210): its filter counted over
+ * every row the replica holds, whatever the page. The settled replica holds
+ * every row the derived REST handler counts, so this is its `meta.total`.
+ */
+const metaOver = (view: ClientView.Reader, read: Query.Read) =>
+  view
+    .query(Subset.unwindowed(Query.plan(nodes, read).root))
+    .pipe(Effect.map((rows) => ({ total: rows.length })));
+
+/** {@link metaOver} for a URL: none for a single-resource URL. */
+const metaOfUrl = (view: ClientView.Reader, url: string) =>
+  Effect.gen(function* () {
+    const parsed = yield* JsonApiQuery.parseRead(nodes, url);
+    return parsed.id === undefined ? yield* metaOver(view, parsed.read) : undefined;
+  });
+
 // ─── The reads the app declares ──────────────────────────────────────────────
 
 const reads: ReadonlyArray<{ readonly name: string; readonly read: Query.Read }> = [
@@ -291,7 +308,7 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
           const served = yield* fetch(url);
           expect(served.status, name).toBe(200);
           expect(served.body.data, name).not.toEqual([]);
-          const local = yield* docs.collection(view, { read });
+          const local = yield* docs.collection(view, { read }, yield* metaOver(view, read));
           expect(bytes(local), `${name}: ${url}`).toBe(bytes(served.body));
         }
       })
@@ -309,7 +326,7 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
           "/jsonapi/cartItems?include=variant",
         ]) {
           const served = yield* fetch(url);
-          const local = yield* docs.fromUrl(view, url);
+          const local = yield* docs.fromUrl(view, url, yield* metaOfUrl(view, url));
           expect(bytes(local), url).toBe(bytes(served.body));
         }
         // `fields[products]=name&include=variants`: only `name`, full linkage
@@ -335,7 +352,11 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
         // The next link continues the window through the parser, on both sides.
         const first = (yield* docs.fromUrl(view, "/jsonapi/products?sort=id&page[limit]=4")) as Json;
         expect(first.links.next).toBe("/jsonapi/products?sort=id&page[limit]=4&page[after]=p-04");
-        const second = (yield* docs.fromUrl(view, first.links.next)) as Json;
+        const second = (yield* docs.fromUrl(
+          view,
+          first.links.next,
+          yield* metaOfUrl(view, first.links.next)
+        )) as Json;
         expect(second.data.map((product: Json) => product.id)).toEqual(["p-05", "p-06"]);
         expect(bytes(second)).toBe(bytes((yield* fetch(first.links.next)).body));
       })
@@ -379,6 +400,7 @@ describe("the commerce façade against the derived REST handler (ADR-0029 §6)",
         const facade = makeFacade({
           view: client.view,
           coverageOf: client.coverageOf,
+          totalOf: client.totalOf,
           cookie: store.getCookie,
           online: () => online.current,
         });

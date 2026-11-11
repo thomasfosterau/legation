@@ -37,6 +37,7 @@ import type {
   ClientView,
   Coverage,
   MutationState,
+  Subset,
 } from "@thomasfosterau/legation/internal";
 import { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./api.js";
@@ -54,6 +55,12 @@ export interface FacadeSource {
   readonly view: ClientView.Reader;
   /** The ledger: the host's registrations in the worker, `client.coverageOf` in a test. */
   readonly coverageOf: (read: Query.Read) => Effect.Effect<Coverage.Verdict>;
+  /**
+   * A windowed subscription's pulled total, for `meta.total` (#210): the worker
+   * engine's `totalOf`, `client.totalOf` in a test. Absent, a listing only a
+   * windowed pin covers is forwarded rather than served without its total.
+   */
+  readonly totalOf?: (subset: Subset.Subset) => Effect.Effect<number | undefined>;
   /** The replica's CVR cookie (`store.getCookie`), for `x-legation-served-at`. */
   readonly cookie: Effect.Effect<string | undefined, unknown>;
   /** Connectivity; defaults to `navigator.onLine`. */

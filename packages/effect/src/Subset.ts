@@ -275,6 +275,28 @@ export const window = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): R
 export const apply = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): ReadonlyArray<R> =>
   window(sortFiltered(rows, subset), subset);
 
+/**
+ * {@link apply}, with the subset's **total** (#210): how many rows match its
+ * `where`, whatever its `orderBy`, `cursor` and `limit`. The window's rows
+ * are cut from exactly that set, so a backend that filters in memory has the
+ * total for free.
+ */
+export const applyCounted = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset) => {
+  const matching = sortFiltered(rows, subset);
+  const windowed = window(matching, subset);
+  const total = matching.length;
+  return { rows: windowed, total };
+};
+
+/** The subset without its window: the same `where` and `orderBy`, no `limit` or `cursor`. */
+export const unwindowed = (subset: Subset): Subset => ({
+  collection: subset.collection,
+  where: subset.where,
+  orderBy: subset.orderBy,
+  limit: undefined,
+  cursor: undefined,
+});
+
 // ─── Indexed evaluation (issue #113) ─────────────────────────────────────────
 //
 // Same semantics as `sortFiltered`/`apply`, but over an id-keyed row map with

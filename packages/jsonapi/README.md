@@ -318,6 +318,16 @@ writer, `getRows` can serve a row that has since been changed or deleted. A row
 not in the cache is fetched with `GET /{type}/{id}`, which needs a `getOne`
 route.
 
+### Totals
+
+A listing also gives each subscription its total (`evaluateCounted`, #210),
+which a pull reports and the façade writes as `meta.total`. The backend lists
+the filter and cuts the window itself, so the total is the rows the listing
+returned, unless the listing's own document says otherwise: a non-negative
+integer `meta.total` from the upstream server is taken as the total. An
+upstream that pages its listings should send one, since the backend reads only
+the first page.
+
 ## Standalone collection loading
 
 `CollectionLoader` reads JSON:API endpoints into rows directly. Every helper is
@@ -478,6 +488,10 @@ What the derivation guarantees:
 - **Sorting and paging are `Subset.apply`'s** (ADR-0026 / ADR-0028): code-point
   text order, NULLs last, the id tie-break, `page[after]` as the cursor.
   `links.next` continues after the last row when the window is full.
+- **A `list` document carries `meta: { total }`** (#210): how many rows the
+  read's filter matches under the request's auth filter, whatever the page,
+  counted through the same path as its rows (`SyncServer.readTotal`). The
+  façade writes the same member for the same URL.
 - **A URL the grammar rejects is the codec's 400** with `source.parameter`,
   before any backend call; a collection the policy does not declare is a 403.
 - **Includes resolve in two phases**, and every `Relationship.many` the
@@ -584,6 +598,7 @@ const facade = JsonApiFacade.fetchHandler({
   resources, // so linkage matches the derived REST handler's
   view,
   coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations), // the mirrors' pins
+  totalOf: host.engine.totalOf, // a windowed pin's pulled total, for `meta.total`
   cookie: store.getCookie, // `x-legation-served-at`
 });
 
@@ -637,6 +652,18 @@ self.addEventListener("fetch", (event) => {
   rows link to pulled (ADR-0029 amendment #426). Every read
   `ReplicaDocuments.toCover` names must be covered; the façade never
   subscribes on a request's behalf.
+- **`meta.total` on every listing** (#210). A collection document the façade
+  serves carries `meta: { total }`, the count the derived REST handler writes
+  for the same URL: the rows the read's filter matches, whatever its page.
+  Under an unwindowed pin the façade counts the replica. Under a windowed pin
+  (`page[limit]`) it uses the pin's total as the last pull reported it,
+  through `totalOf` (`host.engine.totalOf` in a worker, `client.totalOf` over
+  a Client). When that is unknown (no `totalOf`, a backend that cannot count,
+  or no pull since the worker started), the read is **uncovered**: forwarded
+  online, the `503` offline. A listing is never served without its total, or
+  with the page's row count in its place. App-specific `meta` members an app's
+  own handler adds are not reproduced; keep such an endpoint out of the api the
+  façade reflects. A single-resource document has no `meta`.
 - **The overlay.** A covered response sees pending optimistic mutations as
   `Client.query` does; an uncovered network response is the server's
   authoritative answer and does not (ADR-0029 §4).

@@ -68,7 +68,7 @@ import {
   type Backend,
   BackendError,
   type Node,
-  type Query,
+  Query,
   QueryError,
 } from "@thomasfosterau/legation";
 import { type Subset, SyncServer } from "@thomasfosterau/legation/internal";
@@ -304,12 +304,18 @@ export const make = (options: Options): RestHandlers => {
             searchParamsOf(request)
           );
           const resolved = yield* run(context, node, plan, read);
+          // `meta.total` (#210): the read's filter counted behind the same auth
+          // path as its rows, whatever the page, so it matches the total a pull
+          // reports for the same subscription and the façade writes for the URL.
+          const root = yield* Query.tryPlan(nodes, read);
+          const total = yield* SyncServer.readTotal(deps, context, root.root);
           // The endpoint's success encoder checks the document against the
           // resource at runtime; the type here is the default collection
           // document the resource declares.
-          return DocumentWriter.collection(
-            input(read, resolved, fields)
-          ) as CollectionDocumentOf<R>;
+          return DocumentWriter.collection({
+            ...input(read, resolved, fields),
+            meta: { total },
+          }) as CollectionDocumentOf<R>;
         })
       );
   };

@@ -168,6 +168,9 @@
     ],
     "links": {
       "self": "/jsonapi/variants"
+    },
+    "meta": {
+      "total": 9
     }
   }
 }

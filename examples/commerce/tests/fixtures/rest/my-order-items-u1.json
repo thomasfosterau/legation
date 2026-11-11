@@ -53,6 +53,9 @@
     ],
     "links": {
       "self": "/jsonapi/orderItems?filter[userId]=u1"
+    },
+    "meta": {
+      "total": 2
     }
   }
 }

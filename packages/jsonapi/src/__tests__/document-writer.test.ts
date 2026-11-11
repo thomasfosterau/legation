@@ -124,6 +124,15 @@ describe("DocumentWriter.collection", () => {
     expect(plain.data[0]).not.toHaveProperty("relationships");
   });
 
+  it("writes `meta` as given, and none without it (#210)", () => {
+    const input = { nodes, read: { collection: "categories" }, rows: [row(audio)] };
+    expect(DocumentWriter.collection(input)).not.toHaveProperty("meta");
+    const counted = DocumentWriter.collection({ ...input, meta: { total: 7 } });
+    expect(counted.meta).toEqual({ total: 7 });
+    // A single-resource document has no total.
+    expect(DocumentWriter.data({ ...input, meta: { total: 7 } })).not.toHaveProperty("meta");
+  });
+
   it("compounds the included edges in edge-name then row order, deduplicated by (type, id)", () => {
     const document = DocumentWriter.collection({
       nodes,
