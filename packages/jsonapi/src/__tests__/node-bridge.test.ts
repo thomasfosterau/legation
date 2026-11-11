@@ -435,6 +435,50 @@ describe("sync metadata read off the resource (#220)", () => {
     ).toEqual({ kind: "text", operators: ["gt"] });
   });
 
+  it("stores a to-one edge under the relationship's declared key; via still wins (#553)", () => {
+    const Profile = Resource.make("profiles", {
+      attributes: { bio: Schema.String },
+      relationships: {
+        category: Relationship.one(() => Category, { key: "category_ref" }),
+        avatar: Relationship.optional(() => Category, { key: "avatar_ref" }),
+      },
+    });
+    const node = NodeBridge.fromResource(Profile);
+    expect(node.edges["category"]).toEqual({
+      kind: "one",
+      target: "categories",
+      via: "category_ref",
+    });
+    expect(node.edges["avatar"]).toMatchObject({ via: "avatar_ref" });
+    // The declared key joins the derivable set, as the convention's would.
+    expect([...Node.derivableSet(node)].toSorted()).toEqual(["avatar_ref", "category_ref"]);
+    expect(
+      NodeBridge.fromResource(Profile, { via: { category: "categoryKey" } }).edges["category"]
+    ).toMatchObject({ via: "categoryKey" });
+  });
+
+  it("bridges a graph that declares its metadata on the resources with no options (#220)", () => {
+    const Article = Resource.make("articles", {
+      attributes: { publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])) },
+      relationships: {
+        category: Relationship.one(() => Category, { key: "category_ref" }),
+      },
+      annotations: NodeBridge.syncAnnotations({ kinds: { publishedAt: "instant" } }),
+    });
+    const article = defined(NodeBridge.registry([Category, Article]).nodes.get("articles"));
+    expect(article.edges["category"]).toEqual({
+      kind: "one",
+      target: "categories",
+      via: "category_ref",
+    });
+    expect(article.filterable["publishedAt"]).toEqual({
+      kind: "instant",
+      operators: ["gt", "lt"],
+    });
+    // The declared key is filterable by eq / in, as every bridged key field is.
+    expect(article.filterable["category_ref"]).toMatchObject({ operators: ["eq", "in"] });
+  });
+
   it("keeps a mismatched annotation a definition-time defect", () => {
     const undeclared = Resource.make("articles", {
       attributes: { publishedAt: Schema.String },
