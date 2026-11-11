@@ -135,6 +135,14 @@ order — the poison-mutation semantics of the core contract. Creates keep
 sending the client-generated `id`; `lid` is supported by the wire format but
 unused until a mutator needs a server-assigned id.
 
+Since effect-jsonapi 0.18, a server's default create payload (on
+`Endpoint.create` and in an `Endpoint.operations` `add`) refuses a
+client-generated `id` with `403`. `JsonApiBackend` always sends one, so the
+server must accept it: give `Endpoint.create` and `Endpoint.operations` a
+`payload` option whose `data` admits `id` (for a create, the resource's
+`createPayload` with `id: Schema.optionalKey(Schema.String)` added to `data`).
+The commerce example's `src/lib/api.ts` shows both.
+
 Without the endpoint, each write is its own `POST`/`PATCH`/`DELETE` and
 delivery is at-least-once: keep writes idempotent (client-generated ids on
 create; `PATCH`/`DELETE` are naturally idempotent).

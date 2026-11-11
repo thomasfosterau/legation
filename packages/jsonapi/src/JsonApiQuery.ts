@@ -328,23 +328,44 @@ const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top => {
 };
 
 /**
- * The synthetic resource's attributes: every filterable field (`id` and the
+ * The synthetic resource's attributes: every filterable field (the
  * `one`-edge keys included) with its kind's schema and its operators
  * declared through `Filter.able`; every other attribute as `Unknown`, so
- * `fields[type]` still names it but no filter reaches it.
+ * `fields[type]` still names it but no filter reaches it. A filterable `id`
+ * is not an attribute (JSON:API reserves the name, and effect-jsonapi
+ * refuses it since 0.19): it is the resource's id, see {@link idOf}.
  */
 const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
-  const filterable: Record<string, Schema.Top> = R.map(node.filterable, (declared) =>
-    literalSchema(declared.kind).pipe(Filter.able(declared.operators))
+  const filterable: Record<string, Schema.Top> = R.map(
+    R.filter(node.filterable, (_, field) => field !== RESOURCE_ID),
+    (declared) => literalSchema(declared.kind).pipe(Filter.able(declared.operators))
   );
   // Declared filterable fields first, then the other attributes, untyped.
   return {
     ...filterable,
     ...R.map(
-      R.filter(node.attributes, (_, field) => !R.has(filterable, field)),
+      R.filter(
+        node.attributes,
+        (_, field) => field !== RESOURCE_ID && !R.has(node.filterable, field)
+      ),
       (): Schema.Top => Schema.Unknown
     ),
   };
+};
+
+/** The JSON:API member a resource's identity travels in, and the field name it filters under. */
+const RESOURCE_ID = "id";
+
+/**
+ * The synthetic resource's `id` (#590): the node's filterable `id`, declared
+ * through `Filter.able` on `Resource.make`'s `id` option (effect-jsonapi
+ * 0.21), so `filter[id]` decodes through the same grammar as any attribute.
+ * A node whose `id` is not filterable keeps effect-jsonapi's default id.
+ */
+const idOf = (node: Node.AnyNode): Schema.Codec<string, string> | undefined => {
+  const declared = node.filterable[RESOURCE_ID];
+  // A row id is text on the wire whatever its declared kind (`RowId` is a string).
+  return declared === undefined ? undefined : Schema.String.pipe(Filter.able(declared.operators));
 };
 
 /**
@@ -375,6 +396,11 @@ const relationshipsOf = (
   });
 };
 
+/** `Resource.make`'s `id` option, present only when the node declares one. */
+const withId = (
+  id: Schema.Codec<string, string> | undefined
+): { readonly id?: Schema.Codec<string, string> } => (id === undefined ? {} : { id });
+
 const resourceGraphs = new WeakMap<Node.NodeRegistry, ReadonlyMap<string, Resource.Any>>();
 
 /**
@@ -392,6 +418,7 @@ export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resou
     resources.set(
       node.type,
       Resource.make(node.type, {
+        ...withId(idOf(node)),
         attributes: attributesOf(node),
         relationships: relationshipsOf(node, resources),
       })
@@ -1139,11 +1166,18 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
     .join("\n");
   const cached = flatFilterCodecs.get(signature);
   if (cached !== undefined) return cached;
-  const attributes = R.fromIterableWith(types, ([field, type]): [string, Schema.Top] => [
-    field,
-    scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able()),
-  ]);
-  const codec = UrlQuery.Filter(Resource.make("query", { attributes })) as FlatFilterCodec;
+  const attributes = R.fromIterableWith(
+    [...types].filter(([field]) => field !== RESOURCE_ID),
+    ([field, type]): [string, Schema.Top] => [
+      field,
+      scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able()),
+    ]
+  );
+  // An `id` filter is the resource id's (#590): JSON:API reserves the name for it.
+  const id = types.has(RESOURCE_ID) ? Schema.String.pipe(Filter.able()) : undefined;
+  const codec = UrlQuery.Filter(
+    Resource.make("query", { ...withId(id), attributes })
+  ) as FlatFilterCodec;
   flatFilterCodecs.set(signature, codec);
   return codec;
 };

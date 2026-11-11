@@ -110,11 +110,39 @@ const readOnly = {
   errors: [NotFound],
 } as const;
 
+/**
+ * The request document this server accepts: its operations decoded one by one
+ * by the handler (`decodeOperation`), so an `add` may carry the client id
+ * `JsonApiBackend` sends. Since effect-jsonapi 0.18 the default request
+ * document refuses a client-generated `data.id` with 403 (#464), and
+ * `Endpoint.operations`' `payload` option is how an api that honours client
+ * ids declares so.
+ */
+const ClientIdRequest = Schema.Struct({
+  "atomic:operations": Schema.NonEmptyArray(Schema.Unknown),
+});
+
+/** One operation, as the default request document would decode it, without the add's client id. */
+const decodeOperation = (raw: unknown): Effect.Effect<BatchOperation> => {
+  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, unknown> };
+  const { id: _clientId, ...data } = operation.data ?? {};
+  const withoutId = operation.op === "add" ? { ...operation, data } : operation;
+  return Schema.decodeUnknownEffect(Atomic.Operations([Row, EvalRow]))(withoutId).pipe(
+    Effect.orDie
+  );
+};
+
 const api = HttpApi.make("contract")
   .add(Group.make(Row, ...Endpoint.resource(Row, readOnly)))
   .add(Group.make(EvalRow, ...Endpoint.resource(EvalRow, readOnly)))
   .add(
-    Group.make("operations", Endpoint.operations([Row, EvalRow], { errors: [OperationRejected] }))
+    Group.make(
+      "operations",
+      Endpoint.operations([Row, EvalRow], {
+        errors: [OperationRejected],
+        payload: ClientIdRequest,
+      })
+    )
   );
 
 // ─── The server ──────────────────────────────────────────────────────────────
@@ -323,8 +351,9 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
         const entries: Array<Entry> = [];
         yield* Effect.forEach(
           payload["atomic:operations"].entries(),
-          ([index, operation]) =>
+          ([index, rawOperation]) =>
             Effect.gen(function* () {
+              const operation = yield* decodeOperation(rawOperation);
               const clientId = raw["atomic:operations"][index]?.data?.id;
               entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
             }),

@@ -70,6 +70,30 @@ const query = (collection: string) => JsonApiQuery.querySchema(nodes, collection
 /** A collection's `get` query — `include` and `fields[…]` — from the same graph. */
 const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(nodes, collection);
 
+/**
+ * A create payload that accepts the client-generated id every write here
+ * carries (JSON:API 1.1 §Client-Generated IDs): the resource's own create
+ * payload, its resource object rebuilt with an optional `id`. Since
+ * effect-jsonapi 0.18 the default create payload refuses one with 403 (#450),
+ * and `Endpoint.create`'s `payload` option is how an endpoint accepts it. The
+ * handlers read the id from the request (`clientIdOf`).
+ */
+const withClientId = <Data extends Schema.Struct.Fields>(data: Schema.Struct<Data>) =>
+  Schema.Struct({
+    data: Schema.Struct({ ...data.fields, id: Schema.optionalKey(Schema.String) }),
+  });
+
+/**
+ * The atomic request document the operations endpoint accepts: its
+ * operations as sent, each decoded by the handler without its client id
+ * (`server/jsonapi.ts`, `decodeOperation`). The default document refuses a
+ * client id on `add` with 403 (#464), and `Endpoint.operations`' `payload`
+ * option is how the endpoint accepts it.
+ */
+export const OperationsRequest = Schema.Struct({
+  "atomic:operations": Schema.NonEmptyArray(Schema.Unknown),
+});
+
 export const api = HttpApi.make("commerce")
   .add(Group.make(Category, Endpoint.list(Category, { query: query("categories") })))
   .add(
@@ -85,7 +109,10 @@ export const api = HttpApi.make("commerce")
     Group.make(
       Review,
       Endpoint.list(Review, { query: query("reviews") }),
-      Endpoint.create(Review, { errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict] })
+      Endpoint.create(Review, {
+        payload: withClientId(Review.createPayload.fields.data),
+        errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict],
+      })
     )
   )
   .add(
@@ -95,6 +122,7 @@ export const api = HttpApi.make("commerce")
       // The row a JsonApiBackend reads before it deletes the row (#372).
       Endpoint.get(CartItem, { query: singleRowQuery("cartItems"), errors: [NotFound] }),
       Endpoint.create(CartItem, {
+        payload: withClientId(CartItem.createPayload.fields.data),
         errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict],
       }),
       Endpoint.delete(CartItem, { errors: [Unauthorized, NotFound] })
@@ -105,6 +133,7 @@ export const api = HttpApi.make("commerce")
       Order,
       Endpoint.list(Order, { query: query("orders") }),
       Endpoint.create(Order, {
+        payload: withClientId(Order.createPayload.fields.data),
         errors: [Unauthorized, ApiError.BadRequest, ApiError.Conflict],
       })
     )
@@ -117,6 +146,7 @@ export const api = HttpApi.make("commerce")
     Group.make(
       "operations",
       Endpoint.operations([Review, CartItem, Order], {
+        payload: OperationsRequest,
         errors: [OperationUnauthorized, OperationNotFound, OperationConflict, OperationRejected],
       })
     )

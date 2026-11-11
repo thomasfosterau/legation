@@ -44,7 +44,7 @@
  * reads go through the Kit read proxy, `src/routes/jsonapi/[...path]/+server.ts`,
  * which sets this header from the session and drops the client's).
  */
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import type { HttpServerRequest } from "effect/http";
 import { HttpServerRequest as Request } from "effect/http";
@@ -658,11 +658,29 @@ const applyOperation = (
   return fail(422, index, "Unsupported operation", "unknown resource type");
 };
 
+/**
+ * One operation as the default request document decodes it, without an
+ * `add`'s client id (read from the raw request by `clientIdsOf`). A malformed
+ * operation is a defect here (500): the default document rejected it as a 400
+ * before the handler ran, but the endpoint declares no 400 of its own, and the
+ * engine's JsonApiBackend never sends one.
+ */
+const decodeOperation = (raw: unknown) => {
+  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, unknown> };
+  const { id: _clientId, ...data } = operation.data ?? {};
+  const withoutId = operation.op === "add" ? { ...operation, data } : operation;
+  return Schema.decodeUnknownEffect(Atomic.Operations([Review, CartItem, Order]))(withoutId).pipe(
+    Effect.orDie
+  );
+};
+
 const operationsLive = HttpApiBuilder.group(api, "operations", (handlers) =>
   handlers.handle("operations", ({ payload, request }) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient;
-      const operations = payload["atomic:operations"];
+      const operations = yield* Effect.forEach(payload["atomic:operations"], decodeOperation, {
+        concurrency: 1,
+      });
       // The raw ids line up with the decoded operations by index; if the two
       // ever disagree in length, trust neither and assign server ids.
       const clientIds = yield* clientIdsOf(request);
