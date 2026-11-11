@@ -145,6 +145,41 @@ Everything below is on the root entry, `@thomasfosterau/legation`.
 
 The engine seams live on a second entry point, `@thomasfosterau/legation/internal`: `ClientEngine`, `ClientView`, `Subset`, `Mirror`, `EngineHost`, `MirrorChannel`, `MirrorProtocol`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo` and the protocol and transport codecs. The sibling packages (`@thomasfosterau/legation-browser`, `@thomasfosterau/legation-jsonapi`, `@thomasfosterau/legation-alchemy-cloudflare`) compose from it. It is not the app-facing API, and it moves faster than the root entry.
 
+#### Host requests and introspection over a mirror
+
+A `Mirror` asks its engine host for anything outside the `ClientView` surface through one generic envelope (`HostRequest`, ADR-0021 amendment). A **request kind** is declared once, with its schemas, and both sides encode and decode through it:
+
+```ts
+import { EngineHost, HostRequest, Introspection, Mirror } from "@thomasfosterau/legation/internal";
+import * as Schema from "effect/Schema";
+
+// Declared once, shared by host and mirror. Outside core, prefix the name with your package.
+const echo = HostRequest.single("my-package/echo", {
+  request: Schema.Struct({ text: Schema.String }),
+  response: Schema.String,
+});
+
+// Host: `store` serves the introspection kinds; `requests` serves your own.
+yield *
+  EngineHost.run({
+    channel,
+    engine,
+    store,
+    requests: [HostRequest.handler(echo, ({ text }) => Effect.succeed(text))],
+  });
+
+// Mirror: typed answers, or a `HostRequestError`.
+const mirror = yield * Mirror.make({ channel, mutators, requestTimeout: "5 seconds" });
+const text = yield * mirror.request(echo, { text: "hi" });
+const intro = Introspection.fromMirror(mirror); // an `EngineIntrospection<HostRequestError>`
+const journal = yield * intro.journal;
+```
+
+- `HostRequest.single(name, { request, response })` / `HostRequest.streaming(...)` declare a kind; `HostRequest.handler(kind, (input) => Effect)` / `HostRequest.streamHandler(kind, (input) => Stream)` serve one. A later handler for a name replaces an earlier one. `HostRequest.NoInput` and `HostRequest.Done` are the empty request and response.
+- `mirror.request(kind, input)` waits for one value; `mirror.stream(kind, input)` follows a streaming kind's answer until the host ends it. Stopping or interrupting the stream sends `HostRequestCancel`, and the host interrupts its handler; the mirror's `Disconnect` (or the host's liveness sweep) cancels everything it holds.
+- Failures are a `HostRequestError` with `kind`, `message` and `reason`: `UnknownKind` (the host does not serve it), `InvalidRequest` (the payload does not fit the request schema), `Failed` (the handler failed or died), or `Unanswered`. A request is `Unanswered` when no answer arrives within `requestTimeout` (default 10 seconds; what a host that predates the envelope looks like), and every request in flight is `Unanswered` when the host restarts. A stream has no reply timeout, since it may rightly stay quiet, and is not replayed after a restart: re-request it.
+- **Introspection.** Given its `store`, the host serves `Introspection.requests`: single-reply `introspect/subscriptions`, `introspect/journal`, `introspect/cookie`, `introspect/collections` and `introspect/syncFailures`, and streaming `introspect/events`, each typed by the `EngineIntrospection` member it serves. `Introspection.fromMirror(mirror)` builds the same view `Introspection.make(engine, store)` does. Mutation states stay on `mirror.mutationStates`. `EngineIntrospection.syncFailures` is the engine's recent terminal sync failures (`ClientEngine.recentSyncFailures`, the last 50, oldest first).
+
 ```ts
 import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
 

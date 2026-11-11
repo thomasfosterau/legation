@@ -20,10 +20,12 @@ import * as Stream from "effect/Stream";
 import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation/internal";
 import type * as Devtools from "@thomasfosterau/legation-devtools";
 
-/** Subscribe to a `Stream` as a store; `initial` until the first emission. */
-export const toStreamStore = <A>(stream: Stream.Stream<A>, initial: A): Readable<A> =>
+/** Subscribe to a `Stream` as a store; `initial` until the first emission. A failure stops it. */
+export const toStreamStore = <A, E>(stream: Stream.Stream<A, E>, initial: A): Readable<A> =>
   readable<A>(initial, (set) => {
-    const fiber = Effect.runFork(Stream.runForEach(stream, (a) => Effect.sync(() => set(a))));
+    const fiber = Effect.runFork(
+      Stream.runForEach(stream, (a) => Effect.sync(() => set(a))).pipe(Effect.ignore)
+    );
     return () => {
       Effect.runFork(Fiber.interrupt(fiber));
     };
@@ -35,24 +37,26 @@ export const toStreamStore = <A>(stream: Stream.Stream<A>, initial: A): Readable
  * pattern and its rationale (the Introspection substrate's plain-Effect
  * reads aren't Streams; `events` is the "something changed" trigger).
  */
-export const toSnapshotStore = <A, E, S>(
+export const toSnapshotStore = <A, E, S, E2>(
   effect: Effect.Effect<A, E>,
-  signal: Stream.Stream<S>,
+  signal: Stream.Stream<S, E2>,
   initial: A
 ): Readable<A> =>
   readable<A>(initial, (set) => {
     const safe = Effect.catch(effect, () => Effect.succeed(initial));
     const refresh = Effect.runFork(Effect.map(safe, (a) => set(a)));
-    const fiber = Effect.runFork(Stream.runForEach(signal, () => Effect.map(safe, (a) => set(a))));
+    const fiber = Effect.runFork(
+      Stream.runForEach(signal, () => Effect.map(safe, (a) => set(a))).pipe(Effect.ignore)
+    );
     return () => {
       Effect.runFork(Fiber.interrupt(refresh));
       Effect.runFork(Fiber.interrupt(fiber));
     };
   });
 
-/** A capped rolling log of a Stream's emissions, newest last. */
-export const toLogStore = <A>(
-  stream: Stream.Stream<A>,
+/** A capped rolling log of a Stream's emissions, newest last. A failure stops it. */
+export const toLogStore = <A, E>(
+  stream: Stream.Stream<A, E>,
   limit: number
 ): Readable<ReadonlyArray<A>> =>
   readable<ReadonlyArray<A>>([], (set) => {
@@ -63,12 +67,15 @@ export const toLogStore = <A>(
           log = [...log, a].slice(-limit);
           set(log);
         })
-      )
+      ).pipe(Effect.ignore)
     );
     return () => {
       Effect.runFork(Fiber.interrupt(fiber));
     };
   });
+
+/** How often the panel re-reads the sync failures when no event prompts it. */
+const SYNC_FAILURES_REFRESH = "5 seconds";
 
 const EMPTY_STATES: MutationState.MutationStateMap = HashMap.empty();
 
@@ -89,5 +96,11 @@ export const makeStores = (core: Devtools.DevtoolsCore): DevtoolsStores => ({
   cookie: toSnapshotStore(core.cookie, core.events, undefined as string | undefined),
   collections: toSnapshotStore(core.collections, core.events, []),
   events: toLogStore(core.events, 50),
-  syncFailures: toLogStore(core.syncFailures, 10),
+  // Re-read on every event, and on a tick: a terminal failure need not be
+  // followed by an event (the engine may stay offline).
+  syncFailures: toSnapshotStore(
+    Effect.map(core.syncFailures, (failures) => failures.slice(-10)),
+    Stream.merge(core.events, Stream.tick(SYNC_FAILURES_REFRESH)),
+    []
+  ),
 });

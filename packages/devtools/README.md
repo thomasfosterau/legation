@@ -30,11 +30,12 @@ Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` 
 
 ## Scope
 
-The owned-engine case only: an app that constructs its own `ClientEngine` +
-`ClientStore` in-process (see `examples/northwind`).
-Attaching over the mirror seam (a service-worker-hosted engine) needs a
-mirror-protocol introspection extension that doesn't exist yet — tracked as a
-follow-up substrate issue (#136).
+Two sources, one `DevtoolsCore`:
+
+- **An owned engine:** an app that constructs its own `ClientEngine` + `ClientStore` in-process (see `examples/northwind`) builds the core with `Devtools.make(engine, store, options)`.
+- **A hosted engine, over a mirror (#136):** a tab that reaches a service-worker-hosted engine only through a `Mirror` builds it with `Devtools.fromMirror(mirror, options)`. The reads ride core's introspection request kinds, which the host serves when given its store; the row counts and actions ride this package's own kinds (`Devtools.requests`, named `@thomasfosterau/legation-devtools/…`), which the host serves once given `Devtools.hostRequests(engine, store)`. A kind the host does not serve fails with a `HostRequestError` of reason `UnknownKind`, and a host that predates host requests leaves the reads `Unanswered`; the panel shows what it can.
+
+Over a mirror the reads and actions can fail with a `HostRequestError`, so the core's error channels include it. `syncFailures` is a point-in-time read of the engine's recent terminal sync failures (oldest first), which the Svelte panel re-reads on every event and every few seconds. `events` follows the host's event stream again after a host restart.
 
 ## Usage
 
@@ -57,6 +58,27 @@ Svelte:
 </script>
 
 <DevtoolsPanel core={devtools} />
+```
+
+Over a mirror, in the worker that hosts the engine and in the tab:
+
+```ts
+import * as Devtools from "@thomasfosterau/legation-devtools";
+import { Mirror } from "@thomasfosterau/legation/internal";
+import { BroadcastMirrorChannel, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
+
+// Worker: serve the devtools kinds beside core's introspection kinds.
+yield * ServiceWorkerHost.run({ requests: Devtools.hostRequests(engine, store) });
+
+// Tab: the same core shape, over a `Mirror` on the host's channel. A tab whose
+// `Client` connected to the worker can open one of its own for devtools.
+const mirror =
+  yield *
+  Mirror.make({
+    channel: yield * BroadcastMirrorChannel.make("legation"),
+    mutators,
+  });
+const devtools = Devtools.fromMirror(mirror);
 ```
 
 The `/svelte` entry point is a separate export so an app that never imports

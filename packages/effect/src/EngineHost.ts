@@ -57,8 +57,11 @@
 import type { UrlReads } from "./Client.js";
 import * as ClientEngine from "./ClientEngine.js";
 import * as Collection from "./Collection.js";
+import type * as ClientStore from "./ClientStore.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, TransportError } from "./Errors.js";
+import * as HostRequest from "./HostRequest.js";
+import * as Introspection from "./Introspection.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as PullMarks from "./PullMarks.js";
@@ -68,6 +71,7 @@ import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -108,6 +112,22 @@ export interface EngineHostOptions {
     readonly mirrorTimeout?: Duration.Input;
     readonly sweepInterval?: Duration.Input;
   };
+  /**
+   * The engine's store. Given it, the host serves the introspection request
+   * kinds (`Introspection.requests`, #136) over `Introspection.make(engine,
+   * store)`, so a tab's devtools can read this engine through
+   * `Introspection.fromMirror`. Opt-in because the host is otherwise handed
+   * only the engine, and the journal, cookie and collections are the
+   * store's reads.
+   */
+  readonly store?: ClientStore.ClientStore;
+  /**
+   * The host-request handlers this host serves (`HostRequest.handler`,
+   * `HostRequest.streamHandler`), beside the introspection kinds `store`
+   * enables; a handler for a name already served replaces it. A request
+   * naming any other kind is answered `UnknownKind`.
+   */
+  readonly requests?: ReadonlyArray<HostRequest.Handler>;
 }
 
 /** The running host: what a worker can consult about the mirrors it serves. */
@@ -182,6 +202,18 @@ const livenessOf = (options: EngineHostOptions) => ({
 
 /** The key a mirror's enhanced form submission is held under (#536): its mirror and the begin's requestId. */
 const formKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestId}`;
+
+/** The key a mirror's host request is held under while it runs: its mirror and requestId. */
+const hostRequestKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestId}`;
+
+/** The request kinds a host serves: the introspection kinds given a store, then `requests`. */
+const requestRegistryOf = (options: EngineHostOptions): HostRequest.Registry =>
+  HostRequest.registry([
+    ...(options.store === undefined
+      ? []
+      : Introspection.handlers(Introspection.make(options.engine, options.store))),
+    ...(options.requests ?? []),
+  ]);
 
 /** A `Mutate` or `Read`: what its replies are addressed by. */
 interface Request {
@@ -662,6 +694,56 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         })
       );
 
+    // Host requests in flight (ADR-0021 amendment), keyed by mirror and
+    // requestId, each on a fiber of its own so a long or streaming handler never
+    // holds up the message loop. A cancel interrupts one; a mirror that leaves
+    // (or is swept) has every request it holds interrupted.
+    const requestRegistry = requestRegistryOf(options);
+    const hostRequests = yield* Ref.make(HashMap.empty<string, Fiber.Fiber<void>>());
+    const takeHostRequests = (select: (key: string) => boolean) =>
+      Ref.modify(
+        hostRequests,
+        (map) =>
+          [
+            [...HashMap.values(HashMap.filter(map, (_, key) => select(key)))],
+            HashMap.filter(map, (_, key) => !select(key)),
+          ] as const
+      ).pipe(
+        Effect.flatMap((fibers) =>
+          Effect.forEach(fibers, Fiber.interrupt, { concurrency: "unbounded", discard: true })
+        )
+      );
+
+    // Answer a host request: decode it against its kind's handler (or refuse
+    // an unknown kind) and post every outcome to the asking mirror. The fiber
+    // waits until it is recorded, so its own removal can never precede it.
+    const handleHostRequest = (
+      message: MirrorProtocol.MirrorMessage & { readonly _tag: "HostRequest" }
+    ) =>
+      Effect.gen(function* () {
+        const { mirrorId, requestId } = message;
+        const key = hostRequestKey(mirrorId, requestId);
+        const outcomes = Option.match(HashMap.get(requestRegistry, message.kind), {
+          onNone: () => Stream.make(HostRequest.unknownKind(message.kind)),
+          onSome: (served) => served.serve(message.payload),
+        });
+        const recorded = yield* Deferred.make<void>();
+        const fiber = yield* Effect.forkScoped(
+          Deferred.await(recorded).pipe(
+            Effect.andThen(
+              Stream.runForEach(outcomes, (outcome) =>
+                channel
+                  .post({ _tag: "HostResponse", mirrorId, requestId, outcome })
+                  .pipe(Effect.ignore)
+              )
+            ),
+            Effect.ensuring(Ref.update(hostRequests, HashMap.remove(key)))
+          )
+        );
+        yield* Ref.update(hostRequests, HashMap.set(key, fiber));
+        yield* Deferred.succeed(recorded, undefined);
+      });
+
     const abandonForms = (mirrorId: string) =>
       Ref.modify(forms, (map) => {
         const prefix = `${mirrorId}:`;
@@ -692,6 +774,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           { concurrency: 1, discard: true }
         );
         yield* abandonForms(mirrorId);
+        yield* takeHostRequests((key) => key.startsWith(`${mirrorId}:`));
         yield* forget(mirrorId);
       });
 
@@ -807,6 +890,12 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           return handleDisconnect(message.mirrorId);
         case "Heartbeat":
           return touch(message.mirrorId);
+        case "HostRequest":
+          return touch(message.mirrorId).pipe(Effect.andThen(handleHostRequest(message)));
+        case "HostRequestCancel": {
+          const key = hostRequestKey(message.mirrorId, message.requestId);
+          return takeHostRequests((held) => held === key);
+        }
       }
     };
 

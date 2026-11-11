@@ -219,7 +219,26 @@ export type MirrorMessage =
       readonly mirrorId: string;
       readonly requestId: number;
       readonly ruling?: ClientEngine.FormRuling;
-    };
+    }
+  /**
+   * A host request (ADR-0021 amendment, #146, #136): ask the host for what
+   * the request kind named by `kind` serves, with `payload` that kind's
+   * encoded request. `requestId` is unique per mirror. Answered by one or
+   * more `HostResponse`s addressed to `mirrorId`; a host that predates the
+   * envelope drops it as foreign traffic, so the mirror times it out.
+   */
+  | {
+      readonly _tag: "HostRequest";
+      readonly mirrorId: string;
+      readonly requestId: number;
+      readonly kind: string;
+      readonly payload: unknown;
+    }
+  /**
+   * End a host request early: the host interrupts its handler. Idempotent:
+   * cancelling a finished or unknown request does nothing.
+   */
+  | { readonly _tag: "HostRequestCancel"; readonly mirrorId: string; readonly requestId: number };
 
 /** Wire codec for {@link MirrorMessage}. */
 export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
@@ -287,6 +306,18 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
     mirrorId: Schema.String,
     requestId: Schema.Number,
     ruling: Schema.optional(FormRuling),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("HostRequest"),
+    mirrorId: Schema.String,
+    requestId: Schema.Finite,
+    kind: Schema.String,
+    payload: Schema.Unknown,
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("HostRequestCancel"),
+    mirrorId: Schema.String,
+    requestId: Schema.Finite,
   }),
 ]) as Schema.Codec<MirrorMessage>;
 
@@ -434,7 +465,49 @@ export type HostMessage =
       readonly mirrorId: string;
       readonly requestId: number;
       readonly error?: string;
+    }
+  /** One answer to a `HostRequest`, addressed to the mirror that sent it; see {@link HostResponseOutcome}. */
+  | {
+      readonly _tag: "HostResponse";
+      readonly mirrorId: string;
+      readonly requestId: number;
+      readonly outcome: HostResponseOutcome;
     };
+
+/**
+ * Why a host refused or could not finish a `HostRequest`: it serves no such
+ * kind (`UnknownKind`), the payload did not decode against the kind's request
+ * schema (`InvalidRequest`), or the handler failed or died (`Failed`).
+ */
+export type HostFailureReason = "UnknownKind" | "InvalidRequest" | "Failed";
+
+/**
+ * What one `HostResponse` carries: a single-reply kind's `Value` (which ends
+ * the request), a streaming kind's `Item` (more follow) or `End`, or a
+ * `Failure` (which ends the request). `value` is in the kind's encoded
+ * response form.
+ */
+export type HostResponseOutcome =
+  | { readonly _tag: "Value"; readonly value: unknown }
+  | { readonly _tag: "Item"; readonly value: unknown }
+  | { readonly _tag: "End" }
+  | {
+      readonly _tag: "Failure";
+      readonly reason: HostFailureReason;
+      readonly message: string;
+    };
+
+/** Wire codec for {@link HostResponseOutcome}. */
+export const HostResponseOutcome: Schema.Codec<HostResponseOutcome> = Schema.Union([
+  Schema.Struct({ _tag: Schema.tag("Value"), value: Schema.Unknown }),
+  Schema.Struct({ _tag: Schema.tag("Item"), value: Schema.Unknown }),
+  Schema.Struct({ _tag: Schema.tag("End") }),
+  Schema.Struct({
+    _tag: Schema.tag("Failure"),
+    reason: Schema.Literals(["UnknownKind", "InvalidRequest", "Failed"]),
+    message: Schema.String,
+  }),
+]);
 
 /** One registration's pulled summary, keyed as the host keys it. */
 export interface PulledRegistration {
@@ -529,6 +602,12 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
     mirrorId: Schema.String,
     requestId: Schema.Number,
     error: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag("HostResponse"),
+    mirrorId: Schema.String,
+    requestId: Schema.Finite,
+    outcome: HostResponseOutcome,
   }),
 ]) as Schema.Codec<HostMessage>;
 

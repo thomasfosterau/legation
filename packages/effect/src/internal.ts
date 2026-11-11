@@ -49,6 +49,7 @@ export * as PromiseFacade from "./PromiseFacade.js";
 // ─── Mirror seam (ADR-0010/0021) ─────────────────────────────────────────────
 export * as MirrorProtocol from "./MirrorProtocol.js";
 export * as MirrorChannel from "./MirrorChannel.js";
+export * as HostRequest from "./HostRequest.js";
 export * as EngineHost from "./EngineHost.js";
 export * as Mirror from "./Mirror.js";
 

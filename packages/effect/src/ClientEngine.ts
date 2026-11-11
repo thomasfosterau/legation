@@ -452,6 +452,9 @@ export interface ResetOutcome {
   readonly released: number;
 }
 
+/** How many terminal sync failures {@link ClientEngine.recentSyncFailures} keeps. */
+export const RECENT_SYNC_FAILURES = 50;
+
 /** A terminal sync failure surfaced after the retry policy was exhausted. */
 export interface SyncFailure {
   readonly operation: "push" | "pull" | "pokes";
@@ -1007,6 +1010,13 @@ export interface ClientEngine {
    * `Telemetry.syncFailuresTotal`.
    */
   readonly syncFailures: Stream.Stream<SyncFailure>;
+  /**
+   * The most recent terminal sync failures, oldest first: the last
+   * {@link RECENT_SYNC_FAILURES} that {@link syncFailures} surfaced since the
+   * engine started. A point-in-time read, for introspection over a boundary
+   * that cannot follow the live stream (`Introspection`, #136).
+   */
+  readonly recentSyncFailures: Effect.Effect<ReadonlyArray<SyncFailure>>;
 }
 
 /**
@@ -1174,11 +1184,18 @@ export const make = (
     const failures = yield* Effect.acquireRelease(PubSub.unbounded<SyncFailure>(), (hub) =>
       PubSub.shutdown(hub)
     );
+    // The last few, for a point-in-time read (`recentSyncFailures`, #136).
+    const recentFailures = yield* Ref.make<ReadonlyArray<SyncFailure>>([]);
     const surfaceFailure = (
       operation: SyncFailure["operation"],
       error: SyncFailure["error"]
     ): Effect.Effect<void> =>
       Metric.update(Telemetry.syncFailuresTotal, 1).pipe(
+        Effect.andThen(
+          Ref.update(recentFailures, (recent) =>
+            [...recent, { operation, error }].slice(-RECENT_SYNC_FAILURES)
+          )
+        ),
         Effect.andThen(PubSub.publish(failures, { operation, error })),
         Effect.asVoid
       );
@@ -3653,6 +3670,7 @@ export const make = (
           }),
       runSync,
       syncFailures: Stream.fromPubSub(failures),
+      recentSyncFailures: Ref.get(recentFailures),
       engineEvents: Stream.fromPubSub(engineEventsHub),
       activeSubscriptions,
       // #36's mutation stream, now a filtered projection of the one hub (#45).
