@@ -85,7 +85,7 @@ catalog:
   better-sqlite3: ^13.0.3
   fake-indexeddb: ^6.2.8
   fallow: 3.41.0
-  jsdom: ^30.1.3
+  jsdom: ^31.0.0
   # The commerce façade's browser test drives Chromium through it. Pinned
   # exact: each release expects one Chromium revision
   # (`playwright-core install chromium` fetches it).
