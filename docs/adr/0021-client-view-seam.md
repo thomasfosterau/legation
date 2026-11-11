@@ -82,3 +82,118 @@ survive service-worker restarts and mirrors that raced the worker's boot.
   SW-hosted deployment.
 - The React binding still consumes `ClientEngine` via its atoms; migrating it
   to the seam is follow-up work.
+
+## Amendment (#146, #136, #147): one generic host-request envelope
+
+Date: 2026-11-11
+Status: Proposed. It specifies the owner's decision of 2026-10-23 (#146, #136,
+#147), and is accepted when its PR merges.
+
+**Context.** Two features need a mirror to ask its host for something that
+is not part of the `ClientView` surface. #146: a tab holds a server-rendered
+snapshot (ADR-0020) and the host owns the store it must hydrate. #136:
+devtools in a tab must read the host engine's journal, subscriptions, cookie,
+collections and sync failures, and follow its event stream. The owner decided
+that the mirror protocol gains **one** generic request/response envelope with
+a typed request kind, and that hydration and the introspection reads are its
+kinds. Two dedicated extensions, and hydrating only on the host side with
+nothing crossing the mirror, are not taken. The mirror-aware boot unit is
+#147's `createClient` handle.
+
+**Decision.**
+
+1. **Messages.** Three new messages; nothing existing changes.
+   - Mirror → host: `HostRequest { mirrorId, requestId, kind, payload }`,
+     where `kind` is a string naming a request kind and `payload` is that
+     kind's encoded request. `requestId` is unique per mirror, as for `Mutate`
+     and `Read`.
+   - Mirror → host: `HostRequestCancel { mirrorId, requestId }`, which ends a
+     streaming request. It is idempotent: cancelling a finished or unknown
+     request does nothing.
+   - Host → mirror: `HostResponse { mirrorId, requestId, outcome }`, where
+     `outcome` is one of:
+     - `{ _tag: "Value", value }`: a single-reply kind's answer, which ends the
+       request;
+     - `{ _tag: "Item", value }`: one element of a streaming kind's answer;
+       more follow;
+     - `{ _tag: "End" }`: a streaming kind's answer is complete;
+     - `{ _tag: "Failure", reason, message }`, which ends the request, with
+       `reason` one of `"UnknownKind"`, `"InvalidRequest"` or `"Failed"`.
+
+     Replies echo `mirrorId`, and a mirror ignores a reply addressed to
+     another, as #546 does for `Mutate` and `Read`.
+2. **Kinds are declared once, in core.** A kind is a value with a name, a
+   request schema, a response schema, and whether it streams. Both sides
+   encode and decode through the kind's schemas, so the payload is typed at
+   each end and `unknown` only on the wire. The host keeps a registry of the
+   kinds it serves. Kinds outside core (a devtools-only kind, say) register
+   the same way, under a name prefixed with their package, so no two
+   packages claim one name.
+3. **Errors.** Every failure is a reply, never a dropped message:
+   - a kind the host does not serve: `UnknownKind`;
+   - a payload that does not decode against the kind's request schema:
+     `InvalidRequest`;
+   - a handler that fails or dies: `Failed`, with its message.
+
+   The mirror surfaces each as a typed `HostRequestError` with the reason.
+
+4. **Versioning.**
+   - **A host that predates the envelope** decodes `HostRequest` as foreign
+     traffic and ignores it. So every request carries a timeout on the mirror
+     side, and a timeout fails with `HostRequestError` reason
+     `"Unanswered"`, which a caller reads as "this host does not serve the
+     envelope". A mirror never waits forever.
+   - **A host restart** (`HostReady`) fails every request the mirror has in
+     flight with `"Unanswered"`. A streaming request is not replayed: its
+     caller re-requests, since the stream it was following ended with the old
+     host.
+   - **A mirror that predates the envelope** never sends one, so nothing
+     changes for it.
+   - **A new kind** is additive: an older host answers it `UnknownKind`.
+5. **Lifecycle.** Requests are scoped on the mirror. Interrupting the caller
+   of a streaming request sends `HostRequestCancel`, and the host interrupts
+   the handler's stream. A mirror's `Disconnect`, or its liveness sweep,
+   cancels every request it holds, as it releases its subscriptions.
+6. **Hydration (#146) is the kind `hydrate`**, single-reply.
+   - **Request:** a `Hydration.Snapshot`.
+   - **Response:** `{ hydrated: boolean, reason?: "NotEmpty" | "AlreadyPulling" }`.
+   - **The host owns the empty-store gate.** Under the engine's pull
+     serialisation, it hydrates iff the store is empty (`Hydration.isEmpty`:
+     no cookie, no rows, no journalled or unpulled mutations) and no pull has
+     started since the engine booted. A started pull is about to fill the
+     store, and the snapshot's cookie would race it.
+   - **Concurrent tabs and late snapshots.** The first snapshot to reach an
+     empty host wins. Every later one, from another tab or after a pull, is
+     answered `hydrated: false` with its reason. It is never an error, and it
+     never touches the store: the host's replica is then at least as fresh as
+     the late snapshot.
+   - **The tab.** Once the reply arrives, the tab renders from the host as
+     usual; a `false` reply needs no action. Until then it renders from the
+     snapshot locally, which is what makes first paint flash-free.
+   - After a hydration, the engine re-syncs attached views as
+     `Hydration.hydrate` already does, and the first pull continues from the
+     snapshot's cookie (ADR-0020).
+7. **Introspection (#136)** is these kinds, each typed by the
+   `EngineIntrospection` member it serves:
+   - single-reply: `introspect/subscriptions`, `introspect/journal`,
+     `introspect/cookie`, `introspect/collections` and
+     `introspect/syncFailures`;
+   - streaming: `introspect/events`.
+
+   Mutation states keep their existing `SubscribeMutationStates` messages
+   (#116), which `ClientView` already uses: one path for one stream.
+   `Introspection.fromMirror` builds an `EngineIntrospection` over these, so
+   the devtools core attaches to an owned engine and a mirror with the same
+   `DevtoolsCore` shape.
+
+**Consequences.**
+
+- The mirror protocol has one extension point for host requests. A future
+  host-side capability adds a kind, not a message, and an older peer answers
+  or ignores it predictably.
+- `MirrorProtocol` gains three message cases and the kind registry.
+  `MirrorChannel` and `EngineHost` gain the request routing and the
+  per-mirror request table.
+- #146 implements `hydrate`, the `createClient` mirror boot and commerce's
+  snapshot path. #136 implements the introspection kinds and
+  `Introspection.fromMirror`. Neither needs another protocol change.
