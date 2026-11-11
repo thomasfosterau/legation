@@ -362,11 +362,12 @@ const RESOURCE_ID = "id";
  * 0.21), so `filter[id]` decodes through the same grammar as any attribute.
  * A node whose `id` is not filterable keeps effect-jsonapi's default id.
  */
-const idOf = (node: Node.AnyNode): Schema.Codec<string, string> | undefined => {
-  const declared = node.filterable[RESOURCE_ID];
-  // A row id is text on the wire whatever its declared kind (`RowId` is a string).
-  return declared === undefined ? undefined : Schema.String.pipe(Filter.able(declared.operators));
-};
+const idOf = (node: Node.AnyNode): Option.Option<Schema.Codec<string, string>> =>
+  Option.map(
+    Option.fromUndefinedOr(node.filterable[RESOURCE_ID]),
+    // A row id is text on the wire whatever its declared kind (`RowId` is a string).
+    (declared) => Schema.String.pipe(Filter.able(declared.operators))
+  );
 
 /**
  * The synthetic resource's relationships: the node's edges, targets
@@ -398,8 +399,9 @@ const relationshipsOf = (
 
 /** `Resource.make`'s `id` option, present only when the node declares one. */
 const withId = (
-  id: Schema.Codec<string, string> | undefined
-): { readonly id?: Schema.Codec<string, string> } => (id === undefined ? {} : { id });
+  id: Option.Option<Schema.Codec<string, string>>
+): { readonly id?: Schema.Codec<string, string> } =>
+  Option.match(id, { onNone: () => ({}), onSome: (codec) => ({ id: codec }) });
 
 const resourceGraphs = new WeakMap<Node.NodeRegistry, ReadonlyMap<string, Resource.Any>>();
 
@@ -1174,7 +1176,9 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
     ]
   );
   // An `id` filter is the resource id's (#590): JSON:API reserves the name for it.
-  const id = types.has(RESOURCE_ID) ? Schema.String.pipe(Filter.able()) : undefined;
+  const id = types.has(RESOURCE_ID)
+    ? Option.some(Schema.String.pipe(Filter.able()))
+    : Option.none<Schema.Codec<string, string>>();
   const codec = UrlQuery.Filter(
     Resource.make("query", { ...withId(id), attributes })
   ) as FlatFilterCodec;
