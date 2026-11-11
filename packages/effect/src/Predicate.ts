@@ -266,17 +266,6 @@ export const compareText = (a: string, b: string): number => {
   return i < a.length ? 1 : i < b.length ? -1 : 0;
 };
 
-const numericOrder = (left: number, right: number): number =>
-  left < right ? -1 : left > right ? 1 : 0;
-
-/** {@link compareLiterals} once both operands are known to share a JS type. */
-const orderSameTyped = Match.fn((left: unknown, _right: unknown) => left).pipe(
-  Match.when(Match.number, (left, _left, right) => numericOrder(left, right as number)),
-  Match.when(Match.string, (left, _left, right) => compareText(left, right as string)),
-  Match.when(Match.boolean, (left, _left, right) => numericOrder(Number(left), Number(right))),
-  Match.orElse((): number | undefined => undefined)
-);
-
 /**
  * Order two same-typed literals: numbers numerically, text by code point,
  * booleans `false < true` (ADR-0028 section 3). `undefined` when the operands
@@ -284,25 +273,44 @@ const orderSameTyped = Match.fn((left: unknown, _right: unknown) => left).pipe(
  */
 export const compareLiterals = (left: unknown, right: unknown): number | undefined => {
   if (typeof left !== typeof right) return undefined;
-  return orderSameTyped(left, right);
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
+  switch (typeof left) {
+    case "number":
+      return numericOrder(left, right as number);
+    case "string":
+      return compareText(left, right as string);
+    case "boolean":
+      return numericOrder(Number(left), Number(right));
+    default:
+      return undefined;
+  }
 };
+
+const numericOrder = (left: number, right: number): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 
 /**
  * Whether a comparison operator holds for an ordering result (`-1`, `0`,
  * `1`) from {@link compareLiterals}: the per-operator table of ADR-0028
  * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
  */
-export const holds: (op: Comparison, ordered: number) => boolean = Match.fn(
-  (op: Comparison, _ordered: number) => op
-).pipe(
-  Match.when("eq", (_op, _, ordered) => ordered === 0),
-  Match.when("ne", (_op, _, ordered) => ordered !== 0),
-  Match.when("gt", (_op, _, ordered) => ordered > 0),
-  Match.when("gte", (_op, _, ordered) => ordered >= 0),
-  Match.when("lt", (_op, _, ordered) => ordered < 0),
-  Match.when("lte", (_op, _, ordered) => ordered <= 0),
-  Match.exhaustive
-);
+export const holds = (op: Comparison, ordered: number): boolean => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
+  switch (op) {
+    case "eq":
+      return ordered === 0;
+    case "ne":
+      return ordered !== 0;
+    case "gt":
+      return ordered > 0;
+    case "gte":
+      return ordered >= 0;
+    case "lt":
+      return ordered < 0;
+    case "lte":
+      return ordered <= 0;
+  }
+};
 
 // ─── Evaluation ──────────────────────────────────────────────────────────────
 
@@ -399,23 +407,6 @@ const evaluateOr = (predicates: ReadonlyArray<Predicate>, row: unknown): Option.
 const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
   Option.isNone(inner) ? UNKNOWN : inner.value ? FALSE : TRUE;
 
-// Built once at module scope (the per-row hot path); its `Not` / `And` / `Or`
-// cases reach `evaluate` only when called, after the module has loaded.
-const evaluateNode = Match.fn((predicate: Predicate, _row: unknown) => predicate).pipe(
-  Match.tag("True", "Exists", () => TRUE),
-  Match.tag("Compare", (node, _, row) => evaluateCompare(node, row)),
-  Match.tag("InSet", () => FALSE),
-  Match.tag("In", (node, _, row) => evaluateMembership(node.field, node.values, true, row)),
-  Match.tag("NotIn", (node, _, row) => evaluateMembership(node.field, node.values, false, row)),
-  Match.tag("IsNull", (node, _, row) =>
-    definite(isNullish(fieldValue(row, node.field)) !== (node.negated === true))
-  ),
-  Match.tag("And", (node, _, row) => evaluateAnd(node.predicates, row)),
-  Match.tag("Or", (node, _, row) => evaluateOr(node.predicates, row)),
-  Match.tag("Not", (node, _, row) => negate(evaluate(node.predicate, row))),
-  Match.exhaustive
-);
-
 /**
  * Evaluate a predicate against a row value under Postgres's three-valued
  * semantics (ADR-0028 section 3). `Some(true)` / `Some(false)` are definite;
@@ -442,8 +433,30 @@ const evaluateNode = Match.fn((predicate: Predicate, _row: unknown) => predicate
  * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
-export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> =>
-  evaluateNode(predicate, row);
+export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
+  switch (predicate._tag) {
+    case "True":
+    case "Exists":
+      return TRUE;
+    case "Compare":
+      return evaluateCompare(predicate, row);
+    case "InSet":
+      return FALSE;
+    case "In":
+      return evaluateMembership(predicate.field, predicate.values, true, row);
+    case "NotIn":
+      return evaluateMembership(predicate.field, predicate.values, false, row);
+    case "IsNull":
+      return definite(isNullish(fieldValue(row, predicate.field)) !== (predicate.negated === true));
+    case "And":
+      return evaluateAnd(predicate.predicates, row);
+    case "Or":
+      return evaluateOr(predicate.predicates, row);
+    case "Not":
+      return negate(evaluate(predicate.predicate, row));
+  }
+};
 
 /**
  * Whether a row satisfies a predicate: the SQL `WHERE` collapse of

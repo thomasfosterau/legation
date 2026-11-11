@@ -13,7 +13,6 @@
  */
 
 import * as Arr from "effect/Array";
-import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -87,25 +86,25 @@ const numericValues = (
 };
 
 /** Fold the numeric values of a non-`Count` aggregate to its value. */
-const foldNumeric = Match.fn(
-  // `Sum` / `Avg` / `Min` / `Max` share one struct, so match its `_tag` literal.
-  (agg: Exclude<Aggregate, { _tag: "Count" }>, _values: ReadonlyArray<number>) => agg._tag
-).pipe(
-  Match.withReturnType<AggregateValue>(),
-  Match.when("Sum", (_tag, _agg, values) => values.reduce((total, value) => total + value, 0)),
-  Match.when("Avg", (_tag, _agg, values) =>
-    Arr.isReadonlyArrayEmpty(values)
-      ? undefined
-      : values.reduce((total, value) => total + value, 0) / values.length
-  ),
-  Match.when("Min", (_tag, _agg, values) =>
-    Arr.isReadonlyArrayEmpty(values) ? undefined : values.reduce((a, b) => (a < b ? a : b))
-  ),
-  Match.when("Max", (_tag, _agg, values) =>
-    Arr.isReadonlyArrayEmpty(values) ? undefined : values.reduce((a, b) => (a > b ? a : b))
-  ),
-  Match.exhaustive
-);
+const foldNumeric = (agg: Exclude<Aggregate, { _tag: "Count" }>, values: ReadonlyArray<number>) => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
+  switch (agg._tag) {
+    case "Sum":
+      return values.reduce((total, value) => total + value, 0);
+    case "Avg":
+      return Arr.isReadonlyArrayEmpty(values)
+        ? undefined
+        : values.reduce((total, value) => total + value, 0) / values.length;
+    case "Min":
+      return Arr.isReadonlyArrayEmpty(values)
+        ? undefined
+        : values.reduce((a, b) => (a < b ? a : b));
+    case "Max":
+      return Arr.isReadonlyArrayEmpty(values)
+        ? undefined
+        : values.reduce((a, b) => (a > b ? a : b));
+  }
+};
 
 /**
  * Evaluate an aggregate over already-filtered/sorted rows (a subset's result).
@@ -203,73 +202,35 @@ type Bucket =
       current: number | undefined;
     };
 
-// `Sum` / `Avg` / `Min` / `Max` share one struct, so match its `_tag` literal.
-const emptyBucket: (agg: Aggregate) => Bucket = Match.fn((agg: Aggregate) => agg._tag).pipe(
-  Match.withReturnType<Bucket>(),
-  Match.when("Count", () => ({ _tag: "Count", count: 0 })),
-  Match.when("Sum", () => ({ _tag: "Sum", sum: 0 })),
-  Match.when("Avg", () => ({ _tag: "Avg", sum: 0, count: 0 })),
-  Match.when("Min", () => ({
-    _tag: "MinMax",
-    pick: (a, b) => (a < b ? a : b),
-    current: undefined,
-  })),
-  Match.when("Max", () => ({
-    _tag: "MinMax",
-    pick: (a, b) => (a > b ? a : b),
-    current: undefined,
-  })),
-  Match.exhaustive
-);
+const emptyBucket = (agg: Aggregate): Bucket => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
+  switch (agg._tag) {
+    case "Count":
+      return { _tag: "Count", count: 0 };
+    case "Sum":
+      return { _tag: "Sum", sum: 0 };
+    case "Avg":
+      return { _tag: "Avg", sum: 0, count: 0 };
+    case "Min":
+      return { _tag: "MinMax", pick: (a, b) => (a < b ? a : b), current: undefined };
+    case "Max":
+      return { _tag: "MinMax", pick: (a, b) => (a > b ? a : b), current: undefined };
+  }
+};
 
-const bucketValue: (bucket: Bucket) => AggregateValue = Match.type<Bucket>().pipe(
-  Match.withReturnType<AggregateValue>(),
-  Match.tag("Count", (bucket) => bucket.count),
-  Match.tag("Sum", (bucket) => bucket.sum),
-  Match.tag("Avg", (bucket) => (bucket.count === 0 ? undefined : bucket.sum / bucket.count)),
-  Match.tag("MinMax", (bucket) => bucket.current),
-  Match.exhaustive
-);
-
-/** Fold `n` into a field-reading bucket (`addToBucket`'s non-`Count` half). */
-const addNumber = Match.fn((bucket: Exclude<Bucket, { _tag: "Count" }>, _n: number) => bucket).pipe(
-  Match.withReturnType<void>(),
-  Match.tag("Sum", (bucket, _, n) => {
-    bucket.sum += n;
-  }),
-  Match.tag("Avg", (bucket, _, n) => {
-    bucket.sum += n;
-    bucket.count += 1;
-  }),
-  Match.tag("MinMax", (bucket, _, n) => {
-    bucket.current = bucket.current === undefined ? n : bucket.pick(bucket.current, n);
-  }),
-  Match.exhaustive
-);
-
-/** Retract `n` from a field-reading bucket (`removeFromBucket`'s non-`Count` half). */
-const removeNumber = Match.fn(
-  (
-    bucket: Exclude<Bucket, { _tag: "Count" }>,
-    _n: number,
-    _remainingValues: () => ReadonlyArray<number>
-  ) => bucket
-).pipe(
-  Match.withReturnType<void>(),
-  Match.tag("Sum", (bucket, _, n) => {
-    bucket.sum -= n;
-  }),
-  Match.tag("Avg", (bucket, _, n) => {
-    bucket.sum -= n;
-    bucket.count -= 1;
-  }),
-  Match.tag("MinMax", (bucket, _, n, remainingValues) => {
-    if (n !== bucket.current) return; // not the extremum: O(1), no refold needed
-    const rest = remainingValues();
-    bucket.current = Arr.isReadonlyArrayEmpty(rest) ? undefined : rest.reduce(bucket.pick);
-  }),
-  Match.exhaustive
-);
+const bucketValue = (bucket: Bucket): AggregateValue => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
+  switch (bucket._tag) {
+    case "Count":
+      return bucket.count;
+    case "Sum":
+      return bucket.sum;
+    case "Avg":
+      return bucket.count === 0 ? undefined : bucket.sum / bucket.count;
+    case "MinMax":
+      return bucket.current;
+  }
+};
 
 /** Fold one row's value into `bucket` (an insertion, or an update's "add" half). */
 const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined): void => {
@@ -281,7 +242,19 @@ const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined):
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
-  addNumber(bucket, n);
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
+  switch (bucket._tag) {
+    case "Sum":
+      bucket.sum += n;
+      return;
+    case "Avg":
+      bucket.sum += n;
+      bucket.count += 1;
+      return;
+    case "MinMax":
+      bucket.current = bucket.current === undefined ? n : bucket.pick(bucket.current, n);
+      return;
+  }
 };
 
 /**
@@ -305,7 +278,22 @@ const removeFromBucket = (
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
-  removeNumber(bucket, n, remainingValues);
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
+  switch (bucket._tag) {
+    case "Sum":
+      bucket.sum -= n;
+      return;
+    case "Avg":
+      bucket.sum -= n;
+      bucket.count -= 1;
+      return;
+    case "MinMax": {
+      if (n !== bucket.current) return; // not the extremum: O(1), no refold needed
+      const rest = remainingValues();
+      bucket.current = Arr.isReadonlyArrayEmpty(rest) ? undefined : rest.reduce(bucket.pick);
+      return;
+    }
+  }
 };
 
 /** The numeric values of `byId`'s field, skipping absent/non-numeric ones. */
