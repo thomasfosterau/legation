@@ -9,9 +9,11 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -137,16 +139,23 @@ describe("Introspection.fromMirror (#136)", () => {
         pull: () => Effect.fail(new TransportError({ message: "down" })),
       }));
       yield* engine.subscribe(allTodos);
-      const sync = yield* Effect.forkChild(engine.runSync);
+      // `runSync` forks its pull loops into the scope it is given, so interrupting a fibre that
+      // ran it stops nothing: the periodic pull would keep failing, and recording, while the two
+      // reads below ran. Give it a scope of its own and close it, which interrupts and awaits
+      // every loop, so no failure is recorded after the wait and both reads see the same set.
+      const syncScope = yield* Scope.make();
+      yield* Scope.provide(engine.runSync, syncScope);
       yield* owned.syncFailures.pipe(
         Effect.repeat({
           until: Arr.isReadonlyArrayNonEmpty,
           schedule: Schedule.spaced(Duration.millis(10)),
         })
       );
-      yield* Fiber.interrupt(sync);
+      yield* Scope.close(syncScope, Exit.void);
       const failures = yield* remote.syncFailures;
-      expect(failures).toEqual(yield* owned.syncFailures);
+      const ownedFailures = yield* owned.syncFailures;
+      expect(failures.length).toBeGreaterThanOrEqual(1);
+      expect(failures).toEqual(ownedFailures);
       expect(failures[0]?.error).toBeInstanceOf(TransportError);
     })
   );
