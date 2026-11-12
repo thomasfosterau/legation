@@ -42,15 +42,16 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-jsonapi": "catalog:",
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-jsonapi": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:peers"
+    "@thomasfosterau/effect-jsonapi": "catalog:jsonapi-peers",
+    "effect": "catalog:jsonapi-peers"
   }
 }

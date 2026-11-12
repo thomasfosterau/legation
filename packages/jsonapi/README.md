@@ -26,15 +26,17 @@ resource-agnostic loaders on top (ADR-0016).
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation effect
+npm install @thomasfosterau/legation-jsonapi @thomasfosterau/legation @thomasfosterau/effect-jsonapi effect
 ```
 
-`effect` and `@thomasfosterau/legation` are required alongside this package;
-`@thomasfosterau/effect-jsonapi` is a regular dependency.
+`effect`, `@thomasfosterau/effect-jsonapi` (`^0.22.0`) and
+`@thomasfosterau/legation` are required alongside this package.
+effect-jsonapi is a peer: the resources, documents and errors your app builds
+with it are passed into this package, so there must be one copy of it.
 
 ## Effect version
 
-Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.1.0`, the floor `@thomasfosterau/effect-jsonapi` 0.22 requires. Tested against `4.1.4` (the version CI pins); install one copy of `effect` in your app (ADR-0003).
 
 ## The happy path: sync an existing JSON:API
 
