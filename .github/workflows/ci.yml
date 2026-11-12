@@ -105,12 +105,15 @@ jobs:
 
   # The test suite against the lowest `effect` each published peer range
   # admits, so each package README's "tested against … the floor" claim holds
-  # on every PR. Three floors, one install each (`effect` is a singleton): the
-  # core's (`catalogs.peers.effect`, every project but the Alchemy adapter's
-  # and legation-auth's), the Alchemy adapter's
+  # on every PR. Four floors, one install each (`effect` is a singleton): the
+  # core's (`catalogs.peers.effect`, every project but the Alchemy adapter's,
+  # legation-auth's and legation-jsonapi's), the Alchemy adapter's
   # (`catalogs.alchemy-peers.effect`, which Alchemy raises to 4.1.0; its own
-  # Vitest project) and legation-auth's (`catalogs.auth-peers.effect`, which
-  # effect-auth raises to 4.1.0; its own Vitest project). Tests only: the full
+  # Vitest project), legation-auth's (`catalogs.auth-peers.effect`, which
+  # effect-auth raises to 4.1.0; its own Vitest project) and legation-jsonapi's
+  # (`catalogs.jsonapi-peers.effect`, which effect-jsonapi raises to 4.1.0; its
+  # own Vitest project, plus the commerce example's browser tests, which drive
+  # its façade). Tests only: the full
   # gate set runs once, at the pinned version, in Quality Gates. Only the
   # catalog entries versioned in lockstep with effect (`effect` and the
   # `@effect/*` runtime packages, plus the `overrides` entries that hold the
@@ -130,13 +133,16 @@ jobs:
         include:
           - floor: core
             catalog: peers
-            projects: --project node --project svelte --project commerce-browser
+            projects: --project node --project svelte
           - floor: alchemy-cloudflare
             catalog: alchemy-peers
             projects: --project alchemy-cloudflare
           - floor: auth
             catalog: auth-peers
             projects: --project auth
+          - floor: jsonapi
+            catalog: jsonapi-peers
+            projects: --project jsonapi --project commerce-browser
     # The same PostgreSQL server as Quality Gates (see its comment).
     services:
       postgres:
@@ -191,11 +197,11 @@ jobs:
       # `exports` (`dist/`), not Vitest's source aliases, so the packages are
       # built first.
       - name: Install Chromium (the commerce façade's browser test)
-        if: matrix.floor == 'core'
+        if: matrix.floor == 'jsonapi'
         run: pnpm exec playwright-core install --with-deps chromium
 
       - name: Build
-        if: matrix.floor == 'core'
+        if: matrix.floor == 'jsonapi'
         run: pnpm exec vp run build
 
       - name: Test
