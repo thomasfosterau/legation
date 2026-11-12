@@ -5,7 +5,7 @@
  * every failure — an unknown, revoked or disabled credential, a store fault, a
  * defect — fails closed to anonymous without failing the request.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -26,6 +26,7 @@ import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legati
 import { Principal, Resolver } from "@thomasfosterau/legation-auth";
 import { alice, authLayer, bob } from "./harness.js";
 import { asPrincipal, Crash, mentions } from "./support.js";
+import { withLayer } from "./with-layer.js";
 
 const cookieName = SessionCookies.cookieNames().session;
 
@@ -53,7 +54,7 @@ const exploding: Authorization.RequestCredentials = {
 const resolverLayer = (modes?: Parameters<typeof authLayer>[0]) =>
   Resolver.layer().pipe(Layer.provideMerge(authLayer(modes)));
 
-describe("Resolver: the session plane", () => {
+layer(resolverLayer(), { buildPerTest: true })("Resolver: the session plane", (it) => {
   it.effect("resolves a session cookie to a typed Session principal", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionService;
@@ -71,7 +72,7 @@ describe("Resolver: the session plane", () => {
       // The principal carries no credential: effect-auth reports a validated
       // session's id as the raw token, and it is left out.
       expect(mentions(principal, session.id)).toBe(false);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("resolves an Authorization: Bearer session token", () =>
@@ -80,7 +81,7 @@ describe("Resolver: the session plane", () => {
       const session = yield* sessions.createSession(bob.id);
       const principal = asPrincipal(yield* resolveWith(withBearer(session.id)));
       expect(Principal.userId(principal)).toEqual(Option.some(bob.id));
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("reads the cookie under the naming the app configures", () =>
@@ -105,7 +106,7 @@ describe("Resolver: the session plane", () => {
         credentials: withCookie(session.id),
       });
       expect(other).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(authLayer()))
+    }).pipe(withLayer(authLayer()))
   );
 
   it.effect("re-validates on every resolve: a revoked session is anonymous on the next one", () =>
@@ -115,31 +116,31 @@ describe("Resolver: the session plane", () => {
       expect(P.isTagged(yield* resolveWith(withCookie(session.id)), "Session")).toBe(true);
       yield* sessions.invalidateSession(session.id);
       expect(yield* resolveWith(withCookie(session.id))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("fails closed to anonymous on an unknown cookie", () =>
     Effect.gen(function* () {
       expect(yield* resolveWith(withCookie("not-a-session"))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("is anonymous for a request with no credential", () =>
     Effect.gen(function* () {
       expect(yield* resolveWith(Authorization.noCredentials)).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("fails closed to anonymous on a session-store fault", () =>
     Effect.gen(function* () {
       expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer({ sessions: "fault" })))
+    }).pipe(withLayer(resolverLayer({ sessions: "fault" })))
   );
 
   it.effect("fails closed to anonymous on a session-store defect", () =>
     Effect.gen(function* () {
       expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer({ sessions: "defect" })))
+    }).pipe(withLayer(resolverLayer({ sessions: "defect" })))
   );
 
   it.effect("fails closed to anonymous when reading the request itself dies", () =>
@@ -151,7 +152,7 @@ describe("Resolver: the session plane", () => {
   );
 });
 
-describe("Resolver: the API key plane", () => {
+layer(resolverLayer(), { buildPerTest: true })("Resolver: the API key plane", (it) => {
   it.effect("resolves an API key to a typed ApiKey principal, without the key", () =>
     Effect.gen(function* () {
       const apiKeys = yield* ApiKeyService;
@@ -168,7 +169,7 @@ describe("Resolver: the API key plane", () => {
       });
       expect(mentions(principal, created.key)).toBe(false);
       expect(mentions(principal, created.apiKey.keyHash)).toBe(false);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("fails closed to anonymous on a revoked (deleted) key", () =>
@@ -178,7 +179,7 @@ describe("Resolver: the API key plane", () => {
       expect(P.isTagged(yield* resolveWith(withApiKey(created.key)), "ApiKey")).toBe(true);
       yield* apiKeys.delete(alice.id, created.apiKey.id);
       expect(yield* resolveWith(withApiKey(created.key))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("fails closed to anonymous on a disabled key", () =>
@@ -187,7 +188,7 @@ describe("Resolver: the API key plane", () => {
       const created = yield* apiKeys.create(bob.id);
       yield* apiKeys.update(bob.id, created.apiKey.id, { enabled: false });
       expect(yield* resolveWith(withApiKey(created.key))).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("a key that does not verify is anonymous even beside a valid session cookie", () =>
@@ -198,16 +199,16 @@ describe("Resolver: the API key plane", () => {
         withApiKey("ak_forged", { cookie: `${cookieName}=${session.id}` })
       );
       expect(principal).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 
   it.effect("fails closed to anonymous on an API-key-store fault and defect", () =>
     Effect.gen(function* () {
       const fault = yield* resolveWith(withApiKey("ak_any")).pipe(
-        Effect.provide(resolverLayer({ apiKeys: "fault" }))
+        withLayer(resolverLayer({ apiKeys: "fault" }))
       );
       const defect = yield* resolveWith(withApiKey("ak_any")).pipe(
-        Effect.provide(resolverLayer({ apiKeys: "defect" }))
+        withLayer(resolverLayer({ apiKeys: "defect" }))
       );
       expect(fault).toEqual(Principal.anonymous);
       expect(defect).toEqual(Principal.anonymous);
@@ -219,14 +220,14 @@ describe("Resolver: the API key plane", () => {
       const apiKeys = yield* ApiKeyService;
       const created = yield* apiKeys.create(alice.id);
       const principal = yield* resolveWith(withApiKey(created.key)).pipe(
-        Effect.provide(Resolver.layerSessions())
+        withLayer(Resolver.layerSessions())
       );
       expect(principal).toEqual(Principal.anonymous);
-    }).pipe(Effect.provide(authLayer()))
+    }).pipe(withLayer(authLayer()))
   );
 });
 
-describe("Resolver: logging", () => {
+layer(resolverLayer(), { buildPerTest: true })("Resolver: logging", (it) => {
   it.effect("logs a fail-closed resolution by plane and kind, never the credential", () =>
     Effect.gen(function* () {
       const logged: Array<unknown> = [];
@@ -240,14 +241,14 @@ describe("Resolver: logging", () => {
       ]);
       const token = "sekrit-session-token-123";
       const key = "ak_sekrit-api-key-456";
-      yield* resolveWith(withCookie(token)).pipe(Effect.provide(recorder));
-      yield* resolveWith(withApiKey(key)).pipe(Effect.provide(recorder));
+      yield* resolveWith(withCookie(token)).pipe(withLayer(recorder));
+      yield* resolveWith(withApiKey(key)).pipe(withLayer(recorder));
       expect(logged).toHaveLength(2);
       expect(mentions(logged, "failed closed to anonymous")).toBe(true);
       expect(mentions(logged, "rejected")).toBe(true);
       expect(mentions(logged, token)).toBe(false);
       expect(mentions(logged, key)).toBe(false);
-    }).pipe(Effect.provide(resolverLayer()))
+    })
   );
 });
 
@@ -268,7 +269,7 @@ const ownPosts: Authorization.AuthFilter = (context) =>
     })
   );
 
-describe("Resolver behind SyncServer", () => {
+layer(resolverLayer(), { buildPerTest: true })("Resolver behind SyncServer", (it) => {
   it.effect("puts the verified principal on SyncContext.identity for a pull", () =>
     Effect.gen(function* () {
       const seen = yield* Ref.make<ReadonlyArray<unknown>>([]);
@@ -328,6 +329,6 @@ describe("Resolver behind SyncServer", () => {
         "Session",
         "Anonymous",
       ]);
-    }).pipe(Effect.provide(resolverLayer()), Effect.scoped)
+    })
   );
 });
