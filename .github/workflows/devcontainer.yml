@@ -35,8 +35,8 @@ concurrency:
 
 # No permissions by default; the job reads the repository and nothing else. It
 # needs no secret and no OIDC token, so a Dependabot PR runs it safely. Every
-# action is pinned to a full commit SHA (Dependabot's `github-actions` updates
-# keep the pins current).
+# action is locked to its commit by .github/workflows/actions.lock
+# (Dependabot's `github-actions` updates keep the tags current).
 permissions: {}
 
 jobs:
@@ -51,13 +51,13 @@ jobs:
       # `minimumReleaseAge`, so keep this at a release at least 8 hours old.
       DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       # Only to run the CLI on the runner (its managed Node.js and pnpm); the
       # container installs its own, so nothing is installed here.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           version-file: pnpm-workspace.yaml
           run-install: false

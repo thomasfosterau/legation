@@ -42,13 +42,13 @@ jobs:
       pnpm_config_verify_deps_before_run: "false"
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
       # names; the install stays the explicit `--ignore-scripts` step below.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           node-version: "lts"
           cache: true
@@ -57,7 +57,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Select mode
         id: mode
-        uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        uses: changesets/action/select-mode@v2.1.2
 
   version:
     name: Version packages
@@ -74,14 +74,14 @@ jobs:
     env: *id001
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
       # names; the install stays the explicit `--ignore-scripts` step below.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           node-version: "lts"
           cache: true
@@ -89,7 +89,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Create or update the version PR
-        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        uses: changesets/action/version@v2.1.2
         with:
           script: pnpm run version
           commit-message: "chore: version packages"
@@ -130,7 +130,7 @@ jobs:
       pnpm_config_verify_deps_before_run: "false"
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -138,7 +138,7 @@ jobs:
       # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
       # names; the install stays the explicit `--ignore-scripts` step below.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           node-version: "lts"
           cache: true
@@ -177,7 +177,7 @@ jobs:
       # devDependencies) and renamed its inputs from v1's `version` / `publish`
       # / `commit` / `title`.
       - name: Publish to npm
-        uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        uses: changesets/action/publish@v2.1.2
         with:
           script: pnpm run release
         env:
