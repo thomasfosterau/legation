@@ -44,6 +44,7 @@ import type * as Scope from "effect/Scope";
 import type * as Atom from "effect/reactivity/Atom";
 import type * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as Digest from "effect/crypto/Digest";
+import type { SessionState } from "@thomasfosterau/effect-auth/client/atoms";
 import { type Client, Identity } from "@thomasfosterau/legation";
 import type { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
 
@@ -137,13 +138,13 @@ export const onSessionChange =
 /**
  * The session store {@link follow} subscribes to, by shape: {@link sessionStoreOf}
  * makes one from effect-auth's `makeSessionAtoms(client).state` Atom, read
- * structurally so this entry imports nothing of effect-auth. `data` is the
- * signed-in session, `null` when signed out (effect-auth's spelling); a state
- * still `isPending` is not adopted.
+ * structurally so this entry imports nothing of effect-auth at runtime. `data`
+ * is the signed-in session, `None` when signed out (effect-auth's `null` is
+ * converted at that edge); a state still `isPending` is not adopted.
  */
 export interface SessionStore {
   readonly get: () => {
-    readonly data: SessionSubject | null;
+    readonly data: Option.Option<SessionSubject>;
     readonly isPending: boolean;
   };
   readonly subscribe: (listener: () => void) => () => void;
@@ -158,9 +159,12 @@ export interface SessionStore {
  */
 export const sessionStoreOf = (
   registry: AtomRegistry.AtomRegistry,
-  state: Atom.Atom<ReturnType<SessionStore["get"]>>
+  state: Atom.Atom<SessionState>
 ): SessionStore => ({
-  get: () => registry.get(state),
+  get: () => {
+    const current = registry.get(state);
+    return { data: Option.fromNullishOr(current.data), isPending: current.isPending };
+  },
   subscribe: (listener) => registry.subscribe(state, listener),
 });
 
@@ -218,7 +222,7 @@ export const follow: (
       if (state.isPending) return;
       const done = Deferred.makeUnsafe<SessionChange, ClientView.ClientViewError>();
       MutableRef.set(latest, Option.some(done));
-      Queue.offerUnsafe(changes, { next: Option.fromNullishOr(state.data), done });
+      Queue.offerUnsafe(changes, { next: state.data, done });
     };
     const previous = yield* Ref.make(Option.none<SessionSubject>());
     yield* Effect.forkScoped(

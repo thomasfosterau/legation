@@ -343,7 +343,7 @@ layer(testLayer)("SignOut.follow", (it) => {
   it.effect("a pending store is not a sign-out", () =>
     Effect.gen(function* () {
       const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-      const held = heldStore({ data: null, isPending: true });
+      const held = heldStore({ data: Option.none(), isPending: true });
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* clientFor(aliceFp);
@@ -363,7 +363,7 @@ layer(testLayer)("SignOut.follow", (it) => {
       Effect.gen(function* () {
         const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
         const { client } = yield* clientFor(aliceFp);
-        const held = heldStore({ data: null, isPending: false });
+        const held = heldStore({ data: Option.none(), isPending: false });
         const following = yield* SignOut.follow(client, held.store);
         expect(adopted(yield* following.settled).transition).toBe("Reset");
         expect(yield* client.identity).toBe(Identity.anonymous);

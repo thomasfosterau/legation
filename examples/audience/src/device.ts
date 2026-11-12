@@ -74,7 +74,7 @@ const makeJar = (): CookieJar => {
   const listeners = new Set<() => void>();
   return {
     store: {
-      get: () => ({ data: Option.getOrNull(MutableRef.get(session)), isPending: false }),
+      get: () => ({ data: MutableRef.get(session), isPending: false }),
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
