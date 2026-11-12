@@ -4,7 +4,7 @@
  * The real library pipeline in the page — `Server` (the one server-side
  * object: the protocol handler plus `broadcast`, with in-memory CVR storage
  * and an in-process fan-out bus by default) over a `MemoryBackend`, reached
- * through a loopback transport behind a simulated-offline gate, with a durable
+ * through a loopback transport that can be taken offline, with a durable
  * `localStorage` client store. Reads are public (an internal admin tool), so
  * there's no identity/auth layer — the focus is multi-collection relational
  * sync and optimistic edits.
@@ -183,7 +183,7 @@ const seedBackend = (backend: Backend.Backend): Effect.Effect<void> =>
 interface Rig {
   readonly client: Client.Client;
   readonly devtools: Devtools.DevtoolsCore;
-  readonly setOffline: (offline: boolean) => Effect.Effect<void>;
+  readonly setOnline: (online: boolean) => Effect.Effect<void>;
   readonly connection: Stream.Stream<Transport.ConnectionStatus>;
 }
 const Rig = Context.Service<Rig>("northwind/Rig");
@@ -196,10 +196,9 @@ const rigLayer = Layer.effect(Rig)(
     const server = yield* Server.make({ backend, auth: { policy: authPolicy } });
     yield* seedBackend(backend);
 
-    // A loopback transport behind a simulated-offline gate (the devtools'
-    // offline action drives the same toggle, #120) + a durable store.
-    const loopback = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
-    const { transport, setOffline, isOffline } = yield* Transport.simulateOffline(loopback);
+    // A loopback transport that can be taken offline (the devtools' offline
+    // action drives the same toggle, #120) + a durable store.
+    const transport = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
     const store = yield* ClientStore.makeKeyValue({ prefix: "northwind/" }).pipe(
       Effect.provide(BrowserKeyValueStore.layerLocalStorage)
     );
@@ -228,9 +227,15 @@ const rigLayer = Layer.effect(Rig)(
     return {
       client,
       // The devtools headless core (#120): the offline control is the same
-      // `simulateOffline` toggle the banner's own button drives.
-      devtools: Devtools.make(engine, store, { offline: { setOffline, isOffline } }),
-      setOffline,
+      // `setOnline` toggle the banner's own button drives, read back from the
+      // status it sets.
+      devtools: Devtools.make(engine, store, {
+        offline: {
+          setOffline: (offline) => transport.setOnline(!offline),
+          isOffline: Effect.map(transport.status, (status) => status === "disconnected"),
+        },
+      }),
+      setOnline: transport.setOnline,
       connection: Stream.concat(Stream.fromEffect(transport.status), transport.statusChanges),
     };
   })
@@ -251,7 +256,7 @@ export const createWorld = async (): Promise<World> => {
   return {
     runtime,
     devtools: rig.devtools,
-    setOnline: (next) => runtime.runPromise(rig.setOffline(!next)),
+    setOnline: (next) => runtime.runPromise(rig.setOnline(next)),
     connection: rig.connection,
   };
 };

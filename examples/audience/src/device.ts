@@ -17,7 +17,6 @@
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import {
   Authorization,
@@ -26,7 +25,6 @@ import {
   Identity,
   type Query,
   Transport,
-  TransportError,
 } from "@thomasfosterau/legation";
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
@@ -90,46 +88,6 @@ const makeJar = (): CookieJar => {
 };
 
 /**
- * The device's transport: the in-process sync server, presenting whatever
- * session cookie the jar holds on each call, as a browser's cookie jar does.
- * (Hand-written glue: `Transport.makeInMemory` fixes its credentials when it
- * is built, and its `setStatus` does not make calls fail.)
- */
-const jarTransport = (
-  audience: AudienceServer,
-  clientGroupId: string,
-  jar: CookieJar,
-  network: { online: boolean },
-  status: SubscriptionRef.SubscriptionRef<Transport.ConnectionStatus>
-): Transport.ClientTransport => {
-  const handler = audience.server.handler;
-  const withCookie = <A, E>(
-    call: (options: Transport.HandleOptions) => Effect.Effect<A, E>
-  ): Effect.Effect<A, E | TransportError> =>
-    Effect.suspend((): Effect.Effect<A, E | TransportError> =>
-      network.online
-        ? jar.current.pipe(
-            Effect.flatMap((session) =>
-              call({
-                credentials: Option.map(session, ({ token }) =>
-                  Authorization.credentialsFromHeaders({ cookie: cookieHeader(token) })
-                ),
-              })
-            )
-          )
-        : Effect.fail(new TransportError({ message: "the network is down" }))
-    );
-  return {
-    push: (request) => withCookie((options) => handler.handlePush(request, options)),
-    pull: (request) => withCookie((options) => handler.handlePull(request, options)),
-    read: (request) => withCookie((options) => handler.handleRead(request, options)),
-    pokes: handler.pokes(clientGroupId),
-    status: SubscriptionRef.get(status),
-    statusChanges: SubscriptionRef.changes(status),
-  };
-};
-
-/**
  * A device with a fresh profile, signed out; scoped. `name` keys its client
  * group and client id, which stay the same across the sessions it hosts, as
  * a browser profile's do.
@@ -141,16 +99,26 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       Effect.provideService(KeyValueStore.KeyValueStore, kv)
     );
     const jar = makeJar();
-    const network = { online: true };
-    const status = yield* SubscriptionRef.make<Transport.ConnectionStatus>("connected");
     const clientGroupId = `group-${name}`;
+    // The in-process sync server, presenting whatever session cookie the jar
+    // holds on each call, as a browser's cookie jar does.
+    const transport = yield* Transport.makeInMemory(audience.server.handler, clientGroupId, {
+      credentials: Effect.map(
+        jar.current,
+        Option.map(({ token }) =>
+          Authorization.credentialsFromHeaders({ cookie: cookieHeader(token) })
+        )
+      ),
+    });
+    // What the façade reads as `navigator.onLine`; the transport fails calls by itself.
+    const online = MutableRef.make(true);
     const { client, engine } = yield* Client.make({
       nodes,
       mutations,
       clientId: `client-${name}`,
       clientGroupId,
       store,
-      transport: jarTransport(audience, clientGroupId, jar, network, status),
+      transport,
       // The tests drive push and pull, so every replica they read is settled.
       sync: false,
       // A fresh profile boots signed out (`SignOut.fingerprintOfSession(None)`).
@@ -171,7 +139,7 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       coverageOf: client.coverageOf,
       totalOf: (subset) => Effect.map(client.totalOf(subset), Option.fromUndefinedOr),
       cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
-      online: () => network.online,
+      online: () => MutableRef.get(online),
     });
 
     const device: Device = {
@@ -185,11 +153,10 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
         if (Option.isSome(current)) yield* audience.signOut(current.value);
         return yield* change(Option.none());
       }),
-      setOnline: (online) =>
-        Effect.suspend(() => {
-          network.online = online;
-          return SubscriptionRef.set(status, online ? "connected" : "disconnected");
-        }),
+      setOnline: (next) =>
+        Effect.sync(() => MutableRef.set(online, next)).pipe(
+          Effect.andThen(transport.setOnline(next))
+        ),
       posts: (read) =>
         client.query(read).pipe(
           Effect.map((rows) => rows.map((row) => row.value as Post)),

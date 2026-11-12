@@ -45,7 +45,9 @@ import * as Devtools from "@thomasfosterau/legation-devtools";
 // `engine`/`store` are the same values you provided to `ClientEngine.make`.
 const devtools = Devtools.make(engine, store, {
   // Optional: wires the "simulated offline" action. Build `offline` with
-  // `Transport.simulateOffline` and wrap your real transport with it.
+  // `Transport.simulateOffline` and wrap your real transport with it; over the
+  // in-memory loopback, `setOffline: (offline) => loopback.setOnline(!offline)`
+  // and `isOffline` reads `loopback.status` as "disconnected".
   offline: { setOffline, isOffline },
 });
 ```

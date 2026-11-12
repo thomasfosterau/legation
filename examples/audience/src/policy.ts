@@ -16,20 +16,12 @@
  *
  * An anonymous viewer is `User::""`, which no policy names: the public posts.
  */
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { Condition, Entity, Policy } from "@thomasfosterau/effect-auth";
-import {
-  type Authorization,
-  AuthorizationError,
-  type Backend,
-  Predicate,
-} from "@thomasfosterau/legation";
-import { Subset } from "@thomasfosterau/legation/internal";
-import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
-import { FOLLOWS, type Follow, nodes, posts } from "./domain.js";
+import { type Authorization, type Backend, Predicate } from "@thomasfosterau/legation";
+import { ReadScopes } from "@thomasfosterau/legation-auth";
+import { FOLLOWS, nodes, posts } from "./domain.js";
 
 /** The role that reads everything. */
 export const MODERATOR = "moderator";
@@ -86,44 +78,19 @@ export const policies: ReadonlyArray<Policy.DeclarativePolicy> = [
  */
 export const readRequest = ReadScopes.principalRequest({ action: readAction });
 
-/** The followees of `userId`, from the server's `follows` collection. */
-export const followeesOf = (
-  backend: Backend.Backend,
-  context: Backend.SyncContext,
-  userId: string
-): Effect.Effect<ReadonlyArray<string>, AuthorizationError> =>
-  Effect.gen(function* () {
-    const entries = yield* backend.evaluate(
-      context,
-      Subset.make({ collection: FOLLOWS, where: Predicate.eq("followerId", userId) })
-    );
-    const rows = yield* backend.getRows(
-      context,
-      FOLLOWS,
-      Arr.map(entries, (entry) => entry.id)
-    );
-    return Arr.map(rows, (row) => (row.value as Follow).followeeId);
-  }).pipe(
-    Effect.mapError(
-      (error) => new AuthorizationError({ message: error.message, collection: FOLLOWS })
-    )
-  );
-
 /**
- * The `following` named set: the users the request's principal follows.
+ * The `following` named set: the users the request's principal follows, the
+ * `followeeId`s of its `follows` rows (none for an anonymous viewer).
  * Resolved per pull and re-resolved when `follows` changes, so a follow
  * moves the set's members without changing any subscription's scope.
- * (Hand-written glue: no named-set constructor reads a backend collection.)
  */
-export const following = (backend: Backend.Backend): Authorization.NamedSet => ({
-  source: FOLLOWS,
-  maxAge: "1 hour",
-  resolve: (context) =>
-    Option.match(Principal.userId(Principal.fromContext(context)), {
-      onNone: () => Effect.succeed([]),
-      onSome: (userId) => followeesOf(backend, context, userId),
-    }),
-});
+export const following = (backend: Backend.Backend): Authorization.NamedSet =>
+  ReadScopes.userSet(backend, {
+    source: FOLLOWS,
+    where: (userId) => Predicate.eq("followerId", userId),
+    member: "followeeId",
+    maxAge: "1 hour",
+  });
 
 /** The read policy over the backend: `posts` scoped by effect-auth, every other collection denied. */
 export const authPolicy = (backend: Backend.Backend): Authorization.AuthPolicy =>
