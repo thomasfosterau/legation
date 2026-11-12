@@ -1,6 +1,5 @@
 ---
 "@thomasfosterau/legation-alchemy-cloudflare": patch
-"@thomasfosterau/legation-auth": patch
 "@thomasfosterau/legation-devtools": patch
 "@thomasfosterau/legation-jsonapi": patch
 "@thomasfosterau/legation-svelte": patch
