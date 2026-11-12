@@ -247,13 +247,13 @@ describe("Hydration.dehydrate/hydrate (#41)", () => {
   it.effect("a malformed snapshot fails as a StoreError", () =>
     Effect.gen(function* () {
       const target = yield* ClientStoreModule.makeMemory;
-      // Untrusted input that merely claims to be a Snapshot: hydrate must validate it.
-      const malformed: unknown = { rows: "not-an-array" };
-      const failure = yield* Effect.flip(
-        // oxlint-disable-next-line effect/no-widen-then-assert -- the test feeds hydrate a value that is deliberately not a Snapshot, to prove its runtime decode rejects it; no well-typed Snapshot can fail that decode
-        Hydration.hydrate(target, malformed as Hydration.Snapshot)
-      );
+      // Well-typed (a counter is a `number`) but not a valid Snapshot: a mutation id
+      // counter must be a non-negative integer, so hydrate's decode rejects it.
+      const malformed: Hydration.Snapshot = { rows: [], journal: [], counters: { a: -1 } };
+      const failure = yield* Effect.flip(Hydration.hydrate(target, malformed));
       expect(failure._tag).toBe("StoreError");
+      // Nothing was written.
+      expect(yield* target.mutationCounters).toEqual({});
     })
   );
 });
