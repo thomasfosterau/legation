@@ -8,17 +8,17 @@
    * Visual polish is out of scope for this first cut: plain, legible markup.
    */
   import { untrack } from "svelte";
-  import * as Context from "effect/Context";
   import * as Effect from "effect/Effect";
   import * as Fiber from "effect/Fiber";
   import * as HashMap from "effect/HashMap";
+  import * as Layer from "effect/Layer";
+  import * as ManagedRuntime from "effect/ManagedRuntime";
   import * as Result from "effect/Result";
   import type { DevtoolsCore } from "@thomasfosterau/legation-devtools";
   import * as Stores from "./store.js";
 
-  // The panel's event handlers run the core's effects with no services of their own.
-  const runFork = Effect.runForkWith(Context.empty());
-  const runPromise = Effect.runPromiseWith(Context.empty());
+  // The panel's own runtime: the core's effects close over its engine, so there is no service to supply.
+  const edge = ManagedRuntime.make(Layer.empty);
 
   const props: { core: DevtoolsCore } = $props();
   // `core` is a stable singleton built once by the app's `createWorld`, the
@@ -45,31 +45,31 @@
 
   $effect(() => {
     if (core.offline === undefined) return;
-    const fiber = runFork(
+    const fiber = edge.runFork(
       Effect.map(core.offline.isOffline, (value) => {
         offline = value;
       })
     );
     return () => {
-      runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
 
   const toggleOffline = (): void => {
     if (core.offline === undefined) return;
     const next = !(offline ?? false);
-    void runPromise(core.offline.setOffline(next)).then(() => {
+    void edge.runPromise(core.offline.setOffline(next)).then(() => {
       offline = next;
     });
   };
 
-  const forcePull = (): void => void runPromise(core.forcePull);
-  const forcePush = (): void => void runPromise(core.forcePush);
+  const forcePull = (): void => void edge.runPromise(core.forcePull);
+  const forcePush = (): void => void edge.runPromise(core.forcePush);
   const dropSubscription = (subset: (typeof $subscriptions)[number]): void =>
-    void runPromise(core.dropSubscription(subset));
+    void edge.runPromise(core.dropSubscription(subset));
   const clearStore = (): void => {
     if (!confirm("Clear every confirmed row from the store? This cannot be undone.")) return;
-    void runPromise(core.clearStore);
+    void edge.runPromise(core.clearStore);
   };
 </script>
 

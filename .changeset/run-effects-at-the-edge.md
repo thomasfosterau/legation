@@ -5,4 +5,4 @@
 "@thomasfosterau/legation-devtools": patch
 ---
 
-Effects that must run at a callback edge run with explicit services (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use `Effect.runPromiseWith` / `runForkWith` / `runSyncWith(Context.empty())` in place of the implicit-runtime `runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.

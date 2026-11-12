@@ -13,25 +13,26 @@
  * same as the `.svelte` panel component alongside it.
  */
 import { readable, type Readable } from "svelte/store";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Stream from "effect/Stream";
 import type { ClientEngine, MutationState, Subset } from "@thomasfosterau/legation/internal";
 import type * as Devtools from "@thomasfosterau/legation-devtools";
 
-/** Runs a store's effects with no services of their own: the streams close over their engine. */
-const runFork = Effect.runForkWith(Context.empty());
+/** The stores' own runtime: the streams close over their engine, so there is no service to supply. */
+const edge = ManagedRuntime.make(Layer.empty);
 
 /** Subscribe to a `Stream` as a store; `initial` until the first emission. A failure stops it. */
 export const toStreamStore = <A, E>(stream: Stream.Stream<A, E>, initial: A): Readable<A> =>
   readable<A>(initial, (set) => {
-    const fiber = runFork(
+    const fiber = edge.runFork(
       Stream.runForEach(stream, (a) => Effect.sync(() => set(a))).pipe(Effect.ignore)
     );
     return () => {
-      runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
 
@@ -48,13 +49,13 @@ export const toSnapshotStore = <A, E, S, E2>(
 ): Readable<A> =>
   readable<A>(initial, (set) => {
     const safe = Effect.orElseSucceed(effect, () => initial);
-    const refresh = runFork(Effect.map(safe, (a) => set(a)));
-    const fiber = runFork(
+    const refresh = edge.runFork(Effect.map(safe, (a) => set(a)));
+    const fiber = edge.runFork(
       Stream.runForEach(signal, () => Effect.map(safe, (a) => set(a))).pipe(Effect.ignore)
     );
     return () => {
-      runFork(Fiber.interrupt(refresh));
-      runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(refresh));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
 
@@ -65,7 +66,7 @@ export const toLogStore = <A, E>(
 ): Readable<ReadonlyArray<A>> =>
   readable<ReadonlyArray<A>>([], (set) => {
     let log: ReadonlyArray<A> = [];
-    const fiber = runFork(
+    const fiber = edge.runFork(
       Stream.runForEach(stream, (a) =>
         Effect.sync(() => {
           log = [...log, a].slice(-limit);
@@ -74,7 +75,7 @@ export const toLogStore = <A, E>(
       ).pipe(Effect.ignore)
     );
     return () => {
-      runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
 
