@@ -7,7 +7,7 @@
  * the API, and pull reflects authoritative state. Update and delete round
  * trip the same way.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
@@ -26,6 +26,7 @@ import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
@@ -114,7 +115,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
   rows.map((row) => (row.value as { title: string }).title);
 
-describe("Convention.classify", () => {
+describeWrapped("Convention.classify", (it) => {
   it("classifies conventional JSON:API routes", () => {
     expect(Convention.classify("GET", "/todos")).toEqual(
       Option.some({ type: "todos", operation: "list" })
@@ -149,7 +150,7 @@ describe("Convention.classify", () => {
   });
 });
 
-describe("JsonApiSync.inspect", () => {
+describeWrapped("JsonApiSync.inspect", (it) => {
   it("discovers the resource, collection, and CRUD mutators", () => {
     const { resources, collections, registry, operations } = JsonApiSync.inspect(api);
     expect([...resources.keys()]).toEqual(["todos"]);
@@ -163,7 +164,7 @@ describe("JsonApiSync.inspect", () => {
   });
 });
 
-describe("end-to-end client-direct sync", () => {
+describeWrapped("end-to-end client-direct sync", (it) => {
   it.effect("optimistic create is visible, then syncs through the API", () => {
     const server = makeServer();
     const todos = Subset.make({
@@ -212,7 +213,7 @@ describe("end-to-end client-direct sync", () => {
       expect(server.store.has("2")).toBe(false);
       expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
     }).pipe(
-      Effect.provide(
+      withLayer(
         JsonApiSync.layer(api, {
           baseUrl: "http://api.test",
           clientId: "client-1",
@@ -259,7 +260,7 @@ describe("end-to-end client-direct sync", () => {
       expect(server.store.has("y")).toBe(true);
       expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
     }).pipe(
-      Effect.provide(
+      withLayer(
         JsonApiSync.layer(api, {
           baseUrl: "http://api.test",
           clientId: "client-1",
@@ -271,7 +272,7 @@ describe("end-to-end client-direct sync", () => {
   });
 });
 
-describe("JsonApiSync.layer store option", () => {
+describeWrapped("JsonApiSync.layer store option", (it) => {
   it.effect("writes through a supplied durable client store", () => {
     const server = makeServer();
     return Effect.gen(function* () {
@@ -286,7 +287,7 @@ describe("JsonApiSync.layer store option", () => {
           attributes: { title: "queued" },
         });
       }).pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -300,93 +301,96 @@ describe("JsonApiSync.layer store option", () => {
   });
 });
 
-describe("JsonApiSync.layer ledger default (#468)", () => {
-  const todoCreate = {
-    type: "todos",
-    id: "1",
-    attributes: { title: "queued" },
-  };
+layer(KeyValueStore.layerMemory, { buildPerTest: true })(
+  "JsonApiSync.layer ledger default (#468)",
+  (it) => {
+    const todoCreate = {
+      type: "todos",
+      id: "1",
+      attributes: { title: "queued" },
+    };
 
-  it.effect("writes the ledger to keyValueStore when no ledger is given", () => {
-    const server = makeServer();
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", todoCreate);
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-      // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
-      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
-        lastMutationIds: { "client-1": 1 },
-        rejections: [],
+    it.effect("writes the ledger to keyValueStore when no ledger is given", () => {
+      const server = makeServer();
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", todoCreate);
+          yield* engine.push;
+        }).pipe(
+          withLayer(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+        // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
+        expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+          lastMutationIds: { "client-1": 1 },
+          rejections: [],
+        });
       });
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
-  });
+    });
 
-  it.effect("a reload with keyValueStore alone reaches the server with its next mutation", () => {
-    const server = makeServer();
-    const mutate = (kv: KeyValueStore.KeyValueStore, id: string, title: string) =>
-      Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", { type: "todos", id, attributes: { title } });
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* mutate(kv, "1", "first");
-      // A reload: a new layer over the same key/value store, with no `store` given. The
-      // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
-      yield* mutate(kv, "2", "second");
-      expect(server.store.get("2")?.attributes.title).toBe("second");
-      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
-        lastMutationIds: { "client-1": 2 },
-        rejections: [],
+    it.effect("a reload with keyValueStore alone reaches the server with its next mutation", () => {
+      const server = makeServer();
+      const mutate = (kv: KeyValueStore.KeyValueStore, id: string, title: string) =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", { type: "todos", id, attributes: { title } });
+          yield* engine.push;
+        }).pipe(
+          withLayer(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* mutate(kv, "1", "first");
+        // A reload: a new layer over the same key/value store, with no `store` given. The
+        // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
+        yield* mutate(kv, "2", "second");
+        expect(server.store.get("2")?.attributes.title).toBe("second");
+        expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+          lastMutationIds: { "client-1": 2 },
+          rejections: [],
+        });
       });
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
-  });
+    });
 
-  it.effect("an explicit ledger overrides the key/value store", () => {
-    const server = makeServer();
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", todoCreate);
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-            ledger: Ledger.memory,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-      expect(yield* kv.has("legation-jsonapi:ledger:group-1")).toBe(false);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
-  });
-});
+    it.effect("an explicit ledger overrides the key/value store", () => {
+      const server = makeServer();
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", todoCreate);
+          yield* engine.push;
+        }).pipe(
+          withLayer(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+              ledger: Ledger.memory,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+        expect(yield* kv.has("legation-jsonapi:ledger:group-1")).toBe(false);
+      });
+    });
+  }
+);

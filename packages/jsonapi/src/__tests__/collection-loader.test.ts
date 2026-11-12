@@ -11,6 +11,7 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
+import { withLayer } from "./with-layer.js";
 
 describe("resourceToRow", () => {
   it("maps attributes and relationship linkage", () => {
@@ -120,7 +121,7 @@ describe("load / loadOne", () => {
         "two",
       ]);
     }).pipe(
-      Effect.provide(
+      withLayer(
         respondWith(200, {
           data: [
             { type: "todos", id: "1", attributes: { title: "one" } },
@@ -136,7 +137,7 @@ describe("load / loadOne", () => {
       const row = yield* CollectionLoader.loadOne("todos", "1");
       expect(Option.map(row, (loaded) => loaded.id)).toEqual(Option.some("1"));
     }).pipe(
-      Effect.provide(
+      withLayer(
         respondWith(200, { data: { type: "todos", id: "1", attributes: {} } }).pipe(
           Layer.merge(source)
         )
@@ -151,7 +152,7 @@ describe("load / loadOne", () => {
       assert(failure._tag === "ApiError");
       expect(failure.errors[0]?.title).toBe("Forbidden");
     }).pipe(
-      Effect.provide(
+      withLayer(
         respondWith(403, { errors: [{ status: "403", title: "Forbidden" }] }).pipe(
           Layer.merge(source)
         )
@@ -164,7 +165,7 @@ describe("load / loadOne", () => {
       const failure = yield* Effect.flip(CollectionLoader.load("todos"));
       expect(failure._tag).toBe("ApiError");
     }).pipe(
-      Effect.provide(
+      withLayer(
         respondWith(200, { errors: [{ status: "422", title: "Unprocessable" }] }).pipe(
           Layer.merge(source)
         )
@@ -176,6 +177,6 @@ describe("load / loadOne", () => {
     Effect.gen(function* () {
       const failure = yield* Effect.flip(CollectionLoader.load("todos"));
       expect(failure._tag).toBe("ParseError");
-    }).pipe(Effect.provide(respondWith(200, { data: 42 }).pipe(Layer.merge(source))))
+    }).pipe(withLayer(respondWith(200, { data: 42 }).pipe(Layer.merge(source))))
   );
 });
