@@ -71,8 +71,8 @@ Resolver.layer({
   // The naming you give effect-auth's HTTP tier, so the effective cookie name
   // (with its `__Host-` prefix) is derived identically. Default:
   // `__Host-conduit_session`.
-  cookie: Option.some({ name: "app_session" }),
-  apiKeyHeaders: Option.some(["x-api-key"]),
+  cookie: { name: "app_session" },
+  apiKeyHeaders: ["x-api-key"],
 });
 ```
 
@@ -89,47 +89,65 @@ user it acts for (`None` when anonymous).
 effect-auth compiles a policy set into one principal's read scope over a
 resource type: `AllowAll`, `Deny`, or `Filter { predicate, sets }`.
 `ReadScopes.policy` turns a set of such resource types into legation's
-`AuthPolicy`:
+`AuthPolicy`. The binding is derived from the node and the compile request
+from the principal, so none of it restates the schema or the principal by
+hand:
 
 ```ts
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { Entity, type ReadScope } from "@thomasfosterau/effect-auth";
+import * as Result from "effect/Result";
 import { Authorization } from "@thomasfosterau/legation";
-import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
+import { ReadScopes } from "@thomasfosterau/legation-auth";
 
-const binding: ReadScope.Binding = {
-  resourceType: "Post",
-  attributes: { owner: { entity: "User" }, visibility: "Text", publishedAt: "Instant" },
-  setFacts: { followsOwner: { attribute: "owner", set: "following" } },
-};
-
-const compile = ReadScopes.compiler({
-  policies: () => Effect.succeed(policies),
-  request: (principal) =>
-    Effect.succeed({
-      principal: Entity.ref(
-        "User",
-        Option.getOrElse(Principal.userId(principal), () => "")
-      ),
-      action: Entity.ref("Action", "read"),
-    }),
-});
-
-const policy = ReadScopes.policy(
-  {
-    posts: {
-      binding,
-      // effect-auth attribute → row field; a to-one edge maps to its key.
-      attributes: { owner: "ownerId", visibility: "visibility", publishedAt: "publishedAt" },
-      sets: Option.some({ following: followingIds }), // Authorization.NamedSet
-      compile,
+const authPolicy = Result.gen(function* () {
+  // effect-auth attribute → where it lives on the node; kinds come from the node.
+  const posts = yield* ReadScopes.bindingOf(Post, {
+    resourceType: "Post",
+    attributes: {
+      owner: { field: "ownerId", entity: "User" }, // an entity ref, bound as its id
+      visibility: "visibility", // Text, from the node's schema
+      publishedAt: "publishedAt", // Instant, as the node's filterable declares it
     },
-  },
-  { filters: Option.some({ tags: Authorization.allowAll }), collections: Option.some(registry) }
-); // Result<Authorization.AuthPolicy, ScopeMappingError>
+    setFacts: { followsOwner: { attribute: "owner", set: "following" } },
+  });
+  return yield* ReadScopes.policy(
+    {
+      posts: {
+        ...posts,
+        sets: { following: followingIds }, // Authorization.NamedSet
+        compile: ReadScopes.compiler({
+          policies: () => Effect.succeed(policies),
+          request: ReadScopes.principalRequest({ action: "read" }),
+        }),
+      },
+    },
+    { filters: { tags: Authorization.allowAll }, collections: registry }
+  );
+}); // Result<Authorization.AuthPolicy, ScopeMappingError>
 ```
 
+- **The binding from the node.** `ReadScopes.bindingOf(node, { resourceType,
+  attributes, setFacts })` gives each scalar attribute its field's literal
+  kind (`FilterPolicy.kindOf` of the row schema, or the node's declared
+  filterable kind, so an `instant` stored as text is an `Instant`), and an
+  `{ field, entity }` attribute `{ entity }`, which must sit on a text field.
+  A field the node lacks (`UnmappedAttribute`), an entity on a non-text field
+  or a field whose kind cannot be derived (`FieldKind`) is a
+  `ScopeMappingError` when the policy is built — never a `Deny` per request.
+  It returns `{ binding, attributes }`, the two members of a scoped
+  collection; hand-written ones still work.
+- **The request from the principal.** `ReadScopes.principalRequest({ action,
+  principalType?, entities? })` compiles for `User::<userId>` (a session's or
+  an API key's) and the action (`"read"` is `Action::"read"`). The anonymous
+  principal is `User::""` (`ReadScopes.principalRef`), an id no effect-auth
+  user has: a policy naming the principal admits it nothing but rows whose
+  field is `""`, and a forbid scoped to `User` still binds it. The slice comes
+  from effect-auth's `EntityResolver` when you pass one (`entities`); else a
+  session's user sits under `Rbac.roleRef(user.attributes.role)` and carries
+  that `role` attribute, so `Policy.role` and `Policy.roleAtLeast` both see it;
+  an API key carries no user record and gets no role. The anonymous
+  principal's slice never holds a user: no resolver is asked who `User::""`
+  is. A resolver that fails narrows the filter to `Deny`.
 - **Checked when built.** Every attribute of the binding and every set fact's
   attribute must map to a row field, the map names nothing the binding lacks,
   and every set a set fact names has a `NamedSet`. A gap is a
@@ -178,22 +196,50 @@ const policy = ReadScopes.policy(
 ## Sign-out: `SignOut` (`/client`)
 
 ```ts
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { createAuthClient } from "@thomasfosterau/effect-auth/client";
+import { Client } from "@thomasfosterau/legation";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
 import * as Digest from "effect/crypto/Digest";
 
-const onChange = SignOut.onSessionChange(client);
-// When the session changes (each an Option of a session with `user.id`, e.g.
-// effect-auth's client store's `SessionWithUserView`; None = signed out):
-yield * onChange(previous, next).pipe(Effect.provide(Digest.layerWebCrypto));
+const auth = createAuthClient({ baseUrl: "/api/auth" });
+
+const program = Effect.gen(function* () {
+  // Boot under the session you know (e.g. `await auth.getSession()`):
+  const session = Option.fromNullishOr(yield* Effect.promise(() => auth.getSession()));
+  const { client } = yield* Client.make({
+    // ...nodes, mutations, store, transport
+    identity: yield* SignOut.fingerprintOfSession(session),
+  });
+  // From here on every session change on the store resets the replica as needed.
+  const following = yield* SignOut.follow(client, auth.session);
+  // After a sign-out, wait for the reset before the next viewer sees the app:
+  yield* Effect.promise(() => auth.signOut());
+  yield* following.settled;
+}).pipe(Effect.scoped, Effect.provide(Digest.layerWebCrypto));
 ```
 
-It adopts the next session's identity fingerprint with `Client.reset`, whose
-rule decides what survives: the same user is `Unchanged`; signed out → signed
-in is an `Upgrade` (the warm replica and its journal stay); a sign-out or an
+`SignOut.follow(client, store)` subscribes to effect-auth's client session
+store (`createAuthClient(...).session`) for the life of the scope. Every
+settled state the store notifies, and the one it holds when it starts, is
+adopted in order with `SignOut.onSessionChange`, the previous session tracked
+for you; a pending state (the store's first fetch, a refetch in flight) is
+skipped, so a reload never reads as a sign-out. `following.settled` waits
+until every change notified so far is adopted and returns the last outcome
+(`None` before the store has settled once). It hashes with the `Digest` in
+context, else with `Digest.layerWebCrypto`. An adoption that fails is logged
+by its error tag and retried on the next notification.
+
+Each adoption runs `Client.reset` with the session's fingerprint, whose rule
+decides what survives: the same user is `Unchanged`; signed out → signed in
+is an `Upgrade` (the warm replica and its journal stay); a sign-out or an
 account switch is a `Reset` — confirmed rows, the pull cookie and every
 subscription are dropped. The rule compares with the replica's own stamp, not
-with `previous`, so a missed notification cannot skip a reset.
+with the previous session, so a missed notification cannot skip a reset.
+`SignOut.onSessionChange(client)` is the listener itself, `(previous, next)`
+with each an `Option` of a session with `user.id`, for a source other than
+effect-auth's store.
 
 **Pending writes are quarantined.** On a reset, unpushed writes are not flushed
 (they would be pushed under whatever credentials the transport now carries)
@@ -202,13 +248,17 @@ superseded user's fingerprint, pushable again if that user signs back in
 (`Client.quarantines` / `discardQuarantine` manage them). To send them, push
 before signing out.
 
+`SignOut.fingerprintOfSession(session)` is the boot stamp for
+`Client.make({ identity })`: `Identity.anonymous` for `None`, else the user's
+fingerprint. Boot under a session you know: a still-pending store's empty
+session would reset a signed-in user's warm replica.
 `SignOut.fingerprintOf(userId)` is the default fingerprint:
 `legation-auth:sha256:` and the SHA-256 of the user id under a domain
-separator — never the id itself. It needs effect's `Digest` service
+separator — never the id itself. These need effect's `Digest` service
 (`Digest.layerWebCrypto`, which needs `crypto.subtle`: a secure context in a
-browser). Pass `{ fingerprint: Option.some(f) }` to use your own. The `/client`
-entry imports no effect-auth runtime, so it is safe in a browser or service
-worker.
+browser). Pass `{ fingerprint: f }` to use your own. The `/client` entry
+imports nothing of effect-auth (its store is read by shape,
+`SignOut.SessionStore`), so it is safe in a browser or service worker.
 
 ## License
 

@@ -55,7 +55,7 @@ const map = orFail(
     collection: "items",
     binding,
     attributes: { s: "s", i: "i", d: "d", b: "b", t: "t", owner: "ownerId" },
-    sets: Option.some({
+    sets: {
       friends: {
         source: "friends",
         maxAge: "1 hour",
@@ -66,7 +66,7 @@ const map = orFail(
         maxAge: "1 hour",
         resolve: () => Effect.succeed(members.watched),
       },
-    }),
+    },
   })
 );
 

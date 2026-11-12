@@ -30,12 +30,13 @@ jar, a network that can go down, one `Client`, and the façade.
 
 ```
 src/domain.ts   the node, the mutations, the reads (ADR-0022)
-src/policy.ts   effect-auth binding + policies, the `following` set, the AuthPolicy
+src/policy.ts   the binding (derived from the node) + policies, the `following`
+                set, the AuthPolicy
 src/api.ts      the effect-jsonapi resource and HttpApi (the node graph's codec)
 src/server.ts   effect-auth SessionService over its testing memory stores,
                 legation-auth's Resolver, Server + MemoryBackend, RestHandlers
 src/device.ts   one browser profile: replica, cookie jar, transport, Client,
-                SignOut.onSessionChange, JsonApiFacade
+                SignOut.follow, JsonApiFacade
 tests/          the five tests of #221
 ```
 
@@ -72,14 +73,11 @@ hand, each marked in the source, is a gap a library should close:
 
 - `server.ts` `restContext`: the derived REST handlers take a hand-written
   `context` instead of the `IdentityResolver` the sync carrier runs.
-- `policy.ts` `scopeRequest`: the `Principal` → effect-auth `ScopeRequest`
-  (`User::<id>`, `User::""` when anonymous, the user under its role).
 - `policy.ts` `following`: a named set read off a backend collection.
-- `policy.ts` `binding` / `attributes`: the effect-auth binding restates the
-  node's schema.
 - `device.ts` `jarTransport`: an in-process transport whose credentials follow
   the session (and whose network can go down).
-- `device.ts` `change` / `fingerprintOf`: keeping the cookie jar and
-  `SignOut.onSessionChange` in step, and the boot-time fingerprint.
+- `device.ts` `makeJar`: the cookie jar, shaped as effect-auth's client
+  session store, which `SignOut.follow` subscribes to (the example has no auth
+  HTTP tier for `createAuthClient` to talk to).
 - `server.ts` `authLayer`: effect-auth's `SessionService` over its testing
   stores.

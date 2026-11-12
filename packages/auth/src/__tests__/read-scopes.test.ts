@@ -61,7 +61,7 @@ const followingOf = (members: ReadonlyArray<string>): Authorization.NamedSet => 
 const following = followingOf(["user-bob"]);
 
 const checked = (sets: Readonly<Record<string, Authorization.NamedSet>> = { following }) =>
-  orFail(ReadScopes.mapping({ collection: "posts", binding, attributes, sets: Option.some(sets) }));
+  orFail(ReadScopes.mapping({ collection: "posts", binding, attributes, sets: sets }));
 
 const resource = (name: string) => Condition.attr("resource", name);
 
@@ -128,7 +128,7 @@ describe("ReadScopes.mapping: field names explicit and checked at registration",
           collection: "posts",
           binding,
           attributes,
-          sets: Option.some({ following }),
+          sets: { following },
         })
       )
     ).toBe(true);
@@ -141,7 +141,7 @@ describe("ReadScopes.mapping: field names explicit and checked at registration",
         collection: "posts",
         binding,
         attributes: partial,
-        sets: Option.some({ following }),
+        sets: { following },
       })
     );
     expect(error?.reason).toBe("UnmappedAttribute");
@@ -154,7 +154,7 @@ describe("ReadScopes.mapping: field names explicit and checked at registration",
         collection: "posts",
         binding,
         attributes: { ...attributes, score: "" },
-        sets: Option.some({ following }),
+        sets: { following },
       })
     );
     expect(error?.reason).toBe("UnmappedAttribute");
@@ -166,7 +166,7 @@ describe("ReadScopes.mapping: field names explicit and checked at registration",
         collection: "posts",
         binding,
         attributes: { ...attributes, title: "title" },
-        sets: Option.some({ following }),
+        sets: { following },
       })
     );
     expect(error?.reason).toBe("UnknownAttribute");
@@ -451,8 +451,8 @@ describe("ReadScopes: roles and undeclared collections", () => {
     Effect.gen(function* () {
       const built = orFail(
         ReadScopes.policy(
-          { posts: { binding, attributes, sets: Option.some({ following }), compile } },
-          { filters: Option.some({ tags: Authorization.allowAll }) }
+          { posts: { binding, attributes, sets: { following }, compile } },
+          { filters: { tags: Authorization.allowAll } }
         )
       );
       const context = contextOf(principalOf("user-mod"));

@@ -51,12 +51,20 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { ReadScope as AuthScope, type Policy } from "@thomasfosterau/effect-auth";
+import {
+  Entity,
+  type EntityResolver,
+  ReadScope as AuthScope,
+  type Policy,
+  Rbac,
+} from "@thomasfosterau/effect-auth";
 import {
   Authorization,
-  type AuthorizationError,
+  AuthorizationError,
   type Backend,
   type Collection,
+  FilterPolicy,
+  type Node,
   Predicate,
 } from "@thomasfosterau/legation";
 import * as Principal from "./Principal.js";
@@ -69,6 +77,7 @@ import * as Principal from "./Principal.js";
  * - `Inexact` — effect-auth compiled the policy set `Inexact`.
  * - `UnmappedAttribute` — an attribute has no row field in the `attributes` map.
  * - `UnknownAttribute` — the `attributes` map names an attribute the binding does not declare.
+ * - `FieldKind` — a node field whose literal kind cannot carry the attribute ({@link bindingOf}): an entity reference on a field that is not text, or a field whose kind cannot be derived.
  * - `UndeclaredSet` — a set fact names a set with no app-declared `NamedSet`.
  * - `UnmappableNode` — a predicate node with no exact translation (a `Compare` on text or booleans).
  * - `LiteralKind` — a literal of a different kind from the attribute's.
@@ -79,6 +88,7 @@ export const ScopeMappingReason = Schema.Literals([
   "Inexact",
   "UnmappedAttribute",
   "UnknownAttribute",
+  "FieldKind",
   "UndeclaredSet",
   "UnmappableNode",
   "LiteralKind",
@@ -125,8 +135,8 @@ export interface MappingOptions {
    * `ownerId`, the edge's `via`).
    */
   readonly attributes: Readonly<Record<string, string>>;
-  /** The named sets by the name effect-auth's set facts give them. `None` declares none. */
-  readonly sets?: Option.Option<Readonly<Record<string, Authorization.NamedSet>>>;
+  /** The named sets by the name effect-auth's set facts give them. Omitted, none is declared. */
+  readonly sets?: Readonly<Record<string, Authorization.NamedSet>>;
 }
 
 /** A checked mapping from one effect-auth binding to one legation collection. Build it with {@link mapping}. */
@@ -149,7 +159,7 @@ const scalarKindOf = (kind: AuthScope.AttributeKind): AuthScope.ScalarKind =>
  */
 export const mapping = (options: MappingOptions): Result.Result<Mapping, ScopeMappingError> => {
   const { collection, binding, attributes } = options;
-  const sets = Option.getOrElse(Option.flatten(Option.fromNullishOr(options.sets)), () => ({}));
+  const sets = options.sets ?? {};
   const facts = R.values(binding.setFacts ?? {});
   const required = Arr.dedupe([...R.keys(binding.attributes), ...facts.map((f) => f.attribute)]);
   const unmapped = required.filter((attribute) => {
@@ -180,6 +190,123 @@ export const mapping = (options: MappingOptions): Result.Result<Mapping, ScopeMa
     );
   }
   return Result.succeed({ collection, binding, attributes, sets });
+};
+
+// ─── Bindings derived from a node ────────────────────────────────────────────
+
+/**
+ * Where one effect-auth attribute lives on a node: the row field of a scalar
+ * attribute, whose kind is the field's, or `{ field, entity }` for an
+ * attribute holding an entity reference of type `entity`, bound as that
+ * entity's id (a to-one edge's key, such as `ownerId`).
+ */
+export type NodeAttribute = string | { readonly field: string; readonly entity: string };
+
+/** What {@link bindingOf} derives a binding from, besides the node. */
+export interface NodeBindingOptions {
+  /** The effect-auth resource type the policy set names (`Policy.isType("Post")`). */
+  readonly resourceType: string;
+  /** Every attribute a policy may read, by its effect-auth name: where it lives on the node. */
+  readonly attributes: Readonly<Record<string, NodeAttribute>>;
+  /** The context facts that are set memberships (`followsOwner` → `owner` in `following`). */
+  readonly setFacts?: Readonly<Record<string, AuthScope.SetFact>>;
+}
+
+/**
+ * An effect-auth binding with its attribute-to-field map, derived from a
+ * node: the `binding` and `attributes` of a {@link ScopedCollection}.
+ */
+export interface NodeBinding {
+  readonly binding: AuthScope.Binding;
+  readonly attributes: Readonly<Record<string, string>>;
+}
+
+/** effect-auth's scalar kind for each legation literal kind. */
+const scalarKindFor: Readonly<Record<FilterPolicy.LiteralKind, AuthScope.ScalarKind>> = {
+  text: "Text",
+  integer: "Integer",
+  double: "Double",
+  boolean: "Boolean",
+  instant: "Instant",
+};
+
+/**
+ * A node field's literal kind: its filterable declaration's (which names an
+ * `instant` explicitly), else derived from its row schema
+ * (`FilterPolicy.kindOf`). `None` for a field the row lacks; `Some(None)` for
+ * one whose kind cannot be derived.
+ */
+const fieldKindOf = (
+  node: Node.AnyNode,
+  field: string
+): Option.Option<Option.Option<FilterPolicy.LiteralKind>> =>
+  Option.map(R.get(node.row.fields, field), (schema) =>
+    Option.orElse(
+      Option.map(R.get(node.filterable, field), (declared) => declared.kind),
+      () => Option.fromNullishOr(FilterPolicy.kindOf(schema))
+    )
+  );
+
+/**
+ * Derive the effect-auth `Binding` for a node, and the attribute-to-field map
+ * {@link mapping} checks, from the node's own schema: each scalar attribute
+ * takes its field's literal kind (`FilterPolicy.kindOf`, or the node's
+ * declared filterable kind, so an `instant` stored as text is an `Instant`),
+ * and each entity attribute must sit on a text field. A field the node lacks,
+ * an entity reference on a field that is not text, and a field whose kind
+ * cannot be derived are a {@link ScopeMappingError} here, when the policy is
+ * built, never a scope narrowed to `Deny` per request.
+ */
+export const bindingOf = (
+  node: Node.AnyNode,
+  options: NodeBindingOptions
+): Result.Result<NodeBinding, ScopeMappingError> => {
+  const collection = node.type;
+  const derived = Result.all(
+    R.map(
+      options.attributes,
+      (attribute, name): Result.Result<AuthScope.AttributeKind, ScopeMappingError> => {
+        const field = P.isString(attribute) ? attribute : attribute.field;
+        return Option.match(fieldKindOf(node, field), {
+          onNone: () =>
+            failure(
+              collection,
+              "UnmappedAttribute",
+              `${collection}: no row field ${field} for effect-auth attribute ${name}`
+            ),
+          onSome: (derivable) =>
+            Option.match(derivable, {
+              onNone: () =>
+                failure(
+                  collection,
+                  "FieldKind",
+                  `${collection}.${field}: no literal kind can be derived for effect-auth attribute ${name}; declare it filterable with its kind`
+                ),
+              onSome: (kind): Result.Result<AuthScope.AttributeKind, ScopeMappingError> =>
+                P.isString(attribute)
+                  ? Result.succeed(scalarKindFor[kind])
+                  : kind === "text"
+                    ? Result.succeed({ entity: attribute.entity })
+                    : failure(
+                        collection,
+                        "FieldKind",
+                        `${collection}.${field}: effect-auth attribute ${name} references ${attribute.entity}, whose id is text, but the field is ${kind}`
+                      ),
+            }),
+        });
+      }
+    )
+  );
+  return Result.map(derived, (kinds) => ({
+    binding: {
+      resourceType: options.resourceType,
+      attributes: kinds,
+      setFacts: options.setFacts,
+    },
+    attributes: R.map(options.attributes, (attribute) =>
+      P.isString(attribute) ? attribute : attribute.field
+    ),
+  }));
 };
 
 // ─── Literals ────────────────────────────────────────────────────────────────
@@ -396,6 +523,7 @@ export interface CompilerOptions {
    * The effect-auth request a scope is compiled for — the principal's entity
    * ref, the action and the principal's slice — from the request's
    * {@link Principal.Principal} (anonymous when it has none).
+   * {@link principalRequest} builds the conventional one.
    */
   readonly request: (
     principal: Principal.Principal,
@@ -417,6 +545,85 @@ export const compiler =
         )
       );
 
+// ─── Compile requests from a principal ───────────────────────────────────────
+
+/**
+ * The entity a principal is to effect-auth: `<type>::<user id>` (`User::"u1"`)
+ * for a session or an API key, and `<type>::""` for the anonymous principal:
+ * an id no effect-auth user has (its user ids are generated, never empty). A
+ * policy naming the principal (`resource.owner == principal`) then admits only
+ * rows whose field is the empty string for an anonymous reader, and a forbid
+ * scoped to the type (`principal is User`) still binds them.
+ */
+export const principalRef = (
+  principal: Principal.Principal,
+  principalType: string = Rbac.DefaultPrincipalType
+): Entity.EntityRef =>
+  Entity.ref(
+    principalType,
+    Option.getOrElse(Principal.userId(principal), () => "")
+  );
+
+/** What {@link principalRequest} builds a compile request from. */
+export interface PrincipalRequestOptions {
+  /** The action the scope is compiled for: an action id (`"read"` is `Action::"read"`) or its entity ref. */
+  readonly action: string | Entity.EntityRef;
+  /** The entity type of a principal's user. Default `"User"` (`Rbac.DefaultPrincipalType`). */
+  readonly principalType?: string;
+  /**
+   * effect-auth's `EntityResolver`, for the principal's slice: the principal
+   * and the action with their ancestors. Omitted, a session's slice is its
+   * user under `Rbac.roleRef(user.attributes.role)` with that `role`
+   * attribute (what `Policy.role` and `Policy.roleAtLeast` read), and an API
+   * key's is empty: a key carries no user record, so it gets no role.
+   */
+  readonly entities?: typeof EntityResolver.Service;
+}
+
+/** The role a principal's user record carries (`user.attributes.role`), where effect-auth's `Admin` and fixtures put it. */
+const roleOf = (principal: Principal.Principal): Option.Option<string> =>
+  Principal.isSession(principal)
+    ? Option.filter(Option.fromNullishOr(principal.user.attributes["role"]), P.isString)
+    : Option.none();
+
+/** A session's slice without a resolver: its user under its role, carrying the role attribute. */
+const roleSlice = (principal: Principal.Principal, ref: Entity.EntityRef): Entity.EntitySlice =>
+  Option.match(roleOf(principal), {
+    onNone: () => Entity.emptySlice,
+    onSome: (role) =>
+      Entity.slice([Entity.entity(ref, { attributes: { role }, parents: [Rbac.roleRef(role)] })]),
+  });
+
+/**
+ * The conventional {@link CompilerOptions.request}: the principal's entity
+ * ({@link principalRef}: `User::<id>`, `User::""` when anonymous), the action,
+ * and the principal's slice — from `entities` when given, else from the
+ * session user's role. The anonymous principal's slice holds the action's
+ * entities at most, never a user's: no resolver is asked who `User::""` is.
+ * A resolver that fails is an `AuthorizationError` (the filter narrows to
+ * `Deny`), whose message names no principal.
+ */
+export const principalRequest = (options: PrincipalRequestOptions): CompilerOptions["request"] => {
+  const action = P.isString(options.action)
+    ? Entity.ref(Rbac.ActionEntityType, options.action)
+    : options.action;
+  const resolver = Option.fromNullishOr(options.entities);
+  return (principal) => {
+    const ref = principalRef(principal, options.principalType);
+    const slice: Effect.Effect<Entity.EntitySlice, AuthorizationError> = Option.match(resolver, {
+      onNone: () => Effect.succeed(roleSlice(principal, ref)),
+      onSome: (entities) =>
+        entities.resolve(Principal.isAnonymous(principal) ? [action] : [ref, action]).pipe(
+          Effect.map(Entity.slice),
+          Effect.mapError(
+            () => new AuthorizationError({ message: "legation-auth: the entity resolver failed" })
+          )
+        ),
+    });
+    return Effect.map(slice, (resolved) => ({ principal: ref, action, slice: resolved }));
+  };
+};
+
 /** One collection's scope for {@link policy}: its mapping and how its scope is compiled. */
 export interface ScopedCollection extends Omit<MappingOptions, "collection"> {
   readonly compile: Compile;
@@ -425,9 +632,9 @@ export interface ScopedCollection extends Omit<MappingOptions, "collection"> {
 /** Options for {@link policy}. */
 export interface PolicyOptions {
   /** Auth filters for collections effect-auth does not scope (a public collection's `allowAll`). */
-  readonly filters?: Option.Option<Readonly<Record<string, Authorization.AuthFilter>>>;
+  readonly filters?: Readonly<Record<string, Authorization.AuthFilter>>;
   /** The collection registry whose filterable sets the policy enforces (`Authorization.policy`'s `collections`). */
-  readonly collections?: Option.Option<Collection.CollectionRegistry>;
+  readonly collections?: Collection.CollectionRegistry;
 }
 
 /**
@@ -443,25 +650,13 @@ export const policy = (
   Result.map(
     Result.all(
       R.map(collections, (scoped, collection) =>
-        Result.map(
-          mapping({
-            collection,
-            binding: scoped.binding,
-            attributes: scoped.attributes,
-            sets: scoped.sets ?? Option.none(),
-          }),
-          (map) => toAuthFilter(scoped.compile, map)
-        )
+        Result.map(mapping({ ...scoped, collection }), (map) => toAuthFilter(scoped.compile, map))
       )
     ),
     (scopedFilters) => {
-      const filters = {
-        ...Option.getOrElse(Option.flatten(Option.fromNullishOr(options?.filters)), () => ({})),
-        ...scopedFilters,
-      };
-      return Option.match(Option.flatten(Option.fromNullishOr(options?.collections)), {
-        onNone: () => Authorization.policy(filters),
-        onSome: (registry) => Authorization.policy(filters, { collections: registry }),
-      });
+      const filters = { ...options?.filters, ...scopedFilters };
+      return options?.collections === undefined
+        ? Authorization.policy(filters)
+        : Authorization.policy(filters, { collections: options.collections });
     }
   );

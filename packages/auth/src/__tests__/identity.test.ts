@@ -90,7 +90,7 @@ describe("Resolver: the session plane", () => {
       const naming = { name: "app_session", secure: false };
       const resolver = Resolver.make(
         { sessions: Option.some(sessions), apiKeys: Option.none() },
-        { cookie: Option.some(naming) }
+        { cookie: naming }
       );
       const named = SessionCookies.cookieNames(naming).session;
       expect(named).toBe("app_session");

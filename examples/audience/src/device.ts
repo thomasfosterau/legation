@@ -4,9 +4,9 @@
  * one Client), a cookie jar holding the effect-auth session cookie, a
  * network that can go down, and the one `Client` over them.
  *
- * Signing in or out goes through legation-auth's `SignOut.onSessionChange`,
- * which adopts the session's identity fingerprint with `Client.reset`
- * (#212): a sign-out or an account switch drops the replica's confirmed
+ * The cookie jar is read the way effect-auth's client session store is, and
+ * legation-auth's `SignOut.follow` keeps the replica on it: each change of the
+ * jar adopts the session's identity fingerprint with `Client.reset` (#212): a sign-out or an account switch drops the replica's confirmed
  * rows and quarantines the superseded user's unpushed writes before the next
  * viewer can read anything.
  *
@@ -15,11 +15,9 @@
  * covers it, under the same declarations the server's derived handlers use.
  */
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as Digest from "effect/crypto/Digest";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import {
   Authorization,
@@ -58,17 +56,38 @@ export interface Device {
   readonly stored: Effect.Effect<ReadonlyArray<Post>>;
 }
 
-const webCrypto = Layer.orDie(Digest.layerWebCrypto);
-
 /**
- * The fingerprint a session stamps the replica with (`Identity.anonymous`
- * when signed out). (Hand-written glue: `SignOut` keeps this mapping private.)
+ * The browser's cookie jar, holding at most one session, read the way
+ * effect-auth's client session store (`createAuthClient(...).session`) is read:
+ * `SignOut.follow` subscribes to it exactly as it would to that store.
+ * (Hand-written glue: the example has no auth HTTP tier for
+ * `createAuthClient` to talk to, so the jar stands in for its store.)
  */
-const fingerprintOf = (session: Option.Option<Session>): Effect.Effect<Identity.Fingerprint> =>
-  Option.match(session, {
-    onNone: () => Effect.succeed(Identity.anonymous),
-    onSome: ({ user }) => SignOut.fingerprintOf(user.id).pipe(Effect.provide(webCrypto)),
-  });
+interface CookieJar {
+  readonly store: SignOut.SessionStore;
+  readonly current: Effect.Effect<Option.Option<Session>>;
+  readonly set: (session: Option.Option<Session>) => Effect.Effect<void>;
+}
+
+const makeJar = (): CookieJar => {
+  const session = MutableRef.make(Option.none<Session>());
+  const listeners = new Set<() => void>();
+  return {
+    store: {
+      get: () => ({ data: Option.getOrNull(MutableRef.get(session)), isPending: false }),
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    current: Effect.sync(() => MutableRef.get(session)),
+    set: (next) =>
+      Effect.sync(() => {
+        MutableRef.set(session, next);
+        listeners.forEach((listener) => listener());
+      }),
+  };
+};
 
 /**
  * The device's transport: the in-process sync server, presenting whatever
@@ -79,7 +98,7 @@ const fingerprintOf = (session: Option.Option<Session>): Effect.Effect<Identity.
 const jarTransport = (
   audience: AudienceServer,
   clientGroupId: string,
-  jar: Ref.Ref<Option.Option<Session>>,
+  jar: CookieJar,
   network: { online: boolean },
   status: SubscriptionRef.SubscriptionRef<Transport.ConnectionStatus>
 ): Transport.ClientTransport => {
@@ -89,7 +108,7 @@ const jarTransport = (
   ): Effect.Effect<A, E | TransportError> =>
     Effect.suspend((): Effect.Effect<A, E | TransportError> =>
       network.online
-        ? Ref.get(jar).pipe(
+        ? jar.current.pipe(
             Effect.flatMap((session) =>
               call({
                 credentials: Option.map(session, ({ token }) =>
@@ -121,7 +140,7 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
     const store = yield* ClientStore.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, kv)
     );
-    const jar = yield* Ref.make(Option.none<Session>());
+    const jar = makeJar();
     const network = { online: true };
     const status = yield* SubscriptionRef.make<Transport.ConnectionStatus>("connected");
     const clientGroupId = `group-${name}`;
@@ -134,16 +153,15 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       transport: jarTransport(audience, clientGroupId, jar, network, status),
       // The tests drive push and pull, so every replica they read is settled.
       sync: false,
-      identity: yield* fingerprintOf(Option.none()),
+      // A fresh profile boots signed out (`SignOut.fingerprintOfSession(None)`).
+      identity: Identity.anonymous,
     });
-
-    // Hand-written glue: the jar and the session-change listener kept in step.
-    const onSessionChange = SignOut.onSessionChange(client);
+    // Every change of the jar resets the replica as needed, for the device's life.
+    const following = yield* SignOut.follow(client, jar.store);
     const change = (next: Option.Option<Session>) =>
-      Effect.gen(function* () {
-        const previous = yield* Ref.getAndSet(jar, next);
-        return yield* onSessionChange(previous, next).pipe(Effect.provide(webCrypto), Effect.orDie);
-      });
+      jar
+        .set(next)
+        .pipe(Effect.andThen(following.settled), Effect.flatMap(Effect.fromOption), Effect.orDie);
 
     const facade = JsonApiFacade.fetchHandler({
       nodes,
@@ -163,7 +181,7 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       facade,
       signIn: (session) => change(Option.some(session)),
       signOut: Effect.gen(function* () {
-        const current = yield* Ref.get(jar);
+        const current = yield* jar.current;
         if (Option.isSome(current)) yield* audience.signOut(current.value);
         return yield* change(Option.none());
       }),
