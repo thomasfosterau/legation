@@ -27,13 +27,13 @@ import * as Stream from "effect/Stream";
 import { ClientEngine, Related, Subset } from "@thomasfosterau/legation/internal";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
+import type * as ResolvedRelation from "./internal/ResolvedRelation.js";
 
 /**
  * A resolved relationship: a row, a list of rows, `null` (empty linkage), or
  * `undefined` (a to-one whose target is not in the mirror).
  */
-// oxlint-disable-next-line effect/prefer-option-over-null -- the core `Related.RelatedValue` shape, which `Related.Strategy.resolveRow` must return and the core's join compares by reference; it follows the core's `Related` surface.
-export type RelatedValue = JsonApiRow | ReadonlyArray<JsonApiRow> | null | undefined;
+export type RelatedValue = ResolvedRelation.RelatedValue;
 
 /** A base row with its named relationships resolved against the mirror. */
 export interface RelatedRow {

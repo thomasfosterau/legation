@@ -33,7 +33,8 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
-import { ClientTransport, makeInMemory, makePokeHub, type ServerHandler } from "../Transport.js";
+import * as PokeHub from "../PokeHub.js";
+import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
@@ -102,7 +103,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
 describe("backpressure — poke hub", () => {
   it.live("a poke storm delivers at most one queued poke per group", () =>
     Effect.gen(function* () {
-      const hub = yield* makePokeHub;
+      const hub = yield* PokeHub.make;
       const received = yield* Ref.make<Array<unknown>>([]);
       const release = yield* Deferred.make<void>();
       // A subscriber that takes its first poke, then blocks — so the storm hits
@@ -129,7 +130,7 @@ describe("backpressure — poke hub", () => {
 
   it.live("a late subscriber sees only the latest poke (replay 1)", () =>
     Effect.gen(function* () {
-      const hub = yield* makePokeHub;
+      const hub = yield* PokeHub.make;
       yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}), {
         concurrency: 1,
       });

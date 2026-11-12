@@ -32,23 +32,12 @@ import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import type { ShardObject } from "./internal/ShardRpc.js";
 
 const LEASE_PREFIX = "legation:lease:";
 
 /** The shard's RPC surface, as the room-side broker calls it through a stub. */
-export interface ShardObject {
-  /** Lease (or renew) `roomId` on this shard's topic for `ttlMillis`. */
-  readonly register: (
-    roomId: string,
-    ttlMillis: number
-  ) => Effect.Effect<void, never, RuntimeContext>;
-  /**
-   * A publish to this shard's topic: the rooms whose lease is still live, to be
-   * poked by the publisher. Expired leases are deleted as a side effect.
-   */
-  // oxlint-disable-next-line effecttsgo/lazy-effect -- a Durable Object RPC method: the stub calls it as `publish()` across the RPC boundary, so it must be a function
-  readonly publish: () => Effect.Effect<ReadonlyArray<string>, never, RuntimeContext>;
-}
+export type { ShardObject };
 
 /** The lease operations, storage-backed (exported for direct testing). */
 export const leases = {

@@ -14,11 +14,9 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Option from "effect/Option";
@@ -215,76 +213,20 @@ export const offline: ClientTransport = {
   statusChanges: Stream.succeed("disconnected"),
 };
 
-/** Layer wiring the in-memory transport to an in-context ServerHandler. */
+/**
+ * Layer wiring the in-memory transport to an in-context ServerHandler, with
+ * {@link makeInMemory}'s options (the credentials each call presents).
+ */
 export const layerInMemory = (
-  clientGroupId: string
+  clientGroupId: string,
+  options?: InMemoryOptions
 ): Layer.Layer<ClientTransport, never, ServerHandler> =>
   Layer.effect(ClientTransport)(
     Effect.gen(function* () {
       const handler = yield* ServerHandler;
-      return yield* makeInMemory(handler, clientGroupId);
+      return yield* makeInMemory(handler, clientGroupId, options);
     })
   );
-
-/**
- * Internal helper: a poke hub keyed by client group (used by SyncServer).
- *
- * Delivery guarantee (#44): one `sliding(1)` PubSub per client group, so a
- * poke storm dedupes. A poke is a contentless "pull soon" hint, so an
- * outstanding, not-yet-consumed poke absorbs any number of fresh ones — the
- * sliding strategy replaces the queued poke rather than growing the queue, and
- * N hints in a tick still deliver at most one queued poke per group. Correctness
- * never depends on the poke: a dropped/collapsed poke only delays the next pull
- * (ADR-0008), which is the correctness path.
- *
- * `replay: 1` on each group's hub keeps the reconnect-race behaviour — a late
- * subscriber (a (re)connecting poke stream) still sees the most recent poke,
- * costing at most a redundant pull. `sliding(1)` already gives the
- * late-subscriber-sees-latest property for active buffers; `replay` extends it
- * across the subscribe gap.
- *
- * Hubs are created lazily per group under a lock (single-flight) and all shut
- * down together when the enclosing scope closes.
- */
-export const makePokeHub: Effect.Effect<
-  {
-    readonly publish: (clientGroupId: string, poke: Poke) => Effect.Effect<void>;
-    readonly subscribe: (clientGroupId: string) => Stream.Stream<Poke>;
-  },
-  never,
-  Scope.Scope
-> = Effect.gen(function* () {
-  const hubs = yield* Ref.make(new Map<string, PubSub.PubSub<Poke>>());
-  const lock = yield* Semaphore.make(1);
-  // One finalizer shuts every group's hub down when the scope closes.
-  yield* Effect.addFinalizer(() =>
-    Ref.get(hubs).pipe(
-      Effect.flatMap((map) =>
-        Effect.forEach([...map.values()], (hub) => PubSub.shutdown(hub), { concurrency: 1 })
-      ),
-      Effect.asVoid
-    )
-  );
-  // Get-or-create a group's `sliding(1)` hub; the lock makes creation
-  // single-flight so concurrent publish/subscribe for a new group share one hub.
-  const hubFor = (clientGroupId: string): Effect.Effect<PubSub.PubSub<Poke>> =>
-    Semaphore.withPermit(
-      lock,
-      Effect.gen(function* () {
-        const existing = (yield* Ref.get(hubs)).get(clientGroupId);
-        if (existing !== undefined) return existing;
-        const hub = yield* PubSub.sliding<Poke>({ capacity: 1, replay: 1 });
-        yield* Ref.update(hubs, (map) => new Map(map).set(clientGroupId, hub));
-        return hub;
-      })
-    );
-  return {
-    publish: (clientGroupId, poke) =>
-      hubFor(clientGroupId).pipe(Effect.flatMap((hub) => Effect.asVoid(PubSub.publish(hub, poke)))),
-    subscribe: (clientGroupId) =>
-      Stream.unwrap(hubFor(clientGroupId).pipe(Effect.map((hub) => Stream.fromPubSub(hub)))),
-  };
-});
 
 /** Only a TransportError signals carrier trouble; version rejections pass through. */
 const isTransportError = (error: TransportError | VersionNotSupportedError): boolean =>

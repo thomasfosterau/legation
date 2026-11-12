@@ -40,6 +40,8 @@ import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
 import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
+import type { NoEdges } from "./internal/NoEdges.js";
+import * as NodeRowCodec from "./internal/NodeRowCodec.js";
 import * as Subset from "./Subset.js";
 
 /** The branded id schema for a node type: `string & Brand<"<type>/id">`. */
@@ -164,8 +166,7 @@ export type RowOf<N extends AnyNode> = N["row"]["Type"];
 export const make = <
   const Type extends string,
   const Fields extends Schema.Struct.Fields,
-  // oxlint-disable-next-line effect/avoid-object-type -- public type parameter default of exported `Node.make`; `Record<string, never>` would change `keyof Edges` from `never` to `string` for nodes declared without edges.
-  const Edges extends Record<string, Edge.Edge> = {},
+  const Edges extends Record<string, Edge.Edge> = NoEdges,
   const IdField extends (keyof Fields & string) | undefined = undefined,
 >(
   type: Type,
@@ -389,8 +390,7 @@ const toCollection = (
   });
   return Collection.make({
     name: node.type,
-    // oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- `AnyNode` erases fields to the open `Schema.Struct.Fields`, whose services are `unknown`; `Collection.make` needs a service-free codec, which node rows are by construction but the exported types cannot state.
-    schema: node.row as unknown as Schema.Codec<unknown, unknown>,
+    schema: NodeRowCodec.rowCodec(node),
     id: (value) => (value as Record<string, string>)[node.id] ?? "",
     identity: node.id,
     relationships,

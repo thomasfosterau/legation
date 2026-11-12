@@ -12,10 +12,10 @@
  * {@link compute} / {@link computeGrouped}.
  */
 
-import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as RowDispatch from "./internal/RowDispatch.js";
 import * as Predicate from "./Predicate.js";
 
 /**
@@ -85,27 +85,6 @@ const numericValues = (
   return values;
 };
 
-/** Fold the numeric values of a non-`Count` aggregate to its value. */
-const foldNumeric = (agg: Exclude<Aggregate, { _tag: "Count" }>, values: ReadonlyArray<number>) => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain or Match.typeTags measured 4-37x and a Record table 1.8-12x slower than this switch (#497)
-  switch (agg._tag) {
-    case "Sum":
-      return values.reduce((total, value) => total + value, 0);
-    case "Avg":
-      return Arr.isReadonlyArrayEmpty(values)
-        ? undefined
-        : values.reduce((total, value) => total + value, 0) / values.length;
-    case "Min":
-      return Arr.isReadonlyArrayEmpty(values)
-        ? undefined
-        : values.reduce((a, b) => (a < b ? a : b));
-    case "Max":
-      return Arr.isReadonlyArrayEmpty(values)
-        ? undefined
-        : values.reduce((a, b) => (a > b ? a : b));
-  }
-};
-
 /**
  * Evaluate an aggregate over already-filtered/sorted rows (a subset's result).
  * Pure and total; see {@link AggregateValue} for the empty/absent semantics.
@@ -114,7 +93,7 @@ export const compute = (
   agg: Aggregate,
   rows: ReadonlyArray<{ readonly value: unknown }>
 ): AggregateValue =>
-  agg._tag === "Count" ? rows.length : foldNumeric(agg, numericValues(rows, agg.field));
+  agg._tag === "Count" ? rows.length : RowDispatch.foldNumeric(agg, numericValues(rows, agg.field));
 
 /** A row's group key: `String(row.value[groupBy])` (so `undefined` → `"undefined"`). */
 const groupKey = (value: unknown, groupBy: string): string =>
@@ -191,46 +170,8 @@ export const sameGroupedValue = (
 const fieldOf = (agg: Aggregate): string | undefined =>
   agg._tag === "Count" ? undefined : agg.field;
 
-/** One aggregate's running fold — mutated in place by `addToBucket`/`removeFromBucket`. */
-type Bucket =
-  | { readonly _tag: "Count"; count: number }
-  | { readonly _tag: "Sum"; sum: number }
-  | { readonly _tag: "Avg"; sum: number; count: number }
-  | {
-      readonly _tag: "MinMax";
-      readonly pick: (a: number, b: number) => number;
-      current: number | undefined;
-    };
-
-const emptyBucket = (agg: Aggregate): Bucket => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain or Match.typeTags measured 4-37x and a Record table 1.8-12x slower than this switch (#497)
-  switch (agg._tag) {
-    case "Count":
-      return { _tag: "Count", count: 0 };
-    case "Sum":
-      return { _tag: "Sum", sum: 0 };
-    case "Avg":
-      return { _tag: "Avg", sum: 0, count: 0 };
-    case "Min":
-      return { _tag: "MinMax", pick: (a, b) => (a < b ? a : b), current: undefined };
-    case "Max":
-      return { _tag: "MinMax", pick: (a, b) => (a > b ? a : b), current: undefined };
-  }
-};
-
-const bucketValue = (bucket: Bucket): AggregateValue => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain or Match.typeTags measured 4-37x and a Record table 1.8-12x slower than this switch (#497)
-  switch (bucket._tag) {
-    case "Count":
-      return bucket.count;
-    case "Sum":
-      return bucket.sum;
-    case "Avg":
-      return bucket.count === 0 ? undefined : bucket.sum / bucket.count;
-    case "MinMax":
-      return bucket.current;
-  }
-};
+/** One aggregate's running fold, mutated in place by `addToBucket` / `removeFromBucket`. */
+type Bucket = RowDispatch.Bucket;
 
 /** Fold one row's value into `bucket` (an insertion, or an update's "add" half). */
 const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined): void => {
@@ -242,19 +183,7 @@ const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined):
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain or Match.typeTags measured 4-37x and a Record table 1.8-12x slower than this switch (#497)
-  switch (bucket._tag) {
-    case "Sum":
-      bucket.sum += n;
-      return;
-    case "Avg":
-      bucket.sum += n;
-      bucket.count += 1;
-      return;
-    case "MinMax":
-      bucket.current = bucket.current === undefined ? n : bucket.pick(bucket.current, n);
-      return;
-  }
+  RowDispatch.addNumber(bucket, n);
 };
 
 /**
@@ -278,22 +207,7 @@ const removeFromBucket = (
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain or Match.typeTags measured 4-37x and a Record table 1.8-12x slower than this switch (#497)
-  switch (bucket._tag) {
-    case "Sum":
-      bucket.sum -= n;
-      return;
-    case "Avg":
-      bucket.sum -= n;
-      bucket.count -= 1;
-      return;
-    case "MinMax": {
-      if (n !== bucket.current) return; // not the extremum: O(1), no refold needed
-      const rest = remainingValues();
-      bucket.current = Arr.isReadonlyArrayEmpty(rest) ? undefined : rest.reduce(bucket.pick);
-      return;
-    }
-  }
+  RowDispatch.removeNumber(bucket, n, remainingValues);
 };
 
 /** The numeric values of `byId`'s field, skipping absent/non-numeric ones. */
@@ -329,7 +243,7 @@ export interface State {
 export const initState = (agg: Aggregate, rows: ReadonlyArray<Row>): State => {
   const field = fieldOf(agg);
   const byId = new Map<string, unknown>();
-  const bucket = emptyBucket(agg);
+  const bucket = RowDispatch.emptyBucket(agg);
   for (const row of rows) {
     byId.set(row.id, row.value);
     addToBucket(bucket, row.value, field);
@@ -380,7 +294,7 @@ export const applyDel = (state: State, agg: Aggregate, id: string): State => {
 };
 
 /** The current value of an incrementally-maintained (ungrouped) aggregate. */
-export const stateValue = (state: State): AggregateValue => bucketValue(state.bucket);
+export const stateValue = (state: State): AggregateValue => RowDispatch.bucketValue(state.bucket);
 
 /**
  * Incremental state for a grouped aggregate: `groupKeyOf` tracks each
@@ -467,7 +381,7 @@ export const applyGroupedDel = (state: GroupedState, agg: Aggregate, id: string)
 /** The current value of an incrementally-maintained grouped aggregate. */
 export const groupedStateValue = (state: GroupedState): Record<string, AggregateValue> => {
   const result: Record<string, AggregateValue> = {};
-  for (const [key, group] of state.groups) result[key] = bucketValue(group.bucket);
+  for (const [key, group] of state.groups) result[key] = RowDispatch.bucketValue(group.bucket);
   return result;
 };
 

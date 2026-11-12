@@ -61,9 +61,11 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
@@ -74,8 +76,7 @@ import * as HostRequest from "./HostRequest.js";
 import {
   ClientStore,
   freezePending,
-  // oxlint-disable-next-line effect/no-service-constructor-imports -- the SSR render deliberately builds a private, request-scoped in-memory store (`snapshot` needs nothing from context); providing it via a Layer would change the public `R` or share the memoized store across requests.
-  makeMemory,
+  layerMemory,
   type ReplicaState,
   StoredRow,
 } from "./ClientStore.js";
@@ -88,8 +89,8 @@ import type * as Node from "./Node.js";
 import { Mutation } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
-// oxlint-disable-next-line effect/no-service-constructor-imports -- the in-process SSR path builds a private loop-back transport over the `ServerHandler` in context, per call; a Layer would change `snapshot`'s public requirements.
-import { ClientTransport, makeInMemory, ServerHandler } from "./Transport.js";
+import * as WireFlags from "./internal/WireFlags.js";
+import { ClientTransport, layerInMemory, ServerHandler } from "./Transport.js";
 
 /**
  * One dehydrated row: a {@link StoredRow} tagged with the collection it belongs
@@ -335,8 +336,7 @@ export type HydrateDeclined = typeof HydrateDeclined.Type;
  * the snapshot.
  */
 export const HydrateOutcome = Schema.Struct({
-  // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- the `hydrate` kind's published wire contract (ADR-0021 amendment §6) names this field `hydrated`.
-  hydrated: Schema.Boolean,
+  ...WireFlags.Hydrated.fields,
   reason: Schema.optional(HydrateDeclined),
 });
 
@@ -581,34 +581,32 @@ export interface RemoteSnapshotOptions extends SnapshotOptions {
 /** What a snapshot render can fail with. */
 export type SnapshotError = StoreError | TransportError | MutatorError | VersionNotSupportedError;
 
-/** The snapshot render itself, over an already-built carrier. */
+/**
+ * The snapshot render itself, over the carrier in context. The store is the
+ * render's own: `Layer.fresh` builds a new one even under a parent that
+ * memoizes `layerMemory`, so no two requests share it.
+ */
 const renderOver = (
-  transport: ClientTransport,
   options: SnapshotOptions
-): Effect.Effect<Snapshot, SnapshotError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const store = yield* makeMemory;
-      const engine = yield* ClientEngineModule.make({
-        clientId: options.clientId ?? "ssr",
-        clientGroupId: options.clientGroupId,
-        mutators: options.mutations ?? Mutator.registry([]),
-      }).pipe(
-        Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, transport)
-      );
-      yield* Effect.forEach(
-        options.reads,
-        (read) =>
-          Effect.gen(function* () {
-            yield* engine.subscribe(Query.plan(options.nodes, read).root);
-          }),
-        { concurrency: 1, discard: true }
-      );
-      yield* engine.pull;
-      return yield* dehydrate(store);
-    })
-  );
+): Effect.Effect<Snapshot, SnapshotError, ClientTransport> =>
+  Effect.gen(function* () {
+    const store = Context.get(yield* Layer.build(Layer.fresh(layerMemory)), ClientStore);
+    const engine = yield* ClientEngineModule.make({
+      clientId: options.clientId ?? "ssr",
+      clientGroupId: options.clientGroupId,
+      mutators: options.mutations ?? Mutator.registry([]),
+    }).pipe(Effect.provideService(ClientStore, store));
+    yield* Effect.forEach(
+      options.reads,
+      (read) =>
+        Effect.gen(function* () {
+          yield* engine.subscribe(Query.plan(options.nodes, read).root);
+        }),
+      { concurrency: 1, discard: true }
+    );
+    yield* engine.pull;
+    return yield* dehydrate(store);
+  }).pipe(Effect.scoped);
 
 /**
  * Produce an SSR snapshot over a request-scoped engine: build an in-memory
@@ -634,14 +632,22 @@ export function snapshot(
   options: SnapshotOptions
 ): Effect.Effect<Snapshot, SnapshotError, ServerHandler> {
   const supplied = options.transport;
-  if (supplied !== undefined) return renderOver(supplied, options);
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const handler = yield* ServerHandler;
-      const transport = yield* makeInMemory(handler, options.clientGroupId, {
-        credentials: options.credentials ?? Option.none(),
-      });
-      return yield* renderOver(transport, options);
-    })
-  );
+  if (supplied !== undefined) {
+    return renderOver(options).pipe(Effect.provideService(ClientTransport, supplied));
+  }
+  // The in-process carrier: a loop-back over the `ServerHandler` in context,
+  // built fresh for this render (a memoized one would carry another
+  // request's credentials).
+  return Effect.gen(function* () {
+    const carrier = yield* Layer.build(
+      Layer.fresh(
+        layerInMemory(options.clientGroupId, {
+          credentials: options.credentials ?? Option.none(),
+        })
+      )
+    );
+    return yield* renderOver(options).pipe(
+      Effect.provideService(ClientTransport, Context.get(carrier, ClientTransport))
+    );
+  }).pipe(Effect.scoped);
 }

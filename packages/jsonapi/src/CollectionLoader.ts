@@ -27,6 +27,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { ApiError, ParseError } from "./errors.js";
 import { buildQueryString } from "./JsonApiQuery.js";
+import type * as StoredLinkage from "./internal/StoredLinkage.js";
 import { decodeDocument } from "./schema.js";
 import type {
   JsonApiDocument,
@@ -41,11 +42,7 @@ import type {
  * A relationship as it lands in a row value: linkage only, no documents. An
  * empty to-one is `null`, as JSON:API's resource linkage spells it.
  */
-export type RelationshipRef =
-  // oxlint-disable-next-line effect/prefer-option-over-null -- a row value is stored and synced as JSON (ADR-0008): the `null` is the JSON:API empty to-one linkage (`data: null`), which an Option cannot carry through a client store or the wire.
-  | { readonly type: string; readonly id: string }
-  | ReadonlyArray<{ readonly type: string; readonly id: string }>
-  | null;
+export type RelationshipRef = StoredLinkage.RelationshipRef;
 
 /** The value a JSON:API resource takes as a collection row. */
 export interface ResourceValue {

@@ -9,19 +9,28 @@
  * stays correct over HTTP alone (a dead socket only delays pokes — the
  * pull interval remains the safety net).
  *
- * Runs on standard `fetch`/`WebSocket` globals — no Workers types — so the
- * same transport serves browsers, service workers, and Node 22+.
+ * Runs on Effect's Fetch `HttpClient` and the standard `WebSocket` global —
+ * no Workers types — so the same transport serves browsers, service workers,
+ * and Node 22+. Requests carry no trace-propagation headers, so a
+ * cross-origin room needs no extra CORS allowance.
  */
 
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   TransportError,
   type Transport,
   type VersionNotSupportedError,
 } from "@thomasfosterau/legation";
-import type { Protocol } from "@thomasfosterau/legation/internal";
+import { Protocol } from "@thomasfosterau/legation/internal";
 import { routes } from "./RoomProtocol.js";
 
 /** Options for {@link make}. */
@@ -34,31 +43,48 @@ export interface MakeOptions {
   readonly maxReconnectDelayMillis?: number;
 }
 
-const post =
-  <A>(options: MakeOptions, route: string) =>
-  (body: unknown): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-    Effect.tryPromise({
-      try: async () => {
-        // oxlint-disable-next-line effect/avoid-native-fetch -- `make` returns a requirement-free ClientTransport (public API), and swapping in FetchHttpClient changes the wire request: it adds trace-propagation headers (a CORS preflight cross-origin) and aborts on interruption.
-        const response = await fetch(`${options.url}${route}`, {
-          method: "POST",
-          body: JSON.stringify(body),
-          headers: { "content-type": "application/json", ...options.headers },
+/** The body a room answers a failed request with (`Room`'s error response). */
+const ErrorBody = Schema.Struct({ error: Schema.optional(Schema.String) });
+const decodeErrorBody = HttpClientResponse.schemaBodyJson(ErrorBody);
+
+/**
+ * The Fetch-backed client the transport runs on, built per request so `make`
+ * stays requirement-free.
+ */
+const fetchClient = Effect.map(Layer.build(FetchHttpClient.layer), (built) =>
+  Context.get(built, HttpClient.HttpClient)
+);
+
+const post = <A>(options: MakeOptions, route: string, response: Schema.Codec<A>) => {
+  const decodeResponse = HttpClientResponse.schemaBodyJson(response);
+  const failed = (cause: unknown) =>
+    new TransportError({ message: `room ${route} request failed`, cause });
+  return (body: unknown): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+    Effect.gen(function* () {
+      const client = yield* fetchClient;
+      const request = yield* HttpClientRequest.post(`${options.url}${route}`).pipe(
+        HttpClientRequest.setHeaders(options.headers ?? {}),
+        HttpClientRequest.bodyJson(body),
+        Effect.mapError(failed)
+      );
+      const answer = yield* client.execute(request).pipe(Effect.mapError(failed));
+      if (answer.status < 200 || answer.status >= 300) {
+        const detail = yield* decodeErrorBody(answer).pipe(
+          Effect.orElseSucceed((): typeof ErrorBody.Type => ({}))
+        );
+        return yield* new TransportError({
+          message: detail.error ?? `room ${route} answered ${answer.status}`,
         });
-        if (!response.ok) {
-          const detail = (await response.json().catch(() => ({}))) as { error?: string };
-          throw new TransportError({
-            message: detail.error ?? `room ${route} answered ${response.status}`,
-          });
-        }
-        // Trusted JSON from this app's own room.
-        return (await response.json()) as A;
-      },
-      catch: (cause) =>
-        cause instanceof TransportError
-          ? cause
-          : new TransportError({ message: `room ${route} request failed`, cause }),
-    });
+      }
+      return yield* decodeResponse(answer).pipe(Effect.mapError(failed));
+    }).pipe(
+      Effect.scoped,
+      // The room is usually cross-origin: `b3`/`traceparent` headers would
+      // need the room to list them in `Access-Control-Allow-Headers`, or the
+      // browser's preflight fails, so the request carries none.
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false)
+    );
+};
 
 /**
  * Build the transport. The poke socket dials lazily on first subscription
@@ -99,9 +125,9 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
   );
 
   return {
-    push: (request) => post<Protocol.PushResponse>(options, routes.push)(request),
-    pull: (request) => post<Protocol.PullResponse>(options, routes.pull)(request),
-    read: (request) => post<Protocol.ReadResponse>(options, routes.read)(request),
+    push: post(options, routes.push, Protocol.PushResponse),
+    pull: post(options, routes.pull, Protocol.PullResponse),
+    read: post(options, routes.read, Protocol.ReadResponse),
     pokes,
     // Correctness never depends on the socket; report the HTTP tier.
     status: Effect.succeed("connected"),

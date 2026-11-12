@@ -73,8 +73,8 @@ import type {
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
-// oxlint-disable-next-line effect/no-service-constructor-imports -- the poke hub is a private per-handler instance, not a service; exposing it as one would add a requirement to the public sync-server layers.
-import { type HandleOptions, ServerHandler, makePokeHub } from "./Transport.js";
+import * as PokeHub from "./PokeHub.js";
+import { type HandleOptions, ServerHandler } from "./Transport.js";
 import type { Subset } from "./Subset.js";
 import * as Subsets from "./Subset.js";
 
@@ -528,7 +528,7 @@ export const makeWithIntrospectionWith = (
         credentials: Option.getOrElse(options?.credentials ?? Option.none(), () => noCredentials),
       });
 
-    const pokeHub = yield* makePokeHub;
+    const pokeHub = yield* PokeHub.make;
     // Each session's named-set resolutions (#205), by client group, then by the
     // set's key: the collection whose scope declares it and its name, so two
     // collections that declare different sets under one name never share an
