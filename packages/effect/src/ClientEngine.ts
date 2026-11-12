@@ -2909,22 +2909,22 @@ export const make = (
     // that no pull has released would take it past the bound.
     const pullBetweenChunks: Effect.Effect<void, TransportError | StoreError> = pull.pipe(
       Effect.retry({ schedule: pullPolicy, while: isTransient }),
-      Effect.catchTag("VersionNotSupportedError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks was refused: ${error.message}`,
-            cause: error,
-          })
-        )
-      ),
-      Effect.catchTag("MutatorError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks failed: ${error.message}`,
-            cause: error,
-          })
-        )
-      )
+      Effect.catchTags({
+        VersionNotSupportedError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks was refused: ${error.message}`,
+              cause: error,
+            })
+          ),
+        MutatorError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks failed: ${error.message}`,
+              cause: error,
+            })
+          ),
+      })
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
