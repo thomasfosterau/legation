@@ -422,7 +422,7 @@ export const withFallback = (
             yield* SubscriptionRef.set(status, "connected");
             return first.success;
           }
-          if (!isTransportError(first.failure)) return yield* Effect.fail(first.failure);
+          if (!isTransportError(first.failure)) return yield* first.failure;
           yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
         }
         const second = yield* Effect.result(f(fallback));
@@ -431,7 +431,7 @@ export const withFallback = (
           return second.success;
         }
         if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
-        return yield* Effect.fail(second.failure);
+        return yield* second.failure;
       });
 
     return {

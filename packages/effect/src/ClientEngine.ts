@@ -2389,12 +2389,10 @@ export const make = (
           // A pull that succeeded but left no room has not released the tail. Sending over it would take
           // the tail past the bound, so the push stops here as it does on a failed pull.
           if (size < 1) {
-            return yield* Effect.fail(
-              new TransportError({
-                message:
-                  "A pull released no room for the next chunk: the unpulled tail and the chunks other pushes have in flight still fill the bound; the unsent mutations stay journaled",
-              })
-            );
+            return yield* new TransportError({
+              message:
+                "A pull released no room for the next chunk: the unpulled tail and the chunks other pushes have in flight still fill the bound; the unsent mutations stay journaled",
+            });
           }
           sent += size;
         }
