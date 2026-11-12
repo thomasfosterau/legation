@@ -203,7 +203,7 @@ describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
       const members = Coverage.canonicalConjuncts(pair.requested.where).map(
         (conjunct) => conjunct.predicate
       );
-      const reversed = { ...pair.requested, where: Predicate.and(...[...members].reverse()) };
+      const reversed = { ...pair.requested, where: Predicate.and(...Arr.reverse(members)) };
       expect(Coverage.covers(pair.subscribed, reversed)).toBe(
         Coverage.covers(pair.subscribed, pair.requested)
       );
