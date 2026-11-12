@@ -43,6 +43,7 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
@@ -536,7 +537,7 @@ export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdi
         _tag: "Covered",
         by: { root: by.root, edges: by.edges },
         hash: Subset.hash(by.root),
-        ...(by.url === undefined ? {} : { url: by.url }),
+        ...Defined.fields({ url: by.url }),
       };
 };
 

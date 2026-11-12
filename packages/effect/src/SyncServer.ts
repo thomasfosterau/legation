@@ -17,6 +17,7 @@
  * convergence, so anything a single row can't decide matches (ADR-0009).
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
@@ -681,9 +682,12 @@ export const makeWithIntrospectionWith = (
             );
             return {
               lastMutationIds: result.lastMutationIds,
-              ...(result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
-                ? { rejected: result.rejected }
-                : {}),
+              ...Defined.fields({
+                rejected:
+                  result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
+                    ? result.rejected
+                    : undefined,
+              }),
             };
           }).pipe(Effect.mapError(asTransportError))
         ),
@@ -968,7 +972,9 @@ export const makeWithIntrospectionWith = (
               cookie,
               patch,
               lastMutationIds,
-              ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
+              ...Defined.fields({
+                rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+              }),
             };
             return placed === undefined ? response : { ...response, totals: placed };
           }).pipe(Effect.mapError(asTransportError))

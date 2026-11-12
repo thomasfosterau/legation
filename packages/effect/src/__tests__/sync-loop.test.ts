@@ -7,6 +7,7 @@
  * advances it. Nothing here waits on wall-clock time, so a loaded machine
  * cannot make a case time out (#309).
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
@@ -100,7 +101,7 @@ const makeClient = (
       clientId: `client-${name}`,
       clientGroupId: `group-${name}`,
       mutators: setTodo,
-      ...(syncLoop !== undefined ? { syncLoop } : {}),
+      ...Defined.fields({ syncLoop }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)

@@ -23,6 +23,7 @@
  * becomes the host immediately, which is only correct for a single tab —
  * see the package README's topology section.
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation";
 import { Client, ClientStore, TransportError } from "@thomasfosterau/legation";
 import {
@@ -306,8 +307,7 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
           clientId: hostClientId,
           clientGroupId: options.clientGroupId,
           mutators: options.mutations,
-          ...(options.queries === undefined ? {} : { queries: options.queries }),
-          ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
+          ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
         }).pipe(Effect.provideContext(dependencies))
       );
       const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
@@ -318,8 +318,7 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
         requests: options.requests ?? [],
         hydrationWindow: options.hydrationWindow,
         nodes: options.nodes,
-        ...(options.registry === undefined ? {} : { registry: options.registry }),
-        ...(options.urls === undefined ? {} : { urls: options.urls }),
+        ...Defined.fields({ registry: options.registry, urls: options.urls }),
       });
       yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
       yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));

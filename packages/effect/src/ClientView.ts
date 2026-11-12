@@ -22,6 +22,7 @@
  * thread). Engine-only capabilities that remain (explicit push/pull, undo
  * history) still require the full engine from context.
  */
+import * as Defined from "./Defined.js";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -258,18 +259,19 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
         Effect.andThen(Related.trackEdges(marks.wrap(key), registry, collectionName, subset, edges))
       );
     },
-    ...(readThrough === undefined
-      ? {}
-      : {
-          read: (subsets: ReadonlyArray<Subset.Subset>) =>
-            readThrough(subsets).pipe(
-              Effect.mapError((error) =>
-                error._tag === "VersionNotSupportedError"
-                  ? new TransportError({ message: error.message, cause: error })
-                  : error
-              )
-            ),
-        }),
+    ...Defined.fields({
+      read:
+        readThrough === undefined
+          ? undefined
+          : (subsets: ReadonlyArray<Subset.Subset>) =>
+              readThrough(subsets).pipe(
+                Effect.mapError((error) =>
+                  error._tag === "VersionNotSupportedError"
+                    ? new TransportError({ message: error.message, cause: error })
+                    : error
+                )
+              ),
+    }),
     identityBoundary: {
       reset: (identity) => engine.reset(identity),
       current: engine.identity,

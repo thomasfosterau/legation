@@ -11,6 +11,7 @@
  * for a paginated node edge under either declaration, and never for a
  * collection the resource does not declare.
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
@@ -295,7 +296,9 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       context: (request) =>
         Effect.succeed({
           clientGroupId: "http",
-          ...(P.isString(request.headers["x-user"]) ? { identity: request.headers["x-user"] } : {}),
+          ...Defined.fields({
+            identity: P.isString(request.headers["x-user"]) ? request.headers["x-user"] : undefined,
+          }),
         }),
       prefix: "/api",
     });
@@ -330,7 +333,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
           new Request(`http://shop.test${path}`, {
             headers: {
               accept: "application/vnd.api+json",
-              ...(user === undefined ? {} : { "x-user": user }),
+              ...Defined.fields({ "x-user": user }),
             },
           })
         );

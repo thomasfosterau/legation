@@ -39,6 +39,7 @@
  * leaves the caller to keep the scope open.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import { type Client, ClientStore, type Collection, type Node } from "@thomasfosterau/legation";
 import {
   ClientEngine,
@@ -154,9 +155,7 @@ export const start = (
       ...Option.match(store, { onNone: () => ({}), onSome: (value) => ({ store: value }) }),
       requests: options.requests ?? [],
       hydrationWindow: options.hydrationWindow,
-      ...(registry === undefined ? {} : { registry }),
-      ...(nodes === undefined ? {} : { nodes }),
-      ...(urls === undefined ? {} : { urls }),
+      ...Defined.fields({ registry, nodes, urls }),
     });
     yield* engine.runSync.pipe(Effect.ignore);
     if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);

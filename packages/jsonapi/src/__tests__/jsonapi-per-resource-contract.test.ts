@@ -22,7 +22,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { BackendError, type Mutator } from "@thomasfosterau/legation";
-import { BackendContract } from "@thomasfosterau/legation/internal";
+import { BackendContract, Defined } from "@thomasfosterau/legation/internal";
 import type { EndpointRef, ResourceEndpoints, ResourceMap } from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
@@ -277,7 +277,7 @@ const makeBackend = (
       // The server declares no filter or sort parameters, and the backend
       // re-applies the subset locally, so an empty query is exact over it.
       query: { encode: () => Effect.succeedSome("") },
-      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
+      ...Defined.fields({ ledger: options.ledger }),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests };
   });

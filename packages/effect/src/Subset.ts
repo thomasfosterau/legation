@@ -11,6 +11,7 @@
  * subsets are for low-level protocol and backend work.
  */
 
+import * as Defined from "./Defined.js";
 import * as Schema from "effect/Schema";
 import type { AnyCollection, RowOf } from "./Collection.js";
 import * as Index from "./CollectionIndex.js";
@@ -171,12 +172,12 @@ export const forCollection = <C extends AnyCollection>(
     const where = options?.where?.(typedPredicate as TypedPredicate<RowOf<C>>);
     return make({
       collection: collection.name,
-      ...(where !== undefined ? { where } : {}),
-      ...(options?.orderBy !== undefined
-        ? { orderBy: options.orderBy as ReadonlyArray<OrderBy> }
-        : {}),
-      ...(options?.limit !== undefined ? { limit: options.limit } : {}),
-      ...(options?.cursor !== undefined ? { cursor: options.cursor } : {}),
+      ...Defined.fields({
+        where,
+        orderBy: options?.orderBy,
+        limit: options?.limit,
+        cursor: options?.cursor,
+      }),
     }) as TypedSubset<RowOf<C>>;
   },
 });

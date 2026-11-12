@@ -40,7 +40,7 @@ import type * as Ordering from "effect/Ordering";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Predicate } from "@thomasfosterau/legation";
-import { CollectionIndex, Subset } from "@thomasfosterau/legation/internal";
+import { CollectionIndex, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { Protocol } from "@thomasfosterau/legation/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
@@ -467,7 +467,9 @@ const toRecord = (row: Item): NativeRecord => ({
   value: row,
   k_name: keyBytes(row.name),
   k_qty: row.qty,
-  ...(row.note === null || row.note === undefined ? {} : { k_note: keyBytes(row.note) }),
+  ...Defined.fields({
+    k_note: row.note === null || row.note === undefined ? undefined : keyBytes(row.note),
+  }),
 });
 
 const request = <A>(r: IDBRequest<A>): Promise<A> =>

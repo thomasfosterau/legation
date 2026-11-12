@@ -54,6 +54,7 @@
  * sync that edge, so nothing may be credited for it.
  */
 
+import * as Defined from "./Defined.js";
 import type { UrlReads } from "./Client.js";
 import * as ClientEngine from "./ClientEngine.js";
 import * as Collection from "./Collection.js";
@@ -199,9 +200,7 @@ const subscriptionOf = (entry: Active): Coverage.Subscription | undefined =>
     ? undefined
     : {
         ...entry.registered.registration,
-        ...(entry.urlMirrors.size > 0 && entry.registered.url !== undefined
-          ? { url: entry.registered.url }
-          : {}),
+        ...Defined.fields({ url: entry.urlMirrors.size > 0 ? entry.registered.url : undefined }),
       };
 
 /** A set with one member fewer. */
@@ -372,7 +371,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
               ...existing,
               mirrors: new Set(existing.mirrors).add(mirrorId),
               urlMirrors: byUrl ? new Set(existing.urlMirrors).add(mirrorId) : existing.urlMirrors,
-              ...(known === undefined ? {} : { registered: known }),
+              ...Defined.fields({ registered: known }),
             })
           );
           return yield* existing.hydrate;
@@ -389,7 +388,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             fiber,
             teardown,
             hydrate,
-            ...(registered === undefined ? {} : { registered }),
+            ...Defined.fields({ registered }),
           })
         );
         yield* announce;
@@ -451,7 +450,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             ),
           };
         }),
-        { registration: { root: subset, edges: [] }, ...(url === undefined ? {} : { url }) }
+        { registration: { root: subset, edges: [] }, ...Defined.fields({ url }) }
       );
     };
 
@@ -536,7 +535,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             Effect.logWarning(`EngineHost: SubscribeRelated rejected: ${String(error)}`)
           )
         ),
-        { registration: { root: subset, edges }, ...(url === undefined ? {} : { url }) }
+        { registration: { root: subset, edges }, ...Defined.fields({ url }) }
       );
     };
 
@@ -814,7 +813,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         _tag: "MutateSettled",
         ...replyTo(request),
         outcome: outcome._tag,
-        ...(outcome._tag === "rejected" ? { reason: outcome.reason } : {}),
+        ...Defined.fields({ reason: outcome._tag === "rejected" ? outcome.reason : undefined }),
       });
 
     // A `Mutate` naming the reserved form mutator is an enhanced form submit's

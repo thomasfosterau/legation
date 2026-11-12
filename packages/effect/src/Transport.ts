@@ -8,6 +8,7 @@
  * worker, bespoke) implement the same interfaces.
  */
 
+import * as Defined from "./Defined.js";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -299,7 +300,9 @@ export const simulateOffline = (
     const wrapped: ClientTransport = {
       push: (request) => gate(transport.push(request)),
       pull: (request) => gate(transport.pull(request)),
-      ...(read === undefined ? {} : { read: (request: ReadRequest) => gate(read(request)) }),
+      ...Defined.fields({
+        read: read === undefined ? undefined : (request: ReadRequest) => gate(read(request)),
+      }),
       pokes: transport.pokes,
       status,
       statusChanges,

@@ -42,7 +42,7 @@ import {
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
 import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation";
-import { BackendContract, Subset } from "@thomasfosterau/legation/internal";
+import { BackendContract, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
@@ -535,7 +535,7 @@ const makeBackend = (
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.
       query: { encode: () => Effect.succeedSome("") },
-      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
+      ...Defined.fields({ ledger: options.ledger }),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests, store };
   });

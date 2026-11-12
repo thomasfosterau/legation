@@ -20,6 +20,7 @@
  * push/pull handling.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -174,15 +175,16 @@ export const policy = (
   options?: PolicyOptions
 ): AuthPolicy => ({
   filters: new Map(Object.entries(filters)),
-  ...(options?.collections === undefined
-    ? {}
-    : {
-        declarations: new Map(
-          [...options.collections.values()].map(
-            (collection) => [collection.name, Collection.filterDeclarationOf(collection)] as const
-          )
-        ),
-      }),
+  ...Defined.fields({
+    declarations:
+      options?.collections === undefined
+        ? undefined
+        : new Map(
+            [...options.collections.values()].map(
+              (collection) => [collection.name, Collection.filterDeclarationOf(collection)] as const
+            )
+          ),
+  }),
 });
 
 /**

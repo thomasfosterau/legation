@@ -30,6 +30,7 @@
  * is normalized and may hold rows beyond one parent's window).
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -134,7 +135,9 @@ const orderBy = Subset.parseOrder;
 export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =>
   compiled.edges.map((edge) => ({
     name: edge.edge,
-    ...(edge.kind === "paginated" && edge.first !== undefined ? { first: edge.first } : {}),
+    ...Defined.fields({
+      first: edge.kind === "paginated" && edge.first !== undefined ? edge.first : undefined,
+    }),
   }));
 
 /**
@@ -191,8 +194,7 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
     collection: read.collection,
     where: compileWhere(read.where),
     orderBy: orderBy(read.order),
-    ...(limit === undefined ? {} : { limit }),
-    ...(read.after === undefined ? {} : { cursor: read.after }),
+    ...Defined.fields({ limit, cursor: read.after }),
   });
   const node = nodes.nodes.get(read.collection);
   const edges: Array<EdgePlan> = [];
@@ -215,7 +217,7 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
       edge: name,
       kind: edge.kind,
       target: edge.target,
-      ...(window.first === undefined ? {} : { first: window.first }),
+      ...Defined.fields({ first: window.first }),
       order: edge.kind === "paginated" ? orderBy(edge.order) : [],
     });
   });
