@@ -32,7 +32,9 @@
  *
  * The server is built once per in-memory instance, in the object's
  * per-instance phase (Alchemy runs it under `blockConcurrencyWhile` when the
- * object is constructed, a wake from hibernation included).
+ * object is constructed, a wake from hibernation included). Its CVRs, bus and
+ * named-set cache live as long as the instance; a `backend` built with
+ * `Backend.perRequest` is the one part acquired per request (#681).
  */
 
 import * as Workers from "@alchemy.run/cloudflare/Workers";
@@ -116,6 +118,15 @@ export interface RoomConfig<R = never> {
    * connections are dropped by the platform, with no finalizer, and the next
    * instance builds its own. What is safe to hold across requests, and what is
    * not (Hyperdrive), is in `docs/alchemy-postgres.md` (#506).
+   *
+   * For a store that must be opened per request (a Hyperdrive client, whose
+   * credentials are valid only within the current invocation), return
+   * `Backend.perRequest(acquire)` here (#681): the room's sync server then runs
+   * `acquire` once per push, pull and read, in that request's scope, so one
+   * push's transaction stays on the connection it opened, and closes it when
+   * the request ends. `acquire` may need the room's services (the
+   * `RuntimeContext` a `Hyperdrive.ConnectClient` accessor reads); they are
+   * captured here.
    */
   readonly backend: Effect.Effect<Backend.Backend, never, RoomServices | Scope.Scope>;
   /** Deny-by-default per-collection filters, built in the per-instance phase. */

@@ -36,7 +36,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
-  type Backend,
+  Backend,
   Client,
   ClientStore,
   Edge,
@@ -52,6 +52,7 @@ import {
   Cvr,
   Defined,
   HintSource,
+  Subset,
 } from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
@@ -937,6 +938,80 @@ describe("Room backend lifetime", () => {
         expect((yield* pull).status).toBe(200);
         expect(pool).toEqual({ acquired: 1, released: 0 });
       }).pipe(Effect.scoped)
+  );
+});
+
+describe("Room per-request backend (#681)", () => {
+  it.effect("acquires the backend once per request and releases it when the request ends", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.testClockWith(Effect.succeed);
+      const backend = yield* backendOf();
+      // Stands in for a Hyperdrive-backed client: built per request from a binding that
+      // needs the room's `RuntimeContext`, as `Hyperdrive.ConnectClient`'s accessors do.
+      const client = { acquired: 0, released: 0 };
+      const runtimes: Array<string> = [];
+      const hung = makeHungShards();
+      const room = yield* hungRoom("room-per-request", clock, hung.namespace, {
+        publishTimeout: "200 millis",
+        backend: Backend.perRequest(
+          Effect.acquireRelease(
+            Effect.map(Effect.service(RuntimeContext), (runtime) => {
+              client.acquired += 1;
+              runtimes.push(runtime.id);
+              return backend;
+            }),
+            () => Effect.sync(() => void (client.released += 1))
+          )
+        ),
+      });
+      const send = fetchOf(room);
+      const post = (path: string, body: string) =>
+        send(
+          new Request(`https://room/sync${path}`, {
+            method: "POST",
+            body,
+            headers: { "content-type": "application/json" },
+          })
+        );
+      // The push's hint publishes to the hung shards, so it answers once the bound drops them;
+      // its acquisition is held until then.
+      const push = post(
+        routes.push,
+        encodeBody({
+          clientGroupId: "group-request",
+          mutations: [
+            {
+              clientId: "c1",
+              mutationId: 1,
+              mutator: reviewSet.name,
+              args: { id: "r-1", body: "per request", createdAt: "2026-01-01", productId: "p-1" },
+              createdAt: 0,
+            },
+          ],
+        })
+      );
+      yield* awaitPromise(() => hung.arrived(1));
+      expect(client).toMatchObject({ acquired: 1, released: 0 });
+      yield* clock.adjust("200 millis");
+      expect((yield* awaitPromise(() => push)).status).toBe(200);
+      expect(client).toMatchObject({ acquired: 1, released: 1 });
+      const pulled = yield* awaitPromise(() =>
+        post(
+          routes.pull,
+          encodeBody({
+            clientGroupId: "group-request",
+            subscriptions: [Subset.make({ collection: "reviews" })],
+          })
+        )
+      );
+      expect(pulled.status).toBe(200);
+      expect(client).toMatchObject({ acquired: 2, released: 2 });
+      expect(runtimes).toEqual([runtimeContext.id, runtimeContext.id]);
+      // The write went through the acquired backend.
+      expect(
+        yield* backend.lastMutationIds({ clientGroupId: "group-request" }).pipe(Effect.orDie)
+      ).toEqual({ c1: 1 });
+    }).pipe(Effect.scoped)
   );
 });
 

@@ -26,7 +26,7 @@ import * as Scope from "effect/Scope";
  */
 export const fakeBinding = <T>(fake: unknown): T => fake as T;
 
-/** Alchemy's runtime context, as a Durable Object event carries it. Nothing here reads it. */
+/** Alchemy's runtime context, as a Durable Object event carries it. */
 export const runtimeContext: RuntimeContext["Service"] = {
   Type: "Test",
   id: "test",

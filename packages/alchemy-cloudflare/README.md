@@ -209,8 +209,10 @@ dropped, not closed.
   per isolate and shares them across rooms). Keep it small (every awake room
   holds one) and give it an idle timeout.
 - **Hyperdrive**: don't hold it across requests. Its credentials are valid
-  only within the invocation that read them, and the room has no per-request
-  backend yet (#506).
+  only within the invocation that read them, so return
+  `Backend.perRequest(acquire)` from `backend`: the room builds the client in
+  `acquire` once per push, pull and read, in that request's scope, and one
+  push's transaction stays on its connection (#681).
 
 Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
 

@@ -35,6 +35,7 @@ import {
   type ChangeHint,
   evaluateAll,
   evaluateCountedAll,
+  forRequest,
   type SyncContext,
   totalsOf,
 } from "./Backend.js";
@@ -153,6 +154,66 @@ const evaluateRows = (
     );
   });
 
+// Evaluate the desired next view: (collection → id → version) per subset.
+// The subsets go to the backend together (`Backend.evaluateAll`), so a
+// backend with `evaluateMany` answers the pull in a bounded number of
+// round trips (#505); one without it is asked per subset.
+// Each subset's total rides beside it (#210): `undefined` when the backend
+// cannot count (`Backend.evaluateCounted` absent).
+const evaluateView = (backend: Backend, context: SyncContext, subsets: ReadonlyArray<Subset>) =>
+  Effect.gen(function* () {
+    const evaluated = yield* evaluateCountedAll(backend, context, subsets);
+    const rows = new Map<string, Map<string, string | number>>();
+    Arr.forEach(subsets, (subset, index) => {
+      const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
+      Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
+        collection.set(entry.id, entry.version);
+      });
+      rows.set(subset.collection, collection);
+    });
+    const view: Cvr.NextView = { rows };
+    return { view, totals: evaluated.map((answer) => answer.total) };
+  });
+
+// Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
+// per collection) then deletes.
+const assemblePatch = (
+  backend: Backend,
+  context: SyncContext,
+  difference: Cvr.CvrDiff,
+  isReset: boolean
+) =>
+  Effect.gen(function* () {
+    const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
+    const putsByCollection = new Map<string, Array<string>>();
+    Arr.forEach(difference.puts, (put) => {
+      putsByCollection.set(put.collection, [
+        ...(putsByCollection.get(put.collection) ?? []),
+        put.id,
+      ]);
+    });
+    yield* Effect.forEach(
+      putsByCollection,
+      ([collection, ids]) =>
+        Effect.gen(function* () {
+          Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
+            patch.push({
+              _tag: "Put",
+              collection,
+              id: row.id,
+              version: row.version,
+              value: row.value,
+            });
+          });
+        }),
+      { concurrency: 1, discard: true }
+    );
+    Arr.forEach(difference.dels, (del) => {
+      patch.push({ _tag: "Del", collection: del.collection, id: del.id });
+    });
+    return patch;
+  });
+
 /**
  * ADR-0025's read without its carrier: pull's front half, then
  * `Backend.evaluate` + `getRows`, and nothing else. The subsets are checked
@@ -184,7 +245,12 @@ export const readSubsets = (
       (subset) => authorize(deps.authPolicy, context, subset, "server"),
       { concurrency: 1 }
     );
-    return yield* evaluateRows(deps.backend, context, authorized);
+    // One acquisition for the read's statements (#681): a per-request backend opens it here.
+    return yield* Effect.scoped(
+      Effect.flatMap(forRequest(deps.backend), (backend) =>
+        evaluateRows(backend, context, authorized)
+      )
+    );
   });
 
 /**
@@ -212,7 +278,9 @@ export const readTotal = (
       (each) => authorize(deps.authPolicy, context, each, "server"),
       { concurrency: 1 }
     );
-    const totals = yield* totalsOf(deps.backend, context, authorized);
+    const totals = yield* Effect.scoped(
+      Effect.flatMap(forRequest(deps.backend), (backend) => totalsOf(backend, context, authorized))
+    );
     return totals.reduce((sum, total) => sum + total, 0);
   });
 
@@ -435,7 +503,9 @@ export const makeWithIntrospectionWith = (
               message: `Schema version ${version ?? "(unset)"} is not supported by this server`,
             })
           );
-    const backend = yield* Backend;
+    // The configured backend. Each push, pull and read runs against `forRequest`'s
+    // acquisition of it (#681), one per request; everything else here is per server.
+    const configured = yield* Backend;
     const authPolicy = yield* AuthPolicy;
     const cvrStore = yield* Cvr.CvrStore;
     const bus = yield* InvalidationBus;
@@ -649,6 +719,10 @@ export const makeWithIntrospectionWith = (
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId, options);
             const checked = yield* middleware.onPush(context, request);
+            // The push's one acquisition (#681), opened after the middleware so a
+            // refused push opens none: `applyMutations` is one transaction, so its
+            // mutation-id claims and the handlers' writes share its connection.
+            const backend = yield* forRequest(configured);
             // The commit and the fan-out of its hints are one uninterruptible
             // region (#356): an interrupt landing after the backend commits must
             // not skip the publish, because a replayed retry carries no hints and
@@ -683,7 +757,7 @@ export const makeWithIntrospectionWith = (
                     : undefined,
               }),
             };
-          }).pipe(Effect.mapError(asTransportError))
+          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPush)
       );
@@ -743,61 +817,6 @@ export const makeWithIntrospectionWith = (
         return [...direct, ...named];
       });
 
-    // Evaluate the desired next view: (collection → id → version) per subset.
-    // The subsets go to the backend together (`Backend.evaluateAll`), so a
-    // backend with `evaluateMany` answers the pull in a bounded number of
-    // round trips (#505); one without it is asked per subset.
-    // Each subset's total rides beside it (#210): `undefined` when the backend
-    // cannot count (`Backend.evaluateCounted` absent).
-    const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
-      Effect.gen(function* () {
-        const evaluated = yield* evaluateCountedAll(backend, context, subsets);
-        const rows = new Map<string, Map<string, string | number>>();
-        Arr.forEach(subsets, (subset, index) => {
-          const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-          Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
-            collection.set(entry.id, entry.version);
-          });
-          rows.set(subset.collection, collection);
-        });
-        const view: Cvr.NextView = { rows };
-        return { view, totals: evaluated.map((answer) => answer.total) };
-      });
-
-    // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
-    // per collection) then deletes.
-    const assemblePatch = (context: SyncContext, difference: Cvr.CvrDiff, isReset: boolean) =>
-      Effect.gen(function* () {
-        const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
-        const putsByCollection = new Map<string, Array<string>>();
-        Arr.forEach(difference.puts, (put) => {
-          putsByCollection.set(put.collection, [
-            ...(putsByCollection.get(put.collection) ?? []),
-            put.id,
-          ]);
-        });
-        yield* Effect.forEach(
-          putsByCollection,
-          ([collection, ids]) =>
-            Effect.gen(function* () {
-              Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
-                patch.push({
-                  _tag: "Put",
-                  collection,
-                  id: row.id,
-                  version: row.version,
-                  value: row.value,
-                });
-              });
-            }),
-          { concurrency: 1, discard: true }
-        );
-        Arr.forEach(difference.dels, (del) => {
-          patch.push({ _tag: "Del", collection: del.collection, id: del.id });
-        });
-        return patch;
-      });
-
     // Resolve the CVR the presented cookie names. A cookie minted under a
     // different fleet namespace (a bumped deploy) is treated as unknown, so the
     // pull degrades to a reset patch exactly as an unrecognised cookie does (#48).
@@ -824,6 +843,7 @@ export const makeWithIntrospectionWith = (
     // watermarks agree. Writes nothing: the CVR is recorded once, by the caller,
     // for the view it returns.
     const readPullOnce = (
+      backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
       cookie: string | undefined,
@@ -831,10 +851,15 @@ export const makeWithIntrospectionWith = (
     ) =>
       Effect.gen(function* () {
         const before = yield* backend.lastMutationIds(context);
-        const { view: next, totals } = yield* evaluateView(context, authorized);
+        const { view: next, totals } = yield* evaluateView(backend, context, authorized);
         const previous = yield* resolvePrevious(cookie, epoch);
         const isReset = cookie !== undefined && previous === undefined;
-        const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
+        const patch = yield* assemblePatch(
+          backend,
+          context,
+          Cvr.diff(previous ?? Cvr.empty, next),
+          isReset
+        );
         const after = yield* backend.lastMutationIds(context);
         return {
           next,
@@ -865,6 +890,7 @@ export const makeWithIntrospectionWith = (
     // transient revert until the next pull; it never covers less than the patch
     // carries, so it cannot double-apply.
     const readPullView = (
+      backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
       cookie: string | undefined,
@@ -878,7 +904,7 @@ export const makeWithIntrospectionWith = (
           Effect.Success<ReturnType<typeof readPullOnce>>,
           Effect.Error<ReturnType<typeof readPullOnce>>
         > =>
-          Effect.flatMap(readPullOnce(context, authorized, cookie, epoch), (view) =>
+          Effect.flatMap(readPullOnce(backend, context, authorized, cookie, epoch), (view) =>
             view.consistent || attempt >= PULL_VIEW_ATTEMPTS
               ? Effect.succeed(view)
               : read(attempt + 1)
@@ -924,7 +950,11 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
 
+            // The pull's one acquisition (#681): every pass over its view, and the
+            // rejections read after, go through it.
+            const backend = yield* forRequest(configured);
             const { next, totals, patch, lastMutationIds } = yield* readPullView(
+              backend,
               context,
               authorized,
               checked.cookie,
@@ -971,7 +1001,7 @@ export const makeWithIntrospectionWith = (
               }),
             };
             return placed === undefined ? response : { ...response, totals: placed };
-          }).pipe(Effect.mapError(asTransportError))
+          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPull)
       );
@@ -989,7 +1019,11 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId, options);
-            const rows = yield* readSubsets({ backend, authPolicy, middleware }, context, request);
+            const rows = yield* readSubsets(
+              { backend: configured, authPolicy, middleware },
+              context,
+              request
+            );
             return { rows };
           }).pipe(Effect.mapError(asTransportError))
         ),

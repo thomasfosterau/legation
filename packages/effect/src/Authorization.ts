@@ -32,7 +32,7 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Str from "effect/String";
 import { AuthorizationError } from "./Errors.js";
-import type { Backend, SyncContext } from "./Backend.js";
+import { type Backend, forRequest, type SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";
 import * as FilterPolicy from "./FilterPolicy.js";
 import type { Predicate } from "./Predicate.js";
@@ -123,14 +123,20 @@ export const namedSet = (backend: Backend, options: NamedSetOptions): NamedSet =
       Option.match(options.where(context), {
         onNone: () => Effect.succeed([]),
         onSome: (where) =>
-          backend.evaluate(context, Subsets.make({ collection: source, where })).pipe(
-            Effect.flatMap((entries) =>
-              backend.getRows(
-                context,
-                source,
-                Arr.map(entries, (entry) => entry.id)
+          // One acquisition for the read's two calls, as a pull's (#681).
+          Effect.scoped(
+            Effect.flatMap(forRequest(backend), (acquired) =>
+              acquired.evaluate(context, Subsets.make({ collection: source, where })).pipe(
+                Effect.flatMap((entries) =>
+                  acquired.getRows(
+                    context,
+                    source,
+                    Arr.map(entries, (entry) => entry.id)
+                  )
+                )
               )
-            ),
+            )
+          ).pipe(
             Effect.map((rows) => Arr.dedupe(Arr.getSomes(Arr.map(rows, toMember)))),
             Effect.mapError(
               (error) =>

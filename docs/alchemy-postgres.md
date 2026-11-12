@@ -68,14 +68,62 @@ backend: Effect.gen(function* () {
 "valid only within the current Worker invocation" (`Hyperdrive.ConnectClient`).
 A pool built once per room from them opens its later connections with an
 earlier invocation's credentials. Whether a Durable Object's invocation is the
-request or the instance is #506's to verify, so until it does, **do not hold a
-Hyperdrive client across requests**: Hyperdrive is a pool itself, and its model
-is a client per request.
+request or the instance is #506's to verify, so **do not hold a Hyperdrive
+client across requests**: Hyperdrive is a pool itself, and its model is a
+client per request.
 
-The room has no per-request backend: the sync server captures its `Backend`
-when it is built, and a per-call executor would run a transaction's statements
-on different connections, losing the atomicity `PgExecutor` guarantees. So
-for now, inside a room use a direct connection (above), D1 (`D1Executor`, with
-its documented non-atomic mutation-id bump) or Durable Object storage. A
-per-request backend would be a core change to `SyncServer`; it waits for #506's
-findings.
+`Backend.perRequest` gives a room exactly that (#681). Its argument builds the
+backend for one request, in that request's `Scope`; the room's sync server
+runs it once per push, pull and read (`Backend.forRequest`) and closes the
+scope when the request ends, which closes the client. Everything else the room
+holds (its CVRs, its fan-out bus, its named-set cache) stays per instance.
+
+```ts
+// At init, beside the room's other bindings:
+const hyperdrive = yield * Cloudflare.Hyperdrive.Connect(AppDatabase);
+
+return (
+  yield *
+  Room.make({
+    nodes,
+    // Built once per instance; the client inside is built once per request.
+    backend: Backend.perRequest(
+      Effect.gen(function* () {
+        // Read in the request, so the credentials are this invocation's.
+        const url = yield* hyperdrive.connectionString;
+        const context = yield* Layer.build(PgClient.layer({ url, maxConnections: 1 }));
+        return SqlBackend.make({
+          executor: PgExecutor.make(Context.get(context, SqlClient)),
+          dialect: Sql.postgres,
+          tables,
+          mutators,
+          handlers,
+        });
+      }).pipe(
+        Effect.mapError(
+          (cause) => new BackendError({ message: "Hyperdrive connect failed", cause })
+        )
+      )
+    ),
+    policy,
+    shards: LegationShard,
+  })
+);
+```
+
+- **One push is one acquisition.** The push's `applyMutations` is one
+  `PgExecutor.transaction`, a top-level `withTransaction` on the client this
+  request built, so its mutation-id claims and the handlers' writes commit or
+  roll back together on one connection (Backend guarantee 1). With
+  `maxConnections: 1` every statement of the request, the pull's reads
+  included, uses that one connection.
+- **Concurrent requests get separate clients.** Two requests in flight on one
+  room each run `acquire`, so neither sees the other's connection.
+- **The captured services.** `hyperdrive.connectionString` needs Alchemy's
+  `RuntimeContext`; `Backend.perRequest` captures it where `backend` runs and
+  provides it to each acquisition.
+- **A named set over the backend** (`Authorization.namedSet(backend, …)`)
+  opens its own acquisition when it resolves, apart from the pull's.
+- What Hyperdrive guarantees about a transaction staying on one origin
+  connection, and about query caching for reads outside one, is still #506's
+  to record.

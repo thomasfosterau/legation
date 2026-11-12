@@ -66,6 +66,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import type * as Scope from "effect/Scope";
 import type { RowId, RowVersion } from "./Collection.js";
 import { BackendError, type MutationRejected } from "./Errors.js";
 import type { Mutation } from "./Protocol.js";
@@ -649,3 +650,102 @@ export const withoutTransaction = <A>(
   _context: SyncContext,
   effect: Effect.Effect<A, BackendError>
 ): Effect.Effect<A, BackendError> => effect;
+
+// ─── Per-request backends (#681) ────────────────────────────────────────────
+
+/** Each per-request backend's acquisition, keyed by the backend {@link perRequest} returned. */
+const acquisitions = new WeakMap<Backend, Effect.Effect<Backend, BackendError, Scope.Scope>>();
+
+/**
+ * A backend acquired per request (#681): `acquire` builds the backend one
+ * request runs against, in that request's `Scope`, and the scope's close
+ * releases it. For a store whose connection is valid only within the current
+ * invocation (Hyperdrive, whose credentials expire with it) or that must not
+ * be shared across requests.
+ *
+ * The sync server opens one acquisition per push, pull or read
+ * ({@link forRequest}) and runs the whole request against it, so a push's
+ * `applyMutations`, one transaction, runs on the connection that acquisition
+ * holds, and its mutation-id claims commit with the handlers' writes
+ * (guarantee 1). Concurrent requests get separate acquisitions. Everything
+ * else the server holds (its CVRs, its bus, its named-set cache) stays the
+ * server's.
+ *
+ * A call made on the returned backend directly, outside {@link forRequest},
+ * opens its own acquisition and releases it when the call ends, so it is a
+ * conforming `Backend` on its own: one `applyMutations` is still one
+ * acquisition. A copy of it (`{ ...backend, evaluate }`) is not registered:
+ * it keeps its methods, each one acquisition per call.
+ *
+ * The services `acquire` needs beside its `Scope` are captured where the
+ * returned effect runs (a room's per-instance phase); the services of the
+ * fiber that makes the call take precedence over them, its `Scope` included.
+ * On the returned backend, `evaluateMany` and `evaluateCounted` are always
+ * present: they call the acquired backend's own when it has them, and
+ * otherwise answer from its `evaluate` (guarantee 2's equalities).
+ *
+ * @example
+ * ```ts
+ * import { Backend, MemoryBackend } from "@thomasfosterau/legation";
+ * import * as Effect from "effect/Effect";
+ *
+ * const program = Effect.gen(function* () {
+ *   const shared = yield* MemoryBackend.make({});
+ *   // Opened and released around each request; a real store builds a client here.
+ *   const backend = yield* Backend.perRequest(
+ *     Effect.acquireRelease(
+ *       Effect.log("open").pipe(Effect.as(shared)),
+ *       () => Effect.log("release")
+ *     )
+ *   );
+ *   return yield* backend.lastMutationIds({ clientGroupId: "g" });
+ * });
+ * ```
+ */
+export const perRequest = <R = never>(
+  acquire: Effect.Effect<Backend, BackendError, Scope.Scope | R>
+): Effect.Effect<Backend, never, R> =>
+  Effect.map(Effect.context<R>(), (captured) => {
+    const open = Effect.updateContext(acquire, (current: Context.Context<Scope.Scope>) =>
+      Context.merge(captured, current)
+    );
+    const each = <A>(use: (backend: Backend) => Effect.Effect<A, BackendError>) =>
+      Effect.scoped(Effect.flatMap(open, use));
+    const backend: Backend = {
+      applyMutations: (context, mutations) =>
+        each((acquired) => acquired.applyMutations(context, mutations)),
+      lastMutationIds: (context) => each((acquired) => acquired.lastMutationIds(context)),
+      rejections: (context) => each((acquired) => acquired.rejections(context)),
+      evaluate: (context, subset) => each((acquired) => acquired.evaluate(context, subset)),
+      evaluateMany: (context, subsets) =>
+        each((acquired) => evaluateAll(acquired, context, subsets)),
+      evaluateCounted: (context, subsets) =>
+        each((acquired) => {
+          const counted = acquired.evaluateCounted;
+          return counted === undefined
+            ? Effect.zipWith(
+                evaluateAll(acquired, context, subsets),
+                totalsOf(acquired, context, subsets),
+                (lists, totals) =>
+                  Arr.zipWith(lists, totals, (entries, total) => ({ entries, total }))
+              )
+            : counted(context, subsets);
+        }),
+      getRows: (context, collection, ids) =>
+        each((acquired) => acquired.getRows(context, collection, ids)),
+    };
+    acquisitions.set(backend, open);
+    return backend;
+  });
+
+/**
+ * The backend one request runs against (#681): for a {@link perRequest}
+ * backend, one acquisition in the caller's `Scope`, released when it closes;
+ * for any other backend, the backend itself. The sync server calls it once per
+ * push, pull and read, so every statement of the request, a push's
+ * transaction included, goes through one acquisition.
+ *
+ * @throws `BackendError` when the acquisition fails.
+ */
+export const forRequest = (backend: Backend): Effect.Effect<Backend, BackendError, Scope.Scope> =>
+  acquisitions.get(backend) ?? Effect.succeed(backend);
