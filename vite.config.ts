@@ -204,6 +204,7 @@ export default defineConfig({
       "effecttsgo/multiple-catch-tag": "error",
       "effecttsgo/unsafe-effect-type-assertion": "error",
       "effecttsgo/unnecessary-pipe-chain": "error",
+      "effecttsgo/prefer-unsafe-constructor": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers

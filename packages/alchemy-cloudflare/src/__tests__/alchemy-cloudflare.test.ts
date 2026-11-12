@@ -431,7 +431,7 @@ describe("rooms + shards, end to end", () => {
             roomA.sockets.push(socketA);
 
             // A real client engine on room A observes p-1's reviews (fine window).
-            const readerScope = Effect.runSync(Scope.make());
+            const readerScope = Scope.makeUnsafe();
             const reader = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;
@@ -478,7 +478,7 @@ describe("rooms + shards, end to end", () => {
             );
 
             // Room B's client writes a p-1 review and pushes.
-            const writerScope = Effect.runSync(Scope.make());
+            const writerScope = Scope.makeUnsafe();
             const writer = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;
