@@ -9,6 +9,7 @@ import { ClientStore, Hydration } from "@thomasfosterau/legation";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
@@ -286,7 +287,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
 
   it.effect("the store builds and commits over a database a later version created at v2", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() => createAtVersion2("atomic-v2", true));
+      yield* awaitPromise(() => createAtVersion2("atomic-v2", true));
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         yield* defined(store.commitPull)({
@@ -298,7 +299,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(yield* store.getCookie).toBe("cookie-v2");
       }).pipe(Effect.provide(storeLayer("atomic-v2")));
       // The store opened the database at the version it had: nothing was downgraded or upgraded.
-      expect(yield* Effect.promise(() => versionOf("atomic-v2"))).toBe(2);
+      expect(yield* awaitPromise(() => versionOf("atomic-v2"))).toBe(2);
     })
   );
 
@@ -306,7 +307,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
     "a database without the entries store builds the layer, and its calls name the store",
     () =>
       Effect.gen(function* () {
-        yield* Effect.promise(() => createAtVersion2("atomic-no-entries", false));
+        yield* awaitPromise(() => createAtVersion2("atomic-no-entries", false));
         yield* Effect.gen(function* () {
           // The layer builds. The store then seals at open, since its first read of the release record
           // has no entries store to read. The sealed message names the missing store itself, not only
@@ -327,7 +328,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
       yield* Effect.gen(function* () {
         // The layer holds its connections open for the scope.
         yield* ClientStore.ClientStore;
-        const outcome = yield* Effect.promise(() => upgradeTo("atomic-upgrade", 2));
+        const outcome = yield* awaitPromise(() => upgradeTo("atomic-upgrade", 2));
         expect(outcome).toBe("upgraded");
       }).pipe(Effect.provide(storeLayer("atomic-upgrade")));
     })
@@ -343,7 +344,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           yield* store.setCookie("cookie-before");
           // Another connection asks for a newer version. The store's connections close themselves,
           // and nothing reopens them, so every call from here on fails with the reload message.
-          expect(yield* Effect.promise(() => upgradeTo(database, 2))).toBe("upgraded");
+          expect(yield* awaitPromise(() => upgradeTo(database, 2))).toBe("upgraded");
 
           const read = yield* Effect.exit(store.getCookie);
           const write = yield* Effect.exit(store.setCookie("cookie-after"));
@@ -458,7 +459,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         });
       }).pipe(Effect.provide(storeLayer(database)));
       // A number where the cookie belongs: IndexedDB stores it, the platform store reads it as absent.
-      yield* Effect.promise(() => putRawRecord(database, { key: "legation/cookie", value: 7 }));
+      yield* awaitPromise(() => putRawRecord(database, { key: "legation/cookie", value: 7 }));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;

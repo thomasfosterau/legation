@@ -54,7 +54,10 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
   Effect.gen(function* () {

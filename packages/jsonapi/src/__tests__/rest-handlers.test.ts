@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -321,10 +322,10 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
     ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
-      ({ dispose }) => Effect.promise(dispose)
+      ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)
     );
     const getDocument = (path: string, user?: string) =>
-      Effect.promise(async () => {
+      awaitPromise(async () => {
         const response = await handler(
           new Request(`http://shop.test${path}`, {
             headers: {

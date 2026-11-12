@@ -197,7 +197,10 @@ describe("NodeBridge.registry", () => {
 // ─── End to end: the bridged graph drives a Client read ─────────────────────
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
   Effect.gen(function* () {

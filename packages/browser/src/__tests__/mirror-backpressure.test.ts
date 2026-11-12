@@ -44,7 +44,10 @@ const mutators = Mutator.registry([
 const allTodos = Subset.make({ collection: "todos" });
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
   Effect.gen(function* () {

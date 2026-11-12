@@ -180,7 +180,10 @@ const allTodos = Subset.make({ collection: "todos" });
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 describe("Derive — refcounted subscription lifetime", () => {
   it.effect("observed leaf releases its subscription when its scope closes", () =>
