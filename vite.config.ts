@@ -203,6 +203,7 @@ export default defineConfig({
       "effecttsgo/error-payload-shadows-name": "error",
       "effecttsgo/multiple-catch-tag": "error",
       "effecttsgo/unsafe-effect-type-assertion": "error",
+      "effecttsgo/unnecessary-pipe-chain": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
