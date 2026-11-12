@@ -20,6 +20,7 @@
  * push/pull handling.
  */
 
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -27,6 +28,8 @@ import * as HashMap from "effect/HashMap";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
+import * as Str from "effect/String";
 import { AuthorizationError } from "./Errors.js";
 import type { SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";
@@ -311,14 +314,114 @@ export const passthroughMiddleware: SyncMiddleware = {
 };
 
 /**
- * Resolve the request's identity for a connected client group — the decoded,
- * never-client-forgeable principal the auth filters and middleware see on
- * `SyncContext.identity`. A real carrier derives it from the authenticated
- * connection (a verified token); the resolver is the seam where that lands.
- * Optional: absent ⇒ `identity` stays `undefined` (public/deny-by-default).
+ * An opaque, read-only view of the credential-bearing headers of the transport
+ * request a push, pull or read arrived on (ADR-0035): what an
+ * {@link IdentityResolver} verifies a session cookie or an API key from.
+ *
+ * Only the resolver sees it. It never reaches `SyncContext`, middleware, auth
+ * filters, logs, spans or errors, and it offers no way to list its headers: a
+ * resolver asks for the header it verifies by name. Its values live in a
+ * closure, so serialising or inspecting it shows none of them.
+ */
+export interface RequestCredentials {
+  /**
+   * The value of the named request header, or `None` when the request did not
+   * carry it. The lookup is case-insensitive; a header the request repeated is
+   * one value, its parts joined as HTTP joins them (`; ` for `cookie`, `, `
+   * otherwise).
+   */
+  readonly header: (name: string) => Option.Option<string>;
+}
+
+/**
+ * The header shapes {@link credentialsFromHeaders} accepts: a WHATWG `Headers`
+ * (or any iterable of `[name, value]` pairs) and a plain record of names to
+ * values, such as `effect/http`'s `Headers`.
+ */
+export type CredentialHeaders =
+  | Iterable<readonly [string, string]>
+  | Readonly<Record<string, string>>;
+
+/** How a repeated header's parts are joined: cookies by `; `, everything else by `, `. */
+const joinerOf = (name: string): string => (name === "cookie" ? "; " : ", ");
+
+/** What a {@link RequestCredentials} prints as, wherever it is logged or serialised by mistake. */
+const redacted = (): string => "RequestCredentials(<redacted>)";
+
+/** A {@link RequestCredentials} over an already lowercased header map. */
+const credentialsOf = (headers: HashMap.HashMap<string, string>): RequestCredentials => {
+  const header = (name: string): Option.Option<string> =>
+    HashMap.get(headers, Str.toLowerCase(name));
+  const credentials = { header, toJSON: redacted, toString: redacted };
+  return credentials;
+};
+
+/**
+ * Build {@link RequestCredentials} from a transport request's headers. Names are
+ * lowercased once, here; a name given more than once (two pairs, or two record
+ * keys that differ only in case) keeps every part, joined as HTTP joins a
+ * repeated field. The headers are copied, so later changes to `headers` are not
+ * seen.
+ */
+export const credentialsFromHeaders = (headers: CredentialHeaders): RequestCredentials =>
+  credentialsOf(
+    Arr.reduce(
+      P.isIterable(headers) ? Arr.fromIterable(headers) : R.toEntries(headers),
+      HashMap.empty<string, string>(),
+      (collected, [rawName, value]) => {
+        const name = Str.toLowerCase(rawName);
+        return HashMap.set(
+          collected,
+          name,
+          Option.match(HashMap.get(collected, name), {
+            onNone: () => value,
+            onSome: (existing) => `${existing}${joinerOf(name)}${value}`,
+          })
+        );
+      }
+    )
+  );
+
+/**
+ * The {@link RequestCredentials} of a request that carried none: every header is
+ * absent. A carrier with no transport request (the in-memory loopback, an SSR
+ * render in the same process, a test) passes it.
+ */
+export const noCredentials: RequestCredentials = credentialsOf(HashMap.empty());
+
+/**
+ * What an {@link IdentityResolver} resolves an identity from: the client group
+ * the request names and the {@link RequestCredentials} its transport request
+ * carried.
+ */
+export interface IdentityRequest {
+  /** The client group the push, pull or read names. It is client-chosen: never an identity on its own. */
+  readonly clientGroupId: string;
+  /** The transport request's credential-bearing headers; {@link noCredentials} when it had none. */
+  readonly credentials: RequestCredentials;
+}
+
+/**
+ * Resolve a request's identity — the decoded, never-client-forgeable principal
+ * the auth filters and middleware see on `SyncContext.identity` — from the
+ * request's credentials and client group (ADR-0015's identity seam, widened by
+ * ADR-0035).
+ *
+ * The sync server calls it once per push, pull and read. A carrier that has a
+ * transport request passes its headers (`Transport.HandleOptions.credentials`);
+ * one with no request (the in-memory loopback, tests) passes
+ * {@link noCredentials}. The resolver alone sees the credentials: `SyncContext`
+ * carries only the identity it returns, so verify them here (a signed session
+ * cookie, an API key) and return nothing derived from their raw value.
+ *
+ * A failing `resolve` fails the request with its `AuthorizationError`, which
+ * reaches the client: never put a credential in its message. A resolver that
+ * wants to fail closed to anonymous returns its anonymous identity (for
+ * example `undefined`) instead of failing. Optional: absent ⇒ `identity` stays
+ * `undefined` (public/deny-by-default).
  */
 export interface IdentityResolver {
-  readonly resolve: (clientGroupId: string) => Effect.Effect<unknown, AuthorizationError>;
+  readonly resolve: (request: IdentityRequest) => Effect.Effect<unknown, AuthorizationError>;
 }
 
 /** The {@link IdentityResolver} service; absent leaves `SyncContext.identity` undefined. */

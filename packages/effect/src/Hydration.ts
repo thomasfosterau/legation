@@ -62,6 +62,7 @@ import {
   type ReplicaState,
   StoredRow,
 } from "./ClientStore.js";
+import type { RequestCredentials } from "./Authorization.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
@@ -349,6 +350,16 @@ export interface SnapshotOptions {
    * is not in, and its first pull silently degrades to the reset path.
    */
   readonly transport?: ClientTransport;
+  /**
+   * The credentials of the request the render acts for
+   * (`Authorization.credentialsFromHeaders(request.headers)`), which the
+   * in-process path presents to the server's `IdentityResolver`, so the
+   * snapshot holds what that request's session may read (ADR-0035). Absent or
+   * `None`: the render presents none (`Authorization.noCredentials`). Ignored
+   * with a `transport`, which carries its own (a binding transport forwards
+   * the request's cookie).
+   */
+  readonly credentials?: Option.Option<RequestCredentials>;
 }
 
 /** {@link SnapshotOptions} with the carrier supplied — no `ServerHandler` needed. */
@@ -416,7 +427,9 @@ export function snapshot(
   return Effect.scoped(
     Effect.gen(function* () {
       const handler = yield* ServerHandler;
-      const transport = yield* makeInMemory(handler, options.clientGroupId);
+      const transport = yield* makeInMemory(handler, options.clientGroupId, {
+        credentials: options.credentials ?? Option.none(),
+      });
       return yield* renderOver(transport, options);
     })
   );

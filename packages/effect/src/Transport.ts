@@ -20,6 +20,8 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Option from "effect/Option";
+import type { RequestCredentials } from "./Authorization.js";
 import { TransportError } from "./Errors.js";
 import type { VersionNotSupportedError } from "./Errors.js";
 import type {
@@ -75,18 +77,47 @@ export const ClientTransport = Context.Service<ClientTransport>(
  * HTTP routes, message listeners).
  */
 export interface ServerHandler {
+  /** Apply a push's mutations; `options` carries the transport request's credentials. */
   readonly handlePush: (
-    request: PushRequest
+    request: PushRequest,
+    options?: HandleOptions
   ) => Effect.Effect<PushResponse, TransportError | VersionNotSupportedError>;
+  /** Answer a pull with a patch; `options` carries the transport request's credentials. */
   readonly handlePull: (
-    request: PullRequest
+    request: PullRequest,
+    options?: HandleOptions
   ) => Effect.Effect<PullResponse, TransportError | VersionNotSupportedError>;
   /** Point-in-time fallthrough read (ADR-0025): auth-filtered, no CVR. */
   readonly handleRead: (
-    request: ReadRequest
+    request: ReadRequest,
+    options?: HandleOptions
   ) => Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError>;
   /** Pokes addressed to one client group. */
   readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
+}
+
+/**
+ * What a carrier hands the sync server beside a protocol request (ADR-0035):
+ * the credentials of the transport request it arrived on.
+ */
+export interface HandleOptions {
+  /**
+   * The transport request's credential-bearing headers
+   * (`Authorization.credentialsFromHeaders(request.headers)`), which only the
+   * `IdentityResolver` sees. A carrier that has a request passes them; absent
+   * or `None` means the request carried none (`Authorization.noCredentials`).
+   */
+  readonly credentials?: Option.Option<RequestCredentials>;
+}
+
+/** Options for {@link makeInMemory}. */
+export interface InMemoryOptions {
+  /**
+   * Credentials every call presents to the handler, for a same-process carrier
+   * acting for a real request (an SSR render under the browser's session).
+   * Absent or `None` means none (`Authorization.noCredentials`).
+   */
+  readonly credentials?: Option.Option<RequestCredentials>;
 }
 
 /** The {@link ServerHandler} service a carrier answers clients with. */
@@ -96,11 +127,14 @@ export const ServerHandler = Context.Service<ServerHandler>(
 
 /**
  * An in-memory client transport bound directly to a ServerHandler — the
- * loop-back carrier for tests and same-process client/server setups.
+ * loop-back carrier for tests and same-process client/server setups. It has no
+ * transport request, so it presents `Authorization.noCredentials` unless
+ * `options.credentials` supplies the request it acts for.
  */
 export const makeInMemory = (
   handler: ServerHandler,
-  clientGroupId: string
+  clientGroupId: string,
+  options?: InMemoryOptions
 ): Effect.Effect<
   ClientTransport & { readonly setStatus: (status: ConnectionStatus) => Effect.Effect<void> },
   never,
@@ -108,10 +142,11 @@ export const makeInMemory = (
 > =>
   Effect.gen(function* () {
     const status = yield* SubscriptionRef.make<ConnectionStatus>("connected");
+    const handle: HandleOptions = { credentials: options?.credentials ?? Option.none() };
     return {
-      push: (request) => handler.handlePush(request),
-      pull: (request) => handler.handlePull(request),
-      read: (request) => handler.handleRead(request),
+      push: (request) => handler.handlePush(request, handle),
+      pull: (request) => handler.handlePull(request, handle),
+      read: (request) => handler.handleRead(request, handle),
       pokes: handler.pokes(clientGroupId),
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status),

@@ -26,8 +26,10 @@
  */
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import {
+  type Authorization,
   Client,
   type Mutation,
   type Server,
@@ -99,6 +101,16 @@ export const formMutationTarget = (
     : { clientGroupId: group, ...form };
 };
 
+/** Options for {@link runFormMutation}. */
+export interface RunFormMutationOptions {
+  /**
+   * The action's request credentials (`requestCredentials(event)`), which the
+   * server's `IdentityResolver` resolves the mutation's identity from, as for a
+   * push (ADR-0035). Absent or `None`: none.
+   */
+  readonly credentials?: Option.Option<Authorization.RequestCredentials>;
+}
+
 /**
  * Run the form layer's decoded args as the target's Mutation on the server
  * (`Server.mutate`) and answer the receipt. Return it from the action as
@@ -110,7 +122,8 @@ export const runFormMutation = <Args, ArgsEncoded>(
   server: Server.Server,
   target: FormMutationTarget,
   mutation: Mutation.Mutator<string, Args, ArgsEncoded>,
-  args: Args
+  args: Args,
+  options?: RunFormMutationOptions
 ): Effect.Effect<Server.Receipt, TransportError | VersionNotSupportedError> =>
   server.mutate({
     clientGroupId: target.clientGroupId,
@@ -118,6 +131,7 @@ export const runFormMutation = <Args, ArgsEncoded>(
     mutationId: target.mutationId,
     mutation,
     args,
+    credentials: options?.credentials ?? Option.none(),
   });
 
 /**

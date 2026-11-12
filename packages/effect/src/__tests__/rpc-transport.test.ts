@@ -9,7 +9,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { RpcTest } from "effect/rpc";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import { RpcClient, RpcTest } from "effect/rpc";
 import * as Authorization from "../Authorization.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";
@@ -112,5 +114,48 @@ describe("RpcTransport", () => {
       expect(failure._tag).toBe("TransportError");
       expect(failure.message).toContain("secrets");
     }).pipe(Effect.provide(serverLayer))
+  );
+
+  it.effect("presents each call's headers to the IdentityResolver as its credentials", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<ReadonlyArray<Option.Option<string>>>([]);
+      const resolver: Authorization.IdentityResolver = {
+        resolve: ({ credentials }) =>
+          Ref.update(seen, (all) => [...all, credentials.header("Authorization")]),
+      };
+      yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
+        const withKey = RpcClient.withHeaders({ authorization: "Bearer api-key-1" });
+        yield* client.push({ clientGroupId: "group-a", mutations: [] }).pipe(withKey, Effect.orDie);
+        yield* client
+          .pull({ clientGroupId: "group-a", subscriptions: [allTodos] })
+          .pipe(withKey, Effect.orDie);
+        yield* client.read({ clientGroupId: "group-a", subsets: [allTodos] }).pipe(Effect.orDie);
+      }).pipe(
+        Effect.provide(
+          serverLayer.pipe(Layer.provide(Layer.succeed(Authorization.IdentityResolver)(resolver)))
+        )
+      );
+      expect(yield* Ref.get(seen)).toEqual([
+        Option.some("Bearer api-key-1"),
+        Option.some("Bearer api-key-1"),
+        Option.none(),
+      ]);
+    })
+  );
+
+  it.effect("fromOrigin builds the WebSocket transport with an HTTP fallback", () =>
+    Effect.gen(function* () {
+      // Nothing listens on the discard port: the build succeeds and the status is
+      // not yet "disconnected", since no call has failed.
+      const transport = yield* RpcTransport.fromOrigin({
+        origin: "http://127.0.0.1:9",
+        clientGroupId: "group-origin",
+        httpPath: "/rpc",
+        wsPath: "/rpc-ws",
+        fallback: { restoreAfter: "1 second", primaryTimeout: "1 second" },
+      });
+      expect(["connecting", "connected"]).toContain(yield* transport.status);
+    }).pipe(Effect.scoped)
   );
 });

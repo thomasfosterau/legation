@@ -124,6 +124,24 @@ the room's per-instance phase, where the object's state and Alchemy's
 is built there. A request reaches the room with its base path intact, and the
 room answers by the path's last segment (`/sync/push` is the `push` route).
 
+The room presents each push, pull and read request's headers to `identity` as
+its `Authorization.RequestCredentials` (ADR-0035), so a resolver can verify the
+session cookie or API key the request carried: `routeSync` forwards the request
+unchanged, and a `BindingTransport` forwards the document request's cookie.
+
+```ts
+identity: Effect.succeed({
+  resolve: ({ credentials }) =>
+    Option.match(credentials.header("cookie"), {
+      onNone: () => Effect.succeed(undefined), // anonymous
+      onSome: (cookie) => verifySession(cookie), // your own check
+    }),
+}),
+```
+
+Only the resolver sees the headers; auth filters and mutators see the identity
+it returns on `SyncContext.identity`.
+
 ## What Alchemy does not cover
 
 - **Interactive transactions on D1.** The provider's client has `batch()`

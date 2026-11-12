@@ -234,7 +234,7 @@ const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly
       auth: {
         policy: authPolicy,
         // The replica's client group is the signed-in user's (the `client_groups` binding).
-        identity: { resolve: (group) => Effect.succeed(group === GROUP ? USER : undefined) },
+        identity: { resolve: ({ clientGroupId }) => Effect.succeed(clientGroupId === GROUP ? USER : undefined) },
       },
     });
     const transport = yield* Transport.makeInMemory(server.handler, GROUP);

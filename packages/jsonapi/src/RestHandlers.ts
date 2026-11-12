@@ -88,8 +88,8 @@ export interface Options {
   readonly policy: Authorization.AuthPolicy;
   /**
    * The identity seam: an HTTP request to the `SyncContext` the auth filters
-   * see — the HTTP analogue of `IdentityResolver`, which resolves a client
-   * group. Derive `identity` from the verified session (a forwarded header
+   * see — the HTTP analogue of `IdentityResolver`, which resolves the sync
+   * protocol's requests from their credentials and client group. Derive `identity` from the verified session (a forwarded header
    * the app trusts, a session token); never from anything a browser can
    * forge. `clientGroupId` names the carrier (`"http"`) or the session.
    */

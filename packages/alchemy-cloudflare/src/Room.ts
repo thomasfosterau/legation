@@ -43,6 +43,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import {
@@ -102,7 +103,11 @@ export interface RoomConfig<R = never> {
   readonly backend: Effect.Effect<Backend.Backend, never, RoomServices>;
   /** Deny-by-default per-collection filters, built in the per-instance phase. */
   readonly policy: Effect.Effect<Authorization.AuthPolicy, never, RoomServices>;
-  /** Resolve a client group to its identity (session binding). */
+  /**
+   * Resolve a request's identity from its credentials and client group. The
+   * room presents each push, pull and read request's headers (the session
+   * cookie, an API key) as its `Authorization.RequestCredentials`.
+   */
   readonly identity?:
     | Effect.Effect<Authorization.IdentityResolver, never, RoomServices>
     | undefined;
@@ -245,6 +250,12 @@ export const make = <R>(
             Effect.gen(function* () {
               const request = yield* HttpServerRequest.HttpServerRequest;
               const route = routeOf(new URL(request.url, "https://room").pathname);
+              // The request's headers are its credentials (ADR-0035): the room's
+              // IdentityResolver, and nothing else, sees the cookie or API key the
+              // Worker forwarded unchanged.
+              const presented = {
+                credentials: Option.some(Authorization.credentialsFromHeaders(request.headers)),
+              };
               if (route === routes.socket) {
                 // The poke channel: accept under the hibernation API and hold
                 // no per-socket state — eviction costs nothing.
@@ -254,19 +265,25 @@ export const make = <R>(
               if (route === routes.push) {
                 const body = yield* request.json;
                 return yield* answer(
-                  Effect.flatMap(decodePushRequest(body), (decoded) => handler.handlePush(decoded))
+                  Effect.flatMap(decodePushRequest(body), (decoded) =>
+                    handler.handlePush(decoded, presented)
+                  )
                 );
               }
               if (route === routes.pull) {
                 const body = yield* request.json;
                 return yield* answer(
-                  Effect.flatMap(decodePullRequest(body), (decoded) => handler.handlePull(decoded))
+                  Effect.flatMap(decodePullRequest(body), (decoded) =>
+                    handler.handlePull(decoded, presented)
+                  )
                 );
               }
               if (route === routes.read) {
                 const body = yield* request.json;
                 return yield* answer(
-                  Effect.flatMap(decodeReadRequest(body), (decoded) => handler.handleRead(decoded))
+                  Effect.flatMap(decodeReadRequest(body), (decoded) =>
+                    handler.handleRead(decoded, presented)
+                  )
                 );
               }
               return notFound;

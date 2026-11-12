@@ -40,6 +40,7 @@ import {
 import {
   AuthPolicy,
   IdentityResolver,
+  noCredentials,
   type SetBinder,
   SyncMiddleware,
   authorize,
@@ -70,7 +71,7 @@ import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
 // oxlint-disable-next-line effect/no-service-constructor-imports -- the poke hub is a private per-handler instance, not a service; exposing it as one would add a requirement to the public sync-server layers.
-import { ServerHandler, makePokeHub } from "./Transport.js";
+import { type HandleOptions, ServerHandler, makePokeHub } from "./Transport.js";
 import type { Subset } from "./Subset.js";
 import * as Subsets from "./Subset.js";
 
@@ -444,11 +445,22 @@ export const makeWithIntrospectionWith = (
     // Optional: resolve the request's identity onto SyncContext.identity.
     const identityOption = yield* Effect.serviceOption(IdentityResolver);
 
-    const contextFor = (clientGroupId: string): Effect.Effect<SyncContext, AuthorizationError> =>
+    // The request's credentials go to the resolver and nowhere else (ADR-0035):
+    // the SyncContext built here carries the group and the resolved identity only.
+    const contextFor = (
+      clientGroupId: string,
+      options?: HandleOptions
+    ): Effect.Effect<SyncContext, AuthorizationError> =>
       identityOption._tag === "None"
         ? Effect.succeed({ clientGroupId })
         : identityOption.value
-            .resolve(clientGroupId)
+            .resolve({
+              clientGroupId,
+              credentials: Option.getOrElse(
+                options?.credentials ?? Option.none(),
+                () => noCredentials
+              ),
+            })
             .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
 
     const pokeHub = yield* makePokeHub;
@@ -627,12 +639,13 @@ export const makeWithIntrospectionWith = (
     );
 
     const handlePush = (
-      request: PushRequest
+      request: PushRequest,
+      options?: HandleOptions
     ): Effect.Effect<PushResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId);
+            const context = yield* contextFor(request.clientGroupId, options);
             const checked = yield* middleware.onPush(context, request);
             // The commit and the fan-out of its hints are one uninterruptible
             // region (#356): an interrupt landing after the backend commits must
@@ -870,12 +883,13 @@ export const makeWithIntrospectionWith = (
       });
 
     const handlePull = (
-      request: PullRequest
+      request: PullRequest,
+      options?: HandleOptions
     ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId);
+            const context = yield* contextFor(request.clientGroupId, options);
             yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
@@ -955,12 +969,13 @@ export const makeWithIntrospectionWith = (
     // a read never perturbs sync state, so the worst it can be is stale
     // (pull stays the correctness path).
     const handleRead = (
-      request: ReadRequest
+      request: ReadRequest,
+      options?: HandleOptions
     ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId);
+            const context = yield* contextFor(request.clientGroupId, options);
             const rows = yield* readSubsets({ backend, authPolicy, middleware }, context, request);
             return { rows };
           }).pipe(Effect.mapError(asTransportError))

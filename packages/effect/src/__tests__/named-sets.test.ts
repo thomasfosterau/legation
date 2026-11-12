@@ -158,7 +158,7 @@ const setupWith = (
         policy === undefined ? policyOver(backend, source) : policy(backend)
       ),
       Effect.provideService(Authorization.IdentityResolver, {
-        resolve: (clientGroupId) =>
+        resolve: ({ clientGroupId }) =>
           Effect.succeed(Option.getOrUndefined(R.get(identityTable, clientGroupId))),
       }),
       Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),

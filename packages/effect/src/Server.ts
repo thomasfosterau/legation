@@ -29,6 +29,7 @@
 
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Authorization from "./Authorization.js";
@@ -74,6 +75,13 @@ export interface MutateRequest<Args, ArgsEncoded> {
   readonly args: Args;
   /** The schema version to check, as a push carries it (#48); unset when omitted. */
   readonly schemaVersion?: string | undefined;
+  /**
+   * The credentials of the request the mutation arrived on (a form action's
+   * `Authorization.credentialsFromHeaders(event.request.headers)`), presented
+   * to the `IdentityResolver` as a push's are (ADR-0035). Absent or `None`:
+   * none (`Authorization.noCredentials`).
+   */
+  readonly credentials?: Option.Option<Authorization.RequestCredentials>;
 }
 
 /**
@@ -112,7 +120,7 @@ export interface Server {
    * its {@link Receipt} (ADR-0030 #215 §1–§3).
    *
    * The path is the push path minus the transport: the group's identity is
-   * resolved through the `IdentityResolver`, the middleware's `onPush` runs,
+   * resolved through the `IdentityResolver` (from `request.credentials`), the middleware's `onPush` runs,
    * the backend applies the mutation with its id bumped in the same
    * transaction as its effects (a permanent rejection bumps it with no
    * effects, ADR-0008), and the write's hints are broadcast as a pushed
@@ -170,7 +178,10 @@ export interface MakeOptions {
   readonly auth: {
     /** Deny-by-default per-collection filters. */
     readonly policy: Authorization.AuthPolicy;
-    /** Resolve a client group to its identity (session binding). */
+    /**
+     * Resolve a request's identity from its credentials and client group
+     * (`Authorization.IdentityResolver`); absent, every request is anonymous.
+     */
     readonly identity?: Authorization.IdentityResolver;
   };
   /** Named-query resolution (server-authoritative subsets). */
@@ -218,19 +229,22 @@ export const make = (options: MakeOptions): Effect.Effect<Server, never, Scope.S
           Effect.orDie
         );
         const createdAt = yield* Clock.currentTimeMillis;
-        const response = yield* built.handlePush({
-          clientGroupId: request.clientGroupId,
-          mutations: [
-            {
-              clientId: request.clientId,
-              mutationId: request.mutationId,
-              mutator: request.mutation.name,
-              args,
-              createdAt,
-            },
-          ],
-          schemaVersion: request.schemaVersion,
-        });
+        const response = yield* built.handlePush(
+          {
+            clientGroupId: request.clientGroupId,
+            mutations: [
+              {
+                clientId: request.clientId,
+                mutationId: request.mutationId,
+                mutator: request.mutation.name,
+                args,
+                createdAt,
+              },
+            ],
+            schemaVersion: request.schemaVersion,
+          },
+          { credentials: request.credentials ?? Option.none() }
+        );
         return yield* receiptOf(response, request.clientId, request.mutationId);
       });
     return {

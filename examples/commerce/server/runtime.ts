@@ -10,7 +10,11 @@
  * - Identity comes from the `client_groups` binding (browser client group →
  *   authenticated user), written by the sync server's account API and read
  *   here by the `IdentityResolver` — never from anything the client sends
- *   in a push.
+ *   in a push. The resolver also receives the request's credentials
+ *   (`IdentityRequest.credentials`, ADR-0035: the RPC carrier presents the
+ *   HTTP or WebSocket upgrade request's headers), but this process does not
+ *   run Better Auth, which verifies the session cookie, so it keeps resolving
+ *   from the binding the Kit process writes at sign-in.
  *
  * The invalidation bus is created here and passed INTO `Server.make`, so
  * the polling hint source (ADR-0019 tier 2) publishes into the same bus the
@@ -103,7 +107,7 @@ const commerceSync: Effect.Effect<CommerceSync, never, SqlClient | Scope.Scope> 
       auth: {
         policy: authPolicy,
         identity: {
-          resolve: (clientGroupId) =>
+          resolve: ({ clientGroupId }) =>
             currentUser(clientGroupId).pipe(
               Effect.provideService(SqlClient, sql),
               // An unreadable binding table is a server bug, not an auth verdict.

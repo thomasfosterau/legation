@@ -197,7 +197,7 @@ refetch, no reset.
 // +page.server.ts — with @thomasfosterau/effect-sveltekit's serverLoad (or any
 // Effect-based load), the app's sync server provided as ServerHandler.
 import { Effect } from "effect";
-import { loadSnapshot } from "@thomasfosterau/legation-svelte/kit";
+import { loadSnapshot, requestCredentials } from "@thomasfosterau/legation-svelte/kit";
 import { allProducts, nodes } from "$lib/domain";
 
 export const load = serverLoad((event) =>
@@ -205,6 +205,8 @@ export const load = serverLoad((event) =>
     const { snapshot, clientGroupId } = yield* loadSnapshot(event.cookies, {
       nodes,
       reads: [allProducts],
+      // The request's cookie and headers, for the server's IdentityResolver.
+      credentials: requestCredentials(event),
     });
     return { snapshot, clientGroupId };
   })
@@ -214,9 +216,15 @@ export const load = serverLoad((event) =>
 - **`clientGroupId(cookies, options?)`** — read-or-mint the browser's client
   group id (a plain, non-`httpOnly` cookie; it carries no authority — identity
   is resolved server-side via `IdentityResolver`).
-- **`loadSnapshot(cookies, { nodes, reads })`** — resolve the group id and
-  produce the page's snapshot over a request-scoped engine (a thin wrapper of
-  core's `Hydration.snapshot`).
+- **`loadSnapshot(cookies, { nodes, reads, credentials? })`** — resolve the
+  group id and produce the page's snapshot over a request-scoped engine (a thin
+  wrapper of core's `Hydration.snapshot`). Pass `credentials` so the in-process
+  render presents the request's session to the server's `IdentityResolver`;
+  without it the render is anonymous (`Authorization.noCredentials`).
+- **`requestCredentials(event)`** — the request's headers as
+  `Option.some(Authorization.RequestCredentials)`, for `loadSnapshot`'s and
+  `runFormMutation`'s `credentials` option. Only the server's resolver reads
+  them; they never reach `SyncContext`, middleware or auth filters.
 
 ### Client
 
@@ -304,6 +312,7 @@ import {
   RECEIPT_KEY,
   formMutationTarget,
   mintFormClient,
+  requestCredentials,
   runFormMutation,
 } from "@thomasfosterau/legation-svelte/kit";
 import { addToCart } from "$lib/domain";
@@ -312,7 +321,8 @@ import { server } from "$lib/server/sync";
 export const load = () => ({ form: mintFormClient() });
 
 export const actions = {
-  add: async ({ cookies, request }) => {
+  add: async (event) => {
+    const { cookies, request } = event;
     const data = await request.formData();
     // The form layer (e.g. effect-forms) validates the fields first.
     const args = { productId: String(data.get("productId")) };
@@ -321,7 +331,10 @@ export const actions = {
       // No client-group cookie: an out-of-band writer, as before.
       return writeThroughApiAndBroadcast(args);
     }
-    const receipt = await Effect.runPromise(runFormMutation(server, target, addToCart, args));
+    // The action's session reaches the server's IdentityResolver, as a push's does.
+    const receipt = await Effect.runPromise(
+      runFormMutation(server, target, addToCart, args, { credentials: requestCredentials(event) })
+    );
     return { [RECEIPT_KEY]: receipt };
   },
 };

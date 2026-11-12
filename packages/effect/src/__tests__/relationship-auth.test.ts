@@ -50,7 +50,7 @@ const issuesAuth: Authorization.AuthFilter = (context) => {
 };
 
 const identityResolver: Authorization.IdentityResolver = {
-  resolve: (clientGroupId) => Effect.succeed(users[clientGroupId]),
+  resolve: ({ clientGroupId }) => Effect.succeed(users[clientGroupId]),
 };
 
 const handler = Effect.gen(function* () {

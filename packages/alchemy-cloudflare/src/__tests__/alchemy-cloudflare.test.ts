@@ -774,6 +774,9 @@ describe("Room publishTimeout", () => {
   );
 });
 
+/** A protocol body as the room's routes read it. */
+const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 describe("Room HTTP routes", () => {
   it.effect("answers a route by its last path segment, and 404s anything else", () =>
     Effect.gen(function* () {
@@ -800,6 +803,47 @@ describe("Room HTTP routes", () => {
       expect((yield* post(routes.push)).status).toBe(400);
       expect((yield* post(`/sync${routes.read}`)).status).toBe(400);
       expect((yield* post("/nonsense")).status).toBe(404);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("presents each request's headers to the IdentityResolver as its credentials", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.testClockWith(Effect.succeed);
+      const seen: Array<Option.Option<string>> = [];
+      const room = yield* hungRoom("room-credentials", clock, makeHungShards().namespace, {
+        identity: Effect.succeed({
+          resolve: ({ credentials }) =>
+            Effect.sync(() => {
+              seen.push(credentials.header("Cookie"));
+            }),
+        }),
+      });
+      const send = fetchOf(room);
+      const json = { "content-type": "application/json" };
+      const post = (path: string, body: Schema.Json, cookie: Option.Option<string>) =>
+        Effect.tryPromise(() =>
+          send(
+            new Request(`https://room/sync${path}`, {
+              method: "POST",
+              body: encodeBody(body),
+              headers: Option.match(cookie, {
+                onNone: () => json,
+                onSome: (value) => ({ ...json, cookie: value }),
+              }),
+            })
+          )
+        ).pipe(Effect.orDie);
+      const session = Option.some("sid=room-session");
+      expect(
+        (yield* post(routes.push, { clientGroupId: "group-c", mutations: [] }, session)).status
+      ).toBe(200);
+      expect(
+        (yield* post(routes.pull, { clientGroupId: "group-c", subscriptions: [] }, session)).status
+      ).toBe(200);
+      expect(
+        (yield* post(routes.read, { clientGroupId: "group-c", subsets: [] }, Option.none())).status
+      ).toBe(200);
+      expect(seen).toEqual([session, session, Option.none()]);
     }).pipe(Effect.scoped)
   );
 });
