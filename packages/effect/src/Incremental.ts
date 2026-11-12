@@ -131,7 +131,7 @@ export const deltaFromChanges = (
   const added: Array<Row> = [];
   const removed: Array<Row> = [];
   for (const change of batch) {
-    // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.4x slower than this switch (#497)
+    // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain measured ~2.2x, Match.typeTags ~2.1x and a Record table ~1.2x slower than this switch (#497)
     switch (change._tag) {
       case "reset":
         for (const row of known.values()) removed.push(row);

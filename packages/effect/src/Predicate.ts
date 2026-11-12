@@ -295,7 +295,7 @@ const numericOrder = (left: number, right: number): number =>
  * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
  */
 export const holds = (op: Comparison, ordered: number): boolean => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.when chain measured ~7x slower and a Record table ~5x slower than this switch (#497)
   switch (op) {
     case "eq":
       return ordered === 0;
@@ -433,29 +433,35 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
-export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
-  switch (predicate._tag) {
-    case "True":
-    case "Exists":
-      return TRUE;
-    case "Compare":
-      return evaluateCompare(predicate, row);
-    case "InSet":
-      return FALSE;
-    case "In":
-      return evaluateMembership(predicate.field, predicate.values, true, row);
-    case "NotIn":
-      return evaluateMembership(predicate.field, predicate.values, false, row);
-    case "IsNull":
-      return definite(isNullish(fieldValue(row, predicate.field)) !== (predicate.negated === true));
-    case "And":
-      return evaluateAnd(predicate.predicates, row);
-    case "Or":
-      return evaluateOr(predicate.predicates, row);
-    case "Not":
-      return negate(evaluate(predicate.predicate, row));
-  }
+export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> =>
+  (evaluators[predicate._tag] as (node: Predicate, row: unknown) => Option.Option<boolean>)(
+    predicate,
+    row
+  );
+
+/**
+ * One evaluator per node tag, keyed by `_tag`: a property lookup, not a
+ * `Match`, because `evaluate` runs per row per node (a hoisted `Match.fn` tag
+ * chain measured ~2.3x slower and `Match.typeTags` ~1.7x, the lookup ~8%
+ * slower than a `switch`; #497). The mapped type keeps it exhaustive.
+ */
+const evaluators: {
+  readonly [Tag in Predicate["_tag"]]: (
+    node: Extract<Predicate, { readonly _tag: Tag }>,
+    row: unknown
+  ) => Option.Option<boolean>;
+} = {
+  True: () => TRUE,
+  Exists: () => TRUE,
+  Compare: evaluateCompare,
+  InSet: () => FALSE,
+  In: (node, row) => evaluateMembership(node.field, node.values, true, row),
+  NotIn: (node, row) => evaluateMembership(node.field, node.values, false, row),
+  IsNull: (node, row) =>
+    definite(isNullish(fieldValue(row, node.field)) !== (node.negated === true)),
+  And: (node, row) => evaluateAnd(node.predicates, row),
+  Or: (node, row) => evaluateOr(node.predicates, row),
+  Not: (node, row) => negate(evaluate(node.predicate, row)),
 };
 
 /**
