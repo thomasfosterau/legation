@@ -187,6 +187,33 @@ export const useQuery = <const R extends Query.Read>(
     options
   );
 
+/**
+ * Live answer of a declarative read: {@link useQuery}'s rows with their
+ * completeness beside them (`Client.Answer`, #653), from
+ * `Client.observeAnswers`.
+ *
+ * `completeness` is `"partial"` while the read's windows are not pulled yet
+ * (offline, or before the first pull), so the replica may hold fewer rows
+ * than the server, and `"complete"` once a pull covers them. The rows are
+ * typed and the read checked as {@link useQuery}'s are, against the app's
+ * registered graph; the thunk may return `undefined` to opt out in the same
+ * way. A seed from `initial` is an answer the page already holds, with the
+ * completeness it was given.
+ */
+export const useAnswer = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
+  options?: LiveOptions<Client.Answer<R>>
+): Live<Client.Answer<R>> =>
+  live(
+    getClientRuntime(),
+    () => {
+      const value = read();
+      if (value === undefined) return undefined;
+      return (client) => client.observeAnswers(value);
+    },
+    options
+  );
+
 /** A live, growing connection over a read's root window (ADR-0024). */
 export interface Connection<R extends Query.Read = Query.Read> extends Live<ResolvedRows<R>> {
   /**

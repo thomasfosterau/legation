@@ -1,6 +1,7 @@
 /**
  * Live reads against a real engine (memory backend, loopback transport) in
- * mounted Svelte components: `useQuery` re-emits on mutation,
+ * mounted Svelte components: `useQuery` re-emits on mutation, `useAnswer`
+ * says how complete its rows are,
  * `useAggregate`/`useAggregateGrouped` track counts, and `useNamedQuery`
  * renders the named query's client-local subset.
  */
@@ -45,7 +46,7 @@ describe("live read hooks", () => {
     await runtime.dispose();
   });
 
-  it("useQuery's rows carry the answer's completeness (#653)", async () => {
+  it("useAnswer gives the rows with their completeness (#653)", async () => {
     const runtime = makeClientRuntime();
     const app = mount(QueryHarness, {
       target: document.body,
@@ -53,9 +54,13 @@ describe("live read hooks", () => {
     });
 
     // Registered but not yet pulled: the replica's answer is partial.
-    await until(() => text().includes("completeness:partial"));
+    await until(() => text().includes("completeness:partial/0"));
     await run(runtime, (engine) => engine.pull);
-    await until(() => text().includes("completeness:complete"));
+    await until(() => text().includes("completeness:complete/0"));
+    await run(runtime, (engine) =>
+      engine.mutate("todo/set", { id: "1", title: "seed", authorId: "u1" })
+    );
+    await until(() => text().includes("completeness:complete/1"));
 
     await unmount(app);
     await runtime.dispose();

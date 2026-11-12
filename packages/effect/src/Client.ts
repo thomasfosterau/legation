@@ -39,12 +39,12 @@
  * `observe` never falls through: observing subscribes, which IS the
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  *
- * **An answer carries its completeness** (#653), for a caller that asks:
- * {@link completenessOf} reads it off the rows `query` resolves to and each
- * array `observe` emits. A covered or server-answered read is `"complete"`;
- * an uncovered one answered from the replica (offline, or over a transport
- * without `read`) is `"partial"`: never wider than the policy, but possibly
- * missing rows the server holds. The rows themselves are unchanged.
+ * **An answer can say how complete it is** (#653): `answer` and
+ * `observeAnswers` are `query` and `observe` with each answer's
+ * {@link Completeness} beside its rows ({@link Answer}). A covered or
+ * server-answered read is `"complete"`; an uncovered one answered from the
+ * replica (offline, or over a transport without `read`) is `"partial"`: never
+ * wider than the policy, but possibly missing rows the server holds.
  */
 
 import * as Defined from "./Defined.js";
@@ -187,6 +187,58 @@ export type ObserveOf<Graph extends Node.NodeRegistry> =
       ) => Stream.Stream<ReadonlyArray<ResolvedRow<R, Graph>>>;
 
 /**
+ * How completely an answer holds the rows its read selects: `"complete"` when
+ * a pulled subscription covered the read (ADR-0029) or the server answered it
+ * (ADR-0025); `"partial"` when an uncovered read was answered from the replica
+ * (offline, or no transport `read`), so the server may hold rows it lacks.
+ */
+export type Completeness = "complete" | "partial";
+
+/**
+ * A read's answer with its {@link Completeness}: the rows, typed as
+ * {@link ResolvedRow} types them, and whether they are all the rows the read
+ * selects (#653).
+ *
+ * `rows` is exactly what {@link Client.query} resolves to for the same read;
+ * `completeness` is a value beside it, so filtering or copying the rows never
+ * loses it. `Graph` defaults to the {@link Registered} graph, as
+ * {@link ResolvedRow}'s does.
+ */
+export interface Answer<
+  R extends QueryModule.Read = QueryModule.Read,
+  Graph extends Node.NodeRegistry = Registered,
+> {
+  /** The rows the read resolved to: node values with their included edges. */
+  readonly rows: ReadonlyArray<ResolvedRow<R, Graph>>;
+  /** Whether {@link rows} are all the rows the read selects, or possibly fewer. */
+  readonly completeness: Completeness;
+}
+
+/**
+ * {@link Client.answer} over a graph: as {@link QueryOf}, resolving to the
+ * rows with their completeness ({@link Answer}).
+ */
+export type AnswerOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (
+        read: QueryModule.Read
+      ) => Effect.Effect<Answer<QueryModule.Read, Graph>, ClientView.ClientViewError>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Effect.Effect<Answer<R, Graph>, ClientView.ClientViewError>;
+
+/**
+ * {@link Client.observeAnswers} over a graph: as {@link ObserveOf}, streaming
+ * the rows with their completeness ({@link Answer}).
+ */
+export type ObserveAnswersOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (read: QueryModule.Read) => Stream.Stream<Answer<QueryModule.Read, Graph>>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Stream.Stream<Answer<R, Graph>>;
+
+/**
  * The one-per-thread object an app reads and writes through (ADR-0022): queries, observed reads,
  * pins, mutations and the identity boundary, whether the engine is owned or hosted elsewhere.
  *
@@ -211,6 +263,26 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
    * IS subscribing. Checked and typed as {@link Client.query} is.
    */
   readonly observe: ObserveOf<Graph>;
+  /**
+   * Run a read once as {@link Client.query} does, resolving to its rows and
+   * their {@link Completeness} ({@link Answer}): `"complete"` when a pulled
+   * subscription covered the read or the server answered it, `"partial"` when
+   * an uncovered read was answered from the replica (offline, or over a
+   * transport without `read`). Checked and typed as {@link Client.query} is.
+   *
+   * A covered answer is complete only when its rows were read after the pull
+   * marks that cover them, so rows that predate the covering pull are never
+   * called complete.
+   */
+  readonly answer: AnswerOf<Graph>;
+  /**
+   * Observe a read as {@link Client.observe} does, emitting its rows with
+   * their {@link Completeness} ({@link Answer}): `"partial"` until a pull
+   * covers the read's windows, then the rows again as `"complete"`, and
+   * partial again if the cover is lost. Each emission's rows are read after
+   * the marks it is judged by. Checked and typed as {@link Client.query} is.
+   */
+  readonly observeAnswers: ObserveAnswersOf<Graph>;
   /**
    * Pin a read beyond any observer's lifetime: its root window and, for a
    * read with `include`, its edge windows — the same relational
@@ -248,8 +320,8 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
    * exactly what it answers (#426). A snapshot of any other subset is not used; the
    * verdict then reads its root as usual. Omit it to judge a fresh read.
    *
-   * This judges a read before it is answered; {@link completenessOf} says how
-   * an answer `query` or `observe` gave was answered.
+   * This judges a read before it is answered; {@link Client.answer} and
+   * {@link Client.observeAnswers} say how each answer was answered.
    */
   readonly coverageOf: (
     read: QueryModule.Read,
@@ -452,52 +524,25 @@ const keyOf = (registration: Coverage.Registration): string =>
         registration.edges
       );
 
-// ─── Completeness (#653) ─────────────────────────────────────────────────────
+// ─── Answers (#653) ──────────────────────────────────────────────────────────
 
-/**
- * How completely an answer holds the rows its read selects: `"complete"` when
- * a pulled subscription covered the read (ADR-0029) or the server answered it
- * (ADR-0025); `"partial"` when an uncovered read was answered from the replica
- * (offline, or no transport `read`), so the server may hold rows it lacks.
- */
-export type Completeness = "complete" | "partial";
-
-// The completeness of each answer a Client gave, keyed by the rows array it
-// answered with: the marker rides beside the rows, not in them, so the
-// answer's type and shape are what they were for a caller that never asks.
-const answers = new WeakMap<ReadonlyArray<unknown>, Completeness>();
-
-/** A live read's last answer: its rows and their completeness. */
-interface Answer {
+/** An answer over the erased graph: the shape the Client builds before typing it. */
+interface UntypedAnswer {
   readonly rows: ReadonlyArray<Related.RelatedRow>;
   readonly completeness: Completeness;
 }
 
-/** A live read's next state and what it emits: `answer`, as its rows. */
-const emit = (answer: Answer) => [Option.some(answer), [answer.rows]] as const;
+/** Rows a pulled subscription covered or the server answered: a complete answer. */
+const complete = (rows: ReadonlyArray<Related.RelatedRow>): UntypedAnswer => ({
+  rows,
+  completeness: "complete",
+});
 
-/** Record how `rows` were answered, on a copy when they already carry another marker. */
-const answered =
-  (completeness: Completeness) =>
-  <A>(rows: ReadonlyArray<A>): ReadonlyArray<A> => {
-    const known = answers.get(rows);
-    const own = known === undefined || known === completeness ? rows : Arr.copy(rows);
-    answers.set(own, completeness);
-    return own;
-  };
-
-/**
- * The {@link Completeness} of rows a Client answered with: the array
- * `Client.query` resolved to, or one `Client.observe` emitted (and so a
- * `useQuery` result's rows). `None` for an array no Client answered with,
- * such as a seed or a copy (`rows.map`, `[...rows]`), whose completeness is
- * unknown.
- *
- * Offline, an uncovered read is `"partial"` until a pulled subscription
- * covers it or the server answers it again; a covered read is `"complete"`.
- */
-export const completenessOf = (rows: ReadonlyArray<unknown>): Option.Option<Completeness> =>
-  Option.fromUndefinedOr(answers.get(rows));
+/** Rows the replica answered an uncovered read with: a partial answer. */
+const partial = (rows: ReadonlyArray<Related.RelatedRow>): UntypedAnswer => ({
+  rows,
+  completeness: "partial",
+});
 
 const noUrlReads = (url: string): QueryError =>
   new QueryError({
@@ -764,7 +809,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     );
 
   // The replica's answer to a read when a pulled subscription covers it
-  // (ADR-0029), marked complete (#653); `None` when nothing covers it. The
+  // (ADR-0029), which is complete (#653); `None` when nothing covers it. The
   // marks are read first, then the rows: a pull marks its windows only after
   // its rows are in the replica, so rows read after a mark says pulled are at
   // least that pull's, and rows read before it are never called complete.
@@ -796,9 +841,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
                     Option.exists(requested, (request) =>
                       P.isTagged(Coverage.verdictOf(entries, request), "Covered")
                     )
-                      ? answerOf(rows).pipe(
-                          Effect.map((answer) => Option.some(answered("complete")(answer)))
-                        )
+                      ? answerOf(rows).pipe(Effect.asSome)
                       : Effect.succeedNone
                   )
                 ),
@@ -808,19 +851,18 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       )
     );
 
-  // A live read's answers, each marked with its completeness (#653). An
-  // emitted array may predate the pull that covers the read, and a pull's
-  // tick may arrive before its rows, so no emitted array is marked complete
-  // as it stands: on each emission and each `pulledChanges` tick the read is
-  // answered again by `covered`, and while that finds it uncovered the
-  // emitted rows go out marked partial. A tick emits only when the
-  // completeness moved: a fresh complete answer, or a complete answer that
-  // is uncovered again, out again as a fresh array marked partial.
-  const marked = (
+  // A live read's answers (#653). An emitted array may predate the pull that
+  // covers the read, and a pull's tick may arrive before its rows, so no
+  // emitted array is called complete as it stands: on each emission and each
+  // `pulledChanges` tick the read is answered again by `covered`, and while
+  // that finds it uncovered the emitted rows go out as partial. A tick emits
+  // only when the completeness moved: a fresh complete answer, or the last
+  // complete answer's rows, out again as partial once they are uncovered.
+  const answersOf = (
     sources: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
     covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
-  ): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
-    return Stream.merge(
+  ): Stream.Stream<UntypedAnswer> =>
+    Stream.merge(
       sources.pipe(Stream.map(Option.some)),
       (view.pulledChanges ?? Stream.empty).pipe(
         Stream.as(Option.none<ReadonlyArray<Related.RelatedRow>>())
@@ -828,7 +870,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       { haltStrategy: "left" }
     ).pipe(
       Stream.mapAccumEffect(
-        (): Option.Option<Answer> => Option.none(),
+        (): Option.Option<UntypedAnswer> => Option.none(),
         (last, event) =>
           covered.pipe(
             Effect.map((fresh) => {
@@ -836,29 +878,26 @@ export const fromView = <Graph extends Node.NodeRegistry>(
                 last,
                 (answer) => answer.completeness === "complete"
               );
-              if (Option.isSome(fresh)) {
-                return Option.isSome(event) || !wasComplete
-                  ? emit({ rows: fresh.value, completeness: "complete" })
-                  : ([last, []] as const);
-              }
-              if (Option.isSome(event)) {
-                return emit({ rows: answered("partial")(event.value), completeness: "partial" });
-              }
-              return Option.match(last, {
+              const next = Option.match(fresh, {
+                onSome: (rows) =>
+                  Option.isSome(event) || !wasComplete
+                    ? Option.some(complete(rows))
+                    : Option.none(),
+                onNone: () =>
+                  Option.isSome(event)
+                    ? Option.some(partial(event.value))
+                    : wasComplete
+                      ? Option.map(last, (answer) => partial(answer.rows))
+                      : Option.none(),
+              });
+              return Option.match(next, {
                 onNone: () => [last, []] as const,
-                onSome: (answer) =>
-                  wasComplete
-                    ? emit({
-                        rows: answered("partial")(Arr.copy(answer.rows)),
-                        completeness: "partial",
-                      })
-                    : ([last, []] as const),
+                onSome: (answer) => [next, [answer]] as const,
               });
             })
           )
       )
     );
-  };
 
   // The three-tier read (ADR-0025): replica when a ledger subscription
   // covers the read (ADR-0029); server fallthrough otherwise
@@ -868,29 +907,45 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // unavailable or fails (offline-first — local is always an answer).
   // A covered answer is `coveredAnswer`'s: judged before, and over, the one
   // snapshot of the root rows it is joined from (#426, #653).
-  const queryOnce = (
+  const answerOnce = (
     read: QueryModule.Read
-  ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> => {
+  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> => {
     const readThrough = view.read;
     const compiled = Query.plan(nodes, read);
     // Uncovered and answered from the replica: never wider than the policy,
     // but possibly short of what the server holds (#653).
-    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(
-      Effect.map(answered("partial"))
-    );
+    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(Effect.map(partial));
     const uncovered =
       readThrough === undefined
         ? local
         : Query.runPlanVia(readThrough, nodes, compiled).pipe(
-            Effect.map(answered("complete")),
+            Effect.map(complete),
             Effect.catch(() => local)
           );
     return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
       Query.runRows(view, nodes, read, rows)
-    ).pipe(Effect.flatMap(Option.match({ onNone: () => uncovered, onSome: Effect.succeed })));
+    ).pipe(
+      Effect.flatMap(
+        Option.match({ onNone: () => uncovered, onSome: (rows) => Effect.succeed(complete(rows)) })
+      )
+    );
   };
 
-  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
+  const queryOnce = (
+    read: QueryModule.Read
+  ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
+    answerOnce(read).pipe(Effect.map((answer) => answer.rows));
+
+  // A live read: its windows registered for the stream's lifetime and its
+  // rows streamed, which `finish` turns into what the caller observes, given
+  // the read's covered answer now (`coveredAnswer` over the same rows).
+  const live = <A>(
+    read: QueryModule.Read,
+    finish: (
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+    ) => Stream.Stream<A>
+  ): Stream.Stream<A> => {
     const compiled = Query.plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
@@ -899,7 +954,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
           release(registration, "observer")
         ).pipe(
           Effect.as(
-            marked(
+            finish(
               view.observe(compiled.root).pipe(
                 Stream.orDie,
                 Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
@@ -926,7 +981,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     return Stream.unwrap(
       view.related(nodes.collections, read.collection, compiled.root, edges).pipe(
         Effect.map((stream) =>
-          marked(
+          finish(
             stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows))),
             coveredAnswer(compiled, Option.some(Coverage.ofPlan(compiled)), relatedNow, (rows) =>
               Effect.succeed(Query.applyWindows(compiled, rows))
@@ -937,6 +992,12 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     );
   };
 
+  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+    live(read, (rows) => rows);
+
+  const observeAnswers = (read: QueryModule.Read): Stream.Stream<UntypedAnswer> =>
+    live(read, answersOf);
+
   return {
     nodes,
     // SAFETY: the rows are typed by the graph the reads are planned against,
@@ -946,6 +1007,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     query: queryOnce as QueryOf<Graph>,
     // SAFETY: as `query`: the same plan over the same graph, streamed.
     observe: observe as ObserveOf<Graph>,
+    answer: answerOnce,
+    observeAnswers,
     subscribe: (input) =>
       targetOf(input).pipe(
         Effect.flatMap(({ registration, url }) => acquire(registration, "explicit", url))

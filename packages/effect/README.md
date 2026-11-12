@@ -140,11 +140,12 @@ row?.related.variants; //      a `many` / `paginated` edge: the variants rows
 row?.related.reviews; //       compile error: this read does not include `reviews`
 ```
 
-`client.query`, `client.observe` and the framework hooks check the read against the graph where it is used (`Query.Validate`): a collection the graph does not have, an `include` key that is not an edge of the node, or a `where` key or `order` token that is not a field of its row fails to compile, the error naming the key. Renaming an attribute or an edge therefore breaks every read and every row access that used the old name.
+`client.query`, `client.observe`, `client.answer`, `client.observeAnswers` and the framework hooks check the read against the graph where it is used (`Query.Validate`): a collection the graph does not have, an `include` key that is not an edge of the node, or a `where` key or `order` token that is not a field of its row fails to compile, the error naming the key. Renaming an attribute or an edge therefore breaks every read and every row access that used the old name.
 
 | Type                       | What it is                                                                                                                                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Client.ResolvedRow<R, G>` | A row of read `R` over graph `G` (default: the registered graph): `{ id, value: Node.RowOf<N>, related }`, `related` holding exactly the included edges. `Client.ResolvedRow` alone is the untyped row. |
+| `Client.Answer<R, G>`      | What `client.answer` resolves to and `client.observeAnswers` emits: `{ rows, completeness }`, `rows` typed as `Client.ResolvedRow<R, G>` types them.                                                    |
 | `Client.Client<G>`         | A Client over graph `G` (`typeof nodes`). `Client.Client` alone accepts any read and resolves untyped rows; a typed Client is assignable to it.                                                         |
 | `Node.NodeRegistry<N>`     | What `Node.registry([...])` returns: the graph, carrying the union of its node types `N`.                                                                                                               |
 | `Node.RowOf<N>`            | A node's row type (branded ids: `Id<"products">` is `string & Brand<"products/id">`, so it assigns to `string`).                                                                                        |
@@ -196,19 +197,18 @@ const server = yield * Server.make({ backend, auth: { policy, identity } });
 
 ### Partial answers offline
 
-`client.query` answers an uncovered read from the server; when no server can answer (offline, or a transport without `read`), it answers from the replica instead, which can hold fewer rows than the server would return. Such an answer is marked **partial**. `Client.completenessOf(rows)` reads the marker off the array `query` resolved to, or off any array `observe` emitted. The rows themselves are unchanged, so code that doesn't ask sees no difference:
+`client.query` answers an uncovered read from the server; when no server can answer (offline, or a transport without `read`), it answers from the replica instead, which can hold fewer rows than the server would return. To know which happened, ask with `client.answer(read)` instead: it resolves to the same rows with their completeness beside them. `client.observeAnswers(read)` is `observe` with the same addition. Both are checked and typed as `query` is, so `answer.rows` holds the read's typed rows:
 
 ```ts
-import { Effect, Option } from "effect";
-import { Client } from "@thomasfosterau/legation";
-
-const rows = yield * client.query({ collection: "todos" });
-Client.completenessOf(rows); // Option.some("partial") offline, uncovered; Option.some("complete") otherwise
+const answer = yield * client.answer({ collection: "todos" });
+answer.rows; // what client.query resolves to
+answer.completeness; // "partial" offline and uncovered; "complete" otherwise
 ```
 
-- `"complete"`: a pulled subscription covers the read, or the server answered it.
-- `"partial"`: the read is uncovered and the replica answered it. An `observe` stream is partial until its windows are pulled, then emits again as complete.
-- `Option.none()`: no Client answered with this array, for example a copy made with `rows.map` or `[...rows]`, or a seed.
+- `"complete"`: a pulled subscription covers the read, or the server answered it. Rows are only called complete when they were read after the pull that covers them.
+- `"partial"`: the read is uncovered and the replica answered it. An `observeAnswers` stream is partial until its windows are pulled, then emits the rows again as complete.
+
+The answer is a plain value, `Client.Answer<R, G>` (`{ rows, completeness }`, with `Client.Completeness` = `"complete" | "partial"`), so filtering or copying the rows never loses it. `query` and `observe` resolve to the rows alone.
 
 ## API
 
@@ -222,7 +222,7 @@ Everything below is on the root entry, `@thomasfosterau/legation`.
 | `Query`         | The read. A `Query.Read` is a plain literal `{ collection, where, include, order, first, after }`, declared `as const satisfies Query.Read` (or `Query.make({...})`, which keeps it literal too) so its rows are typed ([Typed reads](#typed-reads)); `Query.named(name, args)` declares a server-resolved named query.                                                                                                                                                                                                                |
 | `Aggregate`     | Read projections over a query: `Aggregate.count`, `Aggregate.sum(field)`, `min`, `max` and `avg`.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `Mutation`      | The write. `Mutation.make(name, schema)` declares a named intent; `Mutation.registry` pairs each with its optimistic `local` handler. (`Mutator` is a deprecated alias.)                                                                                                                                                                                                                                                                                                                                                               |
-| `Client`        | The one-per-thread object. `Client.make` owns an engine and returns `{ client, engine, store }`, so engine-level tools such as devtools attach to what it built; `Client.connect` joins one hosted elsewhere, such as a service worker. It offers `query`, `observe`, `subscribe`, `mutate`, `mutateWithAck`, `mutationStates`, `reset` and `totalOf` (a subscription's total as the last pull reported it, #210).                                                                                                                     |
+| `Client`        | The one-per-thread object. `Client.make` owns an engine and returns `{ client, engine, store }`, so engine-level tools such as devtools attach to what it built; `Client.connect` joins one hosted elsewhere, such as a service worker. It offers `query`, `observe`, `answer`, `observeAnswers` (the rows with their completeness), `subscribe`, `mutate`, `mutateWithAck`, `mutationStates`, `reset` and `totalOf` (a subscription's total as the last pull reported it, #210).                                                      |
 | `ClientStore`   | Durable replica and journal storage. `makeMemory` is the default; `makeKeyValue` and `layerKeyValue` wrap any key-value store. The browser package supplies IndexedDB.                                                                                                                                                                                                                                                                                                                                                                 |
 | `Transport`     | The carrier seam: the `ClientTransport` and `ServerHandler` services, plus `makeInMemory` (loopback; `setOnline(false)` fails its calls until it is back), `simulateOffline` and `withFallback`.                                                                                                                                                                                                                                                                                                                                       |
 | `Identity`      | The identity boundary. A durable replica belongs to one resolved identity; `Client.make({ identity })` and `client.reset(fingerprint)` enforce it.                                                                                                                                                                                                                                                                                                                                                                                     |

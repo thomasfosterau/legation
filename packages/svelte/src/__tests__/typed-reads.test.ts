@@ -1,6 +1,6 @@
 /**
  * Typed reads through the rune hooks (#140), in a program that registers no
- * graph: `useQuery` / `useConnection` accept any read, literal or dynamic,
+ * graph: `useQuery` / `useAnswer` / `useConnection` accept any read, literal or dynamic,
  * and resolve it to the untyped row — never a compile error. (With a graph
  * registered, the examples' `svelte-check` runs are the typed half: their
  * pages read `row.value` and `row.related` with no cast.)
@@ -10,7 +10,13 @@
  */
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import type { Client, Query } from "@thomasfosterau/legation";
-import { useConnection, useQuery, type Live, type ResolvedRows } from "../index.svelte.js";
+import {
+  useAnswer,
+  useConnection,
+  useQuery,
+  type Live,
+  type ResolvedRows,
+} from "../index.svelte.js";
 
 const allTodos = { collection: "todos", include: { author: true } } as const satisfies Query.Read;
 
@@ -27,6 +33,18 @@ describe("typed reads, unregistered", () => {
       expectTypeOf<ResolvedRows<typeof allTodos>>().toEqualTypeOf<
         ReadonlyArray<Client.ResolvedRow>
       >();
+    }));
+
+  it("types useAnswer's rows as useQuery's, beside the completeness (#653)", () =>
+    compileOnly(() => {
+      const answer = useAnswer(() => allTodos);
+      expectTypeOf(answer).toEqualTypeOf<Live<Client.Answer<typeof allTodos>>>();
+      expectTypeOf<Client.Answer<typeof allTodos>["rows"]>().toEqualTypeOf<
+        ResolvedRows<typeof allTodos>
+      >();
+      expectTypeOf<Client.Answer["completeness"]>().toEqualTypeOf<Client.Completeness>();
+      const collection: string = "todos";
+      void useAnswer(() => (collection === "" ? undefined : { collection }));
     }));
 
   it("accepts a dynamic read, an opted-out read and any collection", () =>

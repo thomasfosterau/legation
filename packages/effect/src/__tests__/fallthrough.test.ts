@@ -327,13 +327,16 @@ const makeReader = (handler: Transport.ServerHandler, group: string) =>
     return { engine, client, setOffline: gate.setOffline };
   });
 
-/** Whether rows were answered with the given completeness (#653). */
+/** Whether an answer has the given completeness (#653). */
 const answeredAs =
   (completeness: Client.Completeness) =>
-  (rows: ReadonlyArray<Client.ResolvedRow>): boolean =>
-    Option.contains(Client.completenessOf(rows), completeness);
+  (answer: Client.Answer): boolean =>
+    answer.completeness === completeness;
 const partial = answeredAs("partial");
 const complete = answeredAs("complete");
+
+/** The ids of rows, sorted: a read's rows in no particular order. */
+const idsOf = (rows: ReadonlyArray<Client.ResolvedRow>) => rows.map((row) => row.id).toSorted();
 
 describe("answer completeness (#653)", () => {
   const products = { collection: "products" };
@@ -358,18 +361,18 @@ describe("answer completeness (#653)", () => {
         yield* client.mutate("product/set", { id: "p-9", name: "Local only" });
 
         yield* setOffline(true);
-        const offline = yield* client.query(products);
-        expect(offline.map((row) => row.id)).toEqual(["p-9"]);
-        expect(Client.completenessOf(offline)).toEqual(Option.some("partial"));
-        const offlineJoin = yield* client.query(withReviews);
-        expect(Client.completenessOf(offlineJoin)).toEqual(Option.some("partial"));
+        const offline = yield* client.answer(products);
+        expect(offline.rows.map((row) => row.id)).toEqual(["p-9"]);
+        expect(offline.completeness).toBe("partial");
+        expect((yield* client.answer(withReviews)).completeness).toBe("partial");
+        // `query` resolves to the same rows, with no completeness beside them.
+        expect(yield* client.query(products)).toEqual(offline.rows);
 
         yield* setOffline(false);
-        const online = yield* client.query(products);
-        expect(online.map((row) => row.id).toSorted()).toEqual(["p-1", "p-2"]);
-        expect(Client.completenessOf(online)).toEqual(Option.some("complete"));
-        const onlineJoin = yield* client.query(withReviews);
-        expect(Client.completenessOf(onlineJoin)).toEqual(Option.some("complete"));
+        const online = yield* client.answer(products);
+        expect(online.rows.map((row) => row.id).toSorted()).toEqual(["p-1", "p-2"]);
+        expect(online.completeness).toBe("complete");
+        expect((yield* client.answer(withReviews)).completeness).toBe("complete");
       })
     )
   );
@@ -383,17 +386,13 @@ describe("answer completeness (#653)", () => {
         yield* client.subscribe(withReviews);
         yield* pullUntilCovered(engine, client, withReviews);
 
-        const rows = yield* client.query(products);
-        expect(rows).toHaveLength(2);
-        expect(Client.completenessOf(rows)).toEqual(Option.some("complete"));
+        const answer = yield* client.answer(products);
+        expect(answer.rows).toHaveLength(2);
+        expect(answer.completeness).toBe("complete");
 
         yield* setOffline(true);
-        expect(Client.completenessOf(yield* client.query(products))).toEqual(
-          Option.some("complete")
-        );
-        expect(Client.completenessOf(yield* client.query(withReviews))).toEqual(
-          Option.some("complete")
-        );
+        expect((yield* client.answer(products)).completeness).toBe("complete");
+        expect((yield* client.answer(withReviews)).completeness).toBe("complete");
       })
     )
   );
@@ -416,9 +415,7 @@ describe("answer completeness (#653)", () => {
           Effect.provideService(Transport.ClientTransport, withoutRead)
         );
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
-        expect(Client.completenessOf(yield* client.query(products))).toEqual(
-          Option.some("partial")
-        );
+        expect((yield* client.answer(products)).completeness).toBe("partial");
       })
     )
   );
@@ -431,37 +428,60 @@ describe("answer completeness (#653)", () => {
         const { engine, client, setOffline } = yield* makeReader(server.handler, "group-observe");
         yield* setOffline(true);
 
-        const plain = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
-        const joined = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        const plain = yield* Ref.make(Option.none<Client.Answer>());
+        const joined = yield* Ref.make(Option.none<Client.Answer>());
         yield* Effect.forkScoped(
-          Stream.runForEach(client.observe(products), (rows) => Ref.set(plain, rows))
+          Stream.runForEach(client.observeAnswers(products), (answer) =>
+            Ref.set(plain, Option.some(answer))
+          )
         );
         yield* Effect.forkScoped(
-          Stream.runForEach(client.observe(withReviews), (rows) => Ref.set(joined, rows))
+          Stream.runForEach(client.observeAnswers(withReviews), (answer) =>
+            Ref.set(joined, Option.some(answer))
+          )
         );
+        const latest = (ref: Ref.Ref<Option.Option<Client.Answer>>, until: typeof partial) =>
+          eventually(Ref.get(ref), (answer) => Option.exists(answer, until)).pipe(
+            Effect.map((answer) =>
+              Option.match(answer, { onNone: () => [], onSome: (a) => a.rows })
+            )
+          );
         // Registered offline: nothing is pulled, so the empty replica answers partially.
-        expect(yield* eventually(Ref.get(plain), partial)).toEqual([]);
-        expect(yield* eventually(Ref.get(joined), partial)).toEqual([]);
+        expect(yield* latest(plain, partial)).toEqual([]);
+        expect(yield* latest(joined, partial)).toEqual([]);
 
         yield* setOffline(false);
         yield* engine.pull.pipe(Effect.orDie);
-        expect(
-          (yield* eventually(Ref.get(plain), complete)).map((row) => row.id).toSorted()
-        ).toEqual(["p-1", "p-2"]);
+        expect((yield* latest(plain, complete)).map((row) => row.id).toSorted()).toEqual([
+          "p-1",
+          "p-2",
+        ]);
         // The edge windows are registered from the root rows, so a second pull brings them.
-        expect(
-          yield* eventually(
-            engine.pull.pipe(Effect.orDie, Effect.andThen(Ref.get(joined))),
-            complete
-          )
-        ).toHaveLength(2);
+        const joinedAnswer = yield* eventually(
+          engine.pull.pipe(Effect.orDie, Effect.andThen(Ref.get(joined))),
+          (answer) => Option.exists(answer, complete)
+        );
+        expect(Option.map(joinedAnswer, (answer) => answer.rows.length)).toEqual(Option.some(2));
       })
     )
   );
 
-  it("rows no Client answered with carry no marker", () => {
-    expect(Client.completenessOf([])).toEqual(Option.none());
-  });
+  it.effect("query and observe give the rows alone, as answer and observeAnswers do", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        yield* seed(server.handler);
+        const { engine, client } = yield* makeReader(server.handler, "group-rows-alone");
+        yield* client.subscribe(products);
+        yield* engine.pull.pipe(Effect.orDie);
+        const answer = yield* client.answer(products);
+        expect(answer.completeness).toBe("complete");
+        expect(yield* client.query(products)).toEqual(answer.rows);
+        const observed = yield* Stream.runHead(client.observe(products));
+        expect(Option.map(observed, idsOf)).toEqual(Option.some(idsOf(answer.rows)));
+      })
+    )
+  );
 });
 
 /**
@@ -493,11 +513,11 @@ const holdingRows = (view: ClientView.ClientView, pass: number) =>
   });
 
 /** Every emission of `stream`, in order, recorded as it arrives. */
-const recording = (stream: Stream.Stream<ReadonlyArray<Client.ResolvedRow>>) =>
+const recording = (stream: Stream.Stream<Client.Answer>) =>
   Effect.gen(function* () {
-    const log = yield* Ref.make<ReadonlyArray<ReadonlyArray<Client.ResolvedRow>>>([]);
+    const log = yield* Ref.make<ReadonlyArray<Client.Answer>>([]);
     yield* Effect.forkScoped(
-      Stream.runForEach(stream, (rows) => Ref.update(log, (all) => [...all, rows]))
+      Stream.runForEach(stream, (answer) => Ref.update(log, (all) => [...all, answer]))
     );
     return log;
   });
@@ -519,11 +539,10 @@ describe("completeness is judged against the rows it marks (#653)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { engine, client, open } = yield* setup("group-tick-first", 1);
-        const log = yield* recording(client.observe(products));
+        const log = yield* recording(client.observeAnswers(products));
         // The first answer, before any pull: the empty replica, partial.
         yield* eventually(Ref.get(log), (all) => all.length === 1);
-        expect(yield* Ref.get(log)).toEqual([[]]);
-        expect(Arr.every(yield* Ref.get(log), partial)).toBe(true);
+        expect(yield* Ref.get(log)).toEqual([{ rows: [], completeness: "partial" }]);
 
         // The pull applies and ticks; its rows are held back.
         yield* engine.pull.pipe(Effect.orDie);
@@ -531,13 +550,13 @@ describe("completeness is judged against the rows it marks (#653)", () => {
           Ref.get(log).pipe(Effect.map((all) => Arr.findFirst(all, complete))),
           Option.isSome
         );
-        expect(Option.map(first, (rows) => rows.length)).toEqual(Option.some(2));
+        expect(Option.map(first, (answer) => answer.rows.length)).toEqual(Option.some(2));
 
         yield* open;
         yield* eventually(Ref.get(log), (all) => all.length >= 3);
-        expect(Arr.filter(yield* Ref.get(log), complete).map((rows) => rows.length)).not.toContain(
-          0
-        );
+        expect(
+          Arr.filter(yield* Ref.get(log), complete).map((answer) => answer.rows.length)
+        ).not.toContain(0);
       })
     )
   );
@@ -546,7 +565,7 @@ describe("completeness is judged against the rows it marks (#653)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { engine, client, open } = yield* setup("group-rows-late", 0);
-        const log = yield* recording(client.observe(products));
+        const log = yield* recording(client.observeAnswers(products));
         yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
         // The pull lands while the pre-pull answer is still in flight.
         yield* engine.pull.pipe(Effect.orDie);
@@ -556,17 +575,17 @@ describe("completeness is judged against the rows it marks (#653)", () => {
           Ref.get(log).pipe(Effect.map((all) => Arr.findFirst(all, complete))),
           Option.isSome
         );
-        expect(Option.map(first, (rows) => rows.length)).toEqual(Option.some(2));
-        expect(Arr.filter(yield* Ref.get(log), complete).map((rows) => rows.length)).not.toContain(
-          0
-        );
+        expect(Option.map(first, (answer) => answer.rows.length)).toEqual(Option.some(2));
+        expect(
+          Arr.filter(yield* Ref.get(log), complete).map((answer) => answer.rows.length)
+        ).not.toContain(0);
       })
     )
   );
 });
 
 describe("answer completeness over a hosted engine (#653)", () => {
-  it.effect("a mirror's answers carry the same marker as the host's", () =>
+  it.effect("a mirror's answers carry the same completeness as the host's", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { server } = yield* makeServer();
@@ -578,23 +597,23 @@ describe("answer completeness over a hosted engine (#653)", () => {
         const client = yield* Client.connect({ nodes, mutations, channel: pair.mirror });
 
         // Uncovered, the host forwards the read to the server.
-        const forwarded = yield* client.query({ collection: "products" });
-        expect(forwarded).toHaveLength(2);
-        expect(Client.completenessOf(forwarded)).toEqual(Option.some("complete"));
+        const forwarded = yield* client.answer({ collection: "products" });
+        expect(forwarded.rows).toHaveLength(2);
+        expect(forwarded.completeness).toBe("complete");
 
         // Observing registers through the host; its pull completes the answer.
-        const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        const latest = yield* Ref.make(Option.none<Client.Answer>());
         yield* Effect.forkScoped(
-          Stream.runForEach(client.observe({ collection: "products" }), (rows) =>
-            Ref.set(latest, rows)
+          Stream.runForEach(client.observeAnswers({ collection: "products" }), (answer) =>
+            Ref.set(latest, Option.some(answer))
           )
         );
         yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
         const answer = yield* eventually(
           engine.pull.pipe(Effect.orDie, Effect.andThen(Ref.get(latest))),
-          (rows) => Option.contains(Client.completenessOf(rows), "complete")
+          (last) => Option.exists(last, (a) => a.completeness === "complete")
         );
-        expect(answer).toHaveLength(2);
+        expect(Option.map(answer, (a) => a.rows.length)).toEqual(Option.some(2));
       })
     )
   );
