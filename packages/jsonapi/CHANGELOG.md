@@ -1,5 +1,60 @@
 # @thomasfosterau/legation-jsonapi
 
+## 0.4.0
+
+### Minor Changes
+
+- e30dacd: **Breaking:** every public return and result field that may be absent is an `Option` (#562). Option bags lose `| undefined`: each optional member is `readonly x?: T`, so a caller holding `undefined` omits the key instead of passing it. Optional function parameters and the wire shapes (JSON:API documents, `meta`, `links`, the `data: null` empty to-one, the mutation status document) are unchanged, and so is behaviour.
+
+  Migrate each signature (old → new):
+
+  - **`CollectionLoader.loadOne(type, id, options?)`**: `Effect<CollectionRow | undefined, …>` → `Effect<Option<CollectionRow>, …>`.
+  - **`Convention.ResourceEndpoints`**: `list`, `getOne`, `create`, `update`, `delete`: `?: EndpointRef` → `Option<EndpointRef>` (required; `None` for a role the api does not serve). **`Convention.classify(method, path)`**: `{ type, operation } | undefined` → `Option<{ type, operation }>`. **`Convention.reflectAtomic(api)`**: `EndpointRef | undefined` → `Option<EndpointRef>`.
+  - **`JsonApiSync.inspect(api)`**: `{ atomic?: EndpointRef }` → `{ atomic: Option<EndpointRef> }`.
+  - **`JsonApiQuery.ParsedRead`** (`parseRead`, `parseParams`): `fields?: Projection` → `fields: Option<Projection>`; `id?: string` → `id: Option<string>` (`Some` for a `/{type}/{id}` path).
+  - **`JsonApiFacade.FetchHandler.handle(request)`**: `Effect<Response | undefined>` → `Effect<Option<Response>>` (`None`: not the façade's to answer; forward it).
+  - **`JsonApiFacade.Options.cookie`**: `Effect<string | undefined, unknown>` → `Effect<Option<string>, unknown>` (lift a store's cookie with `Effect.map(store.getCookie, Option.fromUndefinedOr)`). **`JsonApiFacade.Options.totalOf`**: `((subset) => Effect<number | undefined>) | undefined` → `(subset) => Effect<Option<number>>`.
+  - **`FacadeWrites.IntentOf`** and **`FacadeWrites.graphIntentOf(nodes)`**: `(write) => Intent | undefined` → `(write) => Option<Intent>` (so `JsonApiFacade.Options.intentOf` returns an `Option`). **`FacadeWrites.Preferences.wait`**: `?: number` → `Option<number>`. **`FacadeWrites.Refusal.pointer`**: `?: string` → `string` (every refusal names its member).
+  - **`Relationships.Lookup`**: `(collection, id) => JsonApiRow | undefined` → `(collection, id) => Option<JsonApiRow>`.
+  - **`JsonApiSync.JsonApiSyncOptions.pullInterval`**: `?: Duration.Input | null | undefined` → `?: Option<Duration.Input>`: absent keeps the 5-second default, `Option.some(interval)` sets it, and `Option.none()` disables interval pulling (was `null`).
+  - `| undefined` dropped from option-bag members (omit the key instead of passing `undefined`): **`JsonApiSync.JsonApiSyncOptions`** `queryEncoder`, `includes`, `ledger`, `keyValueStore`, `atomic`, `pushDebounce`, `store`; **`JsonApiBackend.JsonApiBackendConfig`** `writes`, `atomic`, `query`, `includes`, `ledger`; **`Ledger.keyValue`**'s `prefix`; **`DocumentWriter.Input`** `meta`; **`JsonApiFacade.Options`** `totalOf`.
+
+  Kept as they are, on purpose: `CollectionLoader.RelationshipRef`'s `null` (a stored and synced row value: JSON:API's empty to-one), `DocumentWriter.RelationshipValue` and `DataDocument`'s `data: null` (the wire document), and `Relationships.RelatedValue` (the core `Related.Strategy` shape the join compares).
+
+- aab6099: **`RestHandlers.make` resolves identity through the `IdentityResolver` (#645).** `RestHandlers.Options` is now `IdentityOptions | ContextOptions` over a shared `BaseOptions`:
+
+  - **`identity?: Authorization.IdentityResolver`** (with `clientGroupId?`, default `"http"`): the request's headers become its `Authorization.RequestCredentials` and the resolver is called with `{ clientGroupId, credentials }`, as every sync carrier calls it (ADR-0035). A failing resolver is a 403; without `identity` every request is anonymous.
+  - **`context`**, as before, for an identity the resolver cannot see. The two are mutually exclusive in the type.
+
+  **Breaking:** `Options` is a union type rather than an interface, so `RestHandlers.Options["context"]` is now optional; name `RestHandlers.ContextOptions["context"]` instead.
+
+### Patch Changes
+
+- 82eb11e: `RestHandlers.Options.context`'s doc comment describes the core `IdentityResolver` as resolving from a request's credentials and client group (ADR-0035, #219).
+- e8e3419: Optional option-bag members are forwarded without conditional empty-object spreads (#562); behaviour is unchanged.
+- 0e102c0: Adds `Predicate.typeName`, the name `typeof` gives a value, read through `effect/Predicate`'s refinements. The engine's comparator tie-break, `Coverage`'s literal keys, the SQL compiler's literal check and `@thomasfosterau/legation-jsonapi`'s flat filter codec use it (or `effect/Predicate` directly) in place of a runtime `typeof`; behaviour is unchanged.
+- d5b8f8b: The defects thrown for invalid arguments or definitions (`ClientEngine.make`'s `unpulledLimit`, `FractionalIndex.generateBetween`, the filter corpus and the JSON:API linkage checks) are now tagged errors with the same messages, not bare `Error`s.
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

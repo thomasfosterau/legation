@@ -1,5 +1,52 @@
 # @thomasfosterau/legation-browser
 
+## 0.3.0
+
+### Minor Changes
+
+- 20d9793: The Cache API HTTP cache has an entry of its own, `@thomasfosterau/legation-browser/http-cache` (#678): `CacheApiHttpCache` and core's `HttpCache`, reaching nothing of the engine, so a service worker that only caches HTTP no longer bundles the sync engine. `CacheApiHttpCache` alone now bundles to about 3.7 KB gzip over the `effect/Schema` its error classes need, down from about 42 KB (from either entry). `dist/` is emitted one module per source module, so a bundler drops every module an app doesn't reach.
+
+  Breaking, in `CacheApiHttpCache`:
+
+  - `fetchHandler`'s `policy` returns `Option<HttpCachePolicy>` (`Option.none()` bypasses the cache), and `FetchHandlerResult.revalidate` is an `Option` (`Some` when a stale entry was served).
+  - The store's `match` answers an `Option` (core's `ResponseCacheStore`).
+  - The stored metadata header is decoded with `HttpCache.CachedResponseMeta`'s schema; an entry whose header doesn't decode is a miss. The header's format is unchanged, so existing entries still match.
+
+  New: a policy's `cacheable(response)` decides what is stored (by default `response.ok`), and `CacheApiHttpCache.isPublic(response)` reads `Cache-Control: public`, for routes cached only when the origin marks them public. `fetchHandler` returns the new `FetchHandler` type.
+
+- da04d41: The worker and elected hosts serve SSR hydration (#146).
+
+  - `ServiceWorkerHost.start` / `run` serve the `hydrate` request kind whenever the engine's `ClientStore` is in the context, and take `hydrationWindow`: a worker started over an empty replica holds its first pull until the first tab's snapshot arrives or the window ends.
+  - `ElectedHost.run` hands its host the store it builds from `dependencies`, so the elected tab serves the introspection and `hydrate` kinds too, and takes `requests` and `hydrationWindow`, forwarded as `ServiceWorkerHost` forwards them.
+
+- 8a60f29: `ElectedHost.run` returns a Client typed by the `nodes` it is given (#140): `ElectedHost.ElectedHost<Graph>` and `ElectedHostOptions<Graph>` carry the graph, so the tab's `client.query` / `client.observe` type their rows from it. Both type parameters default to an untyped graph.
+
+### Patch Changes
+
+- 9441aa0: The elected host's view forwards `pulledChanges` and `queryRelated` from whichever tier currently serves it, and ticks on every tier switch, so a `Client.observeAnswers` stream over it turns complete once a pull lands (#653).
+- e8e3419: Optional option-bag members are forwarded without conditional empty-object spreads (#562); behaviour is unchanged.
+- 20d9793: `dist/` is emitted one module per source module rather than as merged chunks, so a bundler drops every module an app doesn't reach (#678). The entries and their exports are unchanged; the other packages keep their bundled `dist/` for now.
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes

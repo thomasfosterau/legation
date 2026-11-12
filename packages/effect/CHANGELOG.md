@@ -1,5 +1,74 @@
 # @thomasfosterau/legation
 
+## 0.4.0
+
+### Minor Changes
+
+- da296dc: Out-of-band hints for the Cloudflare rooms (#679). `DurableFanoutBroker.publishOutOfBand({ shards, rooms, nodes, timeout? })` lets a cron or queue Worker that writes rows without a mutation poke every room leased on the write's topics, with each shard and room call bounded and fire-and-forget as in a room's own publish. `Room.make` takes a `hints` option, a `HintSource` the room runs on its bus; its doc comment and the README say that a polling source keeps the room from hibernating. `RoomObject` now extends `DurableFanoutBroker.PokeSurface`. In `@thomasfosterau/legation/internal`, `FanoutTopics.topicsForHints` derives the topics of a batch of change hints, the derivation `FanoutBus` publishes with.
+- 9441aa0: Add `Client.answer(read)` and `Client.observeAnswers(read)`, which give a read's rows with their completeness beside them (#653): a `Client.Answer<R, G>`, `{ rows, completeness }`, where `completeness` (`Client.Completeness`) is `"complete"` when a pulled subscription covered the read or the server answered it, and `"partial"` when an uncovered read was answered from the replica (offline, or over a transport without `read`), which may hold fewer rows than the server. Both are checked and typed as `query` and `observe` are (`AnswerOf<G>`, `ObserveAnswersOf<G>`), so `answer.rows` holds the read's typed rows. An `observeAnswers` stream is partial until the read's windows are pulled, then emits the rows again as complete. Rows are called complete only when they were read after the pull marks that cover them: on each emission and each pull the Client reads the read's rows again rather than relabelling rows that may predate the pull. `query` and `observe` are unchanged. `ClientView` gains an optional `pulledChanges` stream, which the Client uses to judge a live read again after a pull, and an optional `queryRelated`, which reads a held relational read's current rows (a `Mirror` answers it from its host's rows). An engine-backed view's relational read now records pull marks under its relational key, as a pin with `include` does.
+- 520e1c8: **Breaking:** `DuplicateNameError`'s `name` field is renamed `duplicate`. The old field shadowed `Error.name`, so `error.name` returned the duplicated name instead of `"DuplicateNameError"`; it now returns the error's own name.
+- 20d9793: `HttpCache` (on `./internal`) follows the Option conventions, and `dist/` is emitted one module per source module, so a bundler drops every module an app doesn't reach: the error classes no longer share a chunk with the whole MemoryBackend graph (#678).
+
+  Breaking, in `HttpCache`:
+
+  - `ResponseCacheStore.match` answers `Option<CachedResponse>` (the new `CachedResponse` interface) instead of the hit or `undefined`.
+  - `CachedResponseMeta` is a schema (`HttpCache.CachedResponseMeta`) as well as its type; `expiresAt` is optional rather than a required `number | undefined`.
+  - `HttpCachePolicy`'s `timeToLive` and `tags` no longer accept an explicit `undefined`; omit them instead.
+
+  New: `HttpCachePolicy.cacheable(response)` decides whether a network response is stored (by default `response.ok`).
+
+- da04d41: A server-rendered snapshot can be hydrated into a store the tab does not own (#146, ADR-0021 amendment §6): the `hydrate` host-request kind.
+
+  - **`Hydration.requests.hydrate`** (single-reply): the request is a `Hydration.Snapshot`, the response a `Hydration.HydrateOutcome`, `{ hydrated: boolean, reason?: "NotEmpty" | "AlreadyPulling" }` (`Hydration.HydrateDeclined`). A tab asks `mirror.request(Hydration.requests.hydrate, snapshot)`.
+  - **`Hydration.hydrateUnpulled(engine, store, snapshot)`**, the empty-store gate: with the engine's pulls held it hydrates iff the store is empty (`Hydration.isEmpty`) and no pull has started since the engine was built; otherwise it answers `hydrated: false` with the reason and leaves the store untouched. The first of concurrent snapshots wins.
+  - **`Hydration.makeGate(engine, store, { hold })`** and **`Hydration.handler(gate)`**: the gate a host serves the kind through. With `hold`, a gate made over an empty, unpulled store holds the engine's pulls until the first snapshot arrives or `hold` elapses.
+  - **`EngineHost.run`** serves `hydrate` whenever it is given its `store` (as it serves the introspection kinds), and takes **`hydrationWindow`**, the `hold` for a cold host, so a first visit's snapshot is not beaten by the sync loop's connect pull. A store that is not empty is never held.
+  - **`ClientEngine.withPullsHeld(body)`** runs `body` under the engine's pull lock, given the pull counters: a required member, so a hand-written `ClientEngine` must add it (one that spreads an engine, `{ ...engine }`, already has it).
+
+- 82eb11e: **Breaking:** `Authorization.IdentityResolver.resolve` now receives the request's credentials (ADR-0035, #219). Its signature is `(request: IdentityRequest) => Effect<unknown, AuthorizationError>`, where `IdentityRequest` is `{ clientGroupId, credentials }`; a resolver written as `(clientGroupId) => …` becomes `({ clientGroupId }) => …`.
+
+  - **`Authorization.RequestCredentials`** (new): an opaque, read-only view of the transport request's headers, with `header(name): Option<string>` (case-insensitive) and nothing that lists them; it prints as `RequestCredentials(<redacted>)`. Build one with **`Authorization.credentialsFromHeaders(headers)`** (a WHATWG `Headers`, any iterable of `[name, value]` pairs, or a plain record); **`Authorization.noCredentials`** has every header absent. **`Authorization.IdentityRequest`** and **`Authorization.CredentialHeaders`** are new types.
+  - Only the resolver sees the credentials: `SyncContext`, middleware, auth filters, logs, spans and errors are unchanged and never carry them. A failing `resolve` still fails the request; to fail closed to anonymous, return the anonymous identity instead.
+  - **`Transport.ServerHandler`**: `handlePush`, `handlePull` and `handleRead` take an optional second argument, **`Transport.HandleOptions`** (`{ credentials?: Option<RequestCredentials> }`); absent or `None` presents `noCredentials`. Existing callers compile unchanged.
+  - **`RpcTransport.layerHandlers`** presents each RPC call's headers (the HTTP request's, or the WebSocket upgrade request's, merged with headers the RPC client attached to the call) as its credentials.
+  - **`Transport.makeInMemory(handler, clientGroupId, options?)`** takes `{ credentials? }` (**`Transport.InMemoryOptions`**); without it the loopback presents `noCredentials`. **`Hydration.snapshot`** takes `credentials` for its in-process render, and **`Server.mutate`**'s `MutateRequest` takes `credentials` too.
+
+- b0f51d9: **`Transport.makeInMemory`** gains per-call credentials and a failing offline mode (#649):
+
+  - **`InMemoryOptions.credentials`** also accepts an `Effect<Option<RequestCredentials>>`, evaluated on every push, pull and read, so a loopback client whose session changes (a cookie jar a sign-in or sign-out writes) presents the current session's credentials.
+  - **`setOnline(online)`** on the returned transport: offline, every push, pull and read fails with a `TransportError` and the status reads `"disconnected"`, until `setOnline(true)` (status `"connected"`). `setStatus` still changes only the reported status.
+  - The returned transport is typed as the new **`Transport.InMemoryTransport`** (a `ClientTransport` with `setStatus` and `setOnline`).
+
+- ed8dd92: **`Authorization.namedSet(backend, { source, where, member, maxAge })`** (new, with **`Authorization.NamedSetOptions`**): a `NamedSet` whose members are read through the `Backend` (#647). Its members are the distinct scalar `member` values of the `source` rows `where(context)` selects; `where` returning `None` (an anonymous viewer) binds the empty set without a read, and a `BackendError` becomes an `AuthorizationError` naming `source`, which binds the set to nothing.
+- aab6099: **`Authorization.resolveContext(resolver, request)`** (new) builds the `SyncContext` a request runs under: the client group it names and the identity an optional `IdentityResolver` resolves from its credentials (ADR-0035). The sync server builds every push, pull and read context with it, and so does `RestHandlers` (#645).
+- 3ca13de: `Sql.Dialect.boolean` (on `@thomasfosterau/legation/sql`) is typed `(value: boolean) => boolean | number` instead of returning `unknown`: the bind value is a boolean (PostgreSQL) or `0`/`1` (SQLite), as the two shipped dialects already return.
+- 8a60f29: Typed query results from the node graph (#140). A read declared `as const satisfies Query.Read` (or written inline) keeps its literal collection, `include` keys and `order` tokens, and `Client.query` / `Client.observe` type its rows from the graph: `row.value` is the node's row (`Node.RowOf`), `row.related` carries exactly the included edges — a `one` edge's row or `null`, a `many` / `paginated` edge's rows — and reading an edge the read did not include is a compile error. The read is checked against the graph where it is used (`Query.Validate`): a collection, edge, `where` field or `order` token the graph does not declare fails to compile, naming the key. A dynamic read (`collection` typed `string`) is unchecked and resolves to untyped rows, as before.
+
+  - `Node.registry` returns `Node.NodeRegistry<Nodes>`, carrying the union of its nodes' types; `Node.NodesOf`, `Node.NodeOf`, `Node.TypeOf`, `Node.FieldOf`, `Node.EdgeOf` and `Node.IsTyped` read it.
+  - `Client.Client<Graph>`; `Client.make`, `Client.connect` and `Client.fromView` return a Client typed by the `nodes` they are given (`Client.Made<Graph>`, `MakeOptions<Graph>`, `ConnectOptions<Graph>`). `Client.Client` alone is a Client over any graph, and a typed Client is assignable to it.
+  - `Client.ResolvedRow<R, Graph>` is the typed row (`Client.ResolvedRow` alone is the untyped one); `Client.QueryOf` / `Client.ObserveOf` / `Client.RelatedOf` spell the method and edge types.
+  - `Register` (root entry): the app registers its graph once by declaration merging (`declare module "@thomasfosterau/legation" { interface Register { readonly nodes: typeof nodes } }`) for the framework hooks that find the Client in context; `Client.Registered` reads it.
+  - `Query.make` keeps the read's literal type; `Query.Read`'s `where` and `include` are spelled as readonly index signatures (the same shape).
+  - `Hydration.rowsFor(snapshot, nodes, read)` checks the read and types its seed rows (`Hydration.SeedRow`), which now carry an empty `related`, so they seed a typed hook's `initial` directly.
+
+  **Breaking** (types only; no runtime or wire change): `Client.query` / `observe` on a typed Client reject a read that misnames a collection, edge or field, and return typed rows where they returned `ResolvedRow` (code that cast `row.value` keeps compiling; code that indexed `row.related["edge"]` for an edge the read does not include no longer does). A helper that forwards a checked read takes `read: R & Query.Validate<Graph, R>` and passes `R` on explicitly (`client.query<R>(read)`). `Node.NodeRegistry`, `Client.Client`, `Client.Made`, `Client.MakeOptions` and `Client.ConnectOptions` gained a type parameter (defaulted).
+
+### Patch Changes
+
+- 9b22e38: `Predicate.evaluate` now dispatches through a per-tag evaluator table instead of a `switch` (#497). Its behaviour is unchanged.
+- 3c83004: A push now marks the named sets (#205) over the collections it wrote stale before it answers, so the next pull re-resolves them. Before, the fan-out did this on a forked fiber, and a pull issued straight after an unfollow could still bind the set's old members and deliver rows the viewer no longer had access to, once (#652). The fan-out still records the same writes from the hints, which is how another server's writes reach this one.
+- e8e3419: Optional option-bag members are forwarded without conditional empty-object spreads (#562); behaviour is unchanged.
+
+  `@thomasfosterau/legation/internal` gains `Defined.fields`, which copies an object's defined members so a caller holding `undefined` omits the key.
+
+- 0e102c0: Adds `Predicate.typeName`, the name `typeof` gives a value, read through `effect/Predicate`'s refinements. The engine's comparator tie-break, `Coverage`'s literal keys, the SQL compiler's literal check and `@thomasfosterau/legation-jsonapi`'s flat filter codec use it (or `effect/Predicate` directly) in place of a runtime `typeof`; behaviour is unchanged.
+- d5b8f8b: The defects thrown for invalid arguments or definitions (`ClientEngine.make`'s `unpulledLimit`, `FractionalIndex.generateBetween`, the filter corpus and the JSON:API linkage checks) are now tagged errors with the same messages, not bare `Error`s.
+- 20d9793: `dist/` is emitted one module per source module rather than as merged chunks, so a bundler drops every module an app doesn't reach (#678). The entries and their exports are unchanged; the other packages keep their bundled `dist/` for now.
+- 89eef12: Internal: a failure built from a yieldable error is yielded directly instead of wrapped in `Effect.fail` (#562). Behaviour is unchanged.
+- 2afcd9f: `Transport.withFallback` forwards the fallthrough `read` (ADR-0025): with both carriers offering it, a read tries the primary and falls back on a `TransportError` with the same sideline as push and pull; with one, that carrier serves it; with neither, the combined transport has none. `RpcTransport.fromOrigin`, and so `Client.make({ transport: { url } })`, now serves uncovered `Client.query` reads from the server instead of answering locally (#632).
+
+  `Transport.withInferredStatus` dropped `read` the same way; it now forwards it and infers status from it like push and pull.
+
 ## 0.3.0
 
 ### Minor Changes
