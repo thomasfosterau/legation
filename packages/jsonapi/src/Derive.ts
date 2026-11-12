@@ -39,12 +39,31 @@ export const toRow = (value: ResourceValue): JsonApiRow => ({
   relationships: value.relationships,
 });
 
-/** Permissive codec for a row (the engine never decodes rows through it). */
-// oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- deliberately permissive: the runtime codec is `Record<string, unknown>` (no `id`/`relationships` check), typed as the row it carries; the two types do not overlap, so no single assertion or schema change keeps both the runtime behaviour and the exported type
-export const RowSchema = Schema.Record(
-  Schema.String,
-  Schema.Unknown
-) as unknown as Schema.Codec<JsonApiRow>;
+/** A resource identifier in a row's relationship linkage. */
+const Linkage = Schema.Struct({ type: Schema.String, id: Schema.String });
+
+/**
+ * A row's checked members: its `id` and its `relationships` linkage (to-one,
+ * to-many, or `null` for an empty to-one), with every other field (the
+ * flattened attributes) passed through as is.
+ */
+const Row = Schema.StructWithRest(
+  Schema.Struct({
+    id: Schema.String,
+    relationships: Schema.Record(
+      Schema.String,
+      Schema.NullOr(Schema.Union([Linkage, Schema.Array(Linkage)]))
+    ),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)]
+);
+
+/**
+ * Codec for a row: its `id` and relationship linkage are checked, and the
+ * flattened attributes pass through as is. The engine never decodes a stored
+ * row through it on read (ADR-0014).
+ */
+export const RowSchema: Schema.Codec<JsonApiRow> = Row;
 
 /** The collection for a resource type: rows keyed by resource id. */
 export const collectionFor = (type: string): Collection.Collection<JsonApiRow> =>
