@@ -275,7 +275,7 @@ const expectReceipt = (response: Response, document: any) => {
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect(response.headers.get(JsonApiFacade.servedAtHeader)).not.toBeNull();
   const { mutationId } = document.meta.legation;
-  expect(typeof mutationId).toBe("number");
+  expect(mutationId).toBeTypeOf("number");
   const location = `/jsonapi/_legation/mutations/${mutationId}`;
   expect(response.headers.get("location")).toBe(location);
   expect(document.meta.legation).toEqual({ status: "pending", mutationId, mutation: location });

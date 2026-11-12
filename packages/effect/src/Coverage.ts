@@ -102,7 +102,7 @@ export type Verdict =
 
 /** A literal's key: its type and its value, so `"1"` and `1` never collide. */
 const literalKey = (literal: Predicate.Literal): string =>
-  literal === null ? "null" : `${typeof literal}:${JSON.stringify(literal)}`;
+  literal === null ? "null" : `${Predicate.typeName(literal)}:${JSON.stringify(literal)}`;
 
 /** Deduplicate and sort keys (plain string order; only determinism matters). */
 const sortedUnique = (keys: ReadonlyArray<string>): ReadonlyArray<string> =>

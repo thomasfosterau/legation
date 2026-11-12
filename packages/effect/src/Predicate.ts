@@ -247,6 +247,25 @@ export const inSet = (field: string, set: string): Predicate => ({ _tag: "InSet"
 
 // ─── Ordering ────────────────────────────────────────────────────────────────
 
+/** Each `typeof` name but `"object"`, with the refinement that recognises it. */
+const typeNames: ReadonlyArray<readonly [P.Predicate<unknown>, string]> = [
+  [P.isString, "string"],
+  [P.isNumber, "number"],
+  [P.isBoolean, "boolean"],
+  [P.isBigInt, "bigint"],
+  [P.isSymbol, "symbol"],
+  [P.isUndefined, "undefined"],
+  [P.isFunction, "function"],
+];
+
+/**
+ * The name `typeof` gives a value (`"object"` for `null`, an array or an
+ * object), read through `effect/Predicate`'s refinements. Orders values of
+ * differing types and keys a literal by its type, so `"1"` and `1` differ.
+ */
+export const typeName = (value: unknown): string =>
+  typeNames.find(([is]) => is(value))?.[1] ?? "object";
+
 /**
  * Compare two strings by Unicode code point (ADR-0028 rule (c)): the order
  * of Postgres `COLLATE "C"` (UTF-8 bytes) and SQLite `BINARY`. JS `<`
@@ -272,18 +291,12 @@ export const compareText = (a: string, b: string): number => {
  * are not of one comparable type — the "type mismatch" of rule (d).
  */
 export const compareLiterals = (left: unknown, right: unknown): number | undefined => {
-  if (typeof left !== typeof right) return undefined;
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
-  switch (typeof left) {
-    case "number":
-      return numericOrder(left, right as number);
-    case "string":
-      return compareText(left, right as string);
-    case "boolean":
-      return numericOrder(Number(left), Number(right));
-    default:
-      return undefined;
+  if (P.isNumber(left)) return P.isNumber(right) ? numericOrder(left, right) : undefined;
+  if (P.isString(left)) return P.isString(right) ? compareText(left, right) : undefined;
+  if (P.isBoolean(left)) {
+    return P.isBoolean(right) ? numericOrder(Number(left), Number(right)) : undefined;
   }
+  return undefined;
 };
 
 const numericOrder = (left: number, right: number): number =>
