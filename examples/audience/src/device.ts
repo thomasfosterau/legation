@@ -151,8 +151,8 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       resources,
       view: client.view,
       coverageOf: client.coverageOf,
-      totalOf: client.totalOf,
-      cookie: store.getCookie,
+      totalOf: (subset) => Effect.map(client.totalOf(subset), Option.fromUndefinedOr),
+      cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
       online: () => network.online,
     });
 
