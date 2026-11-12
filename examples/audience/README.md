@@ -71,8 +71,6 @@ its tests against the packages' built `dist/`.
 The app aims to write nothing between the libraries. What it still writes by
 hand, each marked in the source, is a gap a library should close:
 
-- `device.ts` `jarTransport`: an in-process transport whose credentials follow
-  the session (and whose network can go down).
 - `device.ts` `makeJar`: the cookie jar, shaped as effect-auth's client
   session store, which `SignOut.follow` subscribes to (the example has no auth
   HTTP tier for `createAuthClient` to talk to).
