@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import { byOwner, byVisibility, feed, putPost } from "../src/domain.js";
 import { makeDevice } from "../src/device.js";
@@ -33,8 +34,8 @@ describe("offline is still bounded", () => {
         yield* device.client.subscribe(feed);
         yield* device.engine.pull;
         expect(idsOf(yield* device.stored)).toEqual(followerView);
-        const online = yield* device.facade.handle(jsonApi("/jsonapi/posts"));
-        const onlineBody = yield* Effect.promise(() => online!.text());
+        const online = Option.getOrThrow(yield* device.facade.handle(jsonApi("/jsonapi/posts")));
+        const onlineBody = yield* Effect.promise(() => online.text());
 
         yield* device.setOnline(false);
 
@@ -44,14 +45,14 @@ describe("offline is still bounded", () => {
         expect(idsOf(yield* device.posts(byVisibility("private")))).toEqual(["b-private"]);
         expect(yield* device.posts(byOwner(carol.id))).toEqual([]);
         // The façade serves the covered listing from the replica, unchanged.
-        const offline = yield* device.facade.handle(jsonApi("/jsonapi/posts"));
-        expect(offline!.status).toBe(200);
-        expect(yield* Effect.promise(() => offline!.text())).toBe(onlineBody);
+        const offline = Option.getOrThrow(yield* device.facade.handle(jsonApi("/jsonapi/posts")));
+        expect(offline.status).toBe(200);
+        expect(yield* Effect.promise(() => offline.text())).toBe(onlineBody);
         // A row the replica does not hold is the server's to answer (only it can
         // write the 404): the façade forwards it, the forward fails at the
         // network, and the worker answers with the façade's `offline` document.
         const missing = jsonApi("/jsonapi/posts/a-private");
-        expect(yield* device.facade.handle(missing)).toBeUndefined();
+        expect(yield* device.facade.handle(missing)).toEqual(Option.none());
         const answered = yield* device.facade.offline(missing);
         expect(answered.status).toBe(503);
         expect(yield* Effect.promise(() => answered.text())).not.toContain("a note to self");
@@ -107,8 +108,8 @@ describe("offline is still bounded", () => {
         yield* device.setOnline(false);
         // The whole listing is not covered by the narrower pin: offline it is the
         // `offline` error document, not the public rows passed off as the feed.
-        const listing = yield* device.facade.handle(jsonApi("/jsonapi/posts"));
-        expect(listing!.status).toBe(503);
+        const listing = Option.getOrThrow(yield* device.facade.handle(jsonApi("/jsonapi/posts")));
+        expect(listing.status).toBe(503);
         // Through the Client, the uncovered read falls through to the server,
         // which is unreachable, so it answers locally (ADR-0025: local is always
         // an answer): the rows the replica holds, which the policy admitted —
@@ -135,9 +136,9 @@ describe("offline is still bounded", () => {
         expect((yield* device.signOut).transition).toBe("Reset");
         expect(yield* device.stored).toEqual([]);
         // And the façade has nothing of Bob's left to serve: offline, his own row is the 503.
-        expect((yield* device.facade.handle(jsonApi("/jsonapi/posts/b-private")))?.status).toBe(
-          503
-        );
+        expect(
+          Option.map(yield* device.facade.handle(jsonApi("/jsonapi/posts/b-private")), (r) => r.status)
+        ).toEqual(Option.some(503));
       })
     )
   );
