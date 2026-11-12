@@ -267,8 +267,15 @@ const heldStore = (state: ReturnType<SignOut.SessionStore["get"]>) => {
   return { store, subscribers: () => subscribers };
 };
 
+/** A promise of the auth client's rejected. */
+class CallRejected extends Schema.TaggedError<CallRejected, { readonly brand: unique symbol }>()(
+  "CallRejected",
+  { cause: Schema.optional(Schema.Defect()) }
+) {}
+
 /** Run a promise of the auth client's; a rejection is a defect of the test. */
-const run = <A>(call: () => Promise<A>) => Effect.orDie(Effect.tryPromise(call));
+const run = <A>(call: () => Promise<A>) =>
+  Effect.orDie(Effect.tryPromise({ try: call, catch: (cause) => new CallRejected({ cause }) }));
 
 /** The fingerprint `follow` stamps without a Digest in context: WebCrypto's. */
 const webCryptoFingerprint = (userId: string) =>

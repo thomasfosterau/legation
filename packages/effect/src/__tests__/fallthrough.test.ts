@@ -247,7 +247,7 @@ describe("the server tier", () => {
           order: ["name"],
         });
         expect(rows).toHaveLength(2);
-        const reviews = defined(rows[0]).related["reviews"] as ReadonlyArray<{ id: string }>;
+        const reviews = defined(rows[0]).related.reviews as ReadonlyArray<{ id: string }>;
         expect(reviews.map((row) => row.id)).toEqual(["r-3", "r-2"]);
         // Still nothing registered or replicated.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);
@@ -301,7 +301,7 @@ describe("over a hosted engine", () => {
         });
         expect(rows).toHaveLength(2);
         expect(
-          defined((defined(rows[0]).related["reviews"] as ReadonlyArray<{ id: string }>)[0]).id
+          defined((defined(rows[0]).related.reviews as ReadonlyArray<{ id: string }>)[0]).id
         ).toBe("r-3");
         // The host registered nothing for it.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);

@@ -30,6 +30,7 @@ import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -317,7 +318,7 @@ describe("routeSync", () => {
         { concurrency: 1 }
       );
       // Every room is one of the four anonymous shards, and all four are used.
-      expect(Arr.dedupe(rooms).toSorted()).toEqual(
+      expect(Arr.sort(Arr.dedupe(rooms), Order.mapInput(Order.String, String))).toEqual(
         Arr.makeBy(4, (n) => `${anonymousRoomPrefix}${n}`)
       );
       // Deterministic: a group lands in the same room on every request, its socket included.

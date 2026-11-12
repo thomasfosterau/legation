@@ -15,6 +15,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
@@ -158,7 +159,7 @@ const status = (path: string, headers: Record<string, string> = {}) =>
   new Request(new URL(path, "http://notes.test"), { headers: { accept: MEDIA, ...headers } });
 
 const body = (response: Response): Effect.Effect<any> =>
-  Effect.orDie(Effect.tryPromise(() => response.json()));
+  Effect.orDie(awaitPromise(() => response.json()));
 
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
   Effect.flatMap(

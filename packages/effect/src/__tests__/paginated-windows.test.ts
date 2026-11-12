@@ -182,7 +182,7 @@ describe("per-parent windowed subsets", () => {
           Stream.runForEach(
             reader.observe({ collection: "products", include: { reviews: { first: 2 } } }),
             (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
@@ -222,7 +222,7 @@ describe("per-parent windowed subsets", () => {
           Stream.runForEach(
             reader.observe({ collection: "products", include: { reviews: { first: 2 } } }),
             (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
           ).pipe(Effect.ignore)
         );
         yield* eventually(
@@ -333,7 +333,7 @@ describe("over a hosted engine", () => {
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
             (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);

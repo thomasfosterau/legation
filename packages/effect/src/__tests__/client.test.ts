@@ -205,7 +205,7 @@ describe("Client over an owned engine", () => {
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
             (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
@@ -872,7 +872,7 @@ describe("Client.connect over a hosted engine", () => {
           Ref.get(latest),
           (current) =>
             current.length === 1 &&
-            ((defined(current[0]).related["reviews"] ?? []) as ReadonlyArray<unknown>).length === 1
+            ((defined(current[0]).related.reviews ?? []) as ReadonlyArray<unknown>).length === 1
         );
         expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
       })
@@ -974,7 +974,7 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
           expect(
             rows.map((row) => [
               row.id,
-              ((row.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>).map(
+              ((row.related.reviews ?? []) as ReadonlyArray<{ id: string }>).map(
                 (review) => review.id
               ),
             ])

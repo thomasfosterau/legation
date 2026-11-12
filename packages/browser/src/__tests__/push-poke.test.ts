@@ -25,6 +25,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Schema from "effect/Schema";
 import type * as BackgroundSync from "../BackgroundSync.js";
 import * as PushPoke from "../PushPoke.js";
@@ -95,7 +96,7 @@ const makeEngine = (stamp: Identity.Fingerprint) =>
   });
 
 const outcome = (held: Array<Promise<unknown>>) =>
-  Effect.tryPromise(() => held[0] ?? Promise.resolve("nothing held")).pipe(Effect.orDie);
+  awaitPromise(() => held[0] ?? Promise.resolve("nothing held")).pipe(Effect.orDie);
 
 describe("PushPoke.listen (#214)", () => {
   it.effect("registers the Background Sync tag for the library's push, by default", () =>

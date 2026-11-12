@@ -53,14 +53,14 @@ catalog:
   # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
   # (and the `oxlint` vite-plus carries) with an Effect-patched build matched
   # by gitHead, so this pins in lockstep with `@typescript/native` below and
-  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.63.0
-  # supports typescript 7.0.2, oxlint 1.88.0 – 1.90.0 and tsgolint 7.0.2004 /
-  # 7.0.2005; vite-plus 1.4.0 carries oxlint 1.89.0 and tsgolint 7.0.2004.
+  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.67.7
+  # supports typescript 7.0.2, oxlint 1.89.0 / 1.91.0 – 1.93.0 and tsgolint
+  # 7.0.2004 – 7.0.2006; vite-plus 1.5.1 carries oxlint 1.91.0 and tsgolint 7.0.2005.
   # Each @effect/tsgo release hard-errors (UnsupportedTargetPackageVersionError)
   # on any other component version, failing `pnpm install` itself. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  "@effect/tsgo": 0.63.0
+  "@effect/tsgo": 0.67.7
   "@electric-sql/pglite": ^0.5.16
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
@@ -84,7 +84,7 @@ catalog:
   "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
-  "@vitest/coverage-v8": 5.0.5
+  "@vitest/coverage-v8": 5.1.0
   better-auth: ^1.7.20
   better-sqlite3: ^13.0.3
   fake-indexeddb: ^6.2.8
@@ -107,13 +107,13 @@ catalog:
   typescript: "npm:@typescript/typescript6@6.0.2"
   "@typescript/native": "npm:typescript@7.0.2"
   # vite-plus pins `oxlint`, `oxfmt`, `vitest` and the `@vitest/*` packages to
-  # exact versions (1.4.0 → oxlint 1.89.0, oxfmt 0.74.0, oxlint-tsgolint
-  # 7.0.2004, vitest 5.0.5). `vitest` and
+  # exact versions (1.5.1 → oxlint 1.91.0, oxfmt 0.76.0, oxlint-tsgolint
+  # 7.0.2005, vitest 5.1.0). `vitest` and
   # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
   # its aliased core package. They move together with `@effect/tsgo` (above).
-  vite-plus: 1.4.0
-  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vitest: 5.0.5
+  vite-plus: 1.5.1
+  vite: npm:@voidzero-dev/vite-plus-core@1.5.1
+  vitest: 5.1.0
 
 # Peer ranges the PUBLISHED packages declare: the published floor, a promise
 # to consumers, kept apart from the dev pin above. `pnpm pack` (the release

@@ -13,6 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
@@ -164,7 +165,7 @@ const note = (attributes: Record<string, unknown>) => ({
 });
 
 const body = (response: Response): Effect.Effect<any> =>
-  Effect.orDie(Effect.tryPromise(() => response.json()));
+  Effect.orDie(awaitPromise(() => response.json()));
 
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
   Effect.flatMap(

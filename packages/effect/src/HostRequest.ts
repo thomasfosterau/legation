@@ -156,9 +156,7 @@ const failure = (
 const END: MirrorProtocol.HostResponseOutcome = { _tag: "End" };
 
 /** A handler's failure as its `Failed` reply; an interruption alone sends nothing (the request was cancelled). */
-const failedOf = (
-  cause: Cause.Cause<unknown>
-): Stream.Stream<MirrorProtocol.HostResponseOutcome> =>
+const failedOf = (cause: Cause.Cause<unknown>): Stream.Stream<MirrorProtocol.HostResponseOutcome> =>
   Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.make(failure("Failed", messageOf(cause)));
 
 /** Decode a payload against a kind's request schema, as `InvalidRequest` on failure. */
