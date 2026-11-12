@@ -86,11 +86,29 @@ export interface IncludeOptions {
  * cursor, `offset` by position (issue #209 — mutually exclusive with
  * `after`; a caller compiling from a URL keeps them so, `JsonApiQuery`
  * rejects a request naming both).
+ *
+ * Declare a read `as const satisfies Query.Read`: `satisfies` checks its
+ * shape where it is declared, and `as const` keeps its literal `collection`,
+ * `include` keys and `order` tokens, which is what types its rows
+ * (`Client.ResolvedRow`) and lets `Client.query`, `Client.observe` and the
+ * framework hooks check its names against the node graph
+ * ({@link Validate}). Every member is `readonly`, so a read under `as const`
+ * satisfies it. An annotation (`const read: Query.Read = …`) widens it to a
+ * dynamic read, whose rows are untyped.
+ *
+ * ```ts
+ * export const productDetail = (id: string) =>
+ *   ({
+ *     collection: "products",
+ *     where: { id },
+ *     include: { variants: true, seller: true },
+ *   }) as const satisfies Query.Read;
+ * ```
  */
 export interface Read {
   readonly collection: string;
-  readonly where?: Readonly<Record<string, Predicate.Literal>> | Predicate.Predicate;
-  readonly include?: Readonly<Record<string, true | IncludeOptions>>;
+  readonly where?: { readonly [field: string]: Predicate.Literal } | Predicate.Predicate;
+  readonly include?: { readonly [edge: string]: true | IncludeOptions };
   readonly order?: ReadonlyArray<string>;
   readonly first?: number;
   readonly after?: string;
@@ -109,8 +127,86 @@ export interface Read {
   readonly offset?: number;
 }
 
-/** Define a read ({@link Read}), or a named contract via `(name, args)`. */
-export function make(read: Read): Read;
+// ─── Reads checked against a graph ───────────────────────────────────────────
+
+/** The literal keys of an object type, or `never` when its keys are `string` (a dynamic map). */
+type LiteralKeys<T> = string extends keyof T ? never : keyof T & string;
+
+/** The message a misnamed key of a read is checked against, so the error names the mistake. */
+type Unknown<
+  What extends string,
+  Name,
+  Type extends string,
+> = `${What} "${Name & string}" is not declared on ${Type}`;
+
+/** An `order` token for a node: one of its row's fields, `-` prefixed for descending. */
+type OrderToken<N extends Node.AnyNode> = Node.FieldOf<N> | `-${Node.FieldOf<N>}`;
+
+/** A read's `include`, each key checked against the node's edges. */
+type CheckInclude<N extends Node.AnyNode, I> = {
+  readonly [E in LiteralKeys<I>]: E extends Node.EdgeOf<N> ? I[E] : Unknown<"edge", E, N["type"]>;
+};
+
+/** A read's equality `where`, each key checked against the node's row fields. */
+type CheckWhere<N extends Node.AnyNode, W> = W extends Predicate.Predicate
+  ? unknown
+  : {
+      readonly [F in LiteralKeys<W>]: F extends Node.FieldOf<N>
+        ? W[F]
+        : Unknown<"field", F, N["type"]>;
+    };
+
+/** A read's `order`, each literal token checked against the node's row fields. */
+type CheckOrder<N extends Node.AnyNode, O extends ReadonlyArray<string>> = {
+  readonly [I in keyof O]: string extends O[I]
+    ? O[I]
+    : O[I] extends OrderToken<N>
+      ? O[I]
+      : Unknown<"order field", O[I], N["type"]>;
+};
+
+/** The checks a literal read of node `N` must pass: its include, where and order keys. */
+type CheckIn<N extends Node.AnyNode, R> = (R extends { readonly include: infer I }
+  ? { readonly include: CheckInclude<N, I> }
+  : unknown) &
+  (R extends { readonly where: infer W } ? { readonly where: CheckWhere<N, W> } : unknown) &
+  (R extends { readonly order: infer O extends ReadonlyArray<string> }
+    ? { readonly order: CheckOrder<N, O> }
+    : unknown);
+
+/**
+ * The checks a read must pass against a graph — `unknown` for one that passes
+ * them. A read whose `collection` is a literal names a node of the graph, and
+ * every literal key it names is declared on that node: each `include` key one
+ * of its edges, each equality `where` key and `order` token one of its row's
+ * fields. A misnamed key is checked against a message naming it, so the
+ * compile error points at the mistake.
+ *
+ * A read the graph cannot describe statically is not checked: a dynamic read
+ * (its `collection` is `string`), a dynamic part of a literal read (a
+ * `where` built as a `Record<string, …>`, `order` tokens typed `string`, a
+ * full `Predicate`), and any read over a graph whose types are erased.
+ *
+ * `Client.query`, `Client.observe` and the framework hooks take
+ * `read: R & Query.Validate<Graph, R>`, so a read is checked where it is used,
+ * whatever it was declared as.
+ */
+export type Validate<Graph extends Node.NodeRegistry, R extends Read> =
+  Node.IsTyped<Graph> extends false
+    ? unknown
+    : R extends Read
+      ? string extends R["collection"]
+        ? unknown
+        : R["collection"] extends Node.TypeOf<Graph>
+          ? CheckIn<Node.NodeOf<Graph, R["collection"]>, R>
+          : { readonly collection: Node.TypeOf<Graph> }
+      : never;
+
+/**
+ * Define a read ({@link Read}), or a named contract via `(name, args)`. The
+ * read keeps its literal type, as `as const satisfies Query.Read` does.
+ */
+export function make<const R extends Read>(read: R): R;
 /** Define a named query contract (the same as {@link named}). */
 export function make<const Name extends string, Args, ArgsEncoded>(
   name: Name,

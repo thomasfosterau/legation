@@ -204,6 +204,16 @@ export const nodes = Node.registry([
   orderItems,
 ]);
 
+/**
+ * The graph registered for the rune hooks: `useQuery` and `useConnection` find
+ * the Client in context, so this is how they type each read's rows.
+ */
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
 /** The engine's collection registry, derived edge-for-edge from the graph. */
 export const registry = nodes.collections;
 
@@ -217,22 +227,29 @@ export const privateCollections = ["profiles", "cartItems", "orders", "orderItem
 // Declarative reads (Query.Read) are the app's whole read vocabulary: the
 // rune hooks pass them to the Client, which compiles the plan, registers
 // the windows, and decides where each read is answered.
+//
+// Each read is a plain literal declared `as const satisfies Query.Read`: the
+// shape is checked here, and the literal collection and `include` keys type
+// the rows the hooks hand back (the graph is registered above).
 
-export const allCategories: Query.Read = { collection: "categories", order: ["name"] };
-export const allSellers: Query.Read = { collection: "sellers" };
-export const allVariants: Query.Read = { collection: "variants" };
-export const allReviews: Query.Read = { collection: "reviews" };
+export const allCategories = {
+  collection: "categories",
+  order: ["name"],
+} as const satisfies Query.Read;
+export const allSellers = { collection: "sellers" } as const satisfies Query.Read;
+export const allVariants = { collection: "variants" } as const satisfies Query.Read;
+export const allReviews = { collection: "reviews" } as const satisfies Query.Read;
 
 /**
  * One product with its detail-page edges resolved. Reviews are NOT included
  * here — the detail page pages them with a `useConnection` over
  * {@link productReviews}, so the window (not the whole feed) is what syncs.
  */
-export const productDetail = (id: string): Query.Read => ({
+export const productDetail = (id: string) => ({
   collection: "products",
   where: { id },
   include: { variants: true, seller: true },
-});
+}) as const satisfies Query.Read;
 
 /** The catalog's page size — the SSR load and the live hook window the same read. */
 export const CATALOG_PAGE_SIZE = 4;
@@ -242,41 +259,41 @@ export const productPage = (options: {
   categoryId?: string;
   cursor?: string;
   limit?: number;
-}): Query.Read => ({
+}) => ({
   collection: "products",
   ...(options.categoryId !== undefined ? { where: { categoryId: options.categoryId } } : {}),
   order: ["id"],
   first: options.limit ?? CATALOG_PAGE_SIZE,
   ...(options.cursor !== undefined ? { after: options.cursor } : {}),
-});
+}) as const satisfies Query.Read;
 
-export const productReviews = (productId: string): Query.Read => ({
+export const productReviews = (productId: string) => ({
   collection: "reviews",
   where: { productId },
   order: ["-createdAt"],
-});
+}) as const satisfies Query.Read;
 
-export const myCartItems = (userId: string): Query.Read => ({
+export const myCartItems = (userId: string) => ({
   collection: "cartItems",
   where: { userId },
   include: { variant: true },
-});
+}) as const satisfies Query.Read;
 
-export const myOrders = (userId: string): Query.Read => ({
+export const myOrders = (userId: string) => ({
   collection: "orders",
   where: { userId },
   order: ["-createdAt"],
-});
+}) as const satisfies Query.Read;
 
-export const myOrderItems = (userId: string): Query.Read => ({
+export const myOrderItems = (userId: string) => ({
   collection: "orderItems",
   where: { userId },
-});
+}) as const satisfies Query.Read;
 
-export const myProfile = (userId: string): Query.Read => ({
+export const myProfile = (userId: string) => ({
   collection: "profiles",
   where: { id: userId },
-});
+}) as const satisfies Query.Read;
 
 /**
  * Everything the app shell keeps live — the reads the tab's Client pins at

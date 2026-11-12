@@ -95,6 +95,8 @@ re-subscribing the previous value stays visible with `waiting: true`
   becoming a successful empty result. Every hook below that takes a read
   thunk (`useConnection`, `useAggregate`, `useAggregateGrouped` included)
   supports the same opt-out.
+  The rows are typed from the read and the app's registered graph (see
+  [Typed rows](#typed-rows)).
 - **`useConnection(() => read, { pageSize })`** — connection-style paging that
   _grows_ one window rather than jumping between detached pages.
 - **`useAggregate(() => read, agg)`** / **`useAggregateGrouped(() => read, agg, groupBy)`**
@@ -129,6 +131,59 @@ renders, and on the client it makes the first render match the server markup
   const rows = $derived(AsyncResult.getOrElse(page.current, () => []));
 </script>
 ```
+
+### Typed rows
+
+Register the app's node graph once, next to it, and declare reads
+`as const satisfies Query.Read`; `useQuery` and `useConnection` then type
+every row with no cast and no type argument:
+
+```ts
+// src/lib/domain.ts
+import { Edge, Node, type Query } from "@thomasfosterau/legation";
+
+export const nodes = Node.registry([products, sellers, variants]);
+
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
+export const allProducts = {
+  collection: "products",
+  order: ["name"],
+  include: { seller: true, variants: true },
+} as const satisfies Query.Read;
+```
+
+```svelte
+<script lang="ts">
+  import { AsyncResult } from "effect/reactivity";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
+  import { allProducts } from "$lib/domain";
+
+  const products = useQuery(() => allProducts);
+  const rows = $derived(AsyncResult.getOrElse(products.current, () => []));
+</script>
+
+{#each rows as row (row.id)}
+  <!-- `row.value` is the products row; `seller` is a sellers row or null
+       (a `one` edge whose row is absent); `variants` is the variants rows. -->
+  {row.value.name} by {row.related.seller?.name ?? "—"}, {row.related.variants.length} variants
+{/each}
+```
+
+An edge the read does not `include` is not on `row.related`, and a read that
+names a collection, edge or field the graph does not declare fails to compile
+at the `useQuery` call. Inline reads are typed the same way. A dynamic read
+(its `collection` a `string`), or any read with no graph registered, resolves
+to untyped rows (`value: unknown`) and is never a compile error. A helper that
+takes such rows names them `Client.ResolvedRow<typeof allProducts>` (the
+registered graph is the default). `initial` seeds are checked against the
+typed rows: `Hydration.rowsFor(snapshot, nodes, read)` produces them typed for
+a read with no `include` (a snapshot carries no resolved edges; seed those
+yourself, or let the first live emission fill them in).
 
 A read keyed on a selection that starts empty — the common master/detail
 case — opts out by returning `undefined` instead of reaching for a sentinel

@@ -7,63 +7,78 @@
  * the sync collections store them. These mappers translate the resources a
  * load already fetched, so the first client render matches the server
  * markup with zero extra requests.
+ *
+ * A seed is decoded with its node's row schema (`Node.RowOf`), so it is the
+ * row the live read will emit, typed as the hooks type it: the resource's
+ * attributes plus, for each of the node's `one` edges, the related
+ * resource's id under the edge's key field. A resource that does not make a
+ * row is a defect of the load, and fails here rather than in the markup.
  */
+import * as Schema from "effect/Schema";
+import type { Node } from "@thomasfosterau/legation";
+import {
+  cartItems,
+  categories,
+  orderItems,
+  orders,
+  products,
+  reviews,
+  sellers,
+  variants,
+} from "./domain.js";
 
 interface ResourceLike {
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
-  readonly relationships?: Record<
-    string,
-    { readonly data?: { readonly id: string } | ReadonlyArray<{ readonly id: string }> | null }
+  readonly attributes: Readonly<Record<string, unknown>>;
+  readonly relationships?: Readonly<
+    Record<
+      string,
+      { readonly data?: { readonly id: string } | ReadonlyArray<{ readonly id: string }> | null }
+    >
   >;
 }
 
-export interface RowSeed {
+/** An engine row seed: the node's row and no included edges. */
+export interface RowSeed<Value> {
   readonly id: string;
-  readonly value: unknown;
-  /** Included edges, when the seed feeds a read with `include`. */
-  readonly related: Record<string, unknown>;
+  readonly value: Value;
+  readonly related: Record<never, never>;
 }
 
+/** The id a to-one relationship names, if the resource carries it. */
 const refId = (resource: ResourceLike, name: string): string | undefined => {
   const data = resource.relationships?.[name]?.data;
-  if (data === null || data === undefined || Array.isArray(data)) return undefined;
-  return (data as { readonly id: string }).id;
+  return data === null || data === undefined || !("id" in data) ? undefined : data.id;
 };
 
-/** Inline the given to-one relationships as `<name>Id` foreign keys. */
-export const toRow = (resource: ResourceLike, refs: ReadonlyArray<string> = []): RowSeed => ({
-  id: resource.id,
-  value: {
-    id: resource.id,
-    ...resource.attributes,
-    ...Object.fromEntries(
-      refs.flatMap((name) => {
-        const id = refId(resource, name);
-        return id === undefined ? [] : [[`${name}Id`, id]];
-      })
-    ),
-  },
-  related: {},
-});
+/**
+ * The seeds of a node's resources: each resource's id and attributes, with
+ * every `one` edge's related id inlined under the edge's `via` field, decoded
+ * as the node's row.
+ */
+const seeds =
+  <N extends Node.AnyNode, Value>(node: N, decode: (input: unknown) => Value) =>
+  (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed<Value>> =>
+    resources.map((resource) => ({
+      id: resource.id,
+      value: decode({
+        [node.id]: resource.id,
+        ...resource.attributes,
+        ...Object.fromEntries(
+          Object.entries(node.edges).flatMap(([name, edge]) => {
+            const id = edge.kind === "one" ? refId(resource, name) : undefined;
+            return edge.kind === "one" && id !== undefined ? [[edge.via, id]] : [];
+          })
+        ),
+      }),
+      related: {},
+    }));
 
-export const productRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource, ["category", "seller"]));
-
-export const variantRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource, ["product"]));
-
-export const sellerRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource));
-
-export const reviewRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource, ["product"]));
-
-export const cartItemRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource, ["variant"]));
-
-export const orderRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource));
-
-export const orderItemRows = (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed> =>
-  resources.map((resource) => toRow(resource, ["order", "variant"]));
+export const categoryRows = seeds(categories, Schema.decodeUnknownSync(categories.row));
+export const productRows = seeds(products, Schema.decodeUnknownSync(products.row));
+export const variantRows = seeds(variants, Schema.decodeUnknownSync(variants.row));
+export const sellerRows = seeds(sellers, Schema.decodeUnknownSync(sellers.row));
+export const reviewRows = seeds(reviews, Schema.decodeUnknownSync(reviews.row));
+export const cartItemRows = seeds(cartItems, Schema.decodeUnknownSync(cartItems.row));
+export const orderRows = seeds(orders, Schema.decodeUnknownSync(orders.row));
+export const orderItemRows = seeds(orderItems, Schema.decodeUnknownSync(orderItems.row));

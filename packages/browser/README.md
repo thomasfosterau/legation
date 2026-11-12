@@ -41,7 +41,10 @@ export const mutations = Mutation.registry([
   { mutator: setTodo, local: (todo, writer) => writer.put("todos", todo.id, todo) },
 ]);
 
-export const openTodos: Query.Read = { collection: "todos", where: { done: false } };
+export const openTodos = {
+  collection: "todos",
+  where: { done: false },
+} as const satisfies Query.Read;
 ```
 
 A tab holds no engine. It mirrors the one the service worker serves, over the `legation` BroadcastChannel:

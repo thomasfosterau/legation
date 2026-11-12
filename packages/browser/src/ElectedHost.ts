@@ -52,10 +52,11 @@ import * as ServiceWorkerHost from "./ServiceWorkerHost.js";
 export type Role = "host" | "mirror";
 
 /** Options for {@link run}. */
-export interface ElectedHostOptions {
+export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The Web Lock name AND the sync-protocol client group — one election per group. */
   readonly clientGroupId: string;
-  readonly nodes: Node.NodeRegistry;
+  /** The node graph the tab's Client reads, which types its rows (`Client.ResolvedRow`). */
+  readonly nodes: Graph;
   readonly mutations: Mutation.MutatorRegistry;
   /**
    * `ClientStore` (durable — pair {@link IndexedDbClientStore}) and
@@ -104,7 +105,7 @@ export interface ElectedHostOptions {
 }
 
 /** What {@link run} returns: one stable Client for the tab, and a stream of its host/mirror role. */
-export interface ElectedHost {
+export interface ElectedHost<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /**
    * One stable Client for the tab's whole lifetime: reads and writes go
    * through the mirror until this tab is elected, and through the owned
@@ -112,7 +113,7 @@ export interface ElectedHost {
    * live `observe`/`related` re-hydrates from the new tier; explicit
    * `subscribe` pins are replayed onto it).
    */
-  readonly client: Client.Client;
+  readonly client: Client.Client<Graph>;
   /** Purely observational — devtools/debug UI. Never drives application logic. */
   readonly role: Stream.Stream<Role>;
 }
@@ -276,7 +277,9 @@ const switchingView = (
  * otherwise — and hand back one `Client` that works unchanged across the
  * transition, plus a `role` stream for observability.
  */
-export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, never, Scope.Scope> =>
+export const run = <Graph extends Node.NodeRegistry>(
+  options: ElectedHostOptions<Graph>
+): Effect.Effect<ElectedHost<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const channelName = options.channelName ?? ServiceWorkerHost.defaultChannelName;
     const locks = options.locks ?? globalLocks();

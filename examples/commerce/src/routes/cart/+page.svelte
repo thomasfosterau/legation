@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
-  import { myCartItems, type CartItem, type Variant } from "../../lib/domain.js";
+  import { myCartItems, type CartItem } from "../../lib/domain.js";
   import { cartItemRows, variantRows } from "../../lib/rows.js";
 
   const { data } = $props();
@@ -13,11 +13,12 @@
   const cart = useQuery(
     () => myCartItems(userId ?? "anonymous"),
     {
-      initial: cartItemRows(data.lines).map((row) => {
-        const variantId = (row.value as CartItem).variantId;
-        const variant = variantRows(data.variants).find((v) => v.id === variantId)?.value ?? null;
-        return { id: row.id, value: row.value, related: { variant } };
-      }),
+      initial: cartItemRows(data.lines).map((row) => ({
+        ...row,
+        related: {
+          variant: variantRows(data.variants).find((v) => v.id === row.value.variantId)?.value ?? null,
+        },
+      })),
     }
   );
 
@@ -47,8 +48,8 @@
       userId,
       createdAt: new Date().toISOString(),
       items: rows.map((row) => {
-        const item = row.value as CartItem;
-        const variant = row.related["variant"] as Variant | null;
+        const item = row.value;
+        const variant = row.related.variant;
         return {
           cartItemId: item.id,
           variantId: item.variantId,
@@ -72,8 +73,8 @@
     {:else}
       <ul>
         {#each rows as row (row.id)}
-          {@const item = row.value as CartItem}
-          {@const variant = row.related["variant"] as Variant | null}
+          {@const item = row.value}
+          {@const variant = row.related.variant}
           <li>
             {variant?.name ?? item.variantId} × {item.qty}
             — ${(((variant?.priceCents ?? 0) * item.qty) / 100).toFixed(2)}
@@ -97,8 +98,8 @@
       <p>
         Total: ${(
           rows.reduce((sum, row) => {
-            const item = row.value as CartItem;
-            const variant = row.related["variant"] as Variant | null;
+            const item = row.value;
+            const variant = row.related.variant;
             return sum + (variant?.priceCents ?? 0) * item.qty;
           }, 0) / 100
         ).toFixed(2)}

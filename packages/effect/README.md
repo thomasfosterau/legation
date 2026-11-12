@@ -62,8 +62,13 @@ const mutations = Mutation.registry([
   { mutator: setTodo, local: (t, writer) => writer.put("todos", t.id, t) },
 ]);
 
-const projectsWithTodos: Query.Read = { collection: "projects", include: { todos: true } };
-const openTodos: Query.Read = { collection: "todos", where: { done: false } };
+// Reads are plain literals, declared `as const satisfies Query.Read`: checked
+// where they are declared, and literal enough to type their rows.
+const projectsWithTodos = {
+  collection: "projects",
+  include: { todos: true },
+} as const satisfies Query.Read;
+const openTodos = { collection: "todos", where: { done: false } } as const satisfies Query.Read;
 
 const program = Effect.gen(function* () {
   // 2. Server: one per backend. MemoryBackend is the reference backend; its
@@ -108,11 +113,59 @@ const program = Effect.gen(function* () {
   yield* client.mutate("project/set", { id: "p1", name: "Launch" });
   yield* client.mutate("todo/set", { id: "t1", projectId: "p1", title: "Ship it", done: false });
 
-  return yield* client.query(projectsWithTodos);
+  // Typed by the graph: `value` is a project row, `related.todos` its todo rows.
+  const [project] = yield* client.query(projectsWithTodos);
+  return project?.related.todos.map((todo) => todo.title);
 });
 
 Effect.runPromise(Effect.scoped(program)).then((rows) => console.log(JSON.stringify(rows)));
 ```
+
+### Typed reads
+
+A read's rows are typed from the node graph the Client was built over (`Client.make({ nodes })`, `Client.connect`, `Client.fromView`). Declare each read `as const satisfies Query.Read`, or write it inline: `satisfies` checks its shape where it is declared, and `as const` keeps the literal `collection`, `include` keys and `order` tokens the types are read from. No type arguments, no builder.
+
+```ts
+export const productDetail = (id: string) =>
+  ({
+    collection: "products",
+    where: { id },
+    include: { seller: true, variants: true },
+  }) as const satisfies Query.Read;
+
+const [row] = yield * client.query(productDetail("p1"));
+row?.value.name; //            the products row: attributes, `id`, `one`-edge keys
+row?.related.seller; //        a `one` edge: the sellers row, or `null` when it is absent
+row?.related.variants; //      a `many` / `paginated` edge: the variants rows
+row?.related.reviews; //       compile error: this read does not include `reviews`
+```
+
+`client.query`, `client.observe` and the framework hooks check the read against the graph where it is used (`Query.Validate`): a collection the graph does not have, an `include` key that is not an edge of the node, or a `where` key or `order` token that is not a field of its row fails to compile, the error naming the key. Renaming an attribute or an edge therefore breaks every read and every row access that used the old name.
+
+| Type                       | What it is                                                                                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Client.ResolvedRow<R, G>` | A row of read `R` over graph `G` (default: the registered graph): `{ id, value: Node.RowOf<N>, related }`, `related` holding exactly the included edges. `Client.ResolvedRow` alone is the untyped row. |
+| `Client.Client<G>`         | A Client over graph `G` (`typeof nodes`). `Client.Client` alone accepts any read and resolves untyped rows; a typed Client is assignable to it.                                                         |
+| `Node.NodeRegistry<N>`     | What `Node.registry([...])` returns: the graph, carrying the union of its node types `N`.                                                                                                               |
+| `Node.RowOf<N>`            | A node's row type (branded ids: `Id<"products">` is `string & Brand<"products/id">`, so it assigns to `string`).                                                                                        |
+| `Query.Validate<G, R>`     | The checks a read must pass against a graph; a function that forwards a checked read takes `read: R & Query.Validate<G, R>` and passes `R` on explicitly (`client.query<R>(read)`).                     |
+| `Register`                 | The app's graph, registered once for the hooks that find the Client in context (below).                                                                                                                 |
+
+A read the graph cannot describe statically is not checked, and its rows are untyped (`value: unknown`, `related` keyed by `string`), never a compile error: one whose `collection` is a `string` (built at runtime, or annotated `const read: Query.Read = …`, which widens it), the dynamic parts of a literal read (a `where` built as a `Record`, a full `Predicate`, `order` tokens typed `string`), and any read over a Client typed `Client.Client`.
+
+**Hooks need the graph registered.** A framework hook (`useQuery` in `@thomasfosterau/legation-svelte`) finds the Client in context, so it learns the graph's types from one declaration, next to the graph:
+
+```ts
+export const nodes = Node.registry([products, sellers, variants]);
+
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+```
+
+Register the graph the app's Client is built over: the hooks trust that the rows the context Client emits are that graph's. Without a registration the hooks accept any read and resolve it to untyped rows.
 
 In a real deployment the server runs on its own (a Worker, or a process of its own) and the client connects with `transport: { url }`. See [`@thomasfosterau/legation-alchemy-cloudflare`](../alchemy-cloudflare) for the Cloudflare Workers topology, [SQL backend](#sql-backend-thomasfosteraulegationsql) below for a database-backed `Backend`, and [`@thomasfosterau/legation-browser`](../browser) for the browser hosts. The fuller examples are [`examples/todo`](../../examples/todo), one node with optimistic writes and offline use, and [`examples/commerce`](../../examples/commerce), the full deployment.
 
@@ -150,7 +203,7 @@ Everything below is on the root entry, `@thomasfosterau/legation`.
 | `Node`          | A resource type. `Node.make(type, { attributes, edges, filterable, sortable })` defines one; `Node.registry([...])` closes and validates a graph.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `Edge`          | A relationship between nodes: `Edge.one` (a foreign key on this node), `Edge.many` (the dependent collection, named by its `inverse`) and `Edge.paginated` (a cursor-windowed collection with a fixed `order`).                                                                                                                                                                                                                                                                                                                        |
 | `Collection`    | The named set of one node type that a client materializes. `Node.registry` derives it from the graph.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Query`         | The read. `Query.make({ collection, where, include, order, first, after })` declares a read; `Query.named(name, args)` declares a server-resolved named query.                                                                                                                                                                                                                                                                                                                                                                         |
+| `Query`         | The read. A `Query.Read` is a plain literal `{ collection, where, include, order, first, after }`, declared `as const satisfies Query.Read` (or `Query.make({...})`, which keeps it literal too) so its rows are typed ([Typed reads](#typed-reads)); `Query.named(name, args)` declares a server-resolved named query.                                                                                                                                                                                                                |
 | `Aggregate`     | Read projections over a query: `Aggregate.count`, `Aggregate.sum(field)`, `min`, `max` and `avg`.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `Mutation`      | The write. `Mutation.make(name, schema)` declares a named intent; `Mutation.registry` pairs each with its optimistic `local` handler. (`Mutator` is a deprecated alias.)                                                                                                                                                                                                                                                                                                                                                               |
 | `Client`        | The one-per-thread object. `Client.make` owns an engine and returns `{ client, engine, store }`, so engine-level tools such as devtools attach to what it built; `Client.connect` joins one hosted elsewhere, such as a service worker. It offers `query`, `observe`, `subscribe`, `mutate`, `mutateWithAck`, `mutationStates`, `reset` and `totalOf` (a subscription's total as the last pull reported it, #210).                                                                                                                     |
