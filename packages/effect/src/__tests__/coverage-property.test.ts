@@ -23,8 +23,9 @@ import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Env from "./env.js";
 
-const seed = FilterCorpus.resolveSeed(process.env["LEGATION_CORPUS_SEED"]);
+const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
 /** Rows in the generated set (the pinned sweep plus random rows). */
 const ROWS = 64;
 /** Conjunct-built pairs per run. */

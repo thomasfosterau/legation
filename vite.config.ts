@@ -210,6 +210,7 @@ export default defineConfig({
       "effecttsgo/catch-to-or-else-succeed": "error",
       "effecttsgo/lazy-effect": "error",
       "effecttsgo/catch-to-ignore": "error",
+      "effect/avoid-process-env": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
@@ -232,13 +233,16 @@ export default defineConfig({
           "effect/avoid-ts-ignore": "off",
         },
       },
-      // Test fixtures read the environment at collection time, before any
-      // Effect runtime exists: `DATABASE_URL` selects the PostgreSQL suite and
-      // `CI` turns its skip into a failure. Stays visible as a warning.
+      // The tests read the environment at collection time, before any Effect
+      // runtime exists: `DATABASE_URL` selects the PostgreSQL suites, `CI`
+      // turns their skip into a failure and `LEGATION_CORPUS_SEED` seeds the
+      // corpora Vitest builds while it collects the file. There is no `Config`
+      // provider to read them through yet, so this one module reads
+      // `process.env` and every test imports it from there.
       {
-        files: ["packages/*/src/**/__tests__/**"],
+        files: ["packages/effect/src/__tests__/env.ts"],
         rules: {
-          "effect/avoid-process-env": "warn",
+          "effect/avoid-process-env": "off",
         },
       },
       // Build/test configs and the release scripts are evaluated by Vite,

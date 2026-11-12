@@ -44,6 +44,7 @@ import {
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
@@ -441,7 +442,7 @@ describe("paced compaction against SqlBackend (#249)", () => {
  * overlap suite (`sql-backend-postgres.test.ts`) on one database. Without the
  * variable the suite is skipped locally; in CI that file's guard fails instead.
  */
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = Env.databaseUrl;
 
 const PG_TABLES = `DROP TABLE IF EXISTS __contract, __contract_eval, contract_sync_mutations`;
 
@@ -549,7 +550,7 @@ const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 // Always runs, so a CI job without the service fails here instead of skipping the
 // suite below in silence (the same guard as sql-backend-postgres.test.ts).
 it("has DATABASE_URL in CI, so the PostgreSQL contract run cannot skip silently", () => {
-  const ciWithoutDatabase = process.env.CI !== undefined && databaseUrl === undefined;
+  const ciWithoutDatabase = Env.inCi && databaseUrl === undefined;
   expect(
     ciWithoutDatabase,
     "DATABASE_URL is not set in CI: the PostgreSQL contract run (#353) needs the PostgreSQL service container in .github/workflows/ci.yml"
