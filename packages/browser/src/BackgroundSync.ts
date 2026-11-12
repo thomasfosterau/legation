@@ -207,14 +207,23 @@ export interface RegisterOptions {
   readonly registration?: Effect.Effect<SyncRegistration | undefined>;
 }
 
+/** Reading the service-worker registration or registering the sync tag rejected; handled where it is caught. */
+class SyncRegistrationFailed extends Schema.TaggedError<
+  SyncRegistrationFailed,
+  { readonly brand: unique symbol }
+>()("SyncRegistrationFailed", {
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
 /** The page's service-worker registration, or `undefined` where there is none. */
 const pageRegistration: Effect.Effect<SyncRegistration | undefined> = Effect.suspend(() => {
   const container: ServiceWorkerContainer | undefined = globalThis.navigator?.serviceWorker;
   return container === undefined
     ? Effect.undefined
-    : Effect.tryPromise(() => container.getRegistration()).pipe(
-        Effect.orElseSucceed(() => undefined)
-      );
+    : Effect.tryPromise({
+        try: () => container.getRegistration(),
+        catch: (cause) => new SyncRegistrationFailed({ cause }),
+      }).pipe(Effect.orElseSucceed(() => undefined));
 });
 
 /**
@@ -238,7 +247,10 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
       );
       return "Unsupported" as const;
     }
-    return yield* Effect.tryPromise(() => sync.register(tag)).pipe(
+    return yield* Effect.tryPromise({
+      try: () => sync.register(tag),
+      catch: (cause) => new SyncRegistrationFailed({ cause }),
+    }).pipe(
       Effect.as("Registered" as const),
       Effect.catch((cause) =>
         Effect.logDebug("Background Sync registration refused", cause).pipe(

@@ -10,6 +10,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "../kit/__tests__/await-promise.js";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import { Client, ClientStore, type Hydration, Transport } from "@thomasfosterau/legation";
@@ -57,7 +58,7 @@ const boot = (handle: ClientHandle) =>
 
 /** The host's answer to the handle's snapshot. */
 const hydrationOf = (handle: ConnectedClientHandle) =>
-  Effect.tryPromise(() => handle.hydration).pipe(Effect.orDie);
+  awaitPromise(() => handle.hydration).pipe(Effect.orDie);
 
 /** The ids the Client reads for all todos, once there are `count` of them. */
 const idsOnce = (client: Client.Client, count: number) =>

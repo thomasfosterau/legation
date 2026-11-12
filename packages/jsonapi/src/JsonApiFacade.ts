@@ -297,6 +297,14 @@ export const offlineDocument: RestHandlers.ErrorDocument = {
   ],
 };
 
+/** A write request's body could not be read; `decodeWrite` refuses it as an invalid document. */
+class RequestBodyUnreadable extends Schema.TaggedError<
+  RequestBodyUnreadable,
+  { readonly brand: unique symbol }
+>()("RequestBodyUnreadable", {
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
 /** Every response the façade synthesises: JSON:API, never cached, marked as served locally. */
 const respondWith = (
   status: number,
@@ -816,7 +824,10 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     preferences: FacadeWrites.Preferences
   ): Effect.Effect<Response, Unjournaled> =>
     Effect.gen(function* () {
-      const body = Effect.tryPromise(() => request.clone().text());
+      const body = Effect.tryPromise({
+        try: () => request.clone().text(),
+        catch: (cause) => new RequestBodyUnreadable({ cause }),
+      });
       const write = yield* FacadeWrites.decodeWrite(
         candidate.route.node,
         candidate.target,

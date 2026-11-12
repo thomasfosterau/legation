@@ -13,6 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -240,7 +241,7 @@ const patchNote = (headers: Record<string, string> = {}) =>
 const deleteNote = (headers: Record<string, string> = {}) => remove("/jsonapi/notes/n-1", headers);
 
 const body = (response: Response): Effect.Effect<any> =>
-  Effect.orDie(Effect.tryPromise(() => response.json()));
+  Effect.orDie(awaitPromise(() => response.json()));
 
 /** The façade's own answer to a request; a forward (`undefined`) is a test failure. */
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>

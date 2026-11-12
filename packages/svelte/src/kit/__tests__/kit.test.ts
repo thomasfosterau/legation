@@ -409,7 +409,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           ),
           subscribe: [allTallies],
         });
-        const query = Effect.tryPromise(() =>
+        const query = awaitPromise(() =>
           runtime.runPromise(
             Effect.flatMap(Client.Client, (client) => client.query(allTallies)).pipe(
               Effect.map((rows) => rows.map((row) => row.value))
@@ -440,7 +440,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         const receipt = yield* runFormMutation(server, target, tallyUp, tallyArgsOf(data));
 
         const updates: Array<unknown> = [];
-        yield* Effect.tryPromise(() =>
+        yield* awaitPromise(() =>
           settle({
             result: { type: "success", data: { [RECEIPT_KEY]: receipt } },
             update: (options) => {
@@ -456,7 +456,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         // Shown from the tail, then from the confirmed rows: applied once.
         expect(yield* query).toEqual([{ id: "t2", n: 1 }]);
 
-        yield* Effect.tryPromise(() => runtime.dispose());
+        yield* awaitPromise(() => runtime.dispose());
       })
     )
   );
@@ -483,7 +483,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           args: tallyArgsOf,
           onReceipt: (receipt) => void receipts.push(receipt),
         })({ formData: postedForm({ clientId: "", mutationId: 1 }, "t3") });
-        const query = Effect.tryPromise(() =>
+        const query = awaitPromise(() =>
           runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTallies)))
         );
         const target = formMutationTarget(
@@ -492,7 +492,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         );
         if (target === undefined) return yield* Effect.die("unroutable");
         const receipt = yield* runFormMutation(server, target, tallyLocked, { id: "t3" });
-        yield* Effect.tryPromise(() =>
+        yield* awaitPromise(() =>
           settle({
             result: { type: "failure", data: { [RECEIPT_KEY]: receipt } },
             update: () => Promise.resolve(),
@@ -502,7 +502,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           "tally is locked",
         ]);
         expect(yield* query).toEqual([]);
-        yield* Effect.tryPromise(() => runtime.dispose());
+        yield* awaitPromise(() => runtime.dispose());
       })
     )
   );
