@@ -42,7 +42,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import type { Protocol } from "@thomasfosterau/legation/internal";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
@@ -61,6 +61,7 @@ import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { withLayer } from "./with-layer.js";
 
 interface Todo {
   readonly id: string;
@@ -239,11 +240,11 @@ const recordLogs = () => {
       loud.push(`${options.logLevel}: ${String(options.message)}`);
     }
   });
-  const layer = Layer.merge(
+  const loggingLayer = Layer.merge(
     Logger.layer([logger]),
     Layer.succeed(References.MinimumLogLevel)("All")
   );
-  return { loud, layer };
+  return { loud, layer: loggingLayer };
 };
 
 const phases = (engine: ClientEngine.ClientEngine) =>
@@ -279,7 +280,7 @@ const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("BackgroundSync (#213)", () => {
+describeWrapped("BackgroundSync (#213)", (it) => {
   it.live(
     "journal → sync event → push → acknowledgement → overlay drop, composed into ServiceWorkerHost",
     () =>
@@ -450,7 +451,7 @@ describe("BackgroundSync (#213)", () => {
       };
       const { engine } = yield* makeEngine(store);
       // The flush runs under the services of whoever attached it.
-      yield* listener.serve(engine).pipe(Effect.provide(logs.layer));
+      yield* listener.serve(engine).pipe(withLayer(logs.layer));
       yield* engine.mutate("todo/set", { id: "1", title: "pending" });
 
       yield* Ref.set(broken, true);
@@ -695,9 +696,13 @@ describe("BackgroundSync (#213)", () => {
       }).pipe(Effect.scoped)
     );
   });
+});
 
-  describe("the identity boundary (#212)", () => {
-    it.live("a sync event does not push a quarantined journal", () =>
+// A live clock (`excludeTestServices`): the flushes below race the host's real timers.
+layer(KeyValueStore.layerMemory, { buildPerTest: true, excludeTestServices: true })(
+  "BackgroundSync identity boundary (#212)",
+  (it) => {
+    it.effect("a sync event does not push a quarantined journal", () =>
       Effect.gen(function* () {
         const self = fakeScope();
         // Bob is who the app says is signed in now.
@@ -717,10 +722,10 @@ describe("BackgroundSync (#213)", () => {
         // not lost.
         expect(yield* Ref.get(pushes)).toEqual([]);
         expect(yield* engine.quarantinedMutations(ALICE)).toHaveLength(1);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+      }).pipe(Effect.scoped)
     );
 
-    it.live("a replica stamped for someone other than the current identity is not flushed", () =>
+    it.effect("a replica stamped for someone other than the current identity is not flushed", () =>
       Effect.gen(function* () {
         // The tab closed before the app called `reset`: the store is still
         // stamped for Alice, but Bob is who the app now says is signed in.
@@ -749,10 +754,10 @@ describe("BackgroundSync (#213)", () => {
         expect(flushed).toEqual({ ok: true, value: "Flushed" });
         expect(yield* Ref.get(pushes)).toHaveLength(1);
         expect(yield* store.pendingMutations).toEqual([]);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+      }).pipe(Effect.scoped)
     );
 
-    it.live("an anonymous replica is not flushed under a sign-in, and is under anonymous", () =>
+    it.effect("an anonymous replica is not flushed under a sign-in, and is under anonymous", () =>
       Effect.gen(function* () {
         // Anonymous → signed in is the one benign transition, but a
         // context with no UI does not apply it: the page boot does.
@@ -773,7 +778,7 @@ describe("BackgroundSync (#213)", () => {
         const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
         expect(flushed).toEqual({ ok: true, value: "Flushed" });
         expect(yield* Ref.get(pushes)).toHaveLength(1);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+      }).pipe(Effect.scoped)
     );
-  });
-});
+  }
+);

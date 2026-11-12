@@ -17,6 +17,7 @@ import { KeyValueStore } from "effect/persistence";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 /**
  * Makes the Nth `put` of an armed batch throw, as a write that fails mid-transaction would. Every
@@ -199,9 +200,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(yield* kv.get("legation/cookie")).toBe("cookie-1");
         expect(yield* kv.has(RECORD)).toBe(false);
       }).pipe(
-        Effect.provide(
-          Layer.mergeAll(storeLayer("atomic-readback"), platformLayer("atomic-readback"))
-        )
+        withLayer(Layer.mergeAll(storeLayer("atomic-readback"), platformLayer("atomic-readback")))
       )
   );
 
@@ -221,7 +220,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           });
           yield* defined(store.commitAcknowledgement)([m1], { c: 1 });
           yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
-        }).pipe(Effect.provide(storeLayer(database)));
+        }).pipe(withLayer(storeLayer(database)));
 
         // The pull's second row write fails mid-transaction: IndexedDB aborts the batch.
         yield* Effect.gen(function* () {
@@ -241,7 +240,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { id: "a", n: 0 } });
           expect(yield* store.getRow("counters", "b")).toBeUndefined();
           expect(yield* store.getCookie).toBeUndefined();
-        }).pipe(Effect.provide(storeLayer(database, failingIndexedDb)));
+        }).pipe(withLayer(storeLayer(database, failingIndexedDb)));
 
         // A restart shows the tail still parked, so the overlay keeps the acknowledged effect.
         yield* Effect.gen(function* () {
@@ -251,7 +250,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           ]);
           expect(yield* store.pendingMutations).toEqual([]);
           expect(yield* store.getCookie).toBeUndefined();
-        }).pipe(Effect.provide(storeLayer(database)));
+        }).pipe(withLayer(storeLayer(database)));
       })
   );
 
@@ -264,7 +263,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           cookie: "cookie-0",
           patch: [put("a", 0)],
         });
-      }).pipe(Effect.provide(storeLayer("atomic-tally")));
+      }).pipe(withLayer(storeLayer("atomic-tally")));
 
       tally.readwrite = 0;
       tally.putKeys.length = 0;
@@ -276,7 +275,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           cookie: "cookie-1",
           patch: [put("a", 1), put("b", 2), put("a", 3)],
         });
-      }).pipe(Effect.provide(storeLayer("atomic-tally", failingIndexedDb)));
+      }).pipe(withLayer(storeLayer("atomic-tally", failingIndexedDb)));
 
       expect(tally.readwrite).toBe(1);
       expect(tally.putKeys).toContain(rowKey("a"));
@@ -297,7 +296,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         });
         expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { n: 3 } });
         expect(yield* store.getCookie).toBe("cookie-v2");
-      }).pipe(Effect.provide(storeLayer("atomic-v2")));
+      }).pipe(withLayer(storeLayer("atomic-v2")));
       // The store opened the database at the version it had: nothing was downgraded or upgraded.
       expect(yield* awaitPromise(() => versionOf("atomic-v2"))).toBe(2);
     })
@@ -319,7 +318,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
             "identity boundary could not be established on open,"
           );
           expect(String(error)).toContain('has no "entries" object store');
-        }).pipe(Effect.provide(storeLayer("atomic-no-entries")));
+        }).pipe(withLayer(storeLayer("atomic-no-entries")));
       })
   );
 
@@ -330,7 +329,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         yield* ClientStore.ClientStore;
         const outcome = yield* awaitPromise(() => upgradeTo("atomic-upgrade", 2));
         expect(outcome).toBe("upgraded");
-      }).pipe(Effect.provide(storeLayer("atomic-upgrade")));
+      }).pipe(withLayer(storeLayer("atomic-upgrade")));
     })
   );
 
@@ -362,7 +361,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
               "the IndexedDB database was upgraded by another connection; reload to continue"
             );
           });
-        }).pipe(Effect.provide(storeLayer(database)));
+        }).pipe(withLayer(storeLayer(database)));
       })
   );
 
@@ -387,7 +386,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
             cookie: "cookie-legacy",
             patch: [put("a", 7)],
           });
-        }).pipe(Effect.provide(platformLayer(database)));
+        }).pipe(withLayer(platformLayer(database)));
 
         // The batch-backed store opens the same database and settles the record.
         yield* Effect.gen(function* () {
@@ -399,7 +398,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           expect(yield* store.pendingMutations).toEqual([]);
           const kv = yield* KeyValueStore.KeyValueStore;
           expect(yield* kv.has(RECORD)).toBe(false);
-        }).pipe(Effect.provide(Layer.mergeAll(storeLayer(database), platformLayer(database))));
+        }).pipe(withLayer(Layer.mergeAll(storeLayer(database), platformLayer(database))));
       })
   );
 
@@ -422,7 +421,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         });
         yield* defined(store.commitAcknowledgement)([first], { c: first.mutationId });
         yield* store.appendNext({ clientId: "c", mutator: "counter/inc", args: {}, createdAt: 0 });
-      }).pipe(Effect.provide(storeLayer(database)));
+      }).pipe(withLayer(storeLayer(database)));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
@@ -443,7 +442,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(tally.readonly).toBe(1);
         expect(snapshot.journal.map((m) => m.mutationId)).toEqual([2]);
         expect(snapshot.unpulled?.map((m) => m.mutationId)).toEqual([1]);
-      }).pipe(Effect.provide(storeLayer(database, failingIndexedDb)));
+      }).pipe(withLayer(storeLayer(database, failingIndexedDb)));
     })
   );
 
@@ -457,7 +456,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
           cookie: "cookie-1",
           patch: [put("a", 1)],
         });
-      }).pipe(Effect.provide(storeLayer(database)));
+      }).pipe(withLayer(storeLayer(database)));
       // A number where the cookie belongs: IndexedDB stores it, the platform store reads it as absent.
       yield* awaitPromise(() => putRawRecord(database, { key: "legation/cookie", value: 7 }));
 
@@ -469,7 +468,7 @@ describe("IndexedDbClientStore's atomic batch (#393)", () => {
         expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
         expect(state.journal).toEqual(yield* store.pendingMutations);
         expect(state.unpulled).toEqual(yield* store.unpulled);
-      }).pipe(Effect.provide(storeLayer(database)));
+      }).pipe(withLayer(storeLayer(database)));
     })
   );
 });
