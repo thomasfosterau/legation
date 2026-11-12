@@ -368,8 +368,8 @@ export interface FallbackOptions {
 
 /**
  * Layer a fallback carrier under a primary one (e.g. plain HTTP under
- * WebSockets): each push/pull tries the primary and falls back on a
- * `TransportError`. After a primary failure the primary is sidelined for
+ * WebSockets): each push, pull and fallthrough read tries the primary and
+ * falls back on a `TransportError`. After a primary failure the primary is sidelined for
  * `restoreAfter`, so subsequent calls go straight to the fallback until the
  * cooldown elapses and a call probes the primary again.
  *
@@ -380,6 +380,11 @@ export interface FallbackOptions {
  * redundant pull) and a failing primary poke stream is dropped rather than
  * killing the fallback's. A `VersionNotSupportedError` propagates without
  * falling back — it is the server's verdict, not carrier trouble.
+ *
+ * `read` (ADR-0025) is optional on a carrier: with both legs offering it, it
+ * takes the same path as push and pull; with one, that leg serves every read
+ * as it would unwrapped; with neither, the combined transport has none and
+ * the Client answers uncovered reads locally.
  */
 export const withFallback = (
   primary: ClientTransport,
@@ -434,7 +439,18 @@ export const withFallback = (
         return yield* second.failure;
       });
 
-    return {
+    // The fallthrough read (ADR-0025) is optional on each leg: both legs
+    // carry it through `call`, like push and pull; one leg serves it alone,
+    // as that leg does; neither leaves it off, so the Client answers locally.
+    const primaryRead = primary.read;
+    const fallbackRead = fallback.read;
+    const read: ClientTransport["read"] =
+      primaryRead !== undefined && fallbackRead !== undefined
+        ? (request) =>
+            call((transport) => (transport === primary ? primaryRead : fallbackRead)(request))
+        : (primaryRead ?? fallbackRead);
+
+    const combined: ClientTransport = {
       push: (request) => call((transport) => transport.push(request)),
       pull: (request) => call((transport) => transport.pull(request)),
       pokes: Stream.merge(
@@ -444,4 +460,5 @@ export const withFallback = (
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
     };
+    return read === undefined ? combined : { ...combined, read };
   });
