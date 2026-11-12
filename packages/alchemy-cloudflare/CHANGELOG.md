@@ -1,5 +1,23 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.3.0
+
+### Minor Changes
+
+- f1f0092: A room can use a per-request backend (#681): return `Backend.perRequest(acquire)` from `Room.make`'s `backend`, and the room builds the store in `acquire` once per push, pull and read, in that request's scope, so a Hyperdrive-backed `PgClient` is built from the current invocation's credentials and one push's transaction stays on its connection. The `backend` doc comment, the README and `docs/alchemy-postgres.md` (its Hyperdrive section, with an example over `Hyperdrive.ConnectClient`) say how.
+- 486b0ef: **Breaking:** `Worker.RouterConfig.roomIdOf` returns `Effect<Option<string>, never, R>` instead of `Effect<string | undefined, never, R>` (#683), matching `anonymousRoomOf`. `Option.none()` is the anonymous caller (a 401, unless `anonymousRoomOf` routes it). Migrate by wrapping the result: `Option.fromNullishOr(id)` for a nullable lookup, or `Effect.succeed(Option.some(id))` for a constant id.
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- 2478811: Name the failures of the promises these packages await. A rejected KV delete, cache purge or forwarded invalidation (`EdgeInvalidation`), a rejected Background Sync registration lookup or registration (`BackgroundSync`) and an unreadable write-request body (`JsonApiFacade`) now carry a module-private tagged error with the rejection as its `cause`, where they were the generic `UnknownError`. Behaviour is unchanged; only the error a log line shows differs.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
 ## 0.2.0
 
 ### Minor Changes

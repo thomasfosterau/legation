@@ -1,5 +1,17 @@
 # @thomasfosterau/legation-svelte
 
+## 0.2.1
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
 ## 0.2.0
 
 ### Minor Changes

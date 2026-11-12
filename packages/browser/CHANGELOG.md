@@ -1,5 +1,17 @@
 # @thomasfosterau/legation-browser
 
+## 0.3.1
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- 2478811: Name the failures of the promises these packages await. A rejected KV delete, cache purge or forwarded invalidation (`EdgeInvalidation`), a rejected Background Sync registration lookup or registration (`BackgroundSync`) and an unreadable write-request body (`JsonApiFacade`) now carry a module-private tagged error with the rejection as its `cause`, where they were the generic `UnknownError`. Behaviour is unchanged; only the error a log line shows differs.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
 ## 0.3.0
 
 ### Minor Changes
