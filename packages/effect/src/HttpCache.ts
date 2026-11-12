@@ -21,25 +21,37 @@ import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Duration from "effect/Duration";
+import type * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { StoreError } from "./Errors.js";
 
+/**
+ * The cache metadata kept alongside a stored Response, as a schema: a store
+ * persists it with the response (the Cache API store, in a header), so its
+ * encoded shape is a storage format and keeps its native optional.
+ */
+export const CachedResponseMeta = Schema.Struct({
+  url: Schema.String,
+  storedAt: Schema.Finite,
+  staleAt: Schema.Finite,
+  /** Absent when the entry never expires (no `timeToLive`). */
+  expiresAt: Schema.optional(Schema.Finite),
+  tags: Schema.Array(Schema.String),
+});
+
 /** Cache metadata kept alongside a stored Response. */
-export interface CachedResponseMeta {
-  readonly url: string;
-  readonly storedAt: number;
-  readonly staleAt: number;
-  readonly expiresAt: number | undefined;
-  readonly tags: ReadonlyArray<string>;
+export type CachedResponseMeta = typeof CachedResponseMeta.Type;
+
+/** A stored response and the metadata it was stored with: a {@link ResponseCacheStore} hit. */
+export interface CachedResponse {
+  readonly response: Response;
+  readonly meta: CachedResponseMeta;
 }
 
 /** A pluggable store of Request/Response pairs (Cache API in browsers). */
 export interface ResponseCacheStore {
-  readonly match: (
-    request: Request
-  ) => Effect.Effect<
-    { readonly response: Response; readonly meta: CachedResponseMeta } | undefined,
-    StoreError
-  >;
+  /** The entry stored for the request; `None` on a miss. */
+  readonly match: (request: Request) => Effect.Effect<Option.Option<CachedResponse>, StoreError>;
   readonly put: (
     request: Request,
     response: Response,
@@ -60,9 +72,18 @@ export const ResponseCacheStore = Context.Service<ResponseCacheStore>(
 
 /** Per-route caching policy. */
 export interface HttpCachePolicy {
+  /** How long a stored response is served without revalidating. */
   readonly staleTime: Duration.Input;
-  readonly timeToLive?: Duration.Input | undefined;
-  readonly tags?: ReadonlyArray<string> | undefined;
+  /** How long a stored response may be served at all (stale ones revalidate); no limit when absent. */
+  readonly timeToLive?: Duration.Input;
+  /** The tags stored with the response, for {@link ResponseCacheStore.invalidateTags}. */
+  readonly tags?: ReadonlyArray<string>;
+  /**
+   * Whether a network response may be stored; defaults to `response.ok`. A
+   * response it refuses is still answered, just not cached (e.g. cache only
+   * `Cache-Control: public` responses).
+   */
+  readonly cacheable?: (response: Response) => boolean;
 }
 
 // ─── The tag convention (#207, #206) ─────────────────────────────────────────

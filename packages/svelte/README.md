@@ -63,8 +63,13 @@ and imports nothing from `effect` to boot:
   renders from its `initial` seed, and only a hook that actually reaches for
   the Client (a write, a read with no seed) fails, with `ClientUnavailable`.
   No stand-in runtime is needed.
-- **Custom layers** (an in-page server, a service-worker mirror, a
-  simulated-offline transport, the Kit's snapshot-hydrated `clientRuntime`):
+- **An engine hosted elsewhere** (a service worker, an elected tab): pass a
+  `channel` instead of a transport, `createClient({ nodes, mutations, channel:
+  BroadcastMirrorChannel.make(name) })`, and the Client is a mirror of that
+  engine. Pass the page's `snapshot` too and the host hydrates its store with
+  it (see [With the engine in a service worker](#with-the-engine-in-a-service-worker)).
+- **Custom layers** (an in-page server, a simulated-offline transport, the
+  Kit's snapshot-hydrated `clientRuntime`):
   build the `ManagedRuntime` yourself and pass `setClient(fromRuntime(runtime))`,
   or `setClientRuntime(runtime)`, which is the same thing. `getClient()` returns
   the handle in context (`Option`), and `client.runtime` is the runtime the
@@ -90,6 +95,8 @@ re-subscribing the previous value stays visible with `waiting: true`
   becoming a successful empty result. Every hook below that takes a read
   thunk (`useConnection`, `useAggregate`, `useAggregateGrouped` included)
   supports the same opt-out.
+  The rows are typed from the read and the app's registered graph (see
+  [Typed rows](#typed-rows)).
 - **`useConnection(() => read, { pageSize })`** — connection-style paging that
   _grows_ one window rather than jumping between detached pages.
 - **`useAggregate(() => read, agg)`** / **`useAggregateGrouped(() => read, agg, groupBy)`**
@@ -124,6 +131,59 @@ renders, and on the client it makes the first render match the server markup
   const rows = $derived(AsyncResult.getOrElse(page.current, () => []));
 </script>
 ```
+
+### Typed rows
+
+Register the app's node graph once, next to it, and declare reads
+`as const satisfies Query.Read`; `useQuery` and `useConnection` then type
+every row with no cast and no type argument:
+
+```ts
+// src/lib/domain.ts
+import { Edge, Node, type Query } from "@thomasfosterau/legation";
+
+export const nodes = Node.registry([products, sellers, variants]);
+
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
+export const allProducts = {
+  collection: "products",
+  order: ["name"],
+  include: { seller: true, variants: true },
+} as const satisfies Query.Read;
+```
+
+```svelte
+<script lang="ts">
+  import { AsyncResult } from "effect/reactivity";
+  import { useQuery } from "@thomasfosterau/legation-svelte";
+  import { allProducts } from "$lib/domain";
+
+  const products = useQuery(() => allProducts);
+  const rows = $derived(AsyncResult.getOrElse(products.current, () => []));
+</script>
+
+{#each rows as row (row.id)}
+  <!-- `row.value` is the products row; `seller` is a sellers row or null
+       (a `one` edge whose row is absent); `variants` is the variants rows. -->
+  {row.value.name} by {row.related.seller?.name ?? "—"}, {row.related.variants.length} variants
+{/each}
+```
+
+An edge the read does not `include` is not on `row.related`, and a read that
+names a collection, edge or field the graph does not declare fails to compile
+at the `useQuery` call. Inline reads are typed the same way. A dynamic read
+(its `collection` a `string`), or any read with no graph registered, resolves
+to untyped rows (`value: unknown`) and is never a compile error. A helper that
+takes such rows names them `Client.ResolvedRow<typeof allProducts>` (the
+registered graph is the default). `initial` seeds are checked against the
+typed rows: `Hydration.rowsFor(snapshot, nodes, read)` produces them typed for
+a read with no `include` (a snapshot carries no resolved edges; seed those
+yourself, or let the first live emission fill them in).
 
 A read keyed on a selection that starts empty — the common master/detail
 case — opts out by returning `undefined` instead of reaching for a sentinel
@@ -289,6 +349,81 @@ seeding the rune hooks:
   });
 </script>
 ```
+
+### With the engine in a service worker
+
+When the engine and its durable store live in a service worker (or an
+elected tab), the tab holds the snapshot but not the store, so it hands the
+snapshot to the host. `createClient` with a `channel` and a `snapshot` does
+it, through the mirror's host-request envelope:
+
+```svelte
+<!-- +layout.svelte -->
+<script lang="ts">
+  import { onDestroy } from "svelte";
+  import { createClient, setClient } from "@thomasfosterau/legation-svelte";
+  import { BroadcastMirrorChannel, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
+  import { mutations, nodes, shellReads } from "$lib/domain";
+
+  const { data, children } = $props();
+  const client =
+    typeof document !== "undefined"
+      ? createClient({
+          nodes,
+          mutations,
+          channel: BroadcastMirrorChannel.make(ServiceWorkerHost.defaultChannelName),
+          snapshot: data.snapshot,
+          subscribe: shellReads,
+        })
+      : undefined;
+  setClient(client);
+  onDestroy(() => void client?.dispose());
+</script>
+```
+
+- **The host owns the empty-store gate.** It hydrates its store only when
+  that store is empty (no rows, no cookie, no journalled or unpulled
+  mutations) and its engine has not started a pull. A returning visitor's
+  replica is never touched, and of two tabs booting at once the first
+  snapshot to arrive wins. A declined snapshot needs no action: the host's
+  replica is at least as fresh.
+- **The offer goes first.** The Client offers the snapshot before it
+  subscribes anything (a registration makes the host pull, and a started pull
+  declines the snapshot), and re-sends it every half second while no host
+  answers, as when a first visit's service worker is still installing, for at
+  most `hydrateTimeout` (default 5 seconds). The hooks are handed the Client
+  only after that, so they render from their seeds meanwhile: seed them from
+  the snapshot (`initial: Hydration.rowsFor(data.snapshot, nodes, read)`) and
+  first paint matches the server's markup.
+- **`client.hydration`** is a `Promise` of the host's answer: `Option.some({
+  hydrated, reason? })` with `reason` `"NotEmpty"` or `"AlreadyPulling"`, or
+  `Option.none()` when there was no snapshot, no host answered, or the host
+  does not serve hydration. It is for observability only.
+- **The host side.** Start the worker's host with its store in context and a
+  `hydrationWindow` (`ServiceWorkerHost.start({ hydrationWindow: "3 seconds" })`
+  in `@thomasfosterau/legation-browser`): a worker that boots over an empty
+  replica holds its first pull until the first tab's snapshot arrives, so the
+  snapshot is not beaten by the sync loop's connect pull. A replica that holds
+  state is never held.
+
+### Snapshot or `initial`?
+
+Both put server-rendered rows on the first paint; they differ in what the
+client does next.
+
+- **Reach for the snapshot** when the page's data is the engine's own: the
+  rows a Client will keep live anyway. The snapshot carries the server's CVR
+  cookie, so the client's first pull continues that conversation and fetches
+  only what changed since the render. Nothing is fetched twice, and a fresh
+  browser's durable replica starts warm. It costs a request-scoped engine and
+  a pull per render, against a sync server the renderer can reach.
+- **Reach for `initial` seeding** when a page is genuinely simpler served
+  from the app's own API: a read with included edges (`Hydration.rowsFor`
+  resolves none), a document the no-JS tier already loads, a page that must
+  render when the sync server cannot. The seed shows until the live read
+  emits, and the client syncs those rows from scratch on its first pull.
+- They combine: seed each hook from the snapshot (`Hydration.rowsFor`) where
+  it has the read's rows, and from the API elsewhere.
 
 ### Form actions run Mutations
 

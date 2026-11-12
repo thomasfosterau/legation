@@ -60,6 +60,10 @@ export const anonymous: Principal = { _tag: "Anonymous" };
 export const isAnonymous = (principal: Principal): principal is Anonymous =>
   P.isTagged(principal, "Anonymous");
 
+/** Whether a principal is a validated session's. */
+export const isSession = (principal: Principal): principal is Session =>
+  P.isTagged(principal, "Session");
+
 /** The user a principal acts for: `None` for the anonymous principal. */
 export const userId = (principal: Principal): Option.Option<string> =>
   Match.valueTags(principal, {

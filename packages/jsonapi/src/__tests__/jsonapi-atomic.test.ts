@@ -22,7 +22,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@thomasfosterau/legation";
-import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
@@ -87,7 +87,7 @@ const rowResponse = (id: string, row: StoredRow) =>
         type: "todos",
         id,
         attributes: row.attributes,
-        ...(row.relationships !== undefined ? { relationships: row.relationships } : {}),
+        ...Defined.fields({ relationships: row.relationships }),
       },
     },
     jsonHeaders
@@ -164,9 +164,12 @@ const storeRow = (rows: Record<string, StoredRow>, data: any, merge: boolean): v
   const existing = merge ? rows[data.id] : undefined;
   rows[data.id] = {
     attributes: { ...existing?.attributes, ...data.attributes },
-    ...(existing?.relationships !== undefined || data.relationships !== undefined
-      ? { relationships: { ...existing?.relationships, ...data.relationships } }
-      : {}),
+    ...Defined.fields({
+      relationships:
+        existing?.relationships !== undefined || data.relationships !== undefined
+          ? { ...existing?.relationships, ...data.relationships }
+          : undefined,
+    }),
   };
 };
 
@@ -556,7 +559,7 @@ const makeModeBackend = (mode: HintMode, server: ReturnType<typeof makeServer>) 
     resources,
     mutators: registry.mutators,
     operations,
-    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+    ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
   }).pipe(Effect.provide(server.layer));
 
 for (const mode of ["atomic", "per-resource"] as const) {
@@ -1212,7 +1215,7 @@ describe("JsonApiBackend checks getOne for the whole push before its first write
             resources: inspected.resources,
             mutators: inspected.registry.mutators,
             operations: inspected.operations,
-            ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+            ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
           }).pipe(Effect.provide(server.layer));
 
           const failure = yield* Effect.flip(
@@ -1252,7 +1255,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
           resources: inspected.resources,
           mutators: inspected.registry.mutators,
           operations: inspected.operations,
-          ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+          ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
         }).pipe(Effect.provide(server.layer));
 
         const failure = yield* Effect.flip(
@@ -1488,7 +1491,7 @@ const makeRejectingBackend = (mode: HintMode, server: ReturnType<typeof rejectin
     resources,
     mutators: registry.mutators,
     operations,
-    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
+    ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
   }).pipe(Effect.provide(server.layer));
 
 const createFour = mutation(4, "todos/create", {

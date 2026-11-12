@@ -583,7 +583,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     Option.fromUndefinedOr(options.cookie),
     {
       onNone: () => Effect.succeedNone,
-      onSome: (read) => Effect.catch(read, () => Effect.succeedNone),
+      onSome: (read) => Effect.orElseSucceed(read, () => Option.none()),
     }
   );
   /** The link prefix of a route's documents: the `prefix` option, else the route's own. */

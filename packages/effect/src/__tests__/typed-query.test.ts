@@ -89,7 +89,10 @@ const makeEngine = Effect.gen(function* () {
 });
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 // ─── A. Canonical arg keys ─────────────────────────────────────────────────────
 

@@ -23,8 +23,9 @@ import { Subset } from "@thomasfosterau/legation/internal";
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import * as Env from "../env.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = Env.databaseUrl;
 const context = { clientGroupId: "g" };
 
 const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_big, pgx_sync_mutations`;

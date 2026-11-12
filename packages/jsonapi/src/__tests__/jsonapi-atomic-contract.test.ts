@@ -13,6 +13,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -41,12 +42,13 @@ import {
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
 import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation";
-import { BackendContract, Subset } from "@thomasfosterau/legation/internal";
+import { BackendContract, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
 import { flakyLedger } from "./flaky-ledger.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── The api ─────────────────────────────────────────────────────────────────
 
@@ -264,7 +266,8 @@ const applyAdd = (
   // Staged before the crash check: a row written and then crashed must be
   // discarded with the batch, not leaked into the committed store.
   tableOf(staged, row.type).set(id, row);
-  if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
+  if (row.attributes.crash === true)
+    return Effect.die(new TestFailure({ message: "the server fell over" }));
   return Effect.gen(function* () {
     if (probe.publishEarly) tableOf(committed, row.type).set(id, row);
     const hold = probe.holds.get(id);
@@ -393,14 +396,14 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
     ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
-      ({ dispose }) => Effect.promise(dispose)
+      ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)
     );
     const requests: Array<{ readonly method: string; readonly path: string }> = [];
     const client = HttpClient.make((request, url) =>
       Effect.gen(function* () {
         requests.push({ method: request.method, path: url.pathname });
         const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const response = yield* Effect.promise(() => handler(web));
+        const response = yield* awaitPromise(() => handler(web)).pipe(Effect.orDie);
         return HttpClientResponse.fromWeb(request, response);
       })
     );
@@ -532,7 +535,7 @@ const makeBackend = (
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.
       query: { encode: () => Effect.succeedSome("") },
-      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
+      ...Defined.fields({ ledger: options.ledger }),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests, store };
   });

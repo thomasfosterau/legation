@@ -130,9 +130,6 @@ export const construct = <Surface>(
     return { object, sockets: raw.sockets, run };
   });
 
-/** One member of a Durable Object's surface, by name. */
-const member = (surface: Members, key: string | symbol): unknown => surface[key];
-
 /** A Durable Object's surface, read as its members by name. */
 type Members = Readonly<Record<string | symbol, unknown>>;
 
@@ -158,7 +155,7 @@ export const makeNamespace = <Surface extends object>(
                   Effect.flatMap(lookup(name), (instance) =>
                     instance.run(
                       // SAFETY: a Durable Object's `fetch` member is its HTTP handler.
-                      (member(asMembers(instance.object), "fetch") as Handler).pipe(
+                      (asMembers(instance.object)["fetch"] as Handler).pipe(
                         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
                         Effect.orDie
                       )
@@ -169,7 +166,7 @@ export const makeNamespace = <Surface extends object>(
                     instance.run<unknown, never>(
                       // SAFETY: every other member of a Durable Object's surface is an RPC method.
                       (
-                        member(asMembers(instance.object), method) as (
+                        asMembers(instance.object)[method] as (
                           ...args: ReadonlyArray<unknown>
                         ) => Effect.Effect<unknown, never, RuntimeContext>
                       )(...args)

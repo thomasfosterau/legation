@@ -9,7 +9,7 @@
 
 import { IndexedDb } from "@effect/platform-browser";
 import { StoreError } from "@thomasfosterau/legation";
-import { AtomicKeyValue } from "@thomasfosterau/legation/internal";
+import { AtomicKeyValue, Defined } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -102,7 +102,7 @@ const missingEntriesStore = (db: IDBDatabase, method: string, key?: string) =>
   new KeyValueStore.KeyValueStoreError({
     method,
     message: `IndexedDB database "${db.name}" has no "${ENTRIES_STORE}" object store`,
-    ...(key === undefined ? {} : { key }),
+    ...Defined.fields({ key }),
   });
 
 /**
@@ -140,7 +140,7 @@ const runRequest = <A>(
           new KeyValueStore.KeyValueStoreError({
             method: failure.method,
             message: UPGRADED_MESSAGE,
-            ...(failure.key === undefined ? {} : { key: failure.key }),
+            ...Defined.fields({ key: failure.key }),
           })
         )
       );

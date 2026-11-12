@@ -13,6 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
@@ -291,7 +292,7 @@ const jsonApi = (url: string, init: RequestInit = {}): Request =>
 
 const bytes = (document: unknown) => JSON.stringify(document);
 
-const body = (response: Response) => Effect.promise(() => response.json() as Promise<unknown>);
+const body = (response: Response) => awaitPromise(() => response.json() as Promise<unknown>);
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

@@ -183,6 +183,16 @@ export const nodes = Node.registry([
   orderDetails,
 ]);
 
+/**
+ * The graph registered for the rune hooks: `useQuery` and `useConnection` find
+ * the Client in context, so this is how they type each read's rows.
+ */
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
 /** The engine's collection registry, derived edge-for-edge from the graph. */
 export const registry = nodes.collections;
 
@@ -191,45 +201,52 @@ export const registry = nodes.collections;
 // The seed dataset is small, so each screen reads a whole collection and the
 // tab filters/paginates locally. Each screen's join lives in its read: an
 // `include`d edge resolves onto every row's `related`.
+//
+// Each read is a plain literal declared `as const satisfies Query.Read`: the
+// shape is checked here, and the literal collection and `include` keys type
+// the rows the hooks hand back (the graph is registered above).
 
 /** Categories with their products — the screen counts what it is handed. */
-export const allCategories: Query.Read = {
+export const allCategories = {
   collection: "categories",
   order: ["name"],
   include: { products: true },
-};
+} as const satisfies Query.Read;
 
 /** Products with the category and supplier the grid displays. */
-export const allProducts: Query.Read = {
+export const allProducts = {
   collection: "products",
   order: ["name"],
   include: { category: true, supplier: true },
-};
+} as const satisfies Query.Read;
 
 /** Customers with their orders — the directory's live order count. */
-export const allCustomers: Query.Read = {
+export const allCustomers = {
   collection: "customers",
   order: ["company"],
   include: { orders: true },
-};
+} as const satisfies Query.Read;
 
 /** Orders joined to customer, employee, and their line items, newest first. */
-export const allOrders: Query.Read = {
+export const allOrders = {
   collection: "orders",
   order: ["-orderedAt"],
   include: { customer: true, employee: true, lines: true },
-};
+} as const satisfies Query.Read;
 
-export const allSuppliers: Query.Read = { collection: "suppliers", order: ["company"] };
+export const allSuppliers = {
+  collection: "suppliers",
+  order: ["company"],
+} as const satisfies Query.Read;
 
 /** One order's line items, each with the product it refers to. */
-export const orderLines = (orderId: string): Query.Read => ({
+export const orderLines = (orderId: string) => ({
   collection: "orderDetails",
   where: { orderId },
   include: { product: true },
-});
-export const allEmployees: Query.Read = { collection: "employees" };
-export const allOrderDetails: Query.Read = { collection: "orderDetails" };
+}) as const satisfies Query.Read;
+export const allEmployees = { collection: "employees" } as const satisfies Query.Read;
+export const allOrderDetails = { collection: "orderDetails" } as const satisfies Query.Read;
 
 /**
  * What the shell pins for the lifetime of the tab, beyond whichever screen is

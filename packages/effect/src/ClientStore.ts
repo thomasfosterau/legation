@@ -1818,9 +1818,7 @@ export const makeKeyValue = (
     // Infallible at construction like the opens around it: a failed repair
     // leaves the index as it was (reads still skip the missing bodies), and
     // the next open retries.
-    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex))).pipe(
-      Effect.catch(() => Effect.void)
-    );
+    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex))).pipe(Effect.ignore);
 
     // Finish a pull release, or drop the journal copies of a park, that a
     // crash interrupted (#336). Not swallowed: the tail and the journal then
@@ -1906,7 +1904,7 @@ export const makeKeyValue = (
         )
       );
     });
-    yield* openStoreVersion.pipe(Effect.catch(() => Effect.void));
+    yield* openStoreVersion.pipe(Effect.ignore);
 
     // The identity boundary on open (#212): compare the configured
     // fingerprint with the replica's stamp and apply `Identity.transitionOf`.

@@ -26,7 +26,7 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { type ClientView, Subset } from "@thomasfosterau/legation/internal";
+import { type ClientView, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
@@ -134,7 +134,7 @@ const makeRest = (prefix?: string) =>
         { collections: nodes.collections }
       ),
       context: () => Effect.succeed({ clientGroupId: "http" }),
-      ...(prefix === undefined ? {} : { prefix }),
+      ...Defined.fields({ prefix }),
     });
   });
 

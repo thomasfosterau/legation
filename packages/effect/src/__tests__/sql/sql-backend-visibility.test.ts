@@ -28,6 +28,7 @@ import * as Path from "effect/Path";
 import { BackendError, Mutator } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { TestFailure } from "../test-failure.js";
 
 const context = { clientGroupId: "visibility-group" };
 const clientId = "visibility-client";
@@ -177,7 +178,9 @@ const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
       yield* Effect.raceFirst(
         Deferred.await(parkedSignal),
         Fiber.await(push).pipe(
-          Effect.andThen(Effect.die(new Error("the mutation finished without parking")))
+          Effect.andThen(
+            Effect.die(new TestFailure({ message: "the mutation finished without parking" }))
+          )
         )
       );
       const parked = yield* readView(reader).pipe(

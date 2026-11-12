@@ -6,6 +6,7 @@
  * are the exception: they drive the host's sweep and the mirror's heartbeat
  * on the TestClock (#312).
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import {
   Authorization,
   Backend,
@@ -43,6 +44,7 @@ import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
@@ -71,7 +73,10 @@ const allTodos = Subset.make({ collection: "todos" });
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
@@ -81,7 +86,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 // The liveness cases (#312) step the TestClock with these.
@@ -107,7 +112,9 @@ const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) =>
       yield* Effect.yieldNow;
     }
     if (yield* condition) return;
-    return yield* Effect.die(new Error(`settle: condition never held in ${maxTurns} turns`));
+    return yield* Effect.die(
+      new TestFailure({ message: `settle: condition never held in ${maxTurns} turns` })
+    );
   });
 
 /**
@@ -470,11 +477,12 @@ const stubUrls: Client.UrlReads = {
       const include = searchParams.get("include");
       return Effect.succeed({
         collection,
-        ...(include === null
-          ? {}
-          : {
-              include: Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
-            }),
+        ...Defined.fields({
+          include:
+            include === null
+              ? undefined
+              : Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
+        }),
       });
     }),
   canonical: (read) =>

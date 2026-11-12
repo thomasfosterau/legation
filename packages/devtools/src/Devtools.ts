@@ -55,9 +55,10 @@ export interface CollectionSummary {
 }
 
 /**
- * The optional simulated-offline control (built by `Transport.simulateOffline`
- * and wired into the app's transport at boot) — the devtools actions panel's
- * offline toggle. Omitted when the app never wired a toggleable transport, in
+ * The optional simulated-offline control — the devtools actions panel's
+ * offline toggle. Build it from `Transport.simulateOffline` around the app's
+ * real transport, or, over the in-memory loopback, from `makeInMemory`'s
+ * `setOnline` (`isOffline` reads its status as `"disconnected"`). Omitted when the app never wired a toggleable transport, in
  * which case the panel simply doesn't render that action.
  */
 export interface OfflineControl {

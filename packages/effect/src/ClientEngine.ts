@@ -11,6 +11,7 @@
  * atomically through a single changes event.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -60,6 +61,12 @@ import * as RowChange from "./RowChange.js";
 import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
 import * as Subset from "./Subset.js";
+
+/** The defect `make` dies with for an `unpulledLimit` that is not a positive integer. */
+class InvalidUnpulledLimit extends Schema.TaggedError<
+  InvalidUnpulledLimit,
+  { readonly brand: unique symbol }
+>()("InvalidUnpulledLimit", { message: Schema.String }) {}
 
 export type { RowChange } from "./RowChange.js";
 
@@ -985,6 +992,20 @@ export interface ClientEngine {
    */
   readonly pullCounts: Effect.Effect<PullCounts>;
   /**
+   * Run `body` with pulls held: under the pull lock (#412), so no pull is in
+   * flight while it runs and none starts until it ends, given the pull
+   * counters as they stand. It is how a direct store write that must not race
+   * a pull is serialised against the engine's pulls (`Hydration.hydrateUnpulled`,
+   * #146): `counts.started` is `0` exactly when no pull has begun since the
+   * engine was built.
+   *
+   * `body` must not await {@link pull}, or anything that waits on one: the lock
+   * is not re-entrant, so that call would wait for `body` forever.
+   */
+  readonly withPullsHeld: <A, E, R>(
+    body: (counts: PullCounts) => Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>;
+  /**
    * A subset's **total** as the last applied pull reported it (#210): how many
    * rows the server's subset matches under its auth filter, whatever the
    * window, so a windowed subscription's total is the collection's and not the
@@ -1040,7 +1061,9 @@ export const make = (
     const unpulledLimit = options.unpulledLimit ?? UNPULLED_LIMIT;
     if (!Number.isInteger(unpulledLimit) || unpulledLimit < 1) {
       return yield* Effect.die(
-        new Error(`ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`)
+        new InvalidUnpulledLimit({
+          message: `ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`,
+        })
       );
     }
     // The pull-ahead threshold (#337), and the most mutations one push request carries (#429). A push
@@ -1167,7 +1190,9 @@ export const make = (
       change._tag === "Rebuild"
         ? emitEngineEvent({
             _tag: "ViewRebuilt",
-            ...(change.collections !== undefined ? { collections: [...change.collections] } : {}),
+            ...Defined.fields({
+              collections: change.collections !== undefined ? [...change.collections] : undefined,
+            }),
           })
         : Effect.void;
     const publishChange = (change: ViewChange): Effect.Effect<void> =>
@@ -1281,7 +1306,7 @@ export const make = (
     // (#260), rather than loading the whole journal to take its length.
     const sampleJournalDepth: Effect.Effect<void> = store.pendingCount.pipe(
       Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
-      Effect.catch(() => Effect.void)
+      Effect.ignore
     );
     // Time an effect and record its wall-clock duration (ms) as the rebase
     // histogram — wraps the actual overlay replay (cache misses only).
@@ -2240,7 +2265,7 @@ export const make = (
         yield* publishChange(REBUILD);
         return {
           transition,
-          ...(transition === "Reset" ? { quarantinedUnder: current } : {}),
+          ...Defined.fields({ quarantinedUnder: transition === "Reset" ? current : undefined }),
           quarantined,
           released,
         };
@@ -2254,7 +2279,7 @@ export const make = (
     // intents are retained across it, ready to push once the build is updated.
     const updateNeededLatch = yield* Ref.make(false);
     const infoOf = (error: VersionNotSupportedError) => ({
-      ...(error.schemaVersion !== undefined ? { schemaVersion: error.schemaVersion } : {}),
+      ...Defined.fields({ schemaVersion: error.schemaVersion }),
       message: error.message,
     });
     const onVersionError = (error: VersionNotSupportedError): Effect.Effect<void> =>
@@ -2354,9 +2379,7 @@ export const make = (
                     const response = yield* transport.push({
                       clientGroupId: options.clientGroupId,
                       mutations: pending.slice(sent, sent + size),
-                      ...(options.schemaVersion !== undefined
-                        ? { schemaVersion: options.schemaVersion }
-                        : {}),
+                      ...Defined.fields({ schemaVersion: options.schemaVersion }),
                     });
                     // Settle permanently-rejected mutations before the ack sweep, so a
                     // rejected id reports `rejected` rather than `applied`.
@@ -2389,12 +2412,10 @@ export const make = (
           // A pull that succeeded but left no room has not released the tail. Sending over it would take
           // the tail past the bound, so the push stops here as it does on a failed pull.
           if (size < 1) {
-            return yield* Effect.fail(
-              new TransportError({
-                message:
-                  "A pull released no room for the next chunk: the unpulled tail and the chunks other pushes have in flight still fill the bound; the unsent mutations stay journaled",
-              })
-            );
+            return yield* new TransportError({
+              message:
+                "A pull released no room for the next chunk: the unpulled tail and the chunks other pushes have in flight still fill the bound; the unsent mutations stay journaled",
+            });
           }
           sent += size;
         }
@@ -2615,10 +2636,12 @@ export const make = (
             clientGroupId: options.clientGroupId,
             cookie,
             subscriptions: subsets,
-            ...(Arr.isReadonlyArrayNonEmpty(namedSubscriptions) ? { namedSubscriptions } : {}),
-            ...(options.schemaVersion !== undefined
-              ? { schemaVersion: options.schemaVersion }
-              : {}),
+            ...Defined.fields({
+              namedSubscriptions: Arr.isReadonlyArrayNonEmpty(namedSubscriptions)
+                ? namedSubscriptions
+                : undefined,
+            }),
+            ...Defined.fields({ schemaVersion: options.schemaVersion }),
           });
           const touched = yield* applyPull(response);
           // The totals go in before the pull counts as applied, so a window the
@@ -2676,6 +2699,9 @@ export const make = (
       },
       { concurrency: 1 }
     );
+
+    const withPullsHeld: ClientEngine["withPullsHeld"] = (body) =>
+      Semaphore.withPermit(pullLock, Effect.flatMap(pullCounts, body));
 
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
       Ref.update(subscriptions, (current) =>
@@ -2894,22 +2920,22 @@ export const make = (
     // that no pull has released would take it past the bound.
     const pullBetweenChunks: Effect.Effect<void, TransportError | StoreError> = pull.pipe(
       Effect.retry({ schedule: pullPolicy, while: isTransient }),
-      Effect.catchTag("VersionNotSupportedError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks was refused: ${error.message}`,
-            cause: error,
-          })
-        )
-      ),
-      Effect.catchTag("MutatorError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks failed: ${error.message}`,
-            cause: error,
-          })
-        )
-      )
+      Effect.catchTags({
+        VersionNotSupportedError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks was refused: ${error.message}`,
+              cause: error,
+            })
+          ),
+        MutatorError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks failed: ${error.message}`,
+              cause: error,
+            })
+          ),
+      })
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
@@ -2933,7 +2959,7 @@ export const make = (
             Stream.mapEffect((poke) =>
               emitEngineEvent({
                 _tag: "PokeReceived",
-                ...(poke.reason !== undefined ? { reason: poke.reason } : {}),
+                ...Defined.fields({ reason: poke.reason }),
               }).pipe(Effect.as(poke))
             ),
             // While a pull is in flight the consumer below does not take the next poke, so pokes
@@ -3239,8 +3265,7 @@ export const make = (
             if (limit === previous.limit && cursor === previous.cursor) return;
             const nextSubset: Subset.Subset = {
               ...previous,
-              ...(limit !== undefined ? { limit } : {}),
-              ...(cursor !== undefined ? { cursor } : {}),
+              ...Defined.fields({ limit, cursor }),
             };
             yield* Ref.set(subsetRef, nextSubset);
             yield* Ref.update(viewRef, (view) => LiveView.retarget(view, window));
@@ -3680,6 +3705,7 @@ export const make = (
       push,
       pull,
       pullCounts,
+      withPullsHeld,
       totalOf,
       dropIfPending,
       reset,
@@ -3687,18 +3713,17 @@ export const make = (
       quarantines: store.quarantines,
       quarantinedMutations: store.quarantinedMutations,
       discardQuarantine: store.discardQuarantine,
-      ...(transportRead === undefined
-        ? {}
-        : {
-            readThrough: (subsets: ReadonlyArray<Subset.Subset>) =>
-              transportRead({
-                clientGroupId: options.clientGroupId,
-                subsets,
-                ...(options.schemaVersion === undefined
-                  ? {}
-                  : { schemaVersion: options.schemaVersion }),
-              }).pipe(Effect.map((response) => response.rows)),
-          }),
+      ...Defined.fields({
+        readThrough:
+          transportRead === undefined
+            ? undefined
+            : (subsets: ReadonlyArray<Subset.Subset>) =>
+                transportRead({
+                  clientGroupId: options.clientGroupId,
+                  subsets,
+                  ...Defined.fields({ schemaVersion: options.schemaVersion }),
+                }).pipe(Effect.map((response) => response.rows)),
+      }),
       runSync,
       syncFailures: Stream.fromPubSub(failures),
       recentSyncFailures: Ref.get(recentFailures),

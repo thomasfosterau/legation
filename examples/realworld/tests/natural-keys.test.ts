@@ -17,6 +17,7 @@ import {
   Client,
   ClientStore,
   MemoryBackend,
+  Query,
   Server,
   Transport,
 } from "@thomasfosterau/legation";
@@ -80,13 +81,14 @@ const makeClient = Effect.gen(function* () {
 });
 
 /** One row of a read, once the observer has seen it. */
-const firstRow = (client: Client.Client, read: Parameters<Client.Client["observe"]>[0]) =>
+const firstRow = <const R extends Query.Read>(
+  client: Client.Client<typeof nodes>,
+  read: R & Query.Validate<typeof nodes, R>
+) =>
   Effect.gen(function* () {
-    const latest = yield* Ref.make<ReadonlyArray<Record<string, unknown>>>([]);
+    const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow<R, typeof nodes>>>([]);
     yield* Effect.forkScoped(
-      Stream.runForEach(client.observe(read), (rows) =>
-        Ref.set(latest, rows as unknown as ReadonlyArray<Record<string, unknown>>)
-      ).pipe(Effect.ignore)
+      Stream.runForEach(client.observe<R>(read), (rows) => Ref.set(latest, rows)).pipe(Effect.ignore)
     );
     for (let attempt = 0; attempt < 500; attempt++) {
       const rows = yield* Ref.get(latest);
@@ -133,26 +135,22 @@ describe("Conduit over declared identity attributes", () => {
         yield* seed(client);
 
         const article = yield* firstRow(client, articleBySlug("hello-world"));
-        const value = article["value"] as Record<string, unknown>;
-        const related = article["related"] as Record<string, unknown>;
         // The slug IS the row id: no `id` attribute to keep equal to it.
-        expect(value["slug"]).toBe("hello-world");
-        expect("id" in value).toBe(false);
-        expect(article["id"]).toBe("hello-world");
+        expect(article.value.slug).toBe("hello-world");
+        expect("id" in article.value).toBe(false);
+        expect(article.id).toBe("hello-world");
         // `articles.author` joins authorId → users.username.
-        expect((related["author"] as Record<string, unknown>)["username"]).toBe("emma");
+        expect(article.related.author?.username).toBe("emma");
         // `articles.favorites` joins articles.slug → favorites.articleSlug.
-        expect(related["favorites"]).toHaveLength(1);
+        expect(article.related.favorites).toHaveLength(1);
 
         const profile = yield* firstRow(client, userProfile("emma"));
-        const user = profile["value"] as Record<string, unknown>;
-        expect(user["username"]).toBe("emma");
-        expect("id" in user).toBe(false);
-        expect(profile["id"]).toBe("emma");
+        expect(profile.value.username).toBe("emma");
+        expect("id" in profile.value).toBe(false);
+        expect(profile.id).toBe("emma");
 
         const comment = yield* firstRow(client, articleComments("hello-world"));
-        const author = (comment["related"] as Record<string, unknown>)["author"];
-        expect((author as Record<string, unknown>)["username"]).toBe("emma");
+        expect(comment.related.author?.username).toBe("emma");
       })
     )
   );

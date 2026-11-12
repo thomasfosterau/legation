@@ -18,6 +18,7 @@
 
 import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
+import type { ChangeHint } from "./Backend.js";
 import type * as Node from "./Node.js";
 import type * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
@@ -104,6 +105,38 @@ export const topicsForWrite = (
     Arr.forEach(derivable, (field) => {
       const fieldValue = (value as Record<string, unknown>)[field];
       if (isLiteral(fieldValue)) topics.add(fine(collection, field, fieldValue));
+    });
+  });
+  return topics;
+};
+
+/**
+ * The topics a batch of change hints derives: each hint's coarse topic plus
+ * {@link topicsForWrite} over every changed row's old and new values (a hint
+ * naming no ids derives from the rows its values carry). This is what a
+ * publish hands the broker, so a writer outside any room derives the same
+ * topics a room does.
+ */
+export const topicsForHints = (
+  hints: ReadonlyArray<ChangeHint>,
+  derivable: ReadonlyMap<string, ReadonlySet<string>>
+): ReadonlySet<Topic> => {
+  const topics = new Set<Topic>();
+  Arr.forEach(hints, (hint) => {
+    const values = new Map(hint.values?.map(({ id, value }) => [id, value]) ?? []);
+    const olds = new Map(hint.oldValues?.map(({ id, value }) => [id, value]) ?? []);
+    topics.add(coarse(hint.collection));
+    const ids = Arr.isReadonlyArrayNonEmpty(hint.ids) ? hint.ids : [...values.keys()];
+    Arr.forEach(ids, (id) => {
+      Arr.forEach(
+        topicsForWrite(hint.collection, derivable.get(hint.collection), {
+          oldValue: olds.get(id),
+          newValue: values.get(id),
+        }),
+        (topic) => {
+          topics.add(topic);
+        }
+      );
     });
   });
   return topics;

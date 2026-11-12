@@ -28,6 +28,7 @@ import type { Poke, PullRequest, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -107,7 +108,7 @@ const makeGatedTransport: Effect.Effect<GatedTransport> = Effect.gen(function* (
       const signal = issued[index];
       const answer = answers[index];
       if (signal === undefined || answer === undefined) {
-        return yield* Effect.die(new Error(`unexpected pull #${index}`));
+        return yield* Effect.die(new TestFailure({ message: `unexpected pull #${index}` }));
       }
       yield* Deferred.succeed(signal, request);
       return yield* Deferred.await(answer);
@@ -117,7 +118,7 @@ const makeGatedTransport: Effect.Effect<GatedTransport> = Effect.gen(function* (
       Effect.onInterrupt(() => Ref.update(interrupted, (n) => n + 1))
     );
   const transport: ClientTransport = {
-    push: () => Effect.die(new Error("push is not part of this test")),
+    push: () => Effect.die(new TestFailure({ message: "push is not part of this test" })),
     pull,
     pokes: Stream.fromQueue(pokes),
     status: Effect.succeed("disconnected"),

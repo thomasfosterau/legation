@@ -13,14 +13,17 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { RpcClient, RpcTest } from "effect/rpc";
 import * as Authorization from "../Authorization.js";
+import * as Client from "../Client.js";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore } from "../ClientStore.js";
 import * as ClientStoreModule from "../ClientStore.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
+import * as Node from "../Node.js";
 import * as RpcTransport from "../RpcTransport.js";
 import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
+import * as Transport from "../Transport.js";
 import { ClientTransport } from "../Transport.js";
 
 const Todo = Schema.Struct({
@@ -144,6 +147,35 @@ describe("RpcTransport", () => {
     })
   );
 
+  it.effect("an uncovered Client.query falls through over withFallback's RPC leg (#632)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writer = yield* makeEngine("writer");
+        yield* writer.engine.mutate("todo/set", { id: "1", title: "on the server", isDone: false });
+        yield* writer.engine.push;
+
+        // A primary that is down (every call a TransportError) over the RPC carrier.
+        const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
+        const transport = yield* Transport.withFallback(
+          Transport.offline,
+          RpcTransport.fromRpcClient(client, { clientGroupId: "group-reader" })
+        );
+        const { client: reader } = yield* Client.make({
+          nodes: Node.registry([Node.make("todos", { attributes: Todo.fields })]),
+          mutations: mutators,
+          transport,
+          sync: false,
+        });
+
+        // Nothing is subscribed, so nothing is in the replica: the server answers.
+        const rows = yield* reader.query({ collection: "todos" });
+        expect(rows.map((row) => row.value)).toEqual([
+          { id: "1", title: "on the server", isDone: false },
+        ]);
+      })
+    ).pipe(Effect.provide(serverLayer))
+  );
+
   it.effect("fromOrigin builds the WebSocket transport with an HTTP fallback", () =>
     Effect.gen(function* () {
       // Nothing listens on the discard port: the build succeeds and the status is
@@ -156,6 +188,8 @@ describe("RpcTransport", () => {
         fallback: { restoreAfter: "1 second", primaryTimeout: "1 second" },
       });
       expect(["connecting", "connected"]).toContain(yield* transport.status);
+      // Both carriers are RPC clients with `read`, so the fallthrough tier survives (#632).
+      expect(transport.read).toBeDefined();
     }).pipe(Effect.scoped)
   );
 });
