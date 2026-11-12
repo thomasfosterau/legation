@@ -45,15 +45,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
+      # names; the install stays the explicit `--ignore-scripts` step below.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          node-version: "*"
-          check-latest: true
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+          node-version: "lts"
+          cache: true
+          run-install: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Select mode
@@ -79,15 +78,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Setup pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
+      # names; the install stays the explicit `--ignore-scripts` step below.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          node-version: "*"
-          check-latest: true
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+          node-version: "lts"
+          cache: true
+          run-install: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Create or update the version PR
@@ -137,21 +135,14 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # Installs the pnpm version pinned by the package.json "packageManager"
-      # field. Must run before setup-node so its pnpm cache can find the store.
-      - name: Setup pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Vite+ provides Node.js and the pnpm that package.json's `packageManager`
+      # names; the install stays the explicit `--ignore-scripts` step below.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          # Never `latest`: setup-node resolves it to the first entry of the
-          # nodejs.org index, pre-releases included (a v27 alpha since
-          # 2026-10-29). `*` + `check-latest` is the newest stable release.
-          node-version: "*"
-          check-latest: true
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+          node-version: "lts"
+          cache: true
+          run-install: false
 
       # `pnpm run release` uploads each checked tarball with
       # `npm publish <tarball>` (scripts/publish.mjs), and npm OIDC trusted
