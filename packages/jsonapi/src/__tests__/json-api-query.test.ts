@@ -4,7 +4,7 @@
  * `Query.Read` parsing over a node graph with `QueryError`s naming the
  * parameter, and the canonical string round trip over generated reads.
  */
-import { assert, describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -34,8 +34,6 @@ import { ClientEngine, FilterCorpus, Subset, Defined } from "@thomasfosterau/leg
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
-import { TestFailure } from "./test-failure.js";
-import { withLayer } from "./with-layer.js";
 
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
@@ -439,7 +437,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
 };
 
 describe("server-side narrowing", () => {
-  it.effect("pushes the exact filter to the API and narrows the listing", () => {
+  {
     const server = makeServer([
       { type: "todos", id: "1", attributes: { status: "open" } },
       { type: "todos", id: "2", attributes: { status: "done" } },
@@ -447,28 +445,29 @@ describe("server-side narrowing", () => {
     const open = Subset.make({ collection: "todos", where: Predicate.eq("status", "open") });
     const none = Subset.make({ collection: "todos", where: Predicate.isIn("status", []) });
 
-    return Effect.gen(function* () {
-      const engine = yield* ClientEngine.ClientEngine;
-      yield* engine.subscribe(open);
-      yield* engine.subscribe(none);
-      yield* engine.pull;
+    layer(
+      JsonApiSync.layer(api, {
+        baseUrl: "http://api.test",
+        clientId: "c1",
+        clientGroupId: "g1",
+      }).pipe(Layer.provide(server.layer))
+    )((scoped) => {
+      scoped.effect("pushes the exact filter to the API and narrows the listing", () =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.subscribe(open);
+          yield* engine.subscribe(none);
+          yield* engine.pull;
 
-      expect((yield* engine.query(open)).map((r) => r.id)).toEqual(["1"]);
-      expect(yield* engine.query(none)).toEqual([]);
-      // The narrowing reached the server, not just the local Subset.apply;
-      // the empty allow-set never became a request.
-      expect(server.requests).toEqual(["/todos?filter[status]=open"]);
-    }).pipe(
-      withLayer(
-        JsonApiSync.layer(api, {
-          baseUrl: "http://api.test",
-          clientId: "c1",
-          clientGroupId: "g1",
-        }).pipe(Layer.provide(server.layer))
-      ),
-      Effect.scoped
-    );
-  });
+          expect((yield* engine.query(open)).map((r) => r.id)).toEqual(["1"]);
+          expect(yield* engine.query(none)).toEqual([]);
+          // The narrowing reached the server, not just the local Subset.apply;
+          // the empty allow-set never became a request.
+          expect(server.requests).toEqual(["/todos?filter[status]=open"]);
+        })
+      );
+    });
+  }
 });
 
 // ─── URL → Query.Read ────────────────────────────────────────────────────────

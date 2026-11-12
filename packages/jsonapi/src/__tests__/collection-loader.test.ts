@@ -2,7 +2,7 @@
  * CollectionLoader tests: mapping JSON:API resources/documents into
  * collection rows, and loading them over a mocked HttpClient.
  */
-import { assert, describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
@@ -11,7 +11,6 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
-import { withLayer } from "./with-layer.js";
 
 describe("resourceToRow", () => {
   it("maps attributes and relationship linkage", () => {
@@ -113,70 +112,68 @@ const respondWith = (status: number, body: unknown) =>
 const source = Layer.succeed(CollectionLoader.JsonApiSource)({ baseUrl: "https://api.test" });
 
 describe("load / loadOne", () => {
-  it.effect("loads a collection into rows", () =>
-    Effect.gen(function* () {
-      const loaded = yield* CollectionLoader.load("todos");
-      expect(loaded.rows.map((r) => (r.value.attributes as { title: string }).title)).toEqual([
-        "one",
-        "two",
-      ]);
-    }).pipe(
-      withLayer(
-        respondWith(200, {
-          data: [
-            { type: "todos", id: "1", attributes: { title: "one" } },
-            { type: "todos", id: "2", attributes: { title: "two" } },
-          ],
-        }).pipe(Layer.merge(source))
-      )
-    )
-  );
+  layer(
+    respondWith(200, {
+      data: [
+        { type: "todos", id: "1", attributes: { title: "one" } },
+        { type: "todos", id: "2", attributes: { title: "two" } },
+      ],
+    }).pipe(Layer.merge(source))
+  )((scoped) => {
+    scoped.effect("loads a collection into rows", () =>
+      Effect.gen(function* () {
+        const loaded = yield* CollectionLoader.load("todos");
+        expect(loaded.rows.map((r) => (r.value.attributes as { title: string }).title)).toEqual([
+          "one",
+          "two",
+        ]);
+      })
+    );
+  });
 
-  it.effect("loadOne returns the single row", () =>
-    Effect.gen(function* () {
-      const row = yield* CollectionLoader.loadOne("todos", "1");
-      expect(Option.map(row, (loaded) => loaded.id)).toEqual(Option.some("1"));
-    }).pipe(
-      withLayer(
-        respondWith(200, { data: { type: "todos", id: "1", attributes: {} } }).pipe(
-          Layer.merge(source)
-        )
-      )
-    )
-  );
+  layer(
+    respondWith(200, { data: { type: "todos", id: "1", attributes: {} } }).pipe(Layer.merge(source))
+  )((scoped) => {
+    scoped.effect("loadOne returns the single row", () =>
+      Effect.gen(function* () {
+        const row = yield* CollectionLoader.loadOne("todos", "1");
+        expect(Option.map(row, (loaded) => loaded.id)).toEqual(Option.some("1"));
+      })
+    );
+  });
 
-  it.effect("non-2xx responses become ApiError carrying the error objects", () =>
-    Effect.gen(function* () {
-      const failure = yield* Effect.flip(CollectionLoader.load("todos"));
-      expect(failure._tag).toBe("ApiError");
-      assert(failure._tag === "ApiError");
-      expect(failure.errors[0]?.title).toBe("Forbidden");
-    }).pipe(
-      withLayer(
-        respondWith(403, { errors: [{ status: "403", title: "Forbidden" }] }).pipe(
-          Layer.merge(source)
-        )
-      )
-    )
-  );
+  layer(
+    respondWith(403, { errors: [{ status: "403", title: "Forbidden" }] }).pipe(Layer.merge(source))
+  )((scoped) => {
+    scoped.effect("non-2xx responses become ApiError carrying the error objects", () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(CollectionLoader.load("todos"));
+        expect(failure._tag).toBe("ApiError");
+        assert(failure._tag === "ApiError");
+        expect(failure.errors[0]?.title).toBe("Forbidden");
+      })
+    );
+  });
 
-  it.effect("a document carrying errors becomes ApiError", () =>
-    Effect.gen(function* () {
-      const failure = yield* Effect.flip(CollectionLoader.load("todos"));
-      expect(failure._tag).toBe("ApiError");
-    }).pipe(
-      withLayer(
-        respondWith(200, { errors: [{ status: "422", title: "Unprocessable" }] }).pipe(
-          Layer.merge(source)
-        )
-      )
+  layer(
+    respondWith(200, { errors: [{ status: "422", title: "Unprocessable" }] }).pipe(
+      Layer.merge(source)
     )
-  );
+  )((scoped) => {
+    scoped.effect("a document carrying errors becomes ApiError", () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(CollectionLoader.load("todos"));
+        expect(failure._tag).toBe("ApiError");
+      })
+    );
+  });
 
-  it.effect("a malformed document body becomes ParseError", () =>
-    Effect.gen(function* () {
-      const failure = yield* Effect.flip(CollectionLoader.load("todos"));
-      expect(failure._tag).toBe("ParseError");
-    }).pipe(withLayer(respondWith(200, { data: 42 }).pipe(Layer.merge(source))))
-  );
+  layer(respondWith(200, { data: 42 }).pipe(Layer.merge(source)))((scoped) => {
+    scoped.effect("a malformed document body becomes ParseError", () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(CollectionLoader.load("todos"));
+        expect(failure._tag).toBe("ParseError");
+      })
+    );
+  });
 });

@@ -7,7 +7,7 @@
  * the API, and pull reflects authoritative state. Update and delete round
  * trip the same way.
  */
-import { describeWrapped, expect, layer } from "@effect/vitest";
+import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
@@ -164,67 +164,68 @@ describeWrapped("JsonApiSync.inspect", (it) => {
   });
 });
 
-describeWrapped("end-to-end client-direct sync", (it) => {
-  it.effect("optimistic create is visible, then syncs through the API", () => {
+describe("end-to-end client-direct sync", () => {
+  {
     const server = makeServer();
     const todos = Subset.make({
       collection: "todos",
       orderBy: [{ field: "id", direction: "asc" }],
     });
 
-    return Effect.gen(function* () {
-      const engine = yield* ClientEngine.ClientEngine;
-      yield* engine.subscribe(todos);
+    layer(
+      JsonApiSync.layer(api, {
+        baseUrl: "http://api.test",
+        clientId: "client-1",
+        clientGroupId: "group-1",
+      }).pipe(Layer.provide(server.layer))
+    )((scoped) => {
+      scoped.effect("optimistic create is visible, then syncs through the API", () =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.subscribe(todos);
 
-      // Optimistic create — visible before any network round trip.
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "1",
-        attributes: { title: "first" },
-      });
-      expect(titles(yield* engine.query(todos))).toEqual(["first"]);
+          // Optimistic create — visible before any network round trip.
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "1",
+            attributes: { title: "first" },
+          });
+          expect(titles(yield* engine.query(todos))).toEqual(["first"]);
 
-      // Sync: push writes through, pull reveals authoritative state.
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.has("1")).toBe(true);
-      expect(titles(yield* engine.query(todos))).toEqual(["first"]);
+          // Sync: push writes through, pull reveals authoritative state.
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.has("1")).toBe(true);
+          expect(titles(yield* engine.query(todos))).toEqual(["first"]);
 
-      // Update round trips.
-      yield* engine.mutate("todos/update", {
-        type: "todos",
-        id: "1",
-        attributes: { title: "edited" },
-      });
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.get("1")?.attributes.title).toBe("edited");
-      expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
+          // Update round trips.
+          yield* engine.mutate("todos/update", {
+            type: "todos",
+            id: "1",
+            attributes: { title: "edited" },
+          });
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.get("1")?.attributes.title).toBe("edited");
+          expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
 
-      // A row created directly on the server arrives via pull.
-      server.store.set("2", { type: "todos", id: "2", attributes: { title: "remote" } });
-      yield* engine.pull;
-      expect(titles(yield* engine.query(todos))).toEqual(["edited", "remote"]);
+          // A row created directly on the server arrives via pull.
+          server.store.set("2", { type: "todos", id: "2", attributes: { title: "remote" } });
+          yield* engine.pull;
+          expect(titles(yield* engine.query(todos))).toEqual(["edited", "remote"]);
 
-      // Delete round trips.
-      yield* engine.mutate("todos/delete", { type: "todos", id: "2" });
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.has("2")).toBe(false);
-      expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
-    }).pipe(
-      withLayer(
-        JsonApiSync.layer(api, {
-          baseUrl: "http://api.test",
-          clientId: "client-1",
-          clientGroupId: "group-1",
-        }).pipe(Layer.provide(server.layer))
-      ),
-      Effect.scoped
-    );
-  });
+          // Delete round trips.
+          yield* engine.mutate("todos/delete", { type: "todos", id: "2" });
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.has("2")).toBe(false);
+          expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
+        })
+      );
+    });
+  }
 
-  it.effect("a 4xx create is permanently rejected without poisoning the queue", () => {
+  {
     // The server forbids creating "x"; the create behind it must still land.
     const server = makeServer((id) => id === "x");
     const todos = Subset.make({
@@ -232,44 +233,45 @@ describeWrapped("end-to-end client-direct sync", (it) => {
       orderBy: [{ field: "id", direction: "asc" }],
     });
 
-    return Effect.gen(function* () {
-      const engine = yield* ClientEngine.ClientEngine;
-      yield* engine.subscribe(todos);
+    layer(
+      JsonApiSync.layer(api, {
+        baseUrl: "http://api.test",
+        clientId: "client-1",
+        clientGroupId: "group-1",
+      }).pipe(Layer.provide(server.layer))
+    )((scoped) => {
+      scoped.effect("a 4xx create is permanently rejected without poisoning the queue", () =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.subscribe(todos);
 
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "x",
-        attributes: { title: "doomed" },
-      });
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "y",
-        attributes: { title: "kept" },
-      });
-      // Both are optimistically visible.
-      expect(titles(yield* engine.query(todos))).toEqual(["doomed", "kept"]);
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "x",
+            attributes: { title: "doomed" },
+          });
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "y",
+            attributes: { title: "kept" },
+          });
+          // Both are optimistically visible.
+          expect(titles(yield* engine.query(todos))).toEqual(["doomed", "kept"]);
 
-      // Push succeeds (the 403 is a permanent rejection, not a transport error);
-      // the journal drains without app intervention.
-      yield* engine.push;
-      yield* engine.pull;
+          // Push succeeds (the 403 is a permanent rejection, not a transport error);
+          // the journal drains without app intervention.
+          yield* engine.push;
+          yield* engine.pull;
 
-      // The forbidden create left no server row and its optimistic effect is
-      // gone; the create queued behind it applied.
-      expect(server.store.has("x")).toBe(false);
-      expect(server.store.has("y")).toBe(true);
-      expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
-    }).pipe(
-      withLayer(
-        JsonApiSync.layer(api, {
-          baseUrl: "http://api.test",
-          clientId: "client-1",
-          clientGroupId: "group-1",
-        }).pipe(Layer.provide(server.layer))
-      ),
-      Effect.scoped
-    );
-  });
+          // The forbidden create left no server row and its optimistic effect is
+          // gone; the create queued behind it applied.
+          expect(server.store.has("x")).toBe(false);
+          expect(server.store.has("y")).toBe(true);
+          expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
+        })
+      );
+    });
+  }
 });
 
 describeWrapped("JsonApiSync.layer store option", (it) => {
