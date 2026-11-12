@@ -42,6 +42,7 @@ const alias = {
   "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
   "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
+  "@thomasfosterau/legation-browser/http-cache": source("packages/browser/src/http-cache.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
   "@thomasfosterau/legation-auth/client": source("packages/auth/src/client.ts"),

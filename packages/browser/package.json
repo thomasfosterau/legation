@@ -38,6 +38,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./http-cache": {
+      "types": "./dist/http-cache.d.ts",
+      "import": "./dist/http-cache.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
