@@ -131,11 +131,11 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out: exported combinators over untyped
-      // row values (`Incremental`, `Derive`, `Predicate.fieldValue`) and a
-      // dialect's driver-specific bind value return what the caller's
-      // projection or driver produces.
-      "effect/no-unknown-returns": "warn",
+      // The same boundary on the way out is at `error` (#562): the exported
+      // combinators over untyped row values (`Incremental`, `Derive`,
+      // `Predicate.fieldValue`) return what the caller's projection produces,
+      // and each such site carries its own scoped disable with that reason.
+      "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
       "effect/no-runtime-typeof": "warn",
 
