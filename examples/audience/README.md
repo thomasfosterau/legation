@@ -19,7 +19,7 @@ effect-auth policies (`src/policy.ts`): public posts; one's own; followers-only
 posts of people one follows (a **named set**, `following`, resolved from the
 server-side `follows` collection — the relationship-scoped case of ADR-0015);
 and the **moderator** role, which compiles to `AllowAll` and short-circuits.
-An anonymous viewer is `User::""`, which only the public rule admits.
+An anonymous viewer is `Anonymous::"anonymous"`, which only the public rule admits.
 
 There is no UI: the server, the client and the façade run in one process, as
 the commerce example's tests do. A browser profile is a `Device`
@@ -71,8 +71,8 @@ its tests against the packages' built `dist/`.
 The app aims to write nothing between the libraries. What it still writes by
 hand, each marked in the source, is a gap a library should close:
 
-- `device.ts` `makeJar`: the cookie jar, shaped as effect-auth's client
-  session store, which `SignOut.follow` subscribes to (the example has no auth
+- `device.ts` `makeJar`: the cookie jar, shaped as effect-auth's session
+  store (its session Atom), which `SignOut.follow` subscribes to (the example has no auth
   HTTP tier for `createAuthClient` to talk to).
 - `server.ts` `authLayer`: effect-auth's `SessionService` over its testing
   stores.

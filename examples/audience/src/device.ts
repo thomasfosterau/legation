@@ -58,10 +58,10 @@ export interface Device {
 
 /**
  * The browser's cookie jar, holding at most one session, read the way
- * effect-auth's client session store (`createAuthClient(...).session`) is read:
- * `SignOut.follow` subscribes to it exactly as it would to that store.
- * (Hand-written glue: the example has no auth HTTP tier for
- * `createAuthClient` to talk to, so the jar stands in for its store.)
+ * effect-auth's session Atom (`makeSessionAtoms(...).state`, through
+ * `SignOut.sessionStoreOf`) is read: `SignOut.follow` subscribes to it exactly
+ * as it would to that store. (Hand-written glue: the example has no auth HTTP
+ * tier for `createAuthClient` to talk to, so the jar stands in for its store.)
  */
 interface CookieJar {
   readonly store: SignOut.SessionStore;
@@ -74,7 +74,7 @@ const makeJar = (): CookieJar => {
   const listeners = new Set<() => void>();
   return {
     store: {
-      get: () => ({ data: Option.getOrNull(MutableRef.get(session)), isPending: false }),
+      get: () => ({ data: MutableRef.get(session), isPending: false }),
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);

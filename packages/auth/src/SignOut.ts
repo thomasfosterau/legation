@@ -22,8 +22,8 @@
  * observed, which after a sign-out or an account switch are no longer the
  * author's. An app that wants them sent pushes before it signs out.
  *
- * {@link follow} subscribes the listener to effect-auth's client session
- * store, so an app wires nothing by hand; {@link fingerprintOfSession} is the
+ * {@link follow} subscribes the listener to effect-auth's session Atoms
+ * ({@link sessionStoreOf}), so an app wires nothing by hand; {@link fingerprintOfSession} is the
  * stamp to boot a Client with (`Client.make({ identity })`).
  *
  * This module imports nothing of effect-auth (its root barrel reaches
@@ -41,7 +41,10 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
+import type * as Atom from "effect/reactivity/Atom";
+import type * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as Digest from "effect/crypto/Digest";
+import type { SessionState } from "@thomasfosterau/effect-auth/client/atoms";
 import { type Client, Identity } from "@thomasfosterau/legation";
 import type { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
 
@@ -133,19 +136,37 @@ export const onSessionChange =
     fingerprintOfSession(next, options).pipe(Effect.flatMap(client.reset));
 
 /**
- * The session store {@link follow} subscribes to, by shape: effect-auth's
- * client `SessionStore` (`createAuthClient(...).session`) is one, read
- * structurally so this entry imports nothing of effect-auth. `data` is the
- * signed-in session, `null` when signed out (effect-auth's spelling); a state
- * still `isPending` is not adopted.
+ * The session store {@link follow} subscribes to, by shape: {@link sessionStoreOf}
+ * makes one from effect-auth's `makeSessionAtoms(client).state` Atom, read
+ * structurally so this entry imports nothing of effect-auth at runtime. `data`
+ * is the signed-in session, `None` when signed out (effect-auth's `null` is
+ * converted at that edge); a state still `isPending` is not adopted.
  */
 export interface SessionStore {
   readonly get: () => {
-    readonly data: SessionSubject | null;
+    readonly data: Option.Option<SessionSubject>;
     readonly isPending: boolean;
   };
   readonly subscribe: (listener: () => void) => () => void;
 }
+
+/**
+ * A {@link SessionStore} over an Atom in an `AtomRegistry`: pass the registry
+ * the app reads effect-auth's session Atoms through and
+ * `makeSessionAtoms(client).state`. Subscribing mounts the Atom, so the
+ * session read stays live (and refetches on each session-changing call) while
+ * {@link follow} runs.
+ */
+export const sessionStoreOf = (
+  registry: AtomRegistry.AtomRegistry,
+  state: Atom.Atom<SessionState>
+): SessionStore => ({
+  get: () => {
+    const current = registry.get(state);
+    return { data: Option.fromNullishOr(current.data), isPending: current.isPending };
+  },
+  subscribe: (listener) => registry.subscribe(state, listener),
+});
 
 /** A running {@link follow}. */
 export interface Following {
@@ -201,7 +222,7 @@ export const follow: (
       if (state.isPending) return;
       const done = Deferred.makeUnsafe<SessionChange, ClientView.ClientViewError>();
       MutableRef.set(latest, Option.some(done));
-      Queue.offerUnsafe(changes, { next: Option.fromNullishOr(state.data), done });
+      Queue.offerUnsafe(changes, { next: state.data, done });
     };
     const previous = yield* Ref.make(Option.none<SessionSubject>());
     yield* Effect.forkScoped(

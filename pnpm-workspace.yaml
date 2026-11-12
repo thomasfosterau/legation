@@ -76,9 +76,9 @@ catalog:
   # example apps that use it take it from here too.
   "@thomasfosterau/effect-jsonapi": ^0.22.0
   # legation-auth's dev pin (a peer there, `catalogs.auth-peers`): the newest
-  # 0.2.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
+  # 0.4.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
   # legation-auth does not use its JSON:API surface.
-  "@thomasfosterau/effect-auth": 0.2.0
+  "@thomasfosterau/effect-auth": 0.4.0
   # A runtime dependency of a published package (legation-svelte): `pnpm pack`
   # rewrites `catalog:` to this range in the packed manifest.
   "@thomasfosterau/effect-svelte": ^0.6.2
@@ -145,12 +145,12 @@ catalogs:
     effect: ^4.1.0
     alchemy: 2.0.0-beta.85
     "@alchemy.run/cloudflare": 2.0.0-beta.85
-  # legation-auth alone: `@thomasfosterau/effect-auth` 0.2.x peers
+  # legation-auth alone: `@thomasfosterau/effect-auth` 0.4.x peers
   # `effect ^4.1.0`, so its `effect` floor is 4.1.0. effect-auth is a peer
   # (the app configures its services, so there must be one copy).
   auth-peers:
     effect: ^4.1.0
-    "@thomasfosterau/effect-auth": ^0.2.0
+    "@thomasfosterau/effect-auth": ^0.4.0
   # legation-jsonapi alone: `@thomasfosterau/effect-jsonapi` 0.22.x peers
   # `effect ^4.1.0` (its declarations need Effect 4.1's HttpApi types), so its
   # `effect` floor is 4.1.0. effect-jsonapi is a peer (the app passes its own

@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Digest from "effect/crypto/Digest";
 import { KeyValueStore } from "effect/persistence";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import {
   Authorization,
   Backend,
@@ -34,6 +35,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import { createAuthClient } from "@thomasfosterau/effect-auth/client";
+import { makeSessionAtoms } from "@thomasfosterau/effect-auth/client/atoms";
 import { makeCookieJarFetch, makeServerFixture } from "@thomasfosterau/effect-auth/client/testing";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
 import type { Protocol } from "@thomasfosterau/legation/internal";
@@ -295,8 +297,13 @@ layer(KeyValueStore.layerMemory)("SignOut.follow (no Digest in context)", (it) =
       Effect.gen(function* () {
         const { client, engine, store } = yield* clientFor(Identity.anonymous);
         const auth = authClient();
+        const registry = AtomRegistry.make();
+        const atoms = makeSessionAtoms(auth);
         // No Digest in context: follow hashes with WebCrypto's.
-        const following = yield* SignOut.follow(client, auth.session);
+        const following = yield* SignOut.follow(
+          client,
+          SignOut.sessionStoreOf(registry, atoms.state)
+        );
 
         const signedUp = yield* run(() =>
           auth.signUp({ email: "alice@example.com", password: "correct horse battery" })
@@ -336,7 +343,7 @@ layer(testLayer)("SignOut.follow", (it) => {
   it.effect("a pending store is not a sign-out", () =>
     Effect.gen(function* () {
       const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-      const held = heldStore({ data: null, isPending: true });
+      const held = heldStore({ data: Option.none(), isPending: true });
       yield* Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* clientFor(aliceFp);
@@ -356,7 +363,7 @@ layer(testLayer)("SignOut.follow", (it) => {
       Effect.gen(function* () {
         const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
         const { client } = yield* clientFor(aliceFp);
-        const held = heldStore({ data: null, isPending: false });
+        const held = heldStore({ data: Option.none(), isPending: false });
         const following = yield* SignOut.follow(client, held.store);
         expect(adopted(yield* following.settled).transition).toBe("Reset");
         expect(yield* client.identity).toBe(Identity.anonymous);

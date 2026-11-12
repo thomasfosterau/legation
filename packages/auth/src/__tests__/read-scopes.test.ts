@@ -93,12 +93,9 @@ const slice = Entity.slice([
   Entity.entity(Entity.ref("User", "user-mod"), { parents: [Entity.ref("Role", "admin")] }),
 ]);
 
-/** The effect-auth request for a principal: anonymous is `User::""`, which no policy names. */
+/** The effect-auth request for a principal: anonymous is `Anonymous::"anonymous"`, which no policy names. */
 const requestOf = (principal: Principal.Principal): AuthScope.ScopeRequest => ({
-  principal: Entity.ref(
-    "User",
-    Option.getOrElse(Principal.userId(principal), () => "")
-  ),
+  principal: ReadScopes.principalRef(principal),
   action: Entity.ref("Action", "read"),
   slice,
 });
@@ -189,17 +186,6 @@ describe("ReadScopes.mapping: field names explicit and checked at registration",
 
 // ─── The translation ─────────────────────────────────────────────────────────
 
-/** A filter scope over one predicate. */
-const scopeOf = (predicate: AuthScope.Predicate): AuthScope.ReadScope => ({
-  _tag: "Filter",
-  predicate,
-  sets: [],
-});
-
-/** The predicate of a translated filter scope. */
-const predicateOf = (scope: Authorization.ReadScope): Predicate.Predicate =>
-  P.isTagged(scope, "Filter") ? scope.predicate : assert.fail("expected a Filter");
-
 /** The row fields the posts policies read. */
 interface PostRow {
   readonly visibility: string;
@@ -266,110 +252,6 @@ describe("ReadScopes.translate", () => {
     expect(Predicate.test(predicate, { visibility: null })).toBe(true);
     expect(Predicate.test(predicate, {})).toBe(true);
     expect(Predicate.test(predicate, { visibility: "private" })).toBe(false);
-  });
-
-  describe("the anonymous principal is equal to no row's entity (#662)", () => {
-    /** `owner == ""`, as effect-auth compiles an "own" policy for `User::""`. */
-    const ownsEmpty: AuthScope.Predicate = {
-      _tag: "Eq",
-      attribute: "owner",
-      value: AuthScope.text(""),
-    };
-    const never = Predicate.not(Predicate.always);
-    const guarded = Predicate.and(Predicate.isNotNull("ownerId"), Predicate.eq("ownerId", ""));
-
-    it("a positive entity Eq against the empty id is false for the anonymous principal", () => {
-      const scope = scopeOf({
-        _tag: "Or",
-        predicates: [
-          { _tag: "Eq", attribute: "visibility", value: AuthScope.text("public") },
-          ownsEmpty,
-        ],
-      });
-      const translated = predicateOf(
-        orFail(ReadScopes.translate(scope, map, { principal: Principal.anonymous }))
-      );
-      expect(translated).toEqual(
-        Predicate.or(
-          Predicate.and(Predicate.isNotNull("visibility"), Predicate.eq("visibility", "public")),
-          never
-        )
-      );
-      expect(Predicate.test(translated, { visibility: "private", ownerId: "" })).toBe(false);
-      expect(Predicate.test(translated, { visibility: "public", ownerId: "" })).toBe(true);
-      // effect-auth's own answer admits the empty owner: the narrowing is legation-auth's.
-      expect(AuthScope.matches(scope, { visibility: "private", owner: "" })).toBe(true);
-    });
-
-    it("is kept under a Not (false there would widen), and a double Not narrows", () => {
-      const negated = predicateOf(
-        orFail(
-          ReadScopes.translate(scopeOf({ _tag: "Not", predicate: ownsEmpty }), map, {
-            principal: Principal.anonymous,
-          })
-        )
-      );
-      expect(negated).toEqual(Predicate.not(guarded));
-      expect(Predicate.test(negated, { ownerId: "" })).toBe(false);
-      expect(Predicate.test(negated, { ownerId: "user-alice" })).toBe(true);
-      const doubled = predicateOf(
-        orFail(
-          ReadScopes.translate(
-            scopeOf({ _tag: "Not", predicate: { _tag: "Not", predicate: ownsEmpty } }),
-            map,
-            { principal: Principal.anonymous }
-          )
-        )
-      );
-      expect(doubled).toEqual(Predicate.not(Predicate.not(never)));
-    });
-
-    it("leaves a text attribute, a non-empty id, and every other principal alone", () => {
-      const scope = scopeOf({
-        _tag: "Or",
-        predicates: [
-          { _tag: "Eq", attribute: "visibility", value: AuthScope.text("") },
-          { _tag: "Eq", attribute: "owner", value: AuthScope.text("user-alice") },
-          ownsEmpty,
-        ],
-      });
-      const exact = Predicate.or(
-        Predicate.and(Predicate.isNotNull("visibility"), Predicate.eq("visibility", "")),
-        Predicate.and(Predicate.isNotNull("ownerId"), Predicate.eq("ownerId", "user-alice")),
-        guarded
-      );
-      expect(predicateOf(orFail(ReadScopes.translate(scope, map)))).toEqual(exact);
-      expect(
-        predicateOf(
-          orFail(ReadScopes.translate(scope, map, { principal: principalOf("user-alice") }))
-        )
-      ).toEqual(exact);
-      expect(
-        predicateOf(orFail(ReadScopes.translate(scope, map, { principal: Principal.anonymous })))
-      ).toEqual(
-        Predicate.or(
-          Predicate.and(Predicate.isNotNull("visibility"), Predicate.eq("visibility", "")),
-          Predicate.and(Predicate.isNotNull("ownerId"), Predicate.eq("ownerId", "user-alice")),
-          never
-        )
-      );
-    });
-
-    it("still reports a translation failure before narrowing", () => {
-      const unmapped = orFail(
-        ReadScopes.mapping({
-          collection: "posts",
-          binding: { resourceType: "Post", attributes: { owner: { entity: "User" } } },
-          attributes: { owner: "ownerId" },
-        })
-      );
-      const kind = ReadScopes.translate(
-        scopeOf({ _tag: "Eq", attribute: "owner", value: AuthScope.integer(0) }),
-        unmapped,
-        { principal: Principal.anonymous }
-      );
-      expect(failureOf(kind)?.reason).toBe("LiteralKind");
-    });
   });
 });
 
