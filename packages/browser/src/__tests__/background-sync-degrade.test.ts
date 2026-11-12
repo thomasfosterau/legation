@@ -25,8 +25,9 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation/internal";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, layer } from "@effect/vitest";
 import * as Duration from "effect/Duration";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -36,111 +37,123 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
-import { withLayer } from "./with-layer.js";
 
 /**
- * A logger that records every line at every level (the minimum is lowered to
- * `All`, so debug lines reach it too), split into what an app would surface
- * (`Warn` and above) and the quiet rest.
+ * What one test's logger recorded at every level (the minimum is lowered to `All`, so debug lines
+ * reach it too), split into what an app would surface (`Warn` and above) and the quiet rest.
  */
-const recordLogs = () => {
-  const loud: Array<string> = [];
-  const quiet: Array<string> = [];
-  const logger = Logger.make((options) => {
-    const line = `${options.logLevel}: ${String(options.message)}`;
-    (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn") ? loud : quiet).push(line);
-  });
-  const layer = Layer.merge(
-    Logger.layer([logger]),
-    Layer.succeed(References.MinimumLogLevel)("All")
-  );
-  return { loud, quiet, layer };
-};
-
-describe("BackgroundSync without Background Sync (#213)", () => {
-  it.effect("registration degrades quietly wherever the API is missing or refused", () =>
-    Effect.gen(function* () {
-      const logs = recordLogs();
-      const outcomes = yield* Effect.all(
-        [
-          // No service worker at all (jsdom, like any page no worker controls).
-          BackgroundSync.register(),
-          // A registration with no `SyncManager` (Safari, Firefox).
-          BackgroundSync.register({ registration: Effect.succeed({}) }),
-          // The browser declined (permission withheld, no window, no active worker).
-          BackgroundSync.register({
-            registration: Effect.succeed({
-              sync: {
-                register: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
-              },
-            }),
-          }),
-        ],
-        { concurrency: 1 }
-      ).pipe(withLayer(logs.layer));
-      expect(outcomes).toEqual(["Unsupported", "Unsupported", "Refused"]);
-      // Said, but only at debug level: nothing an app would surface.
-      expect(logs.quiet.length).toBeGreaterThan(0);
-      expect(logs.loud).toEqual([]);
+class Logs extends Context.Service<
+  Logs,
+  { readonly loud: Array<string>; readonly quiet: Array<string> }
+>()("test/BackgroundSync/Logs") {
+  static readonly layer = Layer.unwrap(
+    Effect.sync(() => {
+      const loud: Array<string> = [];
+      const quiet: Array<string> = [];
+      const logger = Logger.make((options) => {
+        const line = `${options.logLevel}: ${String(options.message)}`;
+        (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn") ? loud : quiet).push(line);
+      });
+      return Layer.mergeAll(
+        Layer.succeed(Logs)({ loud, quiet }),
+        Logger.layer([logger]),
+        Layer.succeed(References.MinimumLogLevel)("All")
+      );
     })
   );
+}
 
-  it.live("with no SyncManager, the journal still flushes on the next connectivity signal", () =>
-    Effect.gen(function* () {
-      const logs = recordLogs();
-      const setTodo = Mutator.make("todo/set", Schema.Unknown);
-      const backend = yield* MemoryBackend.make({
-        "todo/set": (args, writer) =>
-          Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
-      });
-      const handler = yield* SyncServer.make.pipe(
-        Effect.provideService(Backend.Backend, backend),
-        Effect.provideService(
-          Authorization.AuthPolicy,
-          Authorization.policy({ todos: Authorization.allowAll })
-        ),
-        Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
-        Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
-      );
-      const base = yield* Transport.makeInMemory(handler, "group-degrade");
-      const transport = yield* BrowserConnectivity.withBrowserConnectivity({
-        ...base,
-        pokes: Stream.empty,
-      });
-      const store = yield* ClientStore.makeMemory;
-      const engine = yield* ClientEngine.make({
-        clientId: "client-degrade",
-        clientGroupId: "group-degrade",
-        mutators: Mutator.registry([
-          {
-            mutator: setTodo,
-            local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
-          },
-        ]),
-      }).pipe(
-        Effect.provideService(ClientStore.ClientStore, store),
-        Effect.provideService(Transport.ClientTransport, transport)
-      );
-      yield* engine.subscribe(Subset.make({ collection: "todos" }));
-      yield* engine.runSync;
-      yield* Effect.sleep(Duration.millis(20));
+describe("BackgroundSync without Background Sync (#213)", () => {
+  layer(Logs.layer, { buildPerTest: true })((scoped) => {
+    scoped.effect("registration degrades quietly wherever the API is missing or refused", () =>
+      Effect.gen(function* () {
+        const logs = yield* Logs;
+        const outcomes = yield* Effect.all(
+          [
+            // No service worker at all (jsdom, like any page no worker controls).
+            BackgroundSync.register(),
+            // A registration with no `SyncManager` (Safari, Firefox).
+            BackgroundSync.register({ registration: Effect.succeed({}) }),
+            // The browser declined (permission withheld, no window, no active worker).
+            BackgroundSync.register({
+              registration: Effect.succeed({
+                sync: {
+                  register: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
+                },
+              }),
+            }),
+          ],
+          { concurrency: 1 }
+        );
+        expect(outcomes).toEqual(["Unsupported", "Unsupported", "Refused"]);
+        // Said, but only at debug level: nothing an app would surface.
+        expect(logs.quiet.length).toBeGreaterThan(0);
+        expect(logs.loud).toEqual([]);
+      })
+    );
+  });
 
-      // Offline: the write is journaled, and the registration the app asks
-      // for after it finds no SyncManager.
-      window.dispatchEvent(new Event("offline"));
-      yield* Effect.sleep(Duration.millis(20));
-      yield* engine.mutate("todo/set", { id: "1", title: "offline edit" });
-      const outcome = yield* BackgroundSync.register({ registration: Effect.succeed({}) }).pipe(
-        withLayer(logs.layer)
-      );
-      expect(outcome).toBe("Unsupported");
-      expect(yield* store.pendingMutations).toHaveLength(1);
+  layer(Logs.layer, { buildPerTest: true, excludeTestServices: true })((live) => {
+    live.effect(
+      "with no SyncManager, the journal still flushes on the next connectivity signal",
+      () =>
+        Effect.gen(function* () {
+          const logs = yield* Logs;
+          const setTodo = Mutator.make("todo/set", Schema.Unknown);
+          const backend = yield* MemoryBackend.make({
+            "todo/set": (args, writer) =>
+              Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
+          });
+          const handler = yield* SyncServer.make.pipe(
+            Effect.provideService(Backend.Backend, backend),
+            Effect.provideService(
+              Authorization.AuthPolicy,
+              Authorization.policy({ todos: Authorization.allowAll })
+            ),
+            Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+            Effect.provideService(
+              InvalidationBus.InvalidationBus,
+              yield* InvalidationBus.makeInProcess
+            )
+          );
+          const base = yield* Transport.makeInMemory(handler, "group-degrade");
+          const transport = yield* BrowserConnectivity.withBrowserConnectivity({
+            ...base,
+            pokes: Stream.empty,
+          });
+          const store = yield* ClientStore.makeMemory;
+          const engine = yield* ClientEngine.make({
+            clientId: "client-degrade",
+            clientGroupId: "group-degrade",
+            mutators: Mutator.registry([
+              {
+                mutator: setTodo,
+                local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+              },
+            ]),
+          }).pipe(
+            Effect.provideService(ClientStore.ClientStore, store),
+            Effect.provideService(Transport.ClientTransport, transport)
+          );
+          yield* engine.subscribe(Subset.make({ collection: "todos" }));
+          yield* engine.runSync;
+          yield* Effect.sleep(Duration.millis(20));
 
-      // Back online, with the page open: the connectivity path drains it.
-      window.dispatchEvent(new Event("online"));
-      yield* Effect.sleep(Duration.millis(60));
-      expect(yield* store.pendingMutations).toEqual([]);
-      expect(logs.loud).toEqual([]);
-    }).pipe(Effect.scoped)
-  );
+          // Offline: the write is journaled, and the registration the app asks
+          // for after it finds no SyncManager.
+          window.dispatchEvent(new Event("offline"));
+          yield* Effect.sleep(Duration.millis(20));
+          yield* engine.mutate("todo/set", { id: "1", title: "offline edit" });
+          const outcome = yield* BackgroundSync.register({ registration: Effect.succeed({}) });
+          expect(outcome).toBe("Unsupported");
+          expect(yield* store.pendingMutations).toHaveLength(1);
+
+          // Back online, with the page open: the connectivity path drains it.
+          window.dispatchEvent(new Event("online"));
+          yield* Effect.sleep(Duration.millis(60));
+          expect(yield* store.pendingMutations).toEqual([]);
+          expect(logs.loud).toEqual([]);
+        }).pipe(Effect.scoped)
+    );
+  });
 });

@@ -106,6 +106,8 @@ import type { Identity, StoreError, TransportError } from "@thomasfosterau/legat
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -459,6 +461,12 @@ interface Attached {
 }
 
 /**
+ * The worker's own runtime for the listener's two runs (the host-ready ref and each flush): they close
+ * over the attached host's services, so the runtime itself supplies none.
+ */
+const edge = ManagedRuntime.make(Layer.empty);
+
+/**
  * Install the `sync` listener on the worker's scope — **synchronously, at the
  * top level of the worker script** (see the module docs for why). Deliberately
  * a plain function rather than an Effect for that reason.
@@ -501,7 +509,7 @@ export const listen = (options: ListenOptions): Listener => {
   );
 
   const handle = (event: SyncEvent): Promise<FlushOutcome> =>
-    Effect.runPromiseWith(Context.empty())(
+    edge.runPromise(
       whenAttached.pipe(
         Effect.tapError((error) =>
           Effect.logDebug(

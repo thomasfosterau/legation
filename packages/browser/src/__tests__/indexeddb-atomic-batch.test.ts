@@ -6,7 +6,7 @@
  */
 import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Hydration } from "@thomasfosterau/legation";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
@@ -178,30 +178,32 @@ const upgradeTo = (database: string, version: number) =>
   });
 
 describe("IndexedDbClientStore's atomic batch (#393)", () => {
-  it.effect(
-    "the browser store commits a pull as one batch that the platform store reads back",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* ClientStore.ClientStore;
-        expect(store.commitPull).toBeDefined();
-        const kv = yield* KeyValueStore.KeyValueStore;
+  layer(Layer.mergeAll(storeLayer("atomic-readback"), platformLayer("atomic-readback")))(
+    (scoped) => {
+      scoped.effect(
+        "the browser store commits a pull as one batch that the platform store reads back",
+        () =>
+          Effect.gen(function* () {
+            const store = yield* ClientStore.ClientStore;
+            expect(store.commitPull).toBeDefined();
+            const kv = yield* KeyValueStore.KeyValueStore;
 
-        yield* defined(store.commitPull)({
-          lastMutationIds: {},
-          cookie: "cookie-1",
-          patch: [put("a", 1), put("b", 2)],
-        });
+            yield* defined(store.commitPull)({
+              lastMutationIds: {},
+              cookie: "cookie-1",
+              patch: [put("a", 1), put("b", 2)],
+            });
 
-        // The rows, the id index and the cookie sit in the platform's own records, and no record was written.
-        expect(JSON.parse((yield* kv.get(rowKey("a"))) ?? "null")).toMatchObject({
-          value: { n: 1 },
-        });
-        expect(yield* kv.get("legation/rowIndex/counters")).toBe('["a","b"]');
-        expect(yield* kv.get("legation/cookie")).toBe("cookie-1");
-        expect(yield* kv.has(RECORD)).toBe(false);
-      }).pipe(
-        withLayer(Layer.mergeAll(storeLayer("atomic-readback"), platformLayer("atomic-readback")))
-      )
+            // The rows, the id index and the cookie sit in the platform's own records, and no record was written.
+            expect(JSON.parse((yield* kv.get(rowKey("a"))) ?? "null")).toMatchObject({
+              value: { n: 1 },
+            });
+            expect(yield* kv.get("legation/rowIndex/counters")).toBe('["a","b"]');
+            expect(yield* kv.get("legation/cookie")).toBe("cookie-1");
+            expect(yield* kv.has(RECORD)).toBe(false);
+          })
+      );
+    }
   );
 
   it.effect(

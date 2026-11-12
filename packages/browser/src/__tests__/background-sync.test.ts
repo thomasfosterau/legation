@@ -44,6 +44,7 @@ import {
 import type { Protocol } from "@thomasfosterau/legation/internal";
 import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as HashMap from "effect/HashMap";
@@ -61,7 +62,6 @@ import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
-import { withLayer } from "./with-layer.js";
 
 interface Todo {
   readonly id: string;
@@ -232,20 +232,26 @@ const makeEngine = (
     return { engine, store, pushes, failure, pullsDown };
   });
 
-/** Every log line at `Warn` or above, with the minimum level lowered to `All`. */
-const recordLogs = () => {
-  const loud: Array<string> = [];
-  const logger = Logger.make((options) => {
-    if (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn")) {
-      loud.push(`${options.logLevel}: ${String(options.message)}`);
-    }
-  });
-  const loggingLayer = Layer.merge(
-    Logger.layer([logger]),
-    Layer.succeed(References.MinimumLogLevel)("All")
+/** Every log line at `Warn` or above one test logged, with the minimum level lowered to `All`. */
+class Logs extends Context.Service<Logs, { readonly loud: Array<string> }>()(
+  "test/BackgroundSync/Logs"
+) {
+  static readonly layer = Layer.unwrap(
+    Effect.sync(() => {
+      const loud: Array<string> = [];
+      const logger = Logger.make((options) => {
+        if (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn")) {
+          loud.push(`${options.logLevel}: ${String(options.message)}`);
+        }
+      });
+      return Layer.mergeAll(
+        Layer.succeed(Logs)({ loud }),
+        Logger.layer([logger]),
+        Layer.succeed(References.MinimumLogLevel)("All")
+      );
+    })
   );
-  return { loud, layer: loggingLayer };
-};
+}
 
 const phases = (engine: ClientEngine.ClientEngine) =>
   Stream.runHead(engine.mutationStates).pipe(
@@ -431,35 +437,6 @@ describeWrapped("BackgroundSync (#213)", (it) => {
       // Resolved, not rejected: retrying cannot help until the app updates.
       expect(settled).toEqual({ ok: true, value: "UpdateNeeded" });
       expect(yield* store.pendingMutations).toHaveLength(1);
-    }).pipe(Effect.scoped)
-  );
-
-  it.live("a store failure rejects the event and is logged at Warn", () =>
-    Effect.gen(function* () {
-      const logs = recordLogs();
-      const self = fakeScope();
-      const listener = listenOn(self);
-      const inner = yield* ClientStore.makeMemory;
-      const broken = yield* Ref.make(false);
-      const store: ClientStore.ClientStore = {
-        ...inner,
-        pendingMutations: Ref.get(broken).pipe(
-          Effect.flatMap((down) =>
-            down ? Effect.fail(new StoreError({ message: "disk gone" })) : inner.pendingMutations
-          )
-        ),
-      };
-      const { engine } = yield* makeEngine(store);
-      // The flush runs under the services of whoever attached it.
-      yield* listener.serve(engine).pipe(withLayer(logs.layer));
-      yield* engine.mutate("todo/set", { id: "1", title: "pending" });
-
-      yield* Ref.set(broken, true);
-      const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-      expect(failed.ok).toBe(false);
-      expect(!failed.ok && (failed.error as { _tag?: string })._tag).toBe("StoreError");
-      expect(logs.loud).toHaveLength(1);
-      expect(logs.loud[0]).toMatch(/^Warn: .*store/);
     }).pipe(Effect.scoped)
   );
 
@@ -778,6 +755,41 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true, excludeTestServices: true
         const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
         expect(flushed).toEqual({ ok: true, value: "Flushed" });
         expect(yield* Ref.get(pushes)).toHaveLength(1);
+      }).pipe(Effect.scoped)
+    );
+  }
+);
+
+// A live clock (`excludeTestServices`): the flush races the host's real timers.
+layer(Logs.layer, { buildPerTest: true, excludeTestServices: true })(
+  "BackgroundSync store failure logging",
+  (live) => {
+    live.effect("a store failure rejects the event and is logged at Warn", () =>
+      Effect.gen(function* () {
+        const logs = yield* Logs;
+        const self = fakeScope();
+        const listener = listenOn(self);
+        const inner = yield* ClientStore.makeMemory;
+        const broken = yield* Ref.make(false);
+        const store: ClientStore.ClientStore = {
+          ...inner,
+          pendingMutations: Ref.get(broken).pipe(
+            Effect.flatMap((down) =>
+              down ? Effect.fail(new StoreError({ message: "disk gone" })) : inner.pendingMutations
+            )
+          ),
+        };
+        const { engine } = yield* makeEngine(store);
+        // The flush runs under the services of whoever attached it.
+        yield* listener.serve(engine);
+        yield* engine.mutate("todo/set", { id: "1", title: "pending" });
+
+        yield* Ref.set(broken, true);
+        const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+        expect(failed.ok).toBe(false);
+        expect(!failed.ok && (failed.error as { _tag?: string })._tag).toBe("StoreError");
+        expect(logs.loud).toHaveLength(1);
+        expect(logs.loud[0]).toMatch(/^Warn: .*store/);
       }).pipe(Effect.scoped)
     );
   }
