@@ -60,7 +60,7 @@ catalog:
   # on any other component version, failing `pnpm install` itself. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  "@effect/tsgo": 0.63.0
+  "@effect/tsgo": 0.67.7
   "@electric-sql/pglite": ^0.5.16
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
@@ -84,7 +84,7 @@ catalog:
   "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
-  "@vitest/coverage-v8": 5.0.5
+  "@vitest/coverage-v8": 5.1.0
   better-auth: ^1.7.18
   better-sqlite3: ^13.0.3
   fake-indexeddb: ^6.2.8
@@ -111,9 +111,9 @@ catalog:
   # 7.0.2004, vitest 5.0.5). `vitest` and
   # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
   # its aliased core package. They move together with `@effect/tsgo` (above).
-  vite-plus: 1.4.0
+  vite-plus: 1.5.1
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vitest: 5.0.5
+  vitest: 5.1.0
 
 # Peer ranges the PUBLISHED packages declare: the published floor, a promise
 # to consumers, kept apart from the dev pin above. `pnpm pack` (the release
