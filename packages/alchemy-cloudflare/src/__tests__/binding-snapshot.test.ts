@@ -48,7 +48,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import * as BindingTransport from "../BindingTransport.js";
-import { fakeBinding } from "./harness.js";
+import { fakeBinding, runPromise } from "./harness.js";
 import type * as Room from "../Room.js";
 import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
@@ -247,74 +247,81 @@ const hasClear = (patches: ReadonlyArray<ReadonlyArray<Protocol.PatchOp>>): bool
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("BindingTransport", () => {
-  it("forwards the inbound cookie and origin, and resolves the sync path against it", async () => {
-    const seen: Array<Request> = [];
-    const binding = {
-      fetch: async (request: Request) => {
-        seen.push(request);
-        return json({ cookie: "c", patch: [], lastMutationIds: {} });
-      },
-    };
-    const transport = BindingTransport.make({
-      binding,
-      request: inbound(`${SESSION}; legation-client-group=${GROUP}`),
-      headers: { "x-internal": "token" },
-    });
+  it.effect("forwards the inbound cookie and origin, and resolves the sync path against it", () =>
+    Effect.gen(function* () {
+      const seen: Array<Request> = [];
+      const binding = {
+        fetch: async (request: Request) => {
+          seen.push(request);
+          return json({ cookie: "c", patch: [], lastMutationIds: {} });
+        },
+      };
+      const transport = BindingTransport.make({
+        binding,
+        request: inbound(`${SESSION}; legation-client-group=${GROUP}`),
+        headers: { "x-internal": "token" },
+      });
 
-    await Effect.runPromise(
-      transport.pull({ clientGroupId: GROUP, subscriptions: [] }).pipe(Effect.orDie)
-    );
+      yield* transport.pull({ clientGroupId: GROUP, subscriptions: [] }).pipe(Effect.orDie);
 
-    const sent = defined(seen[0]);
-    expect(sent.url).toBe(`https://shop.example.com/sync${routes.pull}`);
-    expect(sent.headers.get("cookie")).toBe(`${SESSION}; legation-client-group=${GROUP}`);
-    // A top-level navigation carries no Origin header; the front door's own
-    // origin is what the bound Worker needs to see.
-    expect(sent.headers.get("origin")).toBe("https://shop.example.com");
-    expect(sent.headers.get("x-internal")).toBe("token");
-    expect(await sent.json()).toEqual({ clientGroupId: GROUP, subscriptions: [] });
-  });
+      const sent = defined(seen[0]);
+      expect(sent.url).toBe(`https://shop.example.com/sync${routes.pull}`);
+      expect(sent.headers.get("cookie")).toBe(`${SESSION}; legation-client-group=${GROUP}`);
+      // A top-level navigation carries no Origin header; the front door's own
+      // origin is what the bound Worker needs to see.
+      expect(sent.headers.get("origin")).toBe("https://shop.example.com");
+      expect(sent.headers.get("x-internal")).toBe("token");
+      expect(yield* awaitPromise(() => sent.json())).toEqual({
+        clientGroupId: GROUP,
+        subscriptions: [],
+      });
+    })
+  );
 
-  it("honours a custom sync path and an explicit inbound origin", async () => {
-    const seen: Array<Request> = [];
-    const binding = {
-      fetch: async (request: Request) => {
-        seen.push(request);
-        return json({ rows: [] });
-      },
-    };
-    const request = new Request("https://shop.example.com/products", {
-      headers: { origin: "https://admin.example.com" },
-    });
-    const transport = BindingTransport.make({ binding, request, path: "/legation" });
+  it.effect("honours a custom sync path and an explicit inbound origin", () =>
+    Effect.gen(function* () {
+      const seen: Array<Request> = [];
+      const binding = {
+        fetch: async (request: Request) => {
+          seen.push(request);
+          return json({ rows: [] });
+        },
+      };
+      const request = new Request("https://shop.example.com/products", {
+        headers: { origin: "https://admin.example.com" },
+      });
+      const transport = BindingTransport.make({ binding, request, path: "/legation" });
 
-    await Effect.runPromise(
-      defined(transport.read)({ clientGroupId: GROUP, subsets: [] }).pipe(Effect.orDie)
-    );
+      yield* defined(transport.read)({ clientGroupId: GROUP, subsets: [] }).pipe(Effect.orDie);
 
-    expect(defined(seen[0]).url).toBe(`https://shop.example.com/legation${routes.read}`);
-    expect(defined(seen[0]).headers.get("origin")).toBe("https://admin.example.com");
-  });
+      expect(defined(seen[0]).url).toBe(`https://shop.example.com/legation${routes.read}`);
+      expect(defined(seen[0]).headers.get("origin")).toBe("https://admin.example.com");
+    })
+  );
 
-  it("maps an HTTP failure onto a TransportError carrying the server's reason", async () => {
-    const binding = {
-      fetch: async () => new Response(JSON.stringify({ error: "nope" }), { status: 400 }),
-    };
-    const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
-    const failure = await Effect.runPromise(
-      Effect.flip(transport.pull({ clientGroupId: GROUP, subscriptions: [] }))
-    );
-    expect(failure._tag).toBe("TransportError");
-    expect(failure.message).toBe("nope");
-  });
+  it.effect("maps an HTTP failure onto a TransportError carrying the server's reason", () =>
+    Effect.gen(function* () {
+      const binding = {
+        fetch: async () => new Response(JSON.stringify({ error: "nope" }), { status: 400 }),
+      };
+      const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
+      const failure = yield* Effect.flip(
+        transport.pull({ clientGroupId: GROUP, subscriptions: [] })
+      );
+      expect(failure._tag).toBe("TransportError");
+      expect(failure.message).toBe("nope");
+    })
+  );
 
-  it("has no poke channel — a binding is request/response, and pull is correctness", async () => {
-    const transport = BindingTransport.make({
-      binding: { fetch: async () => json({}) },
-      request: inbound(SESSION),
-    });
-    expect(await Effect.runPromise(Stream.runCollect(transport.pokes))).toEqual([]);
-  });
+  it.effect("has no poke channel — a binding is request/response, and pull is correctness", () =>
+    Effect.gen(function* () {
+      const transport = BindingTransport.make({
+        binding: { fetch: async () => json({}) },
+        request: inbound(SESSION),
+      });
+      expect(yield* Stream.runCollect(transport.pokes)).toEqual([]);
+    })
+  );
 });
 
 describe("Hydration.snapshot over a service binding", () => {

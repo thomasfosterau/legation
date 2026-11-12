@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import { Authorization, MemoryBackend, Mutation, Server } from "@thomasfosterau/legation";
 import { HttpCache, InvalidationBus, InvalidationSink } from "@thomasfosterau/legation/internal";
 import { EdgeInvalidation } from "../index.js";
+import { withLayer } from "./with-layer.js";
 
 /** A binding, a KV namespace or a purge that is unreachable. */
 class Unreachable extends Schema.TaggedError<Unreachable, { readonly brand: unique symbol }>()(
@@ -65,7 +66,7 @@ describe("EdgeInvalidation.kv (#206)", () => {
             : Promise.resolve(void deleted.push(key)),
       })
         .invalidate(touched)
-        .pipe(Effect.provide(logs.layer));
+        .pipe(withLayer(logs.layer));
       expect(deleted).toEqual(["posts:p2"]);
       expect(logs.lines.join("\n")).toMatch(/KV delete of "posts:p1" failed/);
     })
@@ -112,12 +113,12 @@ describe("EdgeInvalidation.cachePurge (#206)", () => {
         purge: () => Promise.resolve({ success: false, errors: [{ code: 1, message: "nope" }] }),
       })
         .invalidate(touched)
-        .pipe(Effect.provide(logs.layer));
+        .pipe(withLayer(logs.layer));
       yield* EdgeInvalidation.cachePurge({
         purge: () => Promise.reject(new Unreachable({ what: "purge" })),
       })
         .invalidate(touched)
-        .pipe(Effect.provide(logs.layer));
+        .pipe(withLayer(logs.layer));
       expect(logs.lines).toEqual([
         "EdgeInvalidation: cache purge reported failure",
         "EdgeInvalidation: cache purge failed",
@@ -154,7 +155,7 @@ describe("EdgeInvalidation.forward / receive (#206)", () => {
       let calls = 0;
       yield* EdgeInvalidation.receive({ invalidate: () => Effect.sync(() => void calls++) })(
         '{"collections":"posts"}'
-      ).pipe(Effect.provide(logs.layer));
+      ).pipe(withLayer(logs.layer));
       expect(calls).toBe(0);
       expect(logs.lines).toEqual(["EdgeInvalidation: dropped a payload that does not decode"]);
     })
@@ -167,7 +168,7 @@ describe("EdgeInvalidation.forward / receive (#206)", () => {
         invalidate: () => Promise.reject(new Unreachable({ what: "binding" })),
       })
         .invalidate(touched)
-        .pipe(Effect.provide(logs.layer));
+        .pipe(withLayer(logs.layer));
       expect(logs.lines).toEqual(["EdgeInvalidation: forwarding an invalidation failed"]);
     })
   );
