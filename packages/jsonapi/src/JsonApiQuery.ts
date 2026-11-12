@@ -76,6 +76,7 @@
  * encodes to `None` and the backend skips the request.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -778,15 +779,19 @@ const readOf = (
   return Result.map(whereResult, (where) => ({
     collection,
     ...Option.match(where, { onNone: () => ({}), onSome: (predicate) => ({ where: predicate }) }),
-    ...(decoded.include === undefined || Arr.isReadonlyArrayEmpty(decoded.include)
-      ? {}
-      : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
-    ...(decoded.sort === undefined || Arr.isReadonlyArrayEmpty(decoded.sort)
-      ? {}
-      : { order: orderOf(decoded.sort) }),
-    ...(decoded.page?.limit === undefined ? {} : { first: decoded.page.limit }),
-    ...(decoded.page?.after === undefined ? {} : { after: decoded.page.after }),
-    ...(decoded.page?.offset === undefined ? {} : { offset: decoded.page.offset }),
+    ...Defined.fields({
+      include:
+        decoded.include === undefined || Arr.isReadonlyArrayEmpty(decoded.include)
+          ? undefined
+          : Object.fromEntries(decoded.include.map((edge) => [edge, true as const])),
+      order:
+        decoded.sort === undefined || Arr.isReadonlyArrayEmpty(decoded.sort)
+          ? undefined
+          : orderOf(decoded.sort),
+      first: decoded.page?.limit,
+      after: decoded.page?.after,
+      offset: decoded.page?.offset,
+    }),
   }));
 };
 
@@ -997,19 +1002,18 @@ const decodedOf = (
   const page =
     read.offset === undefined
       ? {
-          ...(root.limit === undefined ? {} : { limit: root.limit }),
-          ...(root.cursor === undefined ? {} : { after: root.cursor }),
+          ...Defined.fields({ limit: root.limit, after: root.cursor }),
         }
-      : { ...(read.first === undefined ? {} : { limit: read.first }), offset: read.offset };
+      : { ...Defined.fields({ limit: read.first }), offset: read.offset };
   return {
-    ...(Arr.isReadonlyArrayEmpty(include) ? {} : { include }),
+    ...Defined.fields({ include: Arr.isReadonlyArrayEmpty(include) ? undefined : include }),
     ...Option.match(fields, {
       onNone: () => ({}),
       onSome: (projection) => ({ fields: projectionOf(projection) }),
     }),
     ...Option.match(filter, { onNone: () => ({}), onSome: (node) => ({ filter: node }) }),
-    ...(Arr.isReadonlyArrayEmpty(root.orderBy) ? {} : { sort: root.orderBy }),
-    ...(R.isEmptyReadonlyRecord<string, unknown>(page) ? {} : { page }),
+    ...Defined.fields({ sort: Arr.isReadonlyArrayEmpty(root.orderBy) ? undefined : root.orderBy }),
+    ...Defined.fields({ page: R.isEmptyReadonlyRecord<string, unknown>(page) ? undefined : page }),
   };
 };
 
@@ -1058,7 +1062,7 @@ export const canonical = (
       error instanceof QueryError
         ? error
         : new QueryError({
-            message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Read on "${read.collection}" has no URL form: ${P.isError(error) ? error.message : String(error)}`,
             query: read.collection,
             cause: error,
           }),
@@ -1106,7 +1110,7 @@ const scalarSchema = (type: "string" | "number" | "boolean"): Schema.Top =>
 const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>): void => {
   const add = (field: string, value: unknown) => {
     const set = types.get(field) ?? new Set<string>();
-    set.add(typeof value);
+    set.add(Predicate.typeName(value));
     types.set(field, set);
   };
   Match.value(ast).pipe(
@@ -1258,8 +1262,8 @@ export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRe
       );
   const sort = subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
   return Option.some({
-    ...(filter === undefined ? {} : { filter }),
-    ...(Arr.isReadonlyArrayEmpty(sort) ? {} : { sort }),
+    ...Defined.fields({ filter }),
+    ...Defined.fields({ sort: Arr.isReadonlyArrayEmpty(sort) ? undefined : sort }),
   });
 };
 
@@ -1272,7 +1276,7 @@ export const defaultEncoder: QueryEncoder = {
         error instanceof QueryError
           ? error
           : new QueryError({
-              message: `Subset on "${subset.collection}" could not be encoded: ${error instanceof Error ? error.message : String(error)}`,
+              message: `Subset on "${subset.collection}" could not be encoded: ${P.isError(error) ? error.message : String(error)}`,
               query: subset.collection,
               cause: error,
             }),

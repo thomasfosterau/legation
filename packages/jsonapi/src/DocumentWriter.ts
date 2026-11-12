@@ -58,6 +58,7 @@
  * the seam is {@link relationshipOf}, the one place a row's linkage is read.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -66,6 +67,13 @@ import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation";
 import type { Related } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
+import * as Schema from "effect/Schema";
+
+/** Thrown for a read on a collection no node registers: a definition defect. */
+class UnknownCollection extends Schema.TaggedError<
+  UnknownCollection,
+  { readonly brand: unique symbol }
+>()("UnknownCollection", { message: Schema.String }) {}
 
 /** A resource identifier: `{ type, id }`. */
 export interface Identifier {
@@ -260,7 +268,9 @@ const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
     type: node.type,
     id: row.id,
     attributes: attributesOf(node, recordOf(row.value)),
-    ...(R.isEmptyReadonlyRecord(relationships) ? {} : { relationships }),
+    ...Defined.fields({
+      relationships: R.isEmptyReadonlyRecord(relationships) ? undefined : relationships,
+    }),
   };
 };
 
@@ -298,7 +308,9 @@ const project = (
 const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
   const node = nodes.nodes.get(read.collection);
   if (node === undefined)
-    throw new Error(`DocumentWriter: unknown collection "${read.collection}"`);
+    throw new UnknownCollection({
+      message: `DocumentWriter: unknown collection "${read.collection}"`,
+    });
   return node;
 };
 
@@ -395,7 +407,7 @@ export const collection = (input: Input): CollectionDocument => {
   const next = nextLink(input, page);
   const prev = prevLink(input);
   const options = {
-    ...(included === undefined ? {} : { included }),
+    ...Defined.fields({ included }),
     links: {
       self: selfLink(input),
       ...Option.match(next, { onNone: () => ({}), onSome: (link) => ({ next: link }) }),
@@ -420,7 +432,7 @@ export const data = (input: Input): DataDocument => {
     nodeOf(input.nodes, input.read)
   );
   return Handlers.data(primary[0] ?? null, {
-    ...(included === undefined ? {} : { included }),
+    ...Defined.fields({ included }),
     links: { self: selfLink(input) },
   });
 };

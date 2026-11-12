@@ -45,12 +45,12 @@ export interface ResolverOptions {
   /**
    * How the session cookie is named: the same value the app passes effect-auth's
    * HTTP tier, so the resolver derives the same effective name (`__Host-`
-   * prefix included). `None` is effect-auth's default naming
+   * prefix included). Omitted, it is effect-auth's default naming
    * (`__Host-conduit_session`).
    */
-  readonly cookie?: Option.Option<SessionCookies.SessionCookieNaming>;
-  /** The headers an API key is read from, in order. `None` is {@link defaultApiKeyHeaders}. */
-  readonly apiKeyHeaders?: Option.Option<ReadonlyArray<string>>;
+  readonly cookie?: SessionCookies.SessionCookieNaming;
+  /** The headers an API key is read from, in order. Omitted, they are {@link defaultApiKeyHeaders}. */
+  readonly apiKeyHeaders?: ReadonlyArray<string>;
 }
 
 /**
@@ -171,11 +171,8 @@ const presentOf = (value: Option.Option<string>): Option.Option<string> =>
  * never fails.
  */
 export const make = (planes: Planes, options?: ResolverOptions): Authorization.IdentityResolver => {
-  const apiKeyHeaders = Option.getOrElse(
-    Option.flatten(Option.fromNullishOr(options?.apiKeyHeaders)),
-    () => defaultApiKeyHeaders
-  );
-  const naming = Option.getOrUndefined(Option.flatten(Option.fromNullishOr(options?.cookie)));
+  const apiKeyHeaders = options?.apiKeyHeaders ?? defaultApiKeyHeaders;
+  const naming = options?.cookie;
   const config: SessionResolution.CredentialConfig = { ...naming, apiKeyHeaders };
   const resolveCredentials = (
     credentials: Authorization.RequestCredentials

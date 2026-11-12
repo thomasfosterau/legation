@@ -4,6 +4,7 @@
  * The log of requests and pulls shows the chunk boundaries, the tail each request found, and the
  * order the server sees the mutations in.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -124,8 +125,7 @@ const engineOver = (
     clientId: "client-a",
     clientGroupId: "group-a",
     mutators: counterMutators,
-    ...(options.unpulledLimit === undefined ? {} : { unpulledLimit: options.unpulledLimit }),
-    ...(options.retry === undefined ? {} : { retry: options.retry }),
+    ...Defined.fields({ unpulledLimit: options.unpulledLimit, retry: options.retry }),
   }).pipe(
     Effect.provideService(ClientStore, store),
     Effect.provideService(ClientTransport, transport)

@@ -65,7 +65,7 @@ export const registry = (
   const handlers = new Map<string, LocalHandler<any>>();
   Arr.forEach(entries, ({ mutator, local }) => {
     if (mutators.has(mutator.name)) {
-      throw new DuplicateNameError({ kind: "mutator", name: mutator.name });
+      throw new DuplicateNameError({ kind: "mutator", duplicate: mutator.name });
     }
     mutators.set(mutator.name, mutator);
     handlers.set(mutator.name, local);

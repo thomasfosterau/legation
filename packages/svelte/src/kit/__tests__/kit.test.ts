@@ -8,6 +8,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -49,6 +50,7 @@ import {
   requestCredentials,
   runFormMutation,
 } from "../index.js";
+import { TestFailure } from "../../__tests__/test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -100,7 +102,7 @@ const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: s
     serialize: () => "",
     // Nothing under test parses a `Set-Cookie` header.
     parse: () => {
-      throw new Error("fakeCookies: parse is not faked");
+      throw new TestFailure({ message: "fakeCookies: parse is not faked" });
     },
   };
   return { cookies, sets };
@@ -170,7 +172,7 @@ describe("loadSnapshot + clientRuntime", () => {
         subscribe: [allTodos],
       });
 
-      const rows = yield* Effect.promise(() =>
+      const rows = yield* awaitPromise(() =>
         runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTodos)))
       );
       expect(rows.map((row) => row.id)).toEqual(["1"]);
@@ -180,7 +182,7 @@ describe("loadSnapshot + clientRuntime", () => {
       // hand-driven pull.
       yield* writer.mutate("todo/set", { id: "2", title: "second" });
       yield* writer.push;
-      const after = yield* Effect.promise(() =>
+      const after = yield* awaitPromise(() =>
         runtime.runPromise(
           Effect.flatMap(Client.Client, (client) =>
             Effect.andThen(
@@ -197,7 +199,7 @@ describe("loadSnapshot + clientRuntime", () => {
       );
       expect(after.map((row) => row.id).toSorted()).toEqual(["1", "2"]);
 
-      yield* Effect.promise(() => runtime.dispose());
+      yield* awaitPromise(() => runtime.dispose());
     })
   );
 

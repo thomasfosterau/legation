@@ -13,6 +13,7 @@
  * Seeded through Effect's `Random.withSeed`; `LEGATION_CORPUS_SEED`
  * overrides the seed to reproduce a failure.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -22,8 +23,9 @@ import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Env from "./env.js";
 
-const seed = FilterCorpus.resolveSeed(process.env["LEGATION_CORPUS_SEED"]);
+const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
 /** Rows in the generated set (the pinned sweep plus random rows). */
 const ROWS = 64;
 /** Conjunct-built pairs per run. */
@@ -79,8 +81,7 @@ const generateWindow = (rows: ReadonlyArray<FilterCorpus.CorpusRow>): Effect.Eff
     const cursor = withCursor ? (yield* Random.choice(rows).pipe(Effect.orDie)).id : undefined;
     return {
       orderBy,
-      ...(limit === undefined ? {} : { limit }),
-      ...(cursor === undefined ? {} : { cursor }),
+      ...Defined.fields({ limit, cursor }),
     };
   });
 

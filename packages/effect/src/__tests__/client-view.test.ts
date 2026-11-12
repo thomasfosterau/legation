@@ -20,6 +20,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import { layerInMemory } from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -108,7 +109,10 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
     for (let attempt = 0; attempt < 200; attempt++) {
       const value = yield* read;
       if (until(value)) return value;
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+      yield* Effect.callback<void>((resume) => {
+        const timer = setTimeout(() => resume(Effect.void), 5);
+        return Effect.sync(() => clearTimeout(timer));
+      });
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });

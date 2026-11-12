@@ -32,8 +32,10 @@ import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfostera
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import * as Env from "../env.js";
+import { TestFailure } from "../test-failure.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = Env.databaseUrl;
 
 const CLIENT_GROUP = "g";
 const CLIENT = "c1";
@@ -218,14 +220,16 @@ const awaitCopySettled = (sql: SqlClient, copy: Fiber.Fiber<unknown, unknown>) =
     }),
     Effect.timeout("20 seconds"),
     Effect.catchTag("TimeoutError", () =>
-      Effect.die(new Error("the copy neither blocked on a lock nor finished within 20s"))
+      Effect.die(
+        new TestFailure({ message: "the copy neither blocked on a lock nor finished within 20s" })
+      )
     )
   );
 
 // Always runs, so a CI job without the service fails here instead of skipping
 // the suite below in silence.
 it("has DATABASE_URL in CI, so the PostgreSQL overlap test cannot skip silently", () => {
-  const ciWithoutDatabase = process.env.CI !== undefined && databaseUrl === undefined;
+  const ciWithoutDatabase = Env.inCi && databaseUrl === undefined;
   expect(
     ciWithoutDatabase,
     "DATABASE_URL is not set in CI: the PostgreSQL overlap test (#360) needs the " +
@@ -233,7 +237,7 @@ it("has DATABASE_URL in CI, so the PostgreSQL overlap test cannot skip silently"
   ).toBe(false);
 });
 
-if (databaseUrl === undefined && process.env.CI === undefined) {
+if (databaseUrl === undefined && !Env.inCi) {
   process.stderr.write(
     "\n*** [sql-backend-postgres] SKIPPED: DATABASE_URL is not set, so the PostgreSQL " +
       "READ COMMITTED overlap test (#360) did not run. Point DATABASE_URL at a " +

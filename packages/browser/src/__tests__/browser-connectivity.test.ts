@@ -39,6 +39,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -101,7 +102,9 @@ const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =
       yield* TestClock.adjust(Duration.millis(1));
     }
     if (yield* condition) return;
-    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+    return yield* Effect.die(
+      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+    );
   });
 
 // A service worker's globals: no `window` or `document`, and a `navigator`

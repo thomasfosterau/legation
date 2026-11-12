@@ -67,9 +67,10 @@ const SEED = 20260903;
 
 /** `TRIALS` random string pairs, deterministic for `SEED`. */
 const randomPairs: ReadonlyArray<readonly [string, string]> = Effect.runSync(
-  Effect.all([randomString, randomString], { concurrency: 1 })
-    .pipe(Effect.replicateEffect(TRIALS))
-    .pipe(Random.withSeed(SEED))
+  Effect.all([randomString, randomString], { concurrency: 1 }).pipe(
+    Effect.replicateEffect(TRIALS),
+    Random.withSeed(SEED)
+  )
 );
 
 describe("Predicate.compareText (ADR-0028 rule (c))", () => {
@@ -116,6 +117,35 @@ describe("Predicate.compareText (ADR-0028 rule (c))", () => {
     expect(Predicate.compareLiterals(1, "1")).toBeUndefined();
     expect(Predicate.compareLiterals(null, null)).toBeUndefined();
     expect(Predicate.compareLiterals(true, 1)).toBeUndefined();
+  });
+
+  it("typeName names a value as typeof does", () => {
+    const values: ReadonlyArray<unknown> = [
+      "a",
+      1,
+      Number.NaN,
+      true,
+      1n,
+      Symbol("s"),
+      undefined,
+      () => 0,
+      null,
+      [],
+      {},
+    ];
+    expect(values.map(Predicate.typeName)).toEqual([
+      "string",
+      "number",
+      "number",
+      "boolean",
+      "bigint",
+      "symbol",
+      "undefined",
+      "function",
+      "object",
+      "object",
+      "object",
+    ]);
   });
 });
 

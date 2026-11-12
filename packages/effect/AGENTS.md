@@ -6,7 +6,7 @@ The engine core. Read the root [AGENTS.md](../../AGENTS.md) first; this file car
 
 - **Peer: `effect` only.** Nothing here imports a runtime (`node:*`, DOM globals beyond the `WebWorker` lib), a protocol library or a framework (ADR-0006, ADR-0033). Code that needs one goes in its own package; `.fallowrc.json` gives this zone no allowed imports.
 - **Three entries** (ADR-0022, ADR-0033): `src/index.ts` (`.`) is the app surface — `Node`, `Edge`, `Collection`, `Query`, `Mutator`, `Client`, `Server`, `Backend`, `Authorization`, the errors. `src/internal.ts` (`./internal`) is the engine seams for adapter authors — `ClientEngine`, `ClientStore`, `Subset`, `SyncServer`, `Cvr`, `InvalidationBus`, `HintSource`, `Undo`, `Mirror*`, `Transport`, …. `src/sql/index.ts` (`./sql`) is the SQL reference backend — `Sql`, `SqlBackend`, `PgExecutor`, `PollingHintSource`. A new export goes on exactly one of them; moving one between them is a breaking change. Nothing outside `src/sql/` imports `src/sql/`, and the root and `./internal` barrels never re-export it, so an app without a database never loads it.
-- The entries share bundle chunks (`vp pack`), so a value reached through more than one is the same instance. `src/sql/` imports the rest of the core through `../index.js` and `../internal.js`.
+- The entries share their modules (`vp pack` emits one module per source module, #678), so a value reached through more than one is the same instance. `src/sql/` imports the rest of the core through `../index.js` and `../internal.js`.
 
 ## Invariants
 

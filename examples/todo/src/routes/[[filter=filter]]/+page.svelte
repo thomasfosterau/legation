@@ -47,11 +47,9 @@
   let draft = $state("");
   let remoteAgent = $state(false);
 
-  // `value` is `unknown` on a resolved row: the node graph types the schema,
-  // but not what a read hands back, so the row value is cast at the edge.
-  const todos = $derived(
-    AsyncResult.getOrElse(rows.current, () => []).map((row) => row.value as Todo)
-  );
+  // Each row's `value` is a todo: `allTodos` is declared `as const satisfies
+  // Query.Read`, so its rows are typed by the graph `domain.ts` registers.
+  const todos = $derived(AsyncResult.getOrElse(rows.current, () => []).map((row) => row.value));
   const offline = $derived(connection.current === "disconnected");
   const total = $derived(todos.length);
   const active = $derived(AsyncResult.getOrElse(activeCount.current, () => 0) ?? 0);

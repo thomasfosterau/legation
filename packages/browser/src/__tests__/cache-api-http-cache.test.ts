@@ -7,8 +7,9 @@
 import type { HttpCache } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { awaitPromise } from "./await-promise.js";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
-import { defined } from "./defined.js";
 
 /** Minimal in-memory Cache API fake, keyed by request URL. */
 const makeFakeCache = (): CacheApiHttpCache.CacheLike & {
@@ -47,10 +48,10 @@ describe("CacheApiHttpCache store", () => {
         meta({ tags: ["todos"] })
       );
 
-      const hit = yield* store.match(request);
-      expect(hit).toBeDefined();
-      expect(hit?.meta.tags).toEqual(["todos"]);
-      expect(yield* Effect.promise(() => defined(hit).response.json())).toEqual([{ id: "1" }]);
+      const found = yield* store.match(request);
+      const hit = yield* Effect.fromOption(found);
+      expect(hit.meta.tags).toEqual(["todos"]);
+      expect(yield* awaitPromise(() => hit.response.json())).toEqual([{ id: "1" }]);
     })
   );
 
@@ -60,7 +61,12 @@ describe("CacheApiHttpCache store", () => {
       const store = CacheApiHttpCache.make(cache);
       const request = new Request("https://api.test/foreign");
       cache.entries.set(request.url, new Response("foreign"));
-      expect(yield* store.match(request)).toBeUndefined();
+      expect(Option.isNone(yield* store.match(request))).toBe(true);
+      cache.entries.set(
+        request.url,
+        new Response("corrupt", { headers: { [CacheApiHttpCache.metaHeader]: "%7Bnot-json" } })
+      );
+      expect(Option.isNone(yield* store.match(request))).toBe(true);
     })
   );
 
@@ -73,8 +79,8 @@ describe("CacheApiHttpCache store", () => {
       yield* store.put(users, new Response("u"), meta({ url: users.url, tags: ["users"] }));
 
       yield* store.invalidateTags(["todos"]);
-      expect(yield* store.match(todos)).toBeUndefined();
-      expect(yield* store.match(users)).toBeDefined();
+      expect(Option.isNone(yield* store.match(todos))).toBe(true);
+      expect(Option.isSome(yield* store.match(users))).toBe(true);
     })
   );
 });
@@ -97,16 +103,16 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       const handler = CacheApiHttpCache.fetchHandler({
         store: CacheApiHttpCache.make(makeFakeCache()),
         fetch: network.fetch,
-        policy: () => ({ staleTime: "1 hour" }),
+        policy: () => Option.some({ staleTime: "1 hour" }),
       });
       const request = new Request("https://api.test/todos");
 
       const first = yield* handler(request);
-      expect(yield* Effect.promise(() => first.response.text())).toBe("network-1");
-      expect(first.revalidate).toBeUndefined();
+      expect(yield* awaitPromise(() => first.response.text())).toBe("network-1");
+      expect(Option.isNone(first.revalidate)).toBe(true);
 
       const second = yield* handler(request);
-      expect(yield* Effect.promise(() => second.response.text())).toBe("network-1");
+      expect(yield* awaitPromise(() => second.response.text())).toBe("network-1");
       expect(network.calls()).toBe(1);
     })
   );
@@ -118,20 +124,20 @@ describe("fetchHandler (stale-while-revalidate)", () => {
         store: CacheApiHttpCache.make(makeFakeCache()),
         fetch: network.fetch,
         // staleTime 0: stale immediately; no TTL: never expires.
-        policy: () => ({ staleTime: 0 }),
+        policy: () => Option.some({ staleTime: 0 }),
       });
       const request = new Request("https://api.test/todos");
       yield* handler(request);
 
       const stale = yield* handler(request);
-      expect(yield* Effect.promise(() => stale.response.text())).toBe("network-1");
-      expect(stale.revalidate).toBeDefined();
-      yield* defined(stale.revalidate);
+      expect(yield* awaitPromise(() => stale.response.text())).toBe("network-1");
+      const revalidate = yield* Effect.fromOption(stale.revalidate);
+      yield* revalidate;
       expect(network.calls()).toBe(2);
 
       // The background refresh replaced the stored copy.
       const refreshed = yield* handler(request);
-      expect(yield* Effect.promise(() => refreshed.response.text())).toBe("network-2");
+      expect(yield* awaitPromise(() => refreshed.response.text())).toBe("network-2");
     })
   );
 
@@ -141,14 +147,14 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       const handler = CacheApiHttpCache.fetchHandler({
         store: CacheApiHttpCache.make(makeFakeCache()),
         fetch: network.fetch,
-        policy: () => ({ staleTime: 0, timeToLive: 0 }),
+        policy: () => Option.some({ staleTime: 0, timeToLive: 0 }),
       });
       const request = new Request("https://api.test/todos");
       yield* handler(request);
 
       const reloaded = yield* handler(request);
-      expect(yield* Effect.promise(() => reloaded.response.text())).toBe("network-2");
-      expect(reloaded.revalidate).toBeUndefined();
+      expect(yield* awaitPromise(() => reloaded.response.text())).toBe("network-2");
+      expect(Option.isNone(reloaded.revalidate)).toBe(true);
       expect(network.calls()).toBe(2);
     })
   );
@@ -160,7 +166,7 @@ describe("fetchHandler (stale-while-revalidate)", () => {
         store: CacheApiHttpCache.make(makeFakeCache()),
         fetch: network.fetch,
         policy: (request) =>
-          request.url.endsWith("/cached") ? { staleTime: "1 hour" } : undefined,
+          request.url.endsWith("/cached") ? Option.some({ staleTime: "1 hour" }) : Option.none(),
       });
 
       yield* handler(new Request("https://api.test/cached", { method: "POST" }));
@@ -169,4 +175,64 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       expect(network.calls()).toBe(3);
     })
   );
+
+  it.effect("stores only the responses the policy's cacheable accepts", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const handler = CacheApiHttpCache.fetchHandler({
+        store: CacheApiHttpCache.make(makeFakeCache()),
+        fetch: (request) => {
+          calls += 1;
+          const cacheControl = request.url.endsWith("/public") ? "public, max-age=60" : "private";
+          return Promise.resolve(
+            new Response(`network-${calls}`, { headers: { "cache-control": cacheControl } })
+          );
+        },
+        policy: () =>
+          Option.some({
+            staleTime: "1 hour",
+            cacheable: (response: Response) => response.ok && CacheApiHttpCache.isPublic(response),
+          }),
+      });
+
+      yield* handler(new Request("https://api.test/private"));
+      yield* handler(new Request("https://api.test/private"));
+      expect(calls).toBe(2);
+
+      yield* handler(new Request("https://api.test/public"));
+      const second = yield* handler(new Request("https://api.test/public"));
+      expect(yield* awaitPromise(() => second.response.text())).toBe("network-3");
+      expect(calls).toBe(3);
+    })
+  );
+
+  it.effect("does not store non-ok responses by default", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const handler = CacheApiHttpCache.fetchHandler({
+        store: CacheApiHttpCache.make(makeFakeCache()),
+        fetch: () => {
+          calls += 1;
+          return Promise.resolve(new Response("missing", { status: 404 }));
+        },
+        policy: () => Option.some({ staleTime: "1 hour" }),
+      });
+      yield* handler(new Request("https://api.test/missing"));
+      yield* handler(new Request("https://api.test/missing"));
+      expect(calls).toBe(2);
+    })
+  );
+});
+
+const withCacheControl = (value: string) =>
+  CacheApiHttpCache.isPublic(new Response("", { headers: { "cache-control": value } }));
+
+describe("isPublic", () => {
+  it("reads the public directive from Cache-Control", () => {
+    expect(withCacheControl("public, max-age=60")).toBe(true);
+    expect(withCacheControl("max-age=60, PUBLIC")).toBe(true);
+    expect(withCacheControl("private, max-age=60")).toBe(false);
+    expect(withCacheControl("no-public")).toBe(false);
+    expect(CacheApiHttpCache.isPublic(new Response(""))).toBe(false);
+  });
 });

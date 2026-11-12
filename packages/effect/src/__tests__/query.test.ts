@@ -66,25 +66,28 @@ const resolver = Query.resolver([
   },
 ]);
 
-const baseServer = Effect.gen(function* () {
-  const backend = yield* MemoryBackend.make(handlers);
-  const cvrStore = yield* Cvr.makeMemoryStore;
-  const bus = yield* InvalidationBus.makeInProcess;
-  return SyncServer.make.pipe(
-    Effect.provideService(Backend, backend),
-    Effect.provideService(
-      Authorization.AuthPolicy,
-      Authorization.policy({ todos: Authorization.allowAll })
-    ),
-    Effect.provideService(Cvr.CvrStore, cvrStore),
-    Effect.provideService(InvalidationBus.InvalidationBus, bus)
-  );
-});
+// A server over a fresh backend, CVR store and bus, built by `make` (`SyncServer.make`, with any
+// further services already provided).
+const serverOver = <A, E, R>(make: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const backend = yield* MemoryBackend.make(handlers);
+    const cvrStore = yield* Cvr.makeMemoryStore;
+    const bus = yield* InvalidationBus.makeInProcess;
+    return yield* make.pipe(
+      Effect.provideService(Backend, backend),
+      Effect.provideService(
+        Authorization.AuthPolicy,
+        Authorization.policy({ todos: Authorization.allowAll })
+      ),
+      Effect.provideService(Cvr.CvrStore, cvrStore),
+      Effect.provideService(InvalidationBus.InvalidationBus, bus)
+    );
+  });
 
-const withResolver = baseServer.pipe(
-  Effect.flatMap((server) => server.pipe(Effect.provideService(Query.QueryResolver, resolver)))
+const withResolver = serverOver(
+  SyncServer.make.pipe(Effect.provideService(Query.QueryResolver, resolver))
 );
-const withoutResolver = baseServer.pipe(Effect.flatMap((server) => server));
+const withoutResolver = serverOver(SyncServer.make);
 
 const makeClient = (handler: ServerHandler) =>
   Effect.gen(function* () {

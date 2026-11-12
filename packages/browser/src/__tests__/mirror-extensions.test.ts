@@ -34,6 +34,7 @@ import * as Stream from "effect/Stream";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -93,7 +94,10 @@ const resolver = Query.resolver([
 const allTodos = Subset.make({ collection: "todos" });
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 // Generous under parallel-suite worker contention; passing runs exit early.
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
@@ -103,7 +107,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeEngine = Effect.gen(function* () {

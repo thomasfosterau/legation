@@ -72,6 +72,13 @@ import type { ClientView, Subset } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Linkage from "./Linkage.js";
+import * as Schema from "effect/Schema";
+
+/** Thrown for a resource with no node in the graph: a definition defect. */
+class UnknownNode extends Schema.TaggedError<UnknownNode, { readonly brand: unique symbol }>()(
+  "UnknownNode",
+  { message: Schema.String }
+) {}
 
 /** What the replica-side writer is bound to: the graph, the declarations linkage follows, the link prefix. */
 export interface Options {
@@ -187,7 +194,9 @@ const bindAll = (
   resources.forEach((resource) => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) {
-      throw new Error(`ReplicaDocuments: no node "${resource.type}" in the graph for the resource`);
+      throw new UnknownNode({
+        message: `ReplicaDocuments: no node "${resource.type}" in the graph for the resource`,
+      });
     }
     bindings.set(resource.type, { node, resource, plan: Linkage.planOf(nodes, resource, node) });
   });

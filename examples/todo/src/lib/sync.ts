@@ -148,7 +148,7 @@ const summarise = (mutation: Protocol.Mutation): string =>
 interface Rig {
   readonly client: Client.Client;
   readonly undo: Undo.UndoManager<ClientView.ClientViewError>;
-  readonly setOffline: (offline: boolean) => Effect.Effect<void>;
+  readonly setOnline: (online: boolean) => Effect.Effect<void>;
   readonly connection: Stream.Stream<Connection>;
   readonly pending: Effect.Effect<ReadonlyArray<PendingEntry>>;
   readonly remoteEdit: Effect.Effect<void>;
@@ -169,17 +169,15 @@ const rigLayer = Layer.effect(Rig)(
     const server = yield* Server.make({ backend, auth: { policy: authPolicy } });
     yield* seed(backend);
 
-    // Client side: durable store (localStorage) + a loopback transport behind
-    // a simulated-offline gate. Both are library substrate: `makeInMemory`
-    // binds the transport straight to the Server's handler, and
-    // `simulateOffline` makes push/pull *fail* while toggled off (as a real
-    // network would), so writes pile up in the journal and the sync loop
-    // flushes them on reconnect.
+    // Client side: durable store (localStorage) + a loopback transport. Both
+    // are library substrate: `makeInMemory` binds the transport straight to
+    // the Server's handler, and its `setOnline(false)` makes push/pull *fail*
+    // (as a real network would), so writes pile up in the journal and the
+    // sync loop flushes them on reconnect.
     const store = yield* ClientStore.makeKeyValue({ prefix: "todo/" }).pipe(
       Effect.provide(BrowserKeyValueStore.layerLocalStorage)
     );
-    const loopback = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
-    const { transport, setOffline } = yield* Transport.simulateOffline(loopback);
+    const transport = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
 
     const { client } = yield* Client.make({
       nodes,
@@ -206,7 +204,7 @@ const rigLayer = Layer.effect(Rig)(
     return {
       client,
       undo: yield* Undo.make(client),
-      setOffline,
+      setOnline: transport.setOnline,
       connection: Stream.concat(Stream.fromEffect(transport.status), transport.statusChanges),
       pending: store.pendingMutations.pipe(
         Effect.map((journal) =>
@@ -258,7 +256,7 @@ export const createWorld = async (): Promise<World> => {
     runtime,
     undo: rig.undo,
     demo: {
-      setOnline: (next) => runtime.runPromise(rig.setOffline(!next)),
+      setOnline: (next) => runtime.runPromise(rig.setOnline(next)),
       simulateRemote: () => runtime.runPromise(rig.remoteEdit),
       pending: () => runtime.runPromise(rig.pending),
       connection: rig.connection,

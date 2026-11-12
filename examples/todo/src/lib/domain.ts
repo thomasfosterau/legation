@@ -48,17 +48,30 @@ export const todos = Node.make("todos", {
 
 export const nodes = Node.registry([todos]);
 
+/**
+ * The graph registered for the rune hooks: `useQuery` and `useConnection` find
+ * the Client in context, so this is how they type each read's rows.
+ */
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
 // ─── Reads ───────────────────────────────────────────────────────────────────
 
 /** Every todo, oldest first — what the list observes. */
-export const allTodos: Query.Read = { collection: "todos", order: ["createdAt"] };
+export const allTodos = { collection: "todos", order: ["createdAt"] } as const satisfies Query.Read;
 
 /**
  * The incomplete todos. The footer's "active" count is a `Count` aggregate over
  * this read, so the tally is derived by the engine rather than an app-side
  * `.filter().length`.
  */
-export const activeTodos: Query.Read = { collection: "todos", where: { done: false } };
+export const activeTodos = {
+  collection: "todos",
+  where: { done: false },
+} as const satisfies Query.Read;
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@
   $effect(() => {
     void ordersQuery.promise.then((rows) => {
       for (const row of rows) {
-        const order = row.value as Order;
+        const order = row.value;
         const previous = seen.get(order.id);
         if (previous !== undefined && previous !== order.status) {
           notify(`Order ${order.id.slice(0, 10)}… is now ${order.status}`);
@@ -51,7 +51,7 @@
   <svelte:boundary>
     <ul>
       {#each await ordersQuery.promise as row (row.id)}
-        {@const order = row.value as Order}
+        {@const order = row.value}
         <li>
           {order.createdAt} — <strong>{order.status}</strong> — ${(order.totalCents / 100).toFixed(2)}
         </li>

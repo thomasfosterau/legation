@@ -119,7 +119,13 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import { Backend, BackendError, MutationRejected, Predicate } from "@thomasfosterau/legation";
-import { Hash, Protocol, RejectionMemory, UnknownMutator } from "@thomasfosterau/legation/internal";
+import {
+  Hash,
+  Protocol,
+  RejectionMemory,
+  UnknownMutator,
+  Defined,
+} from "@thomasfosterau/legation/internal";
 import { Subset } from "@thomasfosterau/legation/internal";
 import type { Mutator } from "@thomasfosterau/legation";
 import {
@@ -363,7 +369,7 @@ const writeBody = (
     type,
     id,
     attributes,
-    ...(relationships !== undefined ? { relationships } : {}),
+    ...Defined.fields({ relationships }),
   },
 });
 
@@ -423,7 +429,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
         type: operation.type,
         id: a.id,
         attributes: a.attributes,
-        ...(a.relationships !== undefined ? { relationships: a.relationships } : {}),
+        ...Defined.fields({ relationships: a.relationships }),
       });
     }),
     Match.when("update", () => {
@@ -454,7 +460,7 @@ const operationOf = (write: Write): Record<string, unknown> =>
         type: write.type,
         id: write.id,
         attributes: write.attributes ?? {},
-        ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+        ...Defined.fields({ relationships: write.relationships }),
       },
     })),
     Match.when("update", () => ({
@@ -463,7 +469,7 @@ const operationOf = (write: Write): Record<string, unknown> =>
         type: write.type,
         id: write.id,
         attributes: write.attributes ?? {},
-        ...(write.relationships !== undefined ? { relationships: write.relationships } : {}),
+        ...Defined.fields({ relationships: write.relationships }),
       },
     })),
     Match.when("delete", () => ({ op: "remove", ref: { type: write.type, id: write.id } })),
@@ -1275,7 +1281,9 @@ export const make = (
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
+          ...Defined.fields({
+            rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+          }),
         };
       });
 
@@ -1416,7 +1424,9 @@ export const make = (
         return {
           lastMutationIds: yield* lastMutationIdsOf(context),
           hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...(Arr.isReadonlyArrayNonEmpty(reported) ? { rejected: reported } : {}),
+          ...Defined.fields({
+            rejected: Arr.isReadonlyArrayNonEmpty(reported) ? reported : undefined,
+          }),
         };
       });
 
