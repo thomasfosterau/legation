@@ -161,31 +161,37 @@ describe("RpcTransport", () => {
   });
 
   layer(serverLayer)((scoped) => {
-    scoped.effect("an uncovered Client.query falls through over withFallback's RPC leg (#632)", () =>
-      Effect.gen(function* () {
-        const writer = yield* makeEngine("writer");
-        yield* writer.engine.mutate("todo/set", { id: "1", title: "on the server", isDone: false });
-        yield* writer.engine.push;
+    scoped.effect(
+      "an uncovered Client.query falls through over withFallback's RPC leg (#632)",
+      () =>
+        Effect.gen(function* () {
+          const writer = yield* makeEngine("writer");
+          yield* writer.engine.mutate("todo/set", {
+            id: "1",
+            title: "on the server",
+            isDone: false,
+          });
+          yield* writer.engine.push;
 
-        // A primary that is down (every call a TransportError) over the RPC carrier.
-        const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
-        const transport = yield* Transport.withFallback(
-          Transport.offline,
-          RpcTransport.fromRpcClient(client, { clientGroupId: "group-reader" })
-        );
-        const { client: reader } = yield* Client.make({
-          nodes: Node.registry([Node.make("todos", { attributes: Todo.fields })]),
-          mutations: mutators,
-          transport,
-          sync: false,
-        });
+          // A primary that is down (every call a TransportError) over the RPC carrier.
+          const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
+          const transport = yield* Transport.withFallback(
+            Transport.offline,
+            RpcTransport.fromRpcClient(client, { clientGroupId: "group-reader" })
+          );
+          const { client: reader } = yield* Client.make({
+            nodes: Node.registry([Node.make("todos", { attributes: Todo.fields })]),
+            mutations: mutators,
+            transport,
+            sync: false,
+          });
 
-        // Nothing is subscribed, so nothing is in the replica: the server answers.
-        const rows = yield* reader.query({ collection: "todos" });
-        expect(rows.map((row) => row.value)).toEqual([
-          { id: "1", title: "on the server", isDone: false },
-        ]);
-      })
+          // Nothing is subscribed, so nothing is in the replica: the server answers.
+          const rows = yield* reader.query({ collection: "todos" });
+          expect(rows.map((row) => row.value)).toEqual([
+            { id: "1", title: "on the server", isDone: false },
+          ]);
+        })
     );
 
     scoped.effect("fromOrigin builds the WebSocket transport with an HTTP fallback", () =>
