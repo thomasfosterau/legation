@@ -1306,7 +1306,7 @@ export const make = (
     // (#260), rather than loading the whole journal to take its length.
     const sampleJournalDepth: Effect.Effect<void> = store.pendingCount.pipe(
       Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
-      Effect.catch(() => Effect.void)
+      Effect.ignore
     );
     // Time an effect and record its wall-clock duration (ms) as the rebase
     // histogram — wraps the actual overlay replay (cache misses only).
@@ -2920,22 +2920,22 @@ export const make = (
     // that no pull has released would take it past the bound.
     const pullBetweenChunks: Effect.Effect<void, TransportError | StoreError> = pull.pipe(
       Effect.retry({ schedule: pullPolicy, while: isTransient }),
-      Effect.catchTag("VersionNotSupportedError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks was refused: ${error.message}`,
-            cause: error,
-          })
-        )
-      ),
-      Effect.catchTag("MutatorError", (error) =>
-        Effect.fail(
-          new TransportError({
-            message: `A pull between chunks failed: ${error.message}`,
-            cause: error,
-          })
-        )
-      )
+      Effect.catchTags({
+        VersionNotSupportedError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks was refused: ${error.message}`,
+              cause: error,
+            })
+          ),
+        MutatorError: (error) =>
+          Effect.fail(
+            new TransportError({
+              message: `A pull between chunks failed: ${error.message}`,
+              cause: error,
+            })
+          ),
+      })
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {

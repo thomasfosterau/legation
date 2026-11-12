@@ -3,7 +3,6 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -129,7 +128,7 @@ describe("JsonApiBackend rejection memory bound (#475)", () => {
         resources: boundInspected.resources,
         mutators: boundInspected.registry.mutators,
         operations: boundInspected.operations,
-      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient)(refusingServer)));
+      }).pipe(Effect.provideService(HttpClient.HttpClient, refusingServer));
       const context: Backend.SyncContext = { clientGroupId: "group-1" };
       const update = boundMutation(1, "todos/update", {
         type: "todos",

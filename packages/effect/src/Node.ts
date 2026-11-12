@@ -422,7 +422,7 @@ export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
   const declared = new Map<string, AnyNode>();
   Arr.forEach(definitions, (node) => {
     if (declared.has(node.type)) {
-      throw new DuplicateNameError({ kind: "collection", name: node.type });
+      throw new DuplicateNameError({ kind: "collection", duplicate: node.type });
     }
     declared.set(node.type, node);
   });

@@ -660,8 +660,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
         const unknown = yield* Effect.flip(client.subscribe("/widgets"));
         expect(unknown._tag).toBe("QueryError");
         const parameter = yield* Effect.flip(client.subscribe("/products?sort=name"));
-        expect(parameter._tag).toBe("QueryError");
-        expect((parameter as QueryError).parameter).toBe("sort");
+        expect(parameter).toMatchObject({ _tag: "QueryError", parameter: "sort" });
         const edge = yield* Effect.flip(client.subscribe("/products?include=nope"));
         expect(edge._tag).toBe("QueryError");
         expect(yield* client.subscriptions).toEqual([]);

@@ -179,8 +179,6 @@ export default defineConfig({
       // boundary `effect/no-unknown-parameters` names), as do test helpers
       // that fail with whatever a backend raised. 54 sites (21 in src).
       "effecttsgo/any-unknown-in-error-context": "warn",
-      // Two tests narrow a handler's channels to the shape they assert on.
-      "effecttsgo/unsafe-effect-type-assertion": "warn", // 2 sites
       // `String(value)` on an untyped row value (a foreign key, a SQL
       // detector's COUNT/MAX column, the comparator's last-resort text form)
       // is the intended string form at that boundary. 7 sites (2 in tests).
@@ -199,6 +197,18 @@ export default defineConfig({
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
       "effecttsgo/unnecessary-fail-yieldable-error": "error",
+      "effecttsgo/flat-map-identity-to-flatten": "error",
+      "effecttsgo/error-payload-shadows-name": "error",
+      "effecttsgo/multiple-catch-tag": "error",
+      "effecttsgo/unsafe-effect-type-assertion": "error",
+      "effecttsgo/unnecessary-pipe-chain": "error",
+      "effecttsgo/prefer-unsafe-constructor": "error",
+      "effecttsgo/provide-layer-succeed-to-provide-service": "error",
+      "effecttsgo/prefer-succeed-some-or-none": "error",
+      "effecttsgo/return-effect-in-gen": "error",
+      "effecttsgo/catch-to-or-else-succeed": "error",
+      "effecttsgo/lazy-effect": "error",
+      "effecttsgo/catch-to-ignore": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers

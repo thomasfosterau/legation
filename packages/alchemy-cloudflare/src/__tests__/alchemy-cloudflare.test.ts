@@ -107,7 +107,7 @@ describe("FanoutShard", () => {
     Effect.gen(function* () {
       const shard = yield* construct(
         "reviews",
-        FanoutShard.make(),
+        FanoutShard.make,
         fakeBinding<Workers.DurableObject>({})
       );
       yield* shard.run(shard.object.register("room-a", 60_000));
@@ -388,7 +388,7 @@ describe("rooms + shards, end to end", () => {
               let shard = shardInstances.get(name);
               if (shard === undefined) {
                 shard = Effect.runPromise(
-                  construct(name, FanoutShard.make(), noSelf).pipe(
+                  construct(name, FanoutShard.make, noSelf).pipe(
                     Effect.map((built): Instance<FanoutShard.ShardObject> => ({
                       ...built,
                       object: {
@@ -432,7 +432,7 @@ describe("rooms + shards, end to end", () => {
             roomA.sockets.push(socketA);
 
             // A real client engine on room A observes p-1's reviews (fine window).
-            const readerScope = Effect.runSync(Scope.make());
+            const readerScope = Scope.makeUnsafe();
             const reader = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;
@@ -479,7 +479,7 @@ describe("rooms + shards, end to end", () => {
             );
 
             // Room B's client writes a p-1 review and pushes.
-            const writerScope = Effect.runSync(Scope.make());
+            const writerScope = Scope.makeUnsafe();
             const writer = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;

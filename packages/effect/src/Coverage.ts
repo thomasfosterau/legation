@@ -560,6 +560,6 @@ export const coverageOf =
       options?.snapshot === undefined ? rowsOf : snapshotOf(options.snapshot, rowsOf)
     ).pipe(
       Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
-      // oxlint-disable-next-line effect/effect-catchall-default -- `E` is the caller's generic row-read error, so its tags are not known here; any failed read is uncovered by contract.
-      Effect.catch(() => Effect.succeed<Verdict>({ _tag: "Uncovered" }))
+      // `E` is the caller's generic row-read error: any failed read is uncovered by contract.
+      Effect.orElseSucceed((): Verdict => ({ _tag: "Uncovered" }))
     );

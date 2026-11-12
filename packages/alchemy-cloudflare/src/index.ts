@@ -22,7 +22,7 @@
  *
  * The app declares its Durable Object classes and binds this package's
  * implementations to them (`LegationRoom.make(Room.make(...))`,
- * `LegationShard.make(FanoutShard.make())`).
+ * `LegationShard.make(FanoutShard.make)`).
  */
 
 export * as BindingTransport from "./BindingTransport.js";

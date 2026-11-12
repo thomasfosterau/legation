@@ -178,7 +178,7 @@ const validateRelationships = (
   const seen = new Set<string>();
   Arr.forEach(collection.relationships ?? [], (relationship) => {
     if (seen.has(relationship.name)) {
-      throw new DuplicateNameError({ kind: "relationship", name: relationship.name });
+      throw new DuplicateNameError({ kind: "relationship", duplicate: relationship.name });
     }
     seen.add(relationship.name);
     if (!map.has(relationship.collection)) {
@@ -200,7 +200,7 @@ export const registry = (collections: ReadonlyArray<AnyCollection>): CollectionR
   const map = new Map<string, AnyCollection>();
   Arr.forEach(collections, (collection) => {
     if (map.has(collection.name)) {
-      throw new DuplicateNameError({ kind: "collection", name: collection.name });
+      throw new DuplicateNameError({ kind: "collection", duplicate: collection.name });
     }
     map.set(collection.name, collection);
   });

@@ -43,7 +43,7 @@ export const toSnapshotStore = <A, E, S, E2>(
   initial: A
 ): Readable<A> =>
   readable<A>(initial, (set) => {
-    const safe = Effect.catch(effect, () => Effect.succeed(initial));
+    const safe = Effect.orElseSucceed(effect, () => initial);
     const refresh = Effect.runFork(Effect.map(safe, (a) => set(a)));
     const fiber = Effect.runFork(
       Stream.runForEach(signal, () => Effect.map(safe, (a) => set(a))).pipe(Effect.ignore)

@@ -88,9 +88,17 @@ export interface RoomObject {
    */
   readonly poke: (topics: ReadonlyArray<string>) => Effect.Effect<void, never, RuntimeContext>;
   /** The poke channel is one-way; inbound frames are ignored. */
-  readonly webSocketMessage: () => Effect.Effect<void>;
+  readonly webSocketMessage: (
+    socket: Workers.WebSocket,
+    message: string | ArrayBuffer
+  ) => Effect.Effect<void>;
   /** A closed poke socket needs no cleanup: the room keeps no per-socket state. */
-  readonly webSocketClose: () => Effect.Effect<void>;
+  readonly webSocketClose: (
+    socket: Workers.WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ) => Effect.Effect<void>;
 }
 
 /** Configuration for {@link make}: the node graph, the backend, the auth policy and the shards. */
@@ -170,137 +178,147 @@ export const make = <R>(
   never,
   Workers.DurableObjectState | Workers.DurableObjectScope | R
 > =>
-  Effect.gen(function* () {
-    const state = yield* Workers.DurableObjectState;
-    // SAFETY: this implementation is bound to the room class, so its own
-    // namespace's objects are rooms with this `RoomObject`.
-    const rooms = (yield* Workers.DurableObjectScope) as Workers.DurableObject<RoomObject>;
-    const shards = yield* config.shards;
+  // Alchemy's two-phase Durable Object contract: init resolves the object's
+  // state and namespaces, and its result is the per-instance Effect the
+  // provider runs for each instance.
+  Effect.map(
+    Effect.all(
+      {
+        state: Workers.DurableObjectState,
+        scope: Workers.DurableObjectScope,
+        shards: config.shards,
+      },
+      { concurrency: 1 }
+    ),
+    ({ state, scope, shards }) => {
+      // SAFETY: this implementation is bound to the room class, so its own
+      // namespace's objects are rooms with this `RoomObject`.
+      const rooms = scope as Workers.DurableObject<RoomObject>;
+      return onRoomClock(
+        config.clock,
+        Effect.gen(function* () {
+          // The scope lives as long as this in-memory instance; eviction tears
+          // the whole isolate down, so no explicit close is needed.
+          const scope = yield* Scope.make();
+          const runtime = yield* RuntimeContext;
+          const roomId = state.id.name ?? state.id.toString();
 
-    return onRoomClock(
-      config.clock,
-      Effect.gen(function* () {
-        // The scope lives as long as this in-memory instance; eviction tears
-        // the whole isolate down, so no explicit close is needed.
-        const scope = yield* Scope.make();
-        const runtime = yield* RuntimeContext;
-        const roomId = state.id.name ?? state.id.toString();
-
-        /** Every poke socket gets one contentless frame. */
-        const nudgeSockets = Effect.flatMap(state.getWebSockets(), (sockets) =>
-          Effect.forEach(sockets, (socket) => socket.send(JSON.stringify(pokeFrame)), {
-            concurrency: "unbounded",
-            discard: true,
-          })
-        );
-
-        return yield* Effect.gen(function* () {
-          // Both bounds apply: FanoutBus wraps every broker call (lease registration included)
-          // with `publishTimeout`, and the broker bounds each shard call with it too. The
-          // broker's own 5 second default would cap any `publishTimeout` above 5 seconds, so the
-          // forwarding here is what honours a longer bound.
-          const durable: DurableFanoutBroker.DurableBroker = yield* DurableFanoutBroker.make({
-            shards,
-            // A publish that matched this room's own lease is delivered here, not over RPC.
-            poke: (target, topics) =>
-              target === roomId ? deliver(topics) : rooms.getByName(target).poke(topics),
-            timeout: config.publishTimeout,
-          });
-          /** An inbound poke: the bus's matcher pokes the affected groups' pull loops. */
-          const deliver = (topics: ReadonlyArray<FanoutTopics.Topic>) =>
-            Effect.andThen(durable.notify(topics), nudgeSockets);
-          // Late binding: the bus leases the room's windows, which the
-          // handler's introspection provides once built.
-          const subsetsRef = yield* Ref.make<Effect.Effect<ReadonlyArray<Subset.Subset>>>(
-            Effect.succeed([])
-          );
-          const bus = yield* FanoutBus.make({
-            roomId,
-            broker: durable.broker,
-            nodes: config.nodes,
-            subsets: Ref.get(subsetsRef).pipe(Effect.flatten),
-            heartbeat: config.heartbeat ?? "30 seconds",
-            timeout: config.publishTimeout,
-          });
-          const cvrs = yield* DurableCvrStore.make(state.storage);
-          let build = SyncServer.makeWithIntrospection.pipe(
-            Effect.provideService(Backend.Backend, yield* config.backend),
-            Effect.provideService(Authorization.AuthPolicy, yield* config.policy),
-            Effect.provideService(Cvr.CvrStore, cvrs),
-            Effect.provideService(InvalidationBus.InvalidationBus, bus)
-          );
-          if (config.identity !== undefined) {
-            build = build.pipe(
-              Effect.provideService(Authorization.IdentityResolver, yield* config.identity)
-            );
-          }
-          if (config.queries !== undefined) {
-            build = build.pipe(Effect.provideService(Query.QueryResolver, yield* config.queries));
-          }
-          const { handler, introspection } = yield* build;
-          yield* Ref.set(
-            subsetsRef,
-            introspection.groups.pipe(
-              Effect.map((groups) => groups.flatMap((group) => group.subsets))
-            )
-          );
-
-          const fetch: RoomObject["fetch"] = onRoomClock(
-            config.clock,
-            Effect.gen(function* () {
-              const request = yield* HttpServerRequest.HttpServerRequest;
-              const route = routeOf(new URL(request.url, "https://room").pathname);
-              // The request's headers are its credentials (ADR-0035): the room's
-              // IdentityResolver, and nothing else, sees the cookie or API key the
-              // Worker forwarded unchanged.
-              const presented = {
-                credentials: Option.some(Authorization.credentialsFromHeaders(request.headers)),
-              };
-              if (route === routes.socket) {
-                // The poke channel: accept under the hibernation API and hold
-                // no per-socket state — eviction costs nothing.
-                const [response] = yield* Workers.upgrade();
-                return response;
-              }
-              if (route === routes.push) {
-                const body = yield* request.json;
-                return yield* answer(
-                  Effect.flatMap(decodePushRequest(body), (decoded) =>
-                    handler.handlePush(decoded, presented)
-                  )
-                );
-              }
-              if (route === routes.pull) {
-                const body = yield* request.json;
-                return yield* answer(
-                  Effect.flatMap(decodePullRequest(body), (decoded) =>
-                    handler.handlePull(decoded, presented)
-                  )
-                );
-              }
-              if (route === routes.read) {
-                const body = yield* request.json;
-                return yield* answer(
-                  Effect.flatMap(decodeReadRequest(body), (decoded) =>
-                    handler.handleRead(decoded, presented)
-                  )
-                );
-              }
-              return notFound;
+          /** Every poke socket gets one contentless frame. */
+          const nudgeSockets = Effect.flatMap(state.getWebSockets(), (sockets) =>
+            Effect.forEach(sockets, (socket) => socket.send(JSON.stringify(pokeFrame)), {
+              concurrency: "unbounded",
+              discard: true,
             })
           );
 
-          return {
-            fetch,
-            poke: (topics) =>
-              onRoomClock(
-                config.clock,
-                deliver(topics).pipe(Effect.provideService(RuntimeContext, runtime))
-              ),
-            webSocketMessage: () => Effect.void,
-            webSocketClose: () => Effect.void,
-          } satisfies RoomObject;
-        }).pipe(Scope.provide(scope));
-      })
-    );
-  });
+          return yield* Effect.gen(function* () {
+            // Both bounds apply: FanoutBus wraps every broker call (lease registration included)
+            // with `publishTimeout`, and the broker bounds each shard call with it too. The
+            // broker's own 5 second default would cap any `publishTimeout` above 5 seconds, so the
+            // forwarding here is what honours a longer bound.
+            const durable: DurableFanoutBroker.DurableBroker = yield* DurableFanoutBroker.make({
+              shards,
+              // A publish that matched this room's own lease is delivered here, not over RPC.
+              poke: (target, topics) =>
+                target === roomId ? deliver(topics) : rooms.getByName(target).poke(topics),
+              timeout: config.publishTimeout,
+            });
+            /** An inbound poke: the bus's matcher pokes the affected groups' pull loops. */
+            const deliver = (topics: ReadonlyArray<FanoutTopics.Topic>) =>
+              Effect.andThen(durable.notify(topics), nudgeSockets);
+            // Late binding: the bus leases the room's windows, which the
+            // handler's introspection provides once built.
+            const subsetsRef = yield* Ref.make<Effect.Effect<ReadonlyArray<Subset.Subset>>>(
+              Effect.succeed([])
+            );
+            const bus = yield* FanoutBus.make({
+              roomId,
+              broker: durable.broker,
+              nodes: config.nodes,
+              subsets: Ref.get(subsetsRef).pipe(Effect.flatten),
+              heartbeat: config.heartbeat ?? "30 seconds",
+              timeout: config.publishTimeout,
+            });
+            const cvrs = yield* DurableCvrStore.make(state.storage);
+            let build = SyncServer.makeWithIntrospection.pipe(
+              Effect.provideService(Backend.Backend, yield* config.backend),
+              Effect.provideService(Authorization.AuthPolicy, yield* config.policy),
+              Effect.provideService(Cvr.CvrStore, cvrs),
+              Effect.provideService(InvalidationBus.InvalidationBus, bus)
+            );
+            if (config.identity !== undefined) {
+              build = build.pipe(
+                Effect.provideService(Authorization.IdentityResolver, yield* config.identity)
+              );
+            }
+            if (config.queries !== undefined) {
+              build = build.pipe(Effect.provideService(Query.QueryResolver, yield* config.queries));
+            }
+            const { handler, introspection } = yield* build;
+            yield* Ref.set(
+              subsetsRef,
+              introspection.groups.pipe(
+                Effect.map((groups) => groups.flatMap((group) => group.subsets))
+              )
+            );
+
+            const fetch: RoomObject["fetch"] = onRoomClock(
+              config.clock,
+              Effect.gen(function* () {
+                const request = yield* HttpServerRequest.HttpServerRequest;
+                const route = routeOf(new URL(request.url, "https://room").pathname);
+                // The request's headers are its credentials (ADR-0035): the room's
+                // IdentityResolver, and nothing else, sees the cookie or API key the
+                // Worker forwarded unchanged.
+                const presented = {
+                  credentials: Option.some(Authorization.credentialsFromHeaders(request.headers)),
+                };
+                if (route === routes.socket) {
+                  // The poke channel: accept under the hibernation API and hold
+                  // no per-socket state — eviction costs nothing.
+                  const [response] = yield* Workers.upgrade();
+                  return response;
+                }
+                if (route === routes.push) {
+                  const body = yield* request.json;
+                  return yield* answer(
+                    Effect.flatMap(decodePushRequest(body), (decoded) =>
+                      handler.handlePush(decoded, presented)
+                    )
+                  );
+                }
+                if (route === routes.pull) {
+                  const body = yield* request.json;
+                  return yield* answer(
+                    Effect.flatMap(decodePullRequest(body), (decoded) =>
+                      handler.handlePull(decoded, presented)
+                    )
+                  );
+                }
+                if (route === routes.read) {
+                  const body = yield* request.json;
+                  return yield* answer(
+                    Effect.flatMap(decodeReadRequest(body), (decoded) =>
+                      handler.handleRead(decoded, presented)
+                    )
+                  );
+                }
+                return notFound;
+              })
+            );
+
+            return {
+              fetch,
+              poke: (topics) =>
+                onRoomClock(
+                  config.clock,
+                  deliver(topics).pipe(Effect.provideService(RuntimeContext, runtime))
+                ),
+              webSocketMessage: () => Effect.void,
+              webSocketClose: () => Effect.void,
+            } satisfies RoomObject;
+          }).pipe(Scope.provide(scope));
+        })
+      );
+    }
+  );

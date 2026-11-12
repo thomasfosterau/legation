@@ -164,9 +164,10 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
   it("fromFilterAst ∘ toFilterAst is the identity over the generated corpus", () => {
     const coverage = FilterCorpus.emptyCoverage();
     const predicates = Effect.runSync(
-      FilterCorpus.generatePredicate(FilterCorpus.corpusColumns, undefined, coverage, 3)
-        .pipe(Effect.replicateEffect(300))
-        .pipe(Random.withSeed(161))
+      FilterCorpus.generatePredicate(FilterCorpus.corpusColumns, undefined, coverage, 3).pipe(
+        Effect.replicateEffect(300),
+        Random.withSeed(161)
+      )
     );
     let representable = 0;
     Arr.forEach(predicates, (predicate) => {

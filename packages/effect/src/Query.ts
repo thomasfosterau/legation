@@ -415,7 +415,8 @@ export const registry = (
   const queries = new Map<string, AnyQuery>();
   const locals = new Map<string, LocalQuery<any>>();
   Arr.forEach(entries, ({ query, local }) => {
-    if (queries.has(query.name)) throw new DuplicateNameError({ kind: "query", name: query.name });
+    if (queries.has(query.name))
+      throw new DuplicateNameError({ kind: "query", duplicate: query.name });
     queries.set(query.name, query);
     locals.set(query.name, local);
   });
