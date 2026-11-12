@@ -22,6 +22,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as SchemaAST from "effect/SchemaAST";
@@ -117,18 +118,14 @@ const hasIntCheck = (checks: SchemaAST.Checks | undefined): boolean =>
   );
 
 /** The kind of a literal schema, by the JS type of its literal. */
-const kindOfLiteral = (literal: SchemaAST.LiteralValue): LiteralKind | undefined => {
-  switch (typeof literal) {
-    case "string":
-      return "text";
-    case "number":
-      return "double";
-    case "boolean":
-      return "boolean";
-    default:
-      return undefined;
-  }
-};
+const kindOfLiteral: (literal: SchemaAST.LiteralValue) => LiteralKind | undefined =
+  Match.type<SchemaAST.LiteralValue>().pipe(
+    Match.withReturnType<LiteralKind | undefined>(),
+    Match.when(Match.string, () => "text"),
+    Match.when(Match.number, () => "double"),
+    Match.when(Match.boolean, () => "boolean"),
+    Match.orElse(() => undefined)
+  );
 
 /** The one kind shared by a union's non-null members (`NullOr`, `optional`, `Literals`). */
 const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undefined => {
@@ -140,22 +137,16 @@ const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undef
   return distinct.size === 1 ? [...distinct][0] : undefined;
 };
 
-const kindOfAst = (ast: SchemaAST.AST): LiteralKind | undefined => {
-  switch (ast._tag) {
-    case "String":
-      return "text";
-    case "Number":
-      return hasIntCheck(ast.checks) ? "integer" : "double";
-    case "Boolean":
-      return "boolean";
-    case "Literal":
-      return kindOfLiteral(ast.literal);
-    case "Union":
-      return kindOfUnion(ast.types);
-    default:
-      return undefined;
-  }
-};
+const kindOfAst: (ast: SchemaAST.AST) => LiteralKind | undefined = Match.type<SchemaAST.AST>().pipe(
+  Match.withReturnType<LiteralKind | undefined>(),
+  Match.tag("String", () => "text"),
+  Match.tag("Number", (ast) => (hasIntCheck(ast.checks) ? "integer" : "double")),
+  Match.tag("Boolean", () => "boolean"),
+  Match.tag("Literal", (ast) => kindOfLiteral(ast.literal)),
+  // `kindOfUnion` reads `kindOfAst` only when called.
+  Match.tag("Union", (ast) => kindOfUnion(ast.types)),
+  Match.orElse(() => undefined)
+);
 
 /**
  * The default literal kind of an attribute, read off its schema's **encoded**
@@ -306,22 +297,21 @@ const INT4_MAX = 2147483647;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /** Whether a (non-null) literal is a value of the kind. */
-export const matchesKind = (kind: LiteralKind, value: Literal): boolean => {
-  switch (kind) {
-    case "text":
-      return P.isString(value);
-    case "instant":
-      return P.isString(value) && INSTANT.test(value);
-    case "double":
-      return P.isNumber(value) && Number.isFinite(value);
-    case "integer":
-      return (
-        P.isNumber(value) && Number.isSafeInteger(value) && value >= INT4_MIN && value <= INT4_MAX
-      );
-    case "boolean":
-      return P.isBoolean(value);
-  }
-};
+export const matchesKind = (kind: LiteralKind, value: Literal): boolean => kindHolds(kind, value);
+
+const kindHolds = Match.fn((kind: LiteralKind, _value: Literal) => kind).pipe(
+  Match.withReturnType<boolean>(),
+  Match.when("text", (_kind, _, value) => P.isString(value)),
+  Match.when("instant", (_kind, _, value) => P.isString(value) && INSTANT.test(value)),
+  Match.when("double", (_kind, _, value) => P.isNumber(value) && Number.isFinite(value)),
+  Match.when(
+    "integer",
+    (_kind, _, value) =>
+      P.isNumber(value) && Number.isSafeInteger(value) && value >= INT4_MIN && value <= INT4_MAX
+  ),
+  Match.when("boolean", (_kind, _, value) => P.isBoolean(value)),
+  Match.exhaustive
+);
 
 const deny = (collection: string, message: string): AuthorizationError =>
   new AuthorizationError({ message: `Collection "${collection}": ${message}`, collection });
@@ -401,32 +391,43 @@ export const checkWhere = (
   collection: string,
   declaration: FilterDeclaration,
   where: Predicate
-): AuthorizationError | undefined => {
-  switch (where._tag) {
-    case "True":
-      return undefined;
-    case "Compare":
-      return compareCheck(collection, declaration, where);
-    case "In":
-      return inCheck(collection, declaration, where, "in");
-    case "NotIn":
-      return inCheck(collection, declaration, where, "nin");
-    case "IsNull":
-      return fieldCheck(collection, declaration, where.field, "isnull");
-    case "And":
-    case "Or":
-      return connectiveCheck(collection, declaration, where.predicates);
-    case "Not":
-      return notCheck(collection, declaration, where.predicate);
-    case "Exists":
-      return deny(collection, `"Exists" is not allowed in a client predicate`);
-    default:
-      return deny(
-        collection,
-        `predicate node "${(where as { readonly _tag: string })._tag}" is not allowed in a client predicate`
-      );
-  }
-};
+): AuthorizationError | undefined => checkNode(where, collection, declaration);
+
+// The connective cases reach `checkWhere` (through `connectiveCheck` /
+// `notCheck`) only when called.
+const checkNode = Match.fn(
+  (where: Predicate, _collection: string, _declaration: FilterDeclaration) => where
+).pipe(
+  Match.withReturnType<AuthorizationError | undefined>(),
+  Match.tag("True", () => undefined),
+  Match.tag("Compare", (where, _, collection, declaration) =>
+    compareCheck(collection, declaration, where)
+  ),
+  Match.tag("In", (where, _, collection, declaration) =>
+    inCheck(collection, declaration, where, "in")
+  ),
+  Match.tag("NotIn", (where, _, collection, declaration) =>
+    inCheck(collection, declaration, where, "nin")
+  ),
+  Match.tag("IsNull", (where, _, collection, declaration) =>
+    fieldCheck(collection, declaration, where.field, "isnull")
+  ),
+  Match.tag("And", "Or", (where, _, collection, declaration) =>
+    connectiveCheck(collection, declaration, where.predicates)
+  ),
+  Match.tag("Not", (where, _, collection, declaration) =>
+    notCheck(collection, declaration, where.predicate)
+  ),
+  Match.tag("Exists", (_where, _, collection) =>
+    deny(collection, `"Exists" is not allowed in a client predicate`)
+  ),
+  Match.orElse((where, _, collection) =>
+    deny(
+      collection,
+      `predicate node "${(where as { readonly _tag: string })._tag}" is not allowed in a client predicate`
+    )
+  )
+);
 
 type CompareNode = Extract<Predicate, { readonly _tag: "Compare" }>;
 

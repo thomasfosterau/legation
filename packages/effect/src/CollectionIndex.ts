@@ -33,6 +33,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 import * as Predicate from "./Predicate.js";
@@ -136,29 +137,12 @@ const lowerBoundValue = (
   return lo;
 };
 
-const rangeIds = (
+/** The ids of `arr`'s entries in `[start, end)`. */
+const idsBetween = (
   arr: ReadonlyArray<SortedEntry>,
-  op: Predicate.Comparison,
-  value: number | string
+  start: number,
+  end: number
 ): ReadonlySet<RowId> => {
-  let start = 0;
-  let end = arr.length;
-  switch (op) {
-    case "gt":
-      start = lowerBoundValue(arr, value, true);
-      break;
-    case "gte":
-      start = lowerBoundValue(arr, value, false);
-      break;
-    case "lt":
-      end = lowerBoundValue(arr, value, false);
-      break;
-    case "lte":
-      end = lowerBoundValue(arr, value, true);
-      break;
-    default:
-      return EMPTY_IDS;
-  }
   const ids = new Set<RowId>();
   for (let i = start; i < end; i++) {
     const entry = arr[i];
@@ -166,6 +150,24 @@ const rangeIds = (
   }
   return ids;
 };
+
+const rangeIds: (
+  arr: ReadonlyArray<SortedEntry>,
+  op: Predicate.Comparison,
+  value: number | string
+) => ReadonlySet<RowId> = Match.fn(
+  (_arr: ReadonlyArray<SortedEntry>, op: Predicate.Comparison, _value: number | string) => op
+).pipe(
+  Match.when("gt", (_op, arr, _, value) =>
+    idsBetween(arr, lowerBoundValue(arr, value, true), arr.length)
+  ),
+  Match.when("gte", (_op, arr, _, value) =>
+    idsBetween(arr, lowerBoundValue(arr, value, false), arr.length)
+  ),
+  Match.when("lt", (_op, arr, _, value) => idsBetween(arr, 0, lowerBoundValue(arr, value, false))),
+  Match.when("lte", (_op, arr, _, value) => idsBetween(arr, 0, lowerBoundValue(arr, value, true))),
+  Match.orElse((): ReadonlySet<RowId> => EMPTY_IDS)
+);
 
 // ─── Field-index maintenance ─────────────────────────────────────────────────
 
@@ -296,6 +298,22 @@ const onField = (
   return fi === undefined ? undefined : narrow(fi);
 };
 
+const conjunctIdsOf = Match.fn(
+  (conjunct: Predicate.Predicate, _index: CollectionIndex) => conjunct
+).pipe(
+  Match.tag("Compare", (conjunct, _, index) =>
+    onField(index, conjunct.field, (fi) => compareIds(fi, conjunct))
+  ),
+  Match.tag("In", (conjunct, _, index) =>
+    onField(index, conjunct.field, (fi) => hashLookupIn(fi, conjunct.values))
+  ),
+  Match.tag("IsNull", (conjunct, _, index) =>
+    // `IS NOT NULL` is the complement of a bucket: not narrowing.
+    conjunct.negated === true ? undefined : onField(index, conjunct.field, (fi) => fi.nulls)
+  ),
+  Match.orElse((): ReadonlySet<RowId> | undefined => undefined)
+);
+
 /**
  * The narrowed id set an indexable conjunct yields, or `undefined` when it
  * can't narrow. Only `Compare`, `In` and a non-negated `IsNull` narrow; every
@@ -305,21 +323,7 @@ const onField = (
 const conjunctIds = (
   index: CollectionIndex,
   conjunct: Predicate.Predicate
-): ReadonlySet<RowId> | undefined => {
-  switch (conjunct._tag) {
-    case "Compare":
-      return onField(index, conjunct.field, (fi) => compareIds(fi, conjunct));
-    case "In":
-      return onField(index, conjunct.field, (fi) => hashLookupIn(fi, conjunct.values));
-    case "IsNull":
-      // `IS NOT NULL` is the complement of a bucket: not narrowing.
-      return conjunct.negated === true
-        ? undefined
-        : onField(index, conjunct.field, (fi) => fi.nulls);
-    default:
-      return undefined;
-  }
-};
+): ReadonlySet<RowId> | undefined => conjunctIdsOf(conjunct, index);
 
 const intersect = (sets: ReadonlyArray<ReadonlySet<RowId>>): ReadonlySet<RowId> => {
   const bySize = sets.toSorted((a, b) => a.size - b.size);

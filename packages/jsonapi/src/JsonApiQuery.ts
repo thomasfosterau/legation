@@ -79,6 +79,7 @@
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -107,23 +108,21 @@ import type { JsonApiRequestOptions, SortTerm } from "./types.js";
  * open-ended, so this is the one place that type meets `Predicate.Literal`'s
  * closed wire-scalar union and can fail.
  */
-const literalOf = (field: string, value: unknown): Result.Result<Predicate.Literal, QueryError> => {
-  switch (typeof value) {
-    case "string":
-    case "number":
-    case "boolean":
-      return Result.succeed(value);
-    default:
-      return value instanceof Date
-        ? Result.succeed(value.toISOString())
+const literalOf = (field: string, value: unknown): Result.Result<Predicate.Literal, QueryError> =>
+  Match.value(value).pipe(
+    Match.withReturnType<Result.Result<Predicate.Literal, QueryError>>(),
+    Match.whenOr(Match.string, Match.number, Match.boolean, (scalar) => Result.succeed(scalar)),
+    Match.orElse((other) =>
+      other instanceof Date
+        ? Result.succeed(other.toISOString())
         : Result.fail(
             new QueryError({
-              message: `Filter literal ${JSON.stringify(value)} for field "${field}" is not a scalar`,
+              message: `Filter literal ${JSON.stringify(other)} for field "${field}" is not a scalar`,
               parameter: `filter[${field}]`,
             })
-          );
-  }
-};
+          )
+    )
+  );
 
 /**
  * The engine form of a filter AST, or a typed `QueryError` naming the field
@@ -147,42 +146,43 @@ const literalOf = (field: string, value: unknown): Result.Result<Predicate.Liter
  * attribute type (a `Date`-valued one aside, which is handled) — not for
  * either call site here.
  */
-export const fromFilterAst = (ast: Filter.Node): Result.Result<Predicate.Predicate, QueryError> => {
-  switch (ast._tag) {
-    case "Compare":
-      return Result.map(literalOf(ast.field, ast.value), (value) =>
-        Predicate.compare(ast.op, ast.field, value)
-      );
-    case "In":
-      return Result.map(
-        Result.all(ast.values.map((value) => literalOf(ast.field, value))),
-        (values) => Predicate.isIn(ast.field, values)
-      );
-    case "NotIn":
-      return Result.map(
-        Result.all(ast.values.map((value) => literalOf(ast.field, value))),
-        (values) => Predicate.notIn(ast.field, values)
-      );
-    case "IsNull":
-      return Result.succeed(
-        ast.negated ? Predicate.isNotNull(ast.field) : Predicate.isNull(ast.field)
-      );
-    case "And":
-      return Arr.isReadonlyArrayEmpty(ast.members)
+export const fromFilterAst = (ast: Filter.Node): Result.Result<Predicate.Predicate, QueryError> =>
+  Match.value(ast).pipe(
+    Match.tag("Compare", (node) =>
+      Result.map(literalOf(node.field, node.value), (value) =>
+        Predicate.compare(node.op, node.field, value)
+      )
+    ),
+    Match.tag("In", (node) =>
+      Result.map(Result.all(node.values.map((value) => literalOf(node.field, value))), (values) =>
+        Predicate.isIn(node.field, values)
+      )
+    ),
+    Match.tag("NotIn", (node) =>
+      Result.map(Result.all(node.values.map((value) => literalOf(node.field, value))), (values) =>
+        Predicate.notIn(node.field, values)
+      )
+    ),
+    Match.tag("IsNull", (node) =>
+      Result.succeed(node.negated ? Predicate.isNotNull(node.field) : Predicate.isNull(node.field))
+    ),
+    Match.tag("And", (node) =>
+      Arr.isReadonlyArrayEmpty(node.members)
         ? Result.succeed(Predicate.always)
         : Result.map(
-            Result.all(ast.members.map(fromFilterAst)),
+            Result.all(node.members.map(fromFilterAst)),
             (predicates): Predicate.Predicate => ({ _tag: "And", predicates })
-          );
-    case "Or":
-      return Result.map(
-        Result.all(ast.members.map(fromFilterAst)),
+          )
+    ),
+    Match.tag("Or", (node) =>
+      Result.map(
+        Result.all(node.members.map(fromFilterAst)),
         (predicates): Predicate.Predicate => ({ _tag: "Or", predicates })
-      );
-    case "Not":
-      return Result.map(fromFilterAst(ast.member), Predicate.not);
-  }
-};
+      )
+    ),
+    Match.tag("Not", (node) => Result.map(fromFilterAst(node.member), Predicate.not)),
+    Match.exhaustive
+  );
 
 /** A non-empty list of non-null literals, or `None` (the grammar has neither an empty list nor a `NULL` literal). */
 const literalList = (
@@ -202,44 +202,36 @@ const literalList = (
  * `fromFilterAst ∘ toFilterAst` is the identity on every constructor-built
  * predicate it accepts.
  */
-export const toFilterAst = (predicate: Predicate.Predicate): Option.Option<Filter.Node> => {
-  switch (predicate._tag) {
-    case "True":
-      return Option.some(Filter.and());
-    case "Compare":
-      return predicate.value === null
+export const toFilterAst = (predicate: Predicate.Predicate): Option.Option<Filter.Node> =>
+  Match.value(predicate).pipe(
+    Match.tag("True", () => Option.some(Filter.and())),
+    Match.tag("Compare", (node) =>
+      node.value === null
         ? Option.none()
         : Option.some({
             _tag: "Compare",
-            op: predicate.op,
-            field: predicate.field,
-            value: predicate.value,
-          } satisfies Filter.Compare);
-    case "In":
-      return Option.map(literalList(predicate.values), (values) =>
-        Filter.isIn(predicate.field, values)
-      );
-    case "NotIn":
-      return Option.map(literalList(predicate.values), (values) =>
-        Filter.notIn(predicate.field, values)
-      );
-    case "IsNull":
-      return Option.some(Filter.isNull(predicate.field, predicate.negated === true));
-    case "And":
-      return Option.map(Option.all(predicate.predicates.map(toFilterAst)), (members) =>
-        Filter.and(...members)
-      );
-    case "Or":
-      return Option.map(Option.all(predicate.predicates.map(toFilterAst)), (members) =>
-        Filter.or(...members)
-      );
-    case "Not":
-      return Option.map(toFilterAst(predicate.predicate), Filter.not);
-    case "Exists":
-    case "InSet":
-      return Option.none();
-  }
-};
+            op: node.op,
+            field: node.field,
+            value: node.value,
+          } satisfies Filter.Compare)
+    ),
+    Match.tag("In", (node) =>
+      Option.map(literalList(node.values), (values) => Filter.isIn(node.field, values))
+    ),
+    Match.tag("NotIn", (node) =>
+      Option.map(literalList(node.values), (values) => Filter.notIn(node.field, values))
+    ),
+    Match.tag("IsNull", (node) => Option.some(Filter.isNull(node.field, node.negated === true))),
+    Match.tag("And", (node) =>
+      Option.map(Option.all(node.predicates.map(toFilterAst)), (members) => Filter.and(...members))
+    ),
+    Match.tag("Or", (node) =>
+      Option.map(Option.all(node.predicates.map(toFilterAst)), (members) => Filter.or(...members))
+    ),
+    Match.tag("Not", (node) => Option.map(toFilterAst(node.predicate), Filter.not)),
+    Match.tag("Exists", "InSet", () => Option.none()),
+    Match.exhaustive
+  );
 
 // ─── Constant folding ────────────────────────────────────────────────────────
 
@@ -280,22 +272,15 @@ const foldNot = (inner: Predicate.Predicate): Predicate.Predicate => {
  * literal stays where it is. The result is `Predicate.always`, the empty
  * `Or` (false), or a predicate free of empty lists.
  */
-export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predicate => {
-  switch (predicate._tag) {
-    case "In":
-      return Arr.isReadonlyArrayEmpty(predicate.values) ? FALSE : predicate;
-    case "NotIn":
-      return Arr.isReadonlyArrayEmpty(predicate.values) ? Predicate.always : predicate;
-    case "And":
-      return foldAnd(predicate.predicates);
-    case "Or":
-      return foldOr(predicate.predicates);
-    case "Not":
-      return foldNot(predicate.predicate);
-    default:
-      return predicate;
-  }
-};
+export const foldConstants = (predicate: Predicate.Predicate): Predicate.Predicate =>
+  Match.value(predicate).pipe(
+    Match.tag("In", (node) => (Arr.isReadonlyArrayEmpty(node.values) ? FALSE : node)),
+    Match.tag("NotIn", (node) => (Arr.isReadonlyArrayEmpty(node.values) ? Predicate.always : node)),
+    Match.tag("And", (node) => foldAnd(node.predicates)),
+    Match.tag("Or", (node) => foldOr(node.predicates)),
+    Match.tag("Not", (node) => foldNot(node.predicate)),
+    Match.orElse((node) => node)
+  );
 
 // ─── The node graph as a query declaration ───────────────────────────────────
 
@@ -312,20 +297,16 @@ const kindCheck = (kind: FilterPolicy.LiteralKind) =>
  * wire string is parsed as the scalar the schema's encoded form names, then
  * checked against the kind (int4 range, the fixed instant format).
  */
-const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top => {
-  switch (kind) {
-    case "text":
-      return Schema.String;
-    case "instant":
-      return Schema.String.pipe(Schema.check(kindCheck("instant")));
-    case "integer":
-      return Schema.Number.pipe(Schema.check(kindCheck("integer")));
-    case "double":
-      return Schema.Number;
-    case "boolean":
-      return Schema.Boolean;
-  }
-};
+const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top =>
+  Match.value(kind).pipe(
+    Match.withReturnType<Schema.Top>(),
+    Match.when("text", () => Schema.String),
+    Match.when("instant", () => Schema.String.pipe(Schema.check(kindCheck("instant")))),
+    Match.when("integer", () => Schema.Number.pipe(Schema.check(kindCheck("integer")))),
+    Match.when("double", () => Schema.Number),
+    Match.when("boolean", () => Schema.Boolean),
+    Match.exhaustive
+  );
 
 /**
  * The synthetic resource's attributes: every filterable field (the
@@ -1114,20 +1095,17 @@ const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>):
     set.add(typeof value);
     types.set(field, set);
   };
-  switch (ast._tag) {
-    case "Compare":
-      return add(ast.field, ast.value);
-    case "In":
-    case "NotIn":
-      return ast.values.forEach((value) => add(ast.field, value));
-    case "IsNull":
-      return void (types.get(ast.field) ?? types.set(ast.field, new Set()));
-    case "And":
-    case "Or":
-      return ast.members.forEach((member) => collectLiteralTypes(member, types));
-    case "Not":
-      return collectLiteralTypes(ast.member, types);
-  }
+  Match.value(ast).pipe(
+    Match.withReturnType<void>(),
+    Match.tag("Compare", (node) => add(node.field, node.value)),
+    Match.tag("In", "NotIn", (node) => node.values.forEach((value) => add(node.field, value))),
+    Match.tag("IsNull", (node) => void (types.get(node.field) ?? types.set(node.field, new Set()))),
+    Match.tag("And", "Or", (node) =>
+      node.members.forEach((member) => collectLiteralTypes(member, types))
+    ),
+    Match.tag("Not", (node) => collectLiteralTypes(node.member, types)),
+    Match.exhaustive
+  );
 };
 
 /** The one JS type each field of a tree is compared with (`string` for a field only null-tested). */

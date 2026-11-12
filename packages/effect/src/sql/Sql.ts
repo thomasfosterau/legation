@@ -66,6 +66,7 @@
 
 import type { Predicate } from "../index.js";
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 
 /** A SQL fragment plus its ordered bind parameters. */
@@ -276,35 +277,37 @@ const compileExists = (node: ExistsNode, compilation: Compilation): string => {
   return `${quote(node.localField)} IN (SELECT ${quote(node.foreignField)} FROM ${quote(node.collection)} WHERE ${inner})`;
 };
 
-const compileNode = (predicate: Predicate.Predicate, compilation: Compilation): string => {
-  switch (predicate._tag) {
-    case "True":
-      return "1 = 1";
-    case "Compare":
-      return compileCompare(predicate, compilation);
-    case "In":
-    case "NotIn":
-      return compileList(predicate, compilation);
-    case "IsNull":
-      return `${compilation.dialect.quote(predicate.field)} IS ${predicate.negated === true ? "NOT " : ""}NULL`;
-    case "And":
-      if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 1";
-      return predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" AND ");
-    case "Or": {
-      if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 0";
-      return `(${predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" OR ")})`;
-    }
-    case "Not":
-      return `NOT (${compileNode(predicate.predicate, compilation)})`;
-    case "Exists":
-      return compileExists(predicate, compilation);
-    case "InSet":
-      // An unbound named set is the empty set (#205): the sync server binds
-      // every `InSet` before a subset reaches a backend, so this is the
-      // fail-closed fallback, like `IN ()`.
-      return "1 = 0";
-  }
-};
+const compileNode: (predicate: Predicate.Predicate, compilation: Compilation) => string = Match.fn(
+  (predicate: Predicate.Predicate, _compilation: Compilation) => predicate
+).pipe(
+  Match.withReturnType<string>(),
+  Match.tag("True", () => "1 = 1"),
+  Match.tag("Compare", (predicate, _, compilation) => compileCompare(predicate, compilation)),
+  Match.tag("In", "NotIn", (predicate, _, compilation) => compileList(predicate, compilation)),
+  Match.tag(
+    "IsNull",
+    (predicate, _, compilation) =>
+      `${compilation.dialect.quote(predicate.field)} IS ${predicate.negated === true ? "NOT " : ""}NULL`
+  ),
+  Match.tag("And", (predicate, _, compilation) => {
+    if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 1";
+    return predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" AND ");
+  }),
+  Match.tag("Or", (predicate, _, compilation) => {
+    if (Arr.isReadonlyArrayEmpty(predicate.predicates)) return "1 = 0";
+    return `(${predicate.predicates.map((inner) => compileNode(inner, compilation)).join(" OR ")})`;
+  }),
+  Match.tag(
+    "Not",
+    (predicate, _, compilation) => `NOT (${compileNode(predicate.predicate, compilation)})`
+  ),
+  Match.tag("Exists", (predicate, _, compilation) => compileExists(predicate, compilation)),
+  // An unbound named set is the empty set (#205): the sync server binds
+  // every `InSet` before a subset reaches a backend, so this is the
+  // fail-closed fallback, like `IN ()`.
+  Match.tag("InSet", () => "1 = 0"),
+  Match.exhaustive
+);
 
 /**
  * Compile a predicate into a `WHERE`-ready fragment for a dialect. Pass

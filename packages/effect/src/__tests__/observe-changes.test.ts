@@ -44,6 +44,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -169,24 +170,24 @@ const idValue = (row: { readonly id: string; readonly value: unknown }) => ({
   value: row.value,
 });
 const stripPositions = (batch: ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>) =>
-  batch.map((change) => {
-    switch (change._tag) {
-      case "exit":
-        return { _tag: "exit" as const, id: change.id, previous: idValue(change.previous) };
-      case "update":
-        return {
-          _tag: "update" as const,
-          row: idValue(change.row),
-          previous: idValue(change.previous),
-        };
-      case "enter":
-        return { _tag: "enter" as const, row: idValue(change.row) };
-      case "move":
-        return { _tag: "move" as const, row: idValue(change.row) };
-      case "reset":
-        return change;
-    }
-  });
+  batch.map((change) =>
+    Match.value(change).pipe(
+      Match.tag("exit", (exit) => ({
+        _tag: "exit" as const,
+        id: exit.id,
+        previous: idValue(exit.previous),
+      })),
+      Match.tag("update", (update) => ({
+        _tag: "update" as const,
+        row: idValue(update.row),
+        previous: idValue(update.previous),
+      })),
+      Match.tag("enter", (enter) => ({ _tag: "enter" as const, row: idValue(enter.row) })),
+      Match.tag("move", (move) => ({ _tag: "move" as const, row: idValue(move.row) })),
+      Match.tag("reset", (reset) => reset),
+      Match.exhaustive
+    )
+  );
 
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
@@ -554,20 +555,20 @@ const foldChangeBatches = (
   const state = new Map<string, unknown>();
   for (const batch of batches) {
     for (const change of batch) {
-      switch (change._tag) {
-        case "reset":
+      Match.value(change).pipe(
+        Match.withReturnType<void>(),
+        Match.tag("reset", () => {
           state.clear();
-          break;
-        case "enter":
-        case "update":
-          state.set(change.row.id, change.row.value);
-          break;
-        case "exit":
-          state.delete(change.id);
-          break;
-        case "move":
-          break;
-      }
+        }),
+        Match.tag("enter", "update", (entered) => {
+          state.set(entered.row.id, entered.row.value);
+        }),
+        Match.tag("exit", (exited) => {
+          state.delete(exited.id);
+        }),
+        Match.tag("move", () => {}),
+        Match.exhaustive
+      );
     }
   }
   return state;

@@ -273,6 +273,7 @@ export const compareText = (a: string, b: string): number => {
  */
 export const compareLiterals = (left: unknown, right: unknown): number | undefined => {
   if (typeof left !== typeof right) return undefined;
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
   switch (typeof left) {
     case "number":
       return numericOrder(left, right as number);
@@ -294,6 +295,7 @@ const numericOrder = (left: number, right: number): number =>
  * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
  */
 export const holds = (op: Comparison, ordered: number): boolean => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
   switch (op) {
     case "eq":
       return ordered === 0;
@@ -432,6 +434,7 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
   switch (predicate._tag) {
     case "True":
     case "Exists":
@@ -472,29 +475,27 @@ export const test = (predicate: Predicate, row: unknown): boolean =>
 export const resolveExists = <E, R>(
   predicate: Predicate,
   resolve: (node: ExistsNode) => Effect.Effect<ReadonlyArray<Literal>, E, R>
-): Effect.Effect<Predicate, E, R> => {
-  switch (predicate._tag) {
-    case "Exists":
-      return resolve(predicate).pipe(Effect.map((values) => isIn(predicate.localField, values)));
-    case "And":
-      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve), {
+): Effect.Effect<Predicate, E, R> =>
+  Match.value(predicate).pipe(
+    Match.tag("Exists", (node) =>
+      resolve(node).pipe(Effect.map((values) => isIn(node.localField, values)))
+    ),
+    Match.tag("And", (node) =>
+      Effect.forEach(node.predicates, (p) => resolveExists(p, resolve), {
         concurrency: 1,
-      }).pipe(Effect.map((predicates) => and(...predicates)));
-    case "Or":
-      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve), {
+      }).pipe(Effect.map((predicates) => and(...predicates)))
+    ),
+    Match.tag("Or", (node) =>
+      Effect.forEach(node.predicates, (p) => resolveExists(p, resolve), {
         concurrency: 1,
-      }).pipe(Effect.map((predicates) => or(...predicates)));
-    case "Not":
-      return resolveExists(predicate.predicate, resolve).pipe(Effect.map(not));
-    case "True":
-    case "Compare":
-    case "In":
-    case "NotIn":
-    case "IsNull":
-    case "InSet":
-      return Effect.succeed(predicate);
-  }
-};
+      }).pipe(Effect.map((predicates) => or(...predicates)))
+    ),
+    Match.tag("Not", (node) => resolveExists(node.predicate, resolve).pipe(Effect.map(not))),
+    Match.tag("True", "Compare", "In", "NotIn", "IsNull", "InSet", (node) =>
+      Effect.succeed<Predicate>(node)
+    ),
+    Match.exhaustive
+  );
 
 /**
  * The distinct `foreignField` values among rows matching an Exists `where`.
@@ -511,25 +512,16 @@ export const existsValues = (node: ExistsNode, rows: Iterable<unknown>): Readonl
   return [...values];
 };
 
+const hasExistsNode = Match.type<Predicate>().pipe(
+  Match.tag("Exists", () => true),
+  Match.tag("And", "Or", (node) => node.predicates.some(hasExists)),
+  Match.tag("Not", (node) => hasExists(node.predicate)),
+  Match.tag("True", "Compare", "In", "NotIn", "IsNull", "InSet", () => false),
+  Match.exhaustive
+);
+
 /** Whether a predicate contains any (unresolved) `Exists` node. */
-export const hasExists = (predicate: Predicate): boolean => {
-  switch (predicate._tag) {
-    case "Exists":
-      return true;
-    case "And":
-    case "Or":
-      return predicate.predicates.some(hasExists);
-    case "Not":
-      return hasExists(predicate.predicate);
-    case "True":
-    case "Compare":
-    case "In":
-    case "NotIn":
-    case "IsNull":
-    case "InSet":
-      return false;
-  }
-};
+export const hasExists = (predicate: Predicate): boolean => hasExistsNode(predicate);
 
 // ─── Named sets (#205) ───────────────────────────────────────────────────────
 

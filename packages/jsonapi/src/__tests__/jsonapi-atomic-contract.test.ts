@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -323,16 +324,15 @@ const applyOperation = (
   index: number,
   operation: BatchOperation,
   clientId: string | undefined
-): Effect.Effect<Entry, Rejection> => {
-  switch (operation.op) {
-    case "add":
-      return applyAdd(staged, committed, probe, index, operation, clientId);
-    case "update":
-      return applyUpdate(staged, index, operation);
-    case "remove":
-      return applyRemove(staged, index, operation);
-  }
-};
+): Effect.Effect<Entry, Rejection> =>
+  Match.value(operation).pipe(
+    Match.discriminator("op")("add", (add) =>
+      applyAdd(staged, committed, probe, index, add, clientId)
+    ),
+    Match.discriminator("op")("update", (update) => applyUpdate(staged, index, update)),
+    Match.discriminator("op")("remove", (remove) => applyRemove(staged, index, remove)),
+    Match.exhaustive
+  );
 
 /**
  * `lock` serialises whole batches: a batch copies the store, runs, and commits

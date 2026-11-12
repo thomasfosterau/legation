@@ -87,6 +87,7 @@ const numericValues = (
 
 /** Fold the numeric values of a non-`Count` aggregate to its value. */
 const foldNumeric = (agg: Exclude<Aggregate, { _tag: "Count" }>, values: ReadonlyArray<number>) => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
   switch (agg._tag) {
     case "Sum":
       return values.reduce((total, value) => total + value, 0);
@@ -202,6 +203,7 @@ type Bucket =
     };
 
 const emptyBucket = (agg: Aggregate): Bucket => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
   switch (agg._tag) {
     case "Count":
       return { _tag: "Count", count: 0 };
@@ -217,6 +219,7 @@ const emptyBucket = (agg: Aggregate): Bucket => {
 };
 
 const bucketValue = (bucket: Bucket): AggregateValue => {
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
   switch (bucket._tag) {
     case "Count":
       return bucket.count;
@@ -239,6 +242,7 @@ const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined):
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
   switch (bucket._tag) {
     case "Sum":
       bucket.sum += n;
@@ -274,6 +278,7 @@ const removeFromBucket = (
   if (field === undefined) return;
   const n = numericField(value, field);
   if (n === undefined) return;
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~1.2x slower than this switch (#497)
   switch (bucket._tag) {
     case "Sum":
       bucket.sum -= n;

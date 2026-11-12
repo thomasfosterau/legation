@@ -31,6 +31,7 @@
  */
 
 import * as Iterable from "effect/Iterable";
+import * as Match from "effect/Match";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Str from "effect/String";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -70,21 +71,15 @@ export const segmentsOf = (path: string): ReadonlyArray<string> =>
 export const isParam = (segment: string): boolean => segment.startsWith(":");
 
 /** Map an HTTP method + whether the route has a trailing id to a CRUD role. */
-const roleOf = (method: string, hasId: boolean): Operation | undefined => {
-  switch (method.toUpperCase()) {
-    case "GET":
-      return hasId ? "getOne" : "list";
-    case "POST":
-      return hasId ? undefined : "create";
-    case "PATCH":
-    case "PUT":
-      return hasId ? "update" : undefined;
-    case "DELETE":
-      return hasId ? "delete" : undefined;
-    default:
-      return undefined;
-  }
-};
+const roleOf = (method: string, hasId: boolean): Operation | undefined =>
+  Match.value(method.toUpperCase()).pipe(
+    Match.withReturnType<Operation | undefined>(),
+    Match.when("GET", () => (hasId ? "getOne" : "list")),
+    Match.when("POST", () => (hasId ? undefined : "create")),
+    Match.whenOr("PATCH", "PUT", () => (hasId ? "update" : undefined)),
+    Match.when("DELETE", () => (hasId ? "delete" : undefined)),
+    Match.orElse(() => undefined)
+  );
 
 /**
  * Classify a (method, path) into a resource type + role, or `undefined` if
@@ -122,16 +117,14 @@ const MEMBER_WALK_DEPTH = 8;
  */
 const hasAtomicMember = (ast: SchemaAST.AST, depth = 0): boolean => {
   if (depth > MEMBER_WALK_DEPTH) return false;
-  switch (ast._tag) {
-    case "Objects":
-      return ast.propertySignatures.some((property) => property.name === ATOMIC_OPERATIONS_MEMBER);
-    case "Union":
-      return ast.types.some((member) => hasAtomicMember(member, depth + 1));
-    case "Suspend":
-      return hasAtomicMember(ast.thunk(), depth + 1);
-    default:
-      return false;
-  }
+  return Match.value(ast).pipe(
+    Match.tag("Objects", (objects) =>
+      objects.propertySignatures.some((property) => property.name === ATOMIC_OPERATIONS_MEMBER)
+    ),
+    Match.tag("Union", (union) => union.types.some((member) => hasAtomicMember(member, depth + 1))),
+    Match.tag("Suspend", (suspend) => hasAtomicMember(suspend.thunk(), depth + 1)),
+    Match.orElse(() => false)
+  );
 };
 
 /**

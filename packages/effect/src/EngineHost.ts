@@ -77,6 +77,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -824,80 +825,87 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         )
       );
 
-    const handle = (message: MirrorProtocol.MirrorMessage) => {
-      switch (message._tag) {
-        case "Mutate":
-          return handleMutate(message);
-        case "EndFormMutation":
-          return touch(message.mirrorId).pipe(Effect.andThen(handleEndForm(message)));
-        case "Subscribe":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(handleSubscribe(message.mirrorId, message.subset))
-          );
-        case "Unsubscribe":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(release(message.mirrorId, Subset.hash(message.subset)))
-          );
-        case "SubscribeNamed":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(handleSubscribeNamed(message.mirrorId, message.name, message.args))
-          );
-        case "UnsubscribeNamed":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(
-              release(message.mirrorId, MirrorProtocol.namedKey(message.name, message.args))
+    const handle = Match.type<MirrorProtocol.MirrorMessage>().pipe(
+      Match.tag("Mutate", (message) => handleMutate(message)),
+      Match.tag("EndFormMutation", (message) =>
+        touch(message.mirrorId).pipe(Effect.andThen(handleEndForm(message)))
+      ),
+      Match.tag("Subscribe", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(handleSubscribe(message.mirrorId, message.subset))
+        )
+      ),
+      Match.tag("Unsubscribe", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(release(message.mirrorId, Subset.hash(message.subset)))
+        )
+      ),
+      Match.tag("SubscribeNamed", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(handleSubscribeNamed(message.mirrorId, message.name, message.args))
+        )
+      ),
+      Match.tag("UnsubscribeNamed", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(
+            release(message.mirrorId, MirrorProtocol.namedKey(message.name, message.args))
+          )
+        )
+      ),
+      Match.tag("SubscribeRelated", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(
+            handleSubscribeRelated(
+              message.mirrorId,
+              message.collection,
+              message.subset,
+              message.edges
             )
-          );
-        case "SubscribeRelated":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(
-              handleSubscribeRelated(
-                message.mirrorId,
-                message.collection,
-                message.subset,
-                message.edges
-              )
+          )
+        )
+      ),
+      Match.tag("UnsubscribeRelated", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(
+            release(
+              message.mirrorId,
+              MirrorProtocol.relatedKey(message.collection, message.subset, message.edges)
             )
-          );
-        case "UnsubscribeRelated":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(
-              release(
-                message.mirrorId,
-                MirrorProtocol.relatedKey(message.collection, message.subset, message.edges)
-              )
-            )
-          );
-        case "SubscribeUrl":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(handleSubscribeUrl(message.mirrorId, message.url))
-          );
-        case "UnsubscribeUrl":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(handleUnsubscribeUrl(message.mirrorId, message.url))
-          );
-        case "Read":
-          return handleRead(message, message.subsets);
-        case "SubscribeMutationStates":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(handleSubscribeMutationStates(message.mirrorId))
-          );
-        case "UnsubscribeMutationStates":
-          return touch(message.mirrorId).pipe(
-            Effect.andThen(release(message.mirrorId, MirrorProtocol.MUTATION_STATES_KEY))
-          );
-        case "Disconnect":
-          return handleDisconnect(message.mirrorId);
-        case "Heartbeat":
-          return touch(message.mirrorId);
-        case "HostRequest":
-          return touch(message.mirrorId).pipe(Effect.andThen(handleHostRequest(message)));
-        case "HostRequestCancel": {
-          const key = hostRequestKey(message.mirrorId, message.requestId);
-          return takeHostRequests((held) => held === key);
-        }
-      }
-    };
+          )
+        )
+      ),
+      Match.tag("SubscribeUrl", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(handleSubscribeUrl(message.mirrorId, message.url))
+        )
+      ),
+      Match.tag("UnsubscribeUrl", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(handleUnsubscribeUrl(message.mirrorId, message.url))
+        )
+      ),
+      Match.tag("Read", (message) => handleRead(message, message.subsets)),
+      Match.tag("SubscribeMutationStates", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(handleSubscribeMutationStates(message.mirrorId))
+        )
+      ),
+      Match.tag("UnsubscribeMutationStates", (message) =>
+        touch(message.mirrorId).pipe(
+          Effect.andThen(release(message.mirrorId, MirrorProtocol.MUTATION_STATES_KEY))
+        )
+      ),
+      Match.tag("Disconnect", (message) => handleDisconnect(message.mirrorId)),
+      Match.tag("Heartbeat", (message) => touch(message.mirrorId)),
+      Match.tag("HostRequest", (message) =>
+        touch(message.mirrorId).pipe(Effect.andThen(handleHostRequest(message)))
+      ),
+      Match.tag("HostRequestCancel", (message) => {
+        const key = hostRequestKey(message.mirrorId, message.requestId);
+        return takeHostRequests((held) => held === key);
+      }),
+      Match.exhaustive
+    );
 
     // Liveness sweep: reclaim registrations from mirrors silent past the timeout.
     const { mirrorTimeout, sweepInterval } = livenessOf(options);

@@ -8,50 +8,45 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 
-const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean => {
-  switch (column.kind) {
-    case "text":
-    case "instant":
-      return P.isString(literal);
-    case "integer":
-      return P.isNumber(literal) && Number.isInteger(literal);
-    case "double":
-      return P.isNumber(literal) && Number.isFinite(literal);
-    case "boolean":
-      return P.isBoolean(literal);
-  }
-};
+const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean =>
+  Match.value(column.kind).pipe(
+    Match.whenOr("text", "instant", () => P.isString(literal)),
+    Match.when("integer", () => P.isNumber(literal) && Number.isInteger(literal)),
+    Match.when("double", () => P.isNumber(literal) && Number.isFinite(literal)),
+    Match.when("boolean", () => P.isBoolean(literal)),
+    Match.exhaustive
+  );
 
 /** Every (field, literal) pair at the leaves of a predicate. */
 const leaves = (
   predicate: Predicate.Predicate
-): ReadonlyArray<{ readonly field: string; readonly literal: Predicate.Literal }> => {
-  switch (predicate._tag) {
-    case "Compare":
-      return [{ field: predicate.field, literal: predicate.value }];
-    case "In":
-    case "NotIn":
-      return predicate.values.map((literal) => ({ field: predicate.field, literal }));
-    case "IsNull":
-      return [];
-    case "And":
-    case "Or":
-      return predicate.predicates.flatMap(leaves);
-    case "Not":
-      return leaves(predicate.predicate);
-    case "True":
-      return [];
-    case "Exists":
+): ReadonlyArray<{ readonly field: string; readonly literal: Predicate.Literal }> =>
+  Match.value(predicate).pipe(
+    Match.withReturnType<
+      ReadonlyArray<{ readonly field: string; readonly literal: Predicate.Literal }>
+    >(),
+    Match.tag("Compare", (node) => [{ field: node.field, literal: node.value }]),
+    Match.tag("In", "NotIn", (node) =>
+      node.values.map((literal) => ({ field: node.field, literal }))
+    ),
+    Match.tag("IsNull", () => []),
+    Match.tag("And", "Or", (node) => node.predicates.flatMap(leaves)),
+    Match.tag("Not", (node) => leaves(node.predicate)),
+    Match.tag("True", () => []),
+    Match.tag("Exists", () => {
       throw new Error("Exists must never be generated");
-    case "InSet":
+    }),
+    Match.tag("InSet", () => {
       throw new Error("InSet must never be generated");
-  }
-};
+    }),
+    Match.exhaustive
+  );
 
 describe("FilterCorpus", () => {
   const generate = (options: FilterCorpus.GenerateOptions) =>
