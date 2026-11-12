@@ -36,6 +36,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
+import { withLayer } from "./with-layer.js";
 
 /**
  * A logger that records every line at every level (the minimum is lowered to
@@ -76,7 +77,7 @@ describe("BackgroundSync without Background Sync (#213)", () => {
           }),
         ],
         { concurrency: 1 }
-      ).pipe(Effect.provide(logs.layer));
+      ).pipe(withLayer(logs.layer));
       expect(outcomes).toEqual(["Unsupported", "Unsupported", "Refused"]);
       // Said, but only at debug level: nothing an app would surface.
       expect(logs.quiet.length).toBeGreaterThan(0);
@@ -130,7 +131,7 @@ describe("BackgroundSync without Background Sync (#213)", () => {
       yield* Effect.sleep(Duration.millis(20));
       yield* engine.mutate("todo/set", { id: "1", title: "offline edit" });
       const outcome = yield* BackgroundSync.register({ registration: Effect.succeed({}) }).pipe(
-        Effect.provide(logs.layer)
+        withLayer(logs.layer)
       );
       expect(outcome).toBe("Unsupported");
       expect(yield* store.pendingMutations).toHaveLength(1);
