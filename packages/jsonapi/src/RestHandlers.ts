@@ -226,7 +226,10 @@ export const queryErrorDocument = (error: QueryError): ErrorDocument => {
       {
         status: String(ApiError.BadRequest.status),
         code: ApiError.BadRequest.code,
-        ...Defined.fields({ title: ApiError.BadRequest.title }),
+        ...Option.match(ApiError.BadRequest.title, {
+          onNone: () => ({}),
+          onSome: (title) => ({ title }),
+        }),
         detail: error.message,
         ...Defined.fields({
           source: error.parameter === undefined ? undefined : { parameter: error.parameter },
@@ -242,7 +245,10 @@ const forbiddenDocument = (error: AuthorizationError): ErrorDocument => ({
     {
       status: String(ApiError.Forbidden.status),
       code: ApiError.Forbidden.code,
-      ...Defined.fields({ title: ApiError.Forbidden.title }),
+      ...Option.match(ApiError.Forbidden.title, {
+        onNone: () => ({}),
+        onSome: (title) => ({ title }),
+      }),
       detail: error.message,
     },
   ],

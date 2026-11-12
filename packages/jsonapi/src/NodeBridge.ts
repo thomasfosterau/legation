@@ -244,7 +244,7 @@ const oneEdgesOf = (resource: Resource.Any, options: BridgeOptions): Record<stri
       ? Result.succeed(
           Edge.one(descriptor.ref().type, {
             // An explicit override wins, then the relationship's declared storage key (#553).
-            via: options.via[name] ?? descriptor.key ?? `${name}Id`,
+            via: options.via[name] ?? Option.getOrElse(descriptor.key, () => `${name}Id`),
           })
         )
       : Result.failVoid
@@ -290,7 +290,7 @@ type CollectionRelationship = Extract<
  */
 const declaredOrder = (descriptor: CollectionRelationship): Option.Option<ReadonlyArray<string>> =>
   descriptor.kind === "paginated"
-    ? Option.map(Option.fromUndefinedOr(descriptor.order), (order) =>
+    ? Option.map(descriptor.order, (order) =>
         order.map((term) => (term.direction === "desc" ? `-${term.field}` : term.field))
       )
     : Option.none();

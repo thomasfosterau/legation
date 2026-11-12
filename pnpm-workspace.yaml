@@ -72,13 +72,15 @@ catalog:
   "@sveltejs/adapter-static": ^4.0.1
   "@sveltejs/kit": ^3.2.0
   "@sveltejs/vite-plugin-svelte": ^7.3.1
-  # Runtime dependencies of published packages: `pnpm pack` rewrites
-  # `catalog:` to these ranges in the packed manifest.
-  "@thomasfosterau/effect-jsonapi": ^0.21.0
+  # legation-jsonapi's dev pin (a peer there, `catalogs.jsonapi-peers`). The
+  # example apps that use it take it from here too.
+  "@thomasfosterau/effect-jsonapi": ^0.22.0
   # legation-auth's dev pin (a peer there, `catalogs.auth-peers`): the newest
   # 0.2.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
   # legation-auth does not use its JSON:API surface.
   "@thomasfosterau/effect-auth": 0.2.0
+  # A runtime dependency of a published package (legation-svelte): `pnpm pack`
+  # rewrites `catalog:` to this range in the packed manifest.
   "@thomasfosterau/effect-svelte": ^0.6.2
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
@@ -128,10 +130,8 @@ catalogs:
     # `^4.0.0`, raised only when a dependency of the package that declares it
     # requires more, naming that dependency here. Our own code is written to
     # run on 4.0.0. Nothing here forces more: `@effect/platform-browser`
-    # 4.0.0 peers `effect ^4.0.0`, `@thomasfosterau/effect-jsonapi`
-    # (legation-jsonapi's dependency) peers `effect >=4.0.0-rc.118`, and
-    # `@thomasfosterau/effect-svelte` 0.6.1 (legation-svelte's) peers
-    # `effect ^4.0.0`.
+    # 4.0.0 peers `effect ^4.0.0`, and `@thomasfosterau/effect-svelte` 0.6.1
+    # (legation-svelte's) peers `effect ^4.0.0`.
     effect: ^4.0.0
     "@effect/platform-browser": ^4.0.0
     svelte: ">=5.40"
@@ -151,6 +151,13 @@ catalogs:
   auth-peers:
     effect: ^4.1.0
     "@thomasfosterau/effect-auth": ^0.2.0
+  # legation-jsonapi alone: `@thomasfosterau/effect-jsonapi` 0.22.x peers
+  # `effect ^4.1.0` (its declarations need Effect 4.1's HttpApi types), so its
+  # `effect` floor is 4.1.0. effect-jsonapi is a peer (the app passes its own
+  # resources, documents and errors in, so there must be one copy).
+  jsonapi-peers:
+    effect: ^4.1.0
+    "@thomasfosterau/effect-jsonapi": ^0.22.0
 
 overrides:
   # `effect` MUST be a singleton (see the header): force every resolution to

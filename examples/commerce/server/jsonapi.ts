@@ -48,6 +48,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpApiBuilder } from "effect/http-api";
 import type { HttpServerRequest } from "effect/http";
@@ -463,19 +464,26 @@ type Ref = { readonly type: string } & ({ readonly id: string } | { readonly lid
  */
 const refId = (batch: Batch, index: number, ref: Ref): Effect.Effect<string, OperationFailed> => {
   if ("id" in ref) return Effect.succeed(ref.id);
-  const id = batch.lids.id(ref.lid);
-  if (id === undefined) {
-    return fail(
-      422,
-      index,
-      "Unknown lid",
-      `no earlier operation in this request created lid "${ref.lid}"`
-    );
-  }
-  const created = batch.lidTypes.get(ref.lid);
-  return created === ref.type
-    ? Effect.succeed(id)
-    : fail(422, index, "Wrong lid type", `lid "${ref.lid}" names a ${created}, not a ${ref.type}`);
+  return Option.match(batch.lids.id(ref.lid), {
+    onNone: () =>
+      fail(
+        422,
+        index,
+        "Unknown lid",
+        `no earlier operation in this request created lid "${ref.lid}"`
+      ),
+    onSome: (id) => {
+      const created = batch.lidTypes.get(ref.lid);
+      return created === ref.type
+        ? Effect.succeed(id)
+        : fail(
+            422,
+            index,
+            "Wrong lid type",
+            `lid "${ref.lid}" names a ${created}, not a ${ref.type}`
+          );
+    },
+  });
 };
 
 /** An `update`'s target: its `data.id`, the id behind its `data.lid`, or its `ref`. */
