@@ -499,8 +499,8 @@ export default defineConfig({
         cache: false,
       },
       // The tests of one published `effect` floor (`FLOOR`: core,
-      // alchemy-cloudflare, auth or jsonapi), after CI's `floor` job has
-      // pointed the catalog at it and installed (scripts/effect-floor.mjs).
+      // alchemy-cloudflare, auth or jsonapi), after `scripts/effect-floor.mjs
+      // point` has pointed the catalog at it and installed (scripts/effect-floor.mjs).
       "ci:floor": {
         command: "node scripts/effect-floor.mjs test",
         cache: false,
@@ -541,7 +541,7 @@ export default defineConfig({
       {
         // legation-jsonapi's suite, apart for the same reason as the two
         // below: its `effect` floor is `catalogs.jsonapi-peers` (4.1.0, which
-        // effect-jsonapi 0.22 requires), so the core floor job (4.0.0) must not
+        // effect-jsonapi 0.22 requires), so the core floor (4.0.0) must not
         // select it. The commerce example drives the façade over
         // effect-jsonapi, so its tests share the floor and the project (its
         // browser tests run in `commerce-browser`, after its build).
@@ -562,7 +562,7 @@ export default defineConfig({
       {
         // The Alchemy adapter's suite, apart because it has its own `effect`
         // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
-        // CI's `floor` job ("ci:floor (…)") runs it at that floor and every other
+        // `vp run ci:floor` runs it at that floor and every other
         // project at the core's.
         extends: true,
         test: {
@@ -574,7 +574,7 @@ export default defineConfig({
       {
         // The effect-auth bridge's suite, apart for the same reason: its
         // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
-        // requires), so CI's `floor` job ("ci:floor (…)") runs it at that floor.
+        // requires), so `vp run ci:floor` runs it at that floor.
         // The audience example (#221) composes effect-auth with the engine
         // and the façade, so its tests share the floor and the project.
         extends: true,

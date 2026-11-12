@@ -1,5 +1,5 @@
 /**
- * CI's `floor` job (`ci.yml`, "ci:floor (<floor>)"): points the workspace at
+ * `vp run ci:floor`'s helper (not run in CI before 1.0): points the workspace at
  * one published `effect` floor, checks the install holds only that floor, and
  * runs that floor's tests.
  *

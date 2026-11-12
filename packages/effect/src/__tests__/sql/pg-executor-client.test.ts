@@ -5,8 +5,7 @@
  * `SqliteClient`) extends `SqlClient`'s `Base` without the `SqlClient` type id,
  * so a parameter typed `SqlClient` refused it.
  *
- * The type assertions are compile-time (`vp run check`, and the effect-floor
- * job at 4.0.0 / 4.1.0). The runtime case runs the executor over SQLite, whose
+ * The type assertions are compile-time (`vp run check`). The runtime case runs the executor over SQLite, whose
  * layer provides both services, so it needs no database server; the
  * PostgreSQL round trips are `pg-executor.test.ts`.
  */

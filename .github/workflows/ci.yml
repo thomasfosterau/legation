@@ -3,9 +3,10 @@ name: CI
 # The repository's one CI workflow. Each matrix leg sets up Vite+ on one
 # Node.js line, installs, and runs `vp run ci`: the `ci` task in vite.config.ts
 # holds the pipeline (AGENTS.md "Verification", in its order), so a local
-# `vp run ci` runs what CI runs. The `floor` legs run the tests against each
-# published `effect` floor. There is no aggregate job: the ruleset requires
-# each leg by its check name.
+# `vp run ci` runs what CI runs. There is no aggregate job: the ruleset
+# requires each leg by its check name. The published `effect` floors are not
+# tested in CI before 1.0 (`vp run ci:floor` checks one by hand; CONTRIBUTING.md
+# "Effect version upgrades").
 
 on:
   pull_request:
@@ -83,77 +84,3 @@ jobs:
 
       - name: CI
         run: vp run ci
-
-  # The test suite against the lowest `effect` each published peer range
-  # admits, so each package README's "tested against … the floor" claim holds
-  # on every PR. One install per floor (`effect` is a singleton): the core's
-  # (`catalogs.peers`, the `node` and `svelte` projects), and the Alchemy
-  # adapter's, legation-auth's and legation-jsonapi's (`catalogs.<floor>-peers`,
-  # each raised to 4.1.0 by a dependency; their own Vitest projects, plus the
-  # commerce example's browser tests for jsonapi). Only the catalog entries
-  # versioned with effect move; the rewrite exists only in this checkout and
-  # nothing is committed. See CONTRIBUTING.md "Effect version upgrades" and
-  # scripts/effect-floor.mjs, which maps each floor to its projects.
-  floor:
-    name: ci:floor (${{ matrix.floor }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        floor: [core, alchemy-cloudflare, auth, jsonapi]
-        include:
-          - floor: core
-            catalog: peers
-          - floor: alchemy-cloudflare
-            catalog: alchemy-peers
-          - floor: auth
-            catalog: auth-peers
-          - floor: jsonapi
-            catalog: jsonapi-peers
-    # The core floor's `node` project runs the PostgreSQL overlap test.
-    services:
-      postgres:
-        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      FLOOR: ${{ matrix.floor }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
-        with:
-          version-file: pnpm-workspace.yaml
-          node-version: lts
-          cache: true
-          run-install: false
-
-      # Points the catalog at the floor, installs without `--frozen-lockfile`
-      # (the catalog no longer matches pnpm-lock.yaml, so this re-resolves the
-      # effect entries in this checkout only), and checks that only the floor
-      # is installed.
-      - name: Install at the effect floor
-        env:
-          CATALOG: ${{ matrix.catalog }}
-        run: |
-          floor="$(node scripts/effect-floor.mjs point "$CATALOG")"
-          echo "effect under test: ${floor} (catalogs.${CATALOG})"
-          pnpm install --no-frozen-lockfile
-          node scripts/effect-floor.mjs verify "$floor"
-
-      - name: CI (effect floor)
-        run: vp run ci:floor

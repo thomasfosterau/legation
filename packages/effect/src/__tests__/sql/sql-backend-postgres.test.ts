@@ -12,8 +12,7 @@
  * reset: it drops and recreates `todos`, `effects` and `sync_mutations`.
  * Without it, the suite is skipped locally with a warning. In CI (`CI` set) a
  * missing `DATABASE_URL` fails the suite instead, so it cannot skip silently.
- * CI's `test` and `floor` jobs run a PostgreSQL service
- * container and set the variable (see `.github/workflows/ci.yml`).
+ * CI's `ci` job runs a PostgreSQL service container and set the variable (see `.github/workflows/ci.yml`).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { PgClient } from "@effect/sql-pg";

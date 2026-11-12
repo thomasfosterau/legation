@@ -36,7 +36,7 @@ with it are passed into this package, so there must be one copy of it.
 
 ## Effect version
 
-Peers `effect ^4.1.0`, the floor `@thomasfosterau/effect-jsonapi` 0.22 requires. Tested against `4.1.4` (the version CI pins) and `4.1.0` (the floor; CI runs this package's tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.1.0`, the floor `@thomasfosterau/effect-jsonapi` 0.22 requires. Tested against `4.1.4` (the version CI pins) and `4.1.0` (the floor; checked by hand, not in CI, before 1.0); install one copy of `effect` in your app (ADR-0003).
 
 ## The happy path: sync an existing JSON:API
 
