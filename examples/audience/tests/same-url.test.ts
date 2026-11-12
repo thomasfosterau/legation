@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { feed } from "../src/domain.js";
 import { makeDevice } from "../src/device.js";
 import { cookieHeader, type Session } from "../src/server.js";
@@ -63,15 +64,14 @@ describe("the façade and the derived REST handler agree for the same signed-in 
             // The browser's own request: the façade never needs its cookie.
             const request = jsonApi(url);
             expect(device.facade.matches(request), url).toBe(true);
-            const local = yield* device.facade.handle(request);
-            expect(local, `${user.id} ${url}`).toBeDefined();
-            expect(local!.status, url).toBe(200);
-            expect(local!.headers.get("x-legation-served-at"), url).toBe(
+            const local = yield* device.facade.handle(request).pipe(Effect.map(Option.getOrThrow));
+            expect(local.status, url).toBe(200);
+            expect(local.headers.get("x-legation-served-at"), url).toBe(
               yield* device.store.getCookie
             );
             const remote = yield* served(world, url, session);
             expect(remote.status, url).toBe(200);
-            expect(yield* Effect.promise(() => local!.text()), `${user.id} ${url}`).toBe(
+            expect(yield* Effect.promise(() => local.text()), `${user.id} ${url}`).toBe(
               remote.text
             );
           }
@@ -95,7 +95,7 @@ describe("the façade and the derived REST handler agree for the same signed-in 
         yield* device.client.subscribe(feed);
         yield* device.engine.pull;
         for (const url of ["/jsonapi/posts/a-private", "/jsonapi/posts/a-followers"]) {
-          expect(yield* device.facade.handle(jsonApi(url)), url).toBeUndefined();
+          expect(yield* device.facade.handle(jsonApi(url)), url).toEqual(Option.none());
           expect((yield* served(world, url, session)).status, url).toBe(404);
         }
         // The owner reads the same URL.
@@ -104,9 +104,9 @@ describe("the façade and the derived REST handler agree for the same signed-in 
         ).toBe(200);
         // A listing filtered to what the viewer may not read is empty on both sides.
         const hidden = "/jsonapi/posts?filter[visibility]=private&filter[ownerId]=user-alice";
-        const local = yield* device.facade.handle(jsonApi(hidden));
+        const local = Option.getOrThrow(yield* device.facade.handle(jsonApi(hidden)));
         const remote = yield* served(world, hidden, session);
-        expect(yield* Effect.promise(() => local!.text())).toBe(remote.text);
+        expect(yield* Effect.promise(() => local.text())).toBe(remote.text);
         expect((JSON.parse(remote.text) as Json).data).toEqual([]);
       })
     )
