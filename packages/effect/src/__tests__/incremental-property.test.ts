@@ -70,11 +70,11 @@ const divergence = (seed: number, step: number, actual: unknown, expected: unkno
   `  recompute:   ${JSON.stringify(expected)}`;
 
 /** Mutate ground truth by a random put/del and return the resulting delta. */
-const stepGround = <V>(
+const stepGround = (
   rng: () => number,
   ground: Map<string, Row>,
   ids: ReadonlyArray<string>,
-  makeValue: (rng: () => number) => V,
+  makeValue: (rng: () => number) => Row["value"],
   delChance: number
 ): Incremental.Delta => {
   const id = pick(rng, ids);
@@ -102,11 +102,11 @@ const teamKey = (v: unknown): string => (v as { team: string }).team;
 const geFive = (v: unknown): boolean => (v as { n: number }).n >= 5;
 
 /** Drive a single-input operator against its from-scratch reference. */
-const runSingle = <V>(options: {
+const runSingle = (options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => V;
+  readonly makeValue: (rng: () => number) => Row["value"];
   readonly makeOperator: () => Incremental.Operator;
   readonly fromScratch: (rows: ReadonlyArray<Row>) => Map<string, Row>;
   readonly delChance?: number;
@@ -134,13 +134,13 @@ const runSingle = <V>(options: {
   return null;
 };
 
-const runJoin = <L, R>(options: {
+const runJoin = (options: {
   readonly seeds: number;
   readonly steps: number;
   readonly leftIds: ReadonlyArray<string>;
   readonly rightIds: ReadonlyArray<string>;
-  readonly makeLeft: (rng: () => number) => L;
-  readonly makeRight: (rng: () => number) => R;
+  readonly makeLeft: (rng: () => number) => Row["value"];
+  readonly makeRight: (rng: () => number) => Row["value"];
   readonly joinOptions: Incremental.JoinOptions;
 }): Divergence => {
   for (let seed = 1; seed <= options.seeds; seed++) {
@@ -170,11 +170,11 @@ const runJoin = <L, R>(options: {
   return null;
 };
 
-const runOrdered = <V>(options: {
+const runOrdered = (options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => V;
+  readonly makeValue: (rng: () => number) => Row["value"];
   readonly orderBy: ReadonlyArray<Subset.OrderBy>;
   readonly limit?: number;
 }): Divergence => {
