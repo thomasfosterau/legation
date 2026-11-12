@@ -17,6 +17,7 @@ import { defineConfig } from "vite-plus";
 const packages = [
   "effect",
   "alchemy-cloudflare",
+  "auth",
   "browser",
   "devtools",
   "jsonapi",
@@ -43,6 +44,8 @@ const alias = {
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
+  "@thomasfosterau/legation-auth/client": source("packages/auth/src/client.ts"),
+  "@thomasfosterau/legation-auth": source("packages/auth/src/index.ts"),
   "@thomasfosterau/legation-jsonapi": source("packages/jsonapi/src/index.ts"),
   "@thomasfosterau/legation-svelte/kit": source("packages/svelte/src/kit/index.ts"),
   "@thomasfosterau/legation-svelte": source("packages/svelte/src/index.svelte.ts"),
@@ -374,6 +377,7 @@ export default defineConfig({
             "**/node_modules/**",
             "packages/svelte/src/__tests__/**",
             "packages/alchemy-cloudflare/src/__tests__/**",
+            "packages/auth/src/__tests__/**",
             "examples/commerce/tests/facade-browser.test.ts",
           ],
         },
@@ -388,6 +392,17 @@ export default defineConfig({
           name: "alchemy-cloudflare",
           environment: "node",
           include: ["packages/alchemy-cloudflare/src/**/*.test.ts"],
+        },
+      },
+      {
+        // The effect-auth bridge's suite, apart for the same reason: its
+        // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
+        // requires), so CI's "Tests (effect floor)" runs it at that floor.
+        extends: true,
+        test: {
+          name: "auth",
+          environment: "node",
+          include: ["packages/auth/src/**/*.test.ts"],
         },
       },
       {

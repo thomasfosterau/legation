@@ -105,17 +105,19 @@ jobs:
 
   # The test suite against the lowest `effect` each published peer range
   # admits, so each package README's "tested against … the floor" claim holds
-  # on every PR. Two floors, one install each (`effect` is a singleton): the
-  # core's (`catalogs.peers.effect`, every project but the Alchemy adapter's)
-  # and the Alchemy adapter's (`catalogs.alchemy-peers.effect`, which Alchemy
-  # raises to 4.1.0; its own Vitest project). Tests only: the full gate set
-  # runs once, at the pinned version, in Quality Gates. Only the catalog entries
-  # versioned in lockstep with effect (`effect` and the `@effect/*` runtime
-  # packages, plus the `overrides` entries that hold the transitive ones) move;
-  # `typescript`, `@typescript/native`, `@effect/tsgo` and
-  # `@effect/language-service` keep their pins. The rewrite exists only in this
-  # job's checkout; nothing is committed. See CONTRIBUTING.md "Effect version
-  # upgrades" and scripts/effect-floor.mjs.
+  # on every PR. Three floors, one install each (`effect` is a singleton): the
+  # core's (`catalogs.peers.effect`, every project but the Alchemy adapter's
+  # and legation-auth's), the Alchemy adapter's
+  # (`catalogs.alchemy-peers.effect`, which Alchemy raises to 4.1.0; its own
+  # Vitest project) and legation-auth's (`catalogs.auth-peers.effect`, which
+  # effect-auth raises to 4.1.0; its own Vitest project). Tests only: the full
+  # gate set runs once, at the pinned version, in Quality Gates. Only the
+  # catalog entries versioned in lockstep with effect (`effect` and the
+  # `@effect/*` runtime packages, plus the `overrides` entries that hold the
+  # transitive ones) move; `typescript`, `@typescript/native`, `@effect/tsgo`
+  # and `@effect/language-service` keep their pins. The rewrite exists only in
+  # this job's checkout; nothing is committed. See CONTRIBUTING.md "Effect
+  # version upgrades" and scripts/effect-floor.mjs.
   effect-floor:
     name: Tests (effect floor, ${{ matrix.floor }})
     runs-on: ubuntu-latest
@@ -132,6 +134,9 @@ jobs:
           - floor: alchemy-cloudflare
             catalog: alchemy-peers
             projects: --project alchemy-cloudflare
+          - floor: auth
+            catalog: auth-peers
+            projects: --project auth
     # The same PostgreSQL server as Quality Gates (see its comment).
     services:
       postgres:

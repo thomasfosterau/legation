@@ -1,0 +1,215 @@
+# @thomasfosterau/legation-auth
+
+[effect-auth](https://www.npmjs.com/package/@thomasfosterau/effect-auth) for the
+[`@thomasfosterau/legation`](../effect) sync engine: who a push, pull or read
+comes from, which rows they may read, and what happens to the device's replica
+when they sign out.
+
+> **Private for now.** This package is not yet published to npm.
+
+- **`Resolver`** — an `Authorization.IdentityResolver` that verifies the
+  request's session cookie, `Authorization: Bearer` session token or API key
+  with effect-auth on **every** push, pull and read, and puts a typed
+  `Principal` on `SyncContext.identity`. It **fails closed**: anything that
+  does not verify, and any fault or defect, is the anonymous principal.
+- **`ReadScopes`** — effect-auth's compiled read scopes (`ReadScope.compile`)
+  as legation auth filters. The translation is exact; whatever cannot be
+  translated exactly **narrows to `Deny`**, never widens.
+- **`SignOut`** (on `@thomasfosterau/legation-auth/client`) — the session-change
+  listener that resets the durable replica when the signed-in user changes,
+  quarantining their unpushed writes.
+
+## Install
+
+```sh
+npm install @thomasfosterau/legation-auth @thomasfosterau/legation \
+  @thomasfosterau/effect-auth effect
+```
+
+Peers: `@thomasfosterau/effect-auth ^0.2.0` and `effect ^4.1.0` (effect-auth
+0.2 requires Effect 4.1). ESM only. Tested against `effect` 4.1.0 (the floor)
+and the workspace pin.
+
+## Identity: `Resolver`
+
+```ts
+import * as Layer from "effect/Layer";
+import { Resolver } from "@thomasfosterau/legation-auth";
+
+// Needs effect-auth's SessionService and ApiKeyService in context.
+const identity = Resolver.layer();
+// Session plane only (an API key resolves to anonymous):
+const sessionsOnly = Resolver.layerSessions();
+```
+
+Provide it beside the sync server; every carrier that has a transport request
+passes its headers to the resolver (ADR-0035). The resolver reads only the
+`cookie`, `authorization` and API-key headers, by name.
+
+- **Session plane**: the session token from `Authorization: Bearer <token>` /
+  `Token <token>`, else from the session cookie, validated with
+  `SessionService.validateSession` → `Principal.Session` (`userId`, `user`,
+  `sessionAttributes`, `expiresAt`).
+- **API-key plane**: the key from the API-key header (default `x-api-key`),
+  verified with `ApiKeyService.verify` → `Principal.ApiKey` (`userId`, `keyId`,
+  `permissions`). A request carrying an API-key header is decided by this plane
+  alone: a key that does not verify makes it anonymous even beside a valid
+  cookie. Each verify counts against the key's remaining uses, as effect-auth's
+  own `verify` does.
+- **Fails closed**: no credential, an unknown, expired, revoked or disabled
+  credential, a store or transport fault and a defect all resolve to
+  `Principal.anonymous`. The request is never failed. Each fail-closed
+  resolution logs one warning naming the plane and kind (`rejected`, `fault`,
+  `defect`) — never the credential, a header value or an effect-auth message.
+- A principal never carries a credential: not the session token, not the key,
+  not its hash.
+
+Options (each defaulting to effect-auth's):
+
+```ts
+Resolver.layer({
+  // The naming you give effect-auth's HTTP tier, so the effective cookie name
+  // (with its `__Host-` prefix) is derived identically. Default:
+  // `__Host-conduit_session`.
+  cookie: Option.some({ name: "app_session" }),
+  apiKeyHeaders: Option.some(["x-api-key"]),
+});
+```
+
+`Resolver.make({ sessions, apiKeys }, options)` builds the resolver from the
+services directly (each `Option`).
+
+Read the principal in an auth filter, middleware or named-set resolver with
+`Principal.fromContext(context)`; anything that is not a principal this
+resolver produced reads as `Principal.anonymous`. `Principal.userId(p)` is the
+user it acts for (`None` when anonymous).
+
+## Read scopes: `ReadScopes`
+
+effect-auth compiles a policy set into one principal's read scope over a
+resource type: `AllowAll`, `Deny`, or `Filter { predicate, sets }`.
+`ReadScopes.policy` turns a set of such resource types into legation's
+`AuthPolicy`:
+
+```ts
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { Entity, type ReadScope } from "@thomasfosterau/effect-auth";
+import { Authorization } from "@thomasfosterau/legation";
+import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
+
+const binding: ReadScope.Binding = {
+  resourceType: "Post",
+  attributes: { owner: { entity: "User" }, visibility: "Text", publishedAt: "Instant" },
+  setFacts: { followsOwner: { attribute: "owner", set: "following" } },
+};
+
+const compile = ReadScopes.compiler({
+  policies: () => Effect.succeed(policies),
+  request: (principal) =>
+    Effect.succeed({
+      principal: Entity.ref(
+        "User",
+        Option.getOrElse(Principal.userId(principal), () => "")
+      ),
+      action: Entity.ref("Action", "read"),
+    }),
+});
+
+const policy = ReadScopes.policy(
+  {
+    posts: {
+      binding,
+      // effect-auth attribute → row field; a to-one edge maps to its key.
+      attributes: { owner: "ownerId", visibility: "visibility", publishedAt: "publishedAt" },
+      sets: Option.some({ following: followingIds }), // Authorization.NamedSet
+      compile,
+    },
+  },
+  { filters: Option.some({ tags: Authorization.allowAll }), collections: Option.some(registry) }
+); // Result<Authorization.AuthPolicy, ScopeMappingError>
+```
+
+- **Checked when built.** Every attribute of the binding and every set fact's
+  attribute must map to a row field, the map names nothing the binding lacks,
+  and every set a set fact names has a `NamedSet`. A gap is a
+  `ScopeMappingError` from `ReadScopes.mapping` / `ReadScopes.policy`, not a
+  per-request surprise.
+- **Deny by default.** Only the listed collections (and `filters`) get a
+  filter; any other collection stays unreachable.
+- **The role short-circuit.** A principal effect-auth grants everything
+  (`AllowAll`, e.g. an admin role) gets legation's `AllowAll`: no predicate is
+  AND-ed in at all.
+- **Exact translation.** effect-auth's predicate is two-valued (an absent
+  attribute makes `Eq` / `Compare` / `InSet` false); legation's follows
+  Postgres's three-valued logic. Each such atom becomes
+  `field IS NOT NULL AND atom`, so the rows legation admits are exactly the
+  rows effect-auth's `ReadScope.matches` admits — `Not(visibility = "private")`
+  admits a row with no visibility in both.
+
+  | effect-auth                   | legation                                                  |
+  | ----------------------------- | --------------------------------------------------------- |
+  | `Eq(a, v)`                    | `and(isNotNull(f), eq(f, v′))`                            |
+  | `Compare(op, a, v)` (numeric) | `and(isNotNull(f), compare(op, f, v′))`                   |
+  | `IsNull(a)`                   | `isNull(f)`                                               |
+  | `InSet(a, set)`               | `and(isNotNull(f), inSet(f, set))` — the set by name      |
+  | `And` / `Or` / `Not`          | `and` / `or` / `not`                                      |
+  | `Text` / `Boolean`            | the string / boolean                                      |
+  | `Integer`                     | a safe integer                                            |
+  | `Double`                      | a finite number                                           |
+  | `Instant(ms)`                 | `new Date(ms).toISOString()`, whole ms in years 0000–9999 |
+
+- **Narrow, never widen.** An `Inexact` compilation, a node with no exact
+  translation (a `Compare` on text or booleans, which effect-auth's `matches`
+  never holds), a literal of another kind than its attribute or outside its
+  domain, and a compile that fails or dies are a `ScopeMappingError`, and the
+  filter answers `Deny` for the whole scope — never a dropped conjunct, never
+  `AllowAll`. It logs one warning with the collection and the reason, never the
+  identity or a credential.
+- **Named sets.** The translated predicate names each set (`Predicate.inSet`),
+  so a subscription's authored scope is the same pull after pull while the
+  set's members move. A set that fails to resolve, or that the scope names but
+  the mapping does not declare, binds to nothing: that branch admits no row.
+
+`ReadScopes.translate(scope, mapping)`, `ReadScopes.translateCompiled` and
+`ReadScopes.literal` are the pure translation, as `Result`s;
+`ReadScopes.toAuthFilter(compile, mapping)` is one collection's filter.
+
+## Sign-out: `SignOut` (`/client`)
+
+```ts
+import * as Option from "effect/Option";
+import { SignOut } from "@thomasfosterau/legation-auth/client";
+import * as Digest from "effect/crypto/Digest";
+
+const onChange = SignOut.onSessionChange(client);
+// When the session changes (each an Option of a session with `user.id`, e.g.
+// effect-auth's client store's `SessionWithUserView`; None = signed out):
+yield * onChange(previous, next).pipe(Effect.provide(Digest.layerWebCrypto));
+```
+
+It adopts the next session's identity fingerprint with `Client.reset`, whose
+rule decides what survives: the same user is `Unchanged`; signed out → signed
+in is an `Upgrade` (the warm replica and its journal stay); a sign-out or an
+account switch is a `Reset` — confirmed rows, the pull cookie and every
+subscription are dropped. The rule compares with the replica's own stamp, not
+with `previous`, so a missed notification cannot skip a reset.
+
+**Pending writes are quarantined.** On a reset, unpushed writes are not flushed
+(they would be pushed under whatever credentials the transport now carries)
+and not discarded (they are the user's data): they are held under the
+superseded user's fingerprint, pushable again if that user signs back in
+(`Client.quarantines` / `discardQuarantine` manage them). To send them, push
+before signing out.
+
+`SignOut.fingerprintOf(userId)` is the default fingerprint:
+`legation-auth:sha256:` and the SHA-256 of the user id under a domain
+separator — never the id itself. It needs effect's `Digest` service
+(`Digest.layerWebCrypto`, which needs `crypto.subtle`: a secure context in a
+browser). Pass `{ fingerprint: Option.some(f) }` to use your own. The `/client`
+entry imports no effect-auth runtime, so it is safe in a browser or service
+worker.
+
+## License
+
+MIT

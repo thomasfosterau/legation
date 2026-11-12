@@ -13,6 +13,8 @@
       "@thomasfosterau/legation/sql": ["./packages/effect/src/sql/index.ts"],
       "@thomasfosterau/legation-browser": ["./packages/browser/src/index.ts"],
       "@thomasfosterau/legation-alchemy-cloudflare": ["./packages/alchemy-cloudflare/src/index.ts"],
+      "@thomasfosterau/legation-auth": ["./packages/auth/src/index.ts"],
+      "@thomasfosterau/legation-auth/client": ["./packages/auth/src/client.ts"],
       "@thomasfosterau/legation-jsonapi": ["./packages/jsonapi/src/index.ts"],
       "@thomasfosterau/legation-svelte": ["./packages/svelte/src/index.svelte.ts"],
       "@thomasfosterau/legation-svelte/kit": ["./packages/svelte/src/kit/index.ts"],
