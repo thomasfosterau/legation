@@ -26,6 +26,8 @@ import * as Stream from "effect/Stream";
 import type * as Workers from "@alchemy.run/cloudflare/Workers";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import {
   Authorization,
@@ -48,7 +50,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import * as BindingTransport from "../BindingTransport.js";
-import { fakeBinding, runPromise } from "./harness.js";
+import { fakeBinding } from "./harness.js";
 import type * as Room from "../Room.js";
 import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
@@ -123,6 +125,12 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
   const handlers = new Map<string, Transport.ServerHandler>();
   const served = new Set<string>();
   const scope = yield* Effect.scope;
+  // The service binding's `fetch` is Promise-based, so its callbacks run on a runtime this API owns
+  // and disposes with the test's scope.
+  const runtime = yield* Effect.acquireRelease(
+    Effect.sync(() => ManagedRuntime.make(Layer.empty)),
+    (owned) => owned.disposeEffect
+  );
 
   const handlerFor = (room: string): Effect.Effect<Transport.ServerHandler> =>
     Effect.gen(function* () {
@@ -142,13 +150,13 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
 
   const rooms = makeNamespace(async (room, request) => {
     served.add(room);
-    const handler = await runPromise(handlerFor(room));
+    const handler = await runtime.runPromise(handlerFor(room));
     const path = routeOf(new URL(request.url).pathname);
     const body: unknown = await request.json();
     const badRequest = (error: TransportError | VersionNotSupportedError) =>
       Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
     const answer = (effect: Effect.Effect<unknown, TransportError | VersionNotSupportedError>) =>
-      runPromise(
+      runtime.runPromise(
         effect.pipe(
           Effect.map(json),
           Effect.catchTags({
@@ -170,7 +178,7 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
 
   return {
     fetch: (request) =>
-      runPromise(
+      runtime.runPromise(
         route.pipe(
           Effect.provideService(
             HttpServerRequest.HttpServerRequest,
