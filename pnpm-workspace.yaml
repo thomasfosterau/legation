@@ -61,7 +61,7 @@ catalog:
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
   "@effect/tsgo": 0.63.0
-  "@electric-sql/pglite": ^0.5.14
+  "@electric-sql/pglite": ^0.5.16
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
   # singleton below forces it onto the catalog's copy, which it lints fine on.
