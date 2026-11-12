@@ -13,6 +13,7 @@ import type * as cf from "@cloudflare/workers-types";
 import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -176,6 +177,15 @@ export const makeNamespace = <Surface extends object>(
       ),
   });
 
+/**
+ * Runs an effect to a promise with no services of its own: the edge where this harness hands
+ * Durable Object calls (a `fetch`, an RPC) to the Promise-based API they are written against.
+ */
+export const runPromise = Effect.runPromiseWith(Context.empty());
+
+/** Runs an effect to its value with no services of its own: the same edge, for a synchronous seam. */
+export const runSync = Effect.runSyncWith(Context.empty());
+
 /** A Durable Object's HTTP handler, as the bridge runs it. */
 type Handler = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
@@ -187,7 +197,7 @@ type Handler = Effect.Effect<
 export const fetchOf =
   (instance: Instance<{ readonly fetch: Handler }>) =>
   (request: Request): Promise<Response> =>
-    Effect.runPromise(
+    runPromise(
       instance
         .run(
           instance.object.fetch.pipe(
