@@ -132,7 +132,10 @@ const users = Subset.make({ collection: "users" });
 
 /** Real timers, independent of the test clock (matches backpressure.test.ts). */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /**
  * The mandatory yield after forking a collector: hands control back to the

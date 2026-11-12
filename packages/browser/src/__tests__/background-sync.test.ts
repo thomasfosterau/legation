@@ -45,6 +45,7 @@ import type { Protocol } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -153,7 +154,7 @@ const listenOn = (
 
 /** Await a held `waitUntil` promise, as its outcome or its rejection. */
 const settle = (promise: Promise<unknown> | undefined) =>
-  Effect.promise(() =>
+  awaitPromise(() =>
     (promise ?? Promise.reject(new Error("nothing was held"))).then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error })

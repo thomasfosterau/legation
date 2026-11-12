@@ -71,7 +71,10 @@ const allTodos = Subset.make({ collection: "todos" });
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>

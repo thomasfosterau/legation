@@ -81,7 +81,10 @@ const ranked = Subset.make({
 });
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 const settle = sleepReal(200);
 
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>

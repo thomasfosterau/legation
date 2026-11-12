@@ -13,6 +13,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -393,14 +394,14 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
     ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
-      ({ dispose }) => Effect.promise(dispose)
+      ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)
     );
     const requests: Array<{ readonly method: string; readonly path: string }> = [];
     const client = HttpClient.make((request, url) =>
       Effect.gen(function* () {
         requests.push({ method: request.method, path: url.pathname });
         const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const response = yield* Effect.promise(() => handler(web));
+        const response = yield* awaitPromise(() => handler(web)).pipe(Effect.orDie);
         return HttpClientResponse.fromWeb(request, response);
       })
     );

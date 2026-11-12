@@ -22,6 +22,7 @@ import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -292,7 +293,7 @@ const makeCalls = <Call>() => {
 /** A ClientTransport calling a room instance's fetch directly. */
 const roomTransport = (send: (request: Request) => Promise<Response>) => {
   const post = (route: string) => (body: unknown) =>
-    Effect.promise(async () => {
+    awaitPromise(async () => {
       const response = await send(
         new Request(`https://room${route}`, {
           method: "POST",
@@ -301,7 +302,7 @@ const roomTransport = (send: (request: Request) => Promise<Response>) => {
         })
       );
       return (await response.json()) as never;
-    });
+    }).pipe(Effect.orDie);
   return {
     push: post(routes.push),
     pull: post(routes.pull),
@@ -336,7 +337,7 @@ const makeRooms = (config: Room.RoomConfig) => {
   const instances = new Map<string, Promise<Instance<Room.RoomObject>>>();
   const pokes = makeCalls<{ readonly room: string; readonly topics: ReadonlyArray<string> }>();
   const namespace: Workers.DurableObject<Room.RoomObject> = makeNamespace<Room.RoomObject>((name) =>
-    Effect.promise(() => room(name))
+    awaitPromise(() => room(name)).pipe(Effect.orDie)
   );
   const room = (name: string): Promise<Instance<Room.RoomObject>> => {
     let instance = instances.get(name);
@@ -370,7 +371,7 @@ describe("rooms + shards, end to end", () => {
       Effect.acquireUseRelease(
         Scope.make(),
         (scope) =>
-          Effect.promise(async () => {
+          awaitPromise(async () => {
             // The room's heartbeat sleeps on this clock, so it beats only when the test
             // advances time. Shards stamp leases with the real wall clock; a 10 minute
             // beat gives a 30 minute TTL, which no run of this test can outlive. (A
@@ -409,7 +410,7 @@ describe("rooms + shards, end to end", () => {
               return shard;
             };
             const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
-              Effect.promise(() => shardNamed(name))
+              awaitPromise(() => shardNamed(name)).pipe(Effect.orDie)
             );
             const { room, pokes } = makeRooms({
               nodes,
@@ -608,7 +609,7 @@ const hungRoom = (
 ) =>
   Effect.gen(function* () {
     const backend = yield* backendOf();
-    return yield* Effect.promise(() =>
+    return yield* awaitPromise(() =>
       makeRooms({
         nodes,
         backend: Effect.succeed(backend),
@@ -622,7 +623,7 @@ const hungRoom = (
 
 /** Mutate one review through `writer`. */
 const writeReview = (writer: ClientEngine.ClientEngine, id: string, productId: string) =>
-  Effect.promise(() =>
+  awaitPromise(() =>
     Effect.runPromise(
       writer.mutate("review/set", { id, body: "hung shard", createdAt: "2026-01-01", productId })
     )
@@ -639,7 +640,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-hung", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-hung", "group-hung")
         );
         yield* writeReview(writer, "r-1", "p-1");
@@ -650,11 +651,11 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(1));
+        yield* awaitPromise(() => hung.arrived(1));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000
@@ -670,7 +671,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-wide", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-wide", "group-wide")
         );
         // Nine products in one push: the coarse topic plus nine fine ones, ten shard
@@ -683,12 +684,12 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(8));
+        yield* awaitPromise(() => hung.arrived(8));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         // One bound covers the whole publish: the second wave is dropped with the first.
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
       }).pipe(Effect.scoped),
     20_000
   );
@@ -704,7 +705,7 @@ describe("Room publishTimeout", () => {
           heartbeat: "1 second",
           publishTimeout: "200 millis",
         });
-        const reader = yield* Effect.promise(() =>
+        const reader = yield* awaitPromise(() =>
           makeClient(room, scope, "client-lease", "group-lease", {
             pullInterval: "10 minutes",
             pushDebounce: "10 millis",
@@ -721,12 +722,12 @@ describe("Room publishTimeout", () => {
           ).pipe(Scope.provide(scope), Effect.ignore)
         );
         void observing;
-        yield* Effect.promise(() => isSubscribed);
-        yield* Effect.promise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
+        yield* awaitPromise(() => isSubscribed);
+        yield* awaitPromise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
 
         // t = 1 s: the first heartbeat registers the window and hangs.
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(1));
+        yield* awaitPromise(() => hung.arrived(1));
         expect(hung.received[0]).toEqual({ shard: "reviews/productId=p-1", method: "register" });
         // The bound drops it at t = 1.2 s; the next heartbeat is one interval later, at
         // t = 2.2 s. With the 5 second default that second registration would not start
@@ -734,7 +735,7 @@ describe("Room publishTimeout", () => {
         yield* clock.adjust("199 millis");
         yield* clock.adjust("1 millis");
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(2));
+        yield* awaitPromise(() => hung.arrived(2));
         expect(hung.received.map((call) => call.method)).toEqual(["register", "register"]);
       }).pipe(Effect.scoped),
     20_000
@@ -750,7 +751,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-long", clock, hung.namespace, {
           publishTimeout: "8 seconds",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-long", "group-long")
         );
         yield* writeReview(writer, "r-1", "p-1");
@@ -759,7 +760,7 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(2));
+        yield* awaitPromise(() => hung.arrived(2));
         // Past the broker's 5 second default the hung calls are still pending: were the broker
         // bounded at its default, the push would have finished here.
         yield* clock.adjust("5 seconds");
@@ -767,7 +768,7 @@ describe("Room publishTimeout", () => {
         yield* clock.adjust("2999 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000
@@ -788,7 +789,7 @@ describe("Room HTTP routes", () => {
       });
       const send = fetchOf(room);
       const post = (path: string) =>
-        Effect.promise(() =>
+        awaitPromise(() =>
           send(
             new Request(`https://room${path}`, {
               method: "POST",
