@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -461,6 +462,107 @@ describe("answer completeness (#653)", () => {
   it("rows no Client answered with carry no marker", () => {
     expect(Client.completenessOf([])).toEqual(Option.none());
   });
+});
+
+/**
+ * A view whose `observe` holds every emission after the first `pass` until
+ * `open`, while `pulledChanges` ticks through at once: the ordering a loaded
+ * machine can produce, where a pull's tick reaches the Client before the
+ * pull's rows do.
+ */
+const holdingRows = (view: ClientView.ClientView, pass: number) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const seen = yield* Ref.make(0);
+    const held: ClientView.ClientView = {
+      ...view,
+      observe: (subset) =>
+        view
+          .observe(subset)
+          .pipe(
+            Stream.mapEffect((rows) =>
+              Ref.getAndUpdate(seen, (n) => n + 1).pipe(
+                Effect.flatMap((n) =>
+                  n < pass ? Effect.succeed(rows) : Deferred.await(gate).pipe(Effect.as(rows))
+                )
+              )
+            )
+          ),
+    };
+    return { view: held, open: Deferred.succeed(gate, undefined) };
+  });
+
+/** Every emission of `stream`, in order, recorded as it arrives. */
+const recording = (stream: Stream.Stream<ReadonlyArray<Client.ResolvedRow>>) =>
+  Effect.gen(function* () {
+    const log = yield* Ref.make<ReadonlyArray<ReadonlyArray<Client.ResolvedRow>>>([]);
+    yield* Effect.forkScoped(
+      Stream.runForEach(stream, (rows) => Ref.update(log, (all) => [...all, rows]))
+    );
+    return log;
+  });
+
+/** A seeded server and a reader over a view that holds `observe`'s rows past `pass`. */
+const setup = (group: string, pass: number) =>
+  Effect.gen(function* () {
+    const { server } = yield* makeServer();
+    yield* seed(server.handler);
+    const engine = yield* makeEngine(server.handler, group);
+    const { view, open } = yield* holdingRows(ClientView.fromEngine(engine), pass);
+    return { engine, client: Client.fromView(nodes, view), open };
+  });
+
+describe("completeness is judged against the rows it marks (#653)", () => {
+  const products = { collection: "products" };
+
+  it.effect("a pull's tick before its rows never marks the stale answer complete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine, client, open } = yield* setup("group-tick-first", 1);
+        const log = yield* recording(client.observe(products));
+        // The first answer, before any pull: the empty replica, partial.
+        yield* eventually(Ref.get(log), (all) => all.length === 1);
+        expect(yield* Ref.get(log)).toEqual([[]]);
+        expect(Arr.every(yield* Ref.get(log), partial)).toBe(true);
+
+        // The pull applies and ticks; its rows are held back.
+        yield* engine.pull.pipe(Effect.orDie);
+        const first = yield* eventually(
+          Ref.get(log).pipe(Effect.map((all) => Arr.findFirst(all, complete))),
+          Option.isSome
+        );
+        expect(Option.map(first, (rows) => rows.length)).toEqual(Option.some(2));
+
+        yield* open;
+        yield* eventually(Ref.get(log), (all) => all.length >= 3);
+        expect(Arr.filter(yield* Ref.get(log), complete).map((rows) => rows.length)).not.toContain(
+          0
+        );
+      })
+    )
+  );
+
+  it.effect("rows emitted before a pull and judged after it are not marked complete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine, client, open } = yield* setup("group-rows-late", 0);
+        const log = yield* recording(client.observe(products));
+        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
+        // The pull lands while the pre-pull answer is still in flight.
+        yield* engine.pull.pipe(Effect.orDie);
+        yield* open;
+
+        const first = yield* eventually(
+          Ref.get(log).pipe(Effect.map((all) => Arr.findFirst(all, complete))),
+          Option.isSome
+        );
+        expect(Option.map(first, (rows) => rows.length)).toEqual(Option.some(2));
+        expect(Arr.filter(yield* Ref.get(log), complete).map((rows) => rows.length)).not.toContain(
+          0
+        );
+      })
+    )
+  );
 });
 
 describe("answer completeness over a hosted engine (#653)", () => {

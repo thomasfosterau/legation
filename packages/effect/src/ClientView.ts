@@ -147,6 +147,18 @@ export interface ClientView {
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /**
+   * The current resolved rows of a relational read this view holds through
+   * {@link related} or {@link pinEdges}, read once (#653). A `Mirror` answers
+   * from the rows its host sent for the registration; absent, a Client joins
+   * the read locally over {@link query}, as an engine-backed view's rows are.
+   */
+  readonly queryRelated?: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<Related.EdgeSelect>
+  ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientViewError>;
+  /**
    * Hold a subset's edge windows registered for the scope's lifetime
    * without resolving the join — what an explicit pin with `include` needs
    * (ADR-0029 section 2): the narrowed foreign windows keep tracking the

@@ -33,6 +33,7 @@ import {
   type HostRequest,
   Mirror,
   MirrorProtocol,
+  Related,
   Subscriptions,
   Subset,
 } from "@thomasfosterau/legation/internal";
@@ -236,6 +237,12 @@ const switchingView = (
               Stream.unwrap(view.related(registry, collectionName, subset, edges))
             )
           )
+        ),
+      queryRelated: (registry, collectionName, subset, edges) =>
+        withCurrent((view) =>
+          view.queryRelated === undefined
+            ? Related.query(view, registry, collectionName, subset, edges)
+            : view.queryRelated(registry, collectionName, subset, edges)
         ),
       // A held edge registration has no stream to redo the switch for it:
       // re-pin on every view this switches to (the current one first —

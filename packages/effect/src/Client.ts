@@ -74,7 +74,7 @@ import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
 import type * as QueryModule from "./Query.js";
-import type * as Related from "./Related.js";
+import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as Mirror from "./Mirror.js";
@@ -467,12 +467,14 @@ export type Completeness = "complete" | "partial";
 // answer's type and shape are what they were for a caller that never asks.
 const answers = new WeakMap<ReadonlyArray<unknown>, Completeness>();
 
-/** A live read's last answer: what it was resolved from, its rows and their completeness. */
-interface Answer<S> {
-  readonly source: S;
+/** A live read's last answer: its rows and their completeness. */
+interface Answer {
   readonly rows: ReadonlyArray<Related.RelatedRow>;
   readonly completeness: Completeness;
 }
+
+/** A live read's next state and what it emits: `answer`, as its rows. */
+const emit = (answer: Answer) => [Option.some(answer), [answer.rows]] as const;
 
 /** Record how `rows` were answered, on a copy when they already carry another marker. */
 const answered =
@@ -724,6 +726,25 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // ─── Coverage ────────────────────────────────────────────────────────────
 
+  // The ledger's entries with their pulled summaries, the read's own
+  // registration beside them when the ledger does not hold it (a live read
+  // with `include` registers through the view's relational read).
+  const entriesOf = (own?: Coverage.Registration): Effect.Effect<ReadonlyArray<Coverage.Entry>> =>
+    Ref.get(ledger).pipe(
+      Effect.flatMap((interests) =>
+        Effect.forEach(
+          own === undefined || interests.has(keyOf(own))
+            ? [...interests.values()]
+            : [...interests.values(), own],
+          (interest) =>
+            view
+              .pulled(keyOf(interest))
+              .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled }))),
+          { concurrency: 1 }
+        )
+      )
+    );
+
   // One rule, one scan: the first pulled ledger entry (in registration order)
   // that covers the read, under `Coverage`. The read's root rows are read from
   // the view, so the edge windows it links to are the ones judged (#426). An
@@ -731,88 +752,113 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
   const verdictOf = (
     plan: Query.Plan,
-    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query,
-    own?: Coverage.Registration
+    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query
   ): Effect.Effect<Coverage.Verdict> =>
     Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
       Effect.flatMap((requested) =>
-        Ref.get(ledger).pipe(
-          Effect.flatMap((interests) =>
-            Effect.forEach(
-              own === undefined || interests.has(keyOf(own))
-                ? [...interests.values()]
-                : [...interests.values(), own],
-              (interest) =>
-                view
-                  .pulled(keyOf(interest))
-                  .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled }))),
-              { concurrency: 1 }
-            )
-          ),
-          Effect.map((entries) => Coverage.verdictOf(entries, requested))
-        )
+        entriesOf().pipe(Effect.map((entries) => Coverage.verdictOf(entries, requested)))
       ),
       Effect.catchTag(["MutatorError", "StoreError", "TransportError", "QueryError"], () =>
         Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" })
       )
     );
 
-  // Each emission is judged over the root rows it was resolved from, as a
-  // covered `query` is (#426): complete once the read's windows are pulled,
-  // partial before (#653). The read's own registration is judged beside the
-  // ledger's, for a read with `include` registers through the view's
-  // relational read, not the ledger.
-  const judged = (
+  // The replica's answer to a read when a pulled subscription covers it
+  // (ADR-0029), marked complete (#653); `None` when nothing covers it. The
+  // marks are read first, then the rows: a pull marks its windows only after
+  // its rows are in the replica, so rows read after a mark says pulled are at
+  // least that pull's, and rows read before it are never called complete.
+  // The verdict is judged over those earlier marks and the root rows just
+  // read, which the answer is joined from, so a root row whose edge windows
+  // were not pulled when the marks were read uncovers the read (#426); edge
+  // rows `answerOf` reads come after the marks too. The root is read once,
+  // and a failed read of it is uncovered.
+  const coveredAnswer = <R extends ClientEngine.LocalRow>(
     compiled: Query.Plan,
-    rowsOf: Coverage.RowsOf<ClientView.ClientViewError>
-  ): Effect.Effect<Completeness> =>
-    verdictOf(compiled, rowsOf, Coverage.ofPlan(compiled)).pipe(
-      Effect.map((verdict): Completeness =>
-        P.isTagged(verdict, "Covered") ? "complete" : "partial"
+    own: Option.Option<Coverage.Registration>,
+    rowsNow: Effect.Effect<ReadonlyArray<R>, ClientView.ClientViewError>,
+    answerOf: (rows: ReadonlyArray<R>) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>
+  ): Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>> =>
+    entriesOf(Option.getOrUndefined(own)).pipe(
+      Effect.flatMap((entries) =>
+        Effect.option(rowsNow).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeedNone,
+              onSome: (rows) =>
+                Coverage.requestedOf(
+                  nodes.collections,
+                  compiled,
+                  Coverage.snapshotOf({ subset: compiled.root, rows }, view.query)
+                ).pipe(
+                  Effect.option,
+                  Effect.flatMap((requested) =>
+                    Option.exists(requested, (request) =>
+                      P.isTagged(Coverage.verdictOf(entries, request), "Covered")
+                    )
+                      ? answerOf(rows).pipe(
+                          Effect.map((answer) => Option.some(answered("complete")(answer)))
+                        )
+                      : Effect.succeedNone
+                  )
+                ),
+            })
+          )
+        )
       )
     );
 
-  // A live read's answers, each marked with its completeness. A pull's rows
-  // reach the stream before the pull marks its windows pulled, so the last
-  // answer is judged again on each `pulledChanges` tick, and emitted again,
-  // as a fresh array, only when its completeness moved.
-  const marked = <S>(
-    compiled: Query.Plan,
-    sources: Stream.Stream<S>,
-    rowsOf: (source: S) => Coverage.RowsOf<ClientView.ClientViewError>,
-    resolve: (source: S) => ReadonlyArray<Related.RelatedRow>
-  ): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
-    Stream.merge(
+  // A live read's answers, each marked with its completeness (#653). An
+  // emitted array may predate the pull that covers the read, and a pull's
+  // tick may arrive before its rows, so no emitted array is marked complete
+  // as it stands: on each emission and each `pulledChanges` tick the read is
+  // answered again by `covered`, and while that finds it uncovered the
+  // emitted rows go out marked partial. A tick emits only when the
+  // completeness moved: a fresh complete answer, or a complete answer that
+  // is uncovered again, out again as a fresh array marked partial.
+  const marked = (
+    sources: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+    covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+  ): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
+    return Stream.merge(
       sources.pipe(Stream.map(Option.some)),
-      (view.pulledChanges ?? Stream.empty).pipe(Stream.as(Option.none<S>())),
+      (view.pulledChanges ?? Stream.empty).pipe(
+        Stream.as(Option.none<ReadonlyArray<Related.RelatedRow>>())
+      ),
       { haltStrategy: "left" }
     ).pipe(
       Stream.mapAccumEffect(
-        (): Option.Option<Answer<S>> => Option.none(),
+        (): Option.Option<Answer> => Option.none(),
         (last, event) =>
-          Option.match(event, {
-            onSome: (source) =>
-              judged(compiled, rowsOf(source)).pipe(
-                Effect.map((completeness) => {
-                  const rows = answered(completeness)(resolve(source));
-                  return [Option.some({ source, rows, completeness }), [rows]] as const;
-                })
-              ),
-            onNone: () =>
-              Option.match(last, {
-                onNone: () => Effect.succeed([last, []] as const),
+          covered.pipe(
+            Effect.map((fresh) => {
+              const wasComplete = Option.exists(
+                last,
+                (answer) => answer.completeness === "complete"
+              );
+              if (Option.isSome(fresh)) {
+                return Option.isSome(event) || !wasComplete
+                  ? emit({ rows: fresh.value, completeness: "complete" })
+                  : ([last, []] as const);
+              }
+              if (Option.isSome(event)) {
+                return emit({ rows: answered("partial")(event.value), completeness: "partial" });
+              }
+              return Option.match(last, {
+                onNone: () => [last, []] as const,
                 onSome: (answer) =>
-                  judged(compiled, rowsOf(answer.source)).pipe(
-                    Effect.map((completeness) => {
-                      if (completeness === answer.completeness) return [last, []] as const;
-                      const rows = answered(completeness)(Arr.copy(answer.rows));
-                      return [Option.some({ ...answer, rows, completeness }), [rows]] as const;
-                    })
-                  ),
-              }),
-          })
+                  wasComplete
+                    ? emit({
+                        rows: answered("partial")(Arr.copy(answer.rows)),
+                        completeness: "partial",
+                      })
+                    : ([last, []] as const),
+              });
+            })
+          )
       )
     );
+  };
 
   // The three-tier read (ADR-0025): replica when a ledger subscription
   // covers the read (ADR-0029); server fallthrough otherwise
@@ -820,11 +866,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // the derived REST handlers run server-side — with the plan compiled once,
   // for the coverage verdict and the run); local again when fallthrough is
   // unavailable or fails (offline-first — local is always an answer).
-  // One snapshot of the root rows, read once: the verdict is judged over them
-  // and a covered answer is joined from them, so a pull between the judgment
-  // and the answer cannot add a root row whose edge windows are not pulled
-  // (#426). A failed read of the root is uncovered, as a failed read of the
-  // rows is.
+  // A covered answer is `coveredAnswer`'s: judged before, and over, the one
+  // snapshot of the root rows it is joined from (#426, #653).
   const queryOnce = (
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> => {
@@ -842,25 +885,9 @@ export const fromView = <Graph extends Node.NodeRegistry>(
             Effect.map(answered("complete")),
             Effect.catch(() => local)
           );
-    return view.query(compiled.root).pipe(
-      Effect.orElseSucceed(() => undefined),
-      Effect.flatMap((snapshot) =>
-        snapshot === undefined
-          ? uncovered
-          : verdictOf(
-              compiled,
-              Coverage.snapshotOf({ subset: compiled.root, rows: snapshot }, view.query)
-            ).pipe(
-              Effect.flatMap((verdict) =>
-                verdict._tag === "Covered"
-                  ? Query.runRows(view, nodes, read, snapshot).pipe(
-                      Effect.map(answered("complete"))
-                    )
-                  : uncovered
-              )
-            )
-      )
-    );
+    return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
+      Query.runRows(view, nodes, read, rows)
+    ).pipe(Effect.flatMap(Option.match({ onNone: () => uncovered, onSome: Effect.succeed })));
   };
 
   const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
@@ -873,10 +900,16 @@ export const fromView = <Graph extends Node.NodeRegistry>(
         ).pipe(
           Effect.as(
             marked(
-              compiled,
-              view.observe(compiled.root).pipe(Stream.orDie),
-              (rows) => Coverage.snapshotOf({ subset: compiled.root, rows }, view.query),
-              (rows) => rows.map((row) => ({ ...row, related: {} }))
+              view.observe(compiled.root).pipe(
+                Stream.orDie,
+                Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+              ),
+              coveredAnswer(
+                compiled,
+                Option.some(registration),
+                view.query(compiled.root),
+                (rows) => Query.runRows(view, nodes, read, rows)
+              )
             )
           )
         )
@@ -884,19 +917,23 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     }
     // The view's relational read auto-subscribes root + narrowed foreign
     // windows itself (host-side on a connected engine), scoped to the stream.
+    // A fresh answer is the relational read's current rows, read where the
+    // view holds them (a mirror's are the host's), or joined locally.
+    const edges = Query.edgeSelects(compiled);
+    const relatedNow =
+      view.queryRelated?.(nodes.collections, read.collection, compiled.root, edges) ??
+      Related.query(view, nodes.collections, read.collection, compiled.root, edges);
     return Stream.unwrap(
-      view
-        .related(nodes.collections, read.collection, compiled.root, Query.edgeSelects(compiled))
-        .pipe(
-          Effect.map((stream) =>
-            marked(
-              compiled,
-              stream,
-              () => view.query,
-              (rows) => Query.applyWindows(compiled, rows)
+      view.related(nodes.collections, read.collection, compiled.root, edges).pipe(
+        Effect.map((stream) =>
+          marked(
+            stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows))),
+            coveredAnswer(compiled, Option.some(Coverage.ofPlan(compiled)), relatedNow, (rows) =>
+              Effect.succeed(Query.applyWindows(compiled, rows))
             )
           )
         )
+      )
     );
   };
 

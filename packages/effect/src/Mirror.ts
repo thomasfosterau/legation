@@ -264,6 +264,13 @@ export interface Mirror {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  /** The host's current rows of a held relational read (#653); see {@link ClientView.ClientView.queryRelated}. */
+  readonly queryRelated: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<Related.EdgeSelect>
+  ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>;
   /**
    * Hold a relational registration with the host for the scope's lifetime
    * without reading its resolved rows — an explicit pin's edge windows
@@ -1085,6 +1092,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         holdRelated(collectionName, subset, edgeInputs).pipe(
           Effect.map((key) => observeKey(key, readRelated(key)))
         ),
+      queryRelated: (_registry, collectionName, subset, edges) =>
+        readRelated(MirrorProtocol.relatedKey(collectionName, subset, edges)),
       pinEdges: (_registry, collectionName, subset, edgeInputs) =>
         Effect.asVoid(holdRelated(collectionName, subset, edgeInputs)),
     };
