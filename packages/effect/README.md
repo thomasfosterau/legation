@@ -425,6 +425,9 @@ connection keeps it; one that can split a transaction across connections breaks
 Backend guarantee 1, as D1 does (see `D1Executor`). In a Worker, build the
 `PgClient` layer per request, inside the request's scope, from the binding's
 connection string: a Worker cannot reuse one request's connection in another.
+`Backend.perRequest(acquire)` does that for a `Server`: `acquire` builds the
+`SqlBackend` for one request, and the server runs it once per push, pull and
+read, so a push's transaction is on the one client it opened (#681).
 What Hyperdrive guarantees about transactions, isolation statements and query
 caching is still to be confirmed against its documentation:
 [#506](https://github.com/thomasfosterau/legation/issues/506).

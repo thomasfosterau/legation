@@ -1,0 +1,5 @@
+---
+"@thomasfosterau/legation": minor
+---
+
+Per-request backends (#681). `Backend.perRequest(acquire)` builds a `Backend` whose store is acquired in a request's `Scope` and released when it closes, for a store whose connection is valid only within the current invocation (Hyperdrive) or must not be shared across requests; the services `acquire` needs beside its `Scope` are captured where the returned effect runs. `Backend.forRequest(backend)` is the backend one request runs against: one acquisition for a per-request backend, the backend itself otherwise. The sync server (`Server.make`, `SyncServer.make*`), `SyncServer.readSubsets`, `SyncServer.readTotal` and `Authorization.namedSet` now run each push, pull and read against one `forRequest` acquisition, so a push's `applyMutations` transaction, mutation-id claims included, stays on the connection that acquisition holds (Backend guarantee 1), while the server's CVRs, bus and named-set cache stay per server. Called directly, a per-request backend acquires once per call.
