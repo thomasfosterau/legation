@@ -298,9 +298,9 @@ without a database never loads it. It needs only `effect`; the driver is yours.
   driver (`better-sqlite3`, `effect/sql`, `pg`, …); the backend supplies
   subset evaluation, row fetching, and the transactional, idempotent,
   gap-checked mutation-id ledger.
-- **`PgExecutor`** — the `SqlExecutor` for PostgreSQL, over the `SqlClient`
-  service from `effect/sql` (the driver, such as `@effect/sql-pg`, is yours to
-  provide). See [PostgreSQL](#postgresql) below.
+- **`PgExecutor`** — the `SqlExecutor` for PostgreSQL, over an `effect/sql`
+  client: the `SqlClient` service or the driver's own client (the driver, such
+  as `@effect/sql-pg`, is yours to provide). See [PostgreSQL](#postgresql) below.
 - **`PollingHintSource`** — a tier-2 change-data-capture hint source over the
   same `SqlExecutor` seam: it polls each table on an interval for a cheap
   change-detector (`COUNT(*)` plus `MAX(versionColumn)`) and pokes subscribers
@@ -340,10 +340,14 @@ PostgreSQL it is refused with a transient `BackendError`, and its retry lists it
 
 ### PostgreSQL
 
-`PgExecutor.make(sql)` turns a PostgreSQL `SqlClient` into the executor
+`PgExecutor.make(sql)` turns a PostgreSQL client into the executor
 `SqlBackend` runs over. It needs only `effect`, so the package gains no
-dependency; install a driver that provides `SqlClient`, such as
-`@effect/sql-pg`, and pass `dialect: Sql.postgres`:
+dependency; install a driver, such as `@effect/sql-pg`, and pass
+`dialect: Sql.postgres`. The client is either the `SqlClient` service or the
+driver's own (`PgClient`, or a `db.$client` that holds one): `make` takes a
+`PgExecutor.Client`, the two members it uses (`unsafe` and `withTransaction`),
+so it accepts both on every effect 4 release, including effect 4.1.3 and later,
+where a driver's client is no longer a `SqlClient`.
 
 ```ts
 import * as Effect from "effect/Effect";
