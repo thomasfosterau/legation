@@ -253,8 +253,9 @@ describe("Related.query / observe", () => {
   // Real-clock: a forked observer collects the join's emissions while a related
   // (not base) row is edited — proving the join re-hydrates incrementally and
   // the base issue row is reused (same reference), never re-resolved.
-  it("re-hydrates on a related-row write without re-resolving the base", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "re-hydrates on a related-row write without re-resolving the base",
+    () =>
       Effect.scoped(
         Effect.gen(function* () {
           const handler = yield* makeServer;
@@ -317,9 +318,9 @@ describe("Related.query / observe", () => {
           // The base issue row object was reused across the re-hydration.
           expect(lastI1.value).toBe(firstI1.value);
         })
-      )
-    );
-  }, 10000);
+      ),
+    10000
+  );
 
   // Regression: a foreign-row write landing
   // between the join's index priming and its foreign observers subscribing
@@ -327,8 +328,9 @@ describe("Related.query / observe", () => {
   // emission — strictly before the concat proceeds to the merged foreign
   // observers — which an initial-emission drop would swallow, leaving the
   // join stale until the next foreign write.
-  it("does not lose a foreign write racing the observer subscription", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "does not lose a foreign write racing the observer subscription",
+    () =>
       Effect.scoped(
         Effect.gen(function* () {
           const handler = yield* makeServer;
@@ -365,9 +367,9 @@ describe("Related.query / observe", () => {
           expect(emissions[0]).toBe("Ada,Ada");
           expect(emissions[emissions.length - 1]).toBe("Grace,Grace");
         })
-      )
-    );
-  }, 10000);
+      ),
+    10000
+  );
 });
 
 describe("Related.related", () => {

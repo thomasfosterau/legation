@@ -7,7 +7,7 @@
  * fleet cookie-namespace bump forces every old cookie to a reset patch.
  */
 import * as Defined from "../Defined.js";
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -106,7 +106,7 @@ const makeClient = (handler: ServerHandler, name: string, clientOptions?: Client
     return { engine, store };
   });
 
-describe("schema-version rejection", () => {
+describeWrapped("schema-version rejection", (it) => {
   it.effect(
     "an unacceptable version fails push and pull typed, fires onUpdateNeeded once, keeps the journal",
     () =>
@@ -158,7 +158,7 @@ describe("schema-version rejection", () => {
   );
 });
 
-describe("schema-version interop old ↔ new", () => {
+describeWrapped("schema-version interop old ↔ new", (it) => {
   it.effect("old client (no version) ↔ new server with default accept-all works", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer(); // acceptor unset → accept everything
@@ -203,7 +203,7 @@ describe("schema-version interop old ↔ new", () => {
   );
 });
 
-describe("protocol round-trips a version-less request unchanged", () => {
+describeWrapped("protocol round-trips a version-less request unchanged", (it) => {
   it.effect("a push/pull request without schemaVersion decodes as today", () =>
     Effect.gen(function* () {
       const push = yield* decodePushRequest({ clientGroupId: "g", mutations: [] });
@@ -217,7 +217,7 @@ describe("protocol round-trips a version-less request unchanged", () => {
   );
 });
 
-describe("storeVersion buster", () => {
+layer(KeyValueStore.layerMemory, { buildPerTest: true })("storeVersion buster", (it) => {
   it.effect("a changed storeVersion clears rows + cookie but preserves the journal", () =>
     Effect.gen(function* () {
       const first = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
@@ -241,7 +241,7 @@ describe("storeVersion buster", () => {
       // Same version again is a no-op: nothing further is cleared.
       const third = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
       expect(yield* third.pendingMutations).toHaveLength(1);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("after a buster the next pull rehydrates fully; the pending intent survives", () =>
@@ -289,11 +289,11 @@ describe("storeVersion buster", () => {
       // The preserved pending intent ("2") is still visible via the overlay.
       const view = yield* engineB.query(allTodos);
       expect(view.map((row) => row.id).toSorted()).toEqual(["1", "2"]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 });
 
-describe("fleet cookie-reset via CVR namespace bump", () => {
+describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
   it.effect("a pull with a pre-bump cookie is a reset patch (Clear present)", () =>
     Effect.gen(function* () {
       const services = yield* makeServices;

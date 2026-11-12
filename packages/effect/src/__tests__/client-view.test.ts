@@ -4,7 +4,7 @@
  * awaited-outcome shape; `layer` derives the view from the in-context engine
  * so one runtime exposes both.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -69,40 +69,46 @@ const viewLayer = ClientView.layer.pipe(Layer.provideMerge(engineLayer));
 
 const allTodos = Subset.make({ collection: "todos" });
 
-describe("ClientView.fromEngine / layer", () => {
+layer(viewLayer, { buildPerTest: true })("ClientView.fromEngine / layer", (it) => {
   it.effect("delegates reads and optimistic writes to the engine", () =>
     Effect.gen(function* () {
       const view = yield* ClientView.ClientView;
       yield* view.mutate("todo/set", { id: "1", title: "seed" });
       expect((yield* view.query(allTodos)).map((row) => row.id)).toEqual(["1"]);
-    }).pipe(Effect.provide(viewLayer))
-  );
-
-  it.live("mutateWithAck resolves with the backend's authoritative outcome", () =>
-    Effect.gen(function* () {
-      const view = yield* ClientView.ClientView;
-      const engine = yield* ClientEngineModule.ClientEngine;
-      const journaled = (id: string) =>
-        eventually(view.query(allTodos), (rows) => rows.some((row) => row.id === id));
-
-      // The call settles only when the backend acknowledges — fork, then push
-      // once the optimistic row shows the mutation is journaled.
-      const applied = yield* Effect.forkChild(
-        view.mutateWithAck("todo/set", { id: "2", title: "ok" })
-      );
-      yield* journaled("2");
-      yield* engine.push;
-      expect(yield* Fiber.join(applied)).toEqual({ _tag: "applied" });
-
-      const rejected = yield* Effect.forkChild(
-        view.mutateWithAck("todo/reject", { id: "9", title: "doomed" })
-      );
-      yield* journaled("9");
-      yield* engine.push;
-      expect(yield* Fiber.join(rejected)).toEqual({ _tag: "rejected", reason: "not allowed" });
-    }).pipe(Effect.provide(ClientView.layer.pipe(Layer.provideMerge(engineLayer))))
+    })
   );
 });
+
+// Live clock (`excludeTestServices`): `eventually` polls on real timers.
+layer(viewLayer, { buildPerTest: true, excludeTestServices: true })(
+  "ClientView.fromEngine / layer, live",
+  (it) => {
+    it.effect("mutateWithAck resolves with the backend's authoritative outcome", () =>
+      Effect.gen(function* () {
+        const view = yield* ClientView.ClientView;
+        const engine = yield* ClientEngineModule.ClientEngine;
+        const journaled = (id: string) =>
+          eventually(view.query(allTodos), (rows) => rows.some((row) => row.id === id));
+
+        // The call settles only when the backend acknowledges — fork, then push
+        // once the optimistic row shows the mutation is journaled.
+        const applied = yield* Effect.forkChild(
+          view.mutateWithAck("todo/set", { id: "2", title: "ok" })
+        );
+        yield* journaled("2");
+        yield* engine.push;
+        expect(yield* Fiber.join(applied)).toEqual({ _tag: "applied" });
+
+        const rejected = yield* Effect.forkChild(
+          view.mutateWithAck("todo/reject", { id: "9", title: "doomed" })
+        );
+        yield* journaled("9");
+        yield* engine.push;
+        expect(yield* Fiber.join(rejected)).toEqual({ _tag: "rejected", reason: "not allowed" });
+      })
+    );
+  }
+);
 
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
   Effect.gen(function* () {

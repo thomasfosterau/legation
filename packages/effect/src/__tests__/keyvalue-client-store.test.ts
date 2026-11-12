@@ -3,7 +3,7 @@
  * rehydrates losslessly (rows, journal, counters, cookie) and drives the
  * engine end to end like the memory store.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -33,7 +33,7 @@ const mutation = (mutationId: number): Mutation => ({
   createdAt: 0,
 });
 
-describe("ClientStore.makeKeyValue", () => {
+layer(KeyValueStore.layerMemory, { buildPerTest: true })("ClientStore.makeKeyValue", (it) => {
   it.effect("rehydrates rows, journal, counters, and cookie from the same KVS", () =>
     Effect.gen(function* () {
       const first = yield* ClientStoreModule.makeKeyValue();
@@ -50,7 +50,7 @@ describe("ClientStore.makeKeyValue", () => {
       expect(yield* second.getCookie).toBe("cookie-1");
       // The mutation-id counter continues, never restarts.
       expect(yield* second.nextMutationId("c1")).toBe(2);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("reads and raises the counters durably, never lowering one (#271)", () =>
@@ -67,7 +67,7 @@ describe("ClientStore.makeKeyValue", () => {
       expect(yield* second.mutationCounters).toEqual({ c1: 2, c2: 5 });
       expect(yield* second.nextMutationId("c1")).toBe(3);
       expect(yield* second.nextMutationId("c2")).toBe(6);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("a corrupt persisted blob fails as a StoreError, not a silent bad cast", () =>
@@ -84,7 +84,7 @@ describe("ClientStore.makeKeyValue", () => {
       yield* kv.set("legation/rows/todos", "}{ not json");
       const rowsError = yield* Effect.flip(store.listRows("todos"));
       expect(rowsError._tag).toBe("StoreError");
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("acknowledge trims the journal per client; clearRows resets rows only", () =>
@@ -109,7 +109,7 @@ describe("ClientStore.makeKeyValue", () => {
       // Journal and cookie survive a row reset.
       expect(yield* store.pendingMutations).toHaveLength(2);
       expect(yield* store.getCookie).toBe("keep-me");
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("compactPending removes specific unpushed entries, unlike acknowledge's <= upTo", () =>
@@ -142,7 +142,7 @@ describe("ClientStore.makeKeyValue", () => {
       expect(
         (yield* rehydrated.pendingMutations).map((m) => m.mutationId).toSorted((a, b) => a - b)
       ).toEqual([1, 1, 2]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("prefixes isolate two stores sharing one KVS", () =>
@@ -153,7 +153,7 @@ describe("ClientStore.makeKeyValue", () => {
       yield* a.setCookie("a-cookie");
       expect(yield* b.listRows("todos")).toEqual([]);
       expect(yield* b.getCookie).toBeUndefined();
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("drives the engine end to end as the durable store", () =>
@@ -204,7 +204,7 @@ describe("ClientStore.makeKeyValue", () => {
       expect(yield* store.pendingMutations).toEqual([]);
       const confirmed = yield* store.listRows("todos");
       expect(confirmed.map((row) => (row.value as { title: string }).title)).toEqual(["durable"]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 });
 
@@ -319,7 +319,7 @@ const onDisk = (kv: Faulty) => {
   return { index, withBody };
 };
 
-describe("KeyValue journal compaction is crash-safe (#249)", () => {
+describeWrapped("KeyValue journal compaction is crash-safe (#249)", (it) => {
   /** The compaction under test: drop 2 and 4 from 1..5, leaving 1,3,5 renumbered 1,2,3. */
   const EXPECTED = {
     dropped: [2, 4],
@@ -463,7 +463,7 @@ describe("KeyValue journal compaction is crash-safe (#249)", () => {
   );
 });
 
-describe("KeyValue acknowledge leaves no index entry without a body (#294)", () => {
+describeWrapped("KeyValue acknowledge leaves no index entry without a body (#294)", (it) => {
   /** c1 holds 1..5 and c2 holds 1..2; the acknowledgement under test is c1 up to 3. */
   const seededTwoClients = Effect.gen(function* () {
     const { kv, first } = yield* seeded(5);

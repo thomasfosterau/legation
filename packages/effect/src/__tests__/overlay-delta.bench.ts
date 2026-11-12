@@ -12,8 +12,9 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { describe, test } from "vite-plus/test";
+import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -22,7 +23,7 @@ import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
-import { layerInMemory, ServerHandler } from "../Transport.js";
+import { type ClientTransport, layerInMemory, ServerHandler } from "../Transport.js";
 
 const ROWS = 10_000;
 const MUTATIONS = 30;
@@ -64,11 +65,7 @@ const scenario = Effect.gen(function* () {
     clientId: "bench",
     clientGroupId: "bench",
     mutators,
-  }).pipe(
-    Effect.provideService(ClientStore, store),
-    Effect.provide(layerInMemory("bench")),
-    Effect.provideService(ServerHandler, noopHandler)
-  );
+  }).pipe(Effect.provideService(ClientStore, store));
   yield* seed(engine);
   const seen = yield* Ref.make(0);
   yield* Effect.forEach(
@@ -89,12 +86,23 @@ const scenario = Effect.gen(function* () {
   );
 });
 
-describe("delta-maintained overlay (#109)", () => {
-  test(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async ({
-    bench,
-  }) => {
-    await bench(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async () => {
-      await Effect.runPromise(scenario.pipe(Effect.scoped));
-    }).run({ time: 1000 });
-  });
+// The in-memory transport over the no-op server, shared by every iteration.
+const transportLayer = layerInMemory("bench").pipe(
+  Layer.provide(Layer.succeed(ServerHandler)(noopHandler))
+);
+
+// `excludeTestServices`: the bench measures wall-clock time, so the scenario runs on the live clock.
+layer(transportLayer, { excludeTestServices: true })("delta-maintained overlay (#109)", (it) => {
+  it.effect(
+    `${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`,
+    ({ bench }) =>
+      Effect.gen(function* () {
+        const run = Effect.runPromiseWith(yield* Effect.context<ClientTransport>());
+        yield* Effect.tryPromise(() =>
+          bench(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async () => {
+            await run(scenario.pipe(Effect.scoped));
+          }).run({ time: 1000 })
+        ).pipe(Effect.orDie);
+      })
+  );
 });
