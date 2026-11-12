@@ -1,8 +1,10 @@
 /**
  * `@thomasfosterau/legation-svelte/kit` — the SvelteKit-shaped surface.
  *
- * Server: {@link clientGroupId} (the client-group cookie) and
- * {@link loadSnapshot} (the page's SSR snapshot, for any Effect-based `load`).
+ * Server: {@link clientGroupId} (the client-group cookie),
+ * {@link loadSnapshot} (the page's SSR snapshot, for any Effect-based `load`)
+ * and {@link requestCredentials} (the request's credentials, for the server's
+ * `IdentityResolver`).
  * Client: {@link clientRuntime} (snapshot-hydrated Client boot).
  * Form actions (ADR-0030 #215): {@link formMutationTarget} and
  * {@link runFormMutation} on the server, {@link enhanceFormMutation} for the
@@ -17,6 +19,7 @@
  * `Cookies` *type*, so importing this subpath pulls no Kit runtime code.
  */
 export * from "./clientGroup.js";
+export * from "./credentials.js";
 export * from "./load.js";
 export * from "./boot.js";
 export * from "./formMutation.js";

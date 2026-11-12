@@ -14,6 +14,12 @@
  * of a binding-only API Worker): pass a `transport` built from the request's
  * service binding (`BindingTransport` in `@thomasfosterau/legation-alchemy-cloudflare`), and nothing
  * is required from context.
+ *
+ * Under a signed-in session, pass the request's credentials
+ * (`credentials: requestCredentials(event)`): the in-process render presents
+ * them to the server's `IdentityResolver`, so the snapshot holds what the
+ * session may read (ADR-0035). A binding transport forwards the request's
+ * cookie itself.
  */
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";

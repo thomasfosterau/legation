@@ -190,7 +190,9 @@ describe("Server.mutate", () => {
           backend,
           auth: {
             policy,
-            identity: { resolve: (clientGroupId) => Effect.succeed(`user-of-${clientGroupId}`) },
+            identity: {
+              resolve: ({ clientGroupId }) => Effect.succeed(`user-of-${clientGroupId}`),
+            },
           },
           middleware: {
             ...Authorization.passthroughMiddleware,

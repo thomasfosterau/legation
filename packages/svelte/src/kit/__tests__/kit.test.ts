@@ -46,6 +46,7 @@ import {
   loadSnapshot,
   mintFormClient,
   receiptOf,
+  requestCredentials,
   runFormMutation,
 } from "../index.js";
 
@@ -500,6 +501,72 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         ]);
         expect(yield* query).toEqual([]);
         yield* Effect.tryPromise(() => runtime.dispose());
+      })
+    )
+  );
+});
+
+describe("request credentials (ADR-0035)", () => {
+  /** A server whose IdentityResolver records the cookie each request presents. */
+  const makeRecordingServer = Effect.fn("makeRecordingServer")(function* () {
+    const seen: Array<Option.Option<string>> = [];
+    const backend = yield* MemoryBackend.make(
+      MemoryBackend.validatedHandlers([
+        MemoryBackend.handler(tallyUp, (args, writer) =>
+          writer.put("tallies", args.id, nextTally(args.id, Option.none()))
+        ),
+      ])
+    );
+    const server = yield* Server.make({
+      backend,
+      auth: {
+        policy: Authorization.policy({ tallies: Authorization.allowAll }),
+        identity: {
+          resolve: ({ credentials }) =>
+            Effect.sync(() => {
+              seen.push(credentials.header("Cookie"));
+            }),
+        },
+      },
+    });
+    return { server, seen };
+  });
+
+  /** A SvelteKit `RequestEvent`'s request, as far as `requestCredentials` reads it. */
+  const event = { request: new Request("https://app.test/", { headers: { cookie: "sid=abc" } }) };
+
+  it.effect("loadSnapshot presents the request's cookie to the resolver", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server, seen } = yield* makeRecordingServer();
+        const { cookies } = fakeCookies();
+        yield* loadSnapshot(cookies, {
+          nodes: tallyNodes,
+          reads: [allTallies],
+          credentials: requestCredentials(event),
+        }).pipe(Effect.provideService(Transport.ServerHandler, server.handler));
+        yield* loadSnapshot(cookies, { nodes: tallyNodes, reads: [allTallies] }).pipe(
+          Effect.provideService(Transport.ServerHandler, server.handler)
+        );
+        expect(seen).toEqual([Option.some("sid=abc"), Option.none()]);
+      })
+    )
+  );
+
+  it.effect("runFormMutation presents the action's cookie to the resolver", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server, seen } = yield* makeRecordingServer();
+        const target = { clientGroupId: "group-form", clientId: "form-1", mutationId: 1 };
+        const receipt = yield* runFormMutation(
+          server,
+          target,
+          tallyUp,
+          { id: "t9" },
+          { credentials: requestCredentials(event) }
+        );
+        expect(receipt.phase).toBe("acknowledged");
+        expect(seen).toEqual([Option.some("sid=abc")]);
       })
     )
   );

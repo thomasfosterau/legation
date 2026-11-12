@@ -1,7 +1,7 @@
 # ADR-0015: Relationship-scoped read authorization via allow-set predicates
 
 Date: 2026-06-18
-Status: Accepted — amended 2026-10-23 (#205: session-resolved filters, named sets, the scope epoch; see the amendment)
+Status: Accepted — amended 2026-10-23 (#205: session-resolved filters, named sets, the scope epoch; see the amendment). Amended in part by [ADR-0035](0035-identity-resolution-sees-request-credentials.md) (the identity seam receives the request's credentials: `resolve({ clientGroupId, credentials })`)
 
 ## Context
 

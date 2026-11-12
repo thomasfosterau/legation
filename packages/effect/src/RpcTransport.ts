@@ -11,13 +11,16 @@
  */
 
 import * as Effect from "effect/Effect";
+import type * as Headers from "effect/http/Headers";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 import { Rpc, RpcClient, RpcGroup, RpcSerialization } from "effect/rpc";
 import * as Socket from "effect/socket/Socket";
+import * as Authorization from "./Authorization.js";
 import { TransportError } from "./Errors.js";
 import {
   Poke,
@@ -80,7 +83,25 @@ export type SyncRpc = RpcGroup.Rpcs<typeof SyncRpcs>;
 const toRpcError = (error: { readonly message: string }): SyncRpcError =>
   new SyncRpcError({ message: error.message });
 
-/** Server side: implement the sync RPCs from an in-context ServerHandler. */
+/**
+ * The credentials an RPC call presents (ADR-0035): the headers `effect/rpc`
+ * hands the handler. Over `RpcServer.layerProtocolHttp` they are the HTTP
+ * request's headers, over `layerProtocolWebsocket` the upgrade request's,
+ * each merged with the headers the RPC client attached to the call
+ * (`RpcClient.withHeaders`), which win on a clash. They are as client-asserted
+ * as any credential: the resolver verifies them, and never trusts a header an
+ * upstream proxy sets to vouch for a user, which a client could set per call.
+ */
+const rpcCredentials = (headers: Headers.Headers): Transport.HandleOptions => ({
+  credentials: Option.some(Authorization.credentialsFromHeaders(headers)),
+});
+
+/**
+ * Server side: implement the sync RPCs from an in-context ServerHandler. Each
+ * push, pull and read passes the call's headers to the handler as its
+ * credentials, so the `IdentityResolver` sees the session cookie or API key the
+ * request carried; see `Authorization.RequestCredentials`.
+ */
 export const layerHandlers: Layer.Layer<
   Rpc.ToHandler<SyncRpc>,
   never,
@@ -89,9 +110,12 @@ export const layerHandlers: Layer.Layer<
   Effect.gen(function* () {
     const handler = yield* ServerHandler;
     return SyncRpcs.of({
-      push: (request) => handler.handlePush(request).pipe(Effect.mapError(toRpcError)),
-      pull: (request) => handler.handlePull(request).pipe(Effect.mapError(toRpcError)),
-      read: (request) => handler.handleRead(request).pipe(Effect.mapError(toRpcError)),
+      push: (request, { headers }) =>
+        handler.handlePush(request, rpcCredentials(headers)).pipe(Effect.mapError(toRpcError)),
+      pull: (request, { headers }) =>
+        handler.handlePull(request, rpcCredentials(headers)).pipe(Effect.mapError(toRpcError)),
+      read: (request, { headers }) =>
+        handler.handleRead(request, rpcCredentials(headers)).pipe(Effect.mapError(toRpcError)),
       pokes: ({ clientGroupId }) => handler.pokes(clientGroupId),
     });
   })
