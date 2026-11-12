@@ -123,6 +123,9 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
   const handlers = new Map<string, Transport.ServerHandler>();
   const served = new Set<string>();
   const scope = yield* Effect.scope;
+  // The Worker's handlers are plain async callbacks, so they run their
+  // effects with the services of the effect that built the API.
+  const runPromise = Effect.runPromiseWith(yield* Effect.context());
 
   const handlerFor = (room: string): Effect.Effect<Transport.ServerHandler> =>
     Effect.gen(function* () {
@@ -142,13 +145,13 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
 
   const rooms = makeNamespace(async (room, request) => {
     served.add(room);
-    const handler = await Effect.runPromise(handlerFor(room));
+    const handler = await runPromise(handlerFor(room));
     const path = routeOf(new URL(request.url).pathname);
     const body: unknown = await request.json();
     const badRequest = (error: TransportError | VersionNotSupportedError) =>
       Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
     const answer = (effect: Effect.Effect<unknown, TransportError | VersionNotSupportedError>) =>
-      Effect.runPromise(
+      runPromise(
         effect.pipe(
           Effect.map(json),
           Effect.catchTags({
@@ -170,7 +173,7 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
 
   return {
     fetch: (request) =>
-      Effect.runPromise(
+      runPromise(
         route.pipe(
           Effect.provideService(
             HttpServerRequest.HttpServerRequest,
