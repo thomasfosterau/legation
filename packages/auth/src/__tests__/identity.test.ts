@@ -6,6 +6,7 @@
  * defect — fails closed to anonymous without failing the request.
  */
 import { expect, layer } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -26,7 +27,6 @@ import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legati
 import { Principal, Resolver } from "@thomasfosterau/legation-auth";
 import { alice, authLayer, bob } from "./harness.js";
 import { asPrincipal, Crash, mentions } from "./support.js";
-import { withLayer } from "./with-layer.js";
 
 const cookieName = SessionCookies.cookieNames().session;
 
@@ -84,30 +84,32 @@ layer(resolverLayer(), { buildPerTest: true })("Resolver: the session plane", (i
     })
   );
 
-  it.effect("reads the cookie under the naming the app configures", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionService;
-      const session = yield* sessions.createSession(alice.id);
-      const naming = { name: "app_session", secure: false };
-      const resolver = Resolver.make(
-        { sessions: Option.some(sessions), apiKeys: Option.none() },
-        { cookie: naming }
-      );
-      const named = SessionCookies.cookieNames(naming).session;
-      expect(named).toBe("app_session");
-      const credentials = Authorization.credentialsFromHeaders({
-        cookie: `${named}=${session.id}`,
-      });
-      const principal = yield* resolver.resolve({ clientGroupId: "g", credentials });
-      expect(P.isTagged(principal, "Session")).toBe(true);
-      // The default name is not read under another naming.
-      const other = yield* resolver.resolve({
-        clientGroupId: "g",
-        credentials: withCookie(session.id),
-      });
-      expect(other).toEqual(Principal.anonymous);
-    }).pipe(withLayer(authLayer()))
-  );
+  layer(authLayer())((scoped) => {
+    scoped.effect("reads the cookie under the naming the app configures", () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionService;
+        const session = yield* sessions.createSession(alice.id);
+        const naming = { name: "app_session", secure: false };
+        const resolver = Resolver.make(
+          { sessions: Option.some(sessions), apiKeys: Option.none() },
+          { cookie: naming }
+        );
+        const named = SessionCookies.cookieNames(naming).session;
+        expect(named).toBe("app_session");
+        const credentials = Authorization.credentialsFromHeaders({
+          cookie: `${named}=${session.id}`,
+        });
+        const principal = yield* resolver.resolve({ clientGroupId: "g", credentials });
+        expect(P.isTagged(principal, "Session")).toBe(true);
+        // The default name is not read under another naming.
+        const other = yield* resolver.resolve({
+          clientGroupId: "g",
+          credentials: withCookie(session.id),
+        });
+        expect(other).toEqual(Principal.anonymous);
+      })
+    );
+  });
 
   it.effect("re-validates on every resolve: a revoked session is anonymous on the next one", () =>
     Effect.gen(function* () {
@@ -131,17 +133,21 @@ layer(resolverLayer(), { buildPerTest: true })("Resolver: the session plane", (i
     })
   );
 
-  it.effect("fails closed to anonymous on a session-store fault", () =>
-    Effect.gen(function* () {
-      expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
-    }).pipe(withLayer(resolverLayer({ sessions: "fault" })))
-  );
+  layer(resolverLayer({ sessions: "fault" }))((scoped) => {
+    scoped.effect("fails closed to anonymous on a session-store fault", () =>
+      Effect.gen(function* () {
+        expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
+      })
+    );
+  });
 
-  it.effect("fails closed to anonymous on a session-store defect", () =>
-    Effect.gen(function* () {
-      expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
-    }).pipe(withLayer(resolverLayer({ sessions: "defect" })))
-  );
+  layer(resolverLayer({ sessions: "defect" }))((scoped) => {
+    scoped.effect("fails closed to anonymous on a session-store defect", () =>
+      Effect.gen(function* () {
+        expect(yield* resolveWith(withCookie("any-token"))).toEqual(Principal.anonymous);
+      })
+    );
+  });
 
   it.effect("fails closed to anonymous when reading the request itself dies", () =>
     Effect.gen(function* () {
@@ -202,55 +208,69 @@ layer(resolverLayer(), { buildPerTest: true })("Resolver: the API key plane", (i
     })
   );
 
-  it.effect("fails closed to anonymous on an API-key-store fault and defect", () =>
-    Effect.gen(function* () {
-      const fault = yield* resolveWith(withApiKey("ak_any")).pipe(
-        withLayer(resolverLayer({ apiKeys: "fault" }))
+  for (const mode of ["fault", "defect"] as const) {
+    layer(resolverLayer({ apiKeys: mode }), { buildPerTest: true })((faulty) => {
+      faulty.effect(`fails closed to anonymous on an API-key-store ${mode}`, () =>
+        Effect.gen(function* () {
+          expect(yield* resolveWith(withApiKey("ak_any"))).toEqual(Principal.anonymous);
+        })
       );
-      const defect = yield* resolveWith(withApiKey("ak_any")).pipe(
-        withLayer(resolverLayer({ apiKeys: "defect" }))
-      );
-      expect(fault).toEqual(Principal.anonymous);
-      expect(defect).toEqual(Principal.anonymous);
-    })
-  );
+    });
+  }
 
-  it.effect("a resolver built without the API key plane resolves a key to anonymous", () =>
-    Effect.gen(function* () {
-      const apiKeys = yield* ApiKeyService;
-      const created = yield* apiKeys.create(alice.id);
-      const principal = yield* resolveWith(withApiKey(created.key)).pipe(
-        withLayer(Resolver.layerSessions())
-      );
-      expect(principal).toEqual(Principal.anonymous);
-    }).pipe(withLayer(authLayer()))
-  );
+  layer(Resolver.layerSessions().pipe(Layer.provideMerge(authLayer())))((sessionsOnly) => {
+    sessionsOnly.effect(
+      "a resolver built without the API key plane resolves a key to anonymous",
+      () =>
+        Effect.gen(function* () {
+          const apiKeys = yield* ApiKeyService;
+          const created = yield* apiKeys.create(alice.id);
+          const principal = yield* resolveWith(withApiKey(created.key));
+          expect(principal).toEqual(Principal.anonymous);
+        })
+    );
+  });
 });
 
-layer(resolverLayer(), { buildPerTest: true })("Resolver: logging", (it) => {
-  it.effect("logs a fail-closed resolution by plane and kind, never the credential", () =>
-    Effect.gen(function* () {
+/** What the logging suite's logger saw, one recorder per test. */
+class LogRecorder extends Context.Service<LogRecorder, Array<unknown>>()("test/auth/LogRecorder") {
+  static readonly layer = Layer.unwrap(
+    Effect.sync(() => {
       const logged: Array<unknown> = [];
-      const recorder = Logger.layer([
-        Logger.make((options) => {
-          logged.push({
-            message: options.message,
-            annotations: options.fiber.getRef(References.CurrentLogAnnotations),
-          });
-        }),
-      ]);
-      const token = "sekrit-session-token-123";
-      const key = "ak_sekrit-api-key-456";
-      yield* resolveWith(withCookie(token)).pipe(withLayer(recorder));
-      yield* resolveWith(withApiKey(key)).pipe(withLayer(recorder));
-      expect(logged).toHaveLength(2);
-      expect(mentions(logged, "failed closed to anonymous")).toBe(true);
-      expect(mentions(logged, "rejected")).toBe(true);
-      expect(mentions(logged, token)).toBe(false);
-      expect(mentions(logged, key)).toBe(false);
+      return Layer.merge(
+        Layer.succeed(LogRecorder)(logged),
+        Logger.layer([
+          Logger.make((options) => {
+            logged.push({
+              message: options.message,
+              annotations: options.fiber.getRef(References.CurrentLogAnnotations),
+            });
+          }),
+        ])
+      );
     })
   );
-});
+}
+
+layer(Layer.merge(resolverLayer(), LogRecorder.layer), { buildPerTest: true })(
+  "Resolver: logging",
+  (it) => {
+    it.effect("logs a fail-closed resolution by plane and kind, never the credential", () =>
+      Effect.gen(function* () {
+        const logged = yield* LogRecorder;
+        const token = "sekrit-session-token-123";
+        const key = "ak_sekrit-api-key-456";
+        yield* resolveWith(withCookie(token));
+        yield* resolveWith(withApiKey(key));
+        expect(logged).toHaveLength(2);
+        expect(mentions(logged, "failed closed to anonymous")).toBe(true);
+        expect(mentions(logged, "rejected")).toBe(true);
+        expect(mentions(logged, token)).toBe(false);
+        expect(mentions(logged, key)).toBe(false);
+      })
+    );
+  }
+);
 
 // ─── End to end through the sync server ──────────────────────────────────────
 
