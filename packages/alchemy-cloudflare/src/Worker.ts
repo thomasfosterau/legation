@@ -47,12 +47,12 @@ export interface RouterConfig<R = never> {
   readonly rooms: Workers.DurableObject<Room.RoomObject>;
   /**
    * Resolve the caller's room id — the per-user identity, typically from
-   * the verified session. `undefined` is an anonymous caller: a 401, unless
-   * {@link RouterConfig.anonymousRoomOf} routes it to an anonymous room.
+   * the verified session. `Option.none()` is an anonymous caller: a 401,
+   * unless {@link RouterConfig.anonymousRoomOf} routes it to an anonymous room.
    */
   readonly roomIdOf: (
     request: HttpServerRequest.HttpServerRequest
-  ) => Effect.Effect<string | undefined, never, R>;
+  ) => Effect.Effect<Option.Option<string>, never, R>;
   /** The base path the sync routes hang off. Default `/sync`. */
   readonly basePath?: string | undefined;
   /**
@@ -127,14 +127,14 @@ export const routeSync = <R = never>(
     }
 
     const identified = yield* config.roomIdOf(request);
-    if (identified?.startsWith(anonymousRoomPrefix) === true) {
-      yield* Effect.logError(
-        `routeSync: roomIdOf answered "${identified}", which is reserved for anonymous rooms`
-      );
-      return Option.some(HttpServerResponse.text("internal error", { status: 500 }));
-    }
-    if (identified !== undefined) {
-      return Option.some(yield* config.rooms.getByName(identified).fetch(request));
+    if (Option.isSome(identified)) {
+      if (identified.value.startsWith(anonymousRoomPrefix)) {
+        yield* Effect.logError(
+          `routeSync: roomIdOf answered "${identified.value}", which is reserved for anonymous rooms`
+        );
+        return Option.some(HttpServerResponse.text("internal error", { status: 500 }));
+      }
+      return Option.some(yield* config.rooms.getByName(identified.value).fetch(request));
     }
     const anonymous =
       config.anonymousRoomOf === undefined

@@ -127,7 +127,9 @@ room answers by the path's last segment (`/sync/push` is the `push` route).
 
 ### Anonymous readers
 
-`roomIdOf` answering `undefined` is a 401. To serve public collections to
+`roomIdOf` resolves the caller's room id as an `Effect<Option<string>>`;
+`Option.none()` is a 401 (`Option.fromNullishOr(session)` adapts a nullable
+lookup). To serve public collections to
 anonymous readers, give `routeSync` an `anonymousRoomOf`: it names the shared
 room an anonymous caller uses, under the reserved `Worker.anonymousRoomPrefix`,
 so an anonymous caller never reaches a user's room (and a `roomIdOf` id with

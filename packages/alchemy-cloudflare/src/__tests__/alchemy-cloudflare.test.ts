@@ -205,7 +205,9 @@ describe("routeSync", () => {
     }),
   });
   const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.succeed(new URL(request.url, "https://app").searchParams.get("user") ?? undefined);
+    Effect.succeed(
+      Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
+    );
   const route = (path: string, basePath?: string) =>
     Effect.runPromise(
       routeSync({ rooms: stubRooms, roomIdOf, basePath }).pipe(
