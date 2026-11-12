@@ -479,6 +479,39 @@ export default defineConfig({
         command: "vp test bench --run --reporter=verbose",
         cache: false,
       },
+      // What CI runs (.github/workflows/ci.yml, on Node.js lts and latest):
+      // AGENTS.md "Verification", in its order. The PostgreSQL overlap test
+      // reads `DATABASE_URL` (the workflow's service sets it; it skips when
+      // unset), and `fallow audit` reads the coverage map `test:coverage`
+      // writes, against `origin/trunk` (fetch it first).
+      ci: {
+        command: [
+          "vp check",
+          "vp run build",
+          "vp run pack:check",
+          "vp run check",
+          "vp run check:examples",
+          "vp run ci:chromium",
+          "vp run test:coverage",
+          "pnpm audit --audit-level high",
+          "fallow audit --ci --base origin/trunk",
+        ],
+        cache: false,
+      },
+      // The tests of one published `effect` floor (`FLOOR`: core,
+      // alchemy-cloudflare, auth or jsonapi), after `scripts/effect-floor.mjs
+      // point` has pointed the catalog at it and installed (scripts/effect-floor.mjs).
+      "ci:floor": {
+        command: "node scripts/effect-floor.mjs test",
+        cache: false,
+      },
+      // Chromium for the commerce façade's browser test (`test:coverage`),
+      // with its system libraries (`--with-deps`: apt on Linux, via sudo when
+      // not root). A no-op download when it is already installed.
+      "ci:chromium": {
+        command: "playwright-core install --with-deps chromium",
+        cache: false,
+      },
     },
   },
   resolve: {
@@ -508,7 +541,7 @@ export default defineConfig({
       {
         // legation-jsonapi's suite, apart for the same reason as the two
         // below: its `effect` floor is `catalogs.jsonapi-peers` (4.1.0, which
-        // effect-jsonapi 0.22 requires), so the core floor job (4.0.0) must not
+        // effect-jsonapi 0.22 requires), so the core floor (4.0.0) must not
         // select it. The commerce example drives the façade over
         // effect-jsonapi, so its tests share the floor and the project (its
         // browser tests run in `commerce-browser`, after its build).
@@ -529,7 +562,7 @@ export default defineConfig({
       {
         // The Alchemy adapter's suite, apart because it has its own `effect`
         // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
-        // CI's "Tests (effect floor)" runs it at that floor and every other
+        // `vp run ci:floor` runs it at that floor and every other
         // project at the core's.
         extends: true,
         test: {
@@ -541,7 +574,7 @@ export default defineConfig({
       {
         // The effect-auth bridge's suite, apart for the same reason: its
         // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
-        // requires), so CI's "Tests (effect floor)" runs it at that floor.
+        // requires), so `vp run ci:floor` runs it at that floor.
         // The audience example (#221) composes effect-auth with the engine
         // and the façade, so its tests share the floor and the project.
         extends: true,

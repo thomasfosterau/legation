@@ -234,8 +234,8 @@ Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
 
 Peers `effect ^4.1.0`, the floor Alchemy requires (`alchemy` and
 `@alchemy.run/cloudflare` 2.0.0-beta.85 peer `effect ^4.1.0`). Tested against
-`4.1.2` (the version CI pins) and `4.1.0` (the floor; CI runs this package's
-tests against it on every PR); install one copy of `effect` in your app
+`4.1.2` (the version CI pins) and `4.1.0` (the floor; checked by hand,
+not in CI, before 1.0); install one copy of `effect` in your app
 (ADR-0003). The rest of legation peers `effect ^4.0.0`.
 
 ## SSR from a separate Worker

@@ -31,7 +31,7 @@ Svelte app pulls nothing.
 
 ## Effect version
 
-Peers `effect ^4.0.0`, as its dependency `@thomasfosterau/effect-svelte` (0.6.1 and later) does. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor: CI's floor job runs every package's tests there on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.0.0`, as its dependency `@thomasfosterau/effect-svelte` (0.6.1 and later) does. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; checked by hand, not in CI, before 1.0); install one copy of `effect` in your app (ADR-0003).
 
 ## Booting the Client
 

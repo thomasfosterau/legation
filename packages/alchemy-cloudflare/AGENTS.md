@@ -21,4 +21,4 @@ The reference deployment on Cloudflare (ADR-0022 topology, ADR-0023 topic-derive
 
 ## Tests
 
-`src/__tests__/` (Vitest project `alchemy-cloudflare`, kept apart so CI runs it at this package's own `effect` floor). No workerd: `harness.ts` stubs Alchemy at the service seam — the provider's own state and storage adapters (`Workers.fromDurableObjectState`) over in-memory raw fakes, namespaces as in-process RPC dispatch, each call given the object's state and a `RuntimeContext` as the Durable Object bridge gives them.
+`src/__tests__/` (Vitest project `alchemy-cloudflare`, kept apart so `vp run ci:floor` can run it at this package's own `effect` floor). No workerd: `harness.ts` stubs Alchemy at the service seam — the provider's own state and storage adapters (`Workers.fromDurableObjectState`) over in-memory raw fakes, namespaces as in-process RPC dispatch, each call given the object's state and a `RuntimeContext` as the Durable Object bridge gives them.

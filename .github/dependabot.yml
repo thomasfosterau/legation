@@ -26,9 +26,9 @@
 # - effect: the Effect release line is a lockstep singleton set (`effect`,
 #   the `@effect/*` runtime packages and the `@effect/platform-node-shared` /
 #   `@effect/sql-d1` catalog entries the `overrides` pins use). The published
-#   floors under `catalogs.peers` and `catalogs.alchemy-peers` are hand-set; CI
-#   tests every PR at the pin and at each floor (`ci.yml`, "Tests (effect
-#   floor, …)"). Alchemy's packages range `effect`, so an effect bump needs no
+#   floors under `catalogs.peers` and `catalogs.*-peers` are hand-set; CI
+#   tests every PR at the pin (`ci.yml`), and the floors only by hand before
+#   1.0 (`vp run ci:floor`). Alchemy's packages range `effect`, so an effect bump needs no
 #   alchemy one.
 # - svelte: the compiler, SvelteKit, its adapters / Vite plugin and
 #   svelte-check peer on each other.

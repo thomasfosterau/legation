@@ -1,36 +1,44 @@
 name: CI
 
-# The gate job runs AGENTS.md "Verification" in its order; the pipeline's task
-# graph lives in vite.config.ts (`build`, `pack:check`, `check`,
-# `check:examples`, `test:coverage`), not in GitHub Actions `needs:`. Shaped
-# like the effect-web library's CI, plus the PostgreSQL service the SQL
-# backend's overlap test needs and the jobs that run the suite at the
-# published `effect` floors.
+# The repository's one CI workflow. Each matrix leg sets up Vite+ on one
+# Node.js line, installs, and runs `vp run ci`: the `ci` task in vite.config.ts
+# holds the pipeline (AGENTS.md "Verification", in its order), so a local
+# `vp run ci` runs what CI runs. There is no aggregate job: the ruleset
+# requires each leg by its check name. The published `effect` floors are not
+# tested in CI before 1.0 (`vp run ci:floor` checks one by hand; CONTRIBUTING.md
+# "Effect version upgrades").
 
 on:
   pull_request:
-    branches: [trunk]
-    types: [opened, reopened, synchronize, ready_for_review]
   push:
     branches: [trunk]
+  workflow_dispatch:
 
+# A new push to a pull request cancels its superseded run; trunk runs finish.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # No permissions by default; each job grants only read access.
 permissions: {}
 
 jobs:
-  quality:
-    name: Quality Gates
+  ci:
+    name: ci (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Vite+ aliases: `lts` is the newest LTS release, `latest` the newest
+        # stable release (pre-releases are skipped). Both satisfy
+        # `engines.node`.
+        node: [lts, latest]
     # The PostgreSQL overlap test (packages/effect/src/__tests__/sql/sql-backend-postgres.test.ts,
-    # #360) runs against this server. It fails, not skips, when DATABASE_URL is
-    # unset in CI, so both jobs that run the suite carry the service.
+    # #360) runs against this server. It skips locally without DATABASE_URL
+    # but fails, not skips, when it is unset in CI.
     services:
       postgres:
         image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
@@ -52,160 +60,27 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Vite+ at the catalog's `vite-plus` pin, its managed Node.js and pnpm
-      # (the `packageManager` field), the dependency cache, and `vp install`
-      # (a frozen lockfile on CI).
+      # Vite+ at the catalog's `vite-plus` pin, the matrix's Node.js (via
+      # `vp env use`), pnpm (the `packageManager` field) and the dependency
+      # cache. The install is the next step.
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           version-file: pnpm-workspace.yaml
+          node-version: ${{ matrix.node }}
           cache: true
+          run-install: false
 
       - name: Restore the Vite+ task cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-v1-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-v2-${{ runner.os }}-node-${{ matrix.node }}-${{ github.sha }}
           restore-keys: |
-            vp-task-v1-${{ runner.os }}-
+            vp-task-v2-${{ runner.os }}-node-${{ matrix.node }}-
 
-      - name: Format and lint
-        run: pnpm exec vp check
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
 
-      - name: Build
-        run: pnpm exec vp run build
-
-      # Packs every publishable package the way the release does and fails on
-      # a `workspace:` / `catalog:` specifier left in a packed package.json
-      # (#267), an exact `effect` peer, a `svelte` condition naming an unpacked
-      # file, or a publint (strict) or arethetypeswrong (ESM-only) finding on
-      # the tarball (#250). No registry access.
-      - name: Check and lint publish tarballs
-        run: pnpm exec vp run pack:check
-
-      - name: Typecheck (packages and tests)
-        run: pnpm exec vp run check
-
-      - name: Typecheck examples
-        run: pnpm exec vp run check:examples
-
-      - name: Install Chromium (the commerce façade's browser test)
-        run: pnpm exec playwright-core install --with-deps chromium
-
-      - name: Test with coverage
-        run: pnpm exec vp run test:coverage
-
-      - name: Audit dependencies
-        run: pnpm audit --audit-level high
-
-      # Reads coverage/coverage-final.json from the step above for exact
-      # per-function CRAP scores.
-      - name: Fallow audit
-        run: pnpm exec fallow audit --ci --base origin/trunk
-
-  # The test suite against the lowest `effect` each published peer range
-  # admits, so each package README's "tested against … the floor" claim holds
-  # on every PR. Four floors, one install each (`effect` is a singleton): the
-  # core's (`catalogs.peers.effect`, every project but the Alchemy adapter's,
-  # legation-auth's and legation-jsonapi's), the Alchemy adapter's
-  # (`catalogs.alchemy-peers.effect`, which Alchemy raises to 4.1.0; its own
-  # Vitest project), legation-auth's (`catalogs.auth-peers.effect`, which
-  # effect-auth raises to 4.1.0; its own Vitest project) and legation-jsonapi's
-  # (`catalogs.jsonapi-peers.effect`, which effect-jsonapi raises to 4.1.0; its
-  # own Vitest project, plus the commerce example's browser tests, which drive
-  # its façade). Tests only: the full
-  # gate set runs once, at the pinned version, in Quality Gates. Only the
-  # catalog entries versioned in lockstep with effect (`effect` and the
-  # `@effect/*` runtime packages, plus the `overrides` entries that hold the
-  # transitive ones) move; `typescript`, `@typescript/native`, `@effect/tsgo`
-  # and `@effect/language-service` keep their pins. The rewrite exists only in
-  # this job's checkout; nothing is committed. See CONTRIBUTING.md "Effect
-  # version upgrades" and scripts/effect-floor.mjs.
-  effect-floor:
-    name: Tests (effect floor, ${{ matrix.floor }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - floor: core
-            catalog: peers
-            projects: --project node --project svelte
-          - floor: alchemy-cloudflare
-            catalog: alchemy-peers
-            projects: --project alchemy-cloudflare
-          - floor: auth
-            catalog: auth-peers
-            projects: --project auth
-          - floor: jsonapi
-            catalog: jsonapi-peers
-            projects: --project jsonapi --project commerce-browser
-    # The same PostgreSQL server as Quality Gates (see its comment).
-    services:
-      postgres:
-        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # No install here: it would use a frozen lockfile, and the rewrite below
-      # deliberately moves the catalog off the lockfile.
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
-        with:
-          version-file: pnpm-workspace.yaml
-          cache: true
-          run-install: false
-
-      - name: Point the catalog at the published floor
-        id: floor
-        env:
-          CATALOG: ${{ matrix.catalog }}
-        run: |
-          floor="$(node scripts/effect-floor.mjs point "$CATALOG")"
-          echo "effect under test: ${floor} (catalogs.${CATALOG})"
-          echo "version=${floor}" >> "$GITHUB_OUTPUT"
-
-      # Not `--frozen-lockfile`: the catalog no longer matches pnpm-lock.yaml,
-      # so this re-resolves the effect entries (and rewrites the lockfile in
-      # this checkout only).
-      - name: Install dependencies (at the floor)
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Check that only the floor is installed
-        env:
-          FLOOR: ${{ steps.floor.outputs.version }}
-        run: node scripts/effect-floor.mjs verify "$FLOOR"
-
-      # The commerce façade's browser test `vite build`s the example app,
-      # which resolves `@thomasfosterau/legation-*` through each package's
-      # `exports` (`dist/`), not Vitest's source aliases, so the packages are
-      # built first.
-      - name: Install Chromium (the commerce façade's browser test)
-        if: matrix.floor == 'jsonapi'
-        run: pnpm exec playwright-core install --with-deps chromium
-
-      - name: Build
-        if: matrix.floor == 'jsonapi'
-        run: pnpm exec vp run build
-
-      - name: Test
-        env:
-          PROJECTS: ${{ matrix.projects }}
-        # Unquoted on purpose: PROJECTS is a list of `--project` flags.
-        run: pnpm exec vp test run $PROJECTS
+      - name: CI
+        run: vp run ci
