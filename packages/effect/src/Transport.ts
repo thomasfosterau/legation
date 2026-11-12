@@ -335,7 +335,7 @@ export const withInferredStatus = (
           isTransportError(error) ? SubscriptionRef.set(status, "disconnected") : Effect.void
         )
       );
-    return {
+    const inferred: ClientTransport = {
       push: (request) => observe(transport.push(request)),
       pull: (request) => observe(transport.pull(request)),
       pokes: transport.pokes,
@@ -344,6 +344,12 @@ export const withInferredStatus = (
       // the engine's reconnect trigger with "connected" re-emissions.
       statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
     };
+    // The fallthrough read (ADR-0025) is optional: forwarded, and observed
+    // like push and pull, only when the wrapped carrier has one.
+    const read = transport.read;
+    return read === undefined
+      ? inferred
+      : { ...inferred, read: (request) => observe(read(request)) };
   });
 
 /** Options for {@link withFallback}. */

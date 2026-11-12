@@ -101,6 +101,36 @@ describe("Transport.withInferredStatus", () => {
       })
     )
   );
+
+  it.effect("forwards the fallthrough read and infers status from it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFake();
+        const wrapped = yield* Transport.withInferredStatus(fake.transport);
+        const read = defined(wrapped.read);
+
+        expect(yield* read(readRequest)).toEqual(readResponse("fake"));
+        expect(yield* Ref.get(fake.reads)).toBe(1);
+        expect(yield* wrapped.status).toBe("connected");
+
+        yield* Ref.set(fake.failing, true);
+        const failed = yield* Effect.flip(read(readRequest));
+        expect(failed._tag).toBe("TransportError");
+        expect(yield* wrapped.status).toBe("disconnected");
+      })
+    )
+  );
+
+  it.effect("leaves read off when the wrapped carrier has none", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFake();
+        const { read: _read, ...withoutRead } = fake.transport;
+        const wrapped = yield* Transport.withInferredStatus(withoutRead);
+        expect(wrapped.read).toBeUndefined();
+      })
+    )
+  );
 });
 
 describe("Transport.withFallback", () => {
