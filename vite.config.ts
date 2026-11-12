@@ -202,6 +202,7 @@ export default defineConfig({
       "effecttsgo/flat-map-identity-to-flatten": "error",
       "effecttsgo/error-payload-shadows-name": "error",
       "effecttsgo/multiple-catch-tag": "error",
+      "effecttsgo/unsafe-effect-type-assertion": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
