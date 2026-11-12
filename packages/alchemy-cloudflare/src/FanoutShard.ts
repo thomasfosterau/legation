@@ -46,6 +46,7 @@ export interface ShardObject {
    * A publish to this shard's topic: the rooms whose lease is still live, to be
    * poked by the publisher. Expired leases are deleted as a side effect.
    */
+  // oxlint-disable-next-line effecttsgo/lazy-effect -- a Durable Object RPC method: the stub calls it as `publish()` across the RPC boundary, so it must be a function
   readonly publish: () => Effect.Effect<ReadonlyArray<string>, never, RuntimeContext>;
 }
 
@@ -77,6 +78,7 @@ export const leases = {
  * The shard's Durable Object implementation, for `LegationShard.make(...)`:
  * its state is resolved at init, its leases read and written per call.
  */
+// oxlint-disable-next-line effecttsgo/lazy-effect -- published constructor: apps call `FanoutShard.make()` (README, `alchemy-classes.test.ts`); a value would break that API
 export const make = (): Effect.Effect<
   Effect.Effect<ShardObject>,
   never,

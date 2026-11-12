@@ -88,9 +88,17 @@ export interface RoomObject {
    */
   readonly poke: (topics: ReadonlyArray<string>) => Effect.Effect<void, never, RuntimeContext>;
   /** The poke channel is one-way; inbound frames are ignored. */
-  readonly webSocketMessage: () => Effect.Effect<void>;
+  readonly webSocketMessage: (
+    socket: Workers.WebSocket,
+    message: string | ArrayBuffer
+  ) => Effect.Effect<void>;
   /** A closed poke socket needs no cleanup: the room keeps no per-socket state. */
-  readonly webSocketClose: () => Effect.Effect<void>;
+  readonly webSocketClose: (
+    socket: Workers.WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ) => Effect.Effect<void>;
 }
 
 /** Configuration for {@link make}: the node graph, the backend, the auth policy and the shards. */
