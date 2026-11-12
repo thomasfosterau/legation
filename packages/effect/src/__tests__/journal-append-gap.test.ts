@@ -7,7 +7,7 @@
  * backend rejects a gap (ADR-0008), so the journal never drained. These tests
  * push through `MemoryBackend`, which enforces that rule.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -96,108 +96,111 @@ const flakyJournalWrites = () => {
   return { kvs, state };
 };
 
-describe("a refused or failed journal append burns no mutation id (#258)", () => {
-  it.effect("a high-water refusal is followed by a mutation the backend accepts", () =>
-    Effect.gen(function* () {
-      const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
-      const { engine, applied } = yield* harness(store);
-
-      yield* engine.mutate("todo/set", { id: "a" });
-      const refused = yield* Effect.flip(engine.mutate("todo/set", { id: "refused" }));
-      expect(refused._tag).toBe("StoreError");
-      expect(refused.message).toContain("high-water");
-
-      // The push frees the space; the next mutation must continue the run.
-      yield* engine.push;
-      expect(yield* ids(store)).toEqual([]);
-      yield* engine.mutate("todo/set", { id: "b" });
-      expect(yield* ids(store)).toEqual([2]);
-
-      const pushed = yield* Effect.exit(engine.push);
-      expect(Exit.isSuccess(pushed)).toBe(true);
-      expect(applied).toEqual(["a", "b"]);
-      expect(yield* ids(store)).toEqual([]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("the issue's reproduction: refused second write, then a third after the ack", () =>
-    Effect.gen(function* () {
-      const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
-      const { engine, applied } = yield* harness(store);
-      yield* engine.mutate("todo/set", { id: "1" });
-      yield* Effect.flip(engine.mutate("todo/set", { id: "2" }));
-      yield* engine.push;
-      yield* engine.mutate("todo/set", { id: "3" });
-      expect(yield* ids(store)).toEqual([2]); // not 3: the refused write consumed nothing
-      yield* engine.push;
-      expect(applied).toEqual(["1", "3"]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("a failed append (write error) is followed by a mutation the backend accepts", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = flakyJournalWrites();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      const { engine, applied } = yield* harness(store);
-
-      yield* engine.mutate("todo/set", { id: "a" });
-      state.armed = true;
-      const failed = yield* Effect.flip(engine.mutate("todo/set", { id: "lost" }));
-      expect(failed._tag).toBe("StoreError");
-      expect(state.failures).toBeGreaterThan(0);
-      state.armed = false;
-
-      yield* engine.mutate("todo/set", { id: "b" });
-      expect(yield* ids(store)).toEqual([1, 2]);
-      const pushed = yield* Effect.exit(engine.push);
-      expect(Exit.isSuccess(pushed)).toBe(true);
-      expect(applied).toEqual(["a", "b"]);
-      expect(yield* ids(store)).toEqual([]);
-    })
-  );
-
-  for (const [name, makeStore] of [
-    ["memory", ClientStoreModule.makeMemory],
-    ["key-value", ClientStoreModule.makeKeyValue()],
-  ] as const) {
-    it.effect(`concurrent journaling neither duplicates nor skips ids (${name})`, () =>
+layer(KeyValueStore.layerMemory, { buildPerTest: true })(
+  "a refused or failed journal append burns no mutation id (#258)",
+  (it) => {
+    it.effect("a high-water refusal is followed by a mutation the backend accepts", () =>
       Effect.gen(function* () {
-        const store = yield* makeStore;
+        const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
         const { engine, applied } = yield* harness(store);
-        const N = 25;
-        yield* Effect.forEach(
-          Array.from({ length: N }, (_, i) => i),
-          (i) => engine.mutate("todo/set", { id: `t${i}` }),
-          { concurrency: "unbounded" }
-        );
-        expect(yield* ids(store)).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+
+        yield* engine.mutate("todo/set", { id: "a" });
+        const refused = yield* Effect.flip(engine.mutate("todo/set", { id: "refused" }));
+        expect(refused._tag).toBe("StoreError");
+        expect(refused.message).toContain("high-water");
+
+        // The push frees the space; the next mutation must continue the run.
+        yield* engine.push;
+        expect(yield* ids(store)).toEqual([]);
+        yield* engine.mutate("todo/set", { id: "b" });
+        expect(yield* ids(store)).toEqual([2]);
+
         const pushed = yield* Effect.exit(engine.push);
         expect(Exit.isSuccess(pushed)).toBe(true);
-        expect(applied).toHaveLength(N);
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+        expect(applied).toEqual(["a", "b"]);
+        expect(yield* ids(store)).toEqual([]);
+      })
+    );
+
+    it.effect("the issue's reproduction: refused second write, then a third after the ack", () =>
+      Effect.gen(function* () {
+        const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
+        const { engine, applied } = yield* harness(store);
+        yield* engine.mutate("todo/set", { id: "1" });
+        yield* Effect.flip(engine.mutate("todo/set", { id: "2" }));
+        yield* engine.push;
+        yield* engine.mutate("todo/set", { id: "3" });
+        expect(yield* ids(store)).toEqual([2]); // not 3: the refused write consumed nothing
+        yield* engine.push;
+        expect(applied).toEqual(["1", "3"]);
+      })
+    );
+
+    it.effect("a failed append (write error) is followed by a mutation the backend accepts", () =>
+      Effect.gen(function* () {
+        const { kvs, state } = flakyJournalWrites();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        const { engine, applied } = yield* harness(store);
+
+        yield* engine.mutate("todo/set", { id: "a" });
+        state.armed = true;
+        const failed = yield* Effect.flip(engine.mutate("todo/set", { id: "lost" }));
+        expect(failed._tag).toBe("StoreError");
+        expect(state.failures).toBeGreaterThan(0);
+        state.armed = false;
+
+        yield* engine.mutate("todo/set", { id: "b" });
+        expect(yield* ids(store)).toEqual([1, 2]);
+        const pushed = yield* Effect.exit(engine.push);
+        expect(Exit.isSuccess(pushed)).toBe(true);
+        expect(applied).toEqual(["a", "b"]);
+        expect(yield* ids(store)).toEqual([]);
+      })
+    );
+
+    for (const [name, makeStore] of [
+      ["memory", ClientStoreModule.makeMemory],
+      ["key-value", ClientStoreModule.makeKeyValue()],
+    ] as const) {
+      it.effect(`concurrent journaling neither duplicates nor skips ids (${name})`, () =>
+        Effect.gen(function* () {
+          const store = yield* makeStore;
+          const { engine, applied } = yield* harness(store);
+          const N = 25;
+          yield* Effect.forEach(
+            Array.from({ length: N }, (_, i) => i),
+            (i) => engine.mutate("todo/set", { id: `t${i}` }),
+            { concurrency: "unbounded" }
+          );
+          expect(yield* ids(store)).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+          const pushed = yield* Effect.exit(engine.push);
+          expect(Exit.isSuccess(pushed)).toBe(true);
+          expect(applied).toHaveLength(N);
+        })
+      );
+    }
+
+    it.effect("concurrent journaling with refusals leaves the accepted ids consecutive", () =>
+      Effect.gen(function* () {
+        const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 5 });
+        const { engine, applied } = yield* harness(store);
+        const results = yield* Effect.forEach(
+          Array.from({ length: 12 }, (_, i) => i),
+          (i) => Effect.exit(engine.mutate("todo/set", { id: `t${i}` })),
+          { concurrency: "unbounded" }
+        );
+        expect(results.filter(Exit.isSuccess)).toHaveLength(5);
+        expect(yield* ids(store)).toEqual([1, 2, 3, 4, 5]);
+        expect(Exit.isSuccess(yield* Effect.exit(engine.push))).toBe(true);
+        expect(applied).toHaveLength(5);
+      })
     );
   }
+);
 
-  it.effect("concurrent journaling with refusals leaves the accepted ids consecutive", () =>
-    Effect.gen(function* () {
-      const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 5 });
-      const { engine, applied } = yield* harness(store);
-      const results = yield* Effect.forEach(
-        Array.from({ length: 12 }, (_, i) => i),
-        (i) => Effect.exit(engine.mutate("todo/set", { id: `t${i}` })),
-        { concurrency: "unbounded" }
-      );
-      expect(results.filter(Exit.isSuccess)).toHaveLength(5);
-      expect(yield* ids(store)).toEqual([1, 2, 3, 4, 5]);
-      expect(Exit.isSuccess(yield* Effect.exit(engine.push))).toBe(true);
-      expect(applied).toHaveLength(5);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-});
-
-describe("ClientStore.appendNext (#258)", () => {
+layer(KeyValueStore.layerMemory, { buildPerTest: true })("ClientStore.appendNext (#258)", (it) => {
   it.effect("assigns consecutive ids and a refusal leaves the counter alone", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
@@ -208,7 +211,7 @@ describe("ClientStore.appendNext (#258)", () => {
       yield* store.acknowledge("c1", 1);
       expect((yield* store.appendNext(draft)).mutationId).toBe(2);
       expect(yield* store.nextMutationId("c1")).toBe(3);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("a counter write that fails after the entry is journaled is healed", () =>
@@ -292,145 +295,148 @@ const controlledCounters = () => {
 
 const draft = { clientId: "c1", mutator: "noop", args: {}, createdAt: 0 };
 
-describe("an id that has left the journal is never reissued (#258 review)", () => {
-  it.effect("counter write fails, entry acked, the next mutation is applied, not skipped", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = controlledCounters();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      const { engine, applied } = yield* harness(store);
-      state.failCounters = true;
-      yield* engine.mutate("todo/set", { id: "a" }); // journaled; counter write swallowed
-      state.failCounters = false;
-      yield* engine.push; // server applies id 1, client acknowledges: journal empty
-      yield* engine.mutate("todo/set", { id: "b" });
-      expect(yield* ids(store)).toEqual([2]); // not 1: that id was already acknowledged
-      yield* engine.push;
-      expect(applied).toEqual(["a", "b"]);
-    })
-  );
-
-  it.effect("interrupted between the index and counter writes, then acked: no reissue", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = controlledCounters();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      const { engine, applied } = yield* harness(store);
-      const reached = yield* Deferred.make<void>();
-      const gate = yield* Deferred.make<void>();
-      state.park = { reached, gate };
-      const fiber = yield* Effect.forkChild(engine.mutate("todo/set", { id: "a" }));
-      yield* Deferred.await(reached);
-      // The append is uninterruptible: the interrupt is only delivered once
-      // the counter write has landed, so the journal and counter agree.
-      const interrupting = yield* Effect.forkChild(Fiber.interrupt(fiber));
-      // Let the interrupt be requested while the counter write is still parked.
-      for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-      yield* Deferred.succeed(gate, undefined);
-      yield* Fiber.join(interrupting);
-      state.park = undefined;
-      yield* engine.push;
-      yield* engine.mutate("todo/set", { id: "b" });
-      expect(yield* ids(store)).toEqual([2]);
-      yield* engine.push;
-      expect(applied).toEqual(["a", "b"]);
-    })
-  );
-
-  it.effect("acknowledge alone raises the counter past the ids it removes", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = controlledCounters();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      state.failCounters = true;
-      yield* store.appendNext(draft);
-      yield* store.appendNext(draft);
-      state.failCounters = false;
-      yield* store.acknowledge("c1", 2);
-      expect((yield* store.appendNext(draft)).mutationId).toBe(3);
-    })
-  );
-
-  it.effect("an acknowledge whose counter write fails removes nothing", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = controlledCounters();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      state.failCounters = true;
-      yield* store.appendNext(draft);
-      const failed = yield* Effect.flip(store.acknowledge("c1", 1));
-      expect(failed._tag).toBe("StoreError");
-      expect(yield* ids(store)).toEqual([1]);
-    })
-  );
-
-  it.effect("quarantinePending keeps its ids reserved (key-value)", () =>
-    Effect.gen(function* () {
-      const { kvs, state } = controlledCounters();
-      const store = yield* ClientStoreModule.makeKeyValue().pipe(
-        Effect.provideService(KeyValueStore.KeyValueStore, kvs)
-      );
-      state.failCounters = true;
-      yield* store.appendNext(draft);
-      yield* store.appendNext(draft);
-      state.failCounters = false;
-      const fingerprint: Identity.Fingerprint = "sha256:alice";
-      expect(yield* store.quarantinePending(fingerprint)).toBe(2);
-      expect((yield* store.appendNext(draft)).mutationId).toBe(3);
-    })
-  );
-
-  for (const [name, makeStore] of [
-    ["memory", ClientStoreModule.makeMemory],
-    ["key-value", ClientStoreModule.makeKeyValue()],
-  ] as const) {
-    it.effect(`heals the counter from journal entries it did not allocate (${name})`, () =>
+layer(KeyValueStore.layerMemory, { buildPerTest: true })(
+  "an id that has left the journal is never reissued (#258 review)",
+  (it) => {
+    it.effect("counter write fails, entry acked, the next mutation is applied, not skipped", () =>
       Effect.gen(function* () {
-        const store = yield* makeStore;
-        yield* store.appendMutation({ ...draft, mutationId: 5 });
-        expect((yield* store.appendNext(draft)).mutationId).toBe(6);
-        yield* store.acknowledge("c1", 6);
-        expect((yield* store.appendNext(draft)).mutationId).toBe(7);
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+        const { kvs, state } = controlledCounters();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        const { engine, applied } = yield* harness(store);
+        state.failCounters = true;
+        yield* engine.mutate("todo/set", { id: "a" }); // journaled; counter write swallowed
+        state.failCounters = false;
+        yield* engine.push; // server applies id 1, client acknowledges: journal empty
+        yield* engine.mutate("todo/set", { id: "b" });
+        expect(yield* ids(store)).toEqual([2]); // not 1: that id was already acknowledged
+        yield* engine.push;
+        expect(applied).toEqual(["a", "b"]);
+      })
     );
 
-    it.effect(
-      `acknowledge and quarantine leave the next id above everything removed (${name})`,
-      () =>
+    it.effect("interrupted between the index and counter writes, then acked: no reissue", () =>
+      Effect.gen(function* () {
+        const { kvs, state } = controlledCounters();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        const { engine, applied } = yield* harness(store);
+        const reached = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        state.park = { reached, gate };
+        const fiber = yield* Effect.forkChild(engine.mutate("todo/set", { id: "a" }));
+        yield* Deferred.await(reached);
+        // The append is uninterruptible: the interrupt is only delivered once
+        // the counter write has landed, so the journal and counter agree.
+        const interrupting = yield* Effect.forkChild(Fiber.interrupt(fiber));
+        // Let the interrupt be requested while the counter write is still parked.
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(interrupting);
+        state.park = undefined;
+        yield* engine.push;
+        yield* engine.mutate("todo/set", { id: "b" });
+        expect(yield* ids(store)).toEqual([2]);
+        yield* engine.push;
+        expect(applied).toEqual(["a", "b"]);
+      })
+    );
+
+    it.effect("acknowledge alone raises the counter past the ids it removes", () =>
+      Effect.gen(function* () {
+        const { kvs, state } = controlledCounters();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        state.failCounters = true;
+        yield* store.appendNext(draft);
+        yield* store.appendNext(draft);
+        state.failCounters = false;
+        yield* store.acknowledge("c1", 2);
+        expect((yield* store.appendNext(draft)).mutationId).toBe(3);
+      })
+    );
+
+    it.effect("an acknowledge whose counter write fails removes nothing", () =>
+      Effect.gen(function* () {
+        const { kvs, state } = controlledCounters();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        state.failCounters = true;
+        yield* store.appendNext(draft);
+        const failed = yield* Effect.flip(store.acknowledge("c1", 1));
+        expect(failed._tag).toBe("StoreError");
+        expect(yield* ids(store)).toEqual([1]);
+      })
+    );
+
+    it.effect("quarantinePending keeps its ids reserved (key-value)", () =>
+      Effect.gen(function* () {
+        const { kvs, state } = controlledCounters();
+        const store = yield* ClientStoreModule.makeKeyValue().pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, kvs)
+        );
+        state.failCounters = true;
+        yield* store.appendNext(draft);
+        yield* store.appendNext(draft);
+        state.failCounters = false;
+        const fingerprint: Identity.Fingerprint = "sha256:alice";
+        expect(yield* store.quarantinePending(fingerprint)).toBe(2);
+        expect((yield* store.appendNext(draft)).mutationId).toBe(3);
+      })
+    );
+
+    for (const [name, makeStore] of [
+      ["memory", ClientStoreModule.makeMemory],
+      ["key-value", ClientStoreModule.makeKeyValue()],
+    ] as const) {
+      it.effect(`heals the counter from journal entries it did not allocate (${name})`, () =>
         Effect.gen(function* () {
           const store = yield* makeStore;
-          yield* store.appendMutation({ ...draft, mutationId: 3 });
-          yield* store.acknowledge("c1", 3);
-          expect((yield* store.appendNext(draft)).mutationId).toBe(4);
-          const fingerprint: Identity.Fingerprint = "sha256:bob";
-          yield* store.quarantinePending(fingerprint);
-          expect((yield* store.appendNext(draft)).mutationId).toBe(5);
-        }).pipe(Effect.provide(KeyValueStore.layerMemory))
+          yield* store.appendMutation({ ...draft, mutationId: 5 });
+          expect((yield* store.appendNext(draft)).mutationId).toBe(6);
+          yield* store.acknowledge("c1", 6);
+          expect((yield* store.appendNext(draft)).mutationId).toBe(7);
+        })
+      );
+
+      it.effect(
+        `acknowledge and quarantine leave the next id above everything removed (${name})`,
+        () =>
+          Effect.gen(function* () {
+            const store = yield* makeStore;
+            yield* store.appendMutation({ ...draft, mutationId: 3 });
+            yield* store.acknowledge("c1", 3);
+            expect((yield* store.appendNext(draft)).mutationId).toBe(4);
+            const fingerprint: Identity.Fingerprint = "sha256:bob";
+            yield* store.quarantinePending(fingerprint);
+            expect((yield* store.appendNext(draft)).mutationId).toBe(5);
+          })
+      );
+    }
+
+    it.effect("memory store: appendNext is atomic with respect to compactPending", () =>
+      Effect.gen(function* () {
+        for (let round = 0; round < 20; round++) {
+          const store = yield* ClientStoreModule.makeMemory;
+          for (let i = 0; i < 3; i++) yield* store.appendNext(draft);
+          yield* Effect.all(
+            [store.compactPending("c1", [2]), store.appendNext(draft), store.appendNext(draft)],
+            { concurrency: "unbounded" }
+          );
+          const after = yield* ids(store);
+          // Consecutive from 1, whichever order the operations were served in,
+          // and the counter agrees with the journal.
+          expect(after).toEqual(after.map((_, i) => i + 1));
+          expect((yield* store.appendNext(draft)).mutationId).toBe(after.length + 1);
+        }
+      })
     );
   }
-
-  it.effect("memory store: appendNext is atomic with respect to compactPending", () =>
-    Effect.gen(function* () {
-      for (let round = 0; round < 20; round++) {
-        const store = yield* ClientStoreModule.makeMemory;
-        for (let i = 0; i < 3; i++) yield* store.appendNext(draft);
-        yield* Effect.all(
-          [store.compactPending("c1", [2]), store.appendNext(draft), store.appendNext(draft)],
-          { concurrency: "unbounded" }
-        );
-        const after = yield* ids(store);
-        // Consecutive from 1, whichever order the operations were served in,
-        // and the counter agrees with the journal.
-        expect(after).toEqual(after.map((_, i) => i + 1));
-        expect((yield* store.appendNext(draft)).mutationId).toBe(after.length + 1);
-      }
-    })
-  );
-});
+);
 
 /**
  * Every memory-store operation that writes the journal, the quarantine or the
@@ -440,7 +446,7 @@ describe("an id that has left the journal is never reissued (#258 review)", () =
  * fibers yield between the read and the write, so the race fires on nearly
  * every round on the unlocked code.
  */
-describe("memory store: journal writers exclude one another (#258 review)", () => {
+describeWrapped("memory store: journal writers exclude one another (#258 review)", (it) => {
   const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
   const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
   const rounds = 50;

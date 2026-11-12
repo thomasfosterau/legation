@@ -14,7 +14,7 @@
 import * as Defined from "../Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as CollectionIndex from "../CollectionIndex.js";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
@@ -226,50 +226,50 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
     ).toEqual(["absent", "null-a"]);
   });
 
-  it("matches the full scan over the differential corpus (NULL, absent, astral text)", () => {
-    // Every corpus column is indexed, so every `eq`/`In`/`IsNull`/range leaf
-    // at the top level of an `And` is planned through the index; `ne`,
-    // `NotIn`, negated `IsNull`, `Or` and `Not` stay residual.
-    const corpus = Effect.runSync(
-      FilterCorpus.generateCorpus({
+  it.effect("matches the full scan over the differential corpus (NULL, absent, astral text)", () =>
+    Effect.gen(function* () {
+      // Every corpus column is indexed, so every `eq`/`In`/`IsNull`/range leaf
+      // at the top level of an `And` is planned through the index; `ne`,
+      // `NotIn`, negated `IsNull`, `Or` and `Not` stay residual.
+      const corpus = yield* FilterCorpus.generateCorpus({
         seed: FilterCorpus.DEFAULT_SEED,
         nulls: true,
         astral: true,
         booleanOrder: true,
         predicates: 400,
-      })
-    );
-    const index = CollectionIndex.empty(corpus.columns.map((column) => column.name));
-    CollectionIndex.rebuild(index, corpus.rows);
-    const rowsById = new Map(corpus.rows.map((row) => [row.id, row]));
-    const fullScan = (where: Predicate.Predicate) =>
-      idsOf(corpus.rows.filter((row) => Predicate.test(where, row.value)));
-    /** Every predicate where the index (planned or fallen back) disagrees with the full scan. */
-    const disagreements = (predicates: ReadonlyArray<Predicate.Predicate>) =>
-      predicates.flatMap((where) => {
-        const expected = fullScan(where);
-        const viaIndex = CollectionIndex.evaluate(index, rowsById, where);
-        const planned = viaIndex === undefined ? expected : idsOf(viaIndex);
-        const subset = Subset.make({ collection: "corpus", where });
-        const applied = idsOf(Subset.applyIndexed(rowsById, subset, index));
-        return same(planned, expected) && same(applied, expected)
-          ? []
-          : [{ where, expected, planned, applied }];
       });
+      const index = CollectionIndex.empty(corpus.columns.map((column) => column.name));
+      CollectionIndex.rebuild(index, corpus.rows);
+      const rowsById = new Map(corpus.rows.map((row) => [row.id, row]));
+      const fullScan = (where: Predicate.Predicate) =>
+        idsOf(corpus.rows.filter((row) => Predicate.test(where, row.value)));
+      /** Every predicate where the index (planned or fallen back) disagrees with the full scan. */
+      const disagreements = (predicates: ReadonlyArray<Predicate.Predicate>) =>
+        predicates.flatMap((where) => {
+          const expected = fullScan(where);
+          const viaIndex = CollectionIndex.evaluate(index, rowsById, where);
+          const planned = viaIndex === undefined ? expected : idsOf(viaIndex);
+          const subset = Subset.make({ collection: "corpus", where });
+          const applied = idsOf(Subset.applyIndexed(rowsById, subset, index));
+          return same(planned, expected) && same(applied, expected)
+            ? []
+            : [{ where, expected, planned, applied }];
+        });
 
-    expect(disagreements(corpus.predicates)).toEqual([]);
-    // The index must actually have been exercised, not bypassed.
-    const planned = corpus.predicates.filter(
-      (where) => CollectionIndex.plan(index, where) !== undefined
-    );
-    expect(planned.length).toBeGreaterThan(100);
+      expect(disagreements(corpus.predicates)).toEqual([]);
+      // The index must actually have been exercised, not bypassed.
+      const planned = corpus.predicates.filter(
+        (where) => CollectionIndex.plan(index, where) !== undefined
+      );
+      expect(planned.length).toBeGreaterThan(100);
 
-    // Incremental maintenance agrees with the rebuild: move every row through
-    // a NULL and back, then re-check a slice of the predicates.
-    Arr.forEach(corpus.rows, (row) => {
-      CollectionIndex.upsertRow(index, row.id, {});
-      CollectionIndex.upsertRow(index, row.id, row.value);
-    });
-    expect(disagreements(corpus.predicates.slice(0, 100))).toEqual([]);
-  });
+      // Incremental maintenance agrees with the rebuild: move every row through
+      // a NULL and back, then re-check a slice of the predicates.
+      Arr.forEach(corpus.rows, (row) => {
+        CollectionIndex.upsertRow(index, row.id, {});
+        CollectionIndex.upsertRow(index, row.id, row.value);
+      });
+      expect(disagreements(corpus.predicates.slice(0, 100))).toEqual([]);
+    })
+  );
 });

@@ -18,7 +18,7 @@
  * - Discarding a quarantine is an explicit call; no reset and no boot does it.
  * - Anonymous → signed in keeps the warm replica: the one permitted upgrade.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -104,7 +104,7 @@ const bodies = (rows: ReadonlyArray<{ readonly value: unknown }>) =>
 const ALICE: Identity.Fingerprint = "sha256:alice-subject-hash";
 const BOB: Identity.Fingerprint = "sha256:bob-subject-hash";
 
-describe("Identity.transitionOf", () => {
+describeWrapped("Identity.transitionOf", (it) => {
   it("treats an unstamped replica as belonging to nobody, so adopting resets", () => {
     expect(Identity.transitionOf(Identity.unstamped, ALICE)).toBe("Reset");
     expect(Identity.transitionOf(Identity.unstamped, Identity.anonymous)).toBe("Reset");
@@ -120,7 +120,7 @@ describe("Identity.transitionOf", () => {
   });
 });
 
-describe("the store's boot check", () => {
+layer(KeyValueStore.layerMemory, { buildPerTest: true })("the store's boot check", (it) => {
   it.effect("stamps the identity and leaves a matching replica alone", () =>
     Effect.gen(function* () {
       const first = yield* ClientStore.makeKeyValue({ identity: ALICE });
@@ -132,7 +132,7 @@ describe("the store's boot check", () => {
       const again = yield* ClientStore.makeKeyValue({ identity: ALICE });
       expect(yield* again.listRows("secrets")).toHaveLength(1);
       expect(yield* again.getCookie).toBe("cookie-alice");
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect(
@@ -159,7 +159,7 @@ describe("the store's boot check", () => {
         expect(yield* bob.pendingMutations).toEqual([]);
         expect(yield* bob.quarantines).toEqual([ALICE]);
         expect(yield* bob.quarantinedMutations(ALICE)).toHaveLength(1);
-      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+      })
   );
 
   it.effect("an unstamped replica resets when the boundary is first turned on", () =>
@@ -175,7 +175,7 @@ describe("the store's boot check", () => {
       expect(yield* scoped.listRows("secrets")).toEqual([]);
       expect(yield* scoped.getCookie).toBeUndefined();
       expect(yield* scoped.getIdentity).toBe(ALICE);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("re-signing in releases that identity's own quarantine back into the journal", () =>
@@ -195,7 +195,7 @@ describe("the store's boot check", () => {
       const aliceAgain = yield* ClientStore.makeKeyValue({ identity: ALICE });
       expect(yield* aliceAgain.pendingMutations).toHaveLength(1);
       expect(yield* aliceAgain.quarantines).toEqual([]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("no boot ever discards a quarantine", () =>
@@ -220,7 +220,7 @@ describe("the store's boot check", () => {
       yield* last.discardQuarantine(ALICE);
       expect(yield* last.quarantines).toEqual([]);
       expect(yield* last.quarantinedMutations(ALICE)).toEqual([]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 
   it.effect("anonymous → signed in keeps the warm replica and its journal", () =>
@@ -242,221 +242,224 @@ describe("the store's boot check", () => {
       expect(yield* signedIn.getCookie).toBe("cookie-anon");
       expect(yield* signedIn.pendingMutations).toHaveLength(1);
       expect(yield* signedIn.quarantines).toEqual([]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    })
   );
 });
 
-describe("switching identities on a shared device", () => {
-  it.effect("B's live queries never observe A's rows — in the session and after a reload", () =>
-    Effect.scoped(
+layer(KeyValueStore.layerMemory, { buildPerTest: true })(
+  "switching identities on a shared device",
+  (it) => {
+    it.effect("B's live queries never observe A's rows — in the session and after a reload", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport } = yield* recordingTransport;
+
+          // A syncs a private row legitimately.
+          const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const alice = yield* engineOver(aliceStore, transport);
+          yield* alice.subscribe(allSecrets);
+          yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
+          yield* alice.push;
+          yield* alice.pull;
+          expect(bodies(yield* alice.query(allSecrets))).toEqual(["alice's private row"]);
+
+          // B signs in on the same device, in the same session.
+          const client = Client.fromView(nodes, ClientView.fromEngine(alice));
+          yield* client.subscribe({ collection: "secrets" });
+          const outcome = yield* client.reset(BOB);
+          expect(outcome.transition).toBe("Reset");
+
+          const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
+          expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
+          // The superseded identity's subscriptions went with its rows: a
+          // ledger entry left behind would claim B's reads are covered by a
+          // window A registered.
+          expect(yield* client.subscriptions).toEqual([]);
+          expect(yield* alice.activeSubscriptions).toEqual([]);
+
+          // ...and after a reload: a fresh store + engine over the same
+          // durable storage, which is where "the replica is the freshest thing
+          // on the device" would otherwise bite.
+          const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
+          const bob = yield* engineOver(bobStore, transport);
+          expect(yield* bob.query(allSecrets)).toEqual([]);
+          expect(yield* bobStore.listRows("secrets")).toEqual([]);
+        })
+      )
+    );
+
+    it.effect("A's quarantined journal entries are never pushed under B's session", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport, pushes } = yield* recordingTransport;
+
+          const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const alice = yield* engineOver(aliceStore, transport);
+          // Authored, never pushed — the journal is durable and causally
+          // ordered, so without a boundary these survive the sign-out and go
+          // out under the next session's cookies.
+          yield* alice.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
+          yield* alice.mutate("secret/set", { id: "s2", body: "alice's other unsent write" });
+          expect(yield* aliceStore.pendingMutations).toHaveLength(2);
+
+          yield* alice.reset(BOB);
+
+          // B pushes — everything they can. Twice, and after a reload, because
+          // "never pushed" has to hold for every push B will ever make.
+          yield* alice.push;
+          yield* alice.mutate("secret/set", { id: "s3", body: "bob's own write" });
+          yield* alice.push;
+
+          const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
+          const bob = yield* engineOver(bobStore, transport);
+          yield* bob.push;
+
+          const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
+          expect(sent.map((m) => (m.args as { body: string }).body)).toEqual(["bob's own write"]);
+
+          // Not discarded either: parked under A's fingerprint, intact.
+          expect(yield* bobStore.quarantines).toEqual([ALICE]);
+          expect(yield* bobStore.quarantinedMutations(ALICE)).toHaveLength(2);
+        })
+      )
+    );
+
+    it.effect("A signing back in makes A's quarantined entries pushable again", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport, pushes } = yield* recordingTransport;
+
+          const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const alice = yield* engineOver(aliceStore, transport);
+          yield* alice.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
+
+          const toBob = yield* alice.reset(BOB);
+          expect(toBob).toMatchObject({
+            transition: "Reset",
+            quarantinedUnder: ALICE,
+            quarantined: 1,
+          });
+          expect(yield* aliceStore.pendingMutations).toEqual([]);
+
+          const backToAlice = yield* alice.reset(ALICE);
+          expect(backToAlice).toMatchObject({ transition: "Reset", released: 1 });
+          expect(yield* aliceStore.pendingMutations).toHaveLength(1);
+          expect(yield* aliceStore.quarantines).toEqual([]);
+
+          yield* alice.push;
+          const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
+          expect(sent.map((m) => (m.args as { body: string }).body)).toEqual([
+            "alice's unsent write",
+          ]);
+        })
+      )
+    );
+
+    it.effect("a reset never discards a quarantine; only discardQuarantine does", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport } = yield* recordingTransport;
+          const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const engine = yield* engineOver(store, transport);
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+
+          yield* client.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
+          yield* client.reset(BOB);
+
+          // Reset after reset after reset — A's intents outlive all of them.
+          yield* client.reset(Identity.anonymous);
+          yield* client.reset(BOB);
+          expect(yield* client.quarantines).toEqual([ALICE]);
+          expect(yield* client.quarantinedMutations(ALICE)).toHaveLength(1);
+
+          yield* client.discardQuarantine(ALICE);
+          expect(yield* client.quarantines).toEqual([]);
+        })
+      )
+    );
+
+    it.effect("anonymous → signed in keeps the warm replica, subscriptions and all", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport } = yield* recordingTransport;
+          const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+          const engine = yield* engineOver(store, transport);
+          const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+
+          yield* client.subscribe({ collection: "secrets" });
+          yield* engine.mutate("secret/set", { id: "s1", body: "public row" });
+          yield* engine.push;
+          yield* engine.pull;
+          expect(bodies(yield* store.listRows("secrets"))).toEqual(["public row"]);
+          yield* client.mutate("secret/set", { id: "s2", body: "written before signing in" });
+
+          const outcome = yield* client.reset(ALICE);
+          expect(outcome).toMatchObject({ transition: "Upgrade", quarantined: 0 });
+
+          // Nothing was thrown away: rows, cookie, subscriptions and the
+          // unpushed journal all survive the first sign-in.
+          expect(bodies(yield* store.listRows("secrets"))).toEqual(["public row"]);
+          expect(yield* store.getCookie).toBeDefined();
+          expect(yield* store.pendingMutations).toHaveLength(1);
+          expect(yield* engine.activeSubscriptions).toHaveLength(1);
+          expect(yield* store.getIdentity).toBe(ALICE);
+        })
+      )
+    );
+
+    it.effect("Client.make adopts the identity before the replica can answer a read", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { transport } = yield* recordingTransport;
+          const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const alice = yield* engineOver(aliceStore, transport);
+          yield* alice.subscribe(allSecrets);
+          yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
+          yield* alice.push;
+          yield* alice.pull;
+
+          // B's Client is built over the very same durable store, with the
+          // boundary named only on the Client — the store itself is opened
+          // without an `identity`, so this is `Client.make`'s adoption doing
+          // the work.
+          const store = yield* ClientStore.makeKeyValue();
+          expect(yield* store.listRows("secrets")).toHaveLength(1);
+
+          const { client } = yield* Client.make({
+            nodes,
+            mutations,
+            store,
+            transport,
+            clientId: "client-shared",
+            clientGroupId: "group-shared",
+            identity: BOB,
+            sync: false,
+          });
+          // `observe` is the replica-backed tier and never falls through, so
+          // this is a statement about the replica, not about what the server
+          // would answer.
+          const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
+          expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
+          expect(yield* store.listRows("secrets")).toEqual([]);
+          expect(yield* client.identity).toBe(BOB);
+        })
+      )
+    );
+
+    it.effect("a connected Client says the host owns the replica rather than faking a reset", () =>
       Effect.gen(function* () {
-        const { transport } = yield* recordingTransport;
-
-        // A syncs a private row legitimately.
-        const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const alice = yield* engineOver(aliceStore, transport);
-        yield* alice.subscribe(allSecrets);
-        yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
-        yield* alice.push;
-        yield* alice.pull;
-        expect(bodies(yield* alice.query(allSecrets))).toEqual(["alice's private row"]);
-
-        // B signs in on the same device, in the same session.
-        const client = Client.fromView(nodes, ClientView.fromEngine(alice));
-        yield* client.subscribe({ collection: "secrets" });
-        const outcome = yield* client.reset(BOB);
-        expect(outcome.transition).toBe("Reset");
-
-        const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
-        expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
-        // The superseded identity's subscriptions went with its rows: a
-        // ledger entry left behind would claim B's reads are covered by a
-        // window A registered.
-        expect(yield* client.subscriptions).toEqual([]);
-        expect(yield* alice.activeSubscriptions).toEqual([]);
-
-        // ...and after a reload: a fresh store + engine over the same
-        // durable storage, which is where "the replica is the freshest thing
-        // on the device" would otherwise bite.
-        const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
-        const bob = yield* engineOver(bobStore, transport);
-        expect(yield* bob.query(allSecrets)).toEqual([]);
-        expect(yield* bobStore.listRows("secrets")).toEqual([]);
+        // A view with no identity boundary stands in for a mirror, which holds
+        // no durable state of its own.
+        const engine = yield* engineOver(
+          yield* ClientStore.makeMemory,
+          (yield* recordingTransport).transport
+        );
+        const { identityBoundary: _omitted, ...mirrorLike } = ClientView.fromEngine(engine);
+        const client = Client.fromView(nodes, mirrorLike);
+        const error = yield* Effect.flip(client.reset(BOB));
+        expect(error._tag).toBe("StoreError");
+        expect(error.message).toContain("hosted elsewhere");
       })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("A's quarantined journal entries are never pushed under B's session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { transport, pushes } = yield* recordingTransport;
-
-        const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const alice = yield* engineOver(aliceStore, transport);
-        // Authored, never pushed — the journal is durable and causally
-        // ordered, so without a boundary these survive the sign-out and go
-        // out under the next session's cookies.
-        yield* alice.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
-        yield* alice.mutate("secret/set", { id: "s2", body: "alice's other unsent write" });
-        expect(yield* aliceStore.pendingMutations).toHaveLength(2);
-
-        yield* alice.reset(BOB);
-
-        // B pushes — everything they can. Twice, and after a reload, because
-        // "never pushed" has to hold for every push B will ever make.
-        yield* alice.push;
-        yield* alice.mutate("secret/set", { id: "s3", body: "bob's own write" });
-        yield* alice.push;
-
-        const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
-        const bob = yield* engineOver(bobStore, transport);
-        yield* bob.push;
-
-        const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
-        expect(sent.map((m) => (m.args as { body: string }).body)).toEqual(["bob's own write"]);
-
-        // Not discarded either: parked under A's fingerprint, intact.
-        expect(yield* bobStore.quarantines).toEqual([ALICE]);
-        expect(yield* bobStore.quarantinedMutations(ALICE)).toHaveLength(2);
-      })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("A signing back in makes A's quarantined entries pushable again", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { transport, pushes } = yield* recordingTransport;
-
-        const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const alice = yield* engineOver(aliceStore, transport);
-        yield* alice.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
-
-        const toBob = yield* alice.reset(BOB);
-        expect(toBob).toMatchObject({
-          transition: "Reset",
-          quarantinedUnder: ALICE,
-          quarantined: 1,
-        });
-        expect(yield* aliceStore.pendingMutations).toEqual([]);
-
-        const backToAlice = yield* alice.reset(ALICE);
-        expect(backToAlice).toMatchObject({ transition: "Reset", released: 1 });
-        expect(yield* aliceStore.pendingMutations).toHaveLength(1);
-        expect(yield* aliceStore.quarantines).toEqual([]);
-
-        yield* alice.push;
-        const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
-        expect(sent.map((m) => (m.args as { body: string }).body)).toEqual([
-          "alice's unsent write",
-        ]);
-      })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("a reset never discards a quarantine; only discardQuarantine does", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { transport } = yield* recordingTransport;
-        const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const engine = yield* engineOver(store, transport);
-        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
-
-        yield* client.mutate("secret/set", { id: "s1", body: "alice's unsent write" });
-        yield* client.reset(BOB);
-
-        // Reset after reset after reset — A's intents outlive all of them.
-        yield* client.reset(Identity.anonymous);
-        yield* client.reset(BOB);
-        expect(yield* client.quarantines).toEqual([ALICE]);
-        expect(yield* client.quarantinedMutations(ALICE)).toHaveLength(1);
-
-        yield* client.discardQuarantine(ALICE);
-        expect(yield* client.quarantines).toEqual([]);
-      })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("anonymous → signed in keeps the warm replica, subscriptions and all", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { transport } = yield* recordingTransport;
-        const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-        const engine = yield* engineOver(store, transport);
-        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
-
-        yield* client.subscribe({ collection: "secrets" });
-        yield* engine.mutate("secret/set", { id: "s1", body: "public row" });
-        yield* engine.push;
-        yield* engine.pull;
-        expect(bodies(yield* store.listRows("secrets"))).toEqual(["public row"]);
-        yield* client.mutate("secret/set", { id: "s2", body: "written before signing in" });
-
-        const outcome = yield* client.reset(ALICE);
-        expect(outcome).toMatchObject({ transition: "Upgrade", quarantined: 0 });
-
-        // Nothing was thrown away: rows, cookie, subscriptions and the
-        // unpushed journal all survive the first sign-in.
-        expect(bodies(yield* store.listRows("secrets"))).toEqual(["public row"]);
-        expect(yield* store.getCookie).toBeDefined();
-        expect(yield* store.pendingMutations).toHaveLength(1);
-        expect(yield* engine.activeSubscriptions).toHaveLength(1);
-        expect(yield* store.getIdentity).toBe(ALICE);
-      })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("Client.make adopts the identity before the replica can answer a read", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { transport } = yield* recordingTransport;
-        const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const alice = yield* engineOver(aliceStore, transport);
-        yield* alice.subscribe(allSecrets);
-        yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
-        yield* alice.push;
-        yield* alice.pull;
-
-        // B's Client is built over the very same durable store, with the
-        // boundary named only on the Client — the store itself is opened
-        // without an `identity`, so this is `Client.make`'s adoption doing
-        // the work.
-        const store = yield* ClientStore.makeKeyValue();
-        expect(yield* store.listRows("secrets")).toHaveLength(1);
-
-        const { client } = yield* Client.make({
-          nodes,
-          mutations,
-          store,
-          transport,
-          clientId: "client-shared",
-          clientGroupId: "group-shared",
-          identity: BOB,
-          sync: false,
-        });
-        // `observe` is the replica-backed tier and never falls through, so
-        // this is a statement about the replica, not about what the server
-        // would answer.
-        const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
-        expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
-        expect(yield* store.listRows("secrets")).toEqual([]);
-        expect(yield* client.identity).toBe(BOB);
-      })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("a connected Client says the host owns the replica rather than faking a reset", () =>
-    Effect.gen(function* () {
-      // A view with no identity boundary stands in for a mirror, which holds
-      // no durable state of its own.
-      const engine = yield* engineOver(
-        yield* ClientStore.makeMemory,
-        (yield* recordingTransport).transport
-      );
-      const { identityBoundary: _omitted, ...mirrorLike } = ClientView.fromEngine(engine);
-      const client = Client.fromView(nodes, mirrorLike);
-      const error = yield* Effect.flip(client.reset(BOB));
-      expect(error._tag).toBe("StoreError");
-      expect(error.message).toContain("hosted elsewhere");
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
-});
+    );
+  }
+);

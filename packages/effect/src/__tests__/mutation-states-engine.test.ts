@@ -630,7 +630,7 @@ describe("hydrated journal entries in a running engine (#358)", () => {
         expect(get(states, 1)?.phase).toBe("acknowledged");
         expect(get(states, 1)?.reason).toBeUndefined();
         expect(warnings.filter((message) => message.includes("contradicts"))).toHaveLength(1);
-      }).pipe(Effect.provide(Logger.layer([logger])));
+      }).pipe(Effect.withLogger(logger));
     }
   );
 });

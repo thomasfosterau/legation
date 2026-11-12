@@ -14,9 +14,11 @@
  * overrides the seed to reproduce a failure.
  */
 import * as Defined from "../Defined.js";
-import { describe, expect, it } from "vite-plus/test";
+import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
 import * as Coverage from "../Coverage.js";
 import * as FilterCorpus from "../FilterCorpus.js";
@@ -158,111 +160,158 @@ const generate: Effect.Effect<Generated> = Effect.suspend(() => {
 
 // ─── Properties ──────────────────────────────────────────────────────────────
 
-describe(`Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`, () => {
-  const { rows, pairs, coverage } = Effect.runSync(generate);
+/** The generated pairs, built once for the soundness suite. */
+class GeneratedPairs extends Context.Service<GeneratedPairs, Generated>()(
+  "test/CoverageProperty/GeneratedPairs"
+) {
+  static readonly layer = Layer.effect(GeneratedPairs)(generate);
+}
 
-  it("if covers(subscribed, requested) then local evaluation over the held subset is exact", () => {
-    const covered = pairs.filter((pair) => Coverage.covers(pair.subscribed, pair.requested));
-    const uncovered = pairs.filter((pair) => !Coverage.covers(pair.subscribed, pair.requested));
-    // A covered pair whose local evaluation is not exact would be a false positive.
-    const unsound = covered.filter((pair) => !exactLocally(rows, pair));
-    expect(unsound).toEqual([]);
-    // Both branches are exercised, and a non-covering pair may still agree:
-    // the rule is sound, not complete, and never claims the converse.
-    expect(covered.length).toBeGreaterThan(TRIALS / 5);
-    expect(uncovered.length).toBeGreaterThan(TRIALS / 5);
-    expect(uncovered.filter((pair) => exactLocally(rows, pair)).length).toBeGreaterThan(0);
-  });
-
-  it("the generators produce cursor-only, limit-only and cursored-and-limited subscriptions", () => {
-    const cursorOnly = pairs.filter(
-      (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit === undefined
+layer(GeneratedPairs.layer)(
+  `Coverage soundness (seed ${seed}, ${TRIALS} pairs over ${ROWS} rows)`,
+  (it) => {
+    it.effect(
+      "if covers(subscribed, requested) then local evaluation over the held subset is exact",
+      () =>
+        Effect.gen(function* () {
+          const { rows, pairs } = yield* GeneratedPairs;
+          const covered = pairs.filter((pair) => Coverage.covers(pair.subscribed, pair.requested));
+          const uncovered = pairs.filter(
+            (pair) => !Coverage.covers(pair.subscribed, pair.requested)
+          );
+          // A covered pair whose local evaluation is not exact would be a false positive.
+          const unsound = covered.filter((pair) => !exactLocally(rows, pair));
+          expect(unsound).toEqual([]);
+          // Both branches are exercised, and a non-covering pair may still agree:
+          // the rule is sound, not complete, and never claims the converse.
+          expect(covered.length).toBeGreaterThan(TRIALS / 5);
+          expect(uncovered.length).toBeGreaterThan(TRIALS / 5);
+          expect(uncovered.filter((pair) => exactLocally(rows, pair)).length).toBeGreaterThan(0);
+        })
     );
-    const limitOnly = pairs.filter(
-      (pair) => pair.subscribed.cursor === undefined && pair.subscribed.limit !== undefined
-    );
-    const both = pairs.filter(
-      (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit !== undefined
-    );
-    expect(cursorOnly.length).toBeGreaterThan(0);
-    expect(limitOnly.length).toBeGreaterThan(0);
-    expect(both.length).toBeGreaterThan(0);
-    // A cursor-only subscription covers some request (its own window) and
-    // never an unwindowed one: it does not hold the rows before its cursor.
-    expect(cursorOnly.some((pair) => Coverage.covers(pair.subscribed, pair.requested))).toBe(true);
-    expect(
-      cursorOnly.filter(
-        (pair) =>
-          pair.requested.cursor === undefined && Coverage.covers(pair.subscribed, pair.requested)
-      )
-    ).toEqual([]);
-  });
 
-  it("the verdict is invariant under conjunct order", () => {
-    Arr.forEach(pairs, (pair) => {
-      const members = Coverage.canonicalConjuncts(pair.requested.where).map(
-        (conjunct) => conjunct.predicate
-      );
-      const reversed = { ...pair.requested, where: Predicate.and(...Arr.reverse(members)) };
-      expect(Coverage.covers(pair.subscribed, reversed)).toBe(
-        Coverage.covers(pair.subscribed, pair.requested)
-      );
-    });
-  });
-
-  it("a windowed subscription never covers a strictly narrower predicate", () => {
-    const narrower = pairs.filter(
-      (pair) => Coverage.isWindowed(pair.subscribed) && strictlyNarrower(pair)
+    it.effect(
+      "the generators produce cursor-only, limit-only and cursored-and-limited subscriptions",
+      () =>
+        Effect.gen(function* () {
+          const { pairs } = yield* GeneratedPairs;
+          const cursorOnly = pairs.filter(
+            (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit === undefined
+          );
+          const limitOnly = pairs.filter(
+            (pair) => pair.subscribed.cursor === undefined && pair.subscribed.limit !== undefined
+          );
+          const both = pairs.filter(
+            (pair) => pair.subscribed.cursor !== undefined && pair.subscribed.limit !== undefined
+          );
+          expect(cursorOnly.length).toBeGreaterThan(0);
+          expect(limitOnly.length).toBeGreaterThan(0);
+          expect(both.length).toBeGreaterThan(0);
+          // A cursor-only subscription covers some request (its own window) and
+          // never an unwindowed one: it does not hold the rows before its cursor.
+          expect(cursorOnly.some((pair) => Coverage.covers(pair.subscribed, pair.requested))).toBe(
+            true
+          );
+          expect(
+            cursorOnly.filter(
+              (pair) =>
+                pair.requested.cursor === undefined &&
+                Coverage.covers(pair.subscribed, pair.requested)
+            )
+          ).toEqual([]);
+        })
     );
-    expect(narrower.length).toBeGreaterThan(0);
-    expect(narrower.filter((pair) => Coverage.covers(pair.subscribed, pair.requested))).toEqual([]);
-  });
 
-  it("the generators reached every conjunct shape", () => {
-    expect(coverage.and + coverage.or + coverage.not).toBeGreaterThan(0);
-    expect(coverage.in + coverage.nin + coverage.isnull).toBeGreaterThan(0);
-  });
+    it.effect("the verdict is invariant under conjunct order", () =>
+      Effect.gen(function* () {
+        const { pairs } = yield* GeneratedPairs;
+        Arr.forEach(pairs, (pair) => {
+          const members = Coverage.canonicalConjuncts(pair.requested.where).map(
+            (conjunct) => conjunct.predicate
+          );
+          const reversed = { ...pair.requested, where: Predicate.and(...Arr.reverse(members)) };
+          expect(Coverage.covers(pair.subscribed, reversed)).toBe(
+            Coverage.covers(pair.subscribed, pair.requested)
+          );
+        });
+      })
+    );
+
+    it.effect("a windowed subscription never covers a strictly narrower predicate", () =>
+      Effect.gen(function* () {
+        const { pairs } = yield* GeneratedPairs;
+        const narrower = pairs.filter(
+          (pair) => Coverage.isWindowed(pair.subscribed) && strictlyNarrower(pair)
+        );
+        expect(narrower.length).toBeGreaterThan(0);
+        expect(narrower.filter((pair) => Coverage.covers(pair.subscribed, pair.requested))).toEqual(
+          []
+        );
+      })
+    );
+
+    it.effect("the generators reached every conjunct shape", () =>
+      Effect.gen(function* () {
+        const { coverage } = yield* GeneratedPairs;
+        expect(coverage.and + coverage.or + coverage.not).toBeGreaterThan(0);
+        expect(coverage.in + coverage.nin + coverage.isnull).toBeGreaterThan(0);
+      })
+    );
+  }
+);
+
+/** The harness corpus at the suite's seed, built once. */
+class HarnessCorpus extends Context.Service<HarnessCorpus, FilterCorpus.Corpus>()(
+  "test/CoverageProperty/HarnessCorpus"
+) {
+  static readonly layer = Layer.effect(HarnessCorpus)(FilterCorpus.generateCorpus({ seed }));
+}
+
+layer(HarnessCorpus.layer)("the harness corpus as subscriptions", (it) => {
+  it.effect("every corpus predicate, unwindowed, covers itself under every corpus window", () =>
+    Effect.gen(function* () {
+      const corpus = yield* HarnessCorpus;
+      Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
+        const subscribed = Subset.make({ collection: "corpus", where });
+        const orderBy = defined(corpus.orderBys[index % corpus.orderBys.length]);
+        const requested = Subset.make({
+          collection: "corpus",
+          where,
+          orderBy,
+          limit: 1 + (index % 20),
+        });
+        expect(Coverage.covers(subscribed, requested)).toBe(true);
+        expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
+      });
+    })
+  );
+
+  it.effect("every corpus predicate, unwindowed, covers itself conjoined with its neighbour", () =>
+    Effect.gen(function* () {
+      const corpus = yield* HarnessCorpus;
+      Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
+        const neighbour = defined(corpus.predicates[(index + 1) % corpus.predicates.length]);
+        const subscribed = Subset.make({ collection: "corpus", where });
+        const requested = Subset.make({
+          collection: "corpus",
+          where: Predicate.and(neighbour, where),
+          orderBy: defined(corpus.orderBys[index % corpus.orderBys.length]),
+        });
+        expect(Coverage.covers(subscribed, requested)).toBe(true);
+        expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
+      });
+    })
+  );
 });
 
-describe("the harness corpus as subscriptions", () => {
-  const corpus = Effect.runSync(FilterCorpus.generateCorpus({ seed }));
-
-  it("every corpus predicate, unwindowed, covers itself under every corpus window", () => {
-    Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
-      const subscribed = Subset.make({ collection: "corpus", where });
-      const orderBy = defined(corpus.orderBys[index % corpus.orderBys.length]);
-      const requested = Subset.make({
-        collection: "corpus",
-        where,
-        orderBy,
-        limit: 1 + (index % 20),
-      });
-      expect(Coverage.covers(subscribed, requested)).toBe(true);
-      expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
-    });
-  });
-
-  it("every corpus predicate, unwindowed, covers itself conjoined with its neighbour", () => {
-    Arr.forEach(corpus.predicates.entries(), ([index, where]) => {
-      const neighbour = defined(corpus.predicates[(index + 1) % corpus.predicates.length]);
-      const subscribed = Subset.make({ collection: "corpus", where });
-      const requested = Subset.make({
-        collection: "corpus",
-        where: Predicate.and(neighbour, where),
-        orderBy: defined(corpus.orderBys[index % corpus.orderBys.length]),
-      });
-      expect(Coverage.covers(subscribed, requested)).toBe(true);
-      expect(exactLocally(corpus.rows, { subscribed, requested })).toBe(true);
-    });
-  });
-});
-
-describe("the converse is not claimed", () => {
-  it("an implied but structurally different predicate is a (harmless) false negative", () => {
-    const rows = Effect.runSync(FilterCorpus.generateRows(ROWS).pipe(Random.withSeed(seed)));
-    const subscribed = Subset.make({ collection: "corpus", where: Predicate.gt("i", 5) });
-    const requested = Subset.make({ collection: "corpus", where: Predicate.gt("i", 10) });
-    expect(Coverage.covers(subscribed, requested)).toBe(false);
-    expect(exactLocally(rows, { subscribed, requested })).toBe(true);
-  });
+describeWrapped("the converse is not claimed", (it) => {
+  it.effect("an implied but structurally different predicate is a (harmless) false negative", () =>
+    Effect.gen(function* () {
+      const rows = yield* FilterCorpus.generateRows(ROWS).pipe(Random.withSeed(seed));
+      const subscribed = Subset.make({ collection: "corpus", where: Predicate.gt("i", 5) });
+      const requested = Subset.make({ collection: "corpus", where: Predicate.gt("i", 10) });
+      expect(Coverage.covers(subscribed, requested)).toBe(false);
+      expect(exactLocally(rows, { subscribed, requested })).toBe(true);
+    })
+  );
 });

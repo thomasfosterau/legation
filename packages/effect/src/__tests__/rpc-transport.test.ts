@@ -3,7 +3,7 @@
  * full RpcClient/RpcServer machinery via RpcTest (typed routing, streaming
  * pokes, error mapping), with the byte-level carrier skipped.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -72,7 +72,7 @@ const makeEngine = (name: string) =>
 
 const allTodos = Subset.make({ collection: "todos" });
 
-describe("RpcTransport", () => {
+layer(serverLayer, { buildPerTest: true })("RpcTransport", (it) => {
   it.effect("syncs end to end over the RPC machinery", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* makeEngine("a");
@@ -85,7 +85,7 @@ describe("RpcTransport", () => {
       expect(yield* store.pendingMutations).toEqual([]);
       const confirmed = yield* store.listRows("todos");
       expect(confirmed.map((row) => (row.value as Todo).title)).toEqual(["over rpc"]);
-    }).pipe(Effect.provide(serverLayer))
+    })
   );
 
   it.effect("streams pokes to subscribed client groups after a push", () =>
@@ -106,7 +106,7 @@ describe("RpcTransport", () => {
       yield* b.engine.pull;
       const seen = yield* b.engine.query(allTodos);
       expect(seen.map((row) => (row.value as Todo).title)).toEqual(["poke me"]);
-    }).pipe(Effect.provide(serverLayer))
+    })
   );
 
   it.effect("maps server refusals back to TransportError", () =>
@@ -116,7 +116,7 @@ describe("RpcTransport", () => {
       const failure = yield* Effect.flip(engine.pull);
       expect(failure._tag).toBe("TransportError");
       expect(failure.message).toContain("secrets");
-    }).pipe(Effect.provide(serverLayer))
+    })
   );
 
   it.effect("presents each call's headers to the IdentityResolver as its credentials", () =>
@@ -126,6 +126,13 @@ describe("RpcTransport", () => {
         resolve: ({ credentials }) =>
           Ref.update(seen, (all) => [...all, credentials.header("Authorization")]),
       };
+      // `Layer.fresh`: the suite's memo map already holds `serverLayer`; this test needs its own copy
+      // wired to its resolver.
+      const served = yield* Layer.build(
+        Layer.fresh(
+          serverLayer.pipe(Layer.provide(Layer.succeed(Authorization.IdentityResolver)(resolver)))
+        )
+      );
       yield* Effect.gen(function* () {
         const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
         const withKey = RpcClient.withHeaders({ authorization: "Bearer api-key-1" });
@@ -134,11 +141,7 @@ describe("RpcTransport", () => {
           .pull({ clientGroupId: "group-a", subscriptions: [allTodos] })
           .pipe(withKey, Effect.orDie);
         yield* client.read({ clientGroupId: "group-a", subsets: [allTodos] }).pipe(Effect.orDie);
-      }).pipe(
-        Effect.provide(
-          serverLayer.pipe(Layer.provide(Layer.succeed(Authorization.IdentityResolver)(resolver)))
-        )
-      );
+      }).pipe(Effect.provideContext(served));
       expect(yield* Ref.get(seen)).toEqual([
         Option.some("Bearer api-key-1"),
         Option.some("Bearer api-key-1"),

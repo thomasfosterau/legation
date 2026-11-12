@@ -16,12 +16,12 @@
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
 import * as Defined from "../Defined.js";
-import { describe, test } from "vite-plus/test";
+import { describe, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ClientEngineModule from "../ClientEngine.js";
 import { ClientStore, type StoredRow } from "../ClientStore.js";
@@ -178,48 +178,51 @@ const rows = Array.from({ length: ROWS }, (_, i) => ({
   done: i % 2 === 0,
 }));
 
-// One long-lived scope for the whole bench run (never closed — the process
-// exits after `vitest bench` completes), so engine setup (seeding 50k rows)
+// Each engine is built inside the test, in the test's scope, so engine setup (seeding 50k rows)
 // happens once and only the timed `query` call repeats per iteration.
-const benchScope = await Effect.runPromise(Scope.make());
-
 const buildEngine = (indexed: boolean) =>
   Effect.gen(function* () {
     const store = yield* makeBulkSeededStore(rows);
+    const transport = yield* Layer.build(
+      layerInMemory(`bench-${indexed}`).pipe(
+        Layer.provide(Layer.succeed(ServerHandler)(noopHandler))
+      )
+    );
     const engine = yield* ClientEngineModule.make({
       clientId: "bench",
       clientGroupId: `bench-${indexed}`,
       mutators,
       ...Defined.fields({ indexes: indexed ? { items: ["priority"] } : undefined }),
-    }).pipe(
-      Effect.provideService(ClientStore, store),
-      Effect.provide(layerInMemory(`bench-${indexed}`)),
-      Effect.provideService(ServerHandler, noopHandler)
-    );
+    }).pipe(Effect.provideService(ClientStore, store), Effect.provideContext(transport));
     // Prime the index (or, for the unindexed engine, just the overlay cache)
     // once outside the timed loop, matching how a long-lived app's first
     // rebuild pays the one-time cost and steady-state rebuilds don't.
     yield* engine.query(Subset.make({ collection: "items", where: Predicate.eq("priority", 0) }));
     return engine;
-  }).pipe(Scope.provide(benchScope), Effect.runPromise);
-
-const unindexedEngine = await buildEngine(false);
-const indexedEngine = await buildEngine(true);
+  });
 
 const pointPredicate = Subset.make({ collection: "items", where: Predicate.eq("priority", 42) });
 
 describe(`point-predicate query over ${ROWS} rows`, () => {
   // One test, both cases: `bench.compare` runs them under the same budget and
-  // prints them side by side, which is the point of this benchmark.
-  test("unindexed (full scan) vs indexed (hash lookup)", async ({ bench }) => {
-    await bench.compare(
-      bench("unindexed (full scan)", async () => {
-        await Effect.runPromise(unindexedEngine.query(pointPredicate));
-      }),
-      bench("indexed (hash lookup)", async () => {
-        await Effect.runPromise(indexedEngine.query(pointPredicate));
-      }),
-      { time: 1000 }
-    );
-  });
+  // prints them side by side, which is the point of this benchmark. Live
+  // clock: the bench measures wall-clock time.
+  it.live("unindexed (full scan) vs indexed (hash lookup)", ({ bench }) =>
+    Effect.gen(function* () {
+      const unindexedEngine = yield* buildEngine(false);
+      const indexedEngine = yield* buildEngine(true);
+      const run = Effect.runPromiseWith(yield* Effect.context());
+      yield* Effect.tryPromise(() =>
+        bench.compare(
+          bench("unindexed (full scan)", async () => {
+            await run(unindexedEngine.query(pointPredicate));
+          }),
+          bench("indexed (hash lookup)", async () => {
+            await run(indexedEngine.query(pointPredicate));
+          }),
+          { time: 1000 }
+        )
+      ).pipe(Effect.orDie);
+    })
+  );
 });

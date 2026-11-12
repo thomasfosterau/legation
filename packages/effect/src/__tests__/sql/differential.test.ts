@@ -28,37 +28,15 @@ import { Predicate } from "@thomasfosterau/legation";
 import { FilterCorpus, Subset } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
 import * as Console from "effect/Console";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Scope from "effect/Scope";
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { describe, expect, layer } from "@effect/vitest";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
 import { TestFailure } from "../test-failure.js";
 
 const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);
-
-// Generation is synchronous and pure (a seeded `Random` service), so the
-// corpora are built once at module load.
-
-/** The full corpus: NULL, absent, astral text, ordered booleans — everything ADR-0028 covers. */
-const full = Effect.runSync(FilterCorpus.generateCorpus({ seed }));
-/**
- * The corpus every evaluator agreed on before #155: no NULL/absent, no
- * astral text, no ordered comparison on booleans. Same seed as `full` so the
- * seed a disagreement reports reproduces it; the options alone make it
- * distinct.
- */
-const restricted = Effect.runSync(
-  FilterCorpus.generateCorpus({
-    seed,
-    nulls: false,
-    astral: false,
-    booleanOrder: false,
-  })
-);
-/** `restricted` re-id'd so it can share the SQL tables with `full`; the one place the prefix is chosen. */
-const restrictedQ = prefixedCorpus("q", restricted);
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;
@@ -299,52 +277,67 @@ const checkOrder = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
-describe("differential filter harness (ADR-0028)", () => {
-  let scope: Scope.Closeable;
-  let sqlite: Leg;
-  let postgres: Leg;
-  const js: Leg = { name: "js", where: jsWhere, order: jsOrder, judge: jsJudge };
+/** What the suite compares: the corpora and the three evaluators, built once for it. */
+interface Differential {
+  /** The full corpus: NULL, absent, astral text, ordered booleans — everything ADR-0028 covers. */
+  readonly full: FilterCorpus.Corpus;
+  /**
+   * The corpus every evaluator agreed on before #155: no NULL/absent, no astral text, no ordered
+   * comparison on booleans, re-id'd so it can share the SQL tables with `full`. Same seed as `full`
+   * so the seed a disagreement reports reproduces it; the options alone make it distinct.
+   */
+  readonly restrictedQ: FilterCorpus.Corpus;
+  readonly js: Leg;
+  readonly sqlite: Leg;
+  readonly postgres: Leg;
+}
+const Differential = Context.Service<Differential>("test/sql/Differential");
 
-  beforeAll(async () => {
-    scope = await Effect.runPromise(Scope.make());
-    const engines = await Effect.runPromise(
-      Scope.provide(scope)(
-        Effect.gen(function* () {
-          const sqliteEngine = yield* makeSqlite;
-          const postgresEngine = yield* makePostgres;
-          return { sqliteEngine, postgresEngine };
-        })
-      )
-    );
-    sqlite = {
-      name: "sqlite",
-      where: sqlWhere(engines.sqliteEngine),
-      order: sqlOrder(engines.sqliteEngine),
-      judge: sqlJudge(engines.sqliteEngine),
-    };
-    postgres = {
-      name: "postgres",
-      where: sqlWhere(engines.postgresEngine),
-      order: sqlOrder(engines.postgresEngine),
-      judge: sqlJudge(engines.postgresEngine),
-    };
+/** Both SQL engines, loaded with every row set used below, closed with the suite's scope. */
+const differentialLayer = Layer.effect(Differential)(
+  Effect.gen(function* () {
+    const full = yield* FilterCorpus.generateCorpus({ seed });
+    const restricted = yield* FilterCorpus.generateCorpus({
+      seed,
+      nulls: false,
+      astral: false,
+      booleanOrder: false,
+    });
+    const restrictedQ = prefixedCorpus("q", restricted);
+    const sqliteEngine = yield* makeSqlite;
+    const postgresEngine = yield* makePostgres;
     // Both SQL legs hold the union of every row set used below; ids are
     // disjoint across corpora and focused cases, so restriction is exact.
     const loaded = [...full.rows, ...restrictedQ.rows, ...focusedRows];
-    await Effect.runPromise(engines.sqliteEngine.load(loaded));
-    await Effect.runPromise(engines.postgresEngine.load(loaded));
-  }, 120_000);
+    yield* sqliteEngine.load(loaded);
+    yield* postgresEngine.load(loaded);
+    return {
+      full,
+      restrictedQ,
+      js: { name: "js", where: jsWhere, order: jsOrder, judge: jsJudge },
+      sqlite: {
+        name: "sqlite",
+        where: sqlWhere(sqliteEngine),
+        order: sqlOrder(sqliteEngine),
+        judge: sqlJudge(sqliteEngine),
+      },
+      postgres: {
+        name: "postgres",
+        where: sqlWhere(postgresEngine),
+        order: sqlOrder(postgresEngine),
+        judge: sqlJudge(postgresEngine),
+      },
+    } satisfies Differential;
+  })
+);
 
-  afterAll(async () => {
-    await Effect.runPromise(Scope.close(scope, Exit.succeed(undefined)));
-  });
-
-  /** Run a check; it resolves when every case agrees and rejects with the minimal case otherwise. */
-  const run = (effect: Effect.Effect<void>) => Effect.runPromise(effect);
-
-  it("reports the seed and operator coverage", () =>
-    run(
+// The checks fail with the minimal disagreeing case, which fails the test.
+layer(differentialLayer, { timeout: "120 seconds" })(
+  "differential filter harness (ADR-0028)",
+  (it) => {
+    it.effect("reports the seed and operator coverage", () =>
       Effect.gen(function* () {
+        const { full } = yield* Differential;
         yield* Console.info(
           `differential corpus seed ${seed}; coverage ${JSON.stringify(full.coverage)}`
         );
@@ -354,78 +347,129 @@ describe("differential filter harness (ADR-0028)", () => {
         );
         expect(thin).toEqual([]);
       })
-    ));
+    );
 
-  describe("SQLite vs Postgres", () => {
-    it(
-      "agree on every generated predicate (full corpus)",
-      () => expect(run(checkWhere(full, sqlite, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-    it(
-      "agree on every per-row verdict (full corpus)",
-      () => expect(run(checkVerdicts(full, sqlite, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-    it(
-      "agree on every generated orderBy (full corpus)",
-      () => expect(run(checkOrder(full, sqlite, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-  });
-
-  describe("JS Predicate.evaluate vs Postgres", () => {
-    it(
-      "agrees on the corpus without NULL/absent values, astral text or ordered booleans",
-      () => expect(run(checkWhere(restrictedQ, js, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-    it(
-      "agrees on the full corpus (NULL, absent, astral text, ordered booleans)",
-      () => expect(run(checkWhere(full, js, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-    it(
-      "agrees on every per-row three-valued verdict (full corpus)",
-      () => expect(run(checkVerdicts(full, js, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-  });
-
-  describe("JS Subset.comparator vs Postgres ORDER BY", () => {
-    it(
-      "agrees on the corpus without NULL/absent values or astral text",
-      () => expect(run(checkOrder(restrictedQ, js, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-    it(
-      "agrees on the full corpus (NULL, astral text)",
-      () => expect(run(checkOrder(full, js, postgres))).resolves.toBeUndefined(),
-      60_000
-    );
-  });
-
-  describe("focused minimal cases", () => {
-    Arr.forEach(focusedWhere, (focused) => {
-      const rows = focusedRows.filter((row) => focused.ids.includes(row.id));
-      const single = { ...full, predicates: [focused.predicate], rows };
-      it(`SQLite agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkWhere(single, sqlite, postgres))).resolves.toBeUndefined());
-      it(`JS agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkWhere(single, js, postgres))).resolves.toBeUndefined());
-      it(`JS verdicts agree with Postgres: ${focused.name}`, () =>
-        expect(run(checkVerdicts(single, js, postgres))).resolves.toBeUndefined());
+    describe("SQLite vs Postgres", () => {
+      it.effect(
+        "agree on every generated predicate (full corpus)",
+        () =>
+          Effect.gen(function* () {
+            const { full, sqlite, postgres } = yield* Differential;
+            yield* checkWhere(full, sqlite, postgres);
+          }),
+        60_000
+      );
+      it.effect(
+        "agree on every per-row verdict (full corpus)",
+        () =>
+          Effect.gen(function* () {
+            const { full, sqlite, postgres } = yield* Differential;
+            yield* checkVerdicts(full, sqlite, postgres);
+          }),
+        60_000
+      );
+      it.effect(
+        "agree on every generated orderBy (full corpus)",
+        () =>
+          Effect.gen(function* () {
+            const { full, sqlite, postgres } = yield* Differential;
+            yield* checkOrder(full, sqlite, postgres);
+          }),
+        60_000
+      );
     });
-    Arr.forEach(focusedOrder, (focused) => {
-      const rows = focusedRows.filter((row) => focused.ids.includes(row.id));
-      const single = { ...full, orderBys: [focused.orderBy], rows };
-      it(`SQLite agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkOrder(single, sqlite, postgres))).resolves.toBeUndefined());
-      it(`JS agrees with Postgres: ${focused.name}`, () =>
-        expect(run(checkOrder(single, js, postgres))).resolves.toBeUndefined());
+
+    describe("JS Predicate.evaluate vs Postgres", () => {
+      it.effect(
+        "agrees on the corpus without NULL/absent values, astral text or ordered booleans",
+        () =>
+          Effect.gen(function* () {
+            const { restrictedQ, js, postgres } = yield* Differential;
+            yield* checkWhere(restrictedQ, js, postgres);
+          }),
+        60_000
+      );
+      it.effect(
+        "agrees on the full corpus (NULL, absent, astral text, ordered booleans)",
+        () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkWhere(full, js, postgres);
+          }),
+        60_000
+      );
+      it.effect(
+        "agrees on every per-row three-valued verdict (full corpus)",
+        () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkVerdicts(full, js, postgres);
+          }),
+        60_000
+      );
     });
-  });
-});
+
+    describe("JS Subset.comparator vs Postgres ORDER BY", () => {
+      it.effect(
+        "agrees on the corpus without NULL/absent values or astral text",
+        () =>
+          Effect.gen(function* () {
+            const { restrictedQ, js, postgres } = yield* Differential;
+            yield* checkOrder(restrictedQ, js, postgres);
+          }),
+        60_000
+      );
+      it.effect(
+        "agrees on the full corpus (NULL, astral text)",
+        () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkOrder(full, js, postgres);
+          }),
+        60_000
+      );
+    });
+
+    describe("focused minimal cases", () => {
+      Arr.forEach(focusedWhere, (focused) => {
+        const rows = focusedRows.filter((row) => focused.ids.includes(row.id));
+        it.effect(`SQLite agrees with Postgres: ${focused.name}`, () =>
+          Effect.gen(function* () {
+            const { full, sqlite, postgres } = yield* Differential;
+            yield* checkWhere({ ...full, predicates: [focused.predicate], rows }, sqlite, postgres);
+          })
+        );
+        it.effect(`JS agrees with Postgres: ${focused.name}`, () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkWhere({ ...full, predicates: [focused.predicate], rows }, js, postgres);
+          })
+        );
+        it.effect(`JS verdicts agree with Postgres: ${focused.name}`, () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkVerdicts({ ...full, predicates: [focused.predicate], rows }, js, postgres);
+          })
+        );
+      });
+      Arr.forEach(focusedOrder, (focused) => {
+        const rows = focusedRows.filter((row) => focused.ids.includes(row.id));
+        it.effect(`SQLite agrees with Postgres: ${focused.name}`, () =>
+          Effect.gen(function* () {
+            const { full, sqlite, postgres } = yield* Differential;
+            yield* checkOrder({ ...full, orderBys: [focused.orderBy], rows }, sqlite, postgres);
+          })
+        );
+        it.effect(`JS agrees with Postgres: ${focused.name}`, () =>
+          Effect.gen(function* () {
+            const { full, js, postgres } = yield* Differential;
+            yield* checkOrder({ ...full, orderBys: [focused.orderBy], rows }, js, postgres);
+          })
+        );
+      });
+    });
+  }
+);
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 

@@ -171,7 +171,7 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
           if (options.logLevel === "Warn") warnings.push(String(options.message));
         });
         const { engine, store, log } = yield* journaled(1100);
-        yield* engine.push.pipe(Effect.provide(Logger.layer([logger])));
+        yield* Effect.withLogger(engine.push, logger);
         expect(log).toEqual([
           `push ${range(1, 512)} tail=0`,
           "pull",
@@ -351,7 +351,7 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5]);
 
       for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
-      yield* engine.push.pipe(Effect.provide(Logger.layer([logger])));
+      yield* Effect.withLogger(engine.push, logger);
       // The second push sends 4 (filling the tail to the bound), pulls, then sends the last 5.
       expect(pushIds(log)).toEqual([
         `push ${range(1, 5)}`,
