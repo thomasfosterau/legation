@@ -161,9 +161,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
         undefined,
         coverage,
         3
-      )
-        .pipe(Effect.replicateEffect(300))
-        .pipe(Random.withSeed(161));
+      ).pipe(Effect.replicateEffect(300), Random.withSeed(161));
       let representable = 0;
       Arr.forEach(predicates, (predicate) => {
         const ast = JsonApiQuery.toFilterAst(predicate);

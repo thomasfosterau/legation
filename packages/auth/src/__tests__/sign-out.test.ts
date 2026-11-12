@@ -6,7 +6,7 @@
  * now carries) nor discarded (they are the user's data); they are parked under
  * that user's fingerprint and become pushable again only if they sign back in.
  */
-import { assert, describe, expect, it, layer } from "@effect/vitest";
+import { assert, describe, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -229,7 +229,7 @@ describe("SignOut.onSessionChange", () => {
   });
 });
 
-describe("SignOut.fingerprintOfSession", () => {
+layer(testLayer)("SignOut.fingerprintOfSession", (it) => {
   it.effect("is anonymous when signed out, and the user's fingerprint when signed in", () =>
     Effect.gen(function* () {
       expect(yield* SignOut.fingerprintOfSession(Option.none())).toBe(Identity.anonymous);
@@ -241,7 +241,7 @@ describe("SignOut.fingerprintOfSession", () => {
           fingerprint: (subject) => Effect.succeed(`app:${subject.user.id}`),
         })
       ).toBe("app:user-alice");
-    }).pipe(Effect.provide(testLayer))
+    })
   );
 });
 
@@ -282,7 +282,7 @@ const webCryptoFingerprint = (userId: string) =>
 const adopted = (settled: Option.Option<SignOut.SessionChange>): SignOut.SessionChange =>
   Option.getOrElse(settled, () => assert.fail("no session change was adopted"));
 
-describe("SignOut.follow", () => {
+layer(KeyValueStore.layerMemory)("SignOut.follow (no Digest in context)", (it) => {
   it.effect("a store change resets the client: sign-in, sign-out, the next user", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -321,9 +321,11 @@ describe("SignOut.follow", () => {
         expect(yield* store.pendingMutations).toEqual([]);
         expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
       })
-    ).pipe(Effect.provide(KeyValueStore.layerMemory))
+    )
   );
+});
 
+layer(testLayer)("SignOut.follow", (it) => {
   it.effect("a pending store is not a sign-out", () =>
     Effect.gen(function* () {
       const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
@@ -339,7 +341,7 @@ describe("SignOut.follow", () => {
       );
       // Closing the scope unsubscribes.
       expect(held.subscribers()).toBe(0);
-    }).pipe(Effect.provide(testLayer))
+    })
   );
 
   it.effect("adopts the store's settled state when it starts", () =>
@@ -352,6 +354,6 @@ describe("SignOut.follow", () => {
         expect(adopted(yield* following.settled).transition).toBe("Reset");
         expect(yield* client.identity).toBe(Identity.anonymous);
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 });
