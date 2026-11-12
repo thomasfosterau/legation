@@ -20,12 +20,25 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Scope from "effect/Scope";
 
 /**
+ * A partial fake of `T`: any subset of `T`'s members, each method with a
+ * simplified signature. The member names are checked against `T`, so a fake
+ * can't stub a member the binding doesn't have.
+ */
+export type Fake<T> = {
+  readonly [K in keyof T]?: T[K] extends (...args: never) => void
+    ? (...args: never) => void
+    : unknown;
+};
+
+/**
  * Type a partial fake as the binding it stands in for. A fake implements only
  * the members the code under test calls; the provider and workerd types carry
  * many more, so no fake satisfies them structurally.
  */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- the type argument names the third-party binding (workerd, `@alchemy.run/cloudflare`) the fake stands in for; a fake implements only the members under test, with simplified signatures, so it cannot be checked against even `Partial<T>`.
-export const fakeBinding = <T>(fake: unknown): T => fake as T;
+export const fakeBinding = <T>(fake: Fake<T>): T =>
+  // SAFETY: a test fake stands in for a third-party binding; the code under
+  // test calls only the members it stubs, whose names `Fake<T>` checks.
+  fake as T;
 
 /** Alchemy's runtime context, as a Durable Object event carries it. */
 export const runtimeContext: RuntimeContext["Service"] = {
