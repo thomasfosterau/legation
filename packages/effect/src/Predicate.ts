@@ -434,23 +434,30 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> =>
-  (evaluators[predicate._tag] as (node: Predicate, row: unknown) => Option.Option<boolean>)(
-    predicate,
-    row
-  );
+  dispatch(predicate._tag, predicate, row);
+
+/** A predicate node by its tag: the key the evaluator table is correlated over. */
+type NodeOf = { readonly [Tag in Predicate["_tag"]]: Extract<Predicate, { readonly _tag: Tag }> };
+
+/** The evaluator table's contract: one handler per node tag, each given its own node. */
+type Evaluators = {
+  readonly [Tag in Predicate["_tag"]]: (node: NodeOf[Tag], row: unknown) => Option.Option<boolean>;
+};
+
+/** Runs the evaluator for `tag` on its node; the shared `Tag` keeps the lookup typed without an assertion. */
+const dispatch = <Tag extends Predicate["_tag"]>(
+  tag: Tag,
+  node: NodeOf[Tag],
+  row: unknown
+): Option.Option<boolean> => evaluators[tag](node, row);
 
 /**
  * One evaluator per node tag, keyed by `_tag`: a property lookup, not a
  * `Match`, because `evaluate` runs per row per node (a hoisted `Match.fn` tag
  * chain measured ~2.3x slower and `Match.typeTags` ~1.7x, the lookup ~8%
- * slower than a `switch`; #497). The mapped type keeps it exhaustive.
+ * slower than a `switch`; #497). `Evaluators` keeps it exhaustive, and `dispatch` correlates a tag with its node, so no assertion is needed.
  */
-const evaluators: {
-  readonly [Tag in Predicate["_tag"]]: (
-    node: Extract<Predicate, { readonly _tag: Tag }>,
-    row: unknown
-  ) => Option.Option<boolean>;
-} = {
+const evaluators: Evaluators = {
   True: () => TRUE,
   Exists: () => TRUE,
   Compare: evaluateCompare,
