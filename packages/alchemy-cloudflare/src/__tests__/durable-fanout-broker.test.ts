@@ -17,6 +17,7 @@ import { FanoutTopics } from "@thomasfosterau/legation/internal";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import type * as FanoutShard from "../FanoutShard.js";
 import { fakeBinding, runtimeContext } from "./harness.js";
+import { TestFailure } from "./test-failure.js";
 
 /** Shards whose every call hangs, recording the topic of each call given up on. */
 const hungShards = () => {
@@ -85,7 +86,7 @@ describe("DurableFanoutBroker publish", () => {
             publish: () =>
               topic in leased
                 ? Effect.succeed(leased[topic])
-                : Effect.die(new Error("RpcCallError")),
+                : Effect.die(new TestFailure({ message: "RpcCallError" })),
           }),
         });
         const poked: Array<readonly [string, ReadonlyArray<string>]> = [];

@@ -35,6 +35,7 @@ import { ClientEngine, FilterCorpus, Subset } from "@thomasfosterau/legation/int
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
@@ -89,9 +90,10 @@ const nodes = Node.registry([categories, products, variants, reviews, corpus]);
 const parse = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
 const parseFailure = (url: string): QueryError => {
   const exit = Effect.runSyncExit(JsonApiQuery.parseRead(nodes, url));
-  if (Exit.isSuccess(exit)) throw new Error(`expected ${url} to be rejected`);
+  if (Exit.isSuccess(exit)) throw new TestFailure({ message: `expected ${url} to be rejected` });
   const failure = Exit.isFailure(exit) ? exit.cause.reasons[0] : undefined;
-  if (failure?._tag !== "Fail") throw new Error(`expected a failure, got ${String(exit.cause)}`);
+  if (failure?._tag !== "Fail")
+    throw new TestFailure({ message: `expected a failure, got ${String(exit.cause)}` });
   return failure.error;
 };
 

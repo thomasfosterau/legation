@@ -25,6 +25,7 @@ import {
   Transport,
 } from "../index.js";
 import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../internal.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, featured: Schema.Boolean },
@@ -62,7 +63,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeServer = Effect.gen(function* () {

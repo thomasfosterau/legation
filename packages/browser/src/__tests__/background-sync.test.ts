@@ -60,6 +60,7 @@ import { KeyValueStore } from "effect/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -155,7 +156,7 @@ const listenOn = (
 /** Await a held `waitUntil` promise, as its outcome or its rejection. */
 const settle = (promise: Promise<unknown> | undefined) =>
   awaitPromise(() =>
-    (promise ?? Promise.reject(new Error("nothing was held"))).then(
+    (promise ?? Promise.reject(new TestFailure({ message: "nothing was held" }))).then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error })
     )
@@ -271,7 +272,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolea
       if (check(value)) return value;
       yield* Effect.sleep("20 millis");
     }
-    return yield* Effect.die(new Error("condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "condition never held" }));
   });
 
 const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;

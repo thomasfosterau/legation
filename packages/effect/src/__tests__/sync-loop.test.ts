@@ -30,6 +30,7 @@ import type { Poke } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -125,7 +126,9 @@ const advanceUntil = <E>(
       yield* TestClock.adjust(step);
     }
     if (yield* condition) return;
-    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+    return yield* Effect.die(
+      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+    );
   });
 
 // Wait for a condition without moving the clock. Each step is a zero-length

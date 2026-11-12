@@ -36,6 +36,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 type Row = Derive.Row;
 const page = (rows: ReadonlyArray<Row>): ReadonlyArray<{ id: string; value: unknown }> =>
@@ -240,7 +241,9 @@ describe("Derive — observable via the standard atom surface", () => {
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
           }
-          return yield* Effect.die(new Error("derived atom never reached the expected state"));
+          return yield* Effect.die(
+            new TestFailure({ message: "derived atom never reached the expected state" })
+          );
         });
 
       yield* await1((rows) => Arr.isReadonlyArrayEmpty(rows));
@@ -280,7 +283,9 @@ describe("Derive — observed leaf consumes observeChanges (#133 item 1), not pa
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
           }
-          return yield* Effect.die(new Error("derived atom never reached the expected state"));
+          return yield* Effect.die(
+            new TestFailure({ message: "derived atom never reached the expected state" })
+          );
         });
 
       // Unlike page-based `observe` (which always emits an initial snapshot,

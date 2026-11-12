@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
 import * as Transport from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 const pullResponse: PullResponse = { cookie: "next", patch: [], lastMutationIds: {} };
 const pushResponse: PushResponse = { lastMutationIds: {} };
@@ -228,9 +229,9 @@ const awaitSeen = (
     const all = yield* Ref.get(seen);
     if (all.length >= count) return;
     return yield* Effect.die(
-      new Error(
-        `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`
-      )
+      new TestFailure({
+        message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
+      })
     );
   });
 

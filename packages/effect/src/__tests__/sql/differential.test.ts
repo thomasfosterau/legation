@@ -34,6 +34,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
+import { TestFailure } from "../test-failure.js";
 
 const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);
 
@@ -147,7 +148,7 @@ interface Leg {
 }
 
 const fail = (disagreement: FilterCorpus.Disagreement): never => {
-  throw new Error(FilterCorpus.formatDisagreement(disagreement));
+  throw new TestFailure({ message: FilterCorpus.formatDisagreement(disagreement) });
 };
 
 /** Every corpus predicate: `subject` must return the oracle's id set. */

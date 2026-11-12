@@ -66,6 +66,13 @@ import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation";
 import type { Related } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "./JsonApiQuery.js";
+import * as Schema from "effect/Schema";
+
+/** Thrown for a read on a collection no node registers: a definition defect. */
+class UnknownCollection extends Schema.TaggedError<
+  UnknownCollection,
+  { readonly brand: unique symbol }
+>()("UnknownCollection", { message: Schema.String }) {}
 
 /** A resource identifier: `{ type, id }`. */
 export interface Identifier {
@@ -298,7 +305,9 @@ const project = (
 const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
   const node = nodes.nodes.get(read.collection);
   if (node === undefined)
-    throw new Error(`DocumentWriter: unknown collection "${read.collection}"`);
+    throw new UnknownCollection({
+      message: `DocumentWriter: unknown collection "${read.collection}"`,
+    });
   return node;
 };
 

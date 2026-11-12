@@ -45,6 +45,7 @@ import type { Protocol } from "@thomasfosterau/legation/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── Deterministic data ──────────────────────────────────────────────────────
 
@@ -342,7 +343,8 @@ const sectionB = async () => {
     for (let i = 0; i < 9; i++) {
       const [a, ta] = await timed(() => fullScan(where));
       const [b, tb] = await timed(() => CollectionIndex.evaluate(index, rowsById, where));
-      if (b === undefined || a.length !== b.length) throw new Error(`mismatch for ${label}`);
+      if (b === undefined || a.length !== b.length)
+        throw new TestFailure({ message: `mismatch for ${label}` });
       hits = a.length;
       scan.push(ta);
       indexed.push(tb);

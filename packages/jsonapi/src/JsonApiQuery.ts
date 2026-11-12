@@ -1058,7 +1058,7 @@ export const canonical = (
       error instanceof QueryError
         ? error
         : new QueryError({
-            message: `Read on "${read.collection}" has no URL form: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Read on "${read.collection}" has no URL form: ${P.isError(error) ? error.message : String(error)}`,
             query: read.collection,
             cause: error,
           }),
@@ -1272,7 +1272,7 @@ export const defaultEncoder: QueryEncoder = {
         error instanceof QueryError
           ? error
           : new QueryError({
-              message: `Subset on "${subset.collection}" could not be encoded: ${error instanceof Error ? error.message : String(error)}`,
+              message: `Subset on "${subset.collection}" could not be encoded: ${P.isError(error) ? error.message : String(error)}`,
               query: subset.collection,
               cause: error,
             }),

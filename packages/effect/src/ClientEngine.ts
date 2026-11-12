@@ -61,6 +61,12 @@ import * as Telemetry from "./Telemetry.js";
 import { ClientTransport } from "./Transport.js";
 import * as Subset from "./Subset.js";
 
+/** The defect `make` dies with for an `unpulledLimit` that is not a positive integer. */
+class InvalidUnpulledLimit extends Schema.TaggedError<
+  InvalidUnpulledLimit,
+  { readonly brand: unique symbol }
+>()("InvalidUnpulledLimit", { message: Schema.String }) {}
+
 export type { RowChange } from "./RowChange.js";
 
 /** A locally-materialized row (no version: overlay rows have none yet). */
@@ -1054,7 +1060,9 @@ export const make = (
     const unpulledLimit = options.unpulledLimit ?? UNPULLED_LIMIT;
     if (!Number.isInteger(unpulledLimit) || unpulledLimit < 1) {
       return yield* Effect.die(
-        new Error(`ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`)
+        new InvalidUnpulledLimit({
+          message: `ClientEngine: unpulledLimit must be a positive integer, got ${unpulledLimit}`,
+        })
       );
     }
     // The pull-ahead threshold (#337), and the most mutations one push request carries (#429). A push
