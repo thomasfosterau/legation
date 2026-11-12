@@ -15,6 +15,8 @@ export * as Related from "./Related.js";
 export * as Coverage from "./Coverage.js";
 export * as Hash from "./Hash.js";
 export * as UnknownMutator from "./UnknownMutator.js";
+// Forwards optional values into an option bag without `undefined` members.
+export * as Defined from "./Defined.js";
 export * as CollectionIndex from "./CollectionIndex.js";
 
 // ─── Protocol ────────────────────────────────────────────────────────────────

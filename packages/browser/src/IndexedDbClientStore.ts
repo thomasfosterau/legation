@@ -34,6 +34,7 @@
  * where accumulating a replica per visitor is the worse trade.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Identity } from "@thomasfosterau/legation";
 import * as Layer from "effect/Layer";
@@ -60,8 +61,7 @@ export interface IndexedDbClientStoreOptions {
 const keyValueOptions = (
   options: IndexedDbClientStoreOptions | undefined
 ): ClientStore.KeyValueOptions => ({
-  ...(options?.prefix === undefined ? {} : { prefix: options.prefix }),
-  ...(options?.identity === undefined ? {} : { identity: options.identity }),
+  ...Defined.fields({ prefix: options?.prefix, identity: options?.identity }),
 });
 
 /**
@@ -119,7 +119,7 @@ export const layerNamespaced = (
   options?: Omit<IndexedDbClientStoreOptions, "identity" | "prefix">
 ): Layer.Layer<ClientStore.ClientStore> =>
   layerWindow({
-    ...(options?.database === undefined ? {} : { database: options.database }),
+    ...Defined.fields({ database: options?.database }),
     prefix: namespacedPrefix(identity),
     identity,
   });

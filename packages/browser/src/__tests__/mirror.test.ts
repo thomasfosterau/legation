@@ -6,6 +6,7 @@
  * are the exception: they drive the host's sweep and the mirror's heartbeat
  * on the TestClock (#312).
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import {
   Authorization,
   Backend,
@@ -476,11 +477,12 @@ const stubUrls: Client.UrlReads = {
       const include = searchParams.get("include");
       return Effect.succeed({
         collection,
-        ...(include === null
-          ? {}
-          : {
-              include: Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
-            }),
+        ...Defined.fields({
+          include:
+            include === null
+              ? undefined
+              : Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
+        }),
       });
     }),
   canonical: (read) =>

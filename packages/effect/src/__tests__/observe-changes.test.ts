@@ -40,6 +40,7 @@
  * membership/value, the same contract before #112's position keys were
  * surfaced.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -121,7 +122,7 @@ const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: n
       clientId: group,
       clientGroupId: group,
       mutators,
-      ...(changeHubCapacity === undefined ? {} : { changeHubCapacity }),
+      ...Defined.fields({ changeHubCapacity }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)

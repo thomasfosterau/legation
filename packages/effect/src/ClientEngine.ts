@@ -11,6 +11,7 @@
  * atomically through a single changes event.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -1189,7 +1190,9 @@ export const make = (
       change._tag === "Rebuild"
         ? emitEngineEvent({
             _tag: "ViewRebuilt",
-            ...(change.collections !== undefined ? { collections: [...change.collections] } : {}),
+            ...Defined.fields({
+              collections: change.collections !== undefined ? [...change.collections] : undefined,
+            }),
           })
         : Effect.void;
     const publishChange = (change: ViewChange): Effect.Effect<void> =>
@@ -2262,7 +2265,7 @@ export const make = (
         yield* publishChange(REBUILD);
         return {
           transition,
-          ...(transition === "Reset" ? { quarantinedUnder: current } : {}),
+          ...Defined.fields({ quarantinedUnder: transition === "Reset" ? current : undefined }),
           quarantined,
           released,
         };
@@ -2276,7 +2279,7 @@ export const make = (
     // intents are retained across it, ready to push once the build is updated.
     const updateNeededLatch = yield* Ref.make(false);
     const infoOf = (error: VersionNotSupportedError) => ({
-      ...(error.schemaVersion !== undefined ? { schemaVersion: error.schemaVersion } : {}),
+      ...Defined.fields({ schemaVersion: error.schemaVersion }),
       message: error.message,
     });
     const onVersionError = (error: VersionNotSupportedError): Effect.Effect<void> =>
@@ -2376,9 +2379,7 @@ export const make = (
                     const response = yield* transport.push({
                       clientGroupId: options.clientGroupId,
                       mutations: pending.slice(sent, sent + size),
-                      ...(options.schemaVersion !== undefined
-                        ? { schemaVersion: options.schemaVersion }
-                        : {}),
+                      ...Defined.fields({ schemaVersion: options.schemaVersion }),
                     });
                     // Settle permanently-rejected mutations before the ack sweep, so a
                     // rejected id reports `rejected` rather than `applied`.
@@ -2635,10 +2636,12 @@ export const make = (
             clientGroupId: options.clientGroupId,
             cookie,
             subscriptions: subsets,
-            ...(Arr.isReadonlyArrayNonEmpty(namedSubscriptions) ? { namedSubscriptions } : {}),
-            ...(options.schemaVersion !== undefined
-              ? { schemaVersion: options.schemaVersion }
-              : {}),
+            ...Defined.fields({
+              namedSubscriptions: Arr.isReadonlyArrayNonEmpty(namedSubscriptions)
+                ? namedSubscriptions
+                : undefined,
+            }),
+            ...Defined.fields({ schemaVersion: options.schemaVersion }),
           });
           const touched = yield* applyPull(response);
           // The totals go in before the pull counts as applied, so a window the
@@ -2956,7 +2959,7 @@ export const make = (
             Stream.mapEffect((poke) =>
               emitEngineEvent({
                 _tag: "PokeReceived",
-                ...(poke.reason !== undefined ? { reason: poke.reason } : {}),
+                ...Defined.fields({ reason: poke.reason }),
               }).pipe(Effect.as(poke))
             ),
             // While a pull is in flight the consumer below does not take the next poke, so pokes
@@ -3262,8 +3265,7 @@ export const make = (
             if (limit === previous.limit && cursor === previous.cursor) return;
             const nextSubset: Subset.Subset = {
               ...previous,
-              ...(limit !== undefined ? { limit } : {}),
-              ...(cursor !== undefined ? { cursor } : {}),
+              ...Defined.fields({ limit, cursor }),
             };
             yield* Ref.set(subsetRef, nextSubset);
             yield* Ref.update(viewRef, (view) => LiveView.retarget(view, window));
@@ -3711,18 +3713,17 @@ export const make = (
       quarantines: store.quarantines,
       quarantinedMutations: store.quarantinedMutations,
       discardQuarantine: store.discardQuarantine,
-      ...(transportRead === undefined
-        ? {}
-        : {
-            readThrough: (subsets: ReadonlyArray<Subset.Subset>) =>
-              transportRead({
-                clientGroupId: options.clientGroupId,
-                subsets,
-                ...(options.schemaVersion === undefined
-                  ? {}
-                  : { schemaVersion: options.schemaVersion }),
-              }).pipe(Effect.map((response) => response.rows)),
-          }),
+      ...Defined.fields({
+        readThrough:
+          transportRead === undefined
+            ? undefined
+            : (subsets: ReadonlyArray<Subset.Subset>) =>
+                transportRead({
+                  clientGroupId: options.clientGroupId,
+                  subsets,
+                  ...Defined.fields({ schemaVersion: options.schemaVersion }),
+                }).pipe(Effect.map((response) => response.rows)),
+      }),
       runSync,
       syncFailures: Stream.fromPubSub(failures),
       recentSyncFailures: Ref.get(recentFailures),

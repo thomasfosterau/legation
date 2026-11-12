@@ -59,6 +59,7 @@
  * decode.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
@@ -190,9 +191,11 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
         version: row.version,
         value: row.value,
       })),
-      ...(state.cookie !== undefined ? { cookie: state.cookie } : {}),
+      ...Defined.fields({ cookie: state.cookie }),
       journal: state.journal,
-      ...(Arr.isReadonlyArrayNonEmpty(state.unpulled) ? { unpulled: state.unpulled } : {}),
+      ...Defined.fields({
+        unpulled: Arr.isReadonlyArrayNonEmpty(state.unpulled) ? state.unpulled : undefined,
+      }),
     };
     return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
   });

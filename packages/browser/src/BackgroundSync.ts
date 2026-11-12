@@ -101,6 +101,7 @@
  * listener.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation";
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
@@ -549,7 +550,7 @@ export const listen = (options: ListenOptions): Listener => {
         yield* registerOnJournal(engine, {
           tag,
           registration,
-          ...(options.offline === undefined ? {} : { offline: options.offline }),
+          ...Defined.fields({ offline: options.offline }),
         });
       }
     });

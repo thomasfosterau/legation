@@ -34,6 +34,7 @@
  * by its canonical value — always a plain string, always stable.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
@@ -556,8 +557,7 @@ export interface OrderedWindow {
 const windowSubset = (
   orderBy: ReadonlyArray<Subset.OrderBy>,
   limit: number | undefined
-): Subset.Subset =>
-  Subset.make({ collection: "", orderBy, ...(limit === undefined ? {} : { limit }) });
+): Subset.Subset => Subset.make({ collection: "", orderBy, ...Defined.fields({ limit }) });
 
 /**
  * `orderedWindow` — sort derived rows by an `orderBy` and keep the first

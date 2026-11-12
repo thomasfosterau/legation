@@ -32,6 +32,7 @@
  * while later ADR-0022 program steps move onto them directly.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import type * as Brand from "effect/Brand";
 import * as Schema from "effect/Schema";
@@ -217,7 +218,7 @@ export const make = <
   const row = Schema.Struct({
     // A declared identity is already one of the attributes; only a node
     // without one gets the synthetic branded `id`.
-    ...(options.id === undefined ? { id } : {}),
+    ...Defined.fields({ id: options.id === undefined ? id : undefined }),
     ...options.attributes,
     ...viaFields,
   }) as Node<Type, Fields, Edges, IdField>["row"];
@@ -345,7 +346,9 @@ const toCollection = (
         // The parent side of a dependent collection is this node's identity.
         localField: node.id,
         foreignField: inverseVia(node, name, edge, nodes),
-        ...(edge.kind === "paginated" ? { order: Subset.parseOrder(edge.order) } : {}),
+        ...Defined.fields({
+          order: edge.kind === "paginated" ? Subset.parseOrder(edge.order) : undefined,
+        }),
       });
     }
   });
@@ -356,7 +359,9 @@ const toCollection = (
     id: (value) => (value as Record<string, string>)[node.id] ?? "",
     identity: node.id,
     relationships,
-    ...(Arr.isReadonlyArrayNonEmpty(node.indexes) ? { indexes: node.indexes } : {}),
+    ...Defined.fields({
+      indexes: Arr.isReadonlyArrayNonEmpty(node.indexes) ? node.indexes : undefined,
+    }),
     // The filterable set travels like `indexes` (#154): the server enforces
     // it from the collection alone.
     filterable: node.filterable,

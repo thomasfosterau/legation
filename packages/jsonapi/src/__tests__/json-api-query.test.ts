@@ -31,7 +31,7 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { ClientEngine, FilterCorpus, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, FilterCorpus, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
@@ -814,9 +814,11 @@ describe("JsonApiQuery.canonical", () => {
       const first = generated.firsts[index];
       reads.push({
         ...read,
-        ...(index % 3 === 0 ? {} : { order: orderTokens(defined(generated.orderBys[index])) }),
-        ...(first === 0 ? {} : { first }),
-        ...(index % 4 === 0 ? { after: `row-${index}` } : {}),
+        ...Defined.fields({
+          order: index % 3 === 0 ? undefined : orderTokens(defined(generated.orderBys[index])),
+        }),
+        ...Defined.fields({ first: first === 0 ? undefined : first }),
+        ...Defined.fields({ after: index % 4 === 0 ? `row-${index}` : undefined }),
       });
     });
     reads.push(

@@ -58,6 +58,7 @@
  * the seam is {@link relationshipOf}, the one place a row's linkage is read.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -267,7 +268,9 @@ const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
     type: node.type,
     id: row.id,
     attributes: attributesOf(node, recordOf(row.value)),
-    ...(R.isEmptyReadonlyRecord(relationships) ? {} : { relationships }),
+    ...Defined.fields({
+      relationships: R.isEmptyReadonlyRecord(relationships) ? undefined : relationships,
+    }),
   };
 };
 
@@ -404,7 +407,7 @@ export const collection = (input: Input): CollectionDocument => {
   const next = nextLink(input, page);
   const prev = prevLink(input);
   const options = {
-    ...(included === undefined ? {} : { included }),
+    ...Defined.fields({ included }),
     links: {
       self: selfLink(input),
       ...Option.match(next, { onNone: () => ({}), onSome: (link) => ({ next: link }) }),
@@ -429,7 +432,7 @@ export const data = (input: Input): DataDocument => {
     nodeOf(input.nodes, input.read)
   );
   return Handlers.data(primary[0] ?? null, {
-    ...(included === undefined ? {} : { included }),
+    ...Defined.fields({ included }),
     links: { self: selfLink(input) },
   });
 };

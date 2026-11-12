@@ -11,6 +11,7 @@
  * #153) with NULL, absent and astral text on — ADR-0028's acceptance
  * criterion for the index.
  */
+import * as Defined from "../Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
@@ -162,7 +163,7 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
         collection: "t",
         where: predicate,
         orderBy: [{ field: "rank", direction: chance(rng, 0.5) ? "asc" : "desc" }],
-        ...(chance(rng, 0.5) ? { limit: 1 + int(rng, ROWS_PER_TRIAL) } : {}),
+        ...Defined.fields({ limit: chance(rng, 0.5) ? 1 + int(rng, ROWS_PER_TRIAL) : undefined }),
       });
 
       const expected = Subset.apply(rows, subset);

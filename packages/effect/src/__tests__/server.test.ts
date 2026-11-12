@@ -9,6 +9,7 @@
  * the debounced auto-push fires when a case moves time past it, and nothing
  * waits on wall-clock time a loaded machine could exhaust (#285).
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -213,7 +214,7 @@ describe("Server", () => {
               mutations,
               clientId,
               clientGroupId: group,
-              ...(options.autoPush ? { syncLoop: { pushDebounce } } : {}),
+              ...Defined.fields({ syncLoop: options.autoPush ? { pushDebounce } : undefined }),
             }).pipe(
               Effect.provideService(ClientStore.ClientStore, store),
               Effect.provideService(Transport.ClientTransport, transport)
