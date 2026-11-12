@@ -905,6 +905,41 @@ describe("Room publishTimeout", () => {
 /** A protocol body as the room's routes read it. */
 const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+describe("Room backend lifetime", () => {
+  it.effect(
+    "a backend's scoped resource is acquired once per instance and outlives each request",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const backend = yield* backendOf();
+        // Stands in for a connection pool built in the instance's scope.
+        const pool = { acquired: 0, released: 0 };
+        const room = yield* hungRoom("room-pool", clock, makeHungShards().namespace, {
+          backend: Effect.acquireRelease(
+            Effect.sync(() => {
+              pool.acquired += 1;
+              return backend;
+            }),
+            () => Effect.sync(() => void (pool.released += 1))
+          ),
+        });
+        const send = fetchOf(room);
+        const pull = awaitPromise(() =>
+          send(
+            new Request(`https://room/sync${routes.pull}`, {
+              method: "POST",
+              body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
+              headers: { "content-type": "application/json" },
+            })
+          )
+        );
+        expect((yield* pull).status).toBe(200);
+        expect((yield* pull).status).toBe(200);
+        expect(pool).toEqual({ acquired: 1, released: 0 });
+      }).pipe(Effect.scoped)
+  );
+});
+
 describe("Room HTTP routes", () => {
   it.effect("answers a route by its last path segment, and 404s anything else", () =>
     Effect.gen(function* () {

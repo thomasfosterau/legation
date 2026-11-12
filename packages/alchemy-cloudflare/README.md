@@ -195,6 +195,25 @@ room hibernating, so it is billed between requests, it polls only while the
 instance is in memory, and every awake room polls and publishes the same
 change. Prefer publishing from the writer.
 
+## PostgreSQL inside a room
+
+A client built in `backend` outlives the request: the room builds its backend
+once per in-memory instance and serves every request with it until the
+instance is evicted; a wake builds a new one. `backend` runs in the instance's
+scope, so `Layer.build(PgClient.layer(...))` there holds a pool for the
+instance's life. That scope is never closed: on eviction the connections are
+dropped, not closed.
+
+- **Direct connection** (PostgreSQL or PgBouncer): build the pool in `backend`,
+  never as a layer on the room class or its Worker (Alchemy builds those once
+  per isolate and shares them across rooms). Keep it small (every awake room
+  holds one) and give it an idle timeout.
+- **Hyperdrive**: don't hold it across requests. Its credentials are valid
+  only within the invocation that read them, and the room has no per-request
+  backend yet (#506).
+
+Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
+
 ## What Alchemy does not cover
 
 - **Interactive transactions on D1.** The provider's client has `batch()`

@@ -107,9 +107,17 @@ export interface RoomConfig<R = never> {
   readonly nodes: Node.NodeRegistry;
   /**
    * The authoritative storage contract (e.g. `SqlBackend` over
-   * `D1Executor.make(db)`), built in the room's per-instance phase.
+   * `D1Executor.make(db)`), built in the room's per-instance phase and used
+   * by every request until the instance is evicted.
+   *
+   * Its `Scope` is the instance's, so a resource the backend holds (a
+   * PostgreSQL pool from `Layer.build(PgClient.layer(...))`) lives as long as
+   * the instance. That scope is never closed: an evicted instance's
+   * connections are dropped by the platform, with no finalizer, and the next
+   * instance builds its own. What is safe to hold across requests, and what is
+   * not (Hyperdrive), is in `docs/alchemy-postgres.md` (#506).
    */
-  readonly backend: Effect.Effect<Backend.Backend, never, RoomServices>;
+  readonly backend: Effect.Effect<Backend.Backend, never, RoomServices | Scope.Scope>;
   /** Deny-by-default per-collection filters, built in the per-instance phase. */
   readonly policy: Effect.Effect<Authorization.AuthPolicy, never, RoomServices>;
   /**
@@ -135,7 +143,7 @@ export interface RoomConfig<R = never> {
    * rooms poll N times and publish each change N times. For a cron or queue writer, publish from
    * the writer instead (`DurableFanoutBroker.publishOutOfBand`).
    */
-  readonly hints?: Effect.Effect<HintSource.HintSource, never, RoomServices>;
+  readonly hints?: Effect.Effect<HintSource.HintSource, never, RoomServices | Scope.Scope>;
   /** The topic-shard namespace: the app's shard class (`LegationShard`), yielded at init. */
   readonly shards: Effect.Effect<Workers.DurableObject<FanoutShard.ShardObject>, never, R>;
   /** Shard lease heartbeat (default 30 seconds; TTL is 3×). */
