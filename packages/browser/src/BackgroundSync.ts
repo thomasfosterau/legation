@@ -247,7 +247,7 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
 
 /** Whether the worker's own view says the network is down. */
 const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
-  () => globalThis.navigator?.onLine === false
+  () => !(globalThis.navigator?.onLine ?? true)
 );
 
 /** Options for {@link registerOnJournal}. */

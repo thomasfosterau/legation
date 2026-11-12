@@ -891,7 +891,9 @@ export const make = (
         const values = loaded.rows.map((row) => toRow(row.value));
         yield* cacheRows(subset.collection, values);
         yield* harvestIncluded(
-          loaded.included.map((row) => ({ ...toRow(row.value), $collection: row.collection }))
+          loaded.included.map((row) =>
+            Object.assign(toRow(row.value), { $collection: row.collection })
+          )
         );
         return countedFrom(values, subset, reportedTotal(document));
       });
