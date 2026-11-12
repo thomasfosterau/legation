@@ -85,7 +85,7 @@ catalog:
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
   "@vitest/coverage-v8": 5.0.5
-  better-auth: ^1.7.18
+  better-auth: ^1.7.20
   better-sqlite3: ^13.0.3
   fake-indexeddb: ^6.2.8
   fallow: 3.42.0
