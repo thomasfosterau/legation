@@ -85,8 +85,8 @@ catalogs:
       specifier: ^1.7.21
       version: 1.7.21
     better-sqlite3:
-      specifier: ^13.0.3
-      version: 13.0.3
+      specifier: ^13.1.1
+      version: 13.1.1
     fake-indexeddb:
       specifier: ^6.2.8
       version: 6.2.8
@@ -252,7 +252,7 @@ importers:
         version: 1.7.21(@sveltejs/kit@3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(@voidzero-dev/vite-plus-core@1.5.1(@arethetypeswrong/core@0.18.5)(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(esbuild@0.28.2)(publint@0.3.25)(tsx@4.23.15)(yaml@2.9.1))(svelte@5.57.3))(@typescript/typescript6@6.0.2)(@voidzero-dev/vite-plus-core@1.5.1(@arethetypeswrong/core@0.18.5)(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(esbuild@0.28.2)(publint@0.3.25)(tsx@4.23.15)(yaml@2.9.1))(svelte@5.57.3))(svelte@5.57.3)(vitest@5.1.0)
       better-sqlite3:
         specifier: 'catalog:'
-        version: 13.0.3
+        version: 13.1.1
       effect:
         specifier: 4.1.4
         version: 4.1.4
@@ -2510,8 +2510,8 @@ packages:
       zod:
         optional: true
 
-  better-sqlite3@13.0.3:
-    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
+  better-sqlite3@13.1.1:
+    resolution: {integrity: sha512-JjyLCATp+VLxZVFyWkicyzKYwpEFLCrV4MmshW97xv3JXdhw5jBDcsbEWRGm2L/96E+k7rtjON8q9nml05h3Pw==}
     engines: {node: '>=22'}
 
   cac@7.1.0:
@@ -4841,7 +4841,7 @@ snapshots:
     optionalDependencies:
       zod: 4.6.7
 
-  better-sqlite3@13.0.3:
+  better-sqlite3@13.1.1:
     dependencies:
       node-addon-api: 8.9.2
 
