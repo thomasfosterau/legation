@@ -16,6 +16,7 @@
  * reproducible from its printed seed.
  */
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 import * as Hash from "../Hash.js";
 import * as Incremental from "../Incremental.js";
@@ -23,7 +24,7 @@ import type { RowChange } from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 
-type Row = Incremental.Row;
+type Row<A> = Incremental.Row<A>;
 
 const mulberry32 = (seed: number) => {
   let state = seed >>> 0;
@@ -40,9 +41,9 @@ const pick = <A>(rng: () => number, values: ReadonlyArray<A>): A =>
   defined(values[Math.floor(rng() * values.length)]);
 
 /** Two result maps are equal when they have the same ids and the same values. */
-const sameResult = (
-  actual: ReadonlyMap<string, Row>,
-  expected: ReadonlyMap<string, Row>
+const sameResult = <A>(
+  actual: ReadonlyMap<string, Row<A>>,
+  expected: ReadonlyMap<string, Row<A>>
 ): boolean => {
   if (actual.size !== expected.size) return false;
   for (const [id, row] of expected) {
@@ -53,7 +54,7 @@ const sameResult = (
   return true;
 };
 
-const sameOrdered = (actual: ReadonlyArray<Row>, expected: ReadonlyArray<Row>): boolean =>
+const sameOrdered = <A>(actual: ReadonlyArray<Row<A>>, expected: ReadonlyArray<Row<A>>): boolean =>
   actual.length === expected.length &&
   actual.every(
     (row, i) =>
@@ -70,13 +71,13 @@ const divergence = (seed: number, step: number, actual: unknown, expected: unkno
   `  recompute:   ${JSON.stringify(expected)}`;
 
 /** Mutate ground truth by a random put/del and return the resulting delta. */
-const stepGround = (
+const stepGround = <A>(
   rng: () => number,
-  ground: Map<string, Row>,
+  ground: Map<string, Row<A>>,
   ids: ReadonlyArray<string>,
-  makeValue: (rng: () => number) => Row["value"],
+  makeValue: (rng: () => number) => A,
   delChance: number
-): Incremental.Delta => {
+): Incremental.Delta<A> => {
   const id = pick(rng, ids);
   if (rng() < delChance) {
     const old = ground.get(id);
@@ -84,7 +85,7 @@ const stepGround = (
     ground.delete(id);
     return { added: [], removed: [old] };
   }
-  const next: Row = { id, value: makeValue(rng) };
+  const next: Row<A> = { id, value: makeValue(rng) };
   const old = ground.get(id);
   if (old !== undefined && Hash.contentHash(old.value) === Hash.contentHash(next.value)) {
     return Incremental.emptyDelta;
@@ -95,27 +96,27 @@ const stepGround = (
 
 // ─── Value generators / keys (module scope: shared, capture nothing) ─────────
 
-const doubleN = (v: unknown): { readonly double: number } => ({
-  double: (v as { n: number }).n * 2,
+const doubleN = (v: { readonly n: number }): { readonly double: number } => ({
+  double: v.n * 2,
 });
-const teamKey = (v: unknown): string => (v as { team: string }).team;
-const geFive = (v: unknown): boolean => (v as { n: number }).n >= 5;
+const teamKey = (v: { readonly team: string }): string => v.team;
+const geFive = (v: { readonly n: number }): boolean => v.n >= 5;
 
 /** Drive a single-input operator against its from-scratch reference. */
-const runSingle = (options: {
+const runSingle = <A, B>(options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => Row["value"];
-  readonly makeOperator: () => Incremental.Operator;
-  readonly fromScratch: (rows: ReadonlyArray<Row>) => Map<string, Row>;
+  readonly makeValue: (rng: () => number) => A;
+  readonly makeOperator: () => Incremental.Operator<A, B>;
+  readonly fromScratch: (rows: ReadonlyArray<Row<A>>) => Map<string, Row<B>>;
   readonly delChance?: number;
 }): Divergence => {
   for (let seed = 1; seed <= options.seeds; seed++) {
     const rng = mulberry32(seed);
-    const ground = new Map<string, Row>();
+    const ground = new Map<string, Row<A>>();
     const operator = options.makeOperator();
-    const result = new Map<string, Row>();
+    const result = new Map<string, Row<B>>();
     for (let step = 0; step < options.steps; step++) {
       const delta = stepGround(
         rng,
@@ -134,21 +135,25 @@ const runSingle = (options: {
   return null;
 };
 
-const runJoin = (options: {
+const runJoin = <L, R, C>(options: {
   readonly seeds: number;
   readonly steps: number;
   readonly leftIds: ReadonlyArray<string>;
   readonly rightIds: ReadonlyArray<string>;
-  readonly makeLeft: (rng: () => number) => Row["value"];
-  readonly makeRight: (rng: () => number) => Row["value"];
-  readonly joinOptions: Incremental.JoinOptions;
+  readonly makeLeft: (rng: () => number) => L;
+  readonly makeRight: (rng: () => number) => R;
+  readonly makeOperator: () => Incremental.JoinOperator<L, R, C>;
+  readonly fromScratch: (
+    left: ReadonlyArray<Row<L>>,
+    right: ReadonlyArray<Row<R>>
+  ) => Map<string, Row<C>>;
 }): Divergence => {
   for (let seed = 1; seed <= options.seeds; seed++) {
     const rng = mulberry32(seed);
-    const left = new Map<string, Row>();
-    const right = new Map<string, Row>();
-    const operator = Incremental.makeJoin(options.joinOptions);
-    const result = new Map<string, Row>();
+    const left = new Map<string, Row<L>>();
+    const right = new Map<string, Row<R>>();
+    const operator = options.makeOperator();
+    const result = new Map<string, Row<C>>();
     for (let step = 0; step < options.steps; step++) {
       if (rng() < 0.5) {
         const delta = stepGround(rng, left, options.leftIds, options.makeLeft, 0.2);
@@ -157,11 +162,7 @@ const runJoin = (options: {
         const delta = stepGround(rng, right, options.rightIds, options.makeRight, 0.2);
         Incremental.applyDelta(result, operator.stepRight(delta));
       }
-      const expected = Incremental.joinFromScratch(
-        [...left.values()],
-        [...right.values()],
-        options.joinOptions
-      );
+      const expected = options.fromScratch([...left.values()], [...right.values()]);
       if (!sameResult(result, expected)) {
         return divergence(seed, step, [...result.values()], [...expected.values()]);
       }
@@ -170,18 +171,24 @@ const runJoin = (options: {
   return null;
 };
 
+/** An ordered-window test row: a rank to sort by and an optional tie label. */
+interface Ranked {
+  readonly rank: number;
+  readonly name?: string;
+}
+
 const runOrdered = (options: {
   readonly seeds: number;
   readonly steps: number;
   readonly ids: ReadonlyArray<string>;
-  readonly makeValue: (rng: () => number) => Row["value"];
+  readonly makeValue: (rng: () => number) => Ranked;
   readonly orderBy: ReadonlyArray<Subset.OrderBy>;
   readonly limit?: number;
 }): Divergence => {
   for (let seed = 1; seed <= options.seeds; seed++) {
     const rng = mulberry32(seed);
-    const ground = new Map<string, Row>();
-    const window = Incremental.makeOrderedWindow(options.orderBy, options.limit);
+    const ground = new Map<string, Row<Ranked>>();
+    const window = Incremental.makeOrderedWindow<Ranked>(options.orderBy, options.limit);
     for (let step = 0; step < options.steps; step++) {
       const delta = stepGround(rng, ground, options.ids, options.makeValue, 0.2);
       const paged = window.step(delta);
@@ -259,12 +266,26 @@ const makeLeft = (rng: () => number) => ({
   fk: pick(rng, ["k0", "k1", "k2", "kmiss", null]),
   lbl: Math.floor(rng() * 100),
 });
-const makeRight = (rng: () => number) => ({
+interface Right {
+  readonly k: string;
+  readonly rlbl: number;
+}
+const makeRight = (rng: () => number): Right => ({
   k: pick(rng, ["k0", "k1", "k2"]),
   rlbl: Math.floor(rng() * 100),
 });
-const leftKey = (v: unknown): string | null => (v as { fk: string | null }).fk;
-const rightKey = (v: unknown): string => (v as { k: string }).k;
+type Left = ReturnType<typeof makeLeft>;
+const leftKey = (v: Left) => v.fk;
+const rightKey = (v: Right): string => v.k;
+const innerJoin = { leftKey, rightKey, kind: "inner" } as const;
+const leftJoin = { leftKey, rightKey, kind: "left" } as const;
+const labelled = {
+  leftKey,
+  rightKey,
+  kind: "left",
+  combine: (left: Left, right: Option.Option<Right>): string =>
+    `${left.lbl}:${Option.match(right, { onNone: () => "-", onSome: (r) => `${r.rlbl}` })}`,
+} as const;
 
 describe("Incremental.join — arbitrary key equality", () => {
   it("inner join matches recompute after every prefix", () => {
@@ -276,12 +297,13 @@ describe("Incremental.join — arbitrary key equality", () => {
         rightIds: ["r0", "r1", "r2", "r3", "r4", "r5"],
         makeLeft,
         makeRight,
-        joinOptions: { leftKey, rightKey, kind: "inner" },
+        makeOperator: () => Incremental.makeJoin(innerJoin),
+        fromScratch: (left, right) => Incremental.joinFromScratch(left, right, innerJoin),
       })
     ).toBeNull();
   });
 
-  it("left join keeps unmatched left rows with a null right", () => {
+  it("left join keeps unmatched left rows with an Option.none() right", () => {
     expect(
       runJoin({
         seeds: 16,
@@ -290,7 +312,23 @@ describe("Incremental.join — arbitrary key equality", () => {
         rightIds: ["r0", "r1", "r2", "r3", "r4", "r5"],
         makeLeft,
         makeRight,
-        joinOptions: { leftKey, rightKey, kind: "left" },
+        makeOperator: () => Incremental.makeJoin(leftJoin),
+        fromScratch: (left, right) => Incremental.joinFromScratch(left, right, leftJoin),
+      })
+    ).toBeNull();
+  });
+
+  it("left join with a combine shapes each joined value", () => {
+    expect(
+      runJoin({
+        seeds: 16,
+        steps: 300,
+        leftIds: ["l0", "l1", "l2", "l3", "l4"],
+        rightIds: ["r0", "r1", "r2", "r3", "r4", "r5"],
+        makeLeft,
+        makeRight,
+        makeOperator: () => Incremental.makeJoin(labelled),
+        fromScratch: (left, right) => Incremental.joinFromScratch(left, right, labelled),
       })
     ).toBeNull();
   });
@@ -310,7 +348,7 @@ describe("Incremental.join — arbitrary key equality", () => {
 
 /** The `RowChange` batch a real `observeChanges` stream would emit for one
  * `stepGround` delta (which touches at most one row per step). */
-const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> => {
+const changeBatchOf = <A>(delta: Incremental.Delta<A>): ReadonlyArray<RowChange<Row<A>>> => {
   if (
     delta.added.length === 1 &&
     delta.removed.length === 1 &&
@@ -318,7 +356,7 @@ const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> 
   ) {
     return [{ _tag: "update", row: defined(delta.added[0]), previous: defined(delta.removed[0]) }];
   }
-  const changes: Array<RowChange<Row>> = [];
+  const changes: Array<RowChange<Row<A>>> = [];
   Arr.forEach(delta.added, (row) => {
     changes.push({ _tag: "enter", row });
   });
@@ -331,8 +369,8 @@ const changeBatchOf = (delta: Incremental.Delta): ReadonlyArray<RowChange<Row>> 
 /** `null` if every step of one seed matched, else a description of the first divergence. */
 const runDeltaFromChangesSession = (seed: number, steps: number): string | null => {
   const rng = mulberry32(seed);
-  const ground = new Map<string, Row>();
-  const known = new Map<string, Row>();
+  const ground = new Map<string, Row<{ readonly n: number }>>();
+  const known = new Map<string, Row<{ readonly n: number }>>();
   const ids = ["a", "b", "c", "d", "e", "f"];
   const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
   for (let step = 0; step < steps; step++) {
@@ -340,7 +378,7 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
     // a single-row delta.
     if (rng() < 0.05) {
       const knownSizeBefore = known.size;
-      const batch: ReadonlyArray<RowChange<Row>> = [
+      const batch: ReadonlyArray<RowChange<Row<{ readonly n: number }>>> = [
         { _tag: "reset" },
         ...[...ground.values()].map((row) => ({ _tag: "enter" as const, row })),
       ];
@@ -382,10 +420,10 @@ describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just
   it("driving an operator via deltaFromChanges matches the from-scratch recompute", () => {
     for (let seed = 1; seed <= 16; seed++) {
       const rng = mulberry32(seed);
-      const ground = new Map<string, Row>();
-      const known = new Map<string, Row>();
+      const ground = new Map<string, Row<{ readonly n: number }>>();
+      const known = new Map<string, Row<{ readonly n: number }>>();
       const operator = Incremental.makeFilter(geFive);
-      const result = new Map<string, Row>();
+      const result = new Map<string, Row<{ readonly n: number }>>();
       const ids = ["a", "b", "c", "d", "e", "f"];
       const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
       for (let step = 0; step < 150; step++) {
