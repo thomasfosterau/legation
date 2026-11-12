@@ -84,7 +84,7 @@ export interface Dialect {
   /** The code-point collation name, emitted as `COLLATE <name>` after a declared-text operand. */
   readonly textCollation: string;
   /** How a boolean literal binds (Postgres has booleans; SQLite stores `0`/`1`). */
-  readonly boolean: (value: boolean) => unknown;
+  readonly boolean: (value: boolean) => boolean | number;
   /** The larger of two SQL expressions: `MAX` on SQLite, `GREATEST` on PostgreSQL. */
   readonly greatest: (left: string, right: string) => string;
   /**

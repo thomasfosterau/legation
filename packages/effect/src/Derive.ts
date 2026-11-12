@@ -180,6 +180,7 @@ export const filter = <E>(source: Source<E>, predicate: (value: unknown) => bool
   maintain(source, () => Incremental.makeFilter(predicate));
 
 /** Project each row's value through an arbitrary JS function, keeping its id. */
+// oxlint-disable-next-line effect/no-unknown-returns -- the projection's result is a new untyped row value (`Incremental.Row.value`) that no collection schema decodes.
 export const map = <E>(source: Source<E>, f: (value: unknown) => unknown): Source<E> =>
   maintain(source, () => Incremental.makeMap(f));
 

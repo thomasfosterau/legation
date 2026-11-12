@@ -321,6 +321,7 @@ export const holds = (op: Comparison, ordered: number): boolean => {
  * (`CollectionIndex.ts`) read fields with exactly this function so they bucket
  * the same way `evaluate` does.
  */
+// oxlint-disable-next-line effect/no-unknown-returns -- a field of a row value before its collection's schema decodes it; evaluation compares it as a raw literal (ADR-0028).
 export const fieldValue = (row: unknown, field: string): unknown =>
   P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
 

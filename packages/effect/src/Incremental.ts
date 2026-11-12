@@ -194,6 +194,7 @@ export const filterFromScratch = (
  * so an update's `removed` reconstructs the old projection and its `added` the
  * new one.
  */
+// oxlint-disable-next-line effect/no-unknown-returns -- the projection's result is a new untyped row value (`Row.value`); no collection schema decodes it inside the operator algebra.
 export const makeMap = (f: (value: unknown) => unknown): Operator => ({
   step: (delta) => ({
     added: delta.added.map((row) => ({ id: row.id, value: f(row.value) })),
@@ -204,6 +205,7 @@ export const makeMap = (f: (value: unknown) => unknown): Operator => ({
 /** {@link makeMap}'s naive recompute. */
 export const mapFromScratch = (
   rows: ReadonlyArray<Row>,
+  // oxlint-disable-next-line effect/no-unknown-returns -- the projection's result is a new untyped row value (`Row.value`); no collection schema decodes it inside the operator algebra.
   f: (value: unknown) => unknown
 ): Map<string, Row> => indexById(rows.map((row) => ({ id: row.id, value: f(row.value) })));
 
@@ -347,13 +349,16 @@ export const groupByFromScratch = (
 // ─── Join (inner + left) ─────────────────────────────────────────────────────
 
 /** How a joined row's value is assembled; default `{ left, right }`. */
+// oxlint-disable-next-line effect/no-unknown-returns -- the combined value is a new untyped row value (`Row.value`), assembled by the caller from two untyped ones.
 export type JoinCombine = (left: unknown, right: unknown | null) => unknown;
 
 /** Options for {@link makeJoin} / {@link joinFromScratch}. */
 export interface JoinOptions {
   /** Extract the left row's join key (an arbitrary value; `null`/`undefined` never matches). */
+  // oxlint-disable-next-line effect/no-unknown-returns -- a join key is any value read off an untyped row (`joinKey` canonicalizes it; `null`/`undefined` never match).
   readonly leftKey: (value: unknown) => unknown;
   /** Extract the right row's join key. */
+  // oxlint-disable-next-line effect/no-unknown-returns -- a join key is any value read off an untyped row (`joinKey` canonicalizes it; `null`/`undefined` never match).
   readonly rightKey: (value: unknown) => unknown;
   /** `inner` drops unmatched left rows; `left` keeps them with a `null` right. */
   readonly kind: "inner" | "left";
