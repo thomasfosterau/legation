@@ -184,8 +184,11 @@ export default defineConfig({
       // purpose: TypeScript collapses the union, but the reader learns the
       // value may be absent. The rule fires on exactly that spelling.
       "typescript/no-redundant-type-constituents": "off",
-      // A test's Clock double spreads the real Clock to override one member.
-      "typescript/no-misused-spread": "warn", // 1 site
+
+      // ---- paid down (#562): at error -------------------------------------
+      // Rules whose last sites #562 fixed, pinned at `error` so a new site
+      // fails the gate while their category is still at `warn`.
+      "typescript/no-misused-spread": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
