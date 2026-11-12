@@ -500,17 +500,20 @@ export interface UndoControls {
   readonly redo: () => Promise<void>;
 }
 
+// The edge runners: the undo streams and effects close over the engine (no `R`), so they run with
+// no services of their own.
+const runFork = Effect.runForkWith(Context.empty());
+const runPromise = Effect.runPromiseWith(Context.empty());
+
 /** Drain a boolean stream into `$state`, interrupting on teardown. */
 const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean } => {
   let value = $state(false);
   $effect(() => {
     // The manager's streams close over the engine (no `R`), so they run on the
     // default runtime — `useUndo` needs no Client in context.
-    const fiber = Effect.runFork(
-      Stream.runForEach(changes, (next) => Effect.sync(() => (value = next)))
-    );
+    const fiber = runFork(Stream.runForEach(changes, (next) => Effect.sync(() => (value = next))));
     return () => {
-      Effect.runFork(Fiber.interrupt(fiber));
+      runFork(Fiber.interrupt(fiber));
     };
   });
   return {
@@ -535,7 +538,7 @@ export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
     get canRedo() {
       return canRedo.current;
     },
-    undo: () => Effect.runPromise(Effect.ignore(manager.undo)),
-    redo: () => Effect.runPromise(Effect.ignore(manager.redo)),
+    undo: () => runPromise(Effect.ignore(manager.undo)),
+    redo: () => runPromise(Effect.ignore(manager.redo)),
   };
 };
