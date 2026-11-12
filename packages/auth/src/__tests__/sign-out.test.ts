@@ -6,7 +6,7 @@
  * now carries) nor discarded (they are the user's data); they are parked under
  * that user's fingerprint and become pushable again only if they sign back in.
  */
-import { assert, describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -93,7 +93,7 @@ const clientFor = (identity: Identity.Fingerprint) =>
 
 const testLayer = Layer.mergeAll(KeyValueStore.layerMemory, Digest.layerWebCrypto);
 
-describe("SignOut.fingerprintOf", () => {
+layer(testLayer, { buildPerTest: true })("SignOut.fingerprintOf", (it) => {
   it.effect("is a stable hash of the user, never the id itself", () =>
     Effect.gen(function* () {
       const a = yield* SignOut.fingerprintOf("user-alice");
@@ -102,11 +102,11 @@ describe("SignOut.fingerprintOf", () => {
       expect(a).toMatch(/^legation-auth:sha256:[0-9a-f]{64}$/);
       expect(a).not.toContain("alice");
       expect(a.startsWith("@legation/")).toBe(false);
-    }).pipe(Effect.provide(testLayer))
+    })
   );
 });
 
-describe("SignOut.onSessionChange", () => {
+layer(testLayer, { buildPerTest: true })("SignOut.onSessionChange", (it) => {
   it.effect("sign-out resets the replica and quarantines the pending journal", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -146,7 +146,7 @@ describe("SignOut.onSessionChange", () => {
           body: "draft",
         });
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 
   it.effect("an account switch resets too, and never hands A's journal to B", () =>
@@ -164,7 +164,7 @@ describe("SignOut.onSessionChange", () => {
         expect(yield* store.pendingMutations).toEqual([]);
         expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 
   it.effect("signing back in releases the user's own quarantine", () =>
@@ -181,7 +181,7 @@ describe("SignOut.onSessionChange", () => {
         expect(yield* store.pendingMutations).toHaveLength(1);
         expect(yield* client.quarantines).toEqual([]);
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 
   it.effect("the same user is unchanged, and the stamp, not `previous`, decides", () =>
@@ -200,7 +200,7 @@ describe("SignOut.onSessionChange", () => {
         expect(missed.transition).toBe("Reset");
         expect(yield* client.identity).toBe(yield* SignOut.fingerprintOf(bob.user.id));
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 
   it.effect("takes the app's own fingerprint when it is given one", () =>
@@ -213,7 +213,7 @@ describe("SignOut.onSessionChange", () => {
         expect((yield* onChange(Option.none(), Option.some(alice))).transition).toBe("Upgrade");
         expect(yield* client.identity).toBe("app:10");
       })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 });
 
