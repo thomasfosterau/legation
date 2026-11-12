@@ -4,8 +4,8 @@ name: CI
 # Node.js line, installs, and runs `vp run ci`: the `ci` task in vite.config.ts
 # holds the pipeline (AGENTS.md "Verification", in its order), so a local
 # `vp run ci` runs what CI runs. The `floor` legs run the tests against each
-# published `effect` floor. The `ci` job is the single required check: it
-# passes only when every leg of both did.
+# published `effect` floor. There is no aggregate job: the ruleset requires
+# each leg by its check name.
 
 on:
   pull_request:
@@ -22,7 +22,7 @@ concurrency:
 permissions: {}
 
 jobs:
-  test:
+  ci:
     name: ci (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -157,22 +157,3 @@ jobs:
 
       - name: CI (effect floor)
         run: vp run ci:floor
-
-  # The single required check: green only when every leg of both matrices
-  # passed.
-  ci:
-    name: ci
-    needs: [test, floor]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Require every leg to pass
-        env:
-          TEST: ${{ needs.test.result }}
-          FLOOR: ${{ needs.floor.result }}
-        run: |
-          echo "test: ${TEST}, floor: ${FLOOR}"
-          test "$TEST" = success && test "$FLOOR" = success
