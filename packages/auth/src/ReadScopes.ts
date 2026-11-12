@@ -33,10 +33,11 @@
  *   the auth filter ({@link toAuthFilter}) answers `Deny` for it, logged by
  *   collection and reason. It never drops a conjunct and never falls back to
  *   `AllowAll`.
- * - A scope compiled for the anonymous principal (`User::""`) is narrowed:
- *   a positive `Eq` of an entity attribute against its empty id is false
- *   (#662), so a row whose owner field is the empty string is not readable
- *   signed out. Only ever narrower than effect-auth's `matches`.
+ * - The anonymous principal is `Anonymous::"anonymous"` ({@link principalRef}),
+ *   of a type of its own: effect-auth refuses an empty id or type, and an
+ *   entity attribute of type `User` is equal to no `Anonymous` reference, so
+ *   `resource.owner == principal` compiles to false for it and no row is
+ *   "owned" by a signed-out viewer (#662).
  *
  * Named sets: each set an effect-auth `SetFact` names must have an app-declared
  * `Authorization.NamedSet` ({@link mapping} checks it). The translated
@@ -408,64 +409,24 @@ const isOrdered = (scalar: AuthScope.Scalar): boolean =>
     Boolean: () => false,
   });
 
-/** The predicate no row matches: definite false, never unknown. */
-const never: Predicate.Predicate = Predicate.not(Predicate.always);
-
-/** The id {@link principalRef} gives the anonymous principal. */
-const anonymousId = "";
-
-/**
- * Whether an `Eq` is the anonymous principal's entity comparison (#662): an
- * entity-reference attribute against the anonymous id. effect-auth compiles
- * `resource.owner == principal` for `User::""` to exactly this
- * (`Eq { attribute: "owner", value: Text("") }`, the reference bound as its id).
- */
-const isAnonymousRef = (map: Mapping, attribute: string, value: AuthScope.Scalar): boolean =>
-  P.isTagged(value, "Text") &&
-  value.value === anonymousId &&
-  Option.exists(R.get(map.binding.attributes, attribute), (kind) => !P.isString(kind));
-
-/**
- * How a predicate is translated: whether the scope was compiled for the
- * anonymous principal, and whether the node sits under an even number of
- * `Not`s (positive) or an odd one.
- */
-interface Position {
-  readonly anonymous: boolean;
-  readonly positive: boolean;
-}
-
 const translatePredicate = (
   map: Mapping,
-  node: AuthScope.Predicate,
-  position: Position
+  node: AuthScope.Predicate
 ): Result.Result<Predicate.Predicate, ScopeMappingError> =>
   Match.valueTags(node, {
     And: ({ predicates }) =>
-      Result.map(
-        Result.all(predicates.map((inner) => translatePredicate(map, inner, position))),
-        (inner) => Predicate.and(...inner)
+      Result.map(Result.all(predicates.map((inner) => translatePredicate(map, inner))), (inner) =>
+        Predicate.and(...inner)
       ),
     Or: ({ predicates }) =>
-      Result.map(
-        Result.all(predicates.map((inner) => translatePredicate(map, inner, position))),
-        (inner) => Predicate.or(...inner)
+      Result.map(Result.all(predicates.map((inner) => translatePredicate(map, inner))), (inner) =>
+        Predicate.or(...inner)
       ),
-    Not: ({ predicate }) =>
-      Result.map(
-        translatePredicate(map, predicate, { ...position, positive: !position.positive }),
-        Predicate.not
-      ),
+    Not: ({ predicate }) => Result.map(translatePredicate(map, predicate), Predicate.not),
     Eq: ({ attribute, value }) =>
       Result.flatMap(fieldOf(map, attribute), (field) =>
         Result.map(literalFor(map, attribute, value), (lit) =>
-          // The anonymous principal is equal to no row's entity (#662): a
-          // positive occurrence becomes false, which narrows. One under a `Not`
-          // is kept: false there would widen, and as it is it already admits no
-          // row whose field is the empty id.
-          position.anonymous && position.positive && isAnonymousRef(map, attribute, value)
-            ? never
-            : present(field, Predicate.compare("eq", field, lit))
+          present(field, Predicate.compare("eq", field, lit))
         )
       ),
     Compare: ({ op, attribute, value }) =>
@@ -488,50 +449,30 @@ const translatePredicate = (
       Result.map(fieldOf(map, attribute), (field) => present(field, Predicate.inSet(field, set))),
   });
 
-/** Options for {@link translate} and {@link translateCompiled}. */
-export interface TranslateOptions {
-  /**
-   * The principal the scope was compiled for. For the anonymous principal
-   * (`User::""`, {@link principalRef}) the scope is narrowed: an entity
-   * attribute never matches it, so a row whose entity field is the empty
-   * string is not readable signed out (#662). Omitted, nothing is narrowed.
-   */
-  readonly principal?: Principal.Principal;
-}
-
 /**
  * Translate an effect-auth read scope into legation's, exactly, or fail with
- * the reason it cannot be. Pure: no request, no I/O. A scope compiled for the
- * anonymous principal (`options.principal`) is narrowed further: a positive
- * `Eq` of an entity attribute against the anonymous id (`""`) is false, so an
- * "own" policy admits no row with an empty owner to a signed-out viewer.
+ * the reason it cannot be. Pure: no request, no I/O.
  */
 export const translate = (
   scope: AuthScope.ReadScope,
-  map: Mapping,
-  options?: TranslateOptions
+  map: Mapping
 ): Result.Result<Authorization.ReadScope, ScopeMappingError> =>
   Match.valueTags(scope, {
     AllowAll: () => Result.succeed(Authorization.AllowAll),
     Deny: () => Result.succeed(Authorization.Deny),
     Filter: ({ predicate }) =>
-      Result.map(
-        translatePredicate(map, predicate, {
-          anonymous: options?.principal !== undefined && Principal.isAnonymous(options.principal),
-          positive: true,
-        }),
-        (translated) => Authorization.filter(translated, map.sets)
+      Result.map(translatePredicate(map, predicate), (translated) =>
+        Authorization.filter(translated, map.sets)
       ),
   });
 
 /** Translate a compilation result: an `Inexact` one is a {@link ScopeMappingError}. */
 export const translateCompiled = (
   compiled: AuthScope.Compiled,
-  map: Mapping,
-  options?: TranslateOptions
+  map: Mapping
 ): Result.Result<Authorization.ReadScope, ScopeMappingError> =>
   Match.valueTags(compiled, {
-    Exact: ({ scope }) => translate(scope, map, options),
+    Exact: ({ scope }) => translate(scope, map),
     Inexact: ({ reasons }) =>
       failure(map.collection, "Inexact", `${map.collection}: inexact scope: ${reasons.join("; ")}`),
   });
@@ -556,8 +497,7 @@ const narrowed = (collection: string, reason: ScopeMappingReason) =>
 
 /**
  * The legation auth filter for one collection: compile the request's scope
- * and translate it for the request's principal ({@link translate}: the
- * anonymous principal's entity comparisons are false). Every failure narrows
+ * and translate it ({@link translate}). Every failure narrows
  * to `Deny` (logged): an `Inexact` compilation, an untranslatable scope, and
  * a compile that fails or dies. It never fails and never answers `AllowAll`
  * for a failure.
@@ -567,13 +507,10 @@ export const toAuthFilter =
   (context) =>
     Effect.suspend(() => compile(context, map.binding)).pipe(
       Effect.flatMap((compiled) =>
-        Result.match(
-          translateCompiled(compiled, map, { principal: Principal.fromContext(context) }),
-          {
-            onSuccess: (scope) => Effect.succeed(scope),
-            onFailure: (error) => narrowed(error.collection, error.reason),
-          }
-        )
+        Result.match(translateCompiled(compiled, map), {
+          onSuccess: (scope) => Effect.succeed(scope),
+          onFailure: (error) => narrowed(error.collection, error.reason),
+        })
       ),
       // An interrupt is not a failure to narrow: it ends the request as it is.
       Effect.catchCauseIf(
@@ -616,24 +553,28 @@ export const compiler =
 
 // ─── Compile requests from a principal ───────────────────────────────────────
 
+/** The entity type of the anonymous principal: a type of its own, which no policy scoped to a user type matches. */
+export const AnonymousEntityType = "Anonymous";
+
 /**
  * The entity a principal is to effect-auth: `<type>::<user id>` (`User::"u1"`)
- * for a session or an API key, and `<type>::""` for the anonymous principal:
- * an id no effect-auth user has (its user ids are generated, never empty). A
- * forbid scoped to the type (`principal is User`) still binds an anonymous
- * reader. A policy naming the principal (`resource.owner == principal`)
- * compiles to `owner == ""` for it, which {@link toAuthFilter} narrows to
- * false (#662), so no row whose owner field is the empty string is readable
- * signed out.
+ * for a session or an API key, and `Anonymous::"anonymous"` for the anonymous
+ * principal. effect-auth refuses an empty id or type, so a signed-out caller
+ * is an entity of a type of its own: a permit or forbid scoped to the user
+ * type (`principal is User`) does not name it, and a policy comparing a
+ * resource's owner reference with the principal (`resource.owner ==
+ * principal`) compiles to false for it, so no row is readable signed out
+ * through ownership (#662). A policy that is not scoped to a principal type
+ * still applies to it.
  */
 export const principalRef = (
   principal: Principal.Principal,
   principalType: string = Rbac.DefaultPrincipalType
 ): Entity.EntityRef =>
-  Entity.ref(
-    principalType,
-    Option.getOrElse(Principal.userId(principal), () => "")
-  );
+  Option.match(Principal.userId(principal), {
+    onNone: () => Entity.ref(AnonymousEntityType, "anonymous"),
+    onSome: (id) => Entity.ref(principalType, id),
+  });
 
 /** What {@link principalRequest} builds a compile request from. */
 export interface PrincipalRequestOptions {
@@ -667,7 +608,7 @@ const roleSlice = (principal: Principal.Principal, ref: Entity.EntityRef): Entit
 
 /**
  * The conventional {@link CompilerOptions.request}: the principal's entity
- * ({@link principalRef}: `User::<id>`, `User::""` when anonymous), the action,
+ * ({@link principalRef}: `User::<id>`, `Anonymous::"anonymous"` when anonymous), the action,
  * and the principal's slice — from `entities` when given, else from the
  * session user's role. The anonymous principal's slice holds the action's
  * entities at most, never a user's: no resolver is asked who `User::""` is.

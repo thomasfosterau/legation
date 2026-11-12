@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Digest from "effect/crypto/Digest";
 import { KeyValueStore } from "effect/persistence";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import {
   Authorization,
   Backend,
@@ -34,6 +35,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import { createAuthClient } from "@thomasfosterau/effect-auth/client";
+import { makeSessionAtoms } from "@thomasfosterau/effect-auth/client/atoms";
 import { makeCookieJarFetch, makeServerFixture } from "@thomasfosterau/effect-auth/client/testing";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
 import type { Protocol } from "@thomasfosterau/legation/internal";
@@ -295,8 +297,13 @@ layer(KeyValueStore.layerMemory)("SignOut.follow (no Digest in context)", (it) =
       Effect.gen(function* () {
         const { client, engine, store } = yield* clientFor(Identity.anonymous);
         const auth = authClient();
+        const registry = AtomRegistry.make();
+        const atoms = makeSessionAtoms(auth);
         // No Digest in context: follow hashes with WebCrypto's.
-        const following = yield* SignOut.follow(client, auth.session);
+        const following = yield* SignOut.follow(
+          client,
+          SignOut.sessionStoreOf(registry, atoms.state)
+        );
 
         const signedUp = yield* run(() =>
           auth.signUp({ email: "alice@example.com", password: "correct horse battery" })

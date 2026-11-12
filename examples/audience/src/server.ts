@@ -205,7 +205,7 @@ export const makeServer = (users: ReadonlyArray<User>) =>
       fetch: handler,
       signIn: (user) =>
         sessions.createSession(user.id).pipe(
-          Effect.map((session) => ({ user, token: session.id })),
+          Effect.map(({ token }) => ({ user, token })),
           Effect.orDie
         ),
       signOut: (session) => sessions.invalidateSession(session.token).pipe(Effect.orDie),

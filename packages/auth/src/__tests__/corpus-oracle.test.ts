@@ -10,11 +10,8 @@
  * Generated as `FilterCorpus` generates: Effect's `Random` under
  * `Random.withSeed`, so a seed reproduces the corpus and a failure reports it.
  *
- * One documented narrowing (#662): for the anonymous principal (`User::""`)
- * legation-auth treats an entity attribute as equal to no row, where
- * effect-auth's `matches` admits a row whose entity field is the empty string.
- * So for the anonymous principal the oracle asserts the only disagreements are
- * rows effect-auth admits, legation-auth does not, and whose owner is `""`.
+ * The anonymous principal is `Anonymous::"anonymous"`, so effect-auth compiles
+ * an "own" policy to false for it and its scope translates exactly like any other (#662).
  */
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -252,13 +249,9 @@ const legationAdmits = (translated: Authorization.ReadScope, row: CorpusRow): bo
       Predicate.test(Predicate.bindSets(predicate, bindings), legationRowOf(row)),
   });
 
-/** The ids legation admits under the scope translated for `principal`, and the ids effect-auth admits. */
-const admitted = (
-  scope: AuthScope.ReadScope,
-  rows: ReadonlyArray<CorpusRow>,
-  principal: Principal.Principal
-) => {
-  const translated = orFail(ReadScopes.translate(scope, map, { principal }));
+/** The ids legation admits under the translated scope, and the ids effect-auth admits. */
+const admitted = (scope: AuthScope.ReadScope, rows: ReadonlyArray<CorpusRow>) => {
+  const translated = orFail(ReadScopes.translate(scope, map));
   return {
     legation: rows.filter((row) => legationAdmits(translated, row)).map((row) => row.id),
     effectAuth: rows
@@ -266,30 +259,6 @@ const admitted = (
       .map((row) => row.id),
   };
 };
-
-/** A signed-in principal acting for `user`: its scope is translated exactly. */
-const signedIn = (user: string): Principal.Principal => ({
-  _tag: "ApiKey",
-  userId: user,
-  keyId: `key-${user}`,
-  permissions: Option.none(),
-});
-
-/**
- * The rows the documented narrowing (#662) may remove: effect-auth admits
- * them, legation-auth does not. Every one must have the empty owner, and
- * legation-auth must admit nothing effect-auth does not.
- */
-const narrowing = (
-  {
-    legation,
-    effectAuth,
-  }: { readonly legation: ReadonlyArray<string>; readonly effectAuth: ReadonlyArray<string> },
-  rows: ReadonlyArray<CorpusRow>
-) => ({
-  widened: legation.filter((id) => !effectAuth.includes(id)),
-  narrowed: rows.filter((row) => effectAuth.includes(row.id) && !legation.includes(row.id)),
-});
 
 /** Whether a set of admitted ids discriminates: some rows, not all. */
 const discriminates = (ids: ReadonlyArray<string>) =>
@@ -342,7 +311,7 @@ const policies = [
   }),
 ];
 
-/** The scope effect-auth compiles for the anonymous principal (`User::""`). */
+/** The scope effect-auth compiles for the anonymous principal (`Anonymous::"anonymous"`). */
 const anonymousScopeOf = (set: ReadonlyArray<Policy.DeclarativePolicy>): AuthScope.ReadScope => {
   const compiled = AuthScope.compile(set, binding, {
     principal: ReadScopes.principalRef(Principal.anonymous),
@@ -360,11 +329,7 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
       expect(rows.some((row) => row.t === null)).toBe(true);
       expect(rows.some((row) => row.t === undefined)).toBe(true);
       const results = predicates.map((predicate, index) => {
-        const { legation, effectAuth } = admitted(
-          { _tag: "Filter", predicate, sets: [] },
-          rows,
-          signedIn("user-alice")
-        );
+        const { legation, effectAuth } = admitted({ _tag: "Filter", predicate, sets: [] }, rows);
         return { index, predicate, legation, effectAuth };
       });
       const disagreements = results.filter(
@@ -389,30 +354,6 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
     })
   );
 
-  it.effect(
-    "for the anonymous principal, disagrees only by narrowing rows whose owner is empty",
-    () =>
-      Effect.gen(function* () {
-        const { rows, predicates } = yield* corpus;
-        const results = predicates.map((predicate, index) => {
-          const { widened, narrowed } = narrowing(
-            admitted({ _tag: "Filter", predicate, sets: [] }, rows, Principal.anonymous),
-            rows
-          );
-          return { index, widened, narrowed };
-        });
-        expect(
-          results.flatMap(({ index, widened }) =>
-            Arr.isReadonlyArrayNonEmpty(widened) ? [{ seed: SEED, index, widened }] : []
-          )
-        ).toEqual([]);
-        const narrowed = results.flatMap(({ narrowed: removed }) => removed);
-        expect(narrowed.filter((row) => row.owner !== "").map((row) => row.id)).toEqual([]);
-        // The narrowing is exercised: some generated predicate admits an empty owner to effect-auth.
-        expect(Arr.isReadonlyArrayNonEmpty(narrowed)).toBe(true);
-      })
-  );
-
   it.effect("agrees on scopes effect-auth compiled from policies, instants included", () =>
     Effect.gen(function* () {
       const { rows } = yield* corpus;
@@ -429,7 +370,7 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
       expect(exact).toHaveLength(owners.length);
       const results = exact.map(({ user, scope }) => {
         // Translated for the signed-in principal, as the auth filter does: no narrowing.
-        const { legation, effectAuth } = admitted(scope, rows, signedIn(user));
+        const { legation, effectAuth } = admitted(scope, rows);
         return { user, legation, effectAuth };
       });
       expect(results.map(({ user, legation }) => ({ user, ids: legation }))).toEqual(
@@ -439,15 +380,12 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
     })
   );
 
-  it.effect('agrees for the anonymous principal except rows whose owner is "" (#662)', () =>
+  it.effect("agrees for the anonymous principal, whom an owner policy never names (#662)", () =>
     Effect.gen(function* () {
       const { rows } = yield* corpus;
-      const result = admitted(anonymousScopeOf(policies), rows, Principal.anonymous);
-      const { widened, narrowed } = narrowing(result, rows);
-      expect(widened).toEqual([]);
-      expect(narrowed.filter((row) => row.owner !== "").map((row) => row.id)).toEqual([]);
-      expect(Arr.isReadonlyArrayNonEmpty(narrowed)).toBe(true);
-      // Exactly as if the "own" policy did not apply to the anonymous principal.
+      const result = admitted(anonymousScopeOf(policies), rows);
+      expect(result.legation).toEqual(result.effectAuth);
+      // Exactly as if the "own" policy did not exist: no row is owned signed out.
       const withoutOwn = anonymousScopeOf(policies.filter((policy) => policy.id !== "own"));
       expect(result.legation).toEqual(
         rows

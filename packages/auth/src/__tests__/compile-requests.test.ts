@@ -107,27 +107,24 @@ const recording = Effect.fn("recording")(function* (entities: ReadonlyArray<Enti
 // ─── principalRequest (#646) ─────────────────────────────────────────────────
 
 describe("ReadScopes.principalRequest: the compile request from a Principal", () => {
-  it.effect('the anonymous principal is User::"" with an empty slice', () =>
+  it.effect('the anonymous principal is Anonymous::"anonymous" with an empty slice', () =>
     Effect.gen(function* () {
       const request = yield* read(Principal.anonymous, contextOf(Principal.anonymous));
-      expect(request.principal).toEqual(Entity.ref("User", ""));
-      expect(Entity.formatRef(request.principal)).toBe('User::""');
+      expect(request.principal).toEqual(Entity.ref("Anonymous", "anonymous"));
+      expect(Entity.formatRef(request.principal)).toBe('Anonymous::"anonymous"');
       expect(request.action).toEqual(Entity.ref("Action", "read"));
       expect(HashMap.size(request.slice?.entities ?? HashMap.empty())).toBe(0);
-      expect(ReadScopes.principalRef(Principal.anonymous)).toEqual(Entity.ref("User", ""));
+      expect(ReadScopes.principalRef(Principal.anonymous)).toEqual(
+        Entity.ref("Anonymous", "anonymous")
+      );
       // It compiles to the public posts and nothing a role grants.
       const compiled = AuthScope.compile(policies, orFail(derived()).binding, request);
       expect(compiled).toEqual({
         _tag: "Exact",
         scope: {
           _tag: "Filter",
-          predicate: {
-            _tag: "Or",
-            predicates: [
-              { _tag: "Eq", attribute: "visibility", value: AuthScope.text("public") },
-              { _tag: "Eq", attribute: "owner", value: AuthScope.text("") },
-            ],
-          },
+          // The owner permit names no `Anonymous` entity: it compiled to false.
+          predicate: { _tag: "Eq", attribute: "visibility", value: AuthScope.text("public") },
           sets: [],
         },
       });
@@ -185,7 +182,9 @@ describe("ReadScopes.principalRequest: the compile request from a Principal", ()
     Effect.gen(function* () {
       const { resolver, asked } = yield* recording([
         Entity.entity(Entity.ref("User", "user-alice"), { parents: [Rbac.roleRef("moderator")] }),
-        Entity.entity(Entity.ref("User", ""), { parents: [Rbac.roleRef("moderator")] }),
+        Entity.entity(Entity.ref("Anonymous", "anonymous"), {
+          parents: [Rbac.roleRef("moderator")],
+        }),
       ]);
       const request = ReadScopes.principalRequest({ action: "read", entities: resolver });
       const alice = apiKeyOf("user-alice");
@@ -195,9 +194,9 @@ describe("ReadScopes.principalRequest: the compile request from a Principal", ()
         scope: AuthScope.allowAll,
       });
       const anonymous = yield* request(Principal.anonymous, contextOf(Principal.anonymous));
-      // A resolver that (wrongly) knows `User::""` grants the anonymous reader nothing.
+      // A resolver that (wrongly) knows `Anonymous::"anonymous"` grants the anonymous reader nothing.
       expect(
-        Entity.getEntity(anonymous.slice ?? Entity.emptySlice, Entity.ref("User", ""))
+        Entity.getEntity(anonymous.slice ?? Entity.emptySlice, Entity.ref("Anonymous", "anonymous"))
       ).toBeNull();
       expect(yield* Ref.get(asked)).toEqual([
         ['User::"user-alice"', 'Action::"read"'],

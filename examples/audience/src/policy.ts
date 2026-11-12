@@ -14,7 +14,7 @@
  *   exactly (never exercised by a well-formed set like this one, but the
  *   bridge's fail-closed answer).
  *
- * An anonymous viewer is `User::""`, which no policy names: the public posts.
+ * An anonymous viewer is `Anonymous::"anonymous"`, which no policy names: the public posts.
  */
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
@@ -73,7 +73,7 @@ export const policies: ReadonlyArray<Policy.DeclarativePolicy> = [
 
 /**
  * The effect-auth request a principal's scope is compiled for: `User::<id>`
- * (`User::""` when anonymous), the read action, and the user under its role
+ * (`Anonymous::"anonymous"` when anonymous), the read action, and the user under its role
  * (`user.attributes.role`), so `Policy.role` can see it.
  */
 export const readRequest = ReadScopes.principalRequest({ action: readAction });

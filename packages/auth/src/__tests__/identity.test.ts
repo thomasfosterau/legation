@@ -59,8 +59,10 @@ describe("Resolver: the session plane", () => {
     scoped.effect("resolves a session cookie to a typed Session principal", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionService;
-        const session = yield* sessions.createSession(alice.id, { activeOrganizationId: "org-1" });
-        const principal = yield* resolveWith(withCookie(session.id));
+        const { token } = yield* sessions.createSession(alice.id, {
+          activeOrganizationId: "org-1",
+        });
+        const principal = yield* resolveWith(withCookie(token));
         expect(P.isTagged(principal, "Session")).toBe(true);
         const typed = asPrincipal(principal);
         expect(Principal.userId(typed)).toEqual(Option.some(alice.id));
@@ -72,7 +74,7 @@ describe("Resolver: the session plane", () => {
         });
         // The principal carries no credential: effect-auth reports a validated
         // session's id as the raw token, and it is left out.
-        expect(mentions(principal, session.id)).toBe(false);
+        expect(mentions(principal, token)).toBe(false);
       })
     );
   });
@@ -81,8 +83,8 @@ describe("Resolver: the session plane", () => {
     scoped.effect("resolves an Authorization: Bearer session token", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionService;
-        const session = yield* sessions.createSession(bob.id);
-        const principal = asPrincipal(yield* resolveWith(withBearer(session.id)));
+        const { token } = yield* sessions.createSession(bob.id);
+        const principal = asPrincipal(yield* resolveWith(withBearer(token)));
         expect(Principal.userId(principal)).toEqual(Option.some(bob.id));
       })
     );
@@ -92,7 +94,7 @@ describe("Resolver: the session plane", () => {
     scoped.effect("reads the cookie under the naming the app configures", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionService;
-        const session = yield* sessions.createSession(alice.id);
+        const { token } = yield* sessions.createSession(alice.id);
         const naming = { name: "app_session", secure: false };
         const resolver = Resolver.make(
           { sessions: Option.some(sessions), apiKeys: Option.none() },
@@ -101,14 +103,14 @@ describe("Resolver: the session plane", () => {
         const named = SessionCookies.cookieNames(naming).session;
         expect(named).toBe("app_session");
         const credentials = Authorization.credentialsFromHeaders({
-          cookie: `${named}=${session.id}`,
+          cookie: `${named}=${token}`,
         });
         const principal = yield* resolver.resolve({ clientGroupId: "g", credentials });
         expect(P.isTagged(principal, "Session")).toBe(true);
         // The default name is not read under another naming.
         const other = yield* resolver.resolve({
           clientGroupId: "g",
-          credentials: withCookie(session.id),
+          credentials: withCookie(token),
         });
         expect(other).toEqual(Principal.anonymous);
       })
@@ -121,10 +123,10 @@ describe("Resolver: the session plane", () => {
       () =>
         Effect.gen(function* () {
           const sessions = yield* SessionService;
-          const session = yield* sessions.createSession(alice.id);
-          expect(P.isTagged(yield* resolveWith(withCookie(session.id)), "Session")).toBe(true);
-          yield* sessions.invalidateSession(session.id);
-          expect(yield* resolveWith(withCookie(session.id))).toEqual(Principal.anonymous);
+          const { token } = yield* sessions.createSession(alice.id);
+          expect(P.isTagged(yield* resolveWith(withCookie(token)), "Session")).toBe(true);
+          yield* sessions.invalidateSession(token);
+          expect(yield* resolveWith(withCookie(token))).toEqual(Principal.anonymous);
         })
     );
   });
@@ -223,9 +225,9 @@ describe("Resolver: the API key plane", () => {
       () =>
         Effect.gen(function* () {
           const sessions = yield* SessionService;
-          const session = yield* sessions.createSession(alice.id);
+          const { token } = yield* sessions.createSession(alice.id);
           const principal = yield* resolveWith(
-            withApiKey("ak_forged", { cookie: `${cookieName}=${session.id}` })
+            withApiKey("ak_forged", { cookie: `${cookieName}=${token}` })
           );
           expect(principal).toEqual(Principal.anonymous);
         })
@@ -362,13 +364,13 @@ describe("Resolver behind SyncServer", () => {
           ],
         });
         const sessions = yield* SessionService;
-        const session = yield* sessions.createSession(alice.id);
+        const { token } = yield* sessions.createSession(alice.id);
         const pull = (credentials: Authorization.RequestCredentials) =>
           server.handlePull(
             { clientGroupId: "group-1", subscriptions: [Subset.make({ collection: "posts" })] },
             { credentials: Option.some(credentials) }
           );
-        const signedIn = yield* pull(withCookie(session.id));
+        const signedIn = yield* pull(withCookie(token));
         expect(signedIn.patch.flatMap((op) => (P.isTagged(op, "Put") ? [op.id] : []))).toEqual([
           "a1",
         ]);
