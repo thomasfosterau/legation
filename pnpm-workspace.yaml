@@ -81,7 +81,7 @@ catalog:
   "@thomasfosterau/effect-auth": 0.4.0
   # A runtime dependency of a published package (legation-svelte): `pnpm pack`
   # rewrites `catalog:` to this range in the packed manifest.
-  "@thomasfosterau/effect-svelte": ^0.6.2
+  "@thomasfosterau/effect-svelte": ^0.7.0
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus

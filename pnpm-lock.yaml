@@ -64,8 +64,8 @@ catalogs:
       specifier: ^0.22.1
       version: 0.22.1
     '@thomasfosterau/effect-svelte':
-      specifier: ^0.6.2
-      version: 0.6.2
+      specifier: ^0.7.0
+      version: 0.7.0
     '@types/better-sqlite3':
       specifier: ^9.6.0
       version: 9.6.0
@@ -540,7 +540,7 @@ importers:
     dependencies:
       '@thomasfosterau/effect-svelte':
         specifier: 'catalog:'
-        version: 0.6.2(effect@4.1.4)(svelte@5.57.3)
+        version: 0.7.0(effect@4.1.4)(svelte@5.57.3)
       '@thomasfosterau/legation':
         specifier: workspace:^
         version: link:../effect
@@ -1971,8 +1971,8 @@ packages:
     peerDependencies:
       effect: 4.1.4
 
-  '@thomasfosterau/effect-svelte@0.6.2':
-    resolution: {integrity: sha512-s1SmOXes8QMejpQb/ZhxJdf+nwV3YW0RUWSAX1HMv3755twLgxi06ulfzAr/Y18WX44OP9nqk1vBmobuP7p70g==}
+  '@thomasfosterau/effect-svelte@0.7.0':
+    resolution: {integrity: sha512-IX2q4aMnVKWk7QFfz6pF6j+jfTVokOModcMB7cpMWfszfuynghDgf4qxlZbJeJZMQCIYKHz/vrq4G9F64tBvqw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       effect: 4.1.4
@@ -4455,7 +4455,7 @@ snapshots:
       - '@effect/platform-node'
       - '@thomasfosterau/effect-parse'
 
-  '@thomasfosterau/effect-svelte@0.6.2(effect@4.1.4)(svelte@5.57.3)':
+  '@thomasfosterau/effect-svelte@0.7.0(effect@4.1.4)(svelte@5.57.3)':
     dependencies:
       effect: 4.1.4
       svelte: 5.57.3
