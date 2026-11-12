@@ -8,6 +8,7 @@
  * worker, bespoke) implement the same interfaces.
  */
 
+import * as Defined from "./Defined.js";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -336,7 +337,9 @@ export const simulateOffline = (
     const wrapped: ClientTransport = {
       push: (request) => gate(transport.push(request)),
       pull: (request) => gate(transport.pull(request)),
-      ...(read === undefined ? {} : { read: (request: ReadRequest) => gate(read(request)) }),
+      ...Defined.fields({
+        read: read === undefined ? undefined : (request: ReadRequest) => gate(read(request)),
+      }),
       pokes: transport.pokes,
       status,
       statusChanges,
@@ -459,7 +462,7 @@ export const withFallback = (
             yield* SubscriptionRef.set(status, "connected");
             return first.success;
           }
-          if (!isTransportError(first.failure)) return yield* Effect.fail(first.failure);
+          if (!isTransportError(first.failure)) return yield* first.failure;
           yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
         }
         const second = yield* Effect.result(f(fallback));
@@ -468,7 +471,7 @@ export const withFallback = (
           return second.success;
         }
         if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
-        return yield* Effect.fail(second.failure);
+        return yield* second.failure;
       });
 
     return {

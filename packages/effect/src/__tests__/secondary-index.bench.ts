@@ -15,6 +15,7 @@
  * numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
+import * as Defined from "../Defined.js";
 import { describe, test } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -189,7 +190,7 @@ const buildEngine = (indexed: boolean) =>
       clientId: "bench",
       clientGroupId: `bench-${indexed}`,
       mutators,
-      ...(indexed ? { indexes: { items: ["priority"] } } : {}),
+      ...Defined.fields({ indexes: indexed ? { items: ["priority"] } : undefined }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provide(layerInMemory(`bench-${indexed}`)),

@@ -34,6 +34,7 @@ import * as Stream from "effect/Stream";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -106,7 +107,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeEngine = Effect.gen(function* () {

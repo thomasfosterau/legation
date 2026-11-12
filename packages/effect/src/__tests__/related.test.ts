@@ -33,6 +33,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Issue {
   readonly id: string;
@@ -191,7 +192,8 @@ const waitForEmissions = <A>(
     Stream.runHead,
     Effect.flatMap(
       Option.match({
-        onNone: () => Effect.die(new Error(`${failure}; the changes stream ended`)),
+        onNone: () =>
+          Effect.die(new TestFailure({ message: `${failure}; the changes stream ended` })),
         onSome: Effect.succeed,
       })
     ),
@@ -199,7 +201,7 @@ const waitForEmissions = <A>(
       duration: "5 seconds",
       orElse: () =>
         Effect.flatMap(SubscriptionRef.get(seen), (emissions) =>
-          Effect.die(new Error(`${failure}; saw ${show(emissions)}`))
+          Effect.die(new TestFailure({ message: `${failure}; saw ${show(emissions)}` }))
         ),
     })
   );

@@ -11,6 +11,7 @@
  * for a paginated node edge under either declaration, and never for a
  * collection the resource does not declare.
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -343,7 +344,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: Identity
           new Request(`http://shop.test${path}`, {
             headers: {
               accept: "application/vnd.api+json",
-              ...(user === undefined ? {} : { "x-user": user }),
+              ...Defined.fields({ "x-user": user }),
               ...headers,
             },
           })

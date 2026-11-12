@@ -13,6 +13,7 @@
  * Seeded through Effect's `Random.withSeed`; `LEGATION_CORPUS_SEED`
  * overrides the seed to reproduce a failure.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -79,8 +80,7 @@ const generateWindow = (rows: ReadonlyArray<FilterCorpus.CorpusRow>): Effect.Eff
     const cursor = withCursor ? (yield* Random.choice(rows).pipe(Effect.orDie)).id : undefined;
     return {
       orderBy,
-      ...(limit === undefined ? {} : { limit }),
-      ...(cursor === undefined ? {} : { cursor }),
+      ...Defined.fields({ limit, cursor }),
     };
   });
 

@@ -5,6 +5,7 @@
  * the store; an identity reset clears it; hydration carries it. The crash
  * windows are exercised by failing the store at each step and reopening it.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -114,7 +115,7 @@ const makeCounterEngine = (
       clientId: "client-a",
       clientGroupId: "group-a",
       mutators: counterMutators,
-      ...(unpulledLimit === undefined ? {} : { unpulledLimit }),
+      ...Defined.fields({ unpulledLimit }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)
@@ -1794,7 +1795,7 @@ const engineWith = (
     clientGroupId: "group-a",
     mutators: counterMutators,
     unpulledLimit,
-    ...(retry === undefined ? {} : { retry }),
+    ...Defined.fields({ retry }),
   }).pipe(
     Effect.provideService(ClientStore, store),
     Effect.provideService(ClientTransport, transport)

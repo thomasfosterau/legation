@@ -40,6 +40,7 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -310,7 +311,7 @@ const oneFewerOn = (current: Interest, kind: Kind): Interest => {
     ...rest,
     observers: oneFewer(current.observers, kind, "observer"),
     pins,
-    ...(pins > 0 && url !== undefined ? { url } : {}),
+    ...Defined.fields({ url: pins > 0 && url !== undefined ? url : undefined }),
   };
 };
 
@@ -441,7 +442,7 @@ export const fromView = (
         edges: registration.edges,
         observers: oneMore(current?.observers, kind, "observer"),
         pins: oneMore(current?.pins, kind, "explicit"),
-        ...(known === undefined ? {} : { url: known }),
+        ...Defined.fields({ url: known }),
       });
       return [current === undefined ? key : undefined, next] as const;
     }).pipe(
@@ -845,10 +846,9 @@ export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Sco
       clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
       clientGroupId,
       mutators: options.mutations,
-      ...(options.queries === undefined ? {} : { queries: options.queries }),
-      ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      ...(!R.isEmptyReadonlyRecord(indexes) ? { indexes } : {}),
-      ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
+      ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+      ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
+      ...Defined.fields({ autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)

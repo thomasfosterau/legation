@@ -35,6 +35,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory, makePokeHub, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const mutators = Mutator.registry([
   {
@@ -95,7 +96,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 describe("backpressure — poke hub", () => {

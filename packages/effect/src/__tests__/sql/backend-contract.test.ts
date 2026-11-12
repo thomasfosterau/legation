@@ -44,6 +44,7 @@ import {
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { TestFailure } from "../test-failure.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
@@ -142,9 +143,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
@@ -518,9 +517,7 @@ const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
 };
 
@@ -734,7 +731,9 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
             Effect.timeoutOrElse({
               duration: "20 seconds",
               orElse: () =>
-                Effect.die(new Error("awaitPeer did not return on the peer's lock wait")),
+                Effect.die(
+                  new TestFailure({ message: "awaitPeer did not return on the peer's lock wait" })
+                ),
             })
           );
           expect(

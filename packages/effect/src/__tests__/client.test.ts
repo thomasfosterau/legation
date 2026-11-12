@@ -6,6 +6,7 @@
  * starts the sync loop itself; Client.connect drives a worker-hosted
  * engine over a channel with identical component-facing behavior.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -41,6 +42,7 @@ import {
   SyncServer,
 } from "../internal.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, categoryId: Schema.String },
@@ -78,7 +80,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeHandler = Effect.gen(function* () {
@@ -266,7 +268,7 @@ const makeCountingEngine = Effect.gen(function* () {
 /** The commerce example's `productPage` read (`examples/commerce/src/lib/domain.ts`). */
 const productPage = (categoryId?: string) => ({
   collection: "products",
-  ...(categoryId === undefined ? {} : { where: { categoryId } }),
+  ...Defined.fields({ where: categoryId === undefined ? undefined : { categoryId } }),
   order: ["id"],
   first: 12,
 });
@@ -580,8 +582,8 @@ const stubUrls: Client.UrlReads = {
       }
       return Effect.succeed({
         collection,
-        ...(R.isEmptyReadonlyRecord(where) ? {} : { where }),
-        ...(R.isEmptyReadonlyRecord(include) ? {} : { include }),
+        ...Defined.fields({ where: R.isEmptyReadonlyRecord(where) ? undefined : where }),
+        ...Defined.fields({ include: R.isEmptyReadonlyRecord(include) ? undefined : include }),
       });
     }),
   canonical: (read) =>

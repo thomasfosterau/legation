@@ -6,6 +6,7 @@
  * `storeVersion` buster clears the cache while preserving the journal, and a
  * fleet cookie-namespace bump forces every old cookie to a reset patch.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -94,12 +95,10 @@ const makeClient = (handler: ServerHandler, name: string, clientOptions?: Client
       clientId: `client-${name}`,
       clientGroupId: `group-${name}`,
       mutators,
-      ...(clientOptions?.schemaVersion !== undefined
-        ? { schemaVersion: clientOptions.schemaVersion }
-        : {}),
-      ...(clientOptions?.onUpdateNeeded !== undefined
-        ? { onUpdateNeeded: clientOptions.onUpdateNeeded }
-        : {}),
+      ...Defined.fields({
+        schemaVersion: clientOptions?.schemaVersion,
+        onUpdateNeeded: clientOptions?.onUpdateNeeded,
+      }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)

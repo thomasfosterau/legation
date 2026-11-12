@@ -27,6 +27,17 @@
  * in-context {@link ServerHandler}; a split deployment (a SvelteKit Worker
  * rendering against a separate API Worker) passes its own carrier.
  *
+ * ## A store the client does not own
+ *
+ * When the engine and its durable store live in an engine host (a service
+ * worker, an elected tab), the tab holds the snapshot but not the store, so
+ * it hands the snapshot over: the `hydrate` request kind ({@link requests}),
+ * answered by a host given its store. The host owns the empty-store gate
+ * ({@link hydrateUnpulled}): it hydrates only an empty store whose engine has
+ * not started a pull, and answers every other snapshot `hydrated: false`
+ * with the reason ({@link HydrateOutcome}). {@link makeGate}'s `hold` lets a
+ * cold host wait for the first snapshot before it pulls.
+ *
  * ## Seeded-versions caveat
  *
  * A snapshot carries each row's authoritative `version`. Those versions must be
@@ -48,12 +59,18 @@
  * decode.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as ClientEngineModule from "./ClientEngine.js";
+import * as HostRequest from "./HostRequest.js";
 import {
   ClientStore,
   freezePending,
@@ -174,9 +191,11 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
         version: row.version,
         value: row.value,
       })),
-      ...(state.cookie !== undefined ? { cookie: state.cookie } : {}),
+      ...Defined.fields({ cookie: state.cookie }),
       journal: state.journal,
-      ...(Arr.isReadonlyArrayNonEmpty(state.unpulled) ? { unpulled: state.unpulled } : {}),
+      ...Defined.fields({
+        unpulled: Arr.isReadonlyArrayNonEmpty(state.unpulled) ? state.unpulled : undefined,
+      }),
     };
     return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
   });
@@ -296,6 +315,181 @@ export const hydrateIfEmpty = (
     yield* hydrate(store, snapshot);
     return true;
   });
+
+/**
+ * Why a host declined a snapshot (ADR-0021 amendment §6): its store already
+ * holds state (`NotEmpty`), or a pull has started since its engine booted
+ * (`AlreadyPulling`), which is about to fill the store and whose cookie the
+ * snapshot's would race.
+ */
+export const HydrateDeclined = Schema.Literals(["NotEmpty", "AlreadyPulling"]);
+
+/** The type {@link HydrateDeclined} decodes to. */
+export type HydrateDeclined = typeof HydrateDeclined.Type;
+
+/**
+ * What a host answers a `hydrate` request with: whether it wrote the snapshot
+ * into its store, and, when it did not, why. A `false` answer is never an
+ * error and needs no action: the host's replica is then at least as fresh as
+ * the snapshot.
+ */
+export const HydrateOutcome = Schema.Struct({
+  // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- the `hydrate` kind's published wire contract (ADR-0021 amendment §6) names this field `hydrated`.
+  hydrated: Schema.Boolean,
+  reason: Schema.optional(HydrateDeclined),
+});
+
+/** The type {@link HydrateOutcome} decodes to. */
+export type HydrateOutcome = typeof HydrateOutcome.Type;
+
+/**
+ * The hydration host-request kind (ADR-0021 amendment §6, #146): a tab holding
+ * a server-rendered {@link Snapshot} hands it to the engine host it mirrors,
+ * which owns the store and the empty-store gate. Single-reply; the answer is a
+ * {@link HydrateOutcome}. Ask it with `Mirror.request(Hydration.requests.hydrate,
+ * snapshot)`; a host serves it once it is given its store (`EngineHost.run({
+ * store })`).
+ */
+export const requests = {
+  hydrate: HostRequest.single("hydrate", { request: Snapshot, response: HydrateOutcome }),
+} as const;
+
+const HYDRATED: HydrateOutcome = { hydrated: true };
+
+/**
+ * The gate itself, for a caller already holding the engine's pulls: the store
+ * must be empty and no pull may have started. Uninterruptible once it has
+ * decided, so a cancelled request never leaves a half-written snapshot.
+ */
+const hydrateHeld = (
+  counts: ClientEngineModule.PullCounts,
+  store: ClientStore,
+  snapshot: Snapshot
+): Effect.Effect<HydrateOutcome, StoreError> =>
+  Effect.uninterruptible(
+    Effect.gen(function* () {
+      if (!(yield* isEmpty(store))) return { hydrated: false, reason: "NotEmpty" } as const;
+      if (counts.started > 0) return { hydrated: false, reason: "AlreadyPulling" } as const;
+      yield* hydrate(store, snapshot);
+      return HYDRATED;
+    })
+  );
+
+/**
+ * {@link hydrate} into a running engine's store, gated as an engine host gates
+ * it (ADR-0021 amendment §6): with the engine's pulls held
+ * (`ClientEngine.withPullsHeld`), it hydrates iff the store {@link isEmpty}
+ * and no pull has started since the engine was built. Otherwise it answers
+ * `hydrated: false` with the reason and leaves the store untouched. Of two
+ * snapshots offered to one empty store, the first to take the pulls wins and
+ * the other is answered `NotEmpty` (unless the winner was itself empty).
+ * After a hydration, the engine re-syncs as {@link hydrate} describes, and its
+ * first pull continues from the snapshot's cookie.
+ *
+ * The check and the write are one section against pulls, not against local
+ * mutations: a mutation journaled between them is kept beside the snapshot's
+ * journal.
+ */
+export const hydrateUnpulled = (
+  engine: ClientEngineModule.ClientEngine,
+  store: ClientStore,
+  snapshot: Snapshot
+): Effect.Effect<HydrateOutcome, StoreError> =>
+  engine.withPullsHeld((counts) => hydrateHeld(counts, store, snapshot));
+
+/** A host's hydration gate: what serves the `hydrate` kind ({@link makeGate}). */
+export interface Gate {
+  /** Offer a snapshot to the host's store: {@link hydrateUnpulled}, through the gate's hold if it is still open. */
+  readonly hydrate: (snapshot: Snapshot) => Effect.Effect<HydrateOutcome, StoreError>;
+}
+
+/** Options for {@link makeGate}. */
+export interface GateOptions {
+  /**
+   * How long to hold the engine's pulls for a snapshot when the gate is made
+   * over an empty store that has not pulled. Unset, nothing is held and every
+   * snapshot races the engine's pulls (the first pull wins, and later
+   * snapshots are `AlreadyPulling`). See `EngineHostOptions.hydrationWindow`.
+   */
+  readonly hold?: Duration.Input | undefined;
+}
+
+interface Job {
+  readonly snapshot: Snapshot;
+  readonly reply: Deferred.Deferred<HydrateOutcome, StoreError>;
+}
+
+/** The hold's state: whether it is still holding, and the snapshot handed over to it, if any. */
+interface Hold {
+  readonly holding: boolean;
+  readonly job: Option.Option<Job>;
+}
+
+const RELEASED: Hold = { holding: false, job: Option.none() };
+
+/**
+ * Build a host's hydration gate over its engine and store. Without `hold` it
+ * is {@link hydrateUnpulled}. With `hold`, and when the store is empty and no
+ * pull has started, the gate first takes the engine's pulls and keeps them
+ * until a snapshot arrives or `hold` elapses, whichever is first: a cold host
+ * (a service worker the first tab's handshake just started) would otherwise
+ * pull on connect before the tab's snapshot crosses the mirror, and the
+ * snapshot would always lose. The first snapshot in that window is hydrated
+ * under the held pulls; anything later goes through {@link hydrateUnpulled}.
+ * A store that is not empty, or an engine that has pulled, releases at once.
+ *
+ * Returns once the hold (if any) is in place, so a pull that starts after the
+ * gate is made waits for it. The hold ends with the scope.
+ */
+export const makeGate = (
+  engine: ClientEngineModule.ClientEngine,
+  store: ClientStore,
+  options: GateOptions = {}
+): Effect.Effect<Gate, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const { hold } = options;
+    const direct = (snapshot: Snapshot) => hydrateUnpulled(engine, store, snapshot);
+    if (hold === undefined) return { hydrate: direct };
+    const state = yield* Ref.make<Hold>({ holding: true, job: Option.none() });
+    const arrived = yield* Deferred.make<void>();
+    const holding = yield* Deferred.make<void>();
+    yield* Effect.forkScoped(
+      engine.withPullsHeld((counts) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(holding, undefined);
+          const eligible =
+            counts.started === 0 && (yield* isEmpty(store).pipe(Effect.orElseSucceed(() => false)));
+          if (eligible) yield* Deferred.await(arrived).pipe(Effect.timeoutOption(hold));
+          // Close the hold and take whatever job was handed over, as one step: a
+          // snapshot that arrives after this goes through the pulls like any other.
+          const claimed = yield* Ref.getAndSet(state, RELEASED);
+          if (Option.isSome(claimed.job)) {
+            const { snapshot, reply } = claimed.job.value;
+            yield* Deferred.done(reply, yield* Effect.exit(hydrateHeld(counts, store, snapshot)));
+          }
+        })
+      )
+    );
+    yield* Deferred.await(holding);
+    return {
+      hydrate: (snapshot) =>
+        Effect.gen(function* () {
+          const reply = yield* Deferred.make<HydrateOutcome, StoreError>();
+          const handedOver = yield* Ref.modify(state, (current): readonly [boolean, Hold] =>
+            current.holding && Option.isNone(current.job)
+              ? [true, { holding: true, job: Option.some({ snapshot, reply }) }]
+              : [false, current]
+          );
+          if (!handedOver) return yield* direct(snapshot);
+          yield* Deferred.succeed(arrived, undefined);
+          return yield* Deferred.await(reply);
+        }),
+    };
+  });
+
+/** The host-side handler serving {@link requests}' `hydrate` kind through a {@link Gate}. */
+export const handler = (gate: Gate): HostRequest.Handler =>
+  HostRequest.handler(requests.hydrate, gate.hydrate);
 
 /**
  * Project a snapshot onto a read, locally and synchronously: the snapshot's

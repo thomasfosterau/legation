@@ -26,6 +26,7 @@ import {
   Transport,
 } from "@thomasfosterau/legation";
 import { ClientEngine, ClientView, Subset, SyncRoom } from "@thomasfosterau/legation/internal";
+import { TestFailure } from "./test-failure.js";
 
 export interface Todo {
   readonly id: string;
@@ -235,7 +236,8 @@ export const until = async (predicate: () => boolean, timeoutMs = 25_000): Promi
   for (;;) {
     flushSync();
     if (predicate()) return;
-    if (nowMillis() > deadline) throw new Error("until: timed out waiting for condition");
+    if (nowMillis() > deadline)
+      throw new TestFailure({ message: "until: timed out waiting for condition" });
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -256,7 +258,7 @@ export const untilSubscriptions = async (
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     const subs = await run(runtime, (engine) => engine.activeSubscriptions);
     if (predicate(subs.length)) return;
-    if (nowMillis() > deadline) throw new Error("untilSubscriptions: timed out");
+    if (nowMillis() > deadline) throw new TestFailure({ message: "untilSubscriptions: timed out" });
     // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -267,6 +269,6 @@ export const buttonByLabel = (label: string): HTMLButtonElement => {
   const button = Array.from(document.querySelectorAll("button")).find(
     (candidate) => candidate.textContent === label
   );
-  if (button === undefined) throw new Error(`no button labelled "${label}"`);
+  if (button === undefined) throw new TestFailure({ message: `no button labelled "${label}"` });
   return button;
 };

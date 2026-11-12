@@ -19,7 +19,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
@@ -151,7 +151,7 @@ const provide = <E>(
         baseUrl: "http://api.test",
         clientId: "c1",
         clientGroupId: "g1",
-        ...(options?.includes !== undefined ? { includes: options.includes } : {}),
+        ...Defined.fields({ includes: options?.includes }),
       }).pipe(Layer.provide(server.layer))
     ),
     Effect.scoped

@@ -26,6 +26,7 @@ import {
 } from "@thomasfosterau/legation";
 import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // The commerce trio, declared once as JSON:API resources. The graph is
 // acyclic (the library's resource types expand eagerly): products point at
@@ -209,7 +210,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 describe("a bridged registry over a real engine", () => {

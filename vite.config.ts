@@ -63,13 +63,15 @@ export default defineConfig({
   // lint without: with type-aware lint on, `vp check --fix` would apply the
   // autofixes of type-aware rules (even ones at `warn`) to staged files at
   // commit time, so the commit would differ from the tree that was verified.
-  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone.
+  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone; the
+  // example apps' `.svelte` files are outside lint's patterns, so a commit
+  // touching only those must not fail on "no files found".
   staged: {
     "*.{js,mjs,ts,json,md,yml,yaml}": [
       "vp check --fix --no-lint",
       "vp check --no-fmt --no-error-on-unmatched-pattern",
     ],
-    "*.svelte": "vp lint",
+    "*.svelte": "vp lint --no-error-on-unmatched-pattern",
   },
   // Oxfmt, the formatter of record. The options keep the style the
   // repository was written in under Prettier, so the migration reformatted
@@ -134,13 +136,16 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out: exported combinators over untyped
-      // row values (`Incremental`, `Derive`, `Predicate.fieldValue`) and a
-      // dialect's driver-specific bind value return what the caller's
-      // projection or driver produces.
-      "effect/no-unknown-returns": "warn",
+      // The same boundary on the way out is at `error` (#562): the exported
+      // combinators over untyped row values (`Incremental`, `Derive`,
+      // `Predicate.fieldValue`) return what the caller's projection produces,
+      // and each such site carries its own scoped disable with that reason.
+      "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      "effect/no-runtime-typeof": "warn",
+      // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),
+      // which measured no slower than a `typeof` switch on the per-row
+      // `Predicate.compareLiterals` path.
+      "effect/no-runtime-typeof": "error",
 
       // ---- Effect preset: ported-code allowances ---------------------------
       // The engine predates the Effect oxlint preset. The rules below sit at
@@ -156,11 +161,9 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/no-conditional-empty-object-spread": "warn", // 144 sites
       "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
-      "effect/avoid-untagged-errors": "warn", // 76 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a
@@ -195,6 +198,7 @@ export default defineConfig({
       "oxc/no-map-spread": "error",
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
+      "effecttsgo/unnecessary-fail-yieldable-error": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
@@ -253,7 +257,6 @@ export default defineConfig({
           "effect/avoid-direct-json": "off",
           "effect/avoid-native-fetch": "off",
           "effect/effect-promise-vs-trypromise": "off",
-          "effect/no-conditional-empty-object-spread": "off",
         },
       },
       {
@@ -388,6 +391,7 @@ export default defineConfig({
             "packages/alchemy-cloudflare/src/__tests__/**",
             "packages/auth/src/__tests__/**",
             "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
           ],
         },
       },
@@ -431,7 +435,10 @@ export default defineConfig({
             "./vitest.global-setup.ts",
             "./examples/commerce/tests/support/global-setup.ts",
           ],
-          include: ["examples/commerce/tests/facade-browser.test.ts"],
+          include: [
+            "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
+          ],
           server: {
             deps: {
               // The test's `beforeAll` imports the app's built server

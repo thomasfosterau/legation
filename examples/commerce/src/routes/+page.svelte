@@ -2,16 +2,17 @@
   import { page as kitPage } from "$app/state";
   import { useAggregateGrouped, useQuery } from "@thomasfosterau/legation-svelte";
   import { AsyncResult } from "effect/reactivity";
-  import { Aggregate } from "@thomasfosterau/legation";
+  import { Aggregate, Hydration, type Query } from "@thomasfosterau/legation";
   import {
     allCategories,
     allVariants,
     CATALOG_PAGE_SIZE,
+    nodes,
     productPage,
     type Category,
     type Product,
   } from "../lib/domain.js";
-  import { productRows, toRow, variantRows } from "../lib/rows.js";
+  import { productRows, type RowSeed, toRow, variantRows } from "../lib/rows.js";
 
   const { data } = $props();
 
@@ -33,26 +34,44 @@
   };
   const PAGE = CATALOG_PAGE_SIZE;
 
+  // First paint from the layout's SSR snapshot (#146) when there is one: the
+  // shell's rows, projected onto each read locally (`Hydration.rowsFor`), the
+  // same rows the worker's replica is hydrated with — so the server markup,
+  // the first client render and the replica agree. Without one (the sync
+  // server could not render it), the universal load's JSON:API documents
+  // seed instead; the load stays either way, as the no-JS tier's cursor and
+  // the façade's plain-`fetch` demonstration (ADR-0029).
+  // svelte-ignore state_referenced_locally
+  const snapshot = data.snapshot;
+  const seededFrom = snapshot === undefined ? "jsonapi" : "snapshot";
+  const seed = (read: Query.Read, fallback: ReadonlyArray<RowSeed>): ReadonlyArray<RowSeed> =>
+    snapshot === undefined
+      ? fallback
+      : Hydration.rowsFor(snapshot, nodes, read).map((row) => ({ ...row, related: {} }));
+
   // svelte-ignore state_referenced_locally
   const productsQuery = useQuery(() => productPage({ categoryId, cursor, limit: PAGE }), {
     // The load fetched exactly this read (the first page, at its canonical
     // URL), so the seed is the window.
-    initial: productRows(data.products),
+    initial: seed(productPage({ categoryId, cursor, limit: PAGE }), productRows(data.products)),
   });
   // svelte-ignore state_referenced_locally
   const categoriesQuery = useQuery(() => allCategories, {
-    initial: data.categories.map((category) => toRow(category)),
+    initial: seed(allCategories, data.categories.map((category) => toRow(category))),
   });
   // Grouped live aggregate: per-product stock from the variants the engine
   // has synced — the "out of stock" badges update as orders decrement stock.
   // svelte-ignore state_referenced_locally
   const stock = useAggregateGrouped(() => allVariants, Aggregate.sum("stock"), "productId", {
-    initial: variantRows(data.variants).reduce<Record<string, number>>((sums, row) => {
-      const value = row.value as { productId?: string; stock?: number };
-      const key = value.productId ?? "";
-      sums[key] = (sums[key] ?? 0) + (value.stock ?? 0);
-      return sums;
-    }, {}),
+    initial: seed(allVariants, variantRows(data.variants)).reduce<Record<string, number>>(
+      (sums, row) => {
+        const value = row.value as { productId?: string; stock?: number };
+        const key = value.productId ?? "";
+        sums[key] = (sums[key] ?? 0) + (value.stock ?? 0);
+        return sums;
+      },
+      {}
+    ),
   });
 
   const products = $derived.by(async () => {
@@ -78,7 +97,7 @@
     <input placeholder="Search…" bind:value={search} />
   </p>
 
-  <ul>
+  <ul data-seed={seededFrom}>
     {#each await products as product (product.id)}
       <li>
         <a href={`/product/${product.id}`}>{product.name}</a>

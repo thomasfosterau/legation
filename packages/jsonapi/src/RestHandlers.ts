@@ -72,10 +72,16 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { type Subset, SyncServer } from "@thomasfosterau/legation/internal";
+import { type Subset, SyncServer, Defined } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Linkage from "./Linkage.js";
+
+/** Thrown for a resource with no node in the graph: a definition defect. */
+class UnknownNode extends Schema.TaggedError<UnknownNode, { readonly brand: unique symbol }>()(
+  "UnknownNode",
+  { message: Schema.String }
+) {}
 
 // ─── Options ─────────────────────────────────────────────────────────────────
 
@@ -220,9 +226,11 @@ export const queryErrorDocument = (error: QueryError): ErrorDocument => {
       {
         status: String(ApiError.BadRequest.status),
         code: ApiError.BadRequest.code,
-        ...(ApiError.BadRequest.title === undefined ? {} : { title: ApiError.BadRequest.title }),
+        ...Defined.fields({ title: ApiError.BadRequest.title }),
         detail: error.message,
-        ...(error.parameter === undefined ? {} : { source: { parameter: error.parameter } }),
+        ...Defined.fields({
+          source: error.parameter === undefined ? undefined : { parameter: error.parameter },
+        }),
       },
     ],
   };
@@ -234,7 +242,7 @@ const forbiddenDocument = (error: AuthorizationError): ErrorDocument => ({
     {
       status: String(ApiError.Forbidden.status),
       code: ApiError.Forbidden.code,
-      ...(ApiError.Forbidden.title === undefined ? {} : { title: ApiError.Forbidden.title }),
+      ...Defined.fields({ title: ApiError.Forbidden.title }),
       detail: error.message,
     },
   ],
@@ -313,7 +321,9 @@ export const make = (options: Options): RestHandlers => {
   const nodeOf = (resource: Resource.Any): Node.AnyNode => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) {
-      throw new Error(`RestHandlers: no node "${resource.type}" in the graph for the resource`);
+      throw new UnknownNode({
+        message: `RestHandlers: no node "${resource.type}" in the graph for the resource`,
+      });
     }
     return node;
   };

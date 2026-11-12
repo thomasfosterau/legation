@@ -43,6 +43,7 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
@@ -102,7 +103,7 @@ export type Verdict =
 
 /** A literal's key: its type and its value, so `"1"` and `1` never collide. */
 const literalKey = (literal: Predicate.Literal): string =>
-  literal === null ? "null" : `${typeof literal}:${JSON.stringify(literal)}`;
+  literal === null ? "null" : `${Predicate.typeName(literal)}:${JSON.stringify(literal)}`;
 
 /** Deduplicate and sort keys (plain string order; only determinism matters). */
 const sortedUnique = (keys: ReadonlyArray<string>): ReadonlyArray<string> =>
@@ -536,7 +537,7 @@ export const verdictOf = (entries: Iterable<Entry>, requested: Requested): Verdi
         _tag: "Covered",
         by: { root: by.root, edges: by.edges },
         hash: Subset.hash(by.root),
-        ...(by.url === undefined ? {} : { url: by.url }),
+        ...Defined.fields({ url: by.url }),
       };
 };
 

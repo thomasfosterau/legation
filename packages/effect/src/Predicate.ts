@@ -247,6 +247,25 @@ export const inSet = (field: string, set: string): Predicate => ({ _tag: "InSet"
 
 // ─── Ordering ────────────────────────────────────────────────────────────────
 
+/** Each `typeof` name but `"object"`, with the refinement that recognises it. */
+const typeNames: ReadonlyArray<readonly [P.Predicate<unknown>, string]> = [
+  [P.isString, "string"],
+  [P.isNumber, "number"],
+  [P.isBoolean, "boolean"],
+  [P.isBigInt, "bigint"],
+  [P.isSymbol, "symbol"],
+  [P.isUndefined, "undefined"],
+  [P.isFunction, "function"],
+];
+
+/**
+ * The name `typeof` gives a value (`"object"` for `null`, an array or an
+ * object), read through `effect/Predicate`'s refinements. Orders values of
+ * differing types and keys a literal by its type, so `"1"` and `1` differ.
+ */
+export const typeName = (value: unknown): string =>
+  typeNames.find(([is]) => is(value))?.[1] ?? "object";
+
 /**
  * Compare two strings by Unicode code point (ADR-0028 rule (c)): the order
  * of Postgres `COLLATE "C"` (UTF-8 bytes) and SQLite `BINARY`. JS `<`
@@ -272,18 +291,12 @@ export const compareText = (a: string, b: string): number => {
  * are not of one comparable type — the "type mismatch" of rule (d).
  */
 export const compareLiterals = (left: unknown, right: unknown): number | undefined => {
-  if (typeof left !== typeof right) return undefined;
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
-  switch (typeof left) {
-    case "number":
-      return numericOrder(left, right as number);
-    case "string":
-      return compareText(left, right as string);
-    case "boolean":
-      return numericOrder(Number(left), Number(right));
-    default:
-      return undefined;
+  if (P.isNumber(left)) return P.isNumber(right) ? numericOrder(left, right) : undefined;
+  if (P.isString(left)) return P.isString(right) ? compareText(left, right) : undefined;
+  if (P.isBoolean(left)) {
+    return P.isBoolean(right) ? numericOrder(Number(left), Number(right)) : undefined;
   }
+  return undefined;
 };
 
 const numericOrder = (left: number, right: number): number =>
@@ -295,7 +308,7 @@ const numericOrder = (left: number, right: number): number =>
  * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
  */
 export const holds = (op: Comparison, ordered: number): boolean => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
+  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.when chain measured ~7x slower and a Record table ~5x slower than this switch (#497)
   switch (op) {
     case "eq":
       return ordered === 0;
@@ -321,6 +334,7 @@ export const holds = (op: Comparison, ordered: number): boolean => {
  * (`CollectionIndex.ts`) read fields with exactly this function so they bucket
  * the same way `evaluate` does.
  */
+// oxlint-disable-next-line effect/no-unknown-returns -- a field of a row value before its collection's schema decodes it; evaluation compares it as a raw literal (ADR-0028).
 export const fieldValue = (row: unknown, field: string): unknown =>
   P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
 
@@ -433,29 +447,42 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
-export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a Match dispatch measured ~3.3x slower than this switch (#497)
-  switch (predicate._tag) {
-    case "True":
-    case "Exists":
-      return TRUE;
-    case "Compare":
-      return evaluateCompare(predicate, row);
-    case "InSet":
-      return FALSE;
-    case "In":
-      return evaluateMembership(predicate.field, predicate.values, true, row);
-    case "NotIn":
-      return evaluateMembership(predicate.field, predicate.values, false, row);
-    case "IsNull":
-      return definite(isNullish(fieldValue(row, predicate.field)) !== (predicate.negated === true));
-    case "And":
-      return evaluateAnd(predicate.predicates, row);
-    case "Or":
-      return evaluateOr(predicate.predicates, row);
-    case "Not":
-      return negate(evaluate(predicate.predicate, row));
-  }
+export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> =>
+  dispatch(predicate._tag, predicate, row);
+
+/** A predicate node by its tag: the key the evaluator table is correlated over. */
+type NodeOf = { readonly [Tag in Predicate["_tag"]]: Extract<Predicate, { readonly _tag: Tag }> };
+
+/** The evaluator table's contract: one handler per node tag, each given its own node. */
+type Evaluators = {
+  readonly [Tag in Predicate["_tag"]]: (node: NodeOf[Tag], row: unknown) => Option.Option<boolean>;
+};
+
+/** Runs the evaluator for `tag` on its node; the shared `Tag` keeps the lookup typed without an assertion. */
+const dispatch = <Tag extends Predicate["_tag"]>(
+  tag: Tag,
+  node: NodeOf[Tag],
+  row: unknown
+): Option.Option<boolean> => evaluators[tag](node, row);
+
+/**
+ * One evaluator per node tag, keyed by `_tag`: a property lookup, not a
+ * `Match`, because `evaluate` runs per row per node (a hoisted `Match.fn` tag
+ * chain measured ~2.3x slower and `Match.typeTags` ~1.7x, the lookup ~8%
+ * slower than a `switch`; #497). `Evaluators` keeps it exhaustive, and `dispatch` correlates a tag with its node, so no assertion is needed.
+ */
+const evaluators: Evaluators = {
+  True: () => TRUE,
+  Exists: () => TRUE,
+  Compare: evaluateCompare,
+  InSet: () => FALSE,
+  In: (node, row) => evaluateMembership(node.field, node.values, true, row),
+  NotIn: (node, row) => evaluateMembership(node.field, node.values, false, row),
+  IsNull: (node, row) =>
+    definite(isNullish(fieldValue(row, node.field)) !== (node.negated === true)),
+  And: (node, row) => evaluateAnd(node.predicates, row),
+  Or: (node, row) => evaluateOr(node.predicates, row),
+  Not: (node, row) => negate(evaluate(node.predicate, row)),
 };
 
 /**
