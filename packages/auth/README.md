@@ -140,8 +140,9 @@ const authPolicy = Result.gen(function* () {
   principalType?, entities? })` compiles for `User::<userId>` (a session's or
   an API key's) and the action (`"read"` is `Action::"read"`). The anonymous
   principal is `User::""` (`ReadScopes.principalRef`), an id no effect-auth
-  user has: a policy naming the principal admits it nothing but rows whose
-  field is `""`, and a forbid scoped to `User` still binds it. The slice comes
+  user has, so a forbid scoped to `User` still binds it; a policy naming the
+  principal admits it nothing (see "The anonymous principal owns nothing"
+  below). The slice comes
   from effect-auth's `EntityResolver` when you pass one (`entities`); else a
   session's user sits under `Rbac.roleRef(user.attributes.role)` and carries
   that `role` attribute, so `Policy.role` and `Policy.roleAtLeast` both see it;
@@ -163,7 +164,8 @@ const authPolicy = Result.gen(function* () {
   Postgres's three-valued logic. Each such atom becomes
   `field IS NOT NULL AND atom`, so the rows legation admits are exactly the
   rows effect-auth's `ReadScope.matches` admits — `Not(visibility = "private")`
-  admits a row with no visibility in both.
+  admits a row with no visibility in both. The one exception is the narrowing
+  below.
 
   | effect-auth                   | legation                                                  |
   | ----------------------------- | --------------------------------------------------------- |
@@ -177,6 +179,19 @@ const authPolicy = Result.gen(function* () {
   | `Double`                      | a finite number                                           |
   | `Instant(ms)`                 | `new Date(ms).toISOString()`, whole ms in years 0000–9999 |
 
+- **The anonymous principal owns nothing.** effect-auth compiles a policy
+  naming the principal (`resource.owner == principal`) for `User::""` to
+  `Eq(owner, Text(""))`, which would admit every row whose owner field is the
+  empty string to every signed-out viewer. For the anonymous principal (the
+  request's, in `toAuthFilter`; `options.principal` in `translate`), an `Eq`
+  of an entity attribute against `""` in a positive position (under an even
+  number of `Not`s) translates to false. Under a `Not` it is kept: false
+  there would widen, and as it is it already admits no empty owner. So a
+  signed-out viewer never reads a row through an ownership rule, a
+  signed-in principal's scope is exact, and public rows are unaffected. This
+  only ever narrows effect-auth's `matches`, and only on rows whose entity
+  field is `""` (`corpus-oracle.test.ts` asserts that is the whole
+  disagreement).
 - **Narrow, never widen.** An `Inexact` compilation, a node with no exact
   translation (a `Compare` on text or booleans, which effect-auth's `matches`
   never holds), a literal of another kind than its attribute or outside its
@@ -189,7 +204,7 @@ const authPolicy = Result.gen(function* () {
   set's members move. A set that fails to resolve, or that the scope names but
   the mapping does not declare, binds to nothing: that branch admits no row.
 
-`ReadScopes.translate(scope, mapping)`, `ReadScopes.translateCompiled` and
+`ReadScopes.translate(scope, mapping, { principal? })`, `ReadScopes.translateCompiled` and
 `ReadScopes.literal` are the pure translation, as `Result`s;
 `ReadScopes.toAuthFilter(compile, mapping)` is one collection's filter.
 

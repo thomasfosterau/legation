@@ -326,4 +326,47 @@ describe("ReadScopes.bindingOf: the binding derived from the node", () => {
       expect(admits({ id: "p3", ownerId: "user-bob", visibility: "private" })).toBe(false);
     })
   );
+
+  it.effect(
+    'through ReadScopes.policy, an anonymous viewer never owns a row whose owner is "" (#662)',
+    () =>
+      Effect.gen(function* () {
+        const compile = ReadScopes.compiler({
+          policies: () => Effect.succeed(policies),
+          request: read,
+        });
+        const policy = orFail(
+          Result.flatMap(derived(), (posts) => ReadScopes.policy({ posts: { ...posts, compile } }))
+        );
+        const whereFor = (principal: Principal.Principal) =>
+          Effect.map(
+            Authorization.authorize(
+              policy,
+              contextOf(principal),
+              Subset.make({ collection: "posts" }),
+              "server"
+            ),
+            (authorized) => authorized.where
+          );
+        const anonymous = yield* whereFor(Principal.anonymous);
+        expect(Predicate.test(anonymous, { id: "p1", ownerId: "", visibility: "private" })).toBe(
+          false
+        );
+        expect(Predicate.test(anonymous, { id: "p2", ownerId: "", visibility: "public" })).toBe(
+          true
+        );
+        expect(
+          Predicate.test(anonymous, { id: "p3", ownerId: "user-bob", visibility: "public" })
+        ).toBe(true);
+        expect(
+          Predicate.test(anonymous, { id: "p4", ownerId: "user-bob", visibility: "private" })
+        ).toBe(false);
+        // A signed-in user's own posts are unaffected.
+        const alice = yield* whereFor(sessionOf("user-alice"));
+        expect(
+          Predicate.test(alice, { id: "p5", ownerId: "user-alice", visibility: "private" })
+        ).toBe(true);
+        expect(Predicate.test(alice, { id: "p1", ownerId: "", visibility: "private" })).toBe(false);
+      })
+  );
 });
