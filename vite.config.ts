@@ -191,6 +191,7 @@ export default defineConfig({
       "typescript/no-misused-spread": "error",
       "unicorn/no-array-reverse": "error",
       "oxc/no-map-spread": "error",
+      "unicorn/prefer-array-find": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
