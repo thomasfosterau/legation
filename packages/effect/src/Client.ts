@@ -40,6 +40,7 @@
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -59,6 +60,7 @@ import * as ClientView from "./ClientView.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, StoreError, TransportError } from "./Errors.js";
 import * as Identity from "./Identity.js";
+import type * as Edge from "./Edge.js";
 import type * as Mutator from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import type * as MutationState from "./MutationState.js";
@@ -71,26 +73,137 @@ import type { MirrorChannel } from "./MirrorChannel.js";
 import * as Mirror from "./Mirror.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
-/** The rows a read resolves to: node values with their included edges. */
-export type ResolvedRow = Related.RelatedRow;
+// ─── Typed reads ─────────────────────────────────────────────────────────────
+
+/**
+ * The app's node graph, registered once by declaration merging so the
+ * surfaces that find the Client in context — the framework hooks
+ * (`@thomasfosterau/legation-svelte`'s `useQuery`, `useConnection`) — check
+ * reads against it and type their rows by it:
+ *
+ * ```ts
+ * declare module "@thomasfosterau/legation" {
+ *   interface Register {
+ *     readonly nodes: typeof nodes;
+ *   }
+ * }
+ * ```
+ *
+ * Unregistered, those surfaces accept any read and resolve it to untyped
+ * rows. A Client an app holds directly (`Client.make`, `Client.connect`,
+ * `Client.fromView`) is typed by the graph it was built over, registered or
+ * not; the {@link Client} service in context is a Client over any graph.
+ * Register the graph the app's Client is built over: the hooks trust that
+ * the rows the context Client emits are that graph's.
+ */
+export interface Register {}
+
+/** The graph an app {@link Register}ed, or an erased graph when it registered none. */
+export type Registered = Register extends { readonly nodes: infer Graph extends Node.NodeRegistry }
+  ? Graph
+  : Node.NodeRegistry;
+
+/** An included edge's resolved value: the target row or `null` for `one`, the target rows otherwise. */
+export type RelatedOf<Graph extends Node.NodeRegistry, E extends Edge.Edge> =
+  E extends Edge.One<infer Target>
+    ? Node.RowOf<Node.NodeOf<Graph, Target>> | null
+    : E extends Edge.Many<infer Target> | Edge.Paginated<infer Target>
+      ? ReadonlyArray<Node.RowOf<Node.NodeOf<Graph, Target>>>
+      : never;
+
+/** The edges a read includes: the literal keys of its `include`. */
+type IncludedOf<R> = R extends { readonly include: infer I }
+  ? string extends keyof I
+    ? never
+    : keyof I & string
+  : never;
+
+/** A row of a read of node `N`: its row value and the edges the read includes. */
+interface TypedRow<Graph extends Node.NodeRegistry, N extends Node.AnyNode, R> {
+  readonly id: string;
+  readonly value: Node.RowOf<N>;
+  readonly related: {
+    readonly [E in IncludedOf<R> & Node.EdgeOf<N>]: RelatedOf<Graph, N["edges"][E]>;
+  };
+}
+
+/**
+ * The rows a read resolves to: node values with their included edges.
+ *
+ * For a read whose `collection` is a literal node of `Graph` (a read declared
+ * `as const satisfies Query.Read`, or written inline), `value` is that node's
+ * row type ({@link Node.RowOf}) and `related` carries exactly the edges the
+ * read `include`s: a `one` edge's target row, or `null` when the row it
+ * references is absent; a `many` or `paginated` edge's target rows. An edge
+ * the read does not include is not on `related`, so reading one is a compile
+ * error. `Graph` defaults to the {@link Registered} graph.
+ *
+ * A read the graph cannot describe statically — `collection` typed `string`,
+ * or any read over an erased graph — resolves to the untyped row, `value:
+ * unknown` and `related` keyed by `string`; so does `ResolvedRow` with no
+ * arguments.
+ */
+export type ResolvedRow<
+  R extends QueryModule.Read = QueryModule.Read,
+  Graph extends Node.NodeRegistry = Registered,
+> =
+  Node.IsTyped<Graph> extends false
+    ? Related.RelatedRow
+    : R extends QueryModule.Read
+      ? string extends R["collection"]
+        ? Related.RelatedRow
+        : R["collection"] extends Node.TypeOf<Graph>
+          ? TypedRow<Graph, Node.NodeOf<Graph, R["collection"]>, R>
+          : Related.RelatedRow
+      : never;
+
+/**
+ * {@link Client.query} over a graph: generic in the read, its rows typed by
+ * the graph, for a graph that carries its types; over an erased graph, a read
+ * in and untyped rows out.
+ */
+export type QueryOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (
+        read: QueryModule.Read
+      ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Effect.Effect<ReadonlyArray<ResolvedRow<R, Graph>>, ClientView.ClientViewError>;
+
+/** {@link Client.observe} over a graph: as {@link QueryOf}, streaming the rows. */
+export type ObserveOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (read: QueryModule.Read) => Stream.Stream<ReadonlyArray<Related.RelatedRow>>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Stream.Stream<ReadonlyArray<ResolvedRow<R, Graph>>>;
 
 /**
  * The one-per-thread object an app reads and writes through (ADR-0022): queries, observed reads,
  * pins, mutations and the identity boundary, whether the engine is owned or hosted elsewhere.
+ *
+ * `Graph` is the node graph it reads: a Client built over a registry
+ * ({@link make}, {@link connect}, {@link fromView}) types each read's rows by
+ * it ({@link ResolvedRow}). `Client` alone is a Client over any graph, with
+ * untyped rows, and a typed Client is one.
  */
-export interface Client {
+export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The node graph this Client reads (bindings compile plans against it). */
-  readonly nodes: Node.NodeRegistry;
-  /** Run a read once against the local replica (no subscription). */
-  readonly query: (
-    read: QueryModule.Read
-  ) => Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError>;
+  readonly nodes: Graph;
+  /**
+   * Run a read once (no subscription), answered from the replica when a
+   * subscription covers it and from the server otherwise. The read is checked
+   * against the graph ({@link Query.Validate}) and its rows typed by it
+   * ({@link ResolvedRow}).
+   */
+  readonly query: QueryOf<Graph>;
   /**
    * Observe a read: current rows now, re-emitting as they change. The
    * read's windows are registered for the stream's lifetime — observing
-   * IS subscribing.
+   * IS subscribing. Checked and typed as {@link Client.query} is.
    */
-  readonly observe: (read: QueryModule.Read) => Stream.Stream<ReadonlyArray<ResolvedRow>>;
+  readonly observe: ObserveOf<Graph>;
   /**
    * Pin a read beyond any observer's lifetime: its root window and, for a
    * read with `include`, its edge windows — the same relational
@@ -310,7 +423,7 @@ const oneFewerOn = (current: Interest, kind: Kind): Interest => {
     ...rest,
     observers: oneFewer(current.observers, kind, "observer"),
     pins,
-    ...(pins > 0 && url !== undefined ? { url } : {}),
+    ...Defined.fields({ url: pins > 0 && url !== undefined ? url : undefined }),
   };
 };
 
@@ -343,11 +456,11 @@ const noUrlReads = (url: string): QueryError =>
  * Client speaks with one voice per window: subscribe on first interest,
  * unsubscribe when the last observer ends and no explicit pin remains.
  */
-export const fromView = (
-  nodes: Node.NodeRegistry,
+export const fromView = <Graph extends Node.NodeRegistry>(
+  nodes: Graph,
   view: ClientView.ClientView,
   options: ViewOptions = {}
-): Client => {
+): Client<Graph> => {
   const urls = options.urls;
   // One ledger per Client: registrations keyed by `keyOf`, each holding one
   // unit on its root window, whose view registration is made once however
@@ -441,7 +554,7 @@ export const fromView = (
         edges: registration.edges,
         observers: oneMore(current?.observers, kind, "observer"),
         pins: oneMore(current?.pins, kind, "explicit"),
-        ...(known === undefined ? {} : { url: known }),
+        ...Defined.fields({ url: known }),
       });
       return [current === undefined ? key : undefined, next] as const;
     }).pipe(
@@ -599,7 +712,7 @@ export const fromView = (
   // rows is.
   const queryOnce = (
     read: QueryModule.Read
-  ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
+  ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> => {
     const readThrough = view.read;
     if (readThrough === undefined) return Query.run(view, nodes, read);
     const compiled = Query.plan(nodes, read);
@@ -623,7 +736,7 @@ export const fromView = (
     );
   };
 
-  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
+  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
     const compiled = Query.plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
@@ -655,8 +768,13 @@ export const fromView = (
 
   return {
     nodes,
-    query: queryOnce,
-    observe,
+    // SAFETY: the rows are typed by the graph the reads are planned against,
+    // which is this Client's own `nodes`: the trust the engine's typed reads
+    // place in rows that passed the row schema on write (ADR-0014). The read
+    // itself is checked against the same graph at the call (`Query.Validate`).
+    query: queryOnce as QueryOf<Graph>,
+    // SAFETY: as `query`: the same plan over the same graph, streamed.
+    observe: observe as ObserveOf<Graph>,
     subscribe: (input) =>
       targetOf(input).pipe(
         Effect.flatMap(({ registration, url }) => acquire(registration, "explicit", url))
@@ -710,8 +828,10 @@ export const fromView = (
 export const Client = Context.Service<Client>("@thomasfosterau/legation/Client");
 
 /** Options for a Client that owns its engine ({@link make}). */
-export interface MakeOptions extends ViewOptions {
-  readonly nodes: Node.NodeRegistry;
+export interface MakeOptions<
+  Graph extends Node.NodeRegistry = Node.NodeRegistry,
+> extends ViewOptions {
+  readonly nodes: Graph;
   readonly mutations: Mutator.MutatorRegistry;
   /**
    * The sync-protocol client identity. Defaults to a random id — fine with
@@ -800,9 +920,9 @@ const declaredIndexes = (
  * Client joined to an engine hosted elsewhere ({@link connect}) owns neither,
  * so it has no such result.
  */
-export interface Made {
+export interface Made<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The Client: the app's one object for reads and writes. */
-  readonly client: Client;
+  readonly client: Client<Graph>;
   /** The engine the Client owns, its sync loop already running when `sync` is on. */
   readonly engine: ClientEngine.ClientEngine;
   /** The store the engine runs over: the one passed, the one in context, or the in-memory default. */
@@ -820,7 +940,9 @@ export interface Made {
  * an app that needs an engine-level capability (devtools) need not build the
  * engine by hand.
  */
-export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Scope> =>
+export const make = <Graph extends Node.NodeRegistry>(
+  options: MakeOptions<Graph>
+): Effect.Effect<Made<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const store =
       options.store ??
@@ -845,10 +967,9 @@ export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Sco
       clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
       clientGroupId,
       mutators: options.mutations,
-      ...(options.queries === undefined ? {} : { queries: options.queries }),
-      ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      ...(!R.isEmptyReadonlyRecord(indexes) ? { indexes } : {}),
-      ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
+      ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+      ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
+      ...Defined.fields({ autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
@@ -868,8 +989,10 @@ export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Sco
   });
 
 /** Options for a Client connected to an engine hosted elsewhere. */
-export interface ConnectOptions extends ViewOptions {
-  readonly nodes: Node.NodeRegistry;
+export interface ConnectOptions<
+  Graph extends Node.NodeRegistry = Node.NodeRegistry,
+> extends ViewOptions {
+  readonly nodes: Graph;
   readonly mutations: Mutator.MutatorRegistry;
   readonly channel: MirrorChannel;
 }
@@ -879,7 +1002,9 @@ export interface ConnectOptions extends ViewOptions {
  * a daemon), joined over a `MirrorChannel`. Reads and writes cross the
  * channel; relational reads resolve host-side.
  */
-export const connect = (options: ConnectOptions): Effect.Effect<Client, never, Scope.Scope> =>
+export const connect = <Graph extends Node.NodeRegistry>(
+  options: ConnectOptions<Graph>
+): Effect.Effect<Client<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const mirror = yield* Mirror.make({ channel: options.channel, mutators: options.mutations });
     return fromView(options.nodes, mirror, viewOptions(options));

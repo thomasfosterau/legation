@@ -41,7 +41,10 @@ export const mutations = Mutation.registry([
   { mutator: setTodo, local: (todo, writer) => writer.put("todos", todo.id, todo) },
 ]);
 
-export const openTodos: Query.Read = { collection: "todos", where: { done: false } };
+export const openTodos = {
+  collection: "todos",
+  where: { done: false },
+} as const satisfies Query.Read;
 ```
 
 A tab holds no engine. It mirrors the one the service worker serves, over the `legation` BroadcastChannel:
@@ -124,6 +127,13 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 
 ## API
 
+### Entry points
+
+| Entry                                         | What it is                                                                                                  |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `@thomasfosterau/legation-browser`            | Every module below.                                                                                         |
+| `@thomasfosterau/legation-browser/http-cache` | `CacheApiHttpCache` and core's `HttpCache` alone, for a service worker that caches HTTP without the engine. |
+
 ### Modules
 
 | Module                   | What it is                                                                                                                                                                  |
@@ -132,7 +142,7 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 | `ElectedHost`            | `run`: elects one tab per client group, with `navigator.locks`, to host the engine on its main thread. The other tabs mirror it.                                            |
 | `IndexedDbClientStore`   | The durable `ClientStore` over IndexedDB: `layer` (needs an `IndexedDb` service), `layerWindow` (the page's `indexedDB`) and `layerNamespaced` (one replica per identity).  |
 | `BroadcastMirrorChannel` | `make(name)`: the mirror seam over a named `BroadcastChannel`. The mirror types (`EngineHost`, `MirrorChannel`, `MirrorProtocol`, `Mirror`) are also re-exported from here. |
-| `CacheApiHttpCache`      | `open` and `fetchHandler`: a `ResponseCacheStore` over the Cache API, with stale-while-revalidate.                                                                          |
+| `CacheApiHttpCache`      | `open`, `fetchHandler` and `isPublic`: a `ResponseCacheStore` over the Cache API, with stale-while-revalidate. Also on `./http-cache`.                                      |
 | `HttpCacheInvalidation`  | `collectionChanges` and `invalidateOnChanges`: evict cached responses as collections change, by the `collection:{name}` tag.                                                |
 | `BrowserConnectivity`    | `withBrowserConnectivity(transport)`: adds `navigator.onLine` and return-to-visible signals to a `ClientTransport`.                                                         |
 | `BackgroundSync`         | `listen`, `register` and `identityUnchecked`: flush the journal after the tab has closed.                                                                                   |
@@ -140,7 +150,7 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 
 ### ServiceWorkerHost
 
-`ServiceWorkerHost.run(options)` serves mirrors and runs the engine's sync loop (pull on poke, push and pull on reconnect). It never returns, so keep its scope open. The options are `channelName` (default `"legation"`), `registry` (the collection registry the mirrors' related reads resolve against: pass `nodes.collections` whenever a tab uses `include`), `nodes` and `urls` (for a page that pins a URL), `backgroundSync`, `pushPoke`, and `requests` (host-request handlers to serve, such as `Devtools.hostRequests(engine, store)` from `@thomasfosterau/legation-devtools`). When the engine's `ClientStore` is in the context (as under `ClientEngine.layer`), the host also serves the introspection request kinds, so a tab reads the worker's engine with `Introspection.fromMirror(mirror)` from the `internal` entry point.
+`ServiceWorkerHost.run(options)` serves mirrors and runs the engine's sync loop (pull on poke, push and pull on reconnect). It never returns, so keep its scope open. The options are `channelName` (default `"legation"`), `registry` (the collection registry the mirrors' related reads resolve against: pass `nodes.collections` whenever a tab uses `include`), `nodes` and `urls` (for a page that pins a URL), `backgroundSync`, `pushPoke`, and `requests` (host-request handlers to serve, such as `Devtools.hostRequests(engine, store)` from `@thomasfosterau/legation-devtools`). When the engine's `ClientStore` is in the context (as under `ClientEngine.layer`), the host also serves the introspection request kinds, so a tab reads the worker's engine with `Introspection.fromMirror(mirror)` from the `internal` entry point, and the `hydrate` kind (#146): a tab hands the page's server-rendered snapshot to the worker, which hydrates its replica only when that replica is empty and has not pulled (`createClient({ channel, snapshot })` in `@thomasfosterau/legation-svelte`). `hydrationWindow` (for example `"3 seconds"`) makes a worker started over an empty replica hold its first pull until the first tab's snapshot arrives or the window ends, so the snapshot wins rather than racing the sync loop's connect pull; a replica that already holds state is never held.
 
 The engine comes from the context, which is why the example builds it with `ClientEngine.layer` from the `internal` entry point. `ServiceWorkerHost.start(options)` does the same and returns a `Host`: the `engine`, and `registrations`: every registration the host holds for its tabs, each with the pulled state of its windows. A covered read needs the windows its rows link to pulled (ADR-0029 amendment #426), so a registration made just now is listed before its rows have arrived. A worker that also serves JSON:API `GET`s from the replica (the façade, [ADR-0029](../../docs/adr/0029-replica-served-jsonapi-facade.md), `JsonApiFacade` in `@thomasfosterau/legation-jsonapi`) builds its coverage check from those registrations. The [`commerce` example](../../examples/commerce) runs this end to end, with its façade.
 
@@ -247,6 +257,8 @@ Effect.runFork(Effect.scoped(program));
 
 `ElectedHost.run` returns one `Client` for the tab's lifetime: reads and writes go through the mirror until this tab is elected, and through the engine from then on. Live `observe` streams re-subscribe on the switch, and `subscribe` pins are replayed. The lock name is `clientGroupId`, and the host's sync-protocol identity defaults to `host-${clientGroupId}`, so whichever tab wins resumes the same journal. Without `navigator.locks` (some embedded webviews), `ElectedHost.run` logs a warning and becomes the host at once. That is correct only when a single tab is ever open.
 
+The elected tab's host serves the same request kinds as `ServiceWorkerHost`: the introspection and `hydrate` kinds over the engine's store from `dependencies`, plus any `requests` you pass. `hydrationWindow` holds a newly elected host's first pull over an empty store for another tab's snapshot. The elected tab's own Client does not offer a snapshot: it is the host, so seed its hooks from the snapshot (`initial`) and let its first pull fill the store.
+
 ### IndexedDbClientStore
 
 A durable `ClientStore` over IndexedDB. Every engine state transition lands in IndexedDB, so a killed service worker, or a closed tab in main-thread hosting, rehydrates without loss. The options are `database` (the IndexedDB database name), `prefix` (the key namespace, default `"legation/"`) and `identity`.
@@ -272,27 +284,47 @@ The store opens its database without a version, so a database a later app build 
 
 ### HTTP cache
 
-`CacheApiHttpCache` keeps responses in a named Cache API cache, and its `fetchHandler` serves them stale-while-revalidate under a per-request policy. A policy returning `undefined` bypasses the cache. `HttpCacheInvalidation` evicts entries by tag as the engine's collections change: a response tagged `collection:todos` is dropped when `todos` changes.
+`CacheApiHttpCache` keeps responses in a named Cache API cache, and its `fetchHandler` serves them stale-while-revalidate under a per-request policy. A policy of `Option.none()` bypasses the cache. A policy's `cacheable(response)` decides what is stored (by default `response.ok`); `CacheApiHttpCache.isPublic` reads `Cache-Control: public`.
+
+A service worker that wants only the cache imports it from `@thomasfosterau/legation-browser/http-cache`, which reaches nothing of the engine. It also re-exports core's `HttpCache` types:
 
 ```ts
-// cache.ts
-import type { ClientEngine, HttpCache } from "@thomasfosterau/legation/internal";
-import { CacheApiHttpCache, HttpCacheInvalidation } from "@thomasfosterau/legation-browser";
-import { Effect } from "effect";
+// service-worker.ts
+import { CacheApiHttpCache, type HttpCache } from "@thomasfosterau/legation-browser/http-cache";
+import { Effect, Option } from "effect";
 
-const policy = (request: Request): HttpCache.HttpCachePolicy | undefined =>
+declare const self: ServiceWorkerGlobalScope;
+
+const policy = (request: Request): Option.Option<HttpCache.HttpCachePolicy> =>
   request.mode === "navigate"
-    ? { tags: ["pages"], staleTime: "5 seconds", timeToLive: "1 hour" }
-    : undefined;
+    ? Option.some({
+        tags: ["pages"],
+        staleTime: "5 seconds",
+        timeToLive: "1 hour",
+        cacheable: (response) => response.ok && CacheApiHttpCache.isPublic(response),
+      })
+    : Option.none();
 
-// Answer a request from the cache, or from the network when nothing is cached.
-export const respond = (request: Request) =>
+const respond = (event: FetchEvent) =>
   Effect.gen(function* () {
     const store = yield* CacheApiHttpCache.open("app-cache");
-    const handle = CacheApiHttpCache.fetchHandler({ store, policy });
-    const result = yield* handle(request);
+    const result = yield* CacheApiHttpCache.fetchHandler({ store, policy })(event.request);
+    // A stale response is served at once; the refresh finishes after it is sent.
+    if (Option.isSome(result.revalidate)) {
+      event.waitUntil(Effect.runPromise(Effect.ignore(result.revalidate.value)));
+    }
     return result.response;
   });
+
+self.addEventListener("fetch", (event) => event.respondWith(Effect.runPromise(respond(event))));
+```
+
+`HttpCacheInvalidation` (root entry only, since it follows the engine) evicts entries by tag as the engine's collections change: a response tagged `collection:todos` is dropped when `todos` changes.
+
+```ts
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
+import { CacheApiHttpCache, HttpCacheInvalidation } from "@thomasfosterau/legation-browser";
+import { Effect } from "effect";
 
 // Evict cached responses as the engine's collections change. Run it in a scope.
 export const evictOnChanges = (engine: ClientEngine.ClientEngine) =>
@@ -304,8 +336,6 @@ export const evictOnChanges = (engine: ClientEngine.ClientEngine) =>
     });
   });
 ```
-
-`fetchHandler` returns `revalidate` for a stale response. A service worker passes it to `event.waitUntil` so the refresh finishes after the response is sent.
 
 ### BrowserConnectivity
 

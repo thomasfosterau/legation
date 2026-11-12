@@ -11,7 +11,10 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as Cvr from "../Cvr.js";

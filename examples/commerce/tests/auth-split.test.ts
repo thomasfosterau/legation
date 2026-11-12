@@ -33,9 +33,6 @@ import {
   mutators,
   nodes,
   productPage,
-  type CartItem,
-  type Order,
-  type Variant,
 } from "../src/lib/domain.js";
 import { migrate } from "../server/db.js";
 import { bindClientGroup, syncLayer } from "../server/runtime.js";
@@ -162,7 +159,7 @@ describe("public/private auth split", () => {
         yield* engine.push;
         yield* engine.pull;
 
-        const cart = (yield* client.query(myCartItems("u1"))).map((row) => row.value as CartItem);
+        const cart = (yield* client.query(myCartItems("u1"))).map((row) => row.value);
         expect(cart.map((item) => item.variantId)).toEqual(["v-01a"]);
 
         yield* client.mutate("order/place", {
@@ -179,7 +176,7 @@ describe("public/private auth split", () => {
         yield* engine.push;
         yield* engine.pull;
 
-        const orders = (yield* client.query(myOrders("u1"))).map((row) => row.value as Order);
+        const orders = (yield* client.query(myOrders("u1"))).map((row) => row.value);
         expect(orders).toHaveLength(1);
         expect(orders[0]!.totalCents).toBe(2 * 14900);
         expect(orders[0]!.status).toBe("placed");
@@ -187,7 +184,7 @@ describe("public/private auth split", () => {
         expect(yield* client.query(myOrderItems("u1"))).toHaveLength(1);
 
         const variant = (yield* client.query(allVariants)).find((row) => row.id === "v-01a");
-        expect((variant?.value as Variant).stock).toBe(10); // 12 - 2
+        expect(variant?.value.stock).toBe(10); // 12 - 2
       })
     )
   );

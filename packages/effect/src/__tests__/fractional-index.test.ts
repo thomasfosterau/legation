@@ -12,7 +12,7 @@ import { defined } from "./defined.js";
 describe("FractionalIndex", () => {
   it("generates a key with no bounds", () => {
     const key = FractionalIndex.generateBetween();
-    expect(typeof key).toBe("string");
+    expect(key).toBeTypeOf("string");
     expect(key.length).toBeGreaterThan(0);
   });
 
@@ -90,7 +90,7 @@ describe("FractionalIndex", () => {
   it("generateNBetween(0) is empty and (1) matches generateBetween", () => {
     expect(FractionalIndex.generateNBetween(undefined, undefined, 0)).toEqual([]);
     const [single] = FractionalIndex.generateNBetween(undefined, undefined, 1);
-    expect(typeof single).toBe("string");
+    expect(single).toBeTypeOf("string");
   });
 
   it("compare treats zero-padded equal values as equal regardless of string length", () => {

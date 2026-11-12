@@ -22,11 +22,10 @@
   // its own hook instance is what makes the paging independent.
   // svelte-ignore state_referenced_locally
   const conn = useConnection(
-    () => ({
-      collection: "todos",
-      ...(authorId === undefined ? {} : { where: { authorId } }),
-      order: ["id"],
-    }),
+    () =>
+      authorId === undefined
+        ? { collection: "todos", order: ["id"] }
+        : { collection: "todos", where: { authorId }, order: ["id"] },
     { pageSize }
   );
 

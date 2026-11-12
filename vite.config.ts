@@ -42,6 +42,7 @@ const alias = {
   "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
   "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
+  "@thomasfosterau/legation-browser/http-cache": source("packages/browser/src/http-cache.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
   "@thomasfosterau/legation-auth/client": source("packages/auth/src/client.ts"),
@@ -63,13 +64,15 @@ export default defineConfig({
   // lint without: with type-aware lint on, `vp check --fix` would apply the
   // autofixes of type-aware rules (even ones at `warn`) to staged files at
   // commit time, so the commit would differ from the tree that was verified.
-  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone.
+  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone; the
+  // example apps' `.svelte` files are outside lint's patterns, so a commit
+  // touching only those must not fail on "no files found".
   staged: {
     "*.{js,mjs,ts,json,md,yml,yaml}": [
       "vp check --fix --no-lint",
       "vp check --no-fmt --no-error-on-unmatched-pattern",
     ],
-    "*.svelte": "vp lint",
+    "*.svelte": "vp lint --no-error-on-unmatched-pattern",
   },
   // Oxfmt, the formatter of record. The options keep the style the
   // repository was written in under Prettier, so the migration reformatted
@@ -134,13 +137,16 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out: exported combinators over untyped
-      // row values (`Incremental`, `Derive`, `Predicate.fieldValue`) and a
-      // dialect's driver-specific bind value return what the caller's
-      // projection or driver produces.
-      "effect/no-unknown-returns": "warn",
+      // The same boundary on the way out is at `error` (#562): the exported
+      // combinators over untyped row values (`Incremental`, `Derive`,
+      // `Predicate.fieldValue`) return what the caller's projection produces,
+      // and each such site carries its own scoped disable with that reason.
+      "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      "effect/no-runtime-typeof": "warn",
+      // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),
+      // which measured no slower than a `typeof` switch on the per-row
+      // `Predicate.compareLiterals` path.
+      "effect/no-runtime-typeof": "error",
 
       // ---- Effect preset: ported-code allowances ---------------------------
       // The engine predates the Effect oxlint preset. The rules below sit at
@@ -156,12 +162,9 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/no-conditional-empty-object-spread": "warn", // 144 sites
       "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
-      "effect/avoid-untagged-errors": "warn", // 76 sites
-      "effect/effect-promise-vs-trypromise": "warn", // 66 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a
@@ -177,8 +180,6 @@ export default defineConfig({
       // boundary `effect/no-unknown-parameters` names), as do test helpers
       // that fail with whatever a backend raised. 54 sites (21 in src).
       "effecttsgo/any-unknown-in-error-context": "warn",
-      // Two tests narrow a handler's channels to the shape they assert on.
-      "effecttsgo/unsafe-effect-type-assertion": "warn", // 2 sites
       // `String(value)` on an untyped row value (a foreign key, a SQL
       // detector's COUNT/MAX column, the comparator's last-resort text form)
       // is the intended string form at that boundary. 7 sites (2 in tests).
@@ -196,6 +197,20 @@ export default defineConfig({
       "oxc/no-map-spread": "error",
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
+      "effecttsgo/unnecessary-fail-yieldable-error": "error",
+      "effecttsgo/flat-map-identity-to-flatten": "error",
+      "effecttsgo/error-payload-shadows-name": "error",
+      "effecttsgo/multiple-catch-tag": "error",
+      "effecttsgo/unsafe-effect-type-assertion": "error",
+      "effecttsgo/unnecessary-pipe-chain": "error",
+      "effecttsgo/prefer-unsafe-constructor": "error",
+      "effecttsgo/provide-layer-succeed-to-provide-service": "error",
+      "effecttsgo/prefer-succeed-some-or-none": "error",
+      "effecttsgo/return-effect-in-gen": "error",
+      "effecttsgo/catch-to-or-else-succeed": "error",
+      "effecttsgo/lazy-effect": "error",
+      "effecttsgo/catch-to-ignore": "error",
+      "effect/avoid-process-env": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
@@ -212,18 +227,22 @@ export default defineConfig({
         files: [
           "packages/effect/src/__tests__/typed-query.test.ts",
           "packages/effect/src/__tests__/node.test.ts",
+          "packages/effect/src/__tests__/typed-reads.test.ts",
         ],
         rules: {
           "effect/avoid-ts-ignore": "off",
         },
       },
-      // Test fixtures read the environment at collection time, before any
-      // Effect runtime exists: `DATABASE_URL` selects the PostgreSQL suite and
-      // `CI` turns its skip into a failure. Stays visible as a warning.
+      // The tests read the environment at collection time, before any Effect
+      // runtime exists: `DATABASE_URL` selects the PostgreSQL suites, `CI`
+      // turns their skip into a failure and `LEGATION_CORPUS_SEED` seeds the
+      // corpora Vitest builds while it collects the file. There is no `Config`
+      // provider to read them through yet, so this one module reads
+      // `process.env` and every test imports it from there.
       {
-        files: ["packages/*/src/**/__tests__/**"],
+        files: ["packages/effect/src/__tests__/env.ts"],
         rules: {
-          "effect/avoid-process-env": "warn",
+          "effect/avoid-process-env": "off",
         },
       },
       // Build/test configs and the release scripts are evaluated by Vite,
@@ -254,7 +273,6 @@ export default defineConfig({
           "effect/avoid-direct-json": "off",
           "effect/avoid-native-fetch": "off",
           "effect/effect-promise-vs-trypromise": "off",
-          "effect/no-conditional-empty-object-spread": "off",
         },
       },
       {
@@ -389,6 +407,7 @@ export default defineConfig({
             "packages/alchemy-cloudflare/src/__tests__/**",
             "packages/auth/src/__tests__/**",
             "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
           ],
         },
       },
@@ -432,7 +451,10 @@ export default defineConfig({
             "./vitest.global-setup.ts",
             "./examples/commerce/tests/support/global-setup.ts",
           ],
-          include: ["examples/commerce/tests/facade-browser.test.ts"],
+          include: [
+            "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
+          ],
           server: {
             deps: {
               // The test's `beforeAll` imports the app's built server

@@ -5,6 +5,7 @@
     "packages/effect/src/internal.ts",
     "packages/effect/src/sql/index.ts",
     "packages/browser/src/index.ts",
+    "packages/browser/src/http-cache.ts",
     "packages/alchemy-cloudflare/src/index.ts",
     "packages/auth/src/index.ts",
     "packages/auth/src/client.ts",

@@ -21,17 +21,22 @@ import { PreparedStatement, type QueryDatabaseClient } from "@alchemy.run/cloudf
 import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
+  type Backend,
   Client,
   ClientStore,
   Edge,
@@ -41,13 +46,25 @@ import {
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  Defined,
+  HintSource,
+} from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
+import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import * as FanoutShard from "../FanoutShard.js";
 import * as Room from "../Room.js";
 import { routes } from "../RoomProtocol.js";
-import { routeSync } from "../Worker.js";
+import {
+  anonymousRoomPrefix,
+  type RouterConfig,
+  routeSync,
+  shardByClientGroup,
+} from "../Worker.js";
 import { defined } from "./defined.js";
 import {
   construct,
@@ -60,6 +77,7 @@ import {
   makeStorage,
   runtimeContext,
 } from "./harness.js";
+import { TestFailure } from "./test-failure.js";
 
 /** Run an effect that needs the runtime context, as inside a Durable Object event. */
 const inRuntime = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
@@ -80,7 +98,7 @@ describe("DurableCvrStore", () => {
 
   it("surfaces a failed storage call as a StoreError", async () => {
     const raw = makeRawStorage();
-    raw.get = () => Promise.reject(new Error("storage unavailable"));
+    raw.get = () => Promise.reject(new TestFailure({ message: "storage unavailable" }));
     const store = await inRuntime(DurableCvrStore.make(Workers.fromDurableObjectStorage(raw)));
     const exit = await Effect.runPromiseExit(store.get("cookie-1"));
     expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
@@ -105,7 +123,7 @@ describe("FanoutShard", () => {
     Effect.gen(function* () {
       const shard = yield* construct(
         "reviews",
-        FanoutShard.make(),
+        FanoutShard.make,
         fakeBinding<Workers.DurableObject>({})
       );
       yield* shard.run(shard.object.register("room-a", 60_000));
@@ -124,12 +142,12 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
         bind: (...values: ReadonlyArray<unknown>) => statement(values),
         all: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: rows, success: true, meta: {} };
         },
         run: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: [], success: true, meta: {} };
         },
       });
@@ -220,6 +238,112 @@ describe("routeSync", () => {
     expect(await response.json()).toEqual({ room: "u-1", path: `/sync${routes.pull}?user=u-1` });
   });
 
+  /** Route `path` with `cookie` (if any) through `anonymousRoomOf`: the room addressed, or the status. */
+  const routeAnonymous = (
+    path: string,
+    cookie: Option.Option<string>,
+    anonymousRoomOf?: RouterConfig["anonymousRoomOf"]
+  ) =>
+    routeSync({
+      rooms: stubRooms,
+      roomIdOf,
+      ...Defined.fields({ anonymousRoomOf }),
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(
+            `https://app.example.com${path}`,
+            Option.match(cookie, {
+              onNone: () => ({}),
+              onSome: (value) => ({ headers: { cookie: value } }),
+            })
+          )
+        )
+      ),
+      Effect.orDie,
+      Effect.map((routed) => HttpServerResponse.toWeb(defined(Option.getOrUndefined(routed)))),
+      Effect.flatMap((response): Effect.Effect<string | number> =>
+        response.ok
+          ? awaitPromise(() => response.json()).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ room: Schema.String }))),
+              Effect.map(({ room }) => room),
+              Effect.orDie
+            )
+          : Effect.succeed(response.status)
+      )
+    );
+  const anonymousShards = shardByClientGroup({ shards: 4 });
+
+  it.effect("spreads anonymous callers over the anonymous rooms by their client-group cookie", () =>
+    Effect.gen(function* () {
+      const groups = Arr.makeBy(64, (n) => `group-${n}`);
+      const rooms = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      // Every room is one of the four anonymous shards, and all four are used.
+      expect(Arr.dedupe(rooms).toSorted()).toEqual(
+        Arr.makeBy(4, (n) => `${anonymousRoomPrefix}${n}`)
+      );
+      // Deterministic: a group lands in the same room on every request, its socket included.
+      const again = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.socket}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      expect(again).toEqual(rooms);
+    })
+  );
+
+  it.effect(
+    "leaves identified callers in their own room and refuses an unroutable anonymous one",
+    () =>
+      Effect.gen(function* () {
+        const cookie = Option.some("legation-client-group=group-1");
+        expect(yield* routeAnonymous(`/sync${routes.pull}?user=u-1`, cookie, anonymousShards)).toBe(
+          "u-1"
+        );
+        // No client-group cookie: nothing to shard by, so a 401.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, Option.none(), anonymousShards)).toBe(
+          401
+        );
+        // No anonymous routing: every anonymous caller gets a 401, cookie or not.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, cookie)).toBe(401);
+        // A custom cookie name.
+        expect(
+          yield* routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some("visitor=v-1"),
+            shardByClientGroup({ shards: 1, cookie: "visitor" })
+          )
+        ).toBe(`${anonymousRoomPrefix}0`);
+      })
+  );
+
+  it.effect("refuses an identified room id inside the anonymous namespace", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* routeAnonymous(
+          `/sync${routes.pull}?user=${encodeURIComponent(`${anonymousRoomPrefix}0`)}`,
+          Option.some("legation-client-group=group-1"),
+          anonymousShards
+        )
+      ).toBe(500);
+    })
+  );
+
   it("honours a custom base path", async () => {
     const routed = await route(`/legation${routes.push}?user=u-2`, "/legation");
     const response = defined(Option.getOrUndefined(routed));
@@ -292,7 +416,7 @@ const makeCalls = <Call>() => {
 /** A ClientTransport calling a room instance's fetch directly. */
 const roomTransport = (send: (request: Request) => Promise<Response>) => {
   const post = (route: string) => (body: unknown) =>
-    Effect.promise(async () => {
+    awaitPromise(async () => {
       const response = await send(
         new Request(`https://room${route}`, {
           method: "POST",
@@ -301,7 +425,7 @@ const roomTransport = (send: (request: Request) => Promise<Response>) => {
         })
       );
       return (await response.json()) as never;
-    });
+    }).pipe(Effect.orDie);
   return {
     push: post(routes.push),
     pull: post(routes.pull),
@@ -336,7 +460,7 @@ const makeRooms = (config: Room.RoomConfig) => {
   const instances = new Map<string, Promise<Instance<Room.RoomObject>>>();
   const pokes = makeCalls<{ readonly room: string; readonly topics: ReadonlyArray<string> }>();
   const namespace: Workers.DurableObject<Room.RoomObject> = makeNamespace<Room.RoomObject>((name) =>
-    Effect.promise(() => room(name))
+    awaitPromise(() => room(name)).pipe(Effect.orDie)
   );
   const room = (name: string): Promise<Instance<Room.RoomObject>> => {
     let instance = instances.get(name);
@@ -360,7 +484,42 @@ const makeRooms = (config: Room.RoomConfig) => {
     }
     return instance;
   };
-  return { room, pokes };
+  return { room, pokes, namespace };
+};
+
+/** A shard namespace of real `FanoutShard` instances, built on first address, recording each answered call. */
+const makeShards = () => {
+  const calls = makeCalls<ShardCall>();
+  const instances = new Map<string, Promise<Instance<FanoutShard.ShardObject>>>();
+  const noSelf = fakeBinding<Workers.DurableObject>({});
+  const shardNamed = (name: string) => {
+    let shard = instances.get(name);
+    if (shard === undefined) {
+      shard = Effect.runPromise(
+        construct(name, FanoutShard.make, noSelf).pipe(
+          Effect.map((built): Instance<FanoutShard.ShardObject> => ({
+            ...built,
+            object: {
+              register: (roomId, ttlMillis) =>
+                Effect.tap(built.object.register(roomId, ttlMillis), () =>
+                  Effect.sync(() => calls.record({ shard: name, method: "register", roomId }))
+                ),
+              publish: () =>
+                Effect.tap(built.object.publish(), () =>
+                  Effect.sync(() => calls.record({ shard: name, method: "publish" }))
+                ),
+            },
+          }))
+        )
+      );
+      instances.set(name, shard);
+    }
+    return shard;
+  };
+  const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
+    awaitPromise(() => shardNamed(name)).pipe(Effect.orDie)
+  );
+  return { shards, calls };
 };
 
 describe("rooms + shards, end to end", () => {
@@ -370,7 +529,7 @@ describe("rooms + shards, end to end", () => {
       Effect.acquireUseRelease(
         Scope.make(),
         (scope) =>
-          Effect.promise(async () => {
+          awaitPromise(async () => {
             // The room's heartbeat sleeps on this clock, so it beats only when the test
             // advances time. Shards stamp leases with the real wall clock; a 10 minute
             // beat gives a 30 minute TTL, which no run of this test can outlive. (A
@@ -379,38 +538,7 @@ describe("rooms + shards, end to end", () => {
             const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(scope)));
             const backend = await Effect.runPromise(backendOf().pipe(Scope.provide(scope)));
 
-            const shardCalls = makeCalls<ShardCall>();
-            const shardInstances = new Map<string, Promise<Instance<FanoutShard.ShardObject>>>();
-            const noSelf = fakeBinding<Workers.DurableObject>({});
-            const shardNamed = (name: string) => {
-              let shard = shardInstances.get(name);
-              if (shard === undefined) {
-                shard = Effect.runPromise(
-                  construct(name, FanoutShard.make(), noSelf).pipe(
-                    Effect.map((built): Instance<FanoutShard.ShardObject> => ({
-                      ...built,
-                      object: {
-                        register: (roomId, ttlMillis) =>
-                          Effect.tap(built.object.register(roomId, ttlMillis), () =>
-                            Effect.sync(() =>
-                              shardCalls.record({ shard: name, method: "register", roomId })
-                            )
-                          ),
-                        publish: () =>
-                          Effect.tap(built.object.publish(), () =>
-                            Effect.sync(() => shardCalls.record({ shard: name, method: "publish" }))
-                          ),
-                      },
-                    }))
-                  )
-                );
-                shardInstances.set(name, shard);
-              }
-              return shard;
-            };
-            const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
-              Effect.promise(() => shardNamed(name))
-            );
+            const { shards, calls: shardCalls } = makeShards();
             const { room, pokes } = makeRooms({
               nodes,
               backend: Effect.succeed(backend),
@@ -430,7 +558,7 @@ describe("rooms + shards, end to end", () => {
             roomA.sockets.push(socketA);
 
             // A real client engine on room A observes p-1's reviews (fine window).
-            const readerScope = Effect.runSync(Scope.make());
+            const readerScope = Scope.makeUnsafe();
             const reader = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;
@@ -477,7 +605,7 @@ describe("rooms + shards, end to end", () => {
             );
 
             // Room B's client writes a p-1 review and pushes.
-            const writerScope = Effect.runSync(Scope.make());
+            const writerScope = Scope.makeUnsafe();
             const writer = await Effect.runPromise(
               Effect.gen(function* () {
                 const store = yield* ClientStore.makeMemory;
@@ -608,7 +736,7 @@ const hungRoom = (
 ) =>
   Effect.gen(function* () {
     const backend = yield* backendOf();
-    return yield* Effect.promise(() =>
+    return yield* awaitPromise(() =>
       makeRooms({
         nodes,
         backend: Effect.succeed(backend),
@@ -622,7 +750,7 @@ const hungRoom = (
 
 /** Mutate one review through `writer`. */
 const writeReview = (writer: ClientEngine.ClientEngine, id: string, productId: string) =>
-  Effect.promise(() =>
+  awaitPromise(() =>
     Effect.runPromise(
       writer.mutate("review/set", { id, body: "hung shard", createdAt: "2026-01-01", productId })
     )
@@ -639,7 +767,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-hung", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-hung", "group-hung")
         );
         yield* writeReview(writer, "r-1", "p-1");
@@ -650,11 +778,11 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(1));
+        yield* awaitPromise(() => hung.arrived(1));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000
@@ -670,7 +798,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-wide", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-wide", "group-wide")
         );
         // Nine products in one push: the coarse topic plus nine fine ones, ten shard
@@ -683,12 +811,12 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(8));
+        yield* awaitPromise(() => hung.arrived(8));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         // One bound covers the whole publish: the second wave is dropped with the first.
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
       }).pipe(Effect.scoped),
     20_000
   );
@@ -704,7 +832,7 @@ describe("Room publishTimeout", () => {
           heartbeat: "1 second",
           publishTimeout: "200 millis",
         });
-        const reader = yield* Effect.promise(() =>
+        const reader = yield* awaitPromise(() =>
           makeClient(room, scope, "client-lease", "group-lease", {
             pullInterval: "10 minutes",
             pushDebounce: "10 millis",
@@ -721,12 +849,12 @@ describe("Room publishTimeout", () => {
           ).pipe(Scope.provide(scope), Effect.ignore)
         );
         void observing;
-        yield* Effect.promise(() => isSubscribed);
-        yield* Effect.promise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
+        yield* awaitPromise(() => isSubscribed);
+        yield* awaitPromise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
 
         // t = 1 s: the first heartbeat registers the window and hangs.
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(1));
+        yield* awaitPromise(() => hung.arrived(1));
         expect(hung.received[0]).toEqual({ shard: "reviews/productId=p-1", method: "register" });
         // The bound drops it at t = 1.2 s; the next heartbeat is one interval later, at
         // t = 2.2 s. With the 5 second default that second registration would not start
@@ -734,7 +862,7 @@ describe("Room publishTimeout", () => {
         yield* clock.adjust("199 millis");
         yield* clock.adjust("1 millis");
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(2));
+        yield* awaitPromise(() => hung.arrived(2));
         expect(hung.received.map((call) => call.method)).toEqual(["register", "register"]);
       }).pipe(Effect.scoped),
     20_000
@@ -750,7 +878,7 @@ describe("Room publishTimeout", () => {
         const room = yield* hungRoom("room-long", clock, hung.namespace, {
           publishTimeout: "8 seconds",
         });
-        const writer = yield* Effect.promise(() =>
+        const writer = yield* awaitPromise(() =>
           makeClient(room, scope, "client-long", "group-long")
         );
         yield* writeReview(writer, "r-1", "p-1");
@@ -759,7 +887,7 @@ describe("Room publishTimeout", () => {
         const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
           pushed = true;
         });
-        yield* Effect.promise(() => hung.arrived(2));
+        yield* awaitPromise(() => hung.arrived(2));
         // Past the broker's 5 second default the hung calls are still pending: were the broker
         // bounded at its default, the push would have finished here.
         yield* clock.adjust("5 seconds");
@@ -767,7 +895,7 @@ describe("Room publishTimeout", () => {
         yield* clock.adjust("2999 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
+        yield* awaitPromise(() => push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000
@@ -776,6 +904,41 @@ describe("Room publishTimeout", () => {
 
 /** A protocol body as the room's routes read it. */
 const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+describe("Room backend lifetime", () => {
+  it.effect(
+    "a backend's scoped resource is acquired once per instance and outlives each request",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const backend = yield* backendOf();
+        // Stands in for a connection pool built in the instance's scope.
+        const pool = { acquired: 0, released: 0 };
+        const room = yield* hungRoom("room-pool", clock, makeHungShards().namespace, {
+          backend: Effect.acquireRelease(
+            Effect.sync(() => {
+              pool.acquired += 1;
+              return backend;
+            }),
+            () => Effect.sync(() => void (pool.released += 1))
+          ),
+        });
+        const send = fetchOf(room);
+        const pull = awaitPromise(() =>
+          send(
+            new Request(`https://room/sync${routes.pull}`, {
+              method: "POST",
+              body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
+              headers: { "content-type": "application/json" },
+            })
+          )
+        );
+        expect((yield* pull).status).toBe(200);
+        expect((yield* pull).status).toBe(200);
+        expect(pool).toEqual({ acquired: 1, released: 0 });
+      }).pipe(Effect.scoped)
+  );
+});
 
 describe("Room HTTP routes", () => {
   it.effect("answers a route by its last path segment, and 404s anything else", () =>
@@ -788,7 +951,7 @@ describe("Room HTTP routes", () => {
       });
       const send = fetchOf(room);
       const post = (path: string) =>
-        Effect.promise(() =>
+        awaitPromise(() =>
           send(
             new Request(`https://room${path}`, {
               method: "POST",
@@ -845,5 +1008,167 @@ describe("Room HTTP routes", () => {
       ).toBe(200);
       expect(seen).toEqual([session, session, Option.none()]);
     }).pipe(Effect.scoped)
+  );
+});
+
+/**
+ * Observe p-1's reviews through `reader`, returning once the window is subscribed; the deferred
+ * it answers completes with the first emission holding `rows` rows.
+ */
+const observeP1 = (reader: ClientEngine.ClientEngine, rows: number) =>
+  Effect.gen(function* () {
+    const subscribed = yield* Deferred.make<void>();
+    const converged = yield* Deferred.make<ReadonlyArray<unknown>>();
+    const client = Client.fromView(nodes, ClientView.fromEngine(reader));
+    yield* Effect.forkScoped(
+      Stream.runForEach(
+        client.observe({ collection: "reviews", where: { productId: "p-1" } }),
+        (latest) =>
+          Deferred.succeed(subscribed, undefined).pipe(
+            Effect.andThen(
+              latest.length === rows ? Deferred.succeed(converged, latest) : Effect.void
+            )
+          )
+      ).pipe(Effect.ignore)
+    );
+    yield* Deferred.await(subscribed);
+    return converged;
+  });
+
+/** One p-1 review, as a cron job writes it straight to the backend: no room sees the write. */
+const review = { id: "r-oob", body: "out of band", createdAt: "2026-01-01", productId: "p-1" };
+
+describe("out-of-band writes", () => {
+  it.live(
+    "publishOutOfBand pokes the room leased on the write's topic, and its client pulls the new row",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.Scope;
+        // The room's heartbeat beats only when the test advances this clock; the shards stamp
+        // leases on the real clock with a 30 minute TTL, which no run outlives.
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = makeShards();
+        const { room, pokes, namespace } = makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+        });
+        const roomA = yield* awaitPromise(() => room("room-a"));
+        const socket = makeSocket();
+        roomA.sockets.push(socket);
+        const reader = yield* awaitPromise(() =>
+          makeClient(roomA, scope, "client-a", "group-a", {
+            pullInterval: "10 minutes",
+            pushDebounce: "10 millis",
+          })
+        );
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* awaitPromise(() =>
+          calls.next(
+            (call) =>
+              call.shard === "reviews/productId=p-1" &&
+              call.method === "register" &&
+              call.roomId === "room-a"
+          )
+        );
+
+        // The cron job writes straight to the backend, then publishes the write's hint.
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cron" }, [
+            { clientId: "cron", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        expect(socket.sent).toEqual([]);
+        const publish = DurableFanoutBroker.publishOutOfBand({ shards, rooms: namespace, nodes });
+        yield* publish([
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]).pipe(
+          Effect.provideService(RuntimeContext, runtimeContext),
+          // The harness runs a stub's call on its caller's fiber, so the shard reads the lease
+          // against the writer's clock: the room's, as on Cloudflare both are wall time.
+          Effect.provideService(Clock.Clock, clock)
+        );
+
+        yield* awaitPromise(() =>
+          pokes.next(
+            (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
+          )
+        );
+        expect(socket.sent.length).toBeGreaterThan(0);
+        // The client honours the poke and pulls the row the cron job wrote.
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
+
+  it.live(
+    "a room's hints source publishes like a push, poking the rooms leased on its topics",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.Scope;
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = makeShards();
+        // A HintSource fed by this queue, as a CDC listener would be. Every room runs it, and
+        // whichever room takes a batch publishes it.
+        const feed = yield* Queue.unbounded<ReadonlyArray<Backend.ChangeHint>>();
+        const { room } = makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+          hints: Effect.succeed(HintSource.fromStream(Stream.fromQueue(feed))),
+        });
+        const roomA = yield* awaitPromise(() => room("room-a"));
+        yield* awaitPromise(() => room("room-cdc"));
+        // Room A's socket signals its first poke frame: over RPC when room-cdc published, or
+        // delivered locally when room A took the batch itself.
+        const framed = yield* Deferred.make<void>();
+        roomA.sockets.push({
+          sent: [],
+          send(data) {
+            this.sent.push(data);
+            Deferred.doneUnsafe(framed, Exit.void);
+          },
+        });
+        const reader = yield* awaitPromise(() =>
+          makeClient(roomA, scope, "client-a", "group-a", {
+            pullInterval: "10 minutes",
+            pushDebounce: "10 millis",
+          })
+        );
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* awaitPromise(() =>
+          calls.next((call) => call.method === "register" && call.roomId === "room-a")
+        );
+
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cdc" }, [
+            { clientId: "cdc", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        yield* Queue.offer(feed, [
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]);
+        yield* Deferred.await(framed);
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
   );
 });

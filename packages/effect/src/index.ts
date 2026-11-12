@@ -49,6 +49,8 @@ export * as CrudMutation from "./CrudMutation.js";
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 export * as Client from "./Client.js";
+/** The app's node graph, registered by declaration merging for the framework hooks (`Client.Register`). */
+export type { Register } from "./Client.js";
 export * as ClientStore from "./ClientStore.js";
 export * as Identity from "./Identity.js";
 export * as Transport from "./Transport.js";

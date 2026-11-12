@@ -38,6 +38,7 @@
  * TanStack DB's `topKWithFractionalIndex` does for its own maintained window.
  */
 
+import * as Defined from "./Defined.js";
 import type * as Index from "./CollectionIndex.js";
 import * as FractionalIndex from "./FractionalIndex.js";
 import * as OrderedTree from "./OrderedTree.js";
@@ -228,8 +229,7 @@ export const retarget = (
   if (limit === view.subset.limit && cursor === view.subset.cursor) return view;
   const subset: Subset.Subset = {
     ...view.subset,
-    ...(limit !== undefined ? { limit } : {}),
-    ...(cursor !== undefined ? { cursor } : {}),
+    ...Defined.fields({ limit, cursor }),
   };
   const positions = positionsFor(windowSlice(view.order, view.byId, subset), view.positions);
   return { ...view, subset, positions };

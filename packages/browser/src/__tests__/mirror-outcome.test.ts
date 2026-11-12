@@ -26,6 +26,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -54,7 +55,10 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
   Effect.gen(function* () {
@@ -63,7 +67,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeEngine = Effect.gen(function* () {

@@ -36,6 +36,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 type Row = Derive.Row;
 const page = (rows: ReadonlyArray<Row>): ReadonlyArray<{ id: string; value: unknown }> =>
@@ -180,7 +181,10 @@ const allTodos = Subset.make({ collection: "todos" });
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 describe("Derive — refcounted subscription lifetime", () => {
   it.effect("observed leaf releases its subscription when its scope closes", () =>
@@ -237,7 +241,9 @@ describe("Derive — observable via the standard atom surface", () => {
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
           }
-          return yield* Effect.die(new Error("derived atom never reached the expected state"));
+          return yield* Effect.die(
+            new TestFailure({ message: "derived atom never reached the expected state" })
+          );
         });
 
       yield* await1((rows) => Arr.isReadonlyArrayEmpty(rows));
@@ -277,7 +283,9 @@ describe("Derive — observed leaf consumes observeChanges (#133 item 1), not pa
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
           }
-          return yield* Effect.die(new Error("derived atom never reached the expected state"));
+          return yield* Effect.die(
+            new TestFailure({ message: "derived atom never reached the expected state" })
+          );
         });
 
       // Unlike page-based `observe` (which always emits an initial snapshot,

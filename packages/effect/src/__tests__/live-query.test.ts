@@ -20,6 +20,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 type Todo = typeof TodoArgs.Type;
@@ -31,7 +32,10 @@ const mutators = Mutator.registry([
 const allTodos = Subset.make({ collection: "todos" });
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const makeEngine = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(
@@ -85,7 +89,9 @@ describe("LiveQuery", () => {
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
           }
-          return yield* Effect.die(new Error("atom never reached the expected state"));
+          return yield* Effect.die(
+            new TestFailure({ message: "atom never reached the expected state" })
+          );
         });
 
       // Initial emission: empty collection.

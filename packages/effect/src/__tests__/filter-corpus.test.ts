@@ -13,6 +13,7 @@ import * as P from "effect/Predicate";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean =>
   Match.value(column.kind).pipe(
@@ -40,10 +41,10 @@ const leaves = (
     Match.tag("Not", (node) => leaves(node.predicate)),
     Match.tag("True", () => []),
     Match.tag("Exists", () => {
-      throw new Error("Exists must never be generated");
+      throw new TestFailure({ message: "Exists must never be generated" });
     }),
     Match.tag("InSet", () => {
-      throw new Error("InSet must never be generated");
+      throw new TestFailure({ message: "InSet must never be generated" });
     }),
     Match.exhaustive
   );

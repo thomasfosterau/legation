@@ -41,8 +41,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation/internal";
-import { CacheApiHttpCache } from "@thomasfosterau/legation-browser";
+import { ClientView, Coverage } from "@thomasfosterau/legation/internal";
+import { CacheApiHttpCache, type HttpCache } from "@thomasfosterau/legation-browser/http-cache";
 import type { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
 import { nodes } from "./lib/domain.js";
 import { makeFacade } from "./lib/facade.js";
@@ -58,16 +58,16 @@ const ASSETS = new Set(
 );
 const CACHE_NAME = `commerce-${version}`;
 
-const policy = (request: Request): HttpCache.HttpCachePolicy | undefined => {
+const policy = (request: Request): Option.Option<HttpCache.HttpCachePolicy> => {
   const url = new URL(request.url);
-  if (url.pathname.startsWith("/sync")) return undefined; // engine-owned
+  if (url.pathname.startsWith("/sync")) return Option.none(); // engine-owned
   if (ASSETS.has(url.pathname)) {
-    return { tags: ["assets"], staleTime: "7 days", timeToLive: "30 days" };
+    return Option.some({ tags: ["assets"], staleTime: "7 days", timeToLive: "30 days" });
   }
   if (request.mode === "navigate") {
-    return { tags: ["pages"], staleTime: "5 seconds", timeToLive: "1 hour" };
+    return Option.some({ tags: ["pages"], staleTime: "5 seconds", timeToLive: "1 hour" });
   }
-  return undefined;
+  return Option.none();
 };
 
 /** The HTTP cache front: stale-while-revalidate under the request's policy. */
@@ -76,8 +76,8 @@ const viaCache = (event: FetchEvent): Effect.Effect<Response, unknown> =>
     const store = yield* CacheApiHttpCache.open(CACHE_NAME);
     const handle = CacheApiHttpCache.fetchHandler({ store, policy });
     const result = yield* handle(event.request);
-    if (result.revalidate !== undefined) {
-      event.waitUntil(Effect.runPromise(Effect.ignore(result.revalidate)));
+    if (Option.isSome(result.revalidate)) {
+      event.waitUntil(Effect.runPromise(Effect.ignore(result.revalidate.value)));
     }
     return result.response;
   });
@@ -149,10 +149,15 @@ const indexedDbLayer = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB: self.indexedDB, IDBKeyRange })
 );
 
-/** Post a message to every client page this worker controls. */
+/**
+ * Post a message to every client page of this worker's origin, controlled or
+ * not: on a first visit the tab that boots the engine is not controlled yet
+ * (the worker claims it on activation), and it must still hear the engine's
+ * first pull (#146).
+ */
 const toClients = (message: unknown) =>
   self.clients
-    .matchAll()
+    .matchAll({ includeUncontrolled: true })
     .then((clients) => clients.forEach((client) => client.postMessage(message)))
     .catch(() => undefined);
 

@@ -8,7 +8,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
@@ -165,7 +164,7 @@ describe("a JsonApiBackend over a node-graph app (#529)", () => {
         mutators: CrudMutation.registry(nodes).mutators,
         operations: new Map(),
         writes: writes,
-      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient)(client)));
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       // What the façade journals for a POST /notes with a category linkage.
       const intent = intentOf({

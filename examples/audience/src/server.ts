@@ -153,22 +153,6 @@ export interface AudienceServer {
   ) => Effect.Effect<Server.Receipt>;
 }
 
-/**
- * The HTTP carrier's identity seam: the request's credential headers through
- * the same `IdentityResolver` the sync carrier runs. (Hand-written glue:
- * legation-auth gives the sync protocol its resolver, and `RestHandlers`
- * wants this function; nothing builds one from the other.)
- */
-const restContext =
-  (identity: Authorization.IdentityResolver): RestHandlers.Options["context"] =>
-  (request) =>
-    identity
-      .resolve({
-        clientGroupId: "http",
-        credentials: Authorization.credentialsFromHeaders(request.headers),
-      })
-      .pipe(Effect.map((resolved) => ({ clientGroupId: "http", identity: resolved })));
-
 /** The derived `list` / `get` handlers for the api's one group. */
 const postsLive = (rest: RestHandlers.RestHandlers) =>
   HttpApiBuilder.group(api, "posts", (handlers) =>
@@ -194,7 +178,8 @@ export const makeServer = (users: ReadonlyArray<User>) =>
       nodes,
       backend,
       policy,
-      context: restContext(identity),
+      // The resolver the sync server runs, over the request's own cookie.
+      identity,
       prefix: "/jsonapi",
     });
     const app = HttpApiBuilder.layer(api).pipe(

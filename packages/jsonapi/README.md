@@ -471,15 +471,15 @@ import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { RestHandlers } from "@thomasfosterau/legation-jsonapi";
 import { api, NotFound, Product } from "./my-json-api";
-import { backend, nodes, policy } from "./my-server";
+import { backend, identity, nodes, policy } from "./my-server";
 
 const rest = RestHandlers.make({
   nodes,
   backend,
   policy,
-  // HTTP request → SyncContext: identity from the verified session, never from a client-supplied id.
-  context: (request) =>
-    Effect.succeed({ clientGroupId: "http", identity: request.headers["x-user"] }),
+  // The sync server's `Authorization.IdentityResolver`: it sees each request's
+  // headers as its credentials, under the client group "http".
+  identity,
   prefix: "/api",
 });
 
@@ -488,6 +488,25 @@ const productsLive = HttpApiBuilder.group(api, "products", (handlers) =>
     .handle("list", rest.list(Product))
     .handle("get", rest.get(Product, { notFound: () => new NotFound() }))
 );
+```
+
+**Identity.** With `identity`, a request's headers become its
+`Authorization.RequestCredentials` and the resolver is called with them and
+`clientGroupId` (default `"http"`), exactly as every sync carrier calls it
+(ADR-0035), so one session cookie is one identity on both carriers; a failing
+resolver is a 403, and without `identity` every request is anonymous. When the
+identity is one the resolver cannot see (a header a trusted proxy sets), pass
+`context: (request) => Effect<SyncContext, AuthorizationError>` instead; the
+two are mutually exclusive.
+
+```ts
+const rest = RestHandlers.make({
+  nodes,
+  backend,
+  policy,
+  context: (request) =>
+    Effect.succeed({ clientGroupId: "http", identity: request.headers["x-user"] }),
+});
 ```
 
 What the derivation guarantees:

@@ -8,6 +8,7 @@
  * worker, bespoke) implement the same interfaces.
  */
 
+import * as Defined from "./Defined.js";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -113,11 +114,33 @@ export interface HandleOptions {
 /** Options for {@link makeInMemory}. */
 export interface InMemoryOptions {
   /**
-   * Credentials every call presents to the handler, for a same-process carrier
-   * acting for a real request (an SSR render under the browser's session).
-   * Absent or `None` means none (`Authorization.noCredentials`).
+   * The credentials each call presents to the handler, for a same-process
+   * carrier acting for a real request (an SSR render under the browser's
+   * session). Either fixed when the transport is built, or an effect evaluated
+   * on every push, pull and read, for a client whose session changes (a cookie
+   * jar a sign-in or sign-out writes). Absent or `None` means none
+   * (`Authorization.noCredentials`).
    */
-  readonly credentials?: Option.Option<RequestCredentials>;
+  readonly credentials?:
+    | Option.Option<RequestCredentials>
+    | Effect.Effect<Option.Option<RequestCredentials>>;
+}
+
+/** The loopback {@link makeInMemory} builds: a {@link ClientTransport} with connectivity controls. */
+export interface InMemoryTransport extends ClientTransport {
+  /**
+   * Set the status the transport reports, which is all it changes: calls go
+   * through or fail as {@link setOnline} decides. For driving the engine's
+   * status-triggered sync in a test.
+   */
+  readonly setStatus: (status: ConnectionStatus) => Effect.Effect<void>;
+  /**
+   * Take the loopback offline (`false`) or back online (`true`). Offline, every
+   * push, pull and read fails with a `TransportError`, as a real network's
+   * would, and the status reads `"disconnected"`; back online, calls reach the
+   * handler again and the status reads `"connected"`. Pokes are unaffected.
+   */
+  readonly setOnline: (online: boolean) => Effect.Effect<void>;
 }
 
 /** The {@link ServerHandler} service a carrier answers clients with. */
@@ -126,31 +149,53 @@ export const ServerHandler = Context.Service<ServerHandler>(
 );
 
 /**
+ * A gate that fails a carrier call with a `TransportError` (`message`) while
+ * `isOffline` reads true, as a real network would, and runs it otherwise.
+ */
+const failWhileOffline =
+  (isOffline: Effect.Effect<boolean>, message: string) =>
+  <A>(
+    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+    Effect.flatMap(isOffline, (offline) =>
+      offline ? Effect.fail(new TransportError({ message })) : effect
+    );
+
+/**
  * An in-memory client transport bound directly to a ServerHandler — the
  * loop-back carrier for tests and same-process client/server setups. It has no
  * transport request, so it presents `Authorization.noCredentials` unless
- * `options.credentials` supplies the request it acts for.
+ * `options.credentials` supplies the request it acts for, read on every call
+ * when it is an effect. It starts online and `"connected"`; `setOnline(false)`
+ * makes its calls fail until `setOnline(true)`.
  */
 export const makeInMemory = (
   handler: ServerHandler,
   clientGroupId: string,
   options?: InMemoryOptions
-): Effect.Effect<
-  ClientTransport & { readonly setStatus: (status: ConnectionStatus) => Effect.Effect<void> },
-  never,
-  Scope.Scope
-> =>
+): Effect.Effect<InMemoryTransport, never, Scope.Scope> =>
   Effect.gen(function* () {
     const status = yield* SubscriptionRef.make<ConnectionStatus>("connected");
-    const handle: HandleOptions = { credentials: options?.credentials ?? Option.none() };
+    const offline = yield* Ref.make(false);
+    const given = options?.credentials ?? Option.none();
+    const credentials = Effect.isEffect(given) ? given : Effect.succeed(given);
+    const gate = failWhileOffline(Ref.get(offline), "in-memory transport offline");
+    const call = <A>(
+      f: (handle: HandleOptions) => Effect.Effect<A, TransportError | VersionNotSupportedError>
+    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+      gate(Effect.flatMap(credentials, (current) => f({ credentials: current })));
     return {
-      push: (request) => handler.handlePush(request, handle),
-      pull: (request) => handler.handlePull(request, handle),
-      read: (request) => handler.handleRead(request, handle),
+      push: (request) => call((handle) => handler.handlePush(request, handle)),
+      pull: (request) => call((handle) => handler.handlePull(request, handle)),
+      read: (request) => call((handle) => handler.handleRead(request, handle)),
       pokes: handler.pokes(clientGroupId),
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status),
       setStatus: (next) => SubscriptionRef.set(status, next),
+      setOnline: (online) =>
+        Ref.set(offline, !online).pipe(
+          Effect.andThen(SubscriptionRef.set(status, online ? "connected" : "disconnected"))
+        ),
     };
   });
 
@@ -274,14 +319,7 @@ export const simulateOffline = (
   Effect.gen(function* () {
     const offline = yield* SubscriptionRef.make(false);
 
-    const gate = <A>(
-      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
-    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      SubscriptionRef.get(offline).pipe(
-        Effect.flatMap((isOffline) =>
-          isOffline ? Effect.fail(new TransportError({ message: "simulated offline" })) : effect
-        )
-      );
+    const gate = failWhileOffline(SubscriptionRef.get(offline), "simulated offline");
 
     const status = SubscriptionRef.get(offline).pipe(
       Effect.flatMap((isOffline): Effect.Effect<ConnectionStatus> =>
@@ -299,7 +337,9 @@ export const simulateOffline = (
     const wrapped: ClientTransport = {
       push: (request) => gate(transport.push(request)),
       pull: (request) => gate(transport.pull(request)),
-      ...(read === undefined ? {} : { read: (request: ReadRequest) => gate(read(request)) }),
+      ...Defined.fields({
+        read: read === undefined ? undefined : (request: ReadRequest) => gate(read(request)),
+      }),
       pokes: transport.pokes,
       status,
       statusChanges,
@@ -335,7 +375,7 @@ export const withInferredStatus = (
           isTransportError(error) ? SubscriptionRef.set(status, "disconnected") : Effect.void
         )
       );
-    return {
+    const inferred: ClientTransport = {
       push: (request) => observe(transport.push(request)),
       pull: (request) => observe(transport.pull(request)),
       pokes: transport.pokes,
@@ -344,6 +384,12 @@ export const withInferredStatus = (
       // the engine's reconnect trigger with "connected" re-emissions.
       statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
     };
+    // The fallthrough read (ADR-0025) is optional: forwarded, and observed
+    // like push and pull, only when the wrapped carrier has one.
+    const read = transport.read;
+    return read === undefined
+      ? inferred
+      : { ...inferred, read: (request) => observe(read(request)) };
   });
 
 /** Options for {@link withFallback}. */
@@ -368,8 +414,8 @@ export interface FallbackOptions {
 
 /**
  * Layer a fallback carrier under a primary one (e.g. plain HTTP under
- * WebSockets): each push/pull tries the primary and falls back on a
- * `TransportError`. After a primary failure the primary is sidelined for
+ * WebSockets): each push, pull and fallthrough read tries the primary and
+ * falls back on a `TransportError`. After a primary failure the primary is sidelined for
  * `restoreAfter`, so subsequent calls go straight to the fallback until the
  * cooldown elapses and a call probes the primary again.
  *
@@ -380,6 +426,11 @@ export interface FallbackOptions {
  * redundant pull) and a failing primary poke stream is dropped rather than
  * killing the fallback's. A `VersionNotSupportedError` propagates without
  * falling back — it is the server's verdict, not carrier trouble.
+ *
+ * `read` (ADR-0025) is optional on a carrier: with both legs offering it, it
+ * takes the same path as push and pull; with one, that leg serves every read
+ * as it would unwrapped; with neither, the combined transport has none and
+ * the Client answers uncovered reads locally.
  */
 export const withFallback = (
   primary: ClientTransport,
@@ -422,7 +473,7 @@ export const withFallback = (
             yield* SubscriptionRef.set(status, "connected");
             return first.success;
           }
-          if (!isTransportError(first.failure)) return yield* Effect.fail(first.failure);
+          if (!isTransportError(first.failure)) return yield* first.failure;
           yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
         }
         const second = yield* Effect.result(f(fallback));
@@ -431,10 +482,21 @@ export const withFallback = (
           return second.success;
         }
         if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
-        return yield* Effect.fail(second.failure);
+        return yield* second.failure;
       });
 
-    return {
+    // The fallthrough read (ADR-0025) is optional on each leg: both legs
+    // carry it through `call`, like push and pull; one leg serves it alone,
+    // as that leg does; neither leaves it off, so the Client answers locally.
+    const primaryRead = primary.read;
+    const fallbackRead = fallback.read;
+    const read: ClientTransport["read"] =
+      primaryRead !== undefined && fallbackRead !== undefined
+        ? (request) =>
+            call((transport) => (transport === primary ? primaryRead : fallbackRead)(request))
+        : (primaryRead ?? fallbackRead);
+
+    const combined: ClientTransport = {
       push: (request) => call((transport) => transport.push(request)),
       pull: (request) => call((transport) => transport.pull(request)),
       pokes: Stream.merge(
@@ -444,4 +506,5 @@ export const withFallback = (
       status: SubscriptionRef.get(status),
       statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
     };
+    return read === undefined ? combined : { ...combined, read };
   });

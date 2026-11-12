@@ -18,6 +18,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -87,7 +88,7 @@ const makeNamespace = (
     getByName: (name: string) => ({
       fetch: (request: HttpServerRequest.HttpServerRequest) =>
         HttpServerRequest.toWeb(request).pipe(
-          Effect.flatMap((web) => Effect.promise(() => dispatch(name, web))),
+          Effect.flatMap((web) => awaitPromise(() => dispatch(name, web))),
           Effect.map(HttpServerResponse.fromWeb),
           Effect.orDie
         ),

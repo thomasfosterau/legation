@@ -2,15 +2,8 @@
   import { page as kitPage } from "$app/state";
   import { Aggregate } from "@thomasfosterau/legation";
   import { useAggregate, useConnection, useMutationWithAck, useQuery } from "@thomasfosterau/legation-svelte";
-  import {
-    productDetail,
-    productReviews,
-    type Product,
-    type Review,
-    type Seller,
-    type Variant,
-  } from "../../../lib/domain.js";
-  import { reviewRows, sellerRows, toRow, variantRows } from "../../../lib/rows.js";
+  import { productDetail, productReviews, type Variant } from "../../../lib/domain.js";
+  import { productRows, reviewRows, sellerRows, variantRows } from "../../../lib/rows.js";
 
   const { data } = $props();
 
@@ -23,15 +16,13 @@
   const detail = useQuery(
     () => productDetail(kitPage.params.id!),
     {
-      initial: [
-        {
-          ...toRow(data.product, ["category", "seller"]),
-          related: {
-            variants: variantRows(data.variants).map((row) => row.value),
-            seller: data.seller === undefined ? null : sellerRows([data.seller])[0]!.value,
-          },
+      initial: productRows([data.product]).map((row) => ({
+        ...row,
+        related: {
+          variants: variantRows(data.variants).map((variant) => variant.value),
+          seller: sellerRows(data.seller === undefined ? [] : [data.seller])[0]?.value ?? null,
         },
-      ],
+      })),
     }
   );
 
@@ -76,9 +67,9 @@
 
 <svelte:boundary>
   {@const row = (await detail.promise)[0]}
-  {@const product = row?.value as Product | undefined}
-  {@const variants = (row?.related["variants"] as ReadonlyArray<Variant>) ?? []}
-  {@const seller = row?.related["seller"] as Seller | null}
+  {@const product = row?.value}
+  {@const variants = row?.related.variants ?? []}
+  {@const seller = row?.related.seller}
 
   {#if product}
     <h1>{product.name}</h1>
@@ -114,7 +105,7 @@
     <h2>Reviews</h2>
     <ul>
       {#each await reviews.promise as reviewRow (reviewRow.id)}
-        {@const review = reviewRow.value as Review}
+        {@const review = reviewRow.value}
         <li>{review.rating}/5 — {review.body} — {review.authorName}</li>
       {/each}
     </ul>

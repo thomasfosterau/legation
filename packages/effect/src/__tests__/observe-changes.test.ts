@@ -40,6 +40,7 @@
  * membership/value, the same contract before #112's position keys were
  * surfaced.
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -65,6 +66,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -120,7 +122,7 @@ const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: n
       clientId: group,
       clientGroupId: group,
       mutators,
-      ...(changeHubCapacity === undefined ? {} : { changeHubCapacity }),
+      ...Defined.fields({ changeHubCapacity }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)
@@ -132,7 +134,10 @@ const users = Subset.make({ collection: "users" });
 
 /** Real timers, independent of the test clock (matches backpressure.test.ts). */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /**
  * The mandatory yield after forking a collector: hands control back to the
@@ -197,7 +202,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 /** Fork a collector and settle once, so its subscription is guaranteed live. */

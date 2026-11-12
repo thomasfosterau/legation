@@ -214,6 +214,75 @@ describe("IdentityResolver sees the request's credentials", () => {
   );
 });
 
+describe("Transport.makeInMemory (#649)", () => {
+  it.effect("reads effectful credentials on every call, so a changed session is seen", () =>
+    Effect.gen(function* () {
+      const { handler, seen } = yield* makeServer();
+      const jar = yield* Ref.make(Option.none<string>());
+      const transport = yield* makeInMemory(handler, "group-a", {
+        credentials: Effect.map(
+          Ref.get(jar),
+          Option.map((cookie) => Authorization.credentialsFromHeaders({ cookie }))
+        ),
+      });
+      yield* transport.pull(pull);
+      yield* Ref.set(jar, Option.some(SECRET));
+      yield* transport.pull(pull);
+      yield* Ref.set(jar, Option.none());
+      yield* transport.push(push);
+
+      const { requests } = yield* seen;
+      expect(requests.map((request) => request.credentials.header("cookie"))).toEqual([
+        Option.none(),
+        Option.some(SECRET),
+        Option.none(),
+      ]);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("fails every call with a TransportError while offline, until back online", () =>
+    Effect.gen(function* () {
+      const { handler, seen } = yield* makeServer();
+      const transport = yield* makeInMemory(handler, "group-a");
+      expect(yield* transport.status).toBe("connected");
+
+      yield* transport.setOnline(false);
+      expect(yield* transport.status).toBe("disconnected");
+      const failures = yield* Effect.all(
+        [
+          Effect.flip(transport.push(push)),
+          Effect.flip(transport.pull(pull)),
+          Effect.flip(transport.read?.(read) ?? Effect.die("no read")),
+        ],
+        { concurrency: 1 }
+      );
+      expect(failures.map((failure) => failure._tag)).toEqual([
+        "TransportError",
+        "TransportError",
+        "TransportError",
+      ]);
+      // Nothing reached the server while the loopback was down.
+      expect((yield* seen).requests).toHaveLength(0);
+
+      yield* transport.setOnline(true);
+      expect(yield* transport.status).toBe("connected");
+      yield* transport.pull(pull);
+      expect((yield* seen).requests).toHaveLength(1);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("setStatus changes only the reported status", () =>
+    Effect.gen(function* () {
+      const { handler, seen } = yield* makeServer();
+      const transport = yield* makeInMemory(handler, "group-a");
+      yield* transport.setStatus("disconnected");
+      expect(yield* transport.status).toBe("disconnected");
+      yield* transport.pull(pull);
+      expect((yield* seen).requests).toHaveLength(1);
+    }).pipe(Effect.scoped)
+  );
+});
+
 describe("credentials reach the resolver alone", () => {
   it.effect(
     "SyncContext, middleware and auth filters get the group and identity, never a credential",

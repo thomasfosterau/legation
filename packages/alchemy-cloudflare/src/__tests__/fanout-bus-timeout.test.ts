@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { Node } from "@thomasfosterau/legation";
 import { FanoutBroker, FanoutBus } from "@thomasfosterau/legation/internal";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);
@@ -22,7 +23,7 @@ describe("FanoutBus broker bound (#379)", () => {
       const broker: FanoutBroker.FanoutBroker = {
         register: () => Effect.void,
         publish: () => Effect.never,
-        pokes: () => Effect.die(new Error("unused")),
+        pokes: () => Effect.die(new TestFailure({ message: "unused" })),
       };
       const bus = yield* FanoutBus.make({
         roomId: "room-a",

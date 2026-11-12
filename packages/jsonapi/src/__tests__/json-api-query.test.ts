@@ -31,10 +31,11 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { ClientEngine, FilterCorpus, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, FilterCorpus, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
@@ -89,9 +90,10 @@ const nodes = Node.registry([categories, products, variants, reviews, corpus]);
 const parse = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
 const parseFailure = (url: string): QueryError => {
   const exit = Effect.runSyncExit(JsonApiQuery.parseRead(nodes, url));
-  if (Exit.isSuccess(exit)) throw new Error(`expected ${url} to be rejected`);
+  if (Exit.isSuccess(exit)) throw new TestFailure({ message: `expected ${url} to be rejected` });
   const failure = Exit.isFailure(exit) ? exit.cause.reasons[0] : undefined;
-  if (failure?._tag !== "Fail") throw new Error(`expected a failure, got ${String(exit.cause)}`);
+  if (failure?._tag !== "Fail")
+    throw new TestFailure({ message: `expected a failure, got ${String(exit.cause)}` });
   return failure.error;
 };
 
@@ -162,9 +164,10 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
   it("fromFilterAst ∘ toFilterAst is the identity over the generated corpus", () => {
     const coverage = FilterCorpus.emptyCoverage();
     const predicates = Effect.runSync(
-      FilterCorpus.generatePredicate(FilterCorpus.corpusColumns, undefined, coverage, 3)
-        .pipe(Effect.replicateEffect(300))
-        .pipe(Random.withSeed(161))
+      FilterCorpus.generatePredicate(FilterCorpus.corpusColumns, undefined, coverage, 3).pipe(
+        Effect.replicateEffect(300),
+        Random.withSeed(161)
+      )
     );
     let representable = 0;
     Arr.forEach(predicates, (predicate) => {
@@ -812,9 +815,11 @@ describe("JsonApiQuery.canonical", () => {
       const first = generated.firsts[index];
       reads.push({
         ...read,
-        ...(index % 3 === 0 ? {} : { order: orderTokens(defined(generated.orderBys[index])) }),
-        ...(first === 0 ? {} : { first }),
-        ...(index % 4 === 0 ? { after: `row-${index}` } : {}),
+        ...Defined.fields({
+          order: index % 3 === 0 ? undefined : orderTokens(defined(generated.orderBys[index])),
+        }),
+        ...Defined.fields({ first: first === 0 ? undefined : first }),
+        ...Defined.fields({ after: index % 4 === 0 ? `row-${index}` : undefined }),
       });
     });
     reads.push(
