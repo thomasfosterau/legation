@@ -12,7 +12,9 @@ import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import { Edge, Node } from "@thomasfosterau/legation";
 import { FanoutTopics } from "@thomasfosterau/legation/internal";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import type * as FanoutShard from "../FanoutShard.js";
@@ -107,6 +109,104 @@ describe("DurableFanoutBroker publish", () => {
       const pokes = yield* broker.pokes("room-a");
       yield* notify([FanoutTopics.coarse("products")]);
       expect(yield* pokes.take).toEqual([FanoutTopics.coarse("products")]);
+    }).pipe(Effect.scoped)
+  );
+});
+
+const nodes = Node.registry([
+  Node.make("products", { attributes: { name: Schema.String } }),
+  Node.make("reviews", {
+    attributes: { body: Schema.String },
+    edges: { product: Edge.one("products", { via: "productId" }) },
+  }),
+]);
+
+/** Shards answering `leased[topic]`, and a room namespace recording each poke (or hanging on one). */
+const outOfBand = (leased: Record<string, ReadonlyArray<string>>, hungRoom?: string) => {
+  const published: Array<string> = [];
+  const poked: Array<readonly [string, ReadonlyArray<string>]> = [];
+  const shards = fakeBinding<Workers.DurableObject<FanoutShard.ShardObject>>({
+    getByName: (topic: string) => ({
+      register: () => Effect.void,
+      publish: () =>
+        Effect.sync(() => {
+          published.push(topic);
+          return leased[topic] ?? [];
+        }),
+    }),
+  });
+  const rooms = fakeBinding<Workers.DurableObject<DurableFanoutBroker.PokeSurface>>({
+    getByName: (roomId: string) => ({
+      poke: (topics: ReadonlyArray<string>) =>
+        roomId === hungRoom ? Effect.never : Effect.sync(() => void poked.push([roomId, topics])),
+    }),
+  });
+  const publish = DurableFanoutBroker.publishOutOfBand({
+    shards,
+    rooms,
+    nodes,
+    timeout: "3 seconds",
+  });
+  return {
+    published,
+    poked,
+    publish: (hints: Parameters<typeof publish>[0]) =>
+      publish(hints).pipe(Effect.provideService(RuntimeContext, runtimeContext)),
+  };
+};
+
+describe("DurableFanoutBroker.publishOutOfBand", () => {
+  it.effect(
+    "derives a room's topics from the hints and pokes each leased room through the room namespace",
+    () =>
+      Effect.gen(function* () {
+        const { published, poked, publish } = outOfBand({
+          reviews: ["room-coarse"],
+          "reviews/productId=p-1": ["room-fine"],
+          "reviews/productId=p-2": ["room-moved-from"],
+        });
+        yield* publish([
+          {
+            collection: "reviews",
+            ids: ["r-1"],
+            values: [{ id: "r-1", value: { body: "new", productId: "p-1" } }],
+            oldValues: [{ id: "r-1", value: { body: "old", productId: "p-2" } }],
+          },
+        ]);
+        expect(published.toSorted()).toEqual([
+          "reviews",
+          "reviews/productId=p-1",
+          "reviews/productId=p-2",
+        ]);
+        expect(poked.toSorted(([a], [b]) => a.localeCompare(b))).toEqual([
+          ["room-coarse", ["reviews"]],
+          ["room-fine", ["reviews/productId=p-1"]],
+          ["room-moved-from", ["reviews/productId=p-2"]],
+        ]);
+      })
+  );
+
+  it.effect("a hint without values publishes its collection's coarse topic only", () =>
+    Effect.gen(function* () {
+      const { published, poked, publish } = outOfBand({
+        reviews: ["room-coarse"],
+        "reviews/productId=p-1": ["room-fine"],
+      });
+      yield* publish([{ collection: "reviews", ids: [] }]);
+      expect(published).toEqual(["reviews"]);
+      expect(poked).toEqual([["room-coarse", ["reviews"]]]);
+    })
+  );
+
+  it.effect("a hung room poke is dropped at the timeout, so the publish returns", () =>
+    Effect.gen(function* () {
+      const { poked, publish } = outOfBand({ products: ["room-hung", "room-ok"] }, "room-hung");
+      const publishing = yield* Effect.forkScoped(publish([{ collection: "products", ids: [] }]), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust("3 seconds");
+      expect(Exit.isSuccess(yield* Fiber.await(publishing))).toBe(true);
+      expect(poked).toEqual([["room-ok", ["products"]]]);
     }).pipe(Effect.scoped)
   );
 });

@@ -59,6 +59,7 @@ import {
   Cvr,
   FanoutBus,
   type FanoutTopics,
+  HintSource,
   InvalidationBus,
   type Subset,
   SyncServer,
@@ -79,7 +80,7 @@ import {
 export type RoomServices = Workers.DurableObjectState | RuntimeContext;
 
 /** The room's surface: its HTTP routes, its poke RPC and its socket handlers. */
-export interface RoomObject {
+export interface RoomObject extends DurableFanoutBroker.PokeSurface {
   /** The room's HTTP routes ({@link routes}): push, pull, read and the poke socket. */
   readonly fetch: HttpEffect<RoomServices>;
   /**
@@ -106,9 +107,17 @@ export interface RoomConfig<R = never> {
   readonly nodes: Node.NodeRegistry;
   /**
    * The authoritative storage contract (e.g. `SqlBackend` over
-   * `D1Executor.make(db)`), built in the room's per-instance phase.
+   * `D1Executor.make(db)`), built in the room's per-instance phase and used
+   * by every request until the instance is evicted.
+   *
+   * Its `Scope` is the instance's, so a resource the backend holds (a
+   * PostgreSQL pool from `Layer.build(PgClient.layer(...))`) lives as long as
+   * the instance. That scope is never closed: an evicted instance's
+   * connections are dropped by the platform, with no finalizer, and the next
+   * instance builds its own. What is safe to hold across requests, and what is
+   * not (Hyperdrive), is in `docs/alchemy-postgres.md` (#506).
    */
-  readonly backend: Effect.Effect<Backend.Backend, never, RoomServices>;
+  readonly backend: Effect.Effect<Backend.Backend, never, RoomServices | Scope.Scope>;
   /** Deny-by-default per-collection filters, built in the per-instance phase. */
   readonly policy: Effect.Effect<Authorization.AuthPolicy, never, RoomServices>;
   /**
@@ -121,6 +130,20 @@ export interface RoomConfig<R = never> {
     | undefined;
   /** Named-query resolution (server-authoritative subsets). */
   readonly queries?: Effect.Effect<Query.QueryResolver, never, RoomServices> | undefined;
+  /**
+   * A source of hints for writes that bypass the room's mutations, run on the room's bus for as long
+   * as the in-memory instance lives (built in the per-instance phase, like `backend`). Its hints are
+   * published like a push's: to the shards, poking every room leased on their topics. A hint
+   * without values (a polling source's) derives only its collection's coarse topic, so it pokes
+   * the rooms whose windows leased that topic, not those that leased a fine one.
+   *
+   * A polling source (`PollingHintSource`) keeps the room awake: its timer stops the instance
+   * hibernating between requests, so the room is billed for that time, and it polls only while the
+   * platform keeps the instance in memory. Every room instance runs its own source, so N awake
+   * rooms poll N times and publish each change N times. For a cron or queue writer, publish from
+   * the writer instead (`DurableFanoutBroker.publishOutOfBand`).
+   */
+  readonly hints?: Effect.Effect<HintSource.HintSource, never, RoomServices | Scope.Scope>;
   /** The topic-shard namespace: the app's shard class (`LegationShard`), yielded at init. */
   readonly shards: Effect.Effect<Workers.DurableObject<FanoutShard.ShardObject>, never, R>;
   /** Shard lease heartbeat (default 30 seconds; TTL is 3×). */
@@ -255,6 +278,11 @@ export const make = <R>(
               build = build.pipe(Effect.provideService(Query.QueryResolver, yield* config.queries));
             }
             const { handler, introspection } = yield* build;
+            if (config.hints !== undefined) {
+              yield* HintSource.run(yield* config.hints).pipe(
+                Effect.provideService(InvalidationBus.InvalidationBus, bus)
+              );
+            }
             yield* Ref.set(
               subsetsRef,
               introspection.groups.pipe(

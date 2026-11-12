@@ -27,7 +27,8 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
   distributed cleanup.
 - **`Worker` (`routeSync`)** — the stateless entry, for an Alchemy Worker's
   `fetch`. It claims only the sync base path (default `/sync`), resolves the
-  caller's identity to their room, forwards the request to the room's stub
+  caller's identity to their room (or, opted in, an anonymous caller to a shared
+  anonymous room), forwards the request to the room's stub
   (WebSocket upgrades included), and answers `Option.none()` for everything
   else, so it composes inside any existing handler.
 - **`D1Executor`** — a `SqlBackend` executor over the `QueryDatabaseClient` of
@@ -124,6 +125,30 @@ the room's per-instance phase, where the object's state and Alchemy's
 is built there. A request reaches the room with its base path intact, and the
 room answers by the path's last segment (`/sync/push` is the `push` route).
 
+### Anonymous readers
+
+`roomIdOf` answering `undefined` is a 401. To serve public collections to
+anonymous readers, give `routeSync` an `anonymousRoomOf`: it names the shared
+room an anonymous caller uses, under the reserved `Worker.anonymousRoomPrefix`,
+so an anonymous caller never reaches a user's room (and a `roomIdOf` id with
+that prefix is refused with a 500). `Worker.shardByClientGroup` spreads them
+over a fixed number of rooms by their client-group cookie, so one Durable
+Object is not their ceiling:
+
+```ts
+Worker.routeSync({
+  rooms,
+  roomIdOf: resolveSession,
+  anonymousRoomOf: Worker.shardByClientGroup({ shards: 16 }),
+});
+```
+
+A group always lands in the same room, so its CVRs stay there. A caller with
+no `legation-client-group` cookie (the SvelteKit adapter's `clientGroupId`
+sets it) gets a 401. Changing `shards` moves most groups, whose next pull is
+then a reset. The room's policy sees these callers as anonymous, so it must
+allow only the public collections to the anonymous identity.
+
 The room presents each push, pull and read request's headers to `identity` as
 its `Authorization.RequestCredentials` (ADR-0035), so a resolver can verify the
 session cookie or API key the request carried: `routeSync` forwards the request
@@ -141,6 +166,53 @@ identity: Effect.succeed({
 
 Only the resolver sees the headers; auth filters and mutators see the identity
 it returns on `SyncContext.identity`.
+
+## Writes that bypass the rooms
+
+A cron or queue Worker that writes rows itself, with no mutation, publishes
+the write's `ChangeHint`s with `DurableFanoutBroker.publishOutOfBand`, and
+every room leased on the derived topics is poked, as after a push:
+
+```ts
+const publish = DurableFanoutBroker.publishOutOfBand({
+  shards: yield * LegationShard,
+  rooms: yield * LegationRoom,
+  nodes,
+});
+// after the write commits
+yield * publish([{ collection: "results", ids, values }]);
+```
+
+Pass the written rows as `values` (and the previous ones as `oldValues` for a
+row that moved or was deleted): a hint without values derives only the
+collection's coarse topic, so a room whose window leased a fine topic (an
+equality on an edge or hint key) waits for its next interval pull. Each call is
+bounded by `timeout` (default 5 seconds) and fire-and-forget.
+
+`Room.make` also takes `hints`, a `HintSource` the room runs on its bus. A
+polling source (`PollingHintSource`) keeps the room awake: its timer stops the
+room hibernating, so it is billed between requests, it polls only while the
+instance is in memory, and every awake room polls and publishes the same
+change. Prefer publishing from the writer.
+
+## PostgreSQL inside a room
+
+A client built in `backend` outlives the request: the room builds its backend
+once per in-memory instance and serves every request with it until the
+instance is evicted; a wake builds a new one. `backend` runs in the instance's
+scope, so `Layer.build(PgClient.layer(...))` there holds a pool for the
+instance's life. That scope is never closed: on eviction the connections are
+dropped, not closed.
+
+- **Direct connection** (PostgreSQL or PgBouncer): build the pool in `backend`,
+  never as a layer on the room class or its Worker (Alchemy builds those once
+  per isolate and shares them across rooms). Keep it small (every awake room
+  holds one) and give it an idle timeout.
+- **Hyperdrive**: don't hold it across requests. Its credentials are valid
+  only within the invocation that read them, and the room has no per-request
+  backend yet (#506).
+
+Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
 
 ## What Alchemy does not cover
 
