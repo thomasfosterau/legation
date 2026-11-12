@@ -514,23 +514,14 @@ const makeBackend = (
   Effect.gen(function* () {
     const store: Store = options.store ?? new Map();
     const { client, requests } = yield* makeInProcessClient(store, probe);
-    const atomic = Convention.reflectAtomic(api);
-    // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
-    expect(atomic).toEqual(
-      Option.some({
-        groupId: "operations",
-        name: "operations",
-        method: "POST",
-        path: "/operations",
-      })
-    );
+    const atomic = yield* Effect.fromOption(Convention.reflectAtomic(api));
     const backend = yield* JsonApiBackend.make({
       baseUrl: "http://contract.test",
       resources: Convention.reflectResources(api),
       mutators: omitted === undefined ? mutators : without(mutators, omitted),
       operations: new Map(),
       writes: omitted === undefined ? writes : without(writes, omitted),
-      atomic: { path: defined(Option.getOrUndefined(atomic)).path },
+      atomic: { path: atomic.path },
       // The server declares no filter/sort parameters (its list endpoint is the
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.
@@ -564,6 +555,17 @@ describeWrapped(
         expect(failure.message).toContain("not registered");
       }).pipe(Effect.scoped)
     );
+
+    it("reflects the atomic operations endpoint", () => {
+      expect(Convention.reflectAtomic(api)).toEqual(
+        Option.some({
+          groupId: "operations",
+          name: "operations",
+          method: "POST",
+          path: "/operations",
+        })
+      );
+    });
 
     it("reflects the effect-jsonapi api without a phantom `operations` resource", () => {
       const resources = Convention.reflectResources(api);
