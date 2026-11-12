@@ -26,6 +26,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
@@ -778,14 +779,21 @@ describe("Room publishTimeout", () => {
         // The push's change hint publishes to the hung shards, so it cannot finish
         // until the bound drops them.
         let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
+        const push = yield* Effect.forkChild(
+          writer.push.pipe(
+            Effect.orDie,
+            Effect.tap(() =>
+              Effect.sync(() => {
+                pushed = true;
+              })
+            )
+          )
+        );
         yield* awaitPromise(() => hung.arrived(1));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* awaitPromise(() => push);
+        yield* Fiber.join(push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000
@@ -811,15 +819,22 @@ describe("Room publishTimeout", () => {
         }
 
         let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
+        const push = yield* Effect.forkChild(
+          writer.push.pipe(
+            Effect.orDie,
+            Effect.tap(() =>
+              Effect.sync(() => {
+                pushed = true;
+              })
+            )
+          )
+        );
         yield* awaitPromise(() => hung.arrived(8));
         yield* clock.adjust("199 millis");
         expect(pushed).toBe(false);
         // One bound covers the whole publish: the second wave is dropped with the first.
         yield* clock.adjust("1 millis");
-        yield* awaitPromise(() => push);
+        yield* Fiber.join(push);
       }).pipe(Effect.scoped),
     20_000
   );
@@ -845,15 +860,15 @@ describe("Room publishTimeout", () => {
         const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
         let subscribed!: () => void;
         const isSubscribed = new Promise<void>((resolve) => (subscribed = resolve));
-        const observing = Effect.runPromise(
+        yield* Effect.forkIn(
           Stream.runForEach(
             readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
             () => Effect.sync(() => subscribed())
-          ).pipe(Scope.provide(scope), Effect.ignore)
+          ).pipe(Scope.provide(scope), Effect.ignore),
+          scope
         );
-        void observing;
         yield* awaitPromise(() => isSubscribed);
-        yield* awaitPromise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
+        yield* reader.pull.pipe(Effect.orDie);
 
         // t = 1 s: the first heartbeat registers the window and hangs.
         yield* clock.adjust("1 second");
@@ -887,9 +902,16 @@ describe("Room publishTimeout", () => {
         yield* writeReview(writer, "r-1", "p-1");
 
         let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
+        const push = yield* Effect.forkChild(
+          writer.push.pipe(
+            Effect.orDie,
+            Effect.tap(() =>
+              Effect.sync(() => {
+                pushed = true;
+              })
+            )
+          )
+        );
         yield* awaitPromise(() => hung.arrived(2));
         // Past the broker's 5 second default the hung calls are still pending: were the broker
         // bounded at its default, the push would have finished here.
@@ -898,7 +920,7 @@ describe("Room publishTimeout", () => {
         yield* clock.adjust("2999 millis");
         expect(pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* awaitPromise(() => push);
+        yield* Fiber.join(push);
         expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
       }).pipe(Effect.scoped),
     20_000

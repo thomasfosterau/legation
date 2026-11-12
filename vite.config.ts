@@ -211,6 +211,7 @@ export default defineConfig({
       "effecttsgo/lazy-effect": "error",
       "effecttsgo/catch-to-ignore": "error",
       "effect/avoid-process-env": "error",
+      "effecttsgo/run-effect-inside-effect": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
