@@ -62,6 +62,20 @@ backend: Effect.gen(function* () {
   connection fails as a `BackendError`, the client retries its push or pull,
   and the pool reconnects.
 
+### Name the database user
+
+`@effect/sql-pg`'s `PgClient` resolves its connection settings when it is
+built, not at its first query. If it finds no user, building the client
+fails with `SqlError: … No username configured`. It looks in three places:
+the `username` option, the user part of `url`
+(`postgres://user:pass@host/db`), and the process's `USER` / `USERNAME`
+environment variables. Checked in 4.1.4; in 4.1.2, with the `pg` driver, a
+missing user surfaced only on connect.
+
+A Worker has no `USER`, so a connection string there must carry the user, or
+the layer must set `username`. Hyperdrive's `connectionString` already
+includes one, so the per-request pattern below needs nothing more.
+
 ## Hyperdrive: build per request
 
 `@alchemy.run/cloudflare` documents Hyperdrive's `host` and `password` as
