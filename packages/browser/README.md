@@ -124,6 +124,13 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 
 ## API
 
+### Entry points
+
+| Entry                                         | What it is                                                                                                  |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `@thomasfosterau/legation-browser`            | Every module below.                                                                                         |
+| `@thomasfosterau/legation-browser/http-cache` | `CacheApiHttpCache` and core's `HttpCache` alone, for a service worker that caches HTTP without the engine. |
+
 ### Modules
 
 | Module                   | What it is                                                                                                                                                                  |
@@ -132,7 +139,7 @@ The tab's `BroadcastMirrorChannel` name and the host's default channel name are 
 | `ElectedHost`            | `run`: elects one tab per client group, with `navigator.locks`, to host the engine on its main thread. The other tabs mirror it.                                            |
 | `IndexedDbClientStore`   | The durable `ClientStore` over IndexedDB: `layer` (needs an `IndexedDb` service), `layerWindow` (the page's `indexedDB`) and `layerNamespaced` (one replica per identity).  |
 | `BroadcastMirrorChannel` | `make(name)`: the mirror seam over a named `BroadcastChannel`. The mirror types (`EngineHost`, `MirrorChannel`, `MirrorProtocol`, `Mirror`) are also re-exported from here. |
-| `CacheApiHttpCache`      | `open` and `fetchHandler`: a `ResponseCacheStore` over the Cache API, with stale-while-revalidate.                                                                          |
+| `CacheApiHttpCache`      | `open`, `fetchHandler` and `isPublic`: a `ResponseCacheStore` over the Cache API, with stale-while-revalidate. Also on `./http-cache`.                                      |
 | `HttpCacheInvalidation`  | `collectionChanges` and `invalidateOnChanges`: evict cached responses as collections change, by the `collection:{name}` tag.                                                |
 | `BrowserConnectivity`    | `withBrowserConnectivity(transport)`: adds `navigator.onLine` and return-to-visible signals to a `ClientTransport`.                                                         |
 | `BackgroundSync`         | `listen`, `register` and `identityUnchecked`: flush the journal after the tab has closed.                                                                                   |
@@ -274,27 +281,47 @@ The store opens its database without a version, so a database a later app build 
 
 ### HTTP cache
 
-`CacheApiHttpCache` keeps responses in a named Cache API cache, and its `fetchHandler` serves them stale-while-revalidate under a per-request policy. A policy returning `undefined` bypasses the cache. `HttpCacheInvalidation` evicts entries by tag as the engine's collections change: a response tagged `collection:todos` is dropped when `todos` changes.
+`CacheApiHttpCache` keeps responses in a named Cache API cache, and its `fetchHandler` serves them stale-while-revalidate under a per-request policy. A policy of `Option.none()` bypasses the cache. A policy's `cacheable(response)` decides what is stored (by default `response.ok`); `CacheApiHttpCache.isPublic` reads `Cache-Control: public`.
+
+A service worker that wants only the cache imports it from `@thomasfosterau/legation-browser/http-cache`, which reaches nothing of the engine. It also re-exports core's `HttpCache` types:
 
 ```ts
-// cache.ts
-import type { ClientEngine, HttpCache } from "@thomasfosterau/legation/internal";
-import { CacheApiHttpCache, HttpCacheInvalidation } from "@thomasfosterau/legation-browser";
-import { Effect } from "effect";
+// service-worker.ts
+import { CacheApiHttpCache, type HttpCache } from "@thomasfosterau/legation-browser/http-cache";
+import { Effect, Option } from "effect";
 
-const policy = (request: Request): HttpCache.HttpCachePolicy | undefined =>
+declare const self: ServiceWorkerGlobalScope;
+
+const policy = (request: Request): Option.Option<HttpCache.HttpCachePolicy> =>
   request.mode === "navigate"
-    ? { tags: ["pages"], staleTime: "5 seconds", timeToLive: "1 hour" }
-    : undefined;
+    ? Option.some({
+        tags: ["pages"],
+        staleTime: "5 seconds",
+        timeToLive: "1 hour",
+        cacheable: (response) => response.ok && CacheApiHttpCache.isPublic(response),
+      })
+    : Option.none();
 
-// Answer a request from the cache, or from the network when nothing is cached.
-export const respond = (request: Request) =>
+const respond = (event: FetchEvent) =>
   Effect.gen(function* () {
     const store = yield* CacheApiHttpCache.open("app-cache");
-    const handle = CacheApiHttpCache.fetchHandler({ store, policy });
-    const result = yield* handle(request);
+    const result = yield* CacheApiHttpCache.fetchHandler({ store, policy })(event.request);
+    // A stale response is served at once; the refresh finishes after it is sent.
+    if (Option.isSome(result.revalidate)) {
+      event.waitUntil(Effect.runPromise(Effect.ignore(result.revalidate.value)));
+    }
     return result.response;
   });
+
+self.addEventListener("fetch", (event) => event.respondWith(Effect.runPromise(respond(event))));
+```
+
+`HttpCacheInvalidation` (root entry only, since it follows the engine) evicts entries by tag as the engine's collections change: a response tagged `collection:todos` is dropped when `todos` changes.
+
+```ts
+import type { ClientEngine } from "@thomasfosterau/legation/internal";
+import { CacheApiHttpCache, HttpCacheInvalidation } from "@thomasfosterau/legation-browser";
+import { Effect } from "effect";
 
 // Evict cached responses as the engine's collections change. Run it in a scope.
 export const evictOnChanges = (engine: ClientEngine.ClientEngine) =>
@@ -306,8 +333,6 @@ export const evictOnChanges = (engine: ClientEngine.ClientEngine) =>
     });
   });
 ```
-
-`fetchHandler` returns `revalidate` for a stale response. A service worker passes it to `event.waitUntil` so the refresh finishes after the response is sent.
 
 ### BrowserConnectivity
 
