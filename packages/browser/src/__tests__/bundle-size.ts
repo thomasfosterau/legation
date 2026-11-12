@@ -75,47 +75,30 @@ const entriesOf = (manifest: Manifest): Record<string, string> =>
     )
   );
 
-/**
- * Whether the package's own `vite.config.ts` packs it one module per source
- * module (`unbundle`), so the test measures what that package ships.
- */
-const unbundleOf = (pkg: WorkspacePackage): Effect.Effect<boolean, PromiseRejected> =>
-  awaitPromise(() => import(new URL("vite.config.ts", pkg.directory).href)).pipe(
-    Effect.map(
-      (module: unknown) =>
-        P.hasProperty(module, "default") &&
-        P.hasProperty(module.default, "pack") &&
-        P.hasProperty(module.default.pack, "unbundle") &&
-        module.default.pack.unbundle === true
-    )
-  );
-
 const pack = (pkg: WorkspacePackage): Effect.Effect<Packed, PromiseRejected> =>
-  Effect.flatMap(unbundleOf(pkg), (unbundle) =>
-    awaitPromise(() =>
-      build({
-        ...packOptions(entriesOf(pkg.manifest), unbundle),
-        config: false,
-        cwd: pkg.directory.pathname,
-        dts: false,
-        sourcemap: false,
-        clean: false,
-        write: false,
-        logLevel: "silent",
-      })
-    ).pipe(
-      Effect.map((handle) => ({
-        manifest: pkg.manifest,
-        directory: pkg.directory,
-        files: R.fromEntries(
-          Arr.flatMap(handle.bundles, (bundle) =>
-            Arr.flatMap(bundle.chunks, (chunk) =>
-              chunk.type === "chunk" ? [[chunk.fileName, chunk.code] as const] : []
-            )
+  awaitPromise(() =>
+    build({
+      ...packOptions(entriesOf(pkg.manifest)),
+      config: false,
+      cwd: pkg.directory.pathname,
+      dts: false,
+      sourcemap: false,
+      clean: false,
+      write: false,
+      logLevel: "silent",
+    })
+  ).pipe(
+    Effect.map((handle) => ({
+      manifest: pkg.manifest,
+      directory: pkg.directory,
+      files: R.fromEntries(
+        Arr.flatMap(handle.bundles, (bundle) =>
+          Arr.flatMap(bundle.chunks, (chunk) =>
+            chunk.type === "chunk" ? [[chunk.fileName, chunk.code] as const] : []
           )
-        ),
-      }))
-    )
+        )
+      ),
+    }))
   );
 
 /** `path` against the directory of `from`, both relative to a package's `dist/`. */

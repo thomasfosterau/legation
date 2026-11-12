@@ -4,5 +4,4 @@ import { packageConfig } from "../../vite.package.ts";
 // for a service worker that doesn't run the engine (#678).
 export default packageConfig({
   entries: { index: "src/index.ts", "http-cache": "src/http-cache.ts" },
-  unbundle: true,
 });
