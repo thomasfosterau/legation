@@ -1,7 +1,7 @@
 /**
  * Typed reads (#140): a read declared `as const satisfies Query.Read` keeps its
  * literal collection, include keys and order tokens; `Client.query` /
- * `Client.observe` check its names against the node graph and type its rows
+ * `Client.observe` (and `answer` / `observeAnswers`) check its names against the node graph and type its rows
  * from it (`Client.ResolvedRow`). A read the graph cannot describe statically
  * falls back to the untyped row.
  *
@@ -83,6 +83,9 @@ declare const clientOver: <G extends Node.NodeRegistry>(graph: G) => Client.Clie
 /** The type of one row a read resolves to, for `expectTypeOf`; only ever type-checked. */
 declare const rowOf: <A>(effect: Effect.Effect<ReadonlyArray<A>, unknown>) => A;
 
+/** The value an effect succeeds with, for `expectTypeOf`; only ever type-checked. */
+declare const valueOf: <A>(effect: Effect.Effect<A, unknown>) => A;
+
 /**
  * A block of compile-time assertions: type-checked by the `check` task and
  * never run, since the reads in it go to a Client that does not exist.
@@ -159,6 +162,38 @@ describe("typed reads (#140)", () => {
       expectTypeOf(stream).toEqualTypeOf<
         Stream.Stream<ReadonlyArray<Client.ResolvedRow<typeof allProducts, Graph>>>
       >();
+    }));
+
+  it("answer and observeAnswers type their rows as query does, beside the completeness (#653)", () =>
+    compileOnly(() => {
+      const answer = valueOf(client.answer(allProducts));
+      expectTypeOf(answer).toEqualTypeOf<Client.Answer<typeof allProducts, Graph>>();
+      expectTypeOf(answer.rows).toEqualTypeOf<
+        ReadonlyArray<Client.ResolvedRow<typeof allProducts, Graph>>
+      >();
+      expectTypeOf<(typeof answer.rows)[number]["value"]>().toEqualTypeOf<ProductRow>();
+      expectTypeOf(answer.completeness).toEqualTypeOf<Client.Completeness>();
+      expectTypeOf(client.observeAnswers(productDetail("p1"))).toEqualTypeOf<
+        Stream.Stream<Client.Answer<ReturnType<typeof productDetail>, Graph>>
+      >();
+      // A dynamic read's answer holds untyped rows, as its query does.
+      const collection: string = "products";
+      expectTypeOf(valueOf(client.answer({ collection })).rows).toEqualTypeOf<
+        ReadonlyArray<Client.ResolvedRow>
+      >();
+    }));
+
+  it("answer and observeAnswers reject a misnamed read as query does (#653)", () =>
+    compileOnly(() => {
+      // @ts-expect-error "sellr" is not an edge of products
+      void client.answer({ collection: "products", include: { sellr: true } });
+      // @ts-expect-error "nmae" is not a field of products
+      void client.observeAnswers({ collection: "products", where: { nmae: "Lamp" } });
+      // @ts-expect-error "prodcts" is not a collection of the graph
+      void client.answer({ collection: "prodcts" });
+      const row = valueOf(client.answer(allProducts)).rows[0];
+      // @ts-expect-error `reviews` is an edge of products, but this read does not include it
+      void row?.related.reviews;
     }));
 
   it("an inline literal read is typed with no `as const`", () =>
@@ -270,6 +305,11 @@ describe("typed reads (#140)", () => {
       // `ResolvedRow` over the registered graph (none in this program) is untyped.
       expectTypeOf<Client.ResolvedRow<typeof allProducts>>().toEqualTypeOf<Client.ResolvedRow>();
       expectTypeOf<Client.Registered>().toEqualTypeOf<Node.NodeRegistry>();
+      // So is an erased Client's answer, and `Answer` over the registered graph.
+      expectTypeOf(valueOf(erased.answer({ collection: "anything" })).rows).toEqualTypeOf<
+        ReadonlyArray<Client.ResolvedRow>
+      >();
+      expectTypeOf<Client.Answer<typeof allProducts>>().toEqualTypeOf<Client.Answer>();
     }));
 
   it.effect("resolves an absent `one` edge to null and an included `many` edge to an array", () =>

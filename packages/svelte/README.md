@@ -87,7 +87,8 @@ Results are exposed as a reactive `current`
 re-subscribing the previous value stays visible with `waiting: true`
 (stale-while-revalidate).
 
-- **`useQuery(() => read)`** / **`useNamedQuery(() => ({ name, args }))`** —
+- **`useQuery(() => read)`** / **`useAnswer(() => read)`** /
+  **`useNamedQuery(() => ({ name, args }))`** —
   a declarative `Query.Read`; `include`d edges resolve onto each row's
   `related`, so a join needs no separate hook. The thunk may return
   `undefined` to opt out of reading entirely — no window is registered and
@@ -96,7 +97,8 @@ re-subscribing the previous value stays visible with `waiting: true`
   thunk (`useConnection`, `useAggregate`, `useAggregateGrouped` included)
   supports the same opt-out.
   The rows are typed from the read and the app's registered graph (see
-  [Typed rows](#typed-rows)).
+  [Typed rows](#typed-rows)). `useAnswer` gives the same rows with their
+  completeness beside them (see below).
 - **`useConnection(() => read, { pageSize })`** — connection-style paging that
   _grows_ one window rather than jumping between detached pages.
 - **`useAggregate(() => read, agg)`** / **`useAggregateGrouped(() => read, agg, groupBy)`**
@@ -135,8 +137,8 @@ renders, and on the client it makes the first render match the server markup
 ### Typed rows
 
 Register the app's node graph once, next to it, and declare reads
-`as const satisfies Query.Read`; `useQuery` and `useConnection` then type
-every row with no cast and no type argument:
+`as const satisfies Query.Read`; `useQuery`, `useAnswer` and `useConnection`
+then type every row with no cast and no type argument:
 
 ```ts
 // src/lib/domain.ts
@@ -201,6 +203,26 @@ argument that matches nothing:
 While `selectedId` is `undefined`, `detail.current` is `Initial` — no window
 is registered and no request is issued — and selecting a row subscribes just
 as any other reactive input change would.
+
+`useAnswer(() => read)` is `useQuery` with the answer's completeness beside
+its rows (`Client.Answer`: `{ rows, completeness }`, from
+`Client.observeAnswers`): `completeness` is `"partial"` while the read's
+windows are not pulled yet (offline, or before the first pull), so the device
+may hold fewer rows than the server, and `"complete"` once they are. Its read
+is checked and its rows typed as `useQuery`'s are, and it opts out the same
+way.
+
+```svelte
+<script lang="ts">
+  import { AsyncResult } from "effect/reactivity";
+  import { useAnswer } from "@thomasfosterau/legation-svelte";
+
+  const todos = useAnswer(() => ({ collection: "todos" }));
+  const answer = $derived(AsyncResult.getOrElse(todos.current, () => undefined));
+</script>
+
+{#if answer?.completeness === "partial"}<p>Showing what this device has synced.</p>{/if}
+```
 
 ### Async Svelte
 
