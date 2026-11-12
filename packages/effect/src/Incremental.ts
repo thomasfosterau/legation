@@ -36,16 +36,21 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
 import * as Predicate from "./Predicate.js";
 import type { RowChange } from "./RowChange.js";
 import * as Subset from "./Subset.js";
 
-/** A `(id, value)` row — structurally `Subset.Row` / `ClientEngine.LocalRow`. */
-export interface Row {
+/**
+ * A `(id, value)` row whose value is an `A`: structurally `Subset.Row` and
+ * `ClientEngine.LocalRow` at `A = unknown`, `ClientEngine.TypedRow<A>`
+ * otherwise, so a page of either is a valid input.
+ */
+export interface Row<A> {
   readonly id: string;
-  readonly value: unknown;
+  readonly value: A;
 }
 
 /**
@@ -54,13 +59,13 @@ export interface Row {
  * {@link diff} produces from consecutive page snapshots, and the shape every
  * operator's `step` accepts and returns.
  */
-export interface Delta {
-  readonly added: ReadonlyArray<Row>;
-  readonly removed: ReadonlyArray<Row>;
+export interface Delta<A> {
+  readonly added: ReadonlyArray<Row<A>>;
+  readonly removed: ReadonlyArray<Row<A>>;
 }
 
-/** The empty delta (a no-op step result). */
-export const emptyDelta: Delta = { added: [], removed: [] };
+/** The empty delta (a no-op step result): a `Delta<A>` for every `A`. */
+export const emptyDelta: Delta<never> = { added: [], removed: [] };
 
 // ─── Snapshot ↔ delta (the source boundary) ──────────────────────────────────
 //
@@ -74,8 +79,8 @@ export const emptyDelta: Delta = { added: [], removed: [] };
 // two page `Map`s.
 
 /** Index a page by id, for diffing against the next snapshot. */
-export const indexById = (rows: ReadonlyArray<Row>): Map<string, Row> => {
-  const map = new Map<string, Row>();
+export const indexById = <A>(rows: ReadonlyArray<Row<A>>): Map<string, Row<A>> => {
+  const map = new Map<string, Row<A>>();
   for (const row of rows) map.set(row.id, row);
   return map;
 };
@@ -86,13 +91,13 @@ export const indexById = (rows: ReadonlyArray<Row>): Map<string, Row> => {
  * changed value a `removed` (old) + `added` (new). Returns the delta and the
  * new snapshot index to carry forward.
  */
-export const diff = (
-  previous: ReadonlyMap<string, Row>,
-  next: ReadonlyArray<Row>
-): { readonly delta: Delta; readonly index: Map<string, Row> } => {
-  const added: Array<Row> = [];
-  const removed: Array<Row> = [];
-  const index = new Map<string, Row>();
+export const diff = <A>(
+  previous: ReadonlyMap<string, Row<A>>,
+  next: ReadonlyArray<Row<A>>
+): { readonly delta: Delta<A>; readonly index: Map<string, Row<A>> } => {
+  const added: Array<Row<A>> = [];
+  const removed: Array<Row<A>> = [];
+  const index = new Map<string, Row<A>>();
   for (const row of next) {
     index.set(row.id, row);
     const prior = previous.get(row.id);
@@ -109,7 +114,7 @@ export const diff = (
 };
 
 /** Fold a delta into a maintained result map (remove ids, then set adds). */
-export const applyDelta = (result: Map<string, Row>, delta: Delta): void => {
+export const applyDelta = <A>(result: Map<string, Row<A>>, delta: Delta<A>): void => {
   for (const row of delta.removed) result.delete(row.id);
   for (const row of delta.added) result.set(row.id, row);
 };
@@ -125,12 +130,12 @@ export const applyDelta = (result: Map<string, Row>, delta: Delta): void => {
  * information a page-diff's `previous` snapshot would have given for free.
  * `move` carries no value change, so it contributes nothing to the delta.
  */
-export const deltaFromChanges = (
-  known: Map<string, Row>,
-  batch: ReadonlyArray<RowChange<Row>>
-): Delta => {
-  const added: Array<Row> = [];
-  const removed: Array<Row> = [];
+export const deltaFromChanges = <A>(
+  known: Map<string, Row<A>>,
+  batch: ReadonlyArray<RowChange<Row<A>>>
+): Delta<A> => {
+  const added: Array<Row<A>> = [];
+  const removed: Array<Row<A>> = [];
   for (const change of batch) {
     // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain measured ~2.2x, Match.typeTags ~2.1x and a Record table ~1.2x slower than this switch (#497)
     switch (change._tag) {
@@ -159,14 +164,18 @@ export const deltaFromChanges = (
 };
 
 /** Materialize a result map to a page in a deterministic (id-ascending, code-point) order. */
-export const pageOf = (result: ReadonlyMap<string, Row>): ReadonlyArray<Row> =>
+export const pageOf = <A>(result: ReadonlyMap<string, Row<A>>): ReadonlyArray<Row<A>> =>
   [...result.values()].toSorted((a, b) => Predicate.compareText(a.id, b.id));
 
 // ─── Operators ───────────────────────────────────────────────────────────────
 
-/** A single-input delta→delta operator maintaining its own internal state. */
-export interface Operator {
-  readonly step: (delta: Delta) => Delta;
+/**
+ * A single-input delta→delta operator maintaining its own internal state: it
+ * steps on the deltas of its `A` input rows and returns the deltas of its `B`
+ * result rows.
+ */
+export interface Operator<A, B> {
+  readonly step: (delta: Delta<A>) => Delta<B>;
 }
 
 /**
@@ -176,7 +185,7 @@ export interface Operator {
  * spot (an update that filters a row out is a `removed` with the old value that
  * passed; one that filters it in is an `added` that now passes).
  */
-export const makeFilter = (predicate: (value: unknown) => boolean): Operator => ({
+export const makeFilter = <A>(predicate: (value: A) => boolean): Operator<A, A> => ({
   step: (delta) => ({
     added: delta.added.filter((row) => predicate(row.value)),
     removed: delta.removed.filter((row) => predicate(row.value)),
@@ -184,10 +193,10 @@ export const makeFilter = (predicate: (value: unknown) => boolean): Operator => 
 });
 
 /** {@link makeFilter}'s naive recompute, for the property test. */
-export const filterFromScratch = (
-  rows: ReadonlyArray<Row>,
-  predicate: (value: unknown) => boolean
-): Map<string, Row> => indexById(rows.filter((row) => predicate(row.value)));
+export const filterFromScratch = <A>(
+  rows: ReadonlyArray<Row<A>>,
+  predicate: (value: A) => boolean
+): Map<string, Row<A>> => indexById(rows.filter((row) => predicate(row.value)));
 
 /**
  * `map`/select — project each value through an arbitrary JS function, keeping
@@ -195,8 +204,7 @@ export const filterFromScratch = (
  * so an update's `removed` reconstructs the old projection and its `added` the
  * new one.
  */
-// oxlint-disable-next-line effect/no-unknown-returns -- the projection's result is a new untyped row value (`Row.value`); no collection schema decodes it inside the operator algebra.
-export const makeMap = (f: (value: unknown) => unknown): Operator => ({
+export const makeMap = <A, B>(f: (value: A) => B): Operator<A, B> => ({
   step: (delta) => ({
     added: delta.added.map((row) => ({ id: row.id, value: f(row.value) })),
     removed: delta.removed.map((row) => ({ id: row.id, value: f(row.value) })),
@@ -204,11 +212,10 @@ export const makeMap = (f: (value: unknown) => unknown): Operator => ({
 });
 
 /** {@link makeMap}'s naive recompute. */
-export const mapFromScratch = (
-  rows: ReadonlyArray<Row>,
-  // oxlint-disable-next-line effect/no-unknown-returns -- the projection's result is a new untyped row value (`Row.value`); no collection schema decodes it inside the operator algebra.
-  f: (value: unknown) => unknown
-): Map<string, Row> => indexById(rows.map((row) => ({ id: row.id, value: f(row.value) })));
+export const mapFromScratch = <A, B>(
+  rows: ReadonlyArray<Row<A>>,
+  f: (value: A) => B
+): Map<string, Row<B>> => indexById(rows.map((row) => ({ id: row.id, value: f(row.value) })));
 
 /**
  * `distinct` — collapse duplicate values to one row, keyed and identified by
@@ -217,12 +224,12 @@ export const mapFromScratch = (
  * count per distinct value means removing one of several duplicates keeps the
  * distinct row; the row appears when its count goes 0→1 and disappears at 1→0.
  */
-export const makeDistinct = (): Operator => {
-  const counts = new Map<string, { count: number; readonly value: unknown }>();
+export const makeDistinct = <A>(): Operator<A, A> => {
+  const counts = new Map<string, { count: number; readonly value: A }>();
   return {
     step: (delta) => {
-      const added: Array<Row> = [];
-      const removed: Array<Row> = [];
+      const added: Array<Row<A>> = [];
+      const removed: Array<Row<A>> = [];
       for (const row of delta.removed) {
         const key = Hash.canonicalJson(row.value);
         const entry = counts.get(key);
@@ -249,8 +256,8 @@ export const makeDistinct = (): Operator => {
 };
 
 /** {@link makeDistinct}'s naive recompute (dedupe by canonical value). */
-export const distinctFromScratch = (rows: ReadonlyArray<Row>): Map<string, Row> => {
-  const result = new Map<string, Row>();
+export const distinctFromScratch = <A>(rows: ReadonlyArray<Row<A>>): Map<string, Row<A>> => {
+  const result = new Map<string, Row<A>>();
   for (const row of rows) {
     const key = Hash.canonicalJson(row.value);
     if (!result.has(key)) result.set(key, { id: key, value: row.value });
@@ -266,12 +273,12 @@ export const distinctFromScratch = (rows: ReadonlyArray<Row>): Map<string, Row> 
  * re-materialize — every other group's row is untouched (the same
  * touch-only-the-affected-bucket discipline as `Aggregate`'s grouped state).
  */
-export const makeGroupBy = (key: (value: unknown) => string): Operator => {
-  const groups = new Map<string, Map<string, unknown>>();
+export const makeGroupBy = <A>(key: (value: A) => string): Operator<A, Group<A>> => {
+  const groups = new Map<string, Map<string, A>>();
   const groupOf = new Map<string, string>();
-  const lastRow = new Map<string, Row>();
+  const lastRow = new Map<string, Row<Group<A>>>();
 
-  const groupRow = (groupKey: string): Row => {
+  const groupRow = (groupKey: string): Row<Group<A>> => {
     const rows = [...(groups.get(groupKey)?.entries() ?? [])]
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([, value]) => value);
@@ -301,8 +308,8 @@ export const makeGroupBy = (key: (value: unknown) => string): Operator => {
         groupOf.set(row.id, groupKey);
         touched.add(groupKey);
       }
-      const added: Array<Row> = [];
-      const removed: Array<Row> = [];
+      const added: Array<Row<Group<A>>> = [];
+      const removed: Array<Row<Group<A>>> = [];
       for (const groupKey of touched) {
         const previous = lastRow.get(groupKey);
         if (previous !== undefined) removed.push(previous);
@@ -319,25 +326,25 @@ export const makeGroupBy = (key: (value: unknown) => string): Operator => {
   };
 };
 
-/** A group row's value shape (what {@link makeGroupBy} emits). */
-export interface Group {
+/** A group row's value shape (what {@link makeGroupBy} emits): the group key and its members' values. */
+export interface Group<A> {
   readonly key: string;
-  readonly rows: ReadonlyArray<unknown>;
+  readonly rows: ReadonlyArray<A>;
 }
 
 /** {@link makeGroupBy}'s naive recompute. */
-export const groupByFromScratch = (
-  rows: ReadonlyArray<Row>,
-  key: (value: unknown) => string
-): Map<string, Row> => {
-  const groups = new Map<string, Array<[string, unknown]>>();
+export const groupByFromScratch = <A>(
+  rows: ReadonlyArray<Row<A>>,
+  key: (value: A) => string
+): Map<string, Row<Group<A>>> => {
+  const groups = new Map<string, Array<[string, A]>>();
   for (const row of rows) {
     const groupKey = key(row.value);
     const bucket = groups.get(groupKey) ?? [];
     bucket.push([row.id, row.value]);
     groups.set(groupKey, bucket);
   }
-  const result = new Map<string, Row>();
+  const result = new Map<string, Row<Group<A>>>();
   for (const [groupKey, bucket] of groups) {
     const ordered = bucket
       .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -349,26 +356,49 @@ export const groupByFromScratch = (
 
 // ─── Join (inner + left) ─────────────────────────────────────────────────────
 
-/** How a joined row's value is assembled; default `{ left, right }`. */
-// oxlint-disable-next-line effect/no-unknown-returns -- the combined value is a new untyped row value (`Row.value`), assembled by the caller from two untyped ones.
-export type JoinCombine = (left: unknown, right: unknown | null) => unknown;
+/**
+ * How a joined row's `C` value is assembled from a left `L` value and its
+ * matching right `R` value: `Option.some(right)` for a match, `Option.none()`
+ * for an unmatched left under `kind: "left"`.
+ */
+export type JoinCombine<L, R, C> = (left: L, right: Option.Option<R>) => C;
 
-/** Options for {@link makeJoin} / {@link joinFromScratch}. */
-export interface JoinOptions {
-  /** Extract the left row's join key (an arbitrary value; `null`/`undefined` never matches). */
-  // oxlint-disable-next-line effect/no-unknown-returns -- a join key is any value read off an untyped row (`joinKey` canonicalizes it; `null`/`undefined` never match).
-  readonly leftKey: (value: unknown) => unknown;
+/**
+ * A joined row's value when no `combine` is given: the left value and its
+ * matching right (`Option.none()` when unmatched).
+ */
+export interface Joined<L, R> {
+  readonly left: L;
+  readonly right: Option.Option<R>;
+}
+
+/**
+ * Options for {@link makeJoin} / {@link joinFromScratch} over `L` left rows and
+ * `R` right rows. Both key extractors return the one key type `K`, so the two
+ * sides' keys are checked against each other; `combine` assembles the `C`
+ * joined value.
+ */
+export interface JoinOptions<L, R, K, C> {
+  /** Extract the left row's join key (any value; `null`/`undefined` never matches). */
+  readonly leftKey: (value: L) => K;
   /** Extract the right row's join key. */
-  // oxlint-disable-next-line effect/no-unknown-returns -- a join key is any value read off an untyped row (`joinKey` canonicalizes it; `null`/`undefined` never match).
-  readonly rightKey: (value: unknown) => unknown;
-  /** `inner` drops unmatched left rows; `left` keeps them with a `null` right. */
+  readonly rightKey: (value: R) => K;
+  /** `inner` drops unmatched left rows; `left` keeps them with an `Option.none()` right. */
   readonly kind: "inner" | "left";
-  /** Assemble the joined value; defaults to `{ left, right }`. */
-  readonly combine?: JoinCombine;
+  /** Assemble the joined value; defaults to {@link Joined} (`{ left, right }`). */
+  readonly combine?: JoinCombine<L, R, C>;
+}
+
+/** {@link JoinOptions} with its `combine` given: the joined value is that combiner's `C`. */
+export interface CombinedJoinOptions<L, R, K, C> extends JoinOptions<L, R, K, C> {
+  readonly combine: JoinCombine<L, R, C>;
 }
 
 const NUL = "\u0000";
-const defaultCombine: JoinCombine = (left, right) => ({ left, right });
+const defaultCombine = <L, R>(left: L, right: Option.Option<R>): Joined<L, R> => ({
+  left,
+  right,
+});
 
 /** A join key's canonical string, or `undefined` for a non-joining `null`/`undefined` key. */
 const joinKey = (value: unknown): string | undefined =>
@@ -379,45 +409,66 @@ const joinKey = (value: unknown): string | undefined =>
  * per side, an id→row map and a key→ids index; a change re-derives only the
  * left rows whose key the change touches (a right delta re-hydrates only the
  * lefts in the affected buckets; a left delta only itself) — never a full
- * re-group, the same discipline as `Related.makeJoinEngine`. Left-join null
- * rows fall out for free: an unmatched left's contribution is a single
- * `combine(left, null)` row, replaced the moment a matching right arrives.
+ * re-group, the same discipline as `Related.makeJoinEngine`. Left-join
+ * unmatched rows fall out for free: an unmatched left's contribution is a
+ * single `combine(left, Option.none())` row, replaced the moment a matching
+ * right arrives.
  */
-export interface JoinOperator {
-  readonly stepLeft: (delta: Delta) => Delta;
-  readonly stepRight: (delta: Delta) => Delta;
+export interface JoinOperator<L, R, C> {
+  readonly stepLeft: (delta: Delta<L>) => Delta<C>;
+  readonly stepRight: (delta: Delta<R>) => Delta<C>;
 }
 
-/** Build a {@link JoinOperator} for the given join keys and kind (inner or left). */
-export const makeJoin = (options: JoinOptions): JoinOperator => {
-  const combine = options.combine ?? defaultCombine;
-  const leftById = new Map<string, Row>();
-  const rightById = new Map<string, Row>();
-  const rightByKey = new Map<string, Map<string, unknown>>();
+/**
+ * Build a {@link JoinOperator} for the given join keys and kind (inner or
+ * left). Its rows' value is `combine`'s `C`, or {@link Joined} without one.
+ */
+export function makeJoin<L, R, K, C>(
+  options: CombinedJoinOptions<L, R, K, C>
+): JoinOperator<L, R, C>;
+export function makeJoin<L, R, K>(
+  options: JoinOptions<L, R, K, Joined<L, R>>
+): JoinOperator<L, R, Joined<L, R>>;
+export function makeJoin<L, R, K, C>(
+  options: JoinOptions<L, R, K, C>
+): JoinOperator<L, R, C | Joined<L, R>>;
+export function makeJoin<L, R, K, C>(
+  options: JoinOptions<L, R, K, C>
+): JoinOperator<L, R, C | Joined<L, R>> {
+  const combine: JoinCombine<L, R, C | Joined<L, R>> = options.combine ?? defaultCombine;
+  const leftById = new Map<string, Row<L>>();
+  const rightById = new Map<string, Row<R>>();
+  // A bucket holds each right value already wrapped, so a reconcile passes it
+  // to `combine` without allocating an `Option` per matched pair.
+  const rightByKey = new Map<string, Map<string, Option.Option<R>>>();
   const leftByKey = new Map<string, Set<string>>();
-  const contribution = new Map<string, Map<string, Row>>();
+  const contribution = new Map<string, Map<string, Row<C | Joined<L, R>>>>();
 
-  const contributionOf = (leftId: string): Map<string, Row> => {
-    const out = new Map<string, Row>();
+  const contributionOf = (leftId: string): Map<string, Row<C | Joined<L, R>>> => {
+    const out = new Map<string, Row<C | Joined<L, R>>>();
     const left = leftById.get(leftId);
     if (left === undefined) return out;
     const key = joinKey(options.leftKey(left.value));
     const rights = key === undefined ? undefined : rightByKey.get(key);
     if (rights !== undefined && rights.size > 0) {
-      for (const [rightId, rightValue] of rights) {
+      for (const [rightId, right] of rights) {
         const id = `${leftId}${NUL}${rightId}`;
-        out.set(id, { id, value: combine(left.value, rightValue) });
+        out.set(id, { id, value: combine(left.value, right) });
       }
     } else if (options.kind === "left") {
       const id = `${leftId}${NUL}`;
-      out.set(id, { id, value: combine(left.value, null) });
+      out.set(id, { id, value: combine(left.value, Option.none()) });
     }
     return out;
   };
 
   /** Recompute one left row's contribution and emit the diff against its last. */
-  const reconcile = (leftId: string, added: Array<Row>, removed: Array<Row>): void => {
-    const previous = contribution.get(leftId) ?? new Map<string, Row>();
+  const reconcile = (
+    leftId: string,
+    added: Array<Row<C | Joined<L, R>>>,
+    removed: Array<Row<C | Joined<L, R>>>
+  ): void => {
+    const previous = contribution.get(leftId) ?? new Map<string, Row<C | Joined<L, R>>>();
     const next = contributionOf(leftId);
     for (const [id, row] of previous) {
       if (!next.has(id)) removed.push(row);
@@ -434,7 +485,7 @@ export const makeJoin = (options: JoinOptions): JoinOperator => {
     else contribution.delete(leftId);
   };
 
-  const indexLeft = (row: Row): void => {
+  const indexLeft = (row: Row<L>): void => {
     leftById.set(row.id, row);
     const key = joinKey(options.leftKey(row.value));
     if (key === undefined) return;
@@ -443,7 +494,7 @@ export const makeJoin = (options: JoinOptions): JoinOperator => {
     leftByKey.set(key, set);
   };
 
-  const unindexLeft = (row: Row): void => {
+  const unindexLeft = (row: Row<L>): void => {
     leftById.delete(row.id);
     const key = joinKey(options.leftKey(row.value));
     if (key === undefined) return;
@@ -453,17 +504,17 @@ export const makeJoin = (options: JoinOptions): JoinOperator => {
     if (set.size === 0) leftByKey.delete(key);
   };
 
-  const putRight = (row: Row, keys: Set<string>): void => {
+  const putRight = (row: Row<R>, keys: Set<string>): void => {
     const key = joinKey(options.rightKey(row.value));
     rightById.set(row.id, row);
     if (key === undefined) return;
-    const bucket = rightByKey.get(key) ?? new Map<string, unknown>();
-    bucket.set(row.id, row.value);
+    const bucket = rightByKey.get(key) ?? new Map<string, Option.Option<R>>();
+    bucket.set(row.id, Option.some(row.value));
     rightByKey.set(key, bucket);
     keys.add(key);
   };
 
-  const removeRight = (row: Row, keys: Set<string>): void => {
+  const removeRight = (row: Row<R>, keys: Set<string>): void => {
     const key = joinKey(options.rightKey(row.value));
     rightById.delete(row.id);
     if (key === undefined) return;
@@ -487,8 +538,8 @@ export const makeJoin = (options: JoinOptions): JoinOperator => {
         indexLeft(row);
         affected.add(row.id);
       }
-      const added: Array<Row> = [];
-      const removed: Array<Row> = [];
+      const added: Array<Row<C | Joined<L, R>>> = [];
+      const removed: Array<Row<C | Joined<L, R>>> = [];
       for (const leftId of affected) reconcile(leftId, added, removed);
       return { added, removed };
     },
@@ -505,22 +556,37 @@ export const makeJoin = (options: JoinOptions): JoinOperator => {
         const ids = leftByKey.get(key);
         if (ids !== undefined) for (const id of ids) affectedLefts.add(id);
       }
-      const added: Array<Row> = [];
-      const removed: Array<Row> = [];
+      const added: Array<Row<C | Joined<L, R>>> = [];
+      const removed: Array<Row<C | Joined<L, R>>> = [];
       for (const leftId of affectedLefts) reconcile(leftId, added, removed);
       return { added, removed };
     },
   };
-};
+}
 
 /** {@link makeJoin}'s naive recompute (nested-loop join by key equality). */
-export const joinFromScratch = (
-  left: ReadonlyArray<Row>,
-  right: ReadonlyArray<Row>,
-  options: JoinOptions
-): Map<string, Row> => {
-  const combine = options.combine ?? defaultCombine;
-  const rightByKey = new Map<string, Array<Row>>();
+export function joinFromScratch<L, R, K, C>(
+  left: ReadonlyArray<Row<L>>,
+  right: ReadonlyArray<Row<R>>,
+  options: CombinedJoinOptions<L, R, K, C>
+): Map<string, Row<C>>;
+export function joinFromScratch<L, R, K>(
+  left: ReadonlyArray<Row<L>>,
+  right: ReadonlyArray<Row<R>>,
+  options: JoinOptions<L, R, K, Joined<L, R>>
+): Map<string, Row<Joined<L, R>>>;
+export function joinFromScratch<L, R, K, C>(
+  left: ReadonlyArray<Row<L>>,
+  right: ReadonlyArray<Row<R>>,
+  options: JoinOptions<L, R, K, C>
+): Map<string, Row<C | Joined<L, R>>>;
+export function joinFromScratch<L, R, K, C>(
+  left: ReadonlyArray<Row<L>>,
+  right: ReadonlyArray<Row<R>>,
+  options: JoinOptions<L, R, K, C>
+): Map<string, Row<C | Joined<L, R>>> {
+  const combine: JoinCombine<L, R, C | Joined<L, R>> = options.combine ?? defaultCombine;
+  const rightByKey = new Map<string, Array<Row<R>>>();
   for (const row of right) {
     const key = joinKey(options.rightKey(row.value));
     if (key === undefined) continue;
@@ -528,29 +594,29 @@ export const joinFromScratch = (
     bucket.push(row);
     rightByKey.set(key, bucket);
   }
-  const result = new Map<string, Row>();
+  const result = new Map<string, Row<C | Joined<L, R>>>();
   for (const leftRow of left) {
     const key = joinKey(options.leftKey(leftRow.value));
     const matches = key === undefined ? undefined : rightByKey.get(key);
     if (matches !== undefined && Arr.isReadonlyArrayNonEmpty(matches)) {
       for (const rightRow of matches) {
         const id = `${leftRow.id}${NUL}${rightRow.id}`;
-        result.set(id, { id, value: combine(leftRow.value, rightRow.value) });
+        result.set(id, { id, value: combine(leftRow.value, Option.some(rightRow.value)) });
       }
     } else if (options.kind === "left") {
       const id = `${leftRow.id}${NUL}`;
-      result.set(id, { id, value: combine(leftRow.value, null) });
+      result.set(id, { id, value: combine(leftRow.value, Option.none()) });
     }
   }
   return result;
-};
+}
 
 // ─── Ordered window (orderBy + limit) ────────────────────────────────────────
 
-/** An ordered-window operator maintaining a `LiveView` over derived rows. */
-export interface OrderedWindow {
+/** An ordered-window operator maintaining a `LiveView` over derived `A` rows. */
+export interface OrderedWindow<A> {
   /** Apply a delta; returns the current window, ordered and limited. */
-  readonly step: (delta: Delta) => ReadonlyArray<Row>;
+  readonly step: (delta: Delta<A>) => ReadonlyArray<Row<A>>;
 }
 
 /** The subset an ordered window maintains (an always-true `where` over derived rows). */
@@ -567,12 +633,12 @@ const windowSubset = (
  * it. Order is `Subset.comparator` — the one ordering authority (ADR-0026), so
  * "no orderBy" still means a stable id-ascending order.
  */
-export const makeOrderedWindow = (
+export const makeOrderedWindow = <A>(
   orderBy: ReadonlyArray<Subset.OrderBy>,
   limit?: number
-): OrderedWindow => {
+): OrderedWindow<A> => {
   const subset = windowSubset(orderBy, limit);
-  let view = LiveView.make(subset, []);
+  let view = LiveView.make<A>(subset, []);
   return {
     step: (delta) => {
       for (const row of delta.removed) view = LiveView.del(view, row.id);
@@ -583,9 +649,9 @@ export const makeOrderedWindow = (
 };
 
 /** {@link makeOrderedWindow}'s naive recompute (`Subset.apply`: sort then window). */
-export const orderedWindowFromScratch = (
-  rows: ReadonlyArray<Row>,
+export const orderedWindowFromScratch = <A>(
+  rows: ReadonlyArray<Row<A>>,
   orderBy: ReadonlyArray<Subset.OrderBy>,
   limit?: number
-): ReadonlyArray<Row> =>
+): ReadonlyArray<Row<A>> =>
   Subset.apply(rows, windowSubset(orderBy, limit)).map((row) => ({ id: row.id, value: row.value }));

@@ -137,10 +137,10 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out is at `error` (#562): the exported
-      // combinators over untyped row values (`Incremental`, `Derive`,
-      // `Predicate.fieldValue`) return what the caller's projection produces,
-      // and each such site carries its own scoped disable with that reason.
+      // The same boundary on the way out is at `error` (#562): a site that
+      // returns an untyped row value (`Predicate.fieldValue`) carries its own
+      // scoped disable with that reason. The derived combinators (`Incremental`,
+      // `Derive`) are typed by their row, so they return the caller's types.
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
       // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),

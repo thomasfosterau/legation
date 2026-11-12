@@ -15,6 +15,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
@@ -38,15 +39,15 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
-type Row = Derive.Row;
-const page = (rows: ReadonlyArray<Row>): ReadonlyArray<{ id: string; value: unknown }> =>
+type Row<A> = Derive.Row<A>;
+const page = <A>(rows: ReadonlyArray<Row<A>>): ReadonlyArray<{ id: string; value: A }> =>
   rows.map((row) => ({ id: row.id, value: row.value }));
 
 /** Compare a derived page by (id, canonical value) — order-sensitive. */
-const canonicalPage = (rows: ReadonlyArray<Row>): ReadonlyArray<readonly [string, string]> =>
+const canonicalPage = <A>(rows: ReadonlyArray<Row<A>>): ReadonlyArray<readonly [string, string]> =>
   rows.map((row) => [row.id, Hash.canonicalJson(row.value)] as const);
 
-const source = (...pages: ReadonlyArray<ReadonlyArray<Row>>): Derive.Source<never> =>
+const source = <A>(...pages: ReadonlyArray<ReadonlyArray<Row<A>>>): Derive.Source<A, never> =>
   Stream.fromIterable(pages);
 
 const lastEmission = <A>(stream: Stream.Stream<A, never>): Effect.Effect<A> =>
@@ -55,20 +56,20 @@ const lastEmission = <A>(stream: Stream.Stream<A, never>): Effect.Effect<A> =>
 describe("Derive — composition (queries-from-queries)", () => {
   it.effect("filter → map → orderedWindow, maintained across snapshots", () =>
     Effect.gen(function* () {
-      const p1: ReadonlyArray<Row> = [
+      const p1: ReadonlyArray<Row<{ readonly n: number; readonly name: string }>> = [
         { id: "1", value: { n: 3, name: "c" } },
         { id: "2", value: { n: 7, name: "a" } },
         { id: "3", value: { n: 5, name: "b" } },
       ];
       // id 3 removed; id 1's n crosses the filter threshold (3 → 9).
-      const p2: ReadonlyArray<Row> = [
+      const p2: ReadonlyArray<Row<{ readonly n: number; readonly name: string }>> = [
         { id: "1", value: { n: 9, name: "c" } },
         { id: "2", value: { n: 7, name: "a" } },
       ];
       const pipeline = Derive.orderedWindow(
         Derive.map(
-          Derive.filter(source(p1, p2), (v) => (v as { n: number }).n >= 5),
-          (v) => ({ name: (v as { name: string }).name, n: (v as { n: number }).n })
+          Derive.filter(source(p1, p2), (v) => v.n >= 5),
+          (v) => ({ name: v.name, n: v.n })
         ),
         { orderBy: [{ field: "name", direction: "asc" }], limit: 2 }
       );
@@ -82,44 +83,65 @@ describe("Derive — composition (queries-from-queries)", () => {
 
   it.effect("join (left) → map → groupBy — a joined view grouped into rows", () =>
     Effect.gen(function* () {
-      const orders: ReadonlyArray<Row> = [
+      const orders: ReadonlyArray<Row<{ readonly cust: string }>> = [
         { id: "o1", value: { cust: "c1" } },
         { id: "o2", value: { cust: "c2" } },
         { id: "o3", value: { cust: "c1" } },
       ];
-      const customers: ReadonlyArray<Row> = [
+      const customers: ReadonlyArray<Row<{ readonly cid: string; readonly region: string }>> = [
         { id: "c1", value: { cid: "c1", region: "east" } },
         { id: "c2", value: { cid: "c2", region: "west" } },
       ];
       const joined = Derive.join(source(orders), source(customers), {
-        leftKey: (v) => (v as { cust: string }).cust,
-        rightKey: (v) => (v as { cid: string }).cid,
+        leftKey: (v) => v.cust,
+        rightKey: (v) => v.cid,
         kind: "left",
       });
       const byRegion = Derive.groupBy(
-        Derive.map(joined, (v) => {
-          const right = (v as { right: { region: string } | null }).right;
-          return { region: right?.region ?? "none" };
-        }),
-        (v) => (v as { region: string }).region
+        Derive.map(joined, (v) => ({
+          region: Option.match(v.right, { onNone: () => "none", onSome: (c) => c.region }),
+        })),
+        (v) => v.region
       );
       const final = yield* lastEmission(byRegion);
       // Two groups, ordered by key: east has o1+o3, west has o2.
       expect(final.map((row) => row.id)).toEqual(["east", "west"]);
-      const east = defined(final.find((row) => row.id === "east")).value as {
-        rows: ReadonlyArray<unknown>;
-      };
-      const west = defined(final.find((row) => row.id === "west")).value as {
-        rows: ReadonlyArray<unknown>;
-      };
+      const east = defined(final.find((row) => row.id === "east")).value;
+      const west = defined(final.find((row) => row.id === "west")).value;
       expect(east.rows.length).toBe(2);
       expect(west.rows.length).toBe(1);
     })
   );
 
+  it.effect("join with a combine shapes the joined value", () =>
+    Effect.gen(function* () {
+      const orders: ReadonlyArray<Row<{ readonly cust: string; readonly total: number }>> = [
+        { id: "o1", value: { cust: "c1", total: 5 } },
+        { id: "o2", value: { cust: "c9", total: 7 } },
+      ];
+      const customers: ReadonlyArray<Row<{ readonly cid: string; readonly name: string }>> = [
+        { id: "c1", value: { cid: "c1", name: "Ada" } },
+      ];
+      const joined = Derive.join(source(orders), source(customers), {
+        leftKey: (v) => v.cust,
+        rightKey: (v) => v.cid,
+        kind: "left",
+        combine: (order, customer) => ({
+          total: order.total,
+          name: Option.map(customer, (c) => c.name),
+        }),
+      });
+      const final = yield* lastEmission(joined);
+      expect(page(final)).toEqual([
+        { id: "o1\u0000c1", value: { total: 5, name: Option.some("Ada") } },
+        { id: "o2\u0000", value: { total: 7, name: Option.none() } },
+      ]);
+    })
+  );
+
   it.effect("distinct collapses duplicate values to one row", () =>
     Effect.gen(function* () {
-      const p: ReadonlyArray<Row> = [
+      const p: ReadonlyArray<Row<{ readonly c: string }>> = [
         { id: "a", value: { c: "x" } },
         { id: "b", value: { c: "y" } },
         { id: "d", value: { c: "x" } },
@@ -234,7 +256,7 @@ describe("Derive — observable via the standard atom surface", () => {
       );
 
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<Row>) => boolean) =>
+      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) =>
         Effect.gen(function* () {
           for (let attempt = 0; attempt < 200; attempt++) {
             const result = yield* read;
@@ -276,7 +298,7 @@ describe("Derive — observed leaf consumes observeChanges (#133 item 1), not pa
       );
 
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<Row>) => boolean) =>
+      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) =>
         Effect.gen(function* () {
           for (let attempt = 0; attempt < 200; attempt++) {
             const result = yield* read;

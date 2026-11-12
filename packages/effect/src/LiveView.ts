@@ -48,42 +48,53 @@ import * as Subset from "./Subset.js";
 /** A materialized `(id, value)` row, as a subset produces it. */
 export type Row = Subset.Row;
 
-/** A {@link Row} carrying its stable in-window position (see the module doc). */
-export interface PositionedRow extends Row {
+/**
+ * A materialized row whose value is an `A`: what a view over `A` rows holds
+ * and pages out (a {@link Row} at `A = unknown`).
+ */
+export interface ValueRow<A> {
+  readonly id: string;
+  readonly value: A;
+}
+
+/** A {@link ValueRow} carrying its stable in-window position (see the module doc). */
+export interface PositionedRow<A = unknown> extends ValueRow<A> {
   readonly position: string;
 }
 
 /**
- * One subset's incrementally maintained window: the matching rows in subset order, plus an id
- * index over the same rows.
+ * One subset's incrementally maintained window over rows with `A` values: the
+ * matching rows in subset order, plus an id index over the same rows. The
+ * engine's views hold untyped store rows (`A = unknown`); a derived window
+ * (`Incremental.makeOrderedWindow`) holds the typed rows it was given.
  */
-export interface LiveView {
+export interface LiveView<A = unknown> {
   readonly subset: Subset.Subset;
   /** The full filtered + sorted matching set, maintained as an ordered tree. */
-  readonly order: OrderedTree.Tree<Row>;
+  readonly order: OrderedTree.Tree<ValueRow<A>>;
   /**
    * The same rows, maintained as a second tree ordered by id — an id index
    * that supports an O(log n) presence check and O(log n) update, unlike a
    * `Map` (see the module doc for why that distinction matters here).
    */
-  readonly byId: OrderedTree.Tree<Row>;
+  readonly byId: OrderedTree.Tree<ValueRow<A>>;
   /** id → stable position, for rows currently inside the window only. */
   readonly positions: ReadonlyMap<string, string>;
 }
 
 // Ids order by code point, the same order `Subset.comparator`'s tie-break uses (ADR-0028).
 const byIdCompare = (a: Row, b: Row): number => Predicate.compareText(a.id, b.id);
-const findById = (byId: OrderedTree.Tree<Row>, id: string): Row | undefined =>
+const findById = <A>(byId: OrderedTree.Tree<ValueRow<A>>, id: string): ValueRow<A> | undefined =>
   OrderedTree.findBy(byId, id, (key, row) => Predicate.compareText(key, row.id));
 
 const compareOf = (subset: Subset.Subset) => Subset.comparator(subset.orderBy);
 
 /** The window's start rank (0 if no cursor, or the row after it) and length. */
-const windowSlice = (
-  order: OrderedTree.Tree<Row>,
-  byId: OrderedTree.Tree<Row>,
+const windowSlice = <A>(
+  order: OrderedTree.Tree<ValueRow<A>>,
+  byId: OrderedTree.Tree<ValueRow<A>>,
   subset: Subset.Subset
-): ReadonlyArray<Row> => {
+): ReadonlyArray<ValueRow<A>> => {
   let from = 0;
   if (subset.cursor !== undefined) {
     const cursorRow = findById(byId, subset.cursor);
@@ -175,7 +186,7 @@ const positionsFor = (
 ): ReadonlyMap<string, string> => fillGaps(windowRows, reusablePositions(windowRows, previous));
 
 /** Build a view from an unordered collection snapshot. */
-export const make = (subset: Subset.Subset, rows: ReadonlyArray<Row>): LiveView => {
+export const make = <A>(subset: Subset.Subset, rows: ReadonlyArray<ValueRow<A>>): LiveView<A> => {
   const sorted = Subset.sortFiltered(rows, subset);
   const order = OrderedTree.fromSorted(sorted);
   const byId = OrderedTree.fromSorted(sorted.toSorted(byIdCompare));
@@ -189,11 +200,11 @@ export const make = (subset: Subset.Subset, rows: ReadonlyArray<Row>): LiveView 
  * view changes, a change-hub seq-gap collapse) shares the same narrowing as
  * one-shot `query`.
  */
-export const makeIndexed = (
+export const makeIndexed = <A>(
   subset: Subset.Subset,
-  rowsById: ReadonlyMap<string, Row>,
+  rowsById: ReadonlyMap<string, ValueRow<A>>,
   index?: Index.CollectionIndex
-): LiveView => {
+): LiveView<A> => {
   const sorted = Subset.sortFilteredIndexed(rowsById, subset, index);
   const order = OrderedTree.fromSorted(sorted);
   const byId = OrderedTree.fromSorted(sorted.toSorted(byIdCompare));
@@ -202,11 +213,13 @@ export const makeIndexed = (
 };
 
 /** The visible page: the subset's cursor + limit over the maintained order. */
-export const result = (view: LiveView): ReadonlyArray<PositionedRow> =>
-  windowSlice(view.order, view.byId, view.subset).flatMap((row): ReadonlyArray<PositionedRow> => {
-    const position = view.positions.get(row.id);
-    return position === undefined ? [] : [{ id: row.id, value: row.value, position }];
-  });
+export const result = <A>(view: LiveView<A>): ReadonlyArray<PositionedRow<A>> =>
+  windowSlice(view.order, view.byId, view.subset).flatMap(
+    (row): ReadonlyArray<PositionedRow<A>> => {
+      const position = view.positions.get(row.id);
+      return position === undefined ? [] : [{ id: row.id, value: row.value, position }];
+    }
+  );
 
 /**
  * Retarget the window — a new `limit` and/or `cursor`, e.g. "load more"
@@ -220,10 +233,10 @@ export const result = (view: LiveView): ReadonlyArray<PositionedRow> =>
  * Same-reference-on-no-op: returns `view` unchanged if neither `limit` nor
  * `cursor` moved.
  */
-export const retarget = (
-  view: LiveView,
+export const retarget = <A>(
+  view: LiveView<A>,
   window: { readonly limit?: number; readonly cursor?: string }
-): LiveView => {
+): LiveView<A> => {
   const limit = window.limit !== undefined ? window.limit : view.subset.limit;
   const cursor = window.cursor !== undefined ? window.cursor : view.subset.cursor;
   if (limit === view.subset.limit && cursor === view.subset.cursor) return view;
@@ -241,7 +254,7 @@ export const retarget = (
  * reference when the row neither matched before nor matches now (an O(log n)
  * `byId` check).
  */
-export const put = (view: LiveView, row: Row): LiveView => {
+export const put = <A>(view: LiveView<A>, row: ValueRow<A>): LiveView<A> => {
   const matches = Predicate.test(view.subset.where, row.value);
   const existing = findById(view.byId, row.id);
   if (!matches && existing === undefined) return view;
@@ -260,7 +273,7 @@ export const put = (view: LiveView, row: Row): LiveView => {
 };
 
 /** Apply a row deletion. Returns the same view reference if the id is absent. */
-export const del = (view: LiveView, id: string): LiveView => {
+export const del = <A>(view: LiveView<A>, id: string): LiveView<A> => {
   const existing = findById(view.byId, id);
   if (existing === undefined) return view;
   const order = OrderedTree.remove(view.order, existing, compareOf(view.subset));
