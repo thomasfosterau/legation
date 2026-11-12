@@ -7,7 +7,7 @@
  * the API, and pull reflects authoritative state. Update and delete round
  * trip the same way.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
@@ -26,6 +26,7 @@ import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
@@ -114,7 +115,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
   rows.map((row) => (row.value as { title: string }).title);
 
-describe("Convention.classify", () => {
+describeWrapped("Convention.classify", (it) => {
   it("classifies conventional JSON:API routes", () => {
     expect(Convention.classify("GET", "/todos")).toEqual(
       Option.some({ type: "todos", operation: "list" })
@@ -149,7 +150,7 @@ describe("Convention.classify", () => {
   });
 });
 
-describe("JsonApiSync.inspect", () => {
+describeWrapped("JsonApiSync.inspect", (it) => {
   it("discovers the resource, collection, and CRUD mutators", () => {
     const { resources, collections, registry, operations } = JsonApiSync.inspect(api);
     expect([...resources.keys()]).toEqual(["todos"]);
@@ -164,66 +165,67 @@ describe("JsonApiSync.inspect", () => {
 });
 
 describe("end-to-end client-direct sync", () => {
-  it.effect("optimistic create is visible, then syncs through the API", () => {
+  {
     const server = makeServer();
     const todos = Subset.make({
       collection: "todos",
       orderBy: [{ field: "id", direction: "asc" }],
     });
 
-    return Effect.gen(function* () {
-      const engine = yield* ClientEngine.ClientEngine;
-      yield* engine.subscribe(todos);
+    layer(
+      JsonApiSync.layer(api, {
+        baseUrl: "http://api.test",
+        clientId: "client-1",
+        clientGroupId: "group-1",
+      }).pipe(Layer.provide(server.layer))
+    )((scoped) => {
+      scoped.effect("optimistic create is visible, then syncs through the API", () =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.subscribe(todos);
 
-      // Optimistic create — visible before any network round trip.
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "1",
-        attributes: { title: "first" },
-      });
-      expect(titles(yield* engine.query(todos))).toEqual(["first"]);
+          // Optimistic create — visible before any network round trip.
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "1",
+            attributes: { title: "first" },
+          });
+          expect(titles(yield* engine.query(todos))).toEqual(["first"]);
 
-      // Sync: push writes through, pull reveals authoritative state.
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.has("1")).toBe(true);
-      expect(titles(yield* engine.query(todos))).toEqual(["first"]);
+          // Sync: push writes through, pull reveals authoritative state.
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.has("1")).toBe(true);
+          expect(titles(yield* engine.query(todos))).toEqual(["first"]);
 
-      // Update round trips.
-      yield* engine.mutate("todos/update", {
-        type: "todos",
-        id: "1",
-        attributes: { title: "edited" },
-      });
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.get("1")?.attributes.title).toBe("edited");
-      expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
+          // Update round trips.
+          yield* engine.mutate("todos/update", {
+            type: "todos",
+            id: "1",
+            attributes: { title: "edited" },
+          });
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.get("1")?.attributes.title).toBe("edited");
+          expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
 
-      // A row created directly on the server arrives via pull.
-      server.store.set("2", { type: "todos", id: "2", attributes: { title: "remote" } });
-      yield* engine.pull;
-      expect(titles(yield* engine.query(todos))).toEqual(["edited", "remote"]);
+          // A row created directly on the server arrives via pull.
+          server.store.set("2", { type: "todos", id: "2", attributes: { title: "remote" } });
+          yield* engine.pull;
+          expect(titles(yield* engine.query(todos))).toEqual(["edited", "remote"]);
 
-      // Delete round trips.
-      yield* engine.mutate("todos/delete", { type: "todos", id: "2" });
-      yield* engine.push;
-      yield* engine.pull;
-      expect(server.store.has("2")).toBe(false);
-      expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
-    }).pipe(
-      Effect.provide(
-        JsonApiSync.layer(api, {
-          baseUrl: "http://api.test",
-          clientId: "client-1",
-          clientGroupId: "group-1",
-        }).pipe(Layer.provide(server.layer))
-      ),
-      Effect.scoped
-    );
-  });
+          // Delete round trips.
+          yield* engine.mutate("todos/delete", { type: "todos", id: "2" });
+          yield* engine.push;
+          yield* engine.pull;
+          expect(server.store.has("2")).toBe(false);
+          expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
+        })
+      );
+    });
+  }
 
-  it.effect("a 4xx create is permanently rejected without poisoning the queue", () => {
+  {
     // The server forbids creating "x"; the create behind it must still land.
     const server = makeServer((id) => id === "x");
     const todos = Subset.make({
@@ -231,47 +233,48 @@ describe("end-to-end client-direct sync", () => {
       orderBy: [{ field: "id", direction: "asc" }],
     });
 
-    return Effect.gen(function* () {
-      const engine = yield* ClientEngine.ClientEngine;
-      yield* engine.subscribe(todos);
+    layer(
+      JsonApiSync.layer(api, {
+        baseUrl: "http://api.test",
+        clientId: "client-1",
+        clientGroupId: "group-1",
+      }).pipe(Layer.provide(server.layer))
+    )((scoped) => {
+      scoped.effect("a 4xx create is permanently rejected without poisoning the queue", () =>
+        Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.subscribe(todos);
 
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "x",
-        attributes: { title: "doomed" },
-      });
-      yield* engine.mutate("todos/create", {
-        type: "todos",
-        id: "y",
-        attributes: { title: "kept" },
-      });
-      // Both are optimistically visible.
-      expect(titles(yield* engine.query(todos))).toEqual(["doomed", "kept"]);
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "x",
+            attributes: { title: "doomed" },
+          });
+          yield* engine.mutate("todos/create", {
+            type: "todos",
+            id: "y",
+            attributes: { title: "kept" },
+          });
+          // Both are optimistically visible.
+          expect(titles(yield* engine.query(todos))).toEqual(["doomed", "kept"]);
 
-      // Push succeeds (the 403 is a permanent rejection, not a transport error);
-      // the journal drains without app intervention.
-      yield* engine.push;
-      yield* engine.pull;
+          // Push succeeds (the 403 is a permanent rejection, not a transport error);
+          // the journal drains without app intervention.
+          yield* engine.push;
+          yield* engine.pull;
 
-      // The forbidden create left no server row and its optimistic effect is
-      // gone; the create queued behind it applied.
-      expect(server.store.has("x")).toBe(false);
-      expect(server.store.has("y")).toBe(true);
-      expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
-    }).pipe(
-      Effect.provide(
-        JsonApiSync.layer(api, {
-          baseUrl: "http://api.test",
-          clientId: "client-1",
-          clientGroupId: "group-1",
-        }).pipe(Layer.provide(server.layer))
-      ),
-      Effect.scoped
-    );
-  });
+          // The forbidden create left no server row and its optimistic effect is
+          // gone; the create queued behind it applied.
+          expect(server.store.has("x")).toBe(false);
+          expect(server.store.has("y")).toBe(true);
+          expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
+        })
+      );
+    });
+  }
 });
 
-describe("JsonApiSync.layer store option", () => {
+describeWrapped("JsonApiSync.layer store option", (it) => {
   it.effect("writes through a supplied durable client store", () => {
     const server = makeServer();
     return Effect.gen(function* () {
@@ -286,7 +289,7 @@ describe("JsonApiSync.layer store option", () => {
           attributes: { title: "queued" },
         });
       }).pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -307,86 +310,95 @@ describe("JsonApiSync.layer ledger default (#468)", () => {
     attributes: { title: "queued" },
   };
 
-  it.effect("writes the ledger to keyValueStore when no ledger is given", () => {
-    const server = makeServer();
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", todoCreate);
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-      // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
-      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
-        lastMutationIds: { "client-1": 1 },
-        rejections: [],
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("writes the ledger to keyValueStore when no ledger is given", () => {
+      const server = makeServer();
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", todoCreate);
+          yield* engine.push;
+        }).pipe(
+          withLayer(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+        // The push acknowledged mutation 1, and the ledger is in the store, not in memory alone.
+        expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+          lastMutationIds: { "client-1": 1 },
+          rejections: [],
+        });
       });
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
+    });
   });
 
-  it.effect("a reload with keyValueStore alone reaches the server with its next mutation", () => {
-    const server = makeServer();
-    const mutate = (kv: KeyValueStore.KeyValueStore, id: string, title: string) =>
-      Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", { type: "todos", id, attributes: { title } });
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* mutate(kv, "1", "first");
-      // A reload: a new layer over the same key/value store, with no `store` given. The
-      // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
-      yield* mutate(kv, "2", "second");
-      expect(server.store.get("2")?.attributes.title).toBe("second");
-      expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
-        lastMutationIds: { "client-1": 2 },
-        rejections: [],
-      });
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a reload with keyValueStore alone reaches the server with its next mutation",
+      () => {
+        const server = makeServer();
+        const mutate = (kv: KeyValueStore.KeyValueStore, id: string, title: string) =>
+          Effect.gen(function* () {
+            const engine = yield* ClientEngine.ClientEngine;
+            yield* engine.mutate("todos/create", { type: "todos", id, attributes: { title } });
+            yield* engine.push;
+          }).pipe(
+            withLayer(
+              JsonApiSync.layer(api, {
+                baseUrl: "http://api.test",
+                clientId: "client-1",
+                clientGroupId: "group-1",
+                keyValueStore: kv,
+              }).pipe(Layer.provide(server.layer))
+            ),
+            Effect.scoped
+          );
+        return Effect.gen(function* () {
+          const kv = yield* KeyValueStore.KeyValueStore;
+          yield* mutate(kv, "1", "first");
+          // A reload: a new layer over the same key/value store, with no `store` given. The
+          // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
+          yield* mutate(kv, "2", "second");
+          expect(server.store.get("2")?.attributes.title).toBe("second");
+          expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
+            lastMutationIds: { "client-1": 2 },
+            rejections: [],
+          });
+        });
+      }
+    );
   });
 
-  it.effect("an explicit ledger overrides the key/value store", () => {
-    const server = makeServer();
-    return Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* Effect.gen(function* () {
-        const engine = yield* ClientEngine.ClientEngine;
-        yield* engine.mutate("todos/create", todoCreate);
-        yield* engine.push;
-      }).pipe(
-        Effect.provide(
-          JsonApiSync.layer(api, {
-            baseUrl: "http://api.test",
-            clientId: "client-1",
-            clientGroupId: "group-1",
-            keyValueStore: kv,
-            ledger: Ledger.memory,
-          }).pipe(Layer.provide(server.layer))
-        ),
-        Effect.scoped
-      );
-      expect(yield* kv.has("legation-jsonapi:ledger:group-1")).toBe(false);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory));
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("an explicit ledger overrides the key/value store", () => {
+      const server = makeServer();
+      return Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        yield* Effect.gen(function* () {
+          const engine = yield* ClientEngine.ClientEngine;
+          yield* engine.mutate("todos/create", todoCreate);
+          yield* engine.push;
+        }).pipe(
+          withLayer(
+            JsonApiSync.layer(api, {
+              baseUrl: "http://api.test",
+              clientId: "client-1",
+              clientGroupId: "group-1",
+              keyValueStore: kv,
+              ledger: Ledger.memory,
+            }).pipe(Layer.provide(server.layer))
+          ),
+          Effect.scoped
+        );
+        expect(yield* kv.has("legation-jsonapi:ledger:group-1")).toBe(false);
+      });
+    });
   });
 });

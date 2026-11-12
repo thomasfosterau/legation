@@ -12,7 +12,7 @@
  * the tests assert on it, and a mutant that leaks the write is detected by the
  * same probe.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -192,7 +192,9 @@ const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
       const committed = yield* readView(reader);
       return { parked, committed, reported: result.lastMutationIds } satisfies Probe;
     })
-  ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)));
+  );
+
+const platformLayer = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer);
 
 /** The guarantee: a parked mutation's write and bump are invisible to a concurrent reader. */
 const expectInvisibleWhileParked = (parked: View) => {
@@ -201,7 +203,7 @@ const expectInvisibleWhileParked = (parked: View) => {
   expect(parked.ledger).toEqual({});
 };
 
-describe("SqlBackend visibility before the bump (guarantee 1, #381)", () => {
+layer(platformLayer)("SqlBackend visibility before the bump (guarantee 1, #381)", (it) => {
   it.effect("a concurrent read sees neither a parked handler's write nor its bump", () =>
     Effect.gen(function* () {
       const observed = yield* probe(makeExecutor);

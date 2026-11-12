@@ -28,6 +28,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -527,17 +529,21 @@ export interface UndoControls {
   readonly redo: () => Promise<void>;
 }
 
+// The adapter's own runtime for the undo hooks: the manager's streams and effects close over the
+// engine (no `R`), so there is no service to supply and no Client to find in context.
+const edge = ManagedRuntime.make(Layer.empty);
+
 /** Drain a boolean stream into `$state`, interrupting on teardown. */
 const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean } => {
   let value = $state(false);
   $effect(() => {
     // The manager's streams close over the engine (no `R`), so they run on the
     // default runtime — `useUndo` needs no Client in context.
-    const fiber = Effect.runFork(
+    const fiber = edge.runFork(
       Stream.runForEach(changes, (next) => Effect.sync(() => (value = next)))
     );
     return () => {
-      Effect.runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
   return {
@@ -562,7 +568,7 @@ export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
     get canRedo() {
       return canRedo.current;
     },
-    undo: () => Effect.runPromise(Effect.ignore(manager.undo)),
-    redo: () => Effect.runPromise(Effect.ignore(manager.redo)),
+    undo: () => edge.runPromise(Effect.ignore(manager.undo)),
+    redo: () => edge.runPromise(Effect.ignore(manager.redo)),
   };
 };

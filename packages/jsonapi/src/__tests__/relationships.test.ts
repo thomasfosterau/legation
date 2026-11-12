@@ -24,6 +24,7 @@ import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
@@ -146,7 +147,7 @@ const provide = <E>(
   options?: { readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> }
 ) =>
   program.pipe(
-    Effect.provide(
+    withLayer(
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "c1",
@@ -250,10 +251,11 @@ describe("Relationships", () => {
   // Real-clock test: a forked observer collects the join's emissions while a
   // referenced (not base) row is edited, proving the live join re-emits
   // incrementally without the base subset changing.
-  it("re-emits the join incrementally when a referenced row changes", async () => {
-    const server = makeServer(seed);
-    await Effect.runPromise(
-      provide(
+  it.live(
+    "re-emits the join incrementally when a referenced row changes",
+    () => {
+      const server = makeServer(seed);
+      return provide(
         Effect.gen(function* () {
           const engine = yield* ClientEngine.ClientEngine;
           yield* syncAll(engine);
@@ -300,9 +302,10 @@ describe("Relationships", () => {
           expect(emissions.length).toBeGreaterThanOrEqual(2);
         }),
         server
-      )
-    );
-  }, 10000);
+      );
+    },
+    10000
+  );
 
   it.effect("auto-subscribes the referenced collections (narrowed by id)", () => {
     const server = makeServer(seed);

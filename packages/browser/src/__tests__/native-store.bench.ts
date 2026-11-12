@@ -34,6 +34,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
 import type * as Ordering from "effect/Ordering";
@@ -46,6 +47,7 @@ import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { withLayer } from "./with-layer.js";
 
 // ─── Deterministic data ──────────────────────────────────────────────────────
 
@@ -193,11 +195,14 @@ const countingStore = () => {
   return { store, data, reset, summarise };
 };
 
+// The script's own runtime, made once at module load: every section's effects run on it.
+const runtime = ManagedRuntime.make(Layer.empty);
+
 const withCounting = <A, E>(
   counting: ReturnType<typeof countingStore>,
   effect: Effect.Effect<A, E, KeyValueStore.KeyValueStore>
 ) =>
-  Effect.runPromise(
+  runtime.runPromise(
     effect.pipe(Effect.provideService(KeyValueStore.KeyValueStore, counting.store))
   );
 
@@ -411,7 +416,7 @@ const sectionC = async () => {
   const table: Array<Record<string, number | string>> = [];
   const row = (what: string, duration: Duration.Duration) =>
     table.push({ what, transactions: counted.count(), ms: ms(Duration.toMillis(duration)) });
-  await Effect.runPromise(
+  await runtime.runPromise(
     Effect.gen(function* () {
       const store = yield* ClientStore.ClientStore;
       counted.reset();
@@ -440,7 +445,7 @@ const sectionC = async () => {
       counted.reset();
       const [loadTime, loaded] = yield* Effect.timed(store.listRows(COLLECTION));
       row(`cold load listRows (${loaded.length} rows)`, loadTime);
-    }).pipe(Effect.provide(layer))
+    }).pipe(withLayer(layer))
   );
   // eslint-disable-next-line no-console
   console.log("C. IndexedDbClientStore (KV layout) over fake-indexeddb");

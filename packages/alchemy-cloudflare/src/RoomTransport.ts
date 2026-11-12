@@ -78,7 +78,7 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
           socket = new WebSocket(socketUrl);
           socket.onmessage = () => {
             attempt = 0;
-            void Queue.offer(queue, {}).pipe(Effect.runPromise);
+            Queue.offerUnsafe(queue, {});
           };
           socket.onclose = () => {
             if (closed) return;

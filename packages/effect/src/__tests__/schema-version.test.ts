@@ -7,7 +7,7 @@
  * fleet cookie-namespace bump forces every old cookie to a reset patch.
  */
 import * as Defined from "../Defined.js";
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -106,7 +106,7 @@ const makeClient = (handler: ServerHandler, name: string, clientOptions?: Client
     return { engine, store };
   });
 
-describe("schema-version rejection", () => {
+describeWrapped("schema-version rejection", (it) => {
   it.effect(
     "an unacceptable version fails push and pull typed, fires onUpdateNeeded once, keeps the journal",
     () =>
@@ -158,7 +158,7 @@ describe("schema-version rejection", () => {
   );
 });
 
-describe("schema-version interop old ↔ new", () => {
+describeWrapped("schema-version interop old ↔ new", (it) => {
   it.effect("old client (no version) ↔ new server with default accept-all works", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer(); // acceptor unset → accept everything
@@ -203,7 +203,7 @@ describe("schema-version interop old ↔ new", () => {
   );
 });
 
-describe("protocol round-trips a version-less request unchanged", () => {
+describeWrapped("protocol round-trips a version-less request unchanged", (it) => {
   it.effect("a push/pull request without schemaVersion decodes as today", () =>
     Effect.gen(function* () {
       const push = yield* decodePushRequest({ clientGroupId: "g", mutations: [] });
@@ -218,82 +218,88 @@ describe("protocol round-trips a version-less request unchanged", () => {
 });
 
 describe("storeVersion buster", () => {
-  it.effect("a changed storeVersion clears rows + cookie but preserves the journal", () =>
-    Effect.gen(function* () {
-      const first = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
-      yield* first.putRow("todos", { id: "1", version: 1, value: { title: "cached" } });
-      yield* first.setCookie("cookie-1");
-      yield* first.appendMutation({
-        clientId: "c1",
-        mutationId: yield* first.nextMutationId("c1"),
-        mutator: "todo/set",
-        args: { id: "2", title: "pending", done: false },
-        createdAt: 0,
-      });
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a changed storeVersion clears rows + cookie but preserves the journal", () =>
+      Effect.gen(function* () {
+        const first = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
+        yield* first.putRow("todos", { id: "1", version: 1, value: { title: "cached" } });
+        yield* first.setCookie("cookie-1");
+        yield* first.appendMutation({
+          clientId: "c1",
+          mutationId: yield* first.nextMutationId("c1"),
+          mutator: "todo/set",
+          args: { id: "2", title: "pending", done: false },
+          createdAt: 0,
+        });
 
-      // Reopen over the same KVS with a bumped storeVersion: rows + cookie go,
-      // the journal stays.
-      const second = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
-      expect(yield* second.listRows("todos")).toHaveLength(0);
-      expect(yield* second.getCookie).toBeUndefined();
-      expect(yield* second.pendingMutations).toHaveLength(1);
+        // Reopen over the same KVS with a bumped storeVersion: rows + cookie go,
+        // the journal stays.
+        const second = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
+        expect(yield* second.listRows("todos")).toHaveLength(0);
+        expect(yield* second.getCookie).toBeUndefined();
+        expect(yield* second.pendingMutations).toHaveLength(1);
 
-      // Same version again is a no-op: nothing further is cleared.
-      const third = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
-      expect(yield* third.pendingMutations).toHaveLength(1);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
+        // Same version again is a no-op: nothing further is cleared.
+        const third = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
+        expect(yield* third.pendingMutations).toHaveLength(1);
+      })
+    );
+  });
 
-  it.effect("after a buster the next pull rehydrates fully; the pending intent survives", () =>
-    Effect.gen(function* () {
-      const handler = yield* makeServer();
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "after a buster the next pull rehydrates fully; the pending intent survives",
+      () =>
+        Effect.gen(function* () {
+          const handler = yield* makeServer();
 
-      // Client A (storeVersion v1) commits a row so the backend holds it.
-      const storeA = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
-      const transportA = yield* makeInMemory(handler, "group-a");
-      const engineA = yield* ClientEngineModule.make({
-        clientId: "client-a",
-        clientGroupId: "group-a",
-        mutators,
-      }).pipe(
-        Effect.provideService(ClientStore, storeA),
-        Effect.provideService(ClientTransport, transportA)
-      );
-      yield* engineA.subscribe(allTodos);
-      yield* engineA.mutate("todo/set", { id: "1", title: "committed", done: false });
-      yield* engineA.push;
-      yield* engineA.pull;
-      expect(yield* storeA.listRows("todos")).toHaveLength(1);
-      // Leave an unpushed mutation in the journal before the buster runs.
-      yield* engineA.mutate("todo/set", { id: "2", title: "pending", done: false });
+          // Client A (storeVersion v1) commits a row so the backend holds it.
+          const storeA = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
+          const transportA = yield* makeInMemory(handler, "group-a");
+          const engineA = yield* ClientEngineModule.make({
+            clientId: "client-a",
+            clientGroupId: "group-a",
+            mutators,
+          }).pipe(
+            Effect.provideService(ClientStore, storeA),
+            Effect.provideService(ClientTransport, transportA)
+          );
+          yield* engineA.subscribe(allTodos);
+          yield* engineA.mutate("todo/set", { id: "1", title: "committed", done: false });
+          yield* engineA.push;
+          yield* engineA.pull;
+          expect(yield* storeA.listRows("todos")).toHaveLength(1);
+          // Leave an unpushed mutation in the journal before the buster runs.
+          yield* engineA.mutate("todo/set", { id: "2", title: "pending", done: false });
 
-      // Reopen the store with a bumped storeVersion → rows + cookie cleared,
-      // journal preserved.
-      const storeB = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
-      expect(yield* storeB.listRows("todos")).toHaveLength(0);
-      expect(yield* storeB.getCookie).toBeUndefined();
-      expect(yield* storeB.pendingMutations).toHaveLength(1);
+          // Reopen the store with a bumped storeVersion → rows + cookie cleared,
+          // journal preserved.
+          const storeB = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v2" });
+          expect(yield* storeB.listRows("todos")).toHaveLength(0);
+          expect(yield* storeB.getCookie).toBeUndefined();
+          expect(yield* storeB.pendingMutations).toHaveLength(1);
 
-      const transportB = yield* makeInMemory(handler, "group-a");
-      const engineB = yield* ClientEngineModule.make({
-        clientId: "client-a",
-        clientGroupId: "group-a",
-        mutators,
-      }).pipe(
-        Effect.provideService(ClientStore, storeB),
-        Effect.provideService(ClientTransport, transportB)
-      );
-      yield* engineB.subscribe(allTodos);
-      yield* engineB.pull; // full reset: rehydrates row "1" from the server
-      expect(yield* storeB.listRows("todos")).toHaveLength(1);
-      // The preserved pending intent ("2") is still visible via the overlay.
-      const view = yield* engineB.query(allTodos);
-      expect(view.map((row) => row.id).toSorted()).toEqual(["1", "2"]);
-    }).pipe(Effect.provide(KeyValueStore.layerMemory))
-  );
+          const transportB = yield* makeInMemory(handler, "group-a");
+          const engineB = yield* ClientEngineModule.make({
+            clientId: "client-a",
+            clientGroupId: "group-a",
+            mutators,
+          }).pipe(
+            Effect.provideService(ClientStore, storeB),
+            Effect.provideService(ClientTransport, transportB)
+          );
+          yield* engineB.subscribe(allTodos);
+          yield* engineB.pull; // full reset: rehydrates row "1" from the server
+          expect(yield* storeB.listRows("todos")).toHaveLength(1);
+          // The preserved pending intent ("2") is still visible via the overlay.
+          const view = yield* engineB.query(allTodos);
+          expect(view.map((row) => row.id).toSorted()).toEqual(["1", "2"]);
+        })
+    );
+  });
 });
 
-describe("fleet cookie-reset via CVR namespace bump", () => {
+describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
   it.effect("a pull with a pre-bump cookie is a reset patch (Clear present)", () =>
     Effect.gen(function* () {
       const services = yield* makeServices;

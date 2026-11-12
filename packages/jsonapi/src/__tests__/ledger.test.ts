@@ -1,7 +1,7 @@
 /**
  * Ledger stores (#468): the in-memory default and the key/value store adapter.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -20,7 +20,7 @@ const group: Ledger.GroupLedger = {
   rejections: [{ clientId: "client-1", mutationId: 2, reason: "title taken" }],
 };
 
-describe("Ledger.memory", () => {
+describeWrapped("Ledger.memory", (it) => {
   it.effect("reads an empty group and persists nothing", () =>
     Effect.gen(function* () {
       expect(yield* Ledger.memory.read("g")).toEqual(Ledger.emptyGroup);
@@ -31,36 +31,47 @@ describe("Ledger.memory", () => {
 });
 
 describe("Ledger.keyValue", () => {
-  it.effect("reads an unknown group as empty", () =>
-    Effect.gen(function* () {
-      const store = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-      expect(yield* store.read("never-written")).toEqual(Ledger.emptyGroup);
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("reads an unknown group as empty", () =>
+      Effect.gen(function* () {
+        const store = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        expect(yield* store.read("never-written")).toEqual(Ledger.emptyGroup);
+      })
+    );
+  });
 
-  it.effect("round-trips a group, keeping each group under its own key", () =>
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const store = Ledger.keyValue(kv);
-      yield* store.write("g", group);
-      expect(yield* store.read("g")).toEqual(group);
-      expect(yield* store.read("other")).toEqual(Ledger.emptyGroup);
-      expect(yield* kv.has("legation-jsonapi:ledger:g")).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("round-trips a group, keeping each group under its own key", () =>
+      Effect.gen(function* () {
+        const kv = yield* KeyValueStore.KeyValueStore;
+        const store = Ledger.keyValue(kv);
+        yield* store.write("g", group);
+        expect(yield* store.read("g")).toEqual(group);
+        expect(yield* store.read("other")).toEqual(Ledger.emptyGroup);
+        expect(yield* kv.has("legation-jsonapi:ledger:g")).toBe(true);
+      })
+    );
+  });
 
-  it.effect("refuses a stored value that does not decode, rather than reading it as empty", () =>
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      yield* kv.set("legation-jsonapi:ledger:g", "{not json");
-      const store = Ledger.keyValue(kv);
-      const notJson = yield* Effect.flip(store.read("g"));
-      expect(notJson).toBeInstanceOf(BackendError);
-      yield* kv.set("legation-jsonapi:ledger:g", JSON.stringify({ lastMutationIds: { a: "x" } }));
-      const notLedger = yield* Effect.flip(store.read("g"));
-      expect(notLedger).toBeInstanceOf(BackendError);
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "refuses a stored value that does not decode, rather than reading it as empty",
+      () =>
+        Effect.gen(function* () {
+          const kv = yield* KeyValueStore.KeyValueStore;
+          yield* kv.set("legation-jsonapi:ledger:g", "{not json");
+          const store = Ledger.keyValue(kv);
+          const notJson = yield* Effect.flip(store.read("g"));
+          expect(notJson).toBeInstanceOf(BackendError);
+          yield* kv.set(
+            "legation-jsonapi:ledger:g",
+            JSON.stringify({ lastMutationIds: { a: "x" } })
+          );
+          const notLedger = yield* Effect.flip(store.read("g"));
+          expect(notLedger).toBeInstanceOf(BackendError);
+        })
+    );
+  });
 });
 
 /**
@@ -120,7 +131,7 @@ const boundMutation = (mutationId: number, mutator: string, args: unknown) => ({
   createdAt: 0,
 });
 
-describe("JsonApiBackend rejection memory bound (#475)", () => {
+describeWrapped("JsonApiBackend rejection memory bound (#475)", (it) => {
   it.effect("a rejection at a push's floor is kept, and forgotten once a push starts past it", () =>
     Effect.gen(function* () {
       const backend = yield* JsonApiBackend.make({

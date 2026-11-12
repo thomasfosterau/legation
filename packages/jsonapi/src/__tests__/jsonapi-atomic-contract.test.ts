@@ -9,7 +9,7 @@
  * backend's `writes` seam; the server's rules make `reject` a 422 pointing at
  * the operation and `fail` a server fault (500).
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -540,38 +540,41 @@ const makeBackend = (
     return { backend, requests, store };
   });
 
-describe("JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operations", () => {
-  it.effect("satisfies verifyBackendContract", () =>
-    Effect.gen(function* () {
-      const { backend, requests } = yield* makeBackend();
-      yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
-      // Every write went through the atomic endpoint; reads through the resources.
-      const writeRequests = requests.filter((request) => request.method !== "GET");
-      expect(writeRequests.length).toBeGreaterThan(0);
-      expect(writeRequests.every((request) => request.path === "/operations")).toBe(true);
-    }).pipe(Effect.scoped)
-  );
-
-  it.effect("catches an unregistered write-then-fail mutator", () =>
-    Effect.gen(function* () {
-      const { backend } = yield* makeBackend(BackendContract.writeThenFail.name);
-      const failure = yield* Effect.flip(
-        BackendContract.verifyBackendContract(backend, { collection: COLLECTION })
-      );
-      expect(failure.rule).toContain("discards");
-      expect(failure.message).toContain("not registered");
-    }).pipe(Effect.scoped)
-  );
-
-  it("reflects the effect-jsonapi api without a phantom `operations` resource", () => {
-    const resources = Convention.reflectResources(api);
-    expect([...resources.keys()].toSorted()).toEqual([COLLECTION, EVAL_COLLECTION]);
-    expect(Option.map(defined(resources.get(COLLECTION)).getOne, ({ path }) => path)).toEqual(
-      Option.some(`/${COLLECTION}/:id`)
+describeWrapped(
+  "JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operations",
+  (it) => {
+    it.effect("satisfies verifyBackendContract", () =>
+      Effect.gen(function* () {
+        const { backend, requests } = yield* makeBackend();
+        yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
+        // Every write went through the atomic endpoint; reads through the resources.
+        const writeRequests = requests.filter((request) => request.method !== "GET");
+        expect(writeRequests.length).toBeGreaterThan(0);
+        expect(writeRequests.every((request) => request.path === "/operations")).toBe(true);
+      }).pipe(Effect.scoped)
     );
-    expect(defined(resources.get(COLLECTION)).create).toEqual(Option.none());
-  });
-});
+
+    it.effect("catches an unregistered write-then-fail mutator", () =>
+      Effect.gen(function* () {
+        const { backend } = yield* makeBackend(BackendContract.writeThenFail.name);
+        const failure = yield* Effect.flip(
+          BackendContract.verifyBackendContract(backend, { collection: COLLECTION })
+        );
+        expect(failure.rule).toContain("discards");
+        expect(failure.message).toContain("not registered");
+      }).pipe(Effect.scoped)
+    );
+
+    it("reflects the effect-jsonapi api without a phantom `operations` resource", () => {
+      const resources = Convention.reflectResources(api);
+      expect([...resources.keys()].toSorted()).toEqual([COLLECTION, EVAL_COLLECTION]);
+      expect(Option.map(defined(resources.get(COLLECTION)).getOne, ({ path }) => path)).toEqual(
+        Option.some(`/${COLLECTION}/:id`)
+      );
+      expect(defined(resources.get(COLLECTION)).create).toEqual(Option.none());
+    });
+  }
+);
 
 // ─── Visibility before the bump (guarantee 1, #381) ──────────────────────────
 
@@ -633,7 +636,7 @@ const expectInvisibleWhileParked = (parked: {
   expect(parked.ledger).toEqual({});
 };
 
-describe("JsonApiBackend visibility before the bump (guarantee 1, #381)", () => {
+describeWrapped("JsonApiBackend visibility before the bump (guarantee 1, #381)", (it) => {
   it.effect("a concurrent read sees neither a parked batch's row nor its bump", () =>
     Effect.gen(function* () {
       const observed = yield* probeBatch(false);
@@ -690,174 +693,191 @@ const restartPush = () => [
 ];
 
 describe("JsonApiBackend ledger store (#468), atomic mode", () => {
-  it.effect("satisfies verifyBackendContract over a durable ledger store", () =>
-    Effect.gen(function* () {
-      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-      const { backend } = yield* makeBackend(undefined, noProbe, { ledger });
-      yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
+      Effect.gen(function* () {
+        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        const { backend } = yield* makeBackend(undefined, noProbe, { ledger });
+        yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
+      })
+    );
+  });
 
-  it.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
-    Effect.gen(function* () {
-      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-      const server: Store = new Map();
-      const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
-      const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
-      const rejected = pushed.rejected ?? [];
-      expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
+      Effect.gen(function* () {
+        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        const server: Store = new Map();
+        const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+        const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
+        const rejected = pushed.rejected ?? [];
+        expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
 
-      // A restart: a new backend over the same ledger store and the same server.
-      const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
-      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
-        [restartClient]: 2,
-      });
-      expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
+        // A restart: a new backend over the same ledger store and the same server.
+        const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+        expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
+          [restartClient]: 2,
+        });
+        expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
 
-      // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
-      const replay = yield* second.backend.applyMutations(restartContext, restartPush());
-      expect(replay.rejected).toEqual(rejected);
-      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
-      expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+        // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
+        const replay = yield* second.backend.applyMutations(restartContext, restartPush());
+        expect(replay.rejected).toEqual(rejected);
+        expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+        expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
+      })
+    );
+  });
 });
 
 // ─── Ledger store failures and the forgetting bound (#468) ───────────────────
 
 describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
-  it.effect(
-    "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
-    () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
+      () =>
+        Effect.gen(function* () {
+          const kv = yield* KeyValueStore.KeyValueStore;
+          const failWrites = yield* Ref.make(0);
+          const failReads = yield* Ref.make(0);
+          const ledger = flakyLedger(Ledger.keyValue(kv), { failWrites, failReads });
+          const server: Store = new Map();
+          const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+
+          // The batch's rejection is remembered by the first ledger write, which runs
+          // after the server has applied the batch's create.
+          yield* Ref.set(failWrites, 1);
+          const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
+          expect(failure).toBeInstanceOf(BackendError);
+          expect(tableOf(server, COLLECTION).has("kept")).toBe(true);
+
+          // Nothing is acknowledged: the cache and the store both hold the group as it was.
+          expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
+          expect(yield* backend.rejections(restartContext)).toEqual([]);
+          expect(yield* kv.has("legation-jsonapi:ledger:restart-group")).toBe(false);
+
+          // The resend re-applies the create (an upsert) and acknowledges both mutations.
+          const retried = yield* backend.applyMutations(restartContext, restartPush());
+          const rejected = retried.rejected ?? [];
+          expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+          expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+          expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual({
+            lastMutationIds: { [restartClient]: 2 },
+            rejections: rejected,
+          });
+          expect(yield* backend.rejections(restartContext)).toEqual(rejected);
+        })
+    );
+  });
+
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a ledger read that fails is a BackendError and fills no cache", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
-        const failWrites = yield* Ref.make(0);
-        const failReads = yield* Ref.make(0);
-        const ledger = flakyLedger(Ledger.keyValue(kv), { failWrites, failReads });
-        const server: Store = new Map();
-        const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+        const durable = Ledger.keyValue(kv);
+        // Seed the store with a ledger that a backend over it must read back.
+        const seeded = yield* makeBackend(undefined, noProbe, {
+          ledger: durable,
+          store: new Map(),
+        });
+        yield* seeded.backend.applyMutations(restartContext, restartPush());
 
-        // The batch's rejection is remembered by the first ledger write, which runs
-        // after the server has applied the batch's create.
-        yield* Ref.set(failWrites, 1);
-        const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
+        const failReads = yield* Ref.make(1);
+        const ledger = flakyLedger(durable, { failWrites: yield* Ref.make(0), failReads });
+        const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: new Map() });
+        const failure = yield* Effect.flip(backend.lastMutationIds(restartContext));
         expect(failure).toBeInstanceOf(BackendError);
-        expect(tableOf(server, COLLECTION).has("kept")).toBe(true);
+        // The failed read cached nothing, so the next read reaches the store and sees its ledger.
+        expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 2 });
+        expect(yield* backend.rejections(restartContext)).toHaveLength(1);
+      })
+    );
+  });
 
-        // Nothing is acknowledged: the cache and the store both hold the group as it was.
-        expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
-        expect(yield* backend.rejections(restartContext)).toEqual([]);
-        expect(yield* kv.has("legation-jsonapi:ledger:restart-group")).toBe(false);
-
-        // The resend re-applies the create (an upsert) and acknowledges both mutations.
-        const retried = yield* backend.applyMutations(restartContext, restartPush());
-        const rejected = retried.rejected ?? [];
-        expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
-        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
-        expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual({
-          lastMutationIds: { [restartClient]: 2 },
-          rejections: rejected,
-        });
-        expect(yield* backend.rejections(restartContext)).toEqual(rejected);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("a ledger read that fails is a BackendError and fills no cache", () =>
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const durable = Ledger.keyValue(kv);
-      // Seed the store with a ledger that a backend over it must read back.
-      const seeded = yield* makeBackend(undefined, noProbe, { ledger: durable, store: new Map() });
-      yield* seeded.backend.applyMutations(restartContext, restartPush());
-
-      const failReads = yield* Ref.make(1);
-      const ledger = flakyLedger(durable, { failWrites: yield* Ref.make(0), failReads });
-      const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: new Map() });
-      const failure = yield* Effect.flip(backend.lastMutationIds(restartContext));
-      expect(failure).toBeInstanceOf(BackendError);
-      // The failed read cached nothing, so the next read reaches the store and sees its ledger.
-      expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 2 });
-      expect(yield* backend.rejections(restartContext)).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect("the forgetting bound persists across a restart", () =>
-    Effect.gen(function* () {
-      const kv = yield* KeyValueStore.KeyValueStore;
-      const ledger = Ledger.keyValue(kv);
-      const server: Store = new Map();
-      const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
-      const mutation = (mutationId: number, mutator: string, args: unknown) => ({
-        clientId: restartClient,
-        mutationId,
-        mutator,
-        args,
-        createdAt: 0,
-      });
-      const putOne = mutation(1, BackendContract.putRow.name, {
-        collection: COLLECTION,
-        id: "first",
-        value: { n: 1 },
-      });
-      const rejectTwo = mutation(2, BackendContract.rejectAlways.name, {
-        collection: COLLECTION,
-        id: "poisoned",
-      });
-      const putThree = mutation(3, BackendContract.putRow.name, {
-        collection: COLLECTION,
-        id: "third",
-        value: { n: 3 },
-      });
-      // Mutation 2 is rejected and remembered; the push acknowledges up to 3.
-      yield* first.backend.applyMutations(restartContext, [putOne, rejectTwo, putThree]);
-      expect(yield* first.backend.rejections(restartContext)).toHaveLength(1);
-      // A replayed copy of 3 alone has floor 3, so it forgets the rejection of 2. Nothing
-      // else changes, so the forgetting is the only ledger write this push makes.
-      const replay = yield* first.backend.applyMutations(restartContext, [putThree]);
-      expect(replay.rejected).toBeUndefined();
-      expect(yield* first.backend.rejections(restartContext)).toEqual([]);
-
-      // After a restart the forgetting is kept, and a replayed copy of 2 is acknowledged, not reported.
-      const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
-      expect(yield* second.backend.rejections(restartContext)).toEqual([]);
-      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 3 });
-      const replayRejected = yield* second.backend.applyMutations(restartContext, [rejectTwo]);
-      expect(replayRejected.rejected).toBeUndefined();
-      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
-
-  it.effect(
-    "restarts over the same durable store with the first group's ledger, and runs the contract in a fresh group",
-    () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("the forgetting bound persists across a restart", () =>
       Effect.gen(function* () {
-        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-        // The first run uses one group, and its ledger is what a restart must bring back.
-        // The restarted backend runs the contract in another group; the same group is the
-        // restart test below (#477).
-        const firstContext = { clientGroupId: "contract-first" };
-        const first = yield* makeBackend(undefined, noProbe, { ledger });
-        yield* BackendContract.verifyBackendContract(first.backend, {
-          collection: COLLECTION,
-          clientGroupId: firstContext.clientGroupId,
+        const kv = yield* KeyValueStore.KeyValueStore;
+        const ledger = Ledger.keyValue(kv);
+        const server: Store = new Map();
+        const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+        const mutation = (mutationId: number, mutator: string, args: unknown) => ({
+          clientId: restartClient,
+          mutationId,
+          mutator,
+          args,
+          createdAt: 0,
         });
-        const acknowledged = yield* first.backend.lastMutationIds(firstContext);
-        const rejected = yield* first.backend.rejections(firstContext);
-        expect(Object.keys(acknowledged)).not.toHaveLength(0);
-        expect(rejected).not.toHaveLength(0);
-
-        // The restart: a new backend over the same durable store reports the group it left.
-        const restarted = yield* makeBackend(undefined, noProbe, { ledger });
-        expect(yield* restarted.backend.lastMutationIds(firstContext)).toEqual(acknowledged);
-        expect(yield* restarted.backend.rejections(firstContext)).toEqual(rejected);
-
-        // The restarted backend then runs the contract in another group.
-        yield* BackendContract.verifyBackendContract(restarted.backend, {
+        const putOne = mutation(1, BackendContract.putRow.name, {
           collection: COLLECTION,
-          clientGroupId: "contract-restarted",
+          id: "first",
+          value: { n: 1 },
         });
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+        const rejectTwo = mutation(2, BackendContract.rejectAlways.name, {
+          collection: COLLECTION,
+          id: "poisoned",
+        });
+        const putThree = mutation(3, BackendContract.putRow.name, {
+          collection: COLLECTION,
+          id: "third",
+          value: { n: 3 },
+        });
+        // Mutation 2 is rejected and remembered; the push acknowledges up to 3.
+        yield* first.backend.applyMutations(restartContext, [putOne, rejectTwo, putThree]);
+        expect(yield* first.backend.rejections(restartContext)).toHaveLength(1);
+        // A replayed copy of 3 alone has floor 3, so it forgets the rejection of 2. Nothing
+        // else changes, so the forgetting is the only ledger write this push makes.
+        const replay = yield* first.backend.applyMutations(restartContext, [putThree]);
+        expect(replay.rejected).toBeUndefined();
+        expect(yield* first.backend.rejections(restartContext)).toEqual([]);
+
+        // After a restart the forgetting is kept, and a replayed copy of 2 is acknowledged, not reported.
+        const second = yield* makeBackend(undefined, noProbe, { ledger, store: server });
+        expect(yield* second.backend.rejections(restartContext)).toEqual([]);
+        expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
+          [restartClient]: 3,
+        });
+        const replayRejected = yield* second.backend.applyMutations(restartContext, [rejectTwo]);
+        expect(replayRejected.rejected).toBeUndefined();
+        expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+      })
+    );
+  });
+
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "restarts over the same durable store with the first group's ledger, and runs the contract in a fresh group",
+      () =>
+        Effect.gen(function* () {
+          const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+          // The first run uses one group, and its ledger is what a restart must bring back.
+          // The restarted backend runs the contract in another group; the same group is the
+          // restart test below (#477).
+          const firstContext = { clientGroupId: "contract-first" };
+          const first = yield* makeBackend(undefined, noProbe, { ledger });
+          yield* BackendContract.verifyBackendContract(first.backend, {
+            collection: COLLECTION,
+            clientGroupId: firstContext.clientGroupId,
+          });
+          const acknowledged = yield* first.backend.lastMutationIds(firstContext);
+          const rejected = yield* first.backend.rejections(firstContext);
+          expect(Object.keys(acknowledged)).not.toHaveLength(0);
+          expect(rejected).not.toHaveLength(0);
+
+          // The restart: a new backend over the same durable store reports the group it left.
+          const restarted = yield* makeBackend(undefined, noProbe, { ledger });
+          expect(yield* restarted.backend.lastMutationIds(firstContext)).toEqual(acknowledged);
+          expect(yield* restarted.backend.rejections(firstContext)).toEqual(rejected);
+
+          // The restarted backend then runs the contract in another group.
+          yield* BackendContract.verifyBackendContract(restarted.backend, {
+            collection: COLLECTION,
+            clientGroupId: "contract-restarted",
+          });
+        })
+    );
+  });
 });
 
 // ─── The contract across a restart in the same client group (#477, #483) ───
@@ -901,31 +921,37 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
       })
     );
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
-  }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory));
+  });
 
 describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), atomic mode", () => {
-  it.effect("runs the full contract over a backend restarted on the same durable ledger", () =>
-    Effect.gen(function* () {
-      const run = yield* restartInSameGroup((ledger) => ledger);
-      expect(run.restartedLedger).toEqual(run.acknowledged);
-      expect(run.restartedRejected).toEqual(run.rejected);
-      expect(Exit.isSuccess(run.outcome)).toBe(true);
-    })
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "runs the full contract over a backend restarted on the same durable ledger",
+      () =>
+        Effect.gen(function* () {
+          const run = yield* restartInSameGroup((ledger) => ledger);
+          expect(run.restartedLedger).toEqual(run.acknowledged);
+          expect(run.restartedRejected).toEqual(run.rejected);
+          expect(Exit.isSuccess(run.outcome)).toBe(true);
+        })
+    );
+  });
 
-  it.effect(
-    "fails a backend that forgets its ledger on restart through the restored-ledger rule",
-    () =>
-      Effect.gen(function* () {
-        // Ledger.memory reads an empty group: the restarted backend reports {} where the
-        // restored run expects the ids the first run acknowledged, so the contract fails
-        // its first rule and never reaches the mutations.
-        const run = yield* restartInSameGroup(() => Ledger.memory);
-        expect(run.restartedLedger).toEqual({});
-        const violation = Option.getOrUndefined(Exit.findErrorOption(run.outcome));
-        expect(violation).toBeInstanceOf(BackendContract.ContractViolation);
-        expect(violation?.rule).toBe("reports the ledger the run expects");
-        expect(violation?.message).toContain("the backend forgot its ledger on restart");
-      })
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "fails a backend that forgets its ledger on restart through the restored-ledger rule",
+      () =>
+        Effect.gen(function* () {
+          // Ledger.memory reads an empty group: the restarted backend reports {} where the
+          // restored run expects the ids the first run acknowledged, so the contract fails
+          // its first rule and never reaches the mutations.
+          const run = yield* restartInSameGroup(() => Ledger.memory);
+          expect(run.restartedLedger).toEqual({});
+          const violation = Option.getOrUndefined(Exit.findErrorOption(run.outcome));
+          expect(violation).toBeInstanceOf(BackendContract.ContractViolation);
+          expect(violation?.rule).toBe("reports the ledger the run expects");
+          expect(violation?.message).toContain("the backend forgot its ledger on restart");
+        })
+    );
+  });
 });

@@ -41,7 +41,7 @@
  * surfaced.
  */
 import * as Defined from "../Defined.js";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -217,8 +217,9 @@ const collect = <A, E>(stream: Stream.Stream<A, E>) =>
   });
 
 describe("ClientEngine.observeChanges", () => {
-  it("Patch path: enter, then update, then exit", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "Patch path: enter, then update, then exit",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer");
@@ -257,12 +258,13 @@ describe("ClientEngine.observeChanges", () => {
         expect(stripPositions(defined(seen[2]))).toEqual([
           { _tag: "exit", id: "1", previous: { id: "1", value: { id: "1", title: "second" } } },
         ]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("includeInitial emits the current window as enters, exactly once, for a late subscriber", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "includeInitial emits the current window as enters, exactly once, for a late subscriber",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer");
@@ -282,12 +284,13 @@ describe("ClientEngine.observeChanges", () => {
         expect(
           new Set((seen[0] ?? []).map((c) => (c._tag === "enter" ? c.row.id : undefined)))
         ).toEqual(new Set(["1", "2"]));
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("a local mutation produces a precise Patch enter (#109's delta-maintained overlay)", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "a local mutation produces a precise Patch enter (#109's delta-maintained overlay)",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const engine = yield* makeClient(handler, "solo");
@@ -308,12 +311,13 @@ describe("ClientEngine.observeChanges", () => {
         expect(stripPositions(defined(seen[0]))).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "optimistic" } } },
         ]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("Rebuild path (a pull racing a pending mutation): a reset marker followed by fresh enters", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "Rebuild path (a pull racing a pending mutation): a reset marker followed by fresh enters",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer2");
@@ -347,12 +351,13 @@ describe("ClientEngine.observeChanges", () => {
             .map((c) => (c._tag === "enter" ? c.row.id : undefined))
         );
         expect(entered).toEqual(new Set(["1", "2"])); // both the pulled row and the still-pending one
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("#133: an observer of an untouched collection sees no spurious reset under a scoped rebuild", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "#133: an observer of an untouched collection sees no spurious reset under a scoped rebuild",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer3");
@@ -387,12 +392,13 @@ describe("ClientEngine.observeChanges", () => {
         // asserting its absence.
         yield* settle;
         expect(yield* Ref.get(userBatches)).toEqual([]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("a seq-gap collapse resets rather than losing the dropped deltas", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "a seq-gap collapse resets rather than losing the dropped deltas",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const engine = yield* makeClient(handler, "storm", 4); // small bound → forced drops
@@ -453,9 +459,9 @@ describe("ClientEngine.observeChanges", () => {
 
         const seen = yield* Ref.get(batches);
         expect(seen.some((batch) => batch[0]?._tag === "reset")).toBe(true);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 });
 
 describe("Mirror.observeChanges", () => {
@@ -473,8 +479,9 @@ describe("Mirror.observeChanges", () => {
       );
     });
 
-  it("diffs consecutive whole-page mirror updates into enter/update/exit", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "diffs consecutive whole-page mirror updates into enter/update/exit",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const engine = yield* makeEngine(handler);
@@ -505,12 +512,13 @@ describe("Mirror.observeChanges", () => {
         const seen = (yield* Ref.get(batches)).filter((b) => Arr.isReadonlyArrayNonEmpty(b));
         const tags = seen.map((batch) => batch.map((c) => c._tag));
         expect(tags).toEqual([["enter"], ["update"], ["exit"]]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("includeInitial emits current rows as enters for a late subscriber", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "includeInitial emits current rows as enters for a late subscriber",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const engine = yield* makeEngine(handler);
@@ -529,9 +537,9 @@ describe("Mirror.observeChanges", () => {
         expect(seen[0]).toEqual([
           { _tag: "enter", row: { id: "1", value: { id: "1", title: "a" } } },
         ]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 });
 
 // ─── Randomized property through the real engine stream (#133 item 5) ───────
@@ -583,58 +591,67 @@ const sortedIdValue = (state: Map<string, unknown>) =>
   [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 describe("ClientEngine.observeChanges — randomized property through the real engine", () => {
-  it("folding the real observeChanges stream matches engine.query at every step", async () => {
-    const IDS = ["a", "b", "c", "d", "e"];
-    for (let seed = 1; seed <= 3; seed++) {
-      // eslint-disable-next-line no-await-in-loop -- each seed needs the previous engine torn down first
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const handler = yield* makeServer;
-          // A tiny change-hub bound so an occasional burst forces a real
-          // seq-gap collapse, alongside the ordinary Patch/pending-pull-Rebuild
-          // paths — all three real triggers, randomized together.
-          const engine = yield* makeClient(handler, `prop-${seed}`, 3);
-          yield* engine.subscribe(todos);
+  it.effect(
+    "folding the real observeChanges stream matches engine.query at every step",
+    () =>
+      Effect.gen(function* () {
+        const IDS = ["a", "b", "c", "d", "e"];
+        // Each seed runs in its own scope, so the previous engine is torn down first.
+        yield* Effect.forEach(
+          [1, 2, 3],
+          (seed) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const handler = yield* makeServer;
+                // A tiny change-hub bound so an occasional burst forces a real
+                // seq-gap collapse, alongside the ordinary Patch/pending-pull-Rebuild
+                // paths — all three real triggers, randomized together.
+                const engine = yield* makeClient(handler, `prop-${seed}`, 3);
+                yield* engine.subscribe(todos);
 
-          const batches = yield* Ref.make<
-            Array<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
-          >([]);
-          yield* Effect.forkScoped(
-            Stream.runForEach(engine.observeChanges(todos), (batch) =>
-              Ref.update(batches, (a) => [...a, batch])
-            ).pipe(Effect.ignore)
-          );
-          yield* settle;
+                const batches = yield* Ref.make<
+                  Array<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
+                >([]);
+                yield* Effect.forkScoped(
+                  Stream.runForEach(engine.observeChanges(todos), (batch) =>
+                    Ref.update(batches, (a) => [...a, batch])
+                  ).pipe(Effect.ignore)
+                );
+                yield* settle;
 
-          const rand = mulberry32(seed);
-          const pick = <A>(xs: ReadonlyArray<A>): A => defined(xs[Math.floor(rand() * xs.length)]);
+                const rand = mulberry32(seed);
+                const pick = <A>(xs: ReadonlyArray<A>): A =>
+                  defined(xs[Math.floor(rand() * xs.length)]);
 
-          for (let step = 0; step < 20; step++) {
-            const action = rand();
-            const id = pick(IDS);
-            if (action < 0.15) {
-              yield* engine.mutate("todo/remove", { id });
-            } else if (action < 0.35) {
-              yield* engine.pull; // a pull: Rebuild only if a mutation is still pending
-            } else {
-              yield* engine.mutate("todo/set", { id, title: `t-${Math.floor(rand() * 5)}` });
-            }
-            // Bursts of rapid mutations occasionally overrun the tiny hub
-            // bound above, forcing a gap-collapse — exercised by chance
-            // across seeds/steps rather than a dedicated branch.
+                for (let step = 0; step < 20; step++) {
+                  const action = rand();
+                  const id = pick(IDS);
+                  if (action < 0.15) {
+                    yield* engine.mutate("todo/remove", { id });
+                  } else if (action < 0.35) {
+                    yield* engine.pull; // a pull: Rebuild only if a mutation is still pending
+                  } else {
+                    yield* engine.mutate("todo/set", { id, title: `t-${Math.floor(rand() * 5)}` });
+                  }
+                  // Bursts of rapid mutations occasionally overrun the tiny hub
+                  // bound above, forcing a gap-collapse — exercised by chance
+                  // across seeds/steps rather than a dedicated branch.
 
-            const expected = sortedIdValue(
-              new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
-            );
-            // eslint-disable-next-line no-loop-func -- captures `batches` fresh each poll, not stale
-            const seen = yield* eventually(Ref.get(batches), (candidate) => {
-              const folded = sortedIdValue(foldChangeBatches(candidate));
-              return JSON.stringify(folded) === JSON.stringify(expected);
-            });
-            expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
-          }
-        }).pipe(Effect.scoped)
-      );
-    }
-  }, 20000);
+                  const expected = sortedIdValue(
+                    new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
+                  );
+                  // eslint-disable-next-line no-loop-func -- captures `batches` fresh each poll, not stale
+                  const seen = yield* eventually(Ref.get(batches), (candidate) => {
+                    const folded = sortedIdValue(foldChangeBatches(candidate));
+                    return JSON.stringify(folded) === JSON.stringify(expected);
+                  });
+                  expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
+                }
+              })
+            ),
+          { concurrency: 1, discard: true }
+        );
+      }),
+    20000
+  );
 });

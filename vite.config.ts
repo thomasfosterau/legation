@@ -162,7 +162,6 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
 
@@ -195,6 +194,9 @@ export default defineConfig({
       "typescript/no-misused-spread": "error",
       "unicorn/no-array-reverse": "error",
       "oxc/no-map-spread": "error",
+      // Tests run effects through `@effect/vitest` (`it.effect`, `it.live`, `layer(...)`), and the
+      // shipped edges that run an effect do it with explicit services (`Effect.runForkWith`).
+      "effecttsgo/strict-effect-provide": "error",
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
       "effecttsgo/unnecessary-fail-yieldable-error": "error",

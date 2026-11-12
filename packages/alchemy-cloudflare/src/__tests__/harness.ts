@@ -200,17 +200,15 @@ type Handler = Effect.Effect<
 /** Run a Durable Object `fetch` handler on a web request and answer a web response. */
 export const fetchOf =
   (instance: Instance<{ readonly fetch: Handler }>) =>
-  (request: Request): Promise<Response> =>
-    Effect.runPromise(
-      instance
-        .run(
-          instance.object.fetch.pipe(
-            Effect.provideService(
-              HttpServerRequest.HttpServerRequest,
-              HttpServerRequest.fromWeb(request)
-            ),
-            Effect.orDie
-          )
+  (request: Request): Effect.Effect<Response> =>
+    instance
+      .run(
+        instance.object.fetch.pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(request)
+          ),
+          Effect.orDie
         )
-        .pipe(Effect.map((response) => HttpServerResponse.toWeb(response)))
-    );
+      )
+      .pipe(Effect.map((response) => HttpServerResponse.toWeb(response)));

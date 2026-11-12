@@ -10,7 +10,7 @@
  * were it re-subscribing/rebuilding, a `Rebuild` (and its `ViewRebuilt`)
  * would fire.
  */
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -101,8 +101,9 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
 
 describe("ClientEngine.observeWindow", () => {
-  it("retarget widens the page without an extra rebuild, over rows already synced", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "retarget widens the page without an extra rebuild, over rows already synced",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer-window");
@@ -162,12 +163,13 @@ describe("ClientEngine.observeWindow", () => {
         // + rebuild — no extra `ViewRebuilt` fired for the retarget itself.
         const rebuildsAfter = yield* Ref.get(rebuilds);
         expect(rebuildsAfter).toBe(rebuildsBefore);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("advancing the cursor slides the window forward, reusing the maintained order", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "advancing the cursor slides the window forward, reusing the maintained order",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer-cursor");
@@ -203,12 +205,13 @@ describe("ClientEngine.observeWindow", () => {
         );
         const advanced = yield* Ref.get(pages);
         expect(ids(defined(advanced[advanced.length - 1]))).toEqual(["i3", "i4", "i5"]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("a genuine engine change after a retarget is folded over the retargeted window", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "a genuine engine change after a retarget is folded over the retargeted window",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer-mixed");
@@ -252,14 +255,15 @@ describe("ClientEngine.observeWindow", () => {
         );
         const final = yield* Ref.get(pages);
         expect(ids(defined(final[final.length - 1]))).toEqual(["i0", "i1", "i2", "i3", "i4"]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 });
 
 describe("Subscriptions.acquireWindow", () => {
-  it("retarget keeps the engine's tracked subscription in step, and release drops the current one", async () => {
-    await Effect.runPromise(
+  it.effect(
+    "retarget keeps the engine's tracked subscription in step, and release drops the current one",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const engine = yield* makeClient(handler, "subs-window");
@@ -294,7 +298,7 @@ describe("Subscriptions.acquireWindow", () => {
             );
           })
         );
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 });
