@@ -454,7 +454,7 @@ describe("BackgroundSync (#213)", () => {
       yield* Ref.set(broken, true);
       const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(failed.ok).toBe(false);
-      expect(failed.ok === false && (failed.error as { _tag?: string })._tag).toBe("StoreError");
+      expect(!failed.ok && (failed.error as { _tag?: string })._tag).toBe("StoreError");
       expect(logs.loud).toHaveLength(1);
       expect(logs.loud[0]).toMatch(/^Warn: .*store/);
     }).pipe(Effect.scoped)
@@ -466,7 +466,7 @@ describe("BackgroundSync (#213)", () => {
       listenOn(self, { readyTimeout: "50 millis" });
       const result = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(result.ok).toBe(false);
-      expect(result.ok === false && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
+      expect(!result.ok && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
     })
   );
 
