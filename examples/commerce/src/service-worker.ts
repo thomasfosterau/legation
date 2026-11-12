@@ -37,7 +37,8 @@
 import { version } from "$app/env";
 import { assets, immutable } from "$app/manifest";
 import { asset, type AssetPath } from "$app/paths";
-import { Effect, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation/internal";
 import { CacheApiHttpCache } from "@thomasfosterau/legation-browser";

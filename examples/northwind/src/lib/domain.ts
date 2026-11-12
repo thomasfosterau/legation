@@ -24,7 +24,7 @@
  * the in-page backend.
  */
 
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────

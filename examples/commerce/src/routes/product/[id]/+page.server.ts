@@ -9,7 +9,7 @@
  */
 import type { Actions, PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { productDetail, productReviews } from "../../../lib/domain.js";
 import { apiFor, readCollection } from "../../../../server/client.js";
 import { productId, variantId } from "../../../../server/jsonapi.js";

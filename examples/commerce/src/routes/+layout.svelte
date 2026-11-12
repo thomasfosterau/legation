@@ -1,6 +1,8 @@
 <script lang="ts">
   import { browser } from "$app/env";
-  import { Effect, Fiber, Stream } from "effect";
+  import * as Effect from "effect/Effect";
+  import * as Fiber from "effect/Fiber";
+  import * as Stream from "effect/Stream";
   import { fromRuntime, setClient } from "@thomasfosterau/legation-svelte";
   import type { ElectedHost } from "@thomasfosterau/legation-browser";
   import { boot, bootMainThread, type AppRuntime } from "../lib/engine.js";

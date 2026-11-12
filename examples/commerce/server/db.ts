@@ -7,7 +7,8 @@
  * seam is a thin adapter over that client. Schema DDL and the catalog seed
  * run as an idempotent migration effect.
  */
-import { Effect, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import type { SqlClient } from "effect/sql/SqlClient";
 import { SqlClient as SqlClientService } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";

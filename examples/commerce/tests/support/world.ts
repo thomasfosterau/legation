@@ -6,7 +6,9 @@
  * The backend is wrapped to count its calls (`counted.ts`), so "before any
  * backend call" is a fact the derived-read tests can assert.
  */
-import { Context, Effect, Layer } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import { SqlClient } from "effect/sql/SqlClient";

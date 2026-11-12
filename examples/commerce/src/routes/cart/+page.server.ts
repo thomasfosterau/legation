@@ -7,7 +7,7 @@
  */
 import type { Actions, PageServerLoad } from "./$types";
 import { redirect } from "@sveltejs/kit";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { myCartItems } from "../../lib/domain.js";
 import { apiFor, readCollection, run } from "../../../server/client.js";
 import { cartItemId } from "../../../server/jsonapi.js";

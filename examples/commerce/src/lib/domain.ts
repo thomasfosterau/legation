@@ -31,7 +31,8 @@
  * the sort fields are declared explicitly. Anything else is unreachable
  * from a client.
  */
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { CrudMutation, Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────

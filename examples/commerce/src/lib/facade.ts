@@ -28,7 +28,8 @@
  * carries exactly the relationships the server writes (ADR-0029 §6;
  * `tests/replica-documents.test.ts` checks the bytes).
  */
-import type { Effect, Stream } from "effect";
+import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
 import type { MutatorError, StoreError } from "@thomasfosterau/legation";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@thomasfosterau/legation";

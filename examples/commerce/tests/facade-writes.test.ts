@@ -18,7 +18,12 @@
  * façade directly, as `replica-documents.test.ts` does for reads.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, HashMap, Layer, Option, Stream } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Client, ClientStore, Transport } from "@thomasfosterau/legation";

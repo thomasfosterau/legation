@@ -9,7 +9,8 @@
  * they participate in the surrounding push transaction because
  * `SqlExecutor.transaction` is `sql.withTransaction` on the same client.
  */
-import { Effect, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation";

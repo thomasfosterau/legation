@@ -19,7 +19,10 @@
  * document byte for byte, an uncovered one is the network's.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Layer, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpApi from "effect/http-api/HttpApi";

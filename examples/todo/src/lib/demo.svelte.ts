@@ -11,7 +11,9 @@
  * with no `$` auto-subscription.
  */
 import { getContext, setContext } from "svelte";
-import { Effect, Fiber, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 import type { Connection, Demo, PendingEntry } from "./sync";
 
 const DEMO_KEY = Symbol("todo/demo");

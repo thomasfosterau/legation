@@ -24,7 +24,8 @@
  * per-resource handler's own) and reports the rows it wrote, so each path
  * announces them its own way.
  */
-import { Data, Effect } from "effect";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 

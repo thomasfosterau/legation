@@ -16,7 +16,9 @@
  * runtime and stays a manual check (`pnpm run dev`, JavaScript off).
  */
 import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Scope } from "effect";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import { isHttpError } from "@sveltejs/kit";
 import { makeWorld, type World } from "./support/world.js";
 
