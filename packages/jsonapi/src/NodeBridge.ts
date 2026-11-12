@@ -12,8 +12,9 @@
  * The mapping:
  *
  * - `Relationship.one` / `Relationship.optional` → `Edge.one`, stored in
- *   the foreign-key field `` `${name}Id` `` (override per relationship with
- *   `via`). JSON:API keeps relationship linkage out of `attributes`, so the
+ *   the relationship's declared storage key, `Relationship.one(ref, { key })`
+ *   (#553), else the foreign-key field `` `${name}Id` `` (the `via` option
+ *   overrides either, per relationship). JSON:API keeps relationship linkage out of `attributes`, so the
  *   engine-side row gains the key field the edge declares.
  * - `Relationship.many` / `Relationship.paginated` → `Edge.many` /
  *   `Edge.paginated`. The **inverse** — the one-edge on the target holding
@@ -32,20 +33,18 @@
  * syncAnnotations({ inverses, kinds }) })`, or `Resource.annotate`, which
  * `Resource.extend` keeps. The {@link FromResourceOptions} remain, as
  * explicit overrides: an option entry wins over the resource's annotation or
- * declaration for the same relationship or field. A to-one relationship's
- * key field is still `` `${name}Id` `` or the `via` option until
- * effect-jsonapi's storage-key slot (effect-jsonapi#509) reaches this
- * package.
+ * declaration for the same relationship or field.
  *
- * **Acyclic resource graphs.** The library's resource types expand eagerly,
- * so mutually-referencing definitions (`Product ⇄ Review`) cannot be
- * authored; the idiomatic JSON:API graph points parent → child and the
- * child carries its foreign key as a plain attribute (`productId`). The
- * `edges` option closes that gap: it promotes such an attribute to a
- * declared one-edge on the bridged node, and {@link registry} discovers
- * collection-valued inverses across **bridged** one-edges — declared and
- * relationship-derived alike — so the acyclic graph bridges without ever
- * naming an inverse by hand.
+ * **Cyclic and acyclic resource graphs.** A parent ⇄ child pair
+ * (`Product ⇄ Review`) is authorable with one interface annotation per
+ * resource in the cycle (effect-jsonapi#118, see `Resource.make`); with the
+ * child's key declared on its relationship, it bridges with no options.
+ * A graph that points only parent → child, its child carrying the foreign
+ * key as a plain attribute (`productId`), uses the `edges` option instead:
+ * it promotes such an attribute to a declared one-edge on the bridged node.
+ * Either way {@link registry} discovers collection-valued inverses across
+ * **bridged** one-edges, declared and relationship-derived alike, so the
+ * graph bridges without naming an inverse by hand.
  *
  * **The filterable set** (ADR-0028 rule d, #154) is read off the resource's
  * own declaration (effect-jsonapi, since 0.13: `Filter.able` / `Sort.able` piped
@@ -160,13 +159,15 @@ const annotationOf = <A>(
 export interface FromResourceOptions {
   /**
    * The foreign-key field a `one`/`optional` relationship's edge stores its
-   * id in, by relationship name. Defaults to `` `${name}Id` ``.
+   * id in, by relationship name. Wins over the relationship's own storage
+   * key (`Relationship.one(ref, { key })`), which wins over the
+   * `` `${name}Id` `` convention.
    */
   readonly via?: Record<string, string>;
   /**
    * One-edges beyond the resource's relationships, by edge name — promote
-   * a foreign-key **attribute** to an edge when the resource graph is
-   * acyclic and could not declare the relationship itself (see the module
+   * a foreign-key **attribute** to an edge when the resource graph points
+   * only parent → child and does not declare the relationship (see the module
    * doc). The attribute named by `via` moves out of the node's attributes;
    * the edge's key field replaces it.
    */
@@ -214,7 +215,12 @@ const oneEdgesOf = (
 ): Record<string, Edge.One> => {
   const related = R.filterMap(resource.relationships, (descriptor, name) =>
     descriptor.kind === "one" || descriptor.kind === "optional"
-      ? Result.succeed(Edge.one(descriptor.ref().type, { via: options.via?.[name] ?? `${name}Id` }))
+      ? Result.succeed(
+          Edge.one(descriptor.ref().type, {
+            // An explicit override wins, then the relationship's declared storage key (#553).
+            via: options.via?.[name] ?? descriptor.key ?? `${name}Id`,
+          })
+        )
       : Result.failVoid
   );
   const declared = R.map(options.edges ?? {}, (edge) => Edge.one(edge.target, { via: edge.via }));

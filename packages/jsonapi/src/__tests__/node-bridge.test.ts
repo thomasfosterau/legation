@@ -363,6 +363,36 @@ describe("NodeBridge filterable set (#154, #161)", () => {
   });
 });
 
+// A mutually-recursive pair, authorable since effect-jsonapi#118: one interface per
+// resource in the cycle. The child's key is declared on its relationship, so the
+// bridge needs no `edges` option to discover the parent's inverse.
+const postAttributes = { title: Schema.String };
+const commentAttributes = { body: Schema.String };
+
+interface Post extends Resource.Resource<
+  "posts",
+  typeof postAttributes,
+  { readonly comments: Relationship.many<Comment> }
+> {}
+
+interface Comment extends Resource.Resource<
+  "comments",
+  typeof commentAttributes,
+  { readonly post: Relationship.one<Post, false, "post_ref"> }
+> {}
+
+const Post: Post = Resource.make("posts", {
+  attributes: postAttributes,
+  relationships: { comments: Relationship.many(() => Comment) },
+});
+
+const Comment: Comment = Resource.make("comments", {
+  attributes: commentAttributes,
+  relationships: { post: Relationship.one(() => Post, { key: "post_ref" }) },
+});
+
+const cyclic = NodeBridge.registry([Post, Comment]);
+
 describe("sync metadata read off the resource (#220)", () => {
   it("takes a paginated relationship's order from its declaration; an option still wins", () => {
     const Ordered = Resource.make("products", {
@@ -433,6 +463,64 @@ describe("sync metadata read off the resource (#220)", () => {
         "publishedAt"
       ]
     ).toEqual({ kind: "text", operators: ["gt"] });
+  });
+
+  it("stores a to-one edge under the relationship's declared key; via still wins (#553)", () => {
+    const Profile = Resource.make("profiles", {
+      attributes: { bio: Schema.String },
+      relationships: {
+        category: Relationship.one(() => Category, { key: "category_ref" }),
+        avatar: Relationship.optional(() => Category, { key: "avatar_ref" }),
+      },
+    });
+    const node = NodeBridge.fromResource(Profile);
+    expect(node.edges["category"]).toEqual({
+      kind: "one",
+      target: "categories",
+      via: "category_ref",
+    });
+    expect(node.edges["avatar"]).toMatchObject({ via: "avatar_ref" });
+    // The declared key joins the derivable set, as the convention's would.
+    expect([...Node.derivableSet(node)].toSorted()).toEqual(["avatar_ref", "category_ref"]);
+    expect(
+      NodeBridge.fromResource(Profile, { via: { category: "categoryKey" } }).edges["category"]
+    ).toMatchObject({ via: "categoryKey" });
+  });
+
+  it("bridges a graph that declares its metadata on the resources with no options (#220)", () => {
+    const Article = Resource.make("articles", {
+      attributes: { publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])) },
+      relationships: {
+        category: Relationship.one(() => Category, { key: "category_ref" }),
+      },
+      annotations: NodeBridge.syncAnnotations({ kinds: { publishedAt: "instant" } }),
+    });
+    const article = defined(NodeBridge.registry([Category, Article]).nodes.get("articles"));
+    expect(article.edges["category"]).toEqual({
+      kind: "one",
+      target: "categories",
+      via: "category_ref",
+    });
+    expect(article.filterable["publishedAt"]).toEqual({
+      kind: "instant",
+      operators: ["gt", "lt"],
+    });
+    // The declared key is filterable by eq / in, as every bridged key field is.
+    expect(article.filterable["category_ref"]).toMatchObject({ operators: ["eq", "in"] });
+  });
+
+  it("bridges a cyclic parent ⇄ child pair with no edges option (#220, effect-jsonapi#118)", () => {
+    const definition = defined(cyclic.nodes.get("posts"));
+    expect(definition.edges["comments"]).toEqual({
+      kind: "many",
+      target: "comments",
+      inverse: "post",
+    });
+    expect(defined(cyclic.nodes.get("comments")).edges["post"]).toEqual({
+      kind: "one",
+      target: "posts",
+      via: "post_ref",
+    });
   });
 
   it("keeps a mismatched annotation a definition-time defect", () => {
