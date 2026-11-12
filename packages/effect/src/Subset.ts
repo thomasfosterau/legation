@@ -206,7 +206,7 @@ const compareValues = (left: unknown, right: unknown): number => {
   if (leftNull || rightNull) return leftNull === rightNull ? 0 : leftNull ? 1 : -1;
   const ordered = Predicate.compareLiterals(left, right);
   if (ordered !== undefined) return ordered;
-  const byType = Predicate.compareText(typeof left, typeof right);
+  const byType = Predicate.compareText(Predicate.typeName(left), Predicate.typeName(right));
   return byType !== 0 ? byType : Predicate.compareText(String(left), String(right));
 };
 

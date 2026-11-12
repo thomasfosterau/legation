@@ -142,7 +142,10 @@ export default defineConfig({
       // and each such site carries its own scoped disable with that reason.
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      "effect/no-runtime-typeof": "warn",
+      // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),
+      // which measured no slower than a `typeof` switch on the per-row
+      // `Predicate.compareLiterals` path.
+      "effect/no-runtime-typeof": "error",
 
       // ---- Effect preset: ported-code allowances ---------------------------
       // The engine predates the Effect oxlint preset. The rules below sit at

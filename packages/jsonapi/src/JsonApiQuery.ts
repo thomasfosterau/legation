@@ -1106,7 +1106,7 @@ const scalarSchema = (type: "string" | "number" | "boolean"): Schema.Top =>
 const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>): void => {
   const add = (field: string, value: unknown) => {
     const set = types.get(field) ?? new Set<string>();
-    set.add(typeof value);
+    set.add(Predicate.typeName(value));
     types.set(field, set);
   };
   Match.value(ast).pipe(

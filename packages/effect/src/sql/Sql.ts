@@ -202,18 +202,18 @@ interface Compilation {
   readonly foreignKinds: Readonly<Record<string, Kinds>> | undefined;
 }
 
-/** The JS type a literal of each kind has. */
-const jsTypeOf: Record<Predicate.LiteralKind, "string" | "number" | "boolean"> = {
-  text: "string",
-  instant: "string",
-  integer: "number",
-  double: "number",
-  boolean: "boolean",
+/** The JS type check a literal of each kind passes. */
+const hasJsTypeOf: Record<Predicate.LiteralKind, (value: Predicate.Literal) => boolean> = {
+  text: P.isString,
+  instant: P.isString,
+  integer: P.isNumber,
+  double: P.isNumber,
+  boolean: P.isBoolean,
 };
 
 /** Whether a literal can bind as the declared kind: `null` always, else by JS type. */
 const conforms = (kind: Predicate.LiteralKind | undefined, value: Predicate.Literal): boolean =>
-  value === null || kind === undefined || typeof value === jsTypeOf[kind];
+  value === null || kind === undefined || hasJsTypeOf[kind](value);
 
 /** The column operand: quoted, with the collation clause when declared `text`. */
 const operand = (compilation: Compilation, field: string): string => {
