@@ -21,6 +21,7 @@ import { PreparedStatement, type QueryDatabaseClient } from "@alchemy.run/cloudf
 import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -509,7 +510,7 @@ const makeRooms = (config: Room.RoomConfig) =>
       )
     );
     const namespace: Workers.DurableObject<Room.RoomObject> = makeNamespace<Room.RoomObject>(room);
-    return { room, pokes };
+    return { room, pokes, namespace };
   });
 
 /** A shard namespace of real `FanoutShard` instances, built on first address, recording each answered call. */
@@ -882,7 +883,7 @@ describe("Room backend lifetime", () => {
         const backend = yield* backendOf();
         // Stands in for a connection pool built in the instance's scope.
         const pool = { acquired: 0, released: 0 };
-        const room = yield* hungRoom("room-pool", clock, makeHungShards().namespace, {
+        const room = yield* hungRoom("room-pool", clock, (yield* makeHungShards()).namespace, {
           backend: Effect.acquireRelease(
             Effect.sync(() => {
               pool.acquired += 1;
@@ -892,14 +893,12 @@ describe("Room backend lifetime", () => {
           ),
         });
         const send = fetchOf(room);
-        const pull = awaitPromise(() =>
-          send(
-            new Request(`https://room/sync${routes.pull}`, {
-              method: "POST",
-              body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
-              headers: { "content-type": "application/json" },
-            })
-          )
+        const pull = send(
+          new Request(`https://room/sync${routes.pull}`, {
+            method: "POST",
+            body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
+            headers: { "content-type": "application/json" },
+          })
         );
         expect((yield* pull).status).toBe(200);
         expect((yield* pull).status).toBe(200);
@@ -1007,13 +1006,12 @@ describe("out-of-band writes", () => {
     "publishOutOfBand pokes the room leased on the write's topic, and its client pulls the new row",
     () =>
       Effect.gen(function* () {
-        const scope = yield* Scope.Scope;
         // The room's heartbeat beats only when the test advances this clock; the shards stamp
         // leases on the real clock with a 30 minute TTL, which no run outlives.
         const clock = yield* TestClock.make();
         const backend = yield* backendOf();
-        const { shards, calls } = makeShards();
-        const { room, pokes, namespace } = makeRooms({
+        const { shards, calls } = yield* makeShards();
+        const { room, pokes, namespace } = yield* makeRooms({
           nodes,
           backend: Effect.succeed(backend),
           policy: publishPolicy,
@@ -1021,25 +1019,21 @@ describe("out-of-band writes", () => {
           heartbeat: "10 minutes",
           clock,
         });
-        const roomA = yield* awaitPromise(() => room("room-a"));
+        const roomA = yield* room("room-a");
         const socket = makeSocket();
         roomA.sockets.push(socket);
-        const reader = yield* awaitPromise(() =>
-          makeClient(roomA, scope, "client-a", "group-a", {
-            pullInterval: "10 minutes",
-            pushDebounce: "10 millis",
-          })
-        );
+        const reader = yield* makeClient(roomA, "client-a", "group-a", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
         const converged = yield* observeP1(reader, 1);
         yield* Effect.orDie(reader.pull);
         yield* clock.adjust("10 minutes");
-        yield* awaitPromise(() =>
-          calls.next(
-            (call) =>
-              call.shard === "reviews/productId=p-1" &&
-              call.method === "register" &&
-              call.roomId === "room-a"
-          )
+        yield* calls.next(
+          (call) =>
+            call.shard === "reviews/productId=p-1" &&
+            call.method === "register" &&
+            call.roomId === "room-a"
         );
 
         // The cron job writes straight to the backend, then publishes the write's hint.
@@ -1059,10 +1053,8 @@ describe("out-of-band writes", () => {
           Effect.provideService(Clock.Clock, clock)
         );
 
-        yield* awaitPromise(() =>
-          pokes.next(
-            (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
-          )
+        yield* pokes.next(
+          (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
         );
         expect(socket.sent.length).toBeGreaterThan(0);
         // The client honours the poke and pulls the row the cron job wrote.
@@ -1078,14 +1070,13 @@ describe("out-of-band writes", () => {
     "a room's hints source publishes like a push, poking the rooms leased on its topics",
     () =>
       Effect.gen(function* () {
-        const scope = yield* Scope.Scope;
         const clock = yield* TestClock.make();
         const backend = yield* backendOf();
-        const { shards, calls } = makeShards();
+        const { shards, calls } = yield* makeShards();
         // A HintSource fed by this queue, as a CDC listener would be. Every room runs it, and
         // whichever room takes a batch publishes it.
         const feed = yield* Queue.unbounded<ReadonlyArray<Backend.ChangeHint>>();
-        const { room } = makeRooms({
+        const { room } = yield* makeRooms({
           nodes,
           backend: Effect.succeed(backend),
           policy: publishPolicy,
@@ -1094,8 +1085,8 @@ describe("out-of-band writes", () => {
           clock,
           hints: Effect.succeed(HintSource.fromStream(Stream.fromQueue(feed))),
         });
-        const roomA = yield* awaitPromise(() => room("room-a"));
-        yield* awaitPromise(() => room("room-cdc"));
+        const roomA = yield* room("room-a");
+        yield* room("room-cdc");
         // Room A's socket signals its first poke frame: over RPC when room-cdc published, or
         // delivered locally when room A took the batch itself.
         const framed = yield* Deferred.make<void>();
@@ -1106,18 +1097,14 @@ describe("out-of-band writes", () => {
             Deferred.doneUnsafe(framed, Exit.void);
           },
         });
-        const reader = yield* awaitPromise(() =>
-          makeClient(roomA, scope, "client-a", "group-a", {
-            pullInterval: "10 minutes",
-            pushDebounce: "10 millis",
-          })
-        );
+        const reader = yield* makeClient(roomA, "client-a", "group-a", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
         const converged = yield* observeP1(reader, 1);
         yield* Effect.orDie(reader.pull);
         yield* clock.adjust("10 minutes");
-        yield* awaitPromise(() =>
-          calls.next((call) => call.method === "register" && call.roomId === "room-a")
-        );
+        yield* calls.next((call) => call.method === "register" && call.roomId === "room-a");
 
         yield* Effect.orDie(
           backend.applyMutations({ clientGroupId: "cdc" }, [
