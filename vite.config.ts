@@ -217,6 +217,7 @@ export default defineConfig({
         files: [
           "packages/effect/src/__tests__/typed-query.test.ts",
           "packages/effect/src/__tests__/node.test.ts",
+          "packages/effect/src/__tests__/typed-reads.test.ts",
         ],
         rules: {
           "effect/avoid-ts-ignore": "off",

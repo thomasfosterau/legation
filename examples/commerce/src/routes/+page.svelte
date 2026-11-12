@@ -2,17 +2,15 @@
   import { page as kitPage } from "$app/state";
   import { useAggregateGrouped, useQuery } from "@thomasfosterau/legation-svelte";
   import { AsyncResult } from "effect/reactivity";
-  import { Aggregate, Hydration, type Query } from "@thomasfosterau/legation";
+  import { Aggregate, type Client, Hydration, type Query } from "@thomasfosterau/legation";
   import {
     allCategories,
     allVariants,
     CATALOG_PAGE_SIZE,
     nodes,
     productPage,
-    type Category,
-    type Product,
   } from "../lib/domain.js";
-  import { productRows, type RowSeed, toRow, variantRows } from "../lib/rows.js";
+  import { categoryRows, productRows, variantRows } from "../lib/rows.js";
 
   const { data } = $props();
 
@@ -44,10 +42,12 @@
   // svelte-ignore state_referenced_locally
   const snapshot = data.snapshot;
   const seededFrom = snapshot === undefined ? "jsonapi" : "snapshot";
-  const seed = (read: Query.Read, fallback: ReadonlyArray<RowSeed>): ReadonlyArray<RowSeed> =>
-    snapshot === undefined
-      ? fallback
-      : Hydration.rowsFor(snapshot, nodes, read).map((row) => ({ ...row, related: {} }));
+  // A seed is typed by its read, as the hook that takes it types its rows.
+  const seed = <const R extends Query.Read>(
+    read: R & Query.Validate<typeof nodes, R>,
+    fallback: ReadonlyArray<Hydration.SeedRow<Client.ResolvedRow<R, typeof nodes>["value"]>>
+  ) =>
+    snapshot === undefined ? fallback : Hydration.rowsFor<typeof nodes, R>(snapshot, nodes, read);
 
   // svelte-ignore state_referenced_locally
   const productsQuery = useQuery(() => productPage({ categoryId, cursor, limit: PAGE }), {
@@ -57,21 +57,16 @@
   });
   // svelte-ignore state_referenced_locally
   const categoriesQuery = useQuery(() => allCategories, {
-    initial: seed(allCategories, data.categories.map((category) => toRow(category))),
+    initial: seed(allCategories, categoryRows(data.categories)),
   });
   // Grouped live aggregate: per-product stock from the variants the engine
   // has synced — the "out of stock" badges update as orders decrement stock.
   // svelte-ignore state_referenced_locally
   const stock = useAggregateGrouped(() => allVariants, Aggregate.sum("stock"), "productId", {
-    initial: seed(allVariants, variantRows(data.variants)).reduce<Record<string, number>>(
-      (sums, row) => {
-        const value = row.value as { productId?: string; stock?: number };
-        const key = value.productId ?? "";
-        sums[key] = (sums[key] ?? 0) + (value.stock ?? 0);
-        return sums;
-      },
-      {}
-    ),
+    initial: seed(allVariants, variantRows(data.variants)).reduce<Record<string, number>>((sums, row) => {
+      sums[row.value.productId] = (sums[row.value.productId] ?? 0) + row.value.stock;
+      return sums;
+    }, {}),
   });
 
   const products = $derived.by(async () => {
@@ -79,7 +74,7 @@
     const needle = search.trim().toLowerCase();
     const rows = await productsQuery.promise;
     return rows
-      .map((row) => row.value as Product)
+      .map((row) => row.value)
       .filter((product) => needle === "" || product.name.toLowerCase().includes(needle));
   });
   const stockOf = $derived(AsyncResult.getOrElse(stock.current, () => ({})) as Record<string, number>);
@@ -91,7 +86,7 @@
   <p>
     <a href="/">All</a>
     {#each await categoriesQuery.promise as row (row.id)}
-      {@const category = row.value as Category}
+      {@const category = row.value}
       <a href={`/?category=${category.id}`}>{category.name}</a>
     {/each}
     <input placeholder="Search…" bind:value={search} />

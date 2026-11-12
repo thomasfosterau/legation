@@ -270,12 +270,47 @@ export const derivableSet = (node: AnyNode): ReadonlySet<string> => {
   return fields;
 };
 
-/** A closed, validated node graph plus the engine registry derived from it. */
-export interface NodeRegistry {
-  readonly nodes: ReadonlyMap<string, AnyNode>;
+/**
+ * A closed, validated node graph plus the engine registry derived from it.
+ *
+ * `Nodes` is the union of the graph's node definitions, as {@link registry}
+ * infers it from the nodes it is given, so the graph's types reach what reads
+ * it: a `Client` built over this registry types each read's rows from it. The
+ * default, {@link AnyNode}, is a graph whose types are erased (one built from
+ * nodes typed `AnyNode`, or a parameter that accepts any graph); a read over
+ * it resolves to untyped rows.
+ */
+export interface NodeRegistry<Nodes extends AnyNode = AnyNode> {
+  readonly nodes: ReadonlyMap<string, Nodes>;
   /** The engine's collection registry, derived edge-for-edge. */
   readonly collections: Collection.CollectionRegistry;
 }
+
+/** The node definitions a graph closes over: the union of its nodes' types. */
+export type NodesOf<Graph extends NodeRegistry> =
+  Graph extends NodeRegistry<infer Nodes> ? Nodes : never;
+
+/**
+ * Whether a graph carries its nodes' types: `false` for an erased
+ * {@link NodeRegistry}, whose collection names are `string`.
+ */
+export type IsTyped<Graph extends NodeRegistry> =
+  Graph extends NodeRegistry<infer Nodes> ? (string extends Nodes["type"] ? false : true) : never;
+
+/** The collection names of a graph: its node types. */
+export type TypeOf<Graph extends NodeRegistry> = NodesOf<Graph>["type"];
+
+/** The definition of the node named `Type` in a graph. */
+export type NodeOf<Graph extends NodeRegistry, Type extends string> = Extract<
+  NodesOf<Graph>,
+  { readonly type: Type }
+>;
+
+/** The field names of a node's row: its identity, attributes and `one`-edge keys. */
+export type FieldOf<N extends AnyNode> = keyof RowOf<N> & string;
+
+/** The edge names declared on a node. */
+export type EdgeOf<N extends AnyNode> = keyof N["edges"] & string;
 
 /** Resolve a collection-valued edge's key field from its inverse. */
 const inverseVia = (
@@ -384,7 +419,7 @@ const rowFields = (node: AnyNode): ReadonlySet<string> => {
  * the filterable set cannot disagree (as `one`-edge keys are `eq` / `in`).
  * An order field the target's row does not carry is a definition defect.
  */
-const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): AnyNode => {
+const withEdgeOrders = <N extends AnyNode>(node: N, definitions: ReadonlyArray<AnyNode>): N => {
   const sortable = new Set<string>(node.sortable);
   const fields = rowFields(node);
   Arr.forEach(definitions, (source) =>
@@ -413,7 +448,9 @@ const withEdgeOrders = (node: AnyNode, definitions: ReadonlyArray<AnyNode>): Any
  * the paginated edges ordering it — plus the derived engine
  * `CollectionRegistry`.
  */
-export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
+export const registry = <const Nodes extends AnyNode>(
+  definitions: ReadonlyArray<Nodes>
+): NodeRegistry<Nodes> => {
   const declared = new Map<string, AnyNode>();
   Arr.forEach(definitions, (node) => {
     if (declared.has(node.type)) {
@@ -433,7 +470,7 @@ export const registry = (definitions: ReadonlyArray<AnyNode>): NodeRegistry => {
       if (edge.kind !== "one") inverseVia(node, name, edge, declared);
     });
   });
-  const nodes = new Map<string, AnyNode>();
+  const nodes = new Map<string, Nodes>();
   Arr.forEach(definitions, (node) => {
     nodes.set(node.type, withEdgeOrders(node, definitions));
   });

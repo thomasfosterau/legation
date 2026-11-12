@@ -107,7 +107,7 @@ const mutations = Mutation.registry([
   { mutator: setTodo, local: (todo, writer) => writer.put("todos", todo.id, todo) },
 ]);
 
-const open: Query.Read = { collection: "todos", where: { done: false } };
+const open = { collection: "todos", where: { done: false } } as const satisfies Query.Read;
 
 const program = Effect.gen(function* () {
   // 2. Server: one per backend. The reference in-memory backend runs the

@@ -52,8 +52,10 @@ export interface Device {
   readonly signOut: Effect.Effect<SignOut.SessionChange>;
   /** Take the network down (or bring it back): every push, pull and read fails while it is down. */
   readonly setOnline: (online: boolean) => Effect.Effect<void>;
-  /** Run a read against the replica: the posts it answers. */
-  readonly posts: (read: Query.Read) => Effect.Effect<ReadonlyArray<Post>>;
+  /** Run a read of the posts against the replica: the posts it answers. */
+  readonly posts: (
+    read: Query.Read & { readonly collection: "posts" }
+  ) => Effect.Effect<ReadonlyArray<Post>>;
   /** Every post the durable store holds, whatever any query would answer. */
   readonly stored: Effect.Effect<ReadonlyArray<Post>>;
 }
@@ -174,7 +176,7 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
         }),
       posts: (read) =>
         client.query(read).pipe(
-          Effect.map((rows) => rows.map((row) => row.value as Post)),
+          Effect.map((rows) => rows.map((row) => row.value)),
           Effect.orDie
         ),
       stored: store.listRows("posts").pipe(

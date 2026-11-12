@@ -82,6 +82,7 @@ import type { RequestCredentials } from "./Authorization.js";
 import type { MutatorError, TransportError, VersionNotSupportedError } from "./Errors.js";
 import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
+import type * as Client from "./Client.js";
 import type * as Node from "./Node.js";
 import { Mutation } from "./Protocol.js";
 import * as Query from "./Query.js";
@@ -489,27 +490,43 @@ export const handler = (gate: Gate): HostRequest.Handler =>
   HostRequest.handler(requests.hydrate, gate.hydrate);
 
 /**
+ * A row seeded from a snapshot ({@link rowsFor}): the node's row, typed as
+ * `Client.ResolvedRow` types it, and no edges resolved.
+ */
+export interface SeedRow<Value = unknown> {
+  readonly id: string;
+  readonly value: Value;
+  readonly related: Record<never, never>;
+}
+
+/**
  * Project a snapshot onto a read, locally and synchronously: the snapshot's
  * rows for the read's collection, filtered/sorted/windowed by the read's
  * compiled root window. This is how a component derives its initial value
  * (e.g. the rune hooks' `initial` option) from the page's snapshot — during
  * SSR and on first client render — without touching an engine.
  *
+ * The rows' values are typed by the graph as `Client.ResolvedRow` types the
+ * read's (a dynamic read, or an erased graph, gives `unknown`), and the read
+ * is checked against the graph as `Client.query` checks it.
+ *
  * `include`d edges are not resolved here: a snapshot is flat rows, and
  * resolving edges is the Client's job once the engine is up. Seed the base
  * rows and let the first live emission fill the edges in.
  */
-export const rowsFor = (
+export const rowsFor = <Graph extends Node.NodeRegistry, const R extends Query.Read>(
   snapshot: Snapshot,
-  nodes: Node.NodeRegistry,
-  read: Query.Read
-): ReadonlyArray<ClientEngineModule.LocalRow> =>
+  nodes: Graph,
+  read: R & Query.Validate<Graph, R>
+): ReadonlyArray<SeedRow<Client.ResolvedRow<R, Graph>["value"]>> =>
+  // SAFETY: the snapshot's rows passed the row schema when they were written,
+  // the trust every typed read places in the replica (ADR-0014).
   Subset.apply(
     snapshot.rows
       .filter((row) => row.collection === read.collection)
-      .map((row) => ({ id: row.id, value: row.value })),
+      .map((row) => ({ id: row.id, value: row.value, related: {} })),
     Query.plan(nodes, read).root
-  );
+  ) as ReadonlyArray<SeedRow<Client.ResolvedRow<R, Graph>["value"]>>;
 
 /** Options for {@link snapshot}. */
 export interface SnapshotOptions {
