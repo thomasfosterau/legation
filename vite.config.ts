@@ -195,6 +195,7 @@ export default defineConfig({
       "oxc/no-map-spread": "error",
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
+      "effecttsgo/unnecessary-fail-yieldable-error": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers

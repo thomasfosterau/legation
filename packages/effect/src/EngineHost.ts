@@ -473,12 +473,10 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           // is credited for it.
           const undeclared = undeclaredEdge(registry, collection, edges);
           if (undeclared !== undefined) {
-            return yield* Effect.fail(
-              new QueryError({
-                message: `EngineHost: SubscribeRelated on "${collection}" names an edge the registry does not declare: "${undeclared.name}"`,
-                query: collection,
-              })
-            );
+            return yield* new QueryError({
+              message: `EngineHost: SubscribeRelated on "${collection}" names an edge the registry does not declare: "${undeclared.name}"`,
+              query: collection,
+            });
           }
           // The relational read is established here — its root subscribed,
           // its edge windows registered by the reconcile loop — in a scope of

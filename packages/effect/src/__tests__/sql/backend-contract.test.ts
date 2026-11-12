@@ -142,9 +142,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
@@ -518,9 +516,7 @@ const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
 };
 
