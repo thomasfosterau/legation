@@ -177,6 +177,7 @@ export const make = <R>(
     const rooms = (yield* Workers.DurableObjectScope) as Workers.DurableObject<RoomObject>;
     const shards = yield* config.shards;
 
+    // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's two-phase Durable Object contract: init returns the per-instance Effect, which the provider runs per instance
     return onRoomClock(
       config.clock,
       Effect.gen(function* () {

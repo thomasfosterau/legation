@@ -84,6 +84,7 @@ export const make = (): Effect.Effect<
 > =>
   Effect.gen(function* () {
     const state = yield* Workers.DurableObjectState;
+    // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's two-phase Durable Object contract: init returns the per-instance Effect, which the provider runs per instance
     return Effect.succeed({
       register: (roomId, ttlMillis) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>

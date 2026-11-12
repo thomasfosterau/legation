@@ -207,6 +207,7 @@ export default defineConfig({
       "effecttsgo/prefer-unsafe-constructor": "error",
       "effecttsgo/provide-layer-succeed-to-provide-service": "error",
       "effecttsgo/prefer-succeed-some-or-none": "error",
+      "effecttsgo/return-effect-in-gen": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
