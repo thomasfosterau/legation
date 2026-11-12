@@ -8,12 +8,17 @@
    * Visual polish is out of scope for this first cut: plain, legible markup.
    */
   import { untrack } from "svelte";
+  import * as Context from "effect/Context";
   import * as Effect from "effect/Effect";
   import * as Fiber from "effect/Fiber";
   import * as HashMap from "effect/HashMap";
   import * as Result from "effect/Result";
   import type { DevtoolsCore } from "@thomasfosterau/legation-devtools";
   import * as Stores from "./store.js";
+
+  // The panel's event handlers run the core's effects with no services of their own.
+  const runFork = Effect.runForkWith(Context.empty());
+  const runPromise = Effect.runPromiseWith(Context.empty());
 
   const props: { core: DevtoolsCore } = $props();
   // `core` is a stable singleton built once by the app's `createWorld`, the
@@ -40,31 +45,31 @@
 
   $effect(() => {
     if (core.offline === undefined) return;
-    const fiber = Effect.runFork(
+    const fiber = runFork(
       Effect.map(core.offline.isOffline, (value) => {
         offline = value;
       })
     );
     return () => {
-      Effect.runFork(Fiber.interrupt(fiber));
+      runFork(Fiber.interrupt(fiber));
     };
   });
 
   const toggleOffline = (): void => {
     if (core.offline === undefined) return;
     const next = !(offline ?? false);
-    void Effect.runPromise(core.offline.setOffline(next)).then(() => {
+    void runPromise(core.offline.setOffline(next)).then(() => {
       offline = next;
     });
   };
 
-  const forcePull = (): void => void Effect.runPromise(core.forcePull);
-  const forcePush = (): void => void Effect.runPromise(core.forcePush);
+  const forcePull = (): void => void runPromise(core.forcePull);
+  const forcePush = (): void => void runPromise(core.forcePush);
   const dropSubscription = (subset: (typeof $subscriptions)[number]): void =>
-    void Effect.runPromise(core.dropSubscription(subset));
+    void runPromise(core.dropSubscription(subset));
   const clearStore = (): void => {
     if (!confirm("Clear every confirmed row from the store? This cannot be undone.")) return;
-    void Effect.runPromise(core.clearStore);
+    void runPromise(core.clearStore);
   };
 </script>
 
