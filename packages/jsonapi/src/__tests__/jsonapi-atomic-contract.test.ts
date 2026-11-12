@@ -48,6 +48,7 @@ import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
 import { flakyLedger } from "./flaky-ledger.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── The api ─────────────────────────────────────────────────────────────────
 
@@ -265,7 +266,8 @@ const applyAdd = (
   // Staged before the crash check: a row written and then crashed must be
   // discarded with the batch, not leaked into the committed store.
   tableOf(staged, row.type).set(id, row);
-  if (row.attributes.crash === true) return Effect.die(new Error("the server fell over"));
+  if (row.attributes.crash === true)
+    return Effect.die(new TestFailure({ message: "the server fell over" }));
   return Effect.gen(function* () {
     if (probe.publishEarly) tableOf(committed, row.type).set(id, row);
     const hold = probe.holds.get(id);

@@ -34,6 +34,7 @@ import type { PatchOp, PullRequest, PullResponse } from "../Protocol.js";
 import * as Query from "../Query.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, sellerId: Schema.String },
@@ -58,7 +59,7 @@ const makeGated = Effect.gen(function* () {
   const release = yield* Deferred.make<PullResponse, TransportError>();
   let calls = 0;
   const transport: ClientTransport = {
-    push: () => Effect.die(new Error("push is not part of this test")),
+    push: () => Effect.die(new TestFailure({ message: "push is not part of this test" })),
     pull: (request) => {
       calls += 1;
       if (calls === 1) {
@@ -77,7 +78,7 @@ const makeGated = Effect.gen(function* () {
 const scripted = (patches: ReadonlyArray<ReadonlyArray<PatchOp>>): ClientTransport => {
   let calls = 0;
   return {
-    push: () => Effect.die(new Error("push is not part of this test")),
+    push: () => Effect.die(new TestFailure({ message: "push is not part of this test" })),
     pull: () => {
       const index = calls;
       calls += 1;

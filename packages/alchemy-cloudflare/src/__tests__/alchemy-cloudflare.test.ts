@@ -61,6 +61,7 @@ import {
   makeStorage,
   runtimeContext,
 } from "./harness.js";
+import { TestFailure } from "./test-failure.js";
 
 /** Run an effect that needs the runtime context, as inside a Durable Object event. */
 const inRuntime = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
@@ -81,7 +82,7 @@ describe("DurableCvrStore", () => {
 
   it("surfaces a failed storage call as a StoreError", async () => {
     const raw = makeRawStorage();
-    raw.get = () => Promise.reject(new Error("storage unavailable"));
+    raw.get = () => Promise.reject(new TestFailure({ message: "storage unavailable" }));
     const store = await inRuntime(DurableCvrStore.make(Workers.fromDurableObjectStorage(raw)));
     const exit = await Effect.runPromiseExit(store.get("cookie-1"));
     expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
@@ -125,12 +126,12 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
         bind: (...values: ReadonlyArray<unknown>) => statement(values),
         all: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: rows, success: true, meta: {} };
         },
         run: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: [], success: true, meta: {} };
         },
       });

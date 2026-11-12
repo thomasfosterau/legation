@@ -77,6 +77,12 @@ import * as DocumentWriter from "./DocumentWriter.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Linkage from "./Linkage.js";
 
+/** Thrown for a resource with no node in the graph: a definition defect. */
+class UnknownNode extends Schema.TaggedError<UnknownNode, { readonly brand: unique symbol }>()(
+  "UnknownNode",
+  { message: Schema.String }
+) {}
+
 // ─── Options ─────────────────────────────────────────────────────────────────
 
 /** What the derived handlers run over: the graph, the read path's seams, and the request's identity. */
@@ -257,7 +263,9 @@ export const make = (options: Options): RestHandlers => {
   const nodeOf = (resource: Resource.Any): Node.AnyNode => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) {
-      throw new Error(`RestHandlers: no node "${resource.type}" in the graph for the resource`);
+      throw new UnknownNode({
+        message: `RestHandlers: no node "${resource.type}" in the graph for the resource`,
+      });
     }
     return node;
   };

@@ -41,6 +41,7 @@ import {
   SyncServer,
 } from "../internal.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, categoryId: Schema.String },
@@ -78,7 +79,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const makeHandler = Effect.gen(function* () {

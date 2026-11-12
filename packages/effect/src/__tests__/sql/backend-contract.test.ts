@@ -44,6 +44,7 @@ import {
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { TestFailure } from "../test-failure.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
@@ -734,7 +735,9 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
             Effect.timeoutOrElse({
               duration: "20 seconds",
               orElse: () =>
-                Effect.die(new Error("awaitPeer did not return on the peer's lock wait")),
+                Effect.die(
+                  new TestFailure({ message: "awaitPeer did not return on the peer's lock wait" })
+                ),
             })
           );
           expect(

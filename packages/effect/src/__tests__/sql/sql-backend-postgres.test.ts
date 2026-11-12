@@ -32,6 +32,7 @@ import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfostera
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { TestFailure } from "../test-failure.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -218,7 +219,9 @@ const awaitCopySettled = (sql: SqlClient, copy: Fiber.Fiber<unknown, unknown>) =
     }),
     Effect.timeout("20 seconds"),
     Effect.catchTag("TimeoutError", () =>
-      Effect.die(new Error("the copy neither blocked on a lock nor finished within 20s"))
+      Effect.die(
+        new TestFailure({ message: "the copy neither blocked on a lock nor finished within 20s" })
+      )
     )
   );
 

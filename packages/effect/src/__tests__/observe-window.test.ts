@@ -30,6 +30,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Item {
   readonly id: string;
@@ -94,7 +95,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);

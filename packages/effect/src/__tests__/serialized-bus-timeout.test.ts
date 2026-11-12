@@ -11,13 +11,14 @@ import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as InvalidationBus from "../InvalidationBus.js";
+import { TestFailure } from "./test-failure.js";
 
 const hint = { collection: "todos", ids: ["1"] };
 
 /** A custom broker whose publish never returns: only the bus's bound can finish it. */
 const hungBroker: InvalidationBus.BusBroker = {
   publish: () => Effect.never,
-  subscribe: Effect.die(new Error("unused")),
+  subscribe: Effect.die(new TestFailure({ message: "unused" })),
 };
 
 describe("makeSerialized broker publish timeout (#375)", () => {

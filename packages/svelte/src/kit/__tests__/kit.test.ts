@@ -50,6 +50,7 @@ import {
   requestCredentials,
   runFormMutation,
 } from "../index.js";
+import { TestFailure } from "../../__tests__/test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -101,7 +102,7 @@ const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: s
     serialize: () => "",
     // Nothing under test parses a `Set-Cookie` header.
     parse: () => {
-      throw new Error("fakeCookies: parse is not faked");
+      throw new TestFailure({ message: "fakeCookies: parse is not faked" });
     },
   };
   return { cookies, sets };

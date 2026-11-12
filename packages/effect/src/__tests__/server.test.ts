@@ -31,6 +31,7 @@ import {
 } from "../index.js";
 import { InvalidationBus } from "../internal.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -60,7 +61,9 @@ const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, m
     }
     const value = yield* read;
     if (until(value)) return value;
-    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+    return yield* Effect.die(
+      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+    );
   });
 
 describe("Server", () => {

@@ -29,6 +29,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -594,7 +595,7 @@ describe("the atomic batch on the key-value store (#393)", () => {
               if (!armed) return real.currentTimeMillis;
               armed = false;
               died.count += 1;
-              return Effect.die(new Error("the pull died after its commit"));
+              return Effect.die(new TestFailure({ message: "the pull died after its commit" }));
             }),
             currentTimeNanosUnsafe: () => real.currentTimeNanosUnsafe(),
             currentTimeNanos: real.currentTimeNanos,
