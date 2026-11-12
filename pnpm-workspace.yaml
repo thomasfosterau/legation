@@ -74,7 +74,7 @@ catalog:
   "@sveltejs/vite-plugin-svelte": ^7.3.1
   # legation-jsonapi's dev pin (a peer there, `catalogs.jsonapi-peers`). The
   # example apps that use it take it from here too.
-  "@thomasfosterau/effect-jsonapi": ^0.22.0
+  "@thomasfosterau/effect-jsonapi": ^0.22.1
   # legation-auth's dev pin (a peer there, `catalogs.auth-peers`): the newest
   # 0.4.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
   # legation-auth does not use its JSON:API surface.
@@ -157,7 +157,7 @@ catalogs:
   # resources, documents and errors in, so there must be one copy).
   jsonapi-peers:
     effect: ^4.1.0
-    "@thomasfosterau/effect-jsonapi": ^0.22.0
+    "@thomasfosterau/effect-jsonapi": ^0.22.1
 
 overrides:
   # `effect` MUST be a singleton (see the header): force every resolution to
