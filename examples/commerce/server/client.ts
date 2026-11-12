@@ -20,7 +20,8 @@
  * `x-commerce-user` header on both paths (the inter-process trust boundary;
  * see server/jsonapi.ts).
  */
-import { Effect, type Schema } from "effect";
+import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 import {
   FetchHttpClient,
   HttpClient,

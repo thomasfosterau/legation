@@ -11,7 +11,7 @@
    * The three filters are three URLs served by one optional route param, so
    * `data.filter` — not component state — decides what is on screen.
    */
-  import { Effect } from "effect";
+  import * as Effect from "effect/Effect";
   import { AsyncResult } from "effect/reactivity";
   import { useAggregate, useQuery, useUndo } from "@thomasfosterau/legation-svelte";
   import { Aggregate } from "@thomasfosterau/legation";

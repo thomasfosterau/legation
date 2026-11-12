@@ -44,7 +44,11 @@
  * reads go through the Kit read proxy, `src/routes/jsonapi/[...path]/+server.ts`,
  * which sets this header from the session and drops the client's).
  */
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { HttpApiBuilder } from "effect/http-api";
 import type { HttpServerRequest } from "effect/http";
 import { HttpServerRequest as Request } from "effect/http";

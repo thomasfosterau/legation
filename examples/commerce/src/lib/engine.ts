@@ -19,7 +19,10 @@
  * so the topology actually runs somewhere in this repo (see `lib/host.ts`'s
  * `bootElected`).
  */
-import { Effect, Layer, ManagedRuntime, type Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import type * as Stream from "effect/Stream";
 import { Client } from "@thomasfosterau/legation";
 import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
 import type { ClientRuntime } from "@thomasfosterau/legation-svelte";

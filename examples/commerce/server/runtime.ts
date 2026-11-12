@@ -17,7 +17,10 @@
  * server's fan-out listens to, and `server.broadcast` is available to
  * out-of-band writers (the fulfilment worker).
  */
-import { Context, Effect, Layer, Scope } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Authorization, type Backend, Predicate, Server, Transport } from "@thomasfosterau/legation";
 import { InvalidationBus } from "@thomasfosterau/legation/internal";

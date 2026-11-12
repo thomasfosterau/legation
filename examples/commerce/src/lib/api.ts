@@ -13,7 +13,7 @@
  * so the contract the api publishes is the grammar the derived handlers
  * parse and the façade parses — the parity the façade presumes.
  */
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiSchema } from "effect/http-api";
 import { ApiError, Document, Endpoint, Group } from "@thomasfosterau/effect-jsonapi";
 import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";

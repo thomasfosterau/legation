@@ -9,7 +9,9 @@
  * `articles.slug`, `favorites.article` → `articles.slug`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Ref, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import {
   Authorization,
   Client,

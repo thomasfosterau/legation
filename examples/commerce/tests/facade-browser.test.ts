@@ -87,7 +87,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest";
 import { existsSync } from "node:fs";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
 import { myCartItems, productPage } from "../src/lib/domain.js";

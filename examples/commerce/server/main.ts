@@ -13,7 +13,10 @@
  *   drift stays covered), and the fulfilment worker — an out-of-band writer
  *   by design, advancing placed orders to shipped/delivered on a timer.
  */
-import { Duration, Effect, Layer, Schedule } from "effect";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import { SqlClient } from "effect/sql/SqlClient";
 import { HttpRouter } from "effect/http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";

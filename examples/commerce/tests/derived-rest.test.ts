@@ -25,7 +25,7 @@
  *    continued by `links.next`.
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { JsonApiQuery, NodeBridge } from "@thomasfosterau/legation-jsonapi";

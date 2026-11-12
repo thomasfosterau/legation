@@ -30,7 +30,7 @@
  * rebase can never leave a stale counter.
  */
 
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────

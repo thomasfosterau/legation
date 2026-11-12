@@ -34,7 +34,7 @@
  * `productId` filter. The node graph's `products.variants` / `variants.product`
  * pair is one edge seen from both ends (ADR-0022).
  */
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 
 /**

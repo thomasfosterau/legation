@@ -17,7 +17,10 @@
  *   cart sync back).
  */
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Fiber, Layer } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Client, ClientStore, Transport } from "@thomasfosterau/legation";

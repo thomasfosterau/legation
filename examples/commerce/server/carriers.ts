@@ -7,7 +7,7 @@
  * protocol, NDJSON-framed. Nothing here is Node-specific; the router is served
  * by `NodeHttpServer` in `main.ts` (and by the test harness).
  */
-import { Layer } from "effect";
+import * as Layer from "effect/Layer";
 import type { HttpRouter } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Transport } from "@thomasfosterau/legation";

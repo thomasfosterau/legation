@@ -12,7 +12,9 @@
    * reload or deep-link straight into Orders and you land where you left off.
    */
   import { page } from "$app/state";
-  import { Effect, Fiber, Stream } from "effect";
+  import * as Effect from "effect/Effect";
+  import * as Fiber from "effect/Fiber";
+  import * as Stream from "effect/Stream";
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import { DevtoolsPanel } from "@thomasfosterau/legation-devtools/svelte";
   import type { Transport } from "@thomasfosterau/legation";

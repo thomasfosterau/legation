@@ -20,7 +20,7 @@
  * `server/client.ts`, the Kit process's typed client for the writes).
  */
 import { error } from "@sveltejs/kit";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { MEDIA_TYPE } from "@thomasfosterau/effect-jsonapi";
 import type { Query } from "@thomasfosterau/legation";
 import { JsonApiQuery } from "@thomasfosterau/legation-jsonapi";

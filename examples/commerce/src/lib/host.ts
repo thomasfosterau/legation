@@ -34,7 +34,10 @@
  * given `nodes` and `urls` too, so a page with no `Client` can pin a URL
  * (`SubscribeUrl`) and have the façade serve it.
  */
-import { Effect, Layer, ManagedRuntime, Stream } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Stream from "effect/Stream";
 import type { IndexedDb } from "@effect/platform-browser";
 import { Client, ClientStore, type StoreError, Transport } from "@thomasfosterau/legation";
 import { ClientEngine, Paced, RpcTransport } from "@thomasfosterau/legation/internal";

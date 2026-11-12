@@ -13,7 +13,7 @@
  *   backend (see `sync.ts`).
  */
 
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 import { Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 /** A todo row. Same schema drives the node, the mutation args, and the UI. */

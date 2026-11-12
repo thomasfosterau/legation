@@ -17,7 +17,9 @@
  * reuses it.
  */
 import type { Handle } from "@sveltejs/kit/hooks";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { clientLayer, migrate } from "../server/db.js";
 import { bindClientGroup, currentUser } from "../server/runtime.js";
 import { auth, migrateAuth } from "#lib/server/auth.js";

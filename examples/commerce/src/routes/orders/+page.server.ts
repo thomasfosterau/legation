@@ -3,7 +3,7 @@
  * canonical URL of `myOrders` (newest first), the read the page keeps live.
  */
 import type { PageServerLoad } from "./$types";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { myOrders } from "../../lib/domain.js";
 import { readCollection } from "../../../server/client.js";
 import { Order } from "../../lib/resources.js";

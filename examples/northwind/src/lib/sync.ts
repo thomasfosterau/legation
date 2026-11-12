@@ -18,7 +18,17 @@
  * `writer.get`, merges, and puts. That re-runs idempotently on every rebase.
  */
 
-import { Context, Effect, Layer, ManagedRuntime, Schema, Stream } from "effect";
+import * as Context from "effect/Context";
+
+import * as Effect from "effect/Effect";
+
+import * as Layer from "effect/Layer";
+
+import * as ManagedRuntime from "effect/ManagedRuntime";
+
+import * as Schema from "effect/Schema";
+
+import * as Stream from "effect/Stream";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,

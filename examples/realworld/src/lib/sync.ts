@@ -26,7 +26,19 @@
  * the client to forge.
  */
 
-import { Context, Effect, Layer, ManagedRuntime, Ref, Schema, Stream } from "effect";
+import * as Context from "effect/Context";
+
+import * as Effect from "effect/Effect";
+
+import * as Layer from "effect/Layer";
+
+import * as ManagedRuntime from "effect/ManagedRuntime";
+
+import * as Ref from "effect/Ref";
+
+import * as Schema from "effect/Schema";
+
+import * as Stream from "effect/Stream";
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import {
   Authorization,

@@ -93,7 +93,7 @@ export default defineConfig({
       ".changeset/**",
       // The example apps are demo code type-checked by their own
       // svelte-check (`vp run check:examples`); the library lint does not
-      // apply to them.
+      // apply to them, except for their Effect imports (`lint:examples`).
       "examples/**",
     ],
     extends: [recommended, effect.configs.recommended],
@@ -307,10 +307,20 @@ export default defineConfig({
         cache: { input: cacheInputs, output: [] },
       },
       // Each example app's own `tsc` / `svelte-check`. The apps resolve the
-      // packages through `dist/`, as they do at runtime.
+      // packages through `dist/`, as they do at runtime. The examples'
+      // import lint runs first.
       "check:examples": {
         command: "node scripts/typecheck-examples.mjs",
-        dependsOn: ["build"],
+        dependsOn: ["build", "lint:examples"],
+        cache: false,
+      },
+      // The example apps are outside the library lint (`lint.ignorePatterns`),
+      // but they are what consumers copy, so their Effect imports follow the
+      // library's convention: `effect/prefer-namespace-imports` alone, from
+      // examples/oxlint.namespace-imports.json. Oxlint's `overrides` cannot
+      // turn categories off per directory, so this is a run of its own.
+      "lint:examples": {
+        command: "oxlint -c examples/oxlint.namespace-imports.json examples",
         cache: false,
       },
       // Packs every publishable package the way the release does and lints
