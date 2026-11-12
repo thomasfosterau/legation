@@ -194,6 +194,22 @@ const server = yield * Server.make({ backend, auth: { policy, identity } });
 - **Carriers present the credentials.** `RpcTransport.layerHandlers` (on `./internal`) passes each RPC call's headers: the HTTP request's over `RpcServer.layerProtocolHttp`, the upgrade request's over `layerProtocolWebsocket`. Headers the RPC client attaches to a call (`RpcClient.withHeaders`) are merged in and win on a clash, so never trust a header an upstream proxy sets to vouch for a user. The Cloudflare room passes the room request's headers, and the SvelteKit helpers take `credentials: requestCredentials(event)`. A carrier you write passes `{ credentials: Option.some(Authorization.credentialsFromHeaders(request.headers)) }` as the second argument of `handler.handlePush`, `handlePull` and `handleRead`. `credentialsFromHeaders` accepts a WHATWG `Headers`, any iterable of `[name, value]` pairs, or a plain record. A handler outside the sync protocol builds its request's `SyncContext` the same way, with `Authorization.resolveContext(Option.some(resolver), { clientGroupId, credentials })` (legation-jsonapi's `RestHandlers` does).
 - **No request means no credentials.** `Transport.makeInMemory` (the loopback) and a handler call without options present `Authorization.noCredentials`. `Hydration.snapshot({ credentials })`, `Server.mutate({ credentials })` and `Transport.makeInMemory(handler, group, { credentials })` act for a real request in the same process. The loopback's `credentials` may also be an `Effect<Option<RequestCredentials>>`, read on every call, for a client whose session changes (a cookie jar a sign-in writes).
 
+### Partial answers offline
+
+`client.query` answers an uncovered read from the server; when no server can answer (offline, or a transport without `read`), it answers from the replica instead, which can hold fewer rows than the server would return. Such an answer is marked **partial**. `Client.completenessOf(rows)` reads the marker off the array `query` resolved to, or off any array `observe` emitted. The rows themselves are unchanged, so code that doesn't ask sees no difference:
+
+```ts
+import { Effect, Option } from "effect";
+import { Client } from "@thomasfosterau/legation";
+
+const rows = yield * client.query({ collection: "todos" });
+Client.completenessOf(rows); // Option.some("partial") offline, uncovered; Option.some("complete") otherwise
+```
+
+- `"complete"`: a pulled subscription covers the read, or the server answered it.
+- `"partial"`: the read is uncovered and the replica answered it. An `observe` stream is partial until its windows are pulled, then emits again as complete.
+- `Option.none()`: no Client answered with this array, for example a copy made with `rows.map` or `[...rows]`, or a seed.
+
 ## API
 
 Everything below is on the root entry, `@thomasfosterau/legation`.

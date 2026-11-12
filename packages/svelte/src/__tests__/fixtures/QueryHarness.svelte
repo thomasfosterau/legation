@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Aggregate, type Query } from "@thomasfosterau/legation";
+  import { Aggregate, Client, type Query } from "@thomasfosterau/legation";
+  import * as Option from "effect/Option";
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useAggregate, useAggregateGrouped, useQuery } from "../../index.svelte.js";
@@ -22,6 +23,10 @@
   const grouped = useAggregateGrouped(() => read, Aggregate.count, groupBy);
 
   const current = $derived(AsyncResult.getOrElse(rows.current, () => []));
+  // The answer's marker rides on the rows the hook emits (#653).
+  const completeness = $derived(
+    Option.getOrElse(Client.completenessOf(current), () => "unknown")
+  );
 </script>
 
 <ul>
@@ -29,5 +34,6 @@
     <li>{(row.value as { title: string }).title}</li>
   {/each}
 </ul>
+<p>completeness:{completeness}</p>
 <p>count:{AsyncResult.getOrElse(count.current, () => "none")}</p>
 <p>grouped:{JSON.stringify(AsyncResult.getOrElse(grouped.current, () => ({})))}</p>

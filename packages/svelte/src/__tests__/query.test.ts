@@ -45,6 +45,22 @@ describe("live read hooks", () => {
     await runtime.dispose();
   });
 
+  it("useQuery's rows carry the answer's completeness (#653)", async () => {
+    const runtime = makeClientRuntime();
+    const app = mount(QueryHarness, {
+      target: document.body,
+      props: { runtime, read: allTodos, groupBy: "authorId" },
+    });
+
+    // Registered but not yet pulled: the replica's answer is partial.
+    await until(() => text().includes("completeness:partial"));
+    await run(runtime, (engine) => engine.pull);
+    await until(() => text().includes("completeness:complete"));
+
+    await unmount(app);
+    await runtime.dispose();
+  });
+
   it("useNamedQuery renders only the named query's client-local subset", async () => {
     const runtime = makeClientRuntime();
     await run(runtime, (engine) => engine.mutate("todo/set", { id: "1", title: "match" }));

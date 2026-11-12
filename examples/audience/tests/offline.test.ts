@@ -4,13 +4,14 @@
  * and nothing more: no read the pin covers widens past the policy, a read
  * the replica does not cover is the façade's `503` (never a partial
  * document) and, through the Client, at most the admitted rows it holds,
- * and nothing written on the server meanwhile leaks in. Back online, one
+ * marked partial (#653), and nothing written on the server meanwhile leaks in. Back online, one
  * pull brings the replica to exactly the current policy — including a post
  * its owner narrowed while the follower was away, which leaves.
  *
  * Signing out offline still clears the replica: the reset needs no network.
  */
 import { describe, expect, it } from "@effect/vitest";
+import { Client } from "@thomasfosterau/legation";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
@@ -41,6 +42,10 @@ describe("offline is still bounded", () => {
 
         // The same reads answer the same rows, and no more.
         expect(idsOf(yield* device.posts(feed))).toEqual(followerView);
+        // Covered by the pulled pin, the replica's answer is complete (#653).
+        expect(Client.completenessOf(yield* device.client.query(feed))).toEqual(
+          Option.some("complete")
+        );
         expect(idsOf(yield* device.posts(byOwner(alice.id)))).toEqual(["a-followers", "a-public"]);
         expect(idsOf(yield* device.posts(byVisibility("private")))).toEqual(["b-private"]);
         expect(yield* device.posts(byOwner(carol.id))).toEqual([]);
@@ -115,11 +120,24 @@ describe("offline is still bounded", () => {
         // an answer): the rows the replica holds, which the policy admitted —
         // narrower than the feed, never wider.
         expect(idsOf(yield* device.posts(feed))).toEqual(["a-public", "b-public"]);
-        // The covered read still answers.
+        // ... and says so: the answer is marked partial (#653).
+        expect(Client.completenessOf(yield* device.client.query(feed))).toEqual(
+          Option.some("partial")
+        );
+        // The covered read still answers, and completely.
         expect(idsOf(yield* device.posts(byVisibility("public")))).toEqual([
           "a-public",
           "b-public",
         ]);
+        expect(
+          Client.completenessOf(yield* device.client.query(byVisibility("public")))
+        ).toEqual(Option.some("complete"));
+
+        // Back online, the next answer of the uncovered read is the server's: complete.
+        yield* device.setOnline(true);
+        const online = yield* device.client.query(feed);
+        expect(idsOf(online)).toEqual(followerView);
+        expect(Client.completenessOf(online)).toEqual(Option.some("complete"));
       })
     )
   );

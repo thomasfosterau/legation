@@ -9,7 +9,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -302,6 +304,195 @@ describe("over a hosted engine", () => {
         ).toBe("r-3");
         // The host registered nothing for it.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);
+      })
+    )
+  );
+});
+
+/** A reader engine over a transport the test can take offline. */
+const makeReader = (handler: Transport.ServerHandler, group: string) =>
+  Effect.gen(function* () {
+    const store = yield* ClientStore.makeMemory;
+    const gate = yield* Transport.simulateOffline(yield* Transport.makeInMemory(handler, group));
+    const engine = yield* ClientEngine.make({
+      clientId: `client-${group}`,
+      clientGroupId: group,
+      mutators: mutations,
+    }).pipe(
+      Effect.provideService(ClientStore.ClientStore, store),
+      Effect.provideService(Transport.ClientTransport, gate.transport)
+    );
+    const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+    return { engine, client, setOffline: gate.setOffline };
+  });
+
+/** Whether rows were answered with the given completeness (#653). */
+const answeredAs =
+  (completeness: Client.Completeness) =>
+  (rows: ReadonlyArray<Client.ResolvedRow>): boolean =>
+    Option.contains(Client.completenessOf(rows), completeness);
+const partial = answeredAs("partial");
+const complete = answeredAs("complete");
+
+describe("answer completeness (#653)", () => {
+  const products = { collection: "products" };
+  const withReviews = { collection: "products", include: { reviews: { first: 2 } } };
+
+  /** Pull until a read is covered: a read with `include` pulls its edge windows second. */
+  const pullUntilCovered = (
+    engine: ClientEngine.ClientEngine,
+    client: Client.Client,
+    read: typeof withReviews
+  ) =>
+    eventually(engine.pull.pipe(Effect.orDie, Effect.andThen(client.coverageOf(read))), (verdict) =>
+      P.isTagged(verdict, "Covered")
+    );
+
+  it.effect("offline, an uncovered query is partial; back online it is complete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        yield* seed(server.handler);
+        const { client, setOffline } = yield* makeReader(server.handler, "group-offline");
+        yield* client.mutate("product/set", { id: "p-9", name: "Local only" });
+
+        yield* setOffline(true);
+        const offline = yield* client.query(products);
+        expect(offline.map((row) => row.id)).toEqual(["p-9"]);
+        expect(Client.completenessOf(offline)).toEqual(Option.some("partial"));
+        const offlineJoin = yield* client.query(withReviews);
+        expect(Client.completenessOf(offlineJoin)).toEqual(Option.some("partial"));
+
+        yield* setOffline(false);
+        const online = yield* client.query(products);
+        expect(online.map((row) => row.id).toSorted()).toEqual(["p-1", "p-2"]);
+        expect(Client.completenessOf(online)).toEqual(Option.some("complete"));
+        const onlineJoin = yield* client.query(withReviews);
+        expect(Client.completenessOf(onlineJoin)).toEqual(Option.some("complete"));
+      })
+    )
+  );
+
+  it.effect("a covered query is complete, offline or not", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        yield* seed(server.handler);
+        const { engine, client, setOffline } = yield* makeReader(server.handler, "group-covered");
+        yield* client.subscribe(withReviews);
+        yield* pullUntilCovered(engine, client, withReviews);
+
+        const rows = yield* client.query(products);
+        expect(rows).toHaveLength(2);
+        expect(Client.completenessOf(rows)).toEqual(Option.some("complete"));
+
+        yield* setOffline(true);
+        expect(Client.completenessOf(yield* client.query(products))).toEqual(
+          Option.some("complete")
+        );
+        expect(Client.completenessOf(yield* client.query(withReviews))).toEqual(
+          Option.some("complete")
+        );
+      })
+    )
+  );
+
+  it.effect("a transport without read answers an uncovered query partial", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        const store = yield* ClientStore.makeMemory;
+        const { read: _read, ...withoutRead } = yield* Transport.makeInMemory(
+          server.handler,
+          "group-noread-mark"
+        );
+        const engine = yield* ClientEngine.make({
+          clientId: "client-noread-mark",
+          clientGroupId: "group-noread-mark",
+          mutators: mutations,
+        }).pipe(
+          Effect.provideService(ClientStore.ClientStore, store),
+          Effect.provideService(Transport.ClientTransport, withoutRead)
+        );
+        const client = Client.fromView(nodes, ClientView.fromEngine(engine));
+        expect(Client.completenessOf(yield* client.query(products))).toEqual(
+          Option.some("partial")
+        );
+      })
+    )
+  );
+
+  it.effect("observe emits partial until its windows are pulled, then complete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        yield* seed(server.handler);
+        const { engine, client, setOffline } = yield* makeReader(server.handler, "group-observe");
+        yield* setOffline(true);
+
+        const plain = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        const joined = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe(products), (rows) => Ref.set(plain, rows))
+        );
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe(withReviews), (rows) => Ref.set(joined, rows))
+        );
+        // Registered offline: nothing is pulled, so the empty replica answers partially.
+        expect(yield* eventually(Ref.get(plain), partial)).toEqual([]);
+        expect(yield* eventually(Ref.get(joined), partial)).toEqual([]);
+
+        yield* setOffline(false);
+        yield* engine.pull.pipe(Effect.orDie);
+        expect(
+          (yield* eventually(Ref.get(plain), complete)).map((row) => row.id).toSorted()
+        ).toEqual(["p-1", "p-2"]);
+        // The edge windows are registered from the root rows, so a second pull brings them.
+        expect(
+          yield* eventually(
+            engine.pull.pipe(Effect.orDie, Effect.andThen(Ref.get(joined))),
+            complete
+          )
+        ).toHaveLength(2);
+      })
+    )
+  );
+
+  it("rows no Client answered with carry no marker", () => {
+    expect(Client.completenessOf([])).toEqual(Option.none());
+  });
+});
+
+describe("answer completeness over a hosted engine (#653)", () => {
+  it.effect("a mirror's answers carry the same marker as the host's", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* makeServer();
+        yield* seed(server.handler);
+
+        const engine = yield* makeEngine(server.handler, "group-hosted-mark");
+        const pair = yield* MirrorChannel.makeLoopbackPair;
+        yield* EngineHost.run({ channel: pair.host, engine, registry: nodes.collections });
+        const client = yield* Client.connect({ nodes, mutations, channel: pair.mirror });
+
+        // Uncovered, the host forwards the read to the server.
+        const forwarded = yield* client.query({ collection: "products" });
+        expect(forwarded).toHaveLength(2);
+        expect(Client.completenessOf(forwarded)).toEqual(Option.some("complete"));
+
+        // Observing registers through the host; its pull completes the answer.
+        const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
+        yield* Effect.forkScoped(
+          Stream.runForEach(client.observe({ collection: "products" }), (rows) =>
+            Ref.set(latest, rows)
+          )
+        );
+        yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
+        const answer = yield* eventually(
+          engine.pull.pipe(Effect.orDie, Effect.andThen(Ref.get(latest))),
+          (rows) => Option.contains(Client.completenessOf(rows), "complete")
+        );
+        expect(answer).toHaveLength(2);
       })
     )
   );

@@ -202,6 +202,23 @@ While `selectedId` is `undefined`, `detail.current` is `Initial` — no window
 is registered and no request is issued — and selecting a row subscribes just
 as any other reactive input change would.
 
+A `useQuery` result's rows carry the Client's completeness marker:
+`Client.completenessOf(rows)` is `Option.some("partial")` while the read's
+windows are not pulled yet (offline, or before the first pull), and
+`Option.some("complete")` once they are. A seed from `{ initial }` was
+answered by no Client, so its completeness is `Option.none()`.
+
+```svelte
+<script lang="ts">
+  import * as Option from "effect/Option";
+  import { Client } from "@thomasfosterau/legation";
+
+  const partial = $derived(Option.contains(Client.completenessOf(rows), "partial"));
+</script>
+
+{#if partial}<p>Showing what this device has synced.</p>{/if}
+```
+
 ### Async Svelte
 
 Every live hook also exposes an awaitable **`promise`** for Svelte's

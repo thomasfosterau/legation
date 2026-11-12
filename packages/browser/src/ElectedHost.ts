@@ -219,6 +219,12 @@ const switchingView = (
         }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
       queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
       pulled: (key) => withCurrent((view) => view.pulled(key)),
+      // A switch of tier moves every summary, so it is a change of its own.
+      pulledChanges: SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) =>
+          Stream.concat(Stream.succeed(undefined), view.pulledChanges ?? Stream.empty)
+        )
+      ),
       observeNamed: (name, args) =>
         SubscriptionRef.changes(viewRef).pipe(
           Stream.switchMap((view) => view.observeNamed(name, args))

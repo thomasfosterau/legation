@@ -38,6 +38,13 @@
  * server is unreachable (offline-first: local is always an answer).
  * `observe` never falls through: observing subscribes, which IS the
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
+ *
+ * **An answer carries its completeness** (#653), for a caller that asks:
+ * {@link completenessOf} reads it off the rows `query` resolves to and each
+ * array `observe` emits. A covered or server-answered read is `"complete"`;
+ * an uncovered one answered from the replica (offline, or over a transport
+ * without `read`) is `"partial"`: never wider than the policy, but possibly
+ * missing rows the server holds. The rows themselves are unchanged.
  */
 
 import * as Defined from "./Defined.js";
@@ -240,6 +247,9 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
    * instead of a fresh read, so a caller that answers from the same rows judges
    * exactly what it answers (#426). A snapshot of any other subset is not used; the
    * verdict then reads its root as usual. Omit it to judge a fresh read.
+   *
+   * This judges a read before it is answered; {@link completenessOf} says how
+   * an answer `query` or `observe` gave was answered.
    */
   readonly coverageOf: (
     read: QueryModule.Read,
@@ -441,6 +451,51 @@ const keyOf = (registration: Coverage.Registration): string =>
         registration.root,
         registration.edges
       );
+
+// ─── Completeness (#653) ─────────────────────────────────────────────────────
+
+/**
+ * How completely an answer holds the rows its read selects: `"complete"` when
+ * a pulled subscription covered the read (ADR-0029) or the server answered it
+ * (ADR-0025); `"partial"` when an uncovered read was answered from the replica
+ * (offline, or no transport `read`), so the server may hold rows it lacks.
+ */
+export type Completeness = "complete" | "partial";
+
+// The completeness of each answer a Client gave, keyed by the rows array it
+// answered with: the marker rides beside the rows, not in them, so the
+// answer's type and shape are what they were for a caller that never asks.
+const answers = new WeakMap<ReadonlyArray<unknown>, Completeness>();
+
+/** A live read's last answer: what it was resolved from, its rows and their completeness. */
+interface Answer<S> {
+  readonly source: S;
+  readonly rows: ReadonlyArray<Related.RelatedRow>;
+  readonly completeness: Completeness;
+}
+
+/** Record how `rows` were answered, on a copy when they already carry another marker. */
+const answered =
+  (completeness: Completeness) =>
+  <A>(rows: ReadonlyArray<A>): ReadonlyArray<A> => {
+    const known = answers.get(rows);
+    const own = known === undefined || known === completeness ? rows : Arr.copy(rows);
+    answers.set(own, completeness);
+    return own;
+  };
+
+/**
+ * The {@link Completeness} of rows a Client answered with: the array
+ * `Client.query` resolved to, or one `Client.observe` emitted (and so a
+ * `useQuery` result's rows). `None` for an array no Client answered with,
+ * such as a seed or a copy (`rows.map`, `[...rows]`), whose completeness is
+ * unknown.
+ *
+ * Offline, an uncovered read is `"partial"` until a pulled subscription
+ * covers it or the server answers it again; a covered read is `"complete"`.
+ */
+export const completenessOf = (rows: ReadonlyArray<unknown>): Option.Option<Completeness> =>
+  Option.fromUndefinedOr(answers.get(rows));
 
 const noUrlReads = (url: string): QueryError =>
   new QueryError({
@@ -676,14 +731,17 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
   const verdictOf = (
     plan: Query.Plan,
-    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query
+    rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query,
+    own?: Coverage.Registration
   ): Effect.Effect<Coverage.Verdict> =>
     Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
       Effect.flatMap((requested) =>
         Ref.get(ledger).pipe(
           Effect.flatMap((interests) =>
             Effect.forEach(
-              interests.values(),
+              own === undefined || interests.has(keyOf(own))
+                ? [...interests.values()]
+                : [...interests.values(), own],
               (interest) =>
                 view
                   .pulled(keyOf(interest))
@@ -696,6 +754,63 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       ),
       Effect.catchTag(["MutatorError", "StoreError", "TransportError", "QueryError"], () =>
         Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" })
+      )
+    );
+
+  // Each emission is judged over the root rows it was resolved from, as a
+  // covered `query` is (#426): complete once the read's windows are pulled,
+  // partial before (#653). The read's own registration is judged beside the
+  // ledger's, for a read with `include` registers through the view's
+  // relational read, not the ledger.
+  const judged = (
+    compiled: Query.Plan,
+    rowsOf: Coverage.RowsOf<ClientView.ClientViewError>
+  ): Effect.Effect<Completeness> =>
+    verdictOf(compiled, rowsOf, Coverage.ofPlan(compiled)).pipe(
+      Effect.map((verdict): Completeness =>
+        P.isTagged(verdict, "Covered") ? "complete" : "partial"
+      )
+    );
+
+  // A live read's answers, each marked with its completeness. A pull's rows
+  // reach the stream before the pull marks its windows pulled, so the last
+  // answer is judged again on each `pulledChanges` tick, and emitted again,
+  // as a fresh array, only when its completeness moved.
+  const marked = <S>(
+    compiled: Query.Plan,
+    sources: Stream.Stream<S>,
+    rowsOf: (source: S) => Coverage.RowsOf<ClientView.ClientViewError>,
+    resolve: (source: S) => ReadonlyArray<Related.RelatedRow>
+  ): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+    Stream.merge(
+      sources.pipe(Stream.map(Option.some)),
+      (view.pulledChanges ?? Stream.empty).pipe(Stream.as(Option.none<S>())),
+      { haltStrategy: "left" }
+    ).pipe(
+      Stream.mapAccumEffect(
+        (): Option.Option<Answer<S>> => Option.none(),
+        (last, event) =>
+          Option.match(event, {
+            onSome: (source) =>
+              judged(compiled, rowsOf(source)).pipe(
+                Effect.map((completeness) => {
+                  const rows = answered(completeness)(resolve(source));
+                  return [Option.some({ source, rows, completeness }), [rows]] as const;
+                })
+              ),
+            onNone: () =>
+              Option.match(last, {
+                onNone: () => Effect.succeed([last, []] as const),
+                onSome: (answer) =>
+                  judged(compiled, rowsOf(answer.source)).pipe(
+                    Effect.map((completeness) => {
+                      if (completeness === answer.completeness) return [last, []] as const;
+                      const rows = answered(completeness)(Arr.copy(answer.rows));
+                      return [Option.some({ ...answer, rows, completeness }), [rows]] as const;
+                    })
+                  ),
+              }),
+          })
       )
     );
 
@@ -714,22 +829,34 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     read: QueryModule.Read
   ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> => {
     const readThrough = view.read;
-    if (readThrough === undefined) return Query.run(view, nodes, read);
     const compiled = Query.plan(nodes, read);
-    const local = Effect.suspend(() => Query.run(view, nodes, read));
+    // Uncovered and answered from the replica: never wider than the policy,
+    // but possibly short of what the server holds (#653).
+    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(
+      Effect.map(answered("partial"))
+    );
+    const uncovered =
+      readThrough === undefined
+        ? local
+        : Query.runPlanVia(readThrough, nodes, compiled).pipe(
+            Effect.map(answered("complete")),
+            Effect.catch(() => local)
+          );
     return view.query(compiled.root).pipe(
       Effect.orElseSucceed(() => undefined),
       Effect.flatMap((snapshot) =>
         snapshot === undefined
-          ? Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+          ? uncovered
           : verdictOf(
               compiled,
               Coverage.snapshotOf({ subset: compiled.root, rows: snapshot }, view.query)
             ).pipe(
               Effect.flatMap((verdict) =>
                 verdict._tag === "Covered"
-                  ? Query.runRows(view, nodes, read, snapshot)
-                  : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
+                  ? Query.runRows(view, nodes, read, snapshot).pipe(
+                      Effect.map(answered("complete"))
+                    )
+                  : uncovered
               )
             )
       )
@@ -745,9 +872,11 @@ export const fromView = <Graph extends Node.NodeRegistry>(
           release(registration, "observer")
         ).pipe(
           Effect.as(
-            view.observe(compiled.root).pipe(
-              Stream.orDie,
-              Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+            marked(
+              compiled,
+              view.observe(compiled.root).pipe(Stream.orDie),
+              (rows) => Coverage.snapshotOf({ subset: compiled.root, rows }, view.query),
+              (rows) => rows.map((row) => ({ ...row, related: {} }))
             )
           )
         )
@@ -760,7 +889,12 @@ export const fromView = <Graph extends Node.NodeRegistry>(
         .related(nodes.collections, read.collection, compiled.root, Query.edgeSelects(compiled))
         .pipe(
           Effect.map((stream) =>
-            stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows)))
+            marked(
+              compiled,
+              stream,
+              () => view.query,
+              (rows) => Query.applyWindows(compiled, rows)
+            )
           )
         )
     );

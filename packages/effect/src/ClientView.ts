@@ -26,6 +26,7 @@ import * as Defined from "./Defined.js";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
@@ -99,6 +100,14 @@ export interface ClientView {
    * the channel.
    */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
+  /**
+   * Emits after something may have moved a {@link pulled} summary (#653): a
+   * pull applied over an engine, the host's summaries arriving over a mirror.
+   * A Client re-judges a live read's completeness on it, since a pull's rows
+   * reach observers before the pull marks them pulled. Absent, a live read is
+   * re-judged only when its rows change.
+   */
+  readonly pulledChanges?: Stream.Stream<void>;
   /**
    * A subscription's total as the last pull reported it (#210):
    * {@link ClientEngineModule.ClientEngine.totalOf}. Present only for an
@@ -228,6 +237,12 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     observeWindow: (subset) => engine.observeWindow(subset),
     observeChanges: (subset, options) => engine.observeChanges(subset, options),
     pulled: (key) => marks.pulled(key),
+    // `PullCompleted` is published once the pull counts move, so the marks read
+    // after it see the pull.
+    pulledChanges: raw.engineEvents.pipe(
+      Stream.filter((event) => P.isTagged(event, "PullCompleted")),
+      Stream.as(undefined)
+    ),
     totalOf: (subset) => engine.totalOf(subset),
     subscribe: (subset) => {
       const key = Subset.hash(subset);
@@ -251,8 +266,14 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     unsubscribeQuery: (name, args) => engine.unsubscribeQuery(name, args),
     queryNamed: (name, args) => engine.queryNamed(name, args),
     observeNamed: (name, args) => engine.observeNamed(name, args),
-    related: (registry, collectionName, subset, edges) =>
-      Related.related(engine, registry, collectionName, subset, edges),
+    // A relational read holds its windows under its relational key, as a pin
+    // does, so a Client can judge its answers' completeness (#653).
+    related: (registry, collectionName, subset, edges) => {
+      const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
+      return Effect.acquireRelease(marks.open(key, subset), () => marks.close(key)).pipe(
+        Effect.andThen(Related.related(marks.wrap(key), registry, collectionName, subset, edges))
+      );
+    },
     pinEdges: (registry, collectionName, subset, edges) => {
       const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
       return Effect.acquireRelease(marks.open(key, subset), () => marks.close(key)).pipe(
