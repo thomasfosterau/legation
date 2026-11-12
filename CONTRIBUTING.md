@@ -39,7 +39,7 @@ Invoke everything through `vp` (`vp exec` instead of `npx`; `vp run <task>` inst
 
 - Branch off `trunk` as `issue-<n>-<slug>`; PR against `trunk`; squash-merge with a conventional prefix (`feat:`, `fix:`, `docs:`, `chore:`). Rebase onto `origin/trunk` before opening or updating a PR; never merge `trunk` into your branch (GitHub's Update-branch button merges).
 - Add a changeset (`pnpm changeset`) for every user-facing or package-impacting change, naming each package it touches; a doc-comment change that reaches the emitted `.d.ts` takes a `patch`. Docs-, CI- and tooling-only changes need none. Never publish or version by hand: the Release workflow opens the "chore: version packages" PR and the owner merges it ([PUBLISHING.md](PUBLISHING.md)).
-- Use the `gh` CLI for GitHub operations. New pull requests are assigned to the owner by `.github/workflows/auto-assign.yml` (Dependabot's by `assignees:` in `.github/dependabot.yml`).
+- Use the `gh` CLI for GitHub operations. Dependabot's pull requests are assigned to the owner by `assignees:` in `.github/dependabot.yml`.
 
 ## Adding a package
 
