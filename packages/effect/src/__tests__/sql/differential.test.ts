@@ -34,9 +34,10 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
+import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 
-const seed = FilterCorpus.resolveSeed(process.env.LEGATION_CORPUS_SEED);
+const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
 
 // Generation is synchronous and pure (a seeded `Random` service), so the
 // corpora are built once at module load.
