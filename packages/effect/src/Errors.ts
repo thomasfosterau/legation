@@ -157,6 +157,7 @@ export class DuplicateNameError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("DuplicateNameError", {
   kind: Schema.Literals(["collection", "mutator", "query", "relationship"]),
+  // oxlint-disable-next-line effecttsgo/error-payload-shadows-name -- published field of an exported error: renaming `name` is a breaking API change, not a refactor (owner decision)
   name: Schema.String,
 }) {
   override get message(): string {

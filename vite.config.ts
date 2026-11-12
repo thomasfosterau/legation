@@ -200,6 +200,7 @@ export default defineConfig({
       "typescript/no-unnecessary-boolean-literal-compare": "error",
       "effecttsgo/unnecessary-fail-yieldable-error": "error",
       "effecttsgo/flat-map-identity-to-flatten": "error",
+      "effecttsgo/error-payload-shadows-name": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
