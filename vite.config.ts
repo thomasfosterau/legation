@@ -120,11 +120,14 @@ export default defineConfig({
       "effect/casting-awareness": "warn",
 
       // ---- Effect preset: rules this workspace's conventions cut across ----
-      // `prefer-option-over-null` also fires on `?: T | undefined`, which is
-      // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
-      // lets a caller forward an optional of its own into (AGENTS.md), and on
-      // the `undefined`-returning lookups the engine's public API is written
-      // in. A bare `null` in a return type is still a finding to read.
+      // `prefer-option-over-null` goes to `error` once every surface is
+      // converted (owner decision, #562): an option-bag member is
+      // `readonly x?: T` (no `| undefined`: a caller holding `undefined` omits
+      // the key), `x?: Option.Option<T>` only where "no value" is itself an
+      // answer, and an absent return or result field is an `Option`. Optional
+      // parameters stay `x?: T`; wire shapes keep their native optionals.
+      // legation-jsonapi is converted (its can't-applies carry a reasoned
+      // disable); the other packages still have sites.
       "effect/prefer-option-over-null": "warn",
       // `unknown` is the honest type at the boundaries this engine sits on:
       // a row value before its collection's schema decodes it, a mutator's

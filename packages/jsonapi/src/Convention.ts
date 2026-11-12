@@ -32,6 +32,7 @@
 
 import * as Iterable from "effect/Iterable";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as Str from "effect/String";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -50,15 +51,25 @@ export interface EndpointRef {
   readonly path: string;
 }
 
-/** The CRUD endpoints discovered for one resource type (collection). */
+/** The CRUD endpoints discovered for one resource type (collection); `None` for a role the api does not serve. */
 export interface ResourceEndpoints {
   readonly type: string;
-  readonly list?: EndpointRef;
-  readonly getOne?: EndpointRef;
-  readonly create?: EndpointRef;
-  readonly update?: EndpointRef;
-  readonly delete?: EndpointRef;
+  readonly list: Option.Option<EndpointRef>;
+  readonly getOne: Option.Option<EndpointRef>;
+  readonly create: Option.Option<EndpointRef>;
+  readonly update: Option.Option<EndpointRef>;
+  readonly delete: Option.Option<EndpointRef>;
 }
+
+/** The endpoints of a type that serves none yet: every role `None`. */
+const noEndpoints = (type: string): ResourceEndpoints => ({
+  type,
+  list: Option.none(),
+  getOne: Option.none(),
+  create: Option.none(),
+  update: Option.none(),
+  delete: Option.none(),
+});
 
 /** Resource endpoints keyed by type (collection name). */
 export type ResourceMap = ReadonlyMap<string, ResourceEndpoints>;
@@ -71,18 +82,18 @@ export const segmentsOf = (path: string): ReadonlyArray<string> =>
 export const isParam = (segment: string): boolean => segment.startsWith(":");
 
 /** Map an HTTP method + whether the route has a trailing id to a CRUD role. */
-const roleOf = (method: string, hasId: boolean): Operation | undefined =>
+const roleOf = (method: string, hasId: boolean): Option.Option<Operation> =>
   Match.value(method.toUpperCase()).pipe(
-    Match.withReturnType<Operation | undefined>(),
-    Match.when("GET", () => (hasId ? "getOne" : "list")),
-    Match.when("POST", () => (hasId ? undefined : "create")),
-    Match.whenOr("PATCH", "PUT", () => (hasId ? "update" : undefined)),
-    Match.when("DELETE", () => (hasId ? "delete" : undefined)),
-    Match.orElse(() => undefined)
+    Match.withReturnType<Option.Option<Operation>>(),
+    Match.when("GET", () => Option.some(hasId ? "getOne" : "list")),
+    Match.when("POST", () => (hasId ? Option.none() : Option.some("create"))),
+    Match.whenOr("PATCH", "PUT", () => (hasId ? Option.some("update") : Option.none())),
+    Match.when("DELETE", () => (hasId ? Option.some("delete") : Option.none())),
+    Match.orElse(() => Option.none())
   );
 
 /**
- * Classify a (method, path) into a resource type + role, or `undefined` if
+ * Classify a (method, path) into a resource type + role, or `None` if
  * it isn't a conventional JSON:API CRUD route — `/{type}` or `/{type}/:id`,
  * where the type is a static segment and the only param is a trailing id
  * (nested routes like `/todos/:id/comments` are not CRUD on a single type).
@@ -90,19 +101,18 @@ const roleOf = (method: string, hasId: boolean): Operation | undefined =>
 export const classify = (
   method: string,
   path: string
-): { readonly type: string; readonly operation: Operation } | undefined => {
+): Option.Option<{ readonly type: string; readonly operation: Operation }> => {
   const segments = segmentsOf(path);
   const last = segments.at(-1);
-  if (last === undefined) return undefined;
+  if (last === undefined) return Option.none();
 
   const hasId = isParam(last);
   const type = hasId ? segments[segments.length - 2] : last;
-  if (type === undefined || isParam(type)) return undefined;
+  if (type === undefined || isParam(type)) return Option.none();
   const params = segments.filter(isParam);
-  if (params.length > 1 || (params.length === 1 && !hasId)) return undefined;
+  if (params.length > 1 || (params.length === 1 && !hasId)) return Option.none();
 
-  const operation = roleOf(method, hasId);
-  return operation === undefined ? undefined : { type, operation };
+  return Option.map(roleOf(method, hasId), (operation) => ({ type, operation }));
 };
 
 /** The top-level member that makes a request an atomic operations document. */
@@ -154,21 +164,18 @@ const refOf = (group: HttpApiGroup.Top, endpoint: HttpApiEndpoint.Top): Endpoint
 export const reflectResources = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
 ): ResourceMap => {
-  const resources = new Map<
-    string,
-    { type: string } & { -readonly [K in Operation]?: EndpointRef }
-  >();
+  const resources = new Map<string, ResourceEndpoints>();
 
   HttpApi.reflect(api, {
     onGroup: () => {},
     onEndpoint: ({ group, endpoint }) => {
       if (isAtomicEndpoint(endpoint)) return;
       const role = classify(endpoint.method, endpoint.path);
-      if (role === undefined) return;
-      const existing = resources.get(role.type) ?? { type: role.type };
-      if (existing[role.operation] !== undefined) return;
-      existing[role.operation] = refOf(group, endpoint);
-      resources.set(role.type, existing);
+      if (Option.isNone(role)) return;
+      const { type, operation } = role.value;
+      const existing = resources.get(type) ?? noEndpoints(type);
+      if (Option.isSome(existing[operation])) return;
+      resources.set(type, { ...existing, [operation]: Option.some(refOf(group, endpoint)) });
     },
   });
 
@@ -177,17 +184,20 @@ export const reflectResources = <Id extends string, Groups extends HttpApiGroup.
 
 /**
  * Reflect an `HttpApi`'s atomic operations endpoint, if it declares one: the
- * first endpoint whose request payload is an `atomic:operations` document.
+ * first endpoint whose request payload is an `atomic:operations` document,
+ * or `None`.
  * `JsonApiSync` uses it to push a batch as one all-or-nothing request.
  */
 export const reflectAtomic = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
-): EndpointRef | undefined => {
-  let atomic: EndpointRef | undefined;
+): Option.Option<EndpointRef> => {
+  let atomic = Option.none<EndpointRef>();
   HttpApi.reflect(api, {
     onGroup: () => {},
     onEndpoint: ({ group, endpoint }) => {
-      if (atomic === undefined && isAtomicEndpoint(endpoint)) atomic = refOf(group, endpoint);
+      if (Option.isNone(atomic) && isAtomicEndpoint(endpoint)) {
+        atomic = Option.some(refOf(group, endpoint));
+      }
     },
   });
   return atomic;

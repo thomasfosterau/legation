@@ -248,9 +248,12 @@ const applyAdd = (
   probe: ServerProbe,
   index: number,
   operation: Extract<BatchOperation, { readonly op: "add" }>,
-  id: string | undefined
+  clientId: Option.Option<string>
 ): Effect.Effect<Entry, Rejection> => {
-  if (id === undefined) return Effect.fail(rejection(index, "add without a client-generated id"));
+  if (Option.isNone(clientId)) {
+    return Effect.fail(rejection(index, "add without a client-generated id"));
+  }
+  const id = clientId.value;
   const row: Stored = {
     type: operation.data.type,
     id,
@@ -323,7 +326,7 @@ const applyOperation = (
   probe: ServerProbe,
   index: number,
   operation: BatchOperation,
-  clientId: string | undefined
+  clientId: Option.Option<string>
 ): Effect.Effect<Entry, Rejection> =>
   Match.value(operation).pipe(
     Match.discriminator("op")("add", (add) =>
@@ -354,7 +357,7 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
           ([index, rawOperation]) =>
             Effect.gen(function* () {
               const operation = yield* decodeOperation(rawOperation);
-              const clientId = raw["atomic:operations"][index]?.data?.id;
+              const clientId = Option.fromUndefinedOr(raw["atomic:operations"][index]?.data?.id);
               entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
             }),
           { concurrency: 1, discard: true }
@@ -510,23 +513,25 @@ const makeBackend = (
     const { client, requests } = yield* makeInProcessClient(store, probe);
     const atomic = Convention.reflectAtomic(api);
     // oxlint-disable-next-line vitest/no-standalone-expect -- runs inside every test that builds the backend
-    expect(atomic).toEqual({
-      groupId: "operations",
-      name: "operations",
-      method: "POST",
-      path: "/operations",
-    });
+    expect(atomic).toEqual(
+      Option.some({
+        groupId: "operations",
+        name: "operations",
+        method: "POST",
+        path: "/operations",
+      })
+    );
     const backend = yield* JsonApiBackend.make({
       baseUrl: "http://contract.test",
       resources: Convention.reflectResources(api),
       mutators: omitted === undefined ? mutators : without(mutators, omitted),
       operations: new Map(),
       writes: omitted === undefined ? writes : without(writes, omitted),
-      atomic: { path: defined(atomic).path },
+      atomic: { path: defined(Option.getOrUndefined(atomic)).path },
       // The server declares no filter/sort parameters (its list endpoint is the
       // whole table); the backend re-applies the subset locally anyway, so an
       // empty query is exact over this server.
-      query: { encode: () => Effect.succeed(Option.some("")) },
+      query: { encode: () => Effect.succeedSome("") },
       ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests, store };
@@ -558,8 +563,10 @@ describe("JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operat
   it("reflects the effect-jsonapi api without a phantom `operations` resource", () => {
     const resources = Convention.reflectResources(api);
     expect([...resources.keys()].toSorted()).toEqual([COLLECTION, EVAL_COLLECTION]);
-    expect(resources.get(COLLECTION)?.getOne?.path).toBe(`/${COLLECTION}/:id`);
-    expect(resources.get(COLLECTION)?.create).toBeUndefined();
+    expect(Option.map(defined(resources.get(COLLECTION)).getOne, ({ path }) => path)).toEqual(
+      Option.some(`/${COLLECTION}/:id`)
+    );
+    expect(defined(resources.get(COLLECTION)).create).toEqual(Option.none());
   });
 });
 

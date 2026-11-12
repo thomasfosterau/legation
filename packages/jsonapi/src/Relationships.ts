@@ -19,6 +19,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Scope from "effect/Scope";
@@ -27,7 +28,11 @@ import { ClientEngine, Related, Subset } from "@thomasfosterau/legation/internal
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 
-/** A resolved relationship: a row, a list of rows, `null`, or `undefined`. */
+/**
+ * A resolved relationship: a row, a list of rows, `null` (empty linkage), or
+ * `undefined` (a to-one whose target is not in the mirror).
+ */
+// oxlint-disable-next-line effect/prefer-option-over-null -- the core `Related.RelatedValue` shape, which `Related.Strategy.resolveRow` must return and the core's join compares by reference; it follows the core's `Related` surface.
 export type RelatedValue = JsonApiRow | ReadonlyArray<JsonApiRow> | null | undefined;
 
 /** A base row with its named relationships resolved against the mirror. */
@@ -37,8 +42,8 @@ export interface RelatedRow {
   readonly related: Record<string, RelatedValue>;
 }
 
-/** Look up a row by (collection, id) from the local mirror. */
-export type Lookup = (collection: string, id: string) => JsonApiRow | undefined;
+/** Look up a row by (collection, id) from the local mirror; `None` when it is not there. */
+export type Lookup = (collection: string, id: string) => Option.Option<JsonApiRow>;
 
 const refOf = (value: JsonApiRow, name: string): RelationshipRef =>
   (value.relationships?.[name] ?? null) as RelationshipRef;
@@ -61,12 +66,9 @@ export const resolve = (lookup: Lookup, value: JsonApiRow, name: string): Relate
   const ref = refOf(value, name);
   if (ref === null || ref === undefined) return ref;
   if (Array.isArray(ref)) {
-    return ref.flatMap((link) => {
-      const row = lookup(link.type, link.id);
-      return row === undefined ? [] : [row];
-    });
+    return ref.flatMap((link) => Option.toArray(lookup(link.type, link.id)));
   }
-  return isLink(ref) ? lookup(ref.type, ref.id) : undefined;
+  return isLink(ref) ? Option.getOrUndefined(lookup(ref.type, ref.id)) : undefined;
 };
 
 /** Resolve several named relationships of a row. */
@@ -109,7 +111,10 @@ const linkageStrategy = (names: ReadonlyArray<string>): Related.Strategy => ({
   },
   resolveRow: (index, baseRow) => {
     const lookup: Lookup = (collection, id) =>
-      index.get(collection)?.get(id)?.[0]?.value as JsonApiRow | undefined;
+      Option.map(
+        Option.fromUndefinedOr(index.get(collection)?.get(id)?.[0]),
+        (row) => row.value as JsonApiRow
+      );
     return hydrate(lookup, baseRow.value as JsonApiRow, names);
   },
 });

@@ -17,6 +17,7 @@
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
@@ -36,8 +37,12 @@ import type {
 
 // ─── Row mapping ─────────────────────────────────────────────────────────────
 
-/** A relationship as it lands in a row value: linkage only, no documents. */
+/**
+ * A relationship as it lands in a row value: linkage only, no documents. An
+ * empty to-one is `null`, as JSON:API's resource linkage spells it.
+ */
 export type RelationshipRef =
+  // oxlint-disable-next-line effect/prefer-option-over-null -- a row value is stored and synced as JSON (ADR-0008): the `null` is the JSON:API empty to-one linkage (`data: null`), which an Option cannot carry through a client store or the wire.
   | { readonly type: string; readonly id: string }
   | ReadonlyArray<{ readonly type: string; readonly id: string }>
   | null;
@@ -166,13 +171,13 @@ export const load = (
     return documentToRows(yield* parseResponse(response));
   });
 
-/** Load a single resource (`GET /{type}/{id}`); `undefined` if absent. */
+/** Load a single resource (`GET /{type}/{id}`); `None` if the document has no primary data. */
 export const loadOne = (
   type: string,
   id: string,
   options?: JsonApiRequestOptions
 ): Effect.Effect<
-  CollectionRow | undefined,
+  Option.Option<CollectionRow>,
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | JsonApiSource
 > =>
@@ -181,5 +186,5 @@ export const loadOne = (
     const client = yield* HttpClient.HttpClient;
     const url = `${source.baseUrl}/${type}/${id}${buildQueryString(options)}`;
     const response = yield* Effect.scoped(client.execute(get(url)));
-    return documentToRows(yield* parseResponse(response)).rows[0];
+    return Arr.head(documentToRows(yield* parseResponse(response)).rows);
   });

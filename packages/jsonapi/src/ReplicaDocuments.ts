@@ -65,6 +65,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { type Node, type Query, QueryError } from "@thomasfosterau/legation";
 import type { ClientView, Subset } from "@thomasfosterau/legation/internal";
@@ -206,36 +207,47 @@ const carriedTypes = (resource: Resource.Any): ReadonlyArray<string> => [
  * The rejection of what the bound resource does not declare, in the codec's
  * shape: an `include` edge that is no relationship of the resource, or a
  * `fields[type]` type its document cannot carry. Checked before the read
- * runs, so a refused request costs no query.
+ * runs, so a refused request costs no query. `None` when the resource
+ * declares everything the read asks for.
  */
-const undeclared = (binding: Binding, parsed: JsonApiQuery.ParsedRead): QueryError | undefined => {
+const undeclared = (
+  binding: Binding,
+  parsed: JsonApiQuery.ParsedRead
+): Option.Option<QueryError> => {
   const { resource } = binding;
   const relationships = descriptorsOf(resource);
   const name = Object.keys(parsed.read.include ?? {}).find(
     (included) => relationships[included] === undefined
   );
   if (name !== undefined) {
-    return JsonApiQuery.invalidParameter(
-      resource.type,
-      "include",
-      `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${Object.keys(relationships).join(", ")})`
+    return Option.some(
+      JsonApiQuery.invalidParameter(
+        resource.type,
+        "include",
+        `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${Object.keys(relationships).join(", ")})`
+      )
     );
   }
   const types = carriedTypes(resource);
-  const type = Object.keys(parsed.fields ?? {}).find((projected) => !types.includes(projected));
+  const type = Object.keys(Option.getOrElse(parsed.fields, () => ({}))).find(
+    (projected) => !types.includes(projected)
+  );
   if (type !== undefined) {
-    return JsonApiQuery.invalidParameter(
-      resource.type,
-      `fields[${type}]`,
-      `"${type}" is not a type the "${resource.type}" resource can carry (types: ${types.join(", ")})`
+    return Option.some(
+      JsonApiQuery.invalidParameter(
+        resource.type,
+        `fields[${type}]`,
+        `"${type}" is not a type the "${resource.type}" resource can carry (types: ${types.join(", ")})`
+      )
     );
   }
-  return undefined;
+  return Option.none();
 };
 
 /** Bind the replica-side writer to a graph and its declarations (a definition-time check of every declaration). */
 export const make = (options: Options): ReplicaDocuments => {
-  const { nodes, prefix } = options;
+  const { nodes } = options;
+  const prefix = Option.fromUndefinedOr(options.prefix);
   const bindings = bindAll(nodes, options.resources ?? JsonApiQuery.resourcesOf(nodes));
 
   /** The binding of a read's collection; a type nothing declares is the URL's failure, not a defect. */
@@ -254,8 +266,10 @@ export const make = (options: Options): ReplicaDocuments => {
   /** The binding of a parsed read, with what the resource does not declare refused. */
   const checked = (parsed: JsonApiQuery.ParsedRead): Effect.Effect<Binding, QueryError> =>
     Effect.flatMap(bound(parsed.read), (binding) => {
-      const error = undeclared(binding, parsed);
-      return error === undefined ? Effect.succeed(binding) : Effect.fail(error);
+      return Option.match(undeclared(binding, parsed), {
+        onNone: () => Effect.succeed(binding),
+        onSome: Effect.fail,
+      });
     });
 
   /** The writer's input for a parsed read's rows off the view. */
@@ -270,8 +284,8 @@ export const make = (options: Options): ReplicaDocuments => {
           read: parsed.read,
           rows: resolved.rows,
           linkage: resolved.linkage,
-          ...(parsed.fields === undefined ? {} : { fields: parsed.fields }),
-          ...(prefix === undefined ? {} : { prefix }),
+          ...Option.match(parsed.fields, { onNone: () => ({}), onSome: (fields) => ({ fields }) }),
+          ...Option.match(prefix, { onNone: () => ({}), onSome: (mount) => ({ prefix: mount }) }),
         }))
       )
     );
@@ -287,7 +301,7 @@ export const make = (options: Options): ReplicaDocuments => {
   const fromUrl: ReplicaDocuments["fromUrl"] = (view, url, meta) =>
     JsonApiQuery.parseRead(nodes, url).pipe(
       Effect.flatMap((parsed): Effect.Effect<Document, QueryError> =>
-        parsed.id === undefined ? collection(view, parsed, meta) : data(view, parsed)
+        Option.isNone(parsed.id) ? collection(view, parsed, meta) : data(view, parsed)
       )
     );
 

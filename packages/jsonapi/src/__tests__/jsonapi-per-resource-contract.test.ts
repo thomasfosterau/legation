@@ -43,11 +43,11 @@ const ref = (groupId: string, name: string, method: string, path: string): Endpo
 /** The CRUD routes of one collection, as the reflected api would name them. */
 const endpointsOf = (type: string): ResourceEndpoints => ({
   type,
-  list: ref(type, "list", "GET", `/${type}`),
-  getOne: ref(type, "getOne", "GET", `/${type}/:id`),
-  create: ref(type, "create", "POST", `/${type}`),
-  update: ref(type, "update", "PATCH", `/${type}/:id`),
-  delete: ref(type, "delete", "DELETE", `/${type}/:id`),
+  list: Option.some(ref(type, "list", "GET", `/${type}`)),
+  getOne: Option.some(ref(type, "getOne", "GET", `/${type}/:id`)),
+  create: Option.some(ref(type, "create", "POST", `/${type}`)),
+  update: Option.some(ref(type, "update", "PATCH", `/${type}/:id`)),
+  delete: Option.some(ref(type, "delete", "DELETE", `/${type}/:id`)),
 });
 
 const resources: ResourceMap = new Map([
@@ -87,10 +87,10 @@ const respond = (status: number, document?: unknown) =>
 interface ServerRequest {
   readonly method: string;
   readonly type: string;
-  readonly id: string | undefined;
-  readonly body:
-    | { readonly data?: { readonly id?: string; readonly attributes?: Record<string, unknown> } }
-    | undefined;
+  readonly id: Option.Option<string>;
+  readonly body: Option.Option<{
+    readonly data?: { readonly id?: string; readonly attributes?: Record<string, unknown> };
+  }>;
 }
 
 /** A row the server refuses to store (a permanent rejection, 422). */
@@ -99,18 +99,19 @@ const POISON = "poison";
 const CRASH = "crash";
 
 /** A GET: the collection, or one row (404 when absent). Reads never wait. */
-const answerGet = (table: Table, id: string | undefined): Response => {
-  if (id === undefined) {
+const answerGet = (table: Table, id: Option.Option<string>): Response => {
+  if (Option.isNone(id)) {
     return respond(200, { data: [...table.values()].map((row) => documentOf(row).data) });
   }
-  const row = table.get(id);
+  const row = table.get(id.value);
   return row === undefined ? respond(404) : respond(200, documentOf(row));
 };
 
 /** A POST: an upsert of the row the body names, or the rejection or fault its marker asks for. */
 const answerPost = (table: Table, request: ServerRequest): Response => {
-  const id = request.body?.data?.id ?? "";
-  const attributes = request.body?.data?.attributes ?? {};
+  const data = Option.getOrUndefined(request.body)?.data;
+  const id = data?.id ?? "";
+  const attributes = data?.attributes ?? {};
   if (attributes[POISON] === true)
     return respond(422, { errors: [{ status: "422", title: "Poison row refused" }] });
   if (attributes[CRASH] === true) return respond(500);
@@ -126,7 +127,7 @@ const answerPost = (table: Table, request: ServerRequest): Response => {
  */
 const answerPatch = (table: Table, row: Stored, request: ServerRequest): Effect.Effect<Response> =>
   Effect.gen(function* () {
-    const attributes = request.body?.data?.attributes ?? {};
+    const attributes = Option.getOrUndefined(request.body)?.data?.attributes ?? {};
     const { increment, ...merge } = attributes;
     if (increment === undefined) {
       const updated: Stored = { ...row, attributes: { ...row.attributes, ...merge } };
@@ -145,7 +146,7 @@ const serve = (store: Store, request: ServerRequest): Effect.Effect<Response> =>
     const table = tableOf(store, request.type);
     if (request.method === "GET") return answerGet(table, request.id);
     if (request.method === "POST") return answerPost(table, request);
-    const id = request.id ?? "";
+    const id = Option.getOrElse(request.id, () => "");
     const row = table.get(id);
     if (row === undefined) return respond(404);
     if (request.method === "DELETE") {
@@ -164,10 +165,10 @@ const makeInProcessClient = (store: Store) =>
       Effect.gen(function* () {
         requests.push({ method: request.method, path: url.pathname });
         const [, type = "", rawId] = url.pathname.split("/");
-        const id = rawId === undefined ? undefined : decodeURIComponent(rawId);
+        const id = Option.map(Option.fromUndefinedOr(rawId), decodeURIComponent);
         const isWrite = request.method === "POST" || request.method === "PATCH";
         const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const body = isWrite ? yield* Effect.promise(() => web.json()) : undefined;
+        const body = isWrite ? Option.some(yield* Effect.promise(() => web.json())) : Option.none();
         const served = serve(store, { method: request.method, type, id, body });
         const response =
           request.method === "GET" || request.method === "DELETE"
@@ -269,10 +270,10 @@ const makeBackend = (
       resources,
       mutators,
       operations: new Map(),
-      writes,
+      writes: writes,
       // The server declares no filter or sort parameters, and the backend
       // re-applies the subset locally, so an empty query is exact over it.
-      query: { encode: () => Effect.succeed(Option.some("")) },
+      query: { encode: () => Effect.succeedSome("") },
       ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests };

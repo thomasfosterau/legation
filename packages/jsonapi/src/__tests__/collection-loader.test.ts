@@ -4,6 +4,7 @@
  */
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -133,7 +134,7 @@ describe("load / loadOne", () => {
   it.effect("loadOne returns the single row", () =>
     Effect.gen(function* () {
       const row = yield* CollectionLoader.loadOne("todos", "1");
-      expect(row?.id).toBe("1");
+      expect(Option.map(row, (loaded) => loaded.id)).toEqual(Option.some("1"));
     }).pipe(
       Effect.provide(
         respondWith(200, { data: { type: "todos", id: "1", attributes: {} } }).pipe(

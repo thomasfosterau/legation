@@ -35,6 +35,7 @@ import {
   Transport,
 } from "@thomasfosterau/legation";
 import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
+import type * as FacadeWrites from "../FacadeWrites.js";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 
@@ -86,7 +87,7 @@ interface Fixture {
 }
 
 const makeFixture = (
-  intentOf?: JsonApiFacade.Options<string, never>["intentOf"]
+  intentOf?: FacadeWrites.IntentOf
 ): Effect.Effect<Fixture, never, Scope.Scope> =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make(serverHandlers);
@@ -118,12 +119,12 @@ const makeFixture = (
       api,
       view: client.view,
       coverageOf: client.coverageOf,
-      cookie: store.getCookie,
+      cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
       online: () => online.current,
       mutate: engine.mutateWithAck,
     };
     const handler = JsonApiFacade.fetchHandler(
-      intentOf === undefined ? options : { ...options, intentOf }
+      intentOf === undefined ? options : { ...options, intentOf: intentOf }
     );
     const journaled = Stream.runHead(engine.mutationStates).pipe(
       Effect.map(Option.match({ onNone: () => 0, onSome: HashMap.size }))
@@ -166,10 +167,12 @@ const body = (response: Response): Effect.Effect<any> =>
   Effect.orDie(Effect.tryPromise(() => response.json()));
 
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
-  Effect.flatMap(handler.handle(request), (response) =>
-    response === undefined
-      ? Effect.die(`forwarded: ${request.method} ${request.url}`)
-      : Effect.succeed(response)
+  Effect.flatMap(
+    handler.handle(request),
+    Option.match({
+      onNone: () => Effect.die(`forwarded: ${request.method} ${request.url}`),
+      onSome: Effect.succeed,
+    })
   );
 
 const each = <A>(items: ReadonlyArray<A>, f: (item: A) => Effect.Effect<unknown>) =>
@@ -334,10 +337,9 @@ describe("JsonApiFacade writes: the offline error documents", () => {
   it.effect("a mutation the engine refuses is 503 offline plus not_journalable", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { handler, journaled } = yield* makeFixture((w) => ({
-          mutator: `${w.type}/unknown`,
-          args: {},
-        }));
+        const { handler, journaled } = yield* makeFixture((w) =>
+          Option.some({ mutator: `${w.type}/unknown`, args: {} })
+        );
         const document = yield* expectErrors(
           yield* answer(handler, write("POST", "/jsonapi/notes", note({ title: "a" }))),
           503,
@@ -375,7 +377,7 @@ describe("JsonApiFacade writes: the offline error documents", () => {
               const withHeaders = new Request(request, {
                 headers: { ...R.fromEntries([...request.headers]), ...headers },
               });
-              expect(yield* handler.handle(withHeaders)).toBeUndefined();
+              expect(yield* handler.handle(withHeaders)).toEqual(Option.none());
               expect(withHeaders.bodyUsed).toBe(false);
             })
           )

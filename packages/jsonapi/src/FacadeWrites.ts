@@ -36,8 +36,8 @@ export interface Preferences {
   readonly respondAsync: boolean;
   /** `Prefer: handling=strict`: never journal. */
   readonly strict: boolean;
-  /** `Prefer: wait=N`, in seconds, when present and a non-negative integer. */
-  readonly wait?: number;
+  /** `Prefer: wait=N`, in seconds, when present and a non-negative integer; `None` otherwise. */
+  readonly wait: Option.Option<number>;
 }
 
 /** Read the `Prefer` headers of a request (several headers and comma-separated lists alike). */
@@ -55,11 +55,11 @@ export const preferencesOf = (headers: Headers): Preferences => {
   const has = (name: string, value?: string) =>
     Arr.some(pairs, ([n, v]) => n === name && (value === undefined || v === value));
   const wait = Arr.findLast(pairs, ([n, v]) => n === "wait" && /^\d+$/.test(v));
-  const preferences = { respondAsync: has("respond-async"), strict: has("handling", "strict") };
-  return Option.match(wait, {
-    onNone: () => preferences,
-    onSome: ([, v]) => ({ ...preferences, wait: Number(v) }),
-  });
+  return {
+    respondAsync: has("respond-async"),
+    strict: has("handling", "strict"),
+    wait: Option.map(wait, ([, v]) => Number(v)),
+  };
 };
 
 // ─── Decoding ────────────────────────────────────────────────────────────────
@@ -80,7 +80,8 @@ export interface Refusal {
     | "client_id_required";
   readonly title: string;
   readonly detail: string;
-  readonly pointer?: string;
+  /** The `source.pointer` of the error object: the member the refusal is about. */
+  readonly pointer: string;
 }
 
 const refuse = (refusal: Refusal): Effect.Effect<never, Refusal> => Effect.fail(refusal);
@@ -98,12 +99,12 @@ export type Target =
   | { readonly operation: "create"; readonly type: string }
   | { readonly operation: "update" | "delete"; readonly type: string; readonly id: string };
 
-/** The linkage of one relationship: a related id, `null`, or a refusal. */
+/** The linkage of one relationship: a related id, `None` for `data: null`, or a refusal. */
 const linkageOf = (
   name: string,
   member: unknown,
   node: Node.AnyNode
-): Effect.Effect<string | null, Refusal> => {
+): Effect.Effect<Option.Option<string>, Refusal> => {
   const pointer = `/data/relationships/${name}`;
   const edge = node.edges[name];
   if (edge === undefined || edge.kind !== "one") {
@@ -122,14 +123,14 @@ const linkageOf = (
     return invalid(`relationship "${name}" must be an object with a "data" member`, pointer);
   }
   const data = member["data"];
-  if (data === null) return Effect.succeed(null);
+  if (data === null) return Effect.succeedNone;
   if (!isRecord(data) || !P.isString(data["id"]) || data["type"] !== edge.target) {
     return invalid(
       `relationship "${name}" must link one "${edge.target}" by type and id, or be null`,
       `${pointer}/data`
     );
   }
-  return Effect.succeed(data["id"]);
+  return Effect.succeedSome(data["id"]);
 };
 
 /** The body's `data` member as an object, or the refusal for a body that has none. */
@@ -229,7 +230,12 @@ export const decodeWrite = (
     const linkage = yield* Effect.forEach(
       R.toEntries(relationships),
       ([name, member]) =>
-        Effect.map(linkageOf(name, member, node), (related) => [name, related] as const),
+        // A cleared to-one stays `null` in the flattened write, as on the wire: the
+        // value becomes the `via` key's own value in the journaled args.
+        Effect.map(
+          linkageOf(name, member, node),
+          (related) => [name, Option.getOrNull(related)] as const
+        ),
       { concurrency: 1 }
     );
     return {
@@ -252,11 +258,11 @@ export interface Intent {
 
 /**
  * The intent mapping (ADR-0030 §5): a decoded `Write` to the mutation the
- * engine journals, or `undefined` when the write is not interceptable.
+ * engine journals, or `None` when the write is not interceptable.
  * `relationships` arrive flattened by {@link decodeWrite}: relationship name
  * to related id (or `null`).
  */
-export type IntentOf = (write: Write) => Intent | undefined;
+export type IntentOf = (write: Write) => Option.Option<Intent>;
 
 /**
  * The default intent mapping: the graph-derived CRUD mutations
@@ -267,17 +273,23 @@ export const graphIntentOf =
   (nodes: Node.NodeRegistry): IntentOf =>
   (write) => {
     const node = nodes.nodes.get(write.type);
-    if (node === undefined) return undefined;
+    if (node === undefined) return Option.none();
     const mutator = CrudMutation.name(write.type, write.operation);
-    if (write.operation === "delete") return { mutator, args: { type: write.type, id: write.id } };
+    if (write.operation === "delete") {
+      return Option.some({ mutator, args: { type: write.type, id: write.id } });
+    }
     const linked = Arr.map(R.toEntries(write.relationships ?? {}), ([name, related]) => {
       const edge = node.edges[name];
       return edge?.kind === "one" ? Option.some([edge.via, related] as const) : Option.none();
     });
-    const vias = Option.all(linked);
-    if (Option.isNone(vias)) return undefined;
-    const attributes = { ...write.attributes, ...R.fromEntries(vias.value) };
-    return { mutator, args: { type: write.type, id: write.id, attributes } };
+    return Option.map(Option.all(linked), (vias) => ({
+      mutator,
+      args: {
+        type: write.type,
+        id: write.id,
+        attributes: { ...write.attributes, ...R.fromEntries(vias) },
+      },
+    }));
   };
 
 // ─── The inverse mapping ─────────────────────────────────────────────────────

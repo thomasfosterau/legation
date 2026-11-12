@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation";
 import type { Related } from "@thomasfosterau/legation/internal";
@@ -203,7 +204,10 @@ describe("DocumentWriter.collection", () => {
       nodes,
       read,
       rows: [row(desk, { variants: [v1, v2] }), row(lamp, { variants: [] })],
-      ...(fields === undefined ? {} : { fields }),
+      ...Option.match(fields, {
+        onNone: () => ({}),
+        onSome: (projection) => ({ fields: projection }),
+      }),
     });
     expect(document.data.map((resource) => resource.attributes)).toEqual([
       { name: "Desk" },
@@ -358,13 +362,22 @@ describe("DocumentWriter.collection", () => {
     // with the projection still beside it; nothing else moved.
     expect(next).toEqual({
       read: { ...read, where: Predicate.eq("categoryId", "c-audio"), after: "p-2" },
-      fields,
+      fields: Option.some(fields),
+      id: Option.none(),
     });
-    expect(JsonApiQuery.canonical(nodes, next.read, next.fields)).toBe(
+    expect(JsonApiQuery.canonical(nodes, next.read, Option.getOrUndefined(next.fields))).toBe(
       (defined(page.links).next as string).slice("/api".length)
     );
     // The advanced read's own document continues the chain from where it stood.
-    const second = DocumentWriter.collection({ nodes, read: next.read, rows: [row(lamp)], fields });
+    const second = DocumentWriter.collection({
+      nodes,
+      read: next.read,
+      rows: [row(lamp)],
+      ...Option.match(next.fields, {
+        onNone: () => ({}),
+        onSome: (projection) => ({ fields: projection }),
+      }),
+    });
     expect(second.links).toEqual({
       self: "/products?include=variants&fields[products]=name&filter[categoryId]=c-audio&sort=name&page[limit]=2&page[after]=p-2",
     });

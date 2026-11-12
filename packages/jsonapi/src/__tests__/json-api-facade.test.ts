@@ -13,6 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -177,9 +178,9 @@ const makeReplica = Effect.gen(function* () {
   );
   const base = ClientView.fromEngine(engine);
   const rootHash = Subset.hash(Query.plan(nodes, { collection: "products" }).root);
-  const armed = yield* Ref.make<
-    { readonly race: Effect.Effect<void>; readonly seen: number } | undefined
-  >(undefined);
+  const armed = yield* Ref.make(
+    Option.none<{ readonly race: Effect.Effect<void>; readonly seen: number }>()
+  );
   const rootReads = yield* Ref.make(0);
   const view: ClientView.ClientView = {
     ...base,
@@ -188,17 +189,17 @@ const makeReplica = Effect.gen(function* () {
         if (Subset.hash(subset) === rootHash) {
           yield* Ref.update(rootReads, (count) => count + 1);
           const state = yield* Ref.get(armed);
-          if (state !== undefined) {
-            const seen = state.seen + 1;
-            yield* Ref.set(armed, { ...state, seen });
-            if (seen === 2) yield* state.race;
+          if (Option.isSome(state)) {
+            const seen = state.value.seen + 1;
+            yield* Ref.set(armed, Option.some({ ...state.value, seen }));
+            if (seen === 2) yield* state.value.race;
           }
         }
         return yield* base.query(subset);
       }),
   };
   const arm = (race: Effect.Effect<void>): Effect.Effect<void> =>
-    Effect.andThen(Ref.set(rootReads, 0), Ref.set(armed, { race, seen: 0 }));
+    Effect.andThen(Ref.set(rootReads, 0), Ref.set(armed, Option.some({ race, seen: 0 })));
   const racePut = (collection: string, value: SeedRow): Effect.Effect<void> =>
     Effect.gen(function* () {
       yield* backend.applyMutations({ clientGroupId: "seed" }, [
@@ -272,8 +273,9 @@ const makeFacade = (
       api,
       view: client.view,
       coverageOf: client.coverageOf,
-      totalOf: client.totalOf,
-      cookie: store.getCookie,
+      totalOf: (subset: Subset.Subset) =>
+        Effect.map(client.totalOf(subset), Option.fromUndefinedOr),
+      cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
       online: () => online.current,
       ...options,
     });
@@ -304,7 +306,7 @@ describe("JsonApiFacade", () => {
         const url = "/jsonapi/products?filter[categoryId]=c-audio&sort=-name&include=variants";
         const request = jsonApi(url);
         expect(handler.matches(request)).toBe(true);
-        const response = yield* handler.handle(request);
+        const response = Option.getOrUndefined(yield* handler.handle(request));
         expect(response).toBeDefined();
         expect(defined(response).status).toBe(200);
         expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
@@ -339,7 +341,9 @@ describe("JsonApiFacade", () => {
           yield* arm(
             racePut("products", { id: "p-4", categoryId: "c-audio", name: "Stool", priceCents: 50 })
           );
-          const response = yield* handler.handle(jsonApi("/jsonapi/products?include=variants"));
+          const response = Option.getOrUndefined(
+            yield* handler.handle(jsonApi("/jsonapi/products?include=variants"))
+          );
           expect(yield* Ref.get(rootReads)).toBe(1);
           expect(response).toBeDefined();
           expect(defined(response).status).toBe(200);
@@ -363,13 +367,15 @@ describe("JsonApiFacade", () => {
           "/jsonapi/products",
           "/jsonapi/variants",
         ]);
-        const found = yield* handler.handle(jsonApi("/jsonapi/products/p-1"));
+        const found = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/products/p-1"))
+        );
         expect(defined(found).status).toBe(200);
         const local = yield* docs.fromUrl(client.view, "/jsonapi/products/p-1");
         expect(bytes(yield* body(defined(found)))).toBe(bytes(local));
         // Covered, but no such row: the 404 is the endpoint's own, so the
         // server writes it.
-        expect(yield* handler.handle(jsonApi("/jsonapi/products/p-9"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/products/p-9"))).toEqual(Option.none());
       })
     )
   );
@@ -379,7 +385,9 @@ describe("JsonApiFacade", () => {
       Effect.gen(function* () {
         const { handler, client } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         yield* client.mutate("product/rename", { id: "p-1", name: "Standing desk" });
-        const response = yield* handler.handle(jsonApi("/jsonapi/products/p-1"));
+        const response = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/products/p-1"))
+        );
         const document = (yield* body(defined(response))) as {
           data: { attributes: { name: string } };
         };
@@ -402,12 +410,14 @@ describe("JsonApiFacade", () => {
           "/jsonapi/products?filter[categoryId]=c-audio&sort=name&page[limit]=2"
         );
         expect(handler.matches(request)).toBe(true);
-        expect(yield* handler.handle(request)).toBeUndefined();
+        expect(yield* handler.handle(request)).toEqual(Option.none());
         // A prefix of the identical window is covered.
-        const covered = yield* handler.handle(jsonApi("/jsonapi/products?sort=name&page[limit]=1"));
+        const covered = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/products?sort=name&page[limit]=1"))
+        );
         expect(defined(covered).status).toBe(200);
         // A category listing with no pin at all: the network's.
-        expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toEqual(Option.none());
       })
     )
   );
@@ -422,7 +432,7 @@ describe("JsonApiFacade", () => {
             "/jsonapi/variants",
           ]);
           const url = "/jsonapi/products?sort=name&page[offset]=0&page[limit]=2";
-          const response = yield* handler.handle(jsonApi(url));
+          const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
           // The window holds 2 of the 3 products; `meta.total` is the collection's 3,
           // the pull's total for the pinned subscription, not the window's 2 (#210).
@@ -450,7 +460,7 @@ describe("JsonApiFacade", () => {
           // it does not satisfy — the coverage rule reads an offset read as
           // the ordinary limit-prefix check on offset + first.
           const deep = jsonApi("/jsonapi/products?sort=name&page[offset]=2&page[limit]=2");
-          expect(yield* handler.handle(deep)).toBeUndefined();
+          expect(yield* handler.handle(deep)).toEqual(Option.none());
           // Offline, the same uncovered read is the spec 503 document, never
           // a partial page synthesised from what happens to be synced.
           const { handler: offlineHandler, online } = yield* makeFacade([
@@ -458,7 +468,7 @@ describe("JsonApiFacade", () => {
             "/jsonapi/variants",
           ]);
           online.current = false;
-          const response = yield* offlineHandler.handle(deep);
+          const response = Option.getOrUndefined(yield* offlineHandler.handle(deep));
           expect(defined(response).status).toBe(503);
           expect(yield* body(defined(response))).toEqual(JsonApiFacade.offlineDocument);
         })
@@ -475,7 +485,7 @@ describe("JsonApiFacade", () => {
             "/jsonapi/variants",
           ]);
           const url = "/jsonapi/products?sort=name&page[limit]=2";
-          const response = yield* handler.handle(jsonApi(url));
+          const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
           // SAFETY: a 200 from the façade is a collection document.
           const local = (yield* body(defined(response))) as {
@@ -508,15 +518,15 @@ describe("JsonApiFacade", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const pins = ["/jsonapi/products?sort=name&page[limit]=2", "/jsonapi/variants"];
-          const noTotal = { totalOf: () => Effect.succeed(undefined) };
+          const noTotal = { totalOf: () => Effect.succeedNone };
           const url = "/jsonapi/products?sort=name&page[limit]=2";
           // Online: forwarded, so the server's document (with its total) answers.
           const { handler } = yield* makeFacade(pins, noTotal);
-          expect(yield* handler.handle(jsonApi(url))).toBeUndefined();
+          expect(yield* handler.handle(jsonApi(url))).toEqual(Option.none());
           // Offline: the 503 document, never a page without its total.
           const { handler: offline, online } = yield* makeFacade(pins, noTotal);
           online.current = false;
-          const response = yield* offline.handle(jsonApi(url));
+          const response = Option.getOrUndefined(yield* offline.handle(jsonApi(url)));
           expect(defined(response).status).toBe(503);
         })
       )
@@ -532,7 +542,7 @@ describe("JsonApiFacade", () => {
             "/jsonapi/variants",
           ]);
           const url = "/jsonapi/products?sort=name&page[offset]=1&page[limit]=1";
-          const response = yield* handler.handle(jsonApi(url));
+          const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
           // Counted from the replica, which the unwindowed pin holds whole (#210).
           const local = yield* docs.fromUrl(client.view, url, { total: 3 });
@@ -549,8 +559,8 @@ describe("JsonApiFacade", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
-          const response = yield* handler.handle(
-            jsonApi("/jsonapi/products?page[offset]=1&page[after]=p-1")
+          const response = Option.getOrUndefined(
+            yield* handler.handle(jsonApi("/jsonapi/products?page[offset]=1&page[after]=p-1"))
           );
           expect(defined(response).status).toBe(400);
           const document = (yield* body(defined(response))) as {
@@ -567,7 +577,7 @@ describe("JsonApiFacade", () => {
         // The products node declares `variants` many: a products listing
         // needs the variants collection whole, which this shell never pinned.
         const { handler } = yield* makeFacade(["/jsonapi/products"]);
-        expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toEqual(Option.none());
       })
     )
   );
@@ -581,12 +591,12 @@ describe("JsonApiFacade", () => {
         yield* client.subscribe("/jsonapi/variants");
         const request = jsonApi("/jsonapi/variants");
         online.current = false;
-        const response = yield* handler.handle(request);
+        const response = Option.getOrUndefined(yield* handler.handle(request));
         expect(defined(response).status).toBe(503);
         expect(yield* body(defined(response))).toEqual(JsonApiFacade.offlineDocument);
         // Online, the same read is forwarded to the server rather than answered locally.
         online.current = true;
-        expect(yield* handler.handle(request)).toBeUndefined();
+        expect(yield* handler.handle(request)).toEqual(Option.none());
       })
     )
   );
@@ -596,7 +606,9 @@ describe("JsonApiFacade", () => {
       Effect.gen(function* () {
         const { handler, online } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         online.current = false;
-        const response = yield* handler.handle(jsonApi("/jsonapi/categories"));
+        const response = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/categories"))
+        );
         expect(defined(response).status).toBe(503);
         expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
         expect(defined(response).headers.get("cache-control")).toBe("no-store");
@@ -612,7 +624,9 @@ describe("JsonApiFacade", () => {
           ],
         });
         // A covered request is never affected by connectivity.
-        const covered = yield* handler.handle(jsonApi("/jsonapi/products/p-2"));
+        const covered = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/products/p-2"))
+        );
         expect(defined(covered).status).toBe(200);
         // What a worker answers for a forward that rejected at the transport:
         // the same document, with the replica's current cookie.
@@ -634,7 +648,7 @@ describe("JsonApiFacade", () => {
       Effect.gen(function* () {
         const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
         const url = "/jsonapi/products?filter[priceCents]=gt:abc";
-        const response = yield* handler.handle(jsonApi(url));
+        const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
         expect(defined(response).status).toBe(400);
         expect(defined(response).headers.get("content-type")).toBe("application/vnd.api+json");
         const failure = yield* Effect.flip(JsonApiQuery.parseRead(nodes, url));
@@ -642,7 +656,9 @@ describe("JsonApiFacade", () => {
         expect(yield* body(defined(response))).toEqual(RestHandlers.queryErrorDocument(failure));
         // Whatever the ledger holds: the server would reject it identically.
         expect(
-          defined(yield* handler.handle(jsonApi("/jsonapi/categories?sort=nope"))).status
+          defined(
+            Option.getOrUndefined(yield* handler.handle(jsonApi("/jsonapi/categories?sort=nope")))
+          ).status
         ).toBe(400);
       })
     )
@@ -652,7 +668,9 @@ describe("JsonApiFacade", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { handler } = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"]);
-        expect(yield* handler.handle(jsonApi("/jsonapi/products?include=reviews"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/products?include=reviews"))).toEqual(
+          Option.none()
+        );
       })
     )
   );
@@ -683,7 +701,7 @@ describe("JsonApiFacade", () => {
           (request) =>
             Effect.gen(function* () {
               expect(handler.matches(request), request.url).toBe(false);
-              expect(yield* handler.handle(request), request.url).toBeUndefined();
+              expect(yield* handler.handle(request), request.url).toEqual(Option.none());
             }),
           { concurrency: 1, discard: true }
         );
@@ -709,8 +727,8 @@ describe("JsonApiFacade", () => {
           true
         );
         expect(origin.handler.matches(jsonApi("http://shop.test/jsonapi/products"))).toBe(false);
-        const served = yield* origin.handler.handle(
-          jsonApi("https://api.shop.test/jsonapi/products")
+        const served = Option.getOrUndefined(
+          yield* origin.handler.handle(jsonApi("https://api.shop.test/jsonapi/products"))
         );
         expect(defined(served).status).toBe(200);
         // Links keep the route's own prefix: the server mounts the api as declared.
@@ -737,14 +755,16 @@ describe("JsonApiFacade", () => {
           api,
           view: client.view,
           coverageOf: client.coverageOf,
-          cookie: store.getCookie,
+          cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
           online: () => true,
         });
         // Registered, not yet pulled: nothing is covered, so the request goes
         // to the network rather than being answered from an empty replica (#426).
-        expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toEqual(Option.none());
         yield* engine.pull.pipe(Effect.orDie);
-        const response = yield* handler.handle(jsonApi("/jsonapi/categories"));
+        const response = Option.getOrUndefined(
+          yield* handler.handle(jsonApi("/jsonapi/categories"))
+        );
         expect(defined(response).status).toBe(200);
         expect(defined(response).headers.get(JsonApiFacade.servedAtHeader)).not.toBe("");
         expect((yield* body(defined(response))) as { data: unknown }).toEqual({
@@ -774,12 +794,12 @@ describe("JsonApiFacade", () => {
           api,
           view: client.view,
           coverageOf: client.coverageOf,
-          cookie: store.getCookie,
+          cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
           online: () => true,
         });
-        expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toBeUndefined();
+        expect(yield* handler.handle(jsonApi("/jsonapi/products"))).toEqual(Option.none());
         yield* engine.pull.pipe(Effect.orDie);
-        const response = yield* handler.handle(jsonApi("/jsonapi/products"));
+        const response = Option.getOrUndefined(yield* handler.handle(jsonApi("/jsonapi/products")));
         expect(defined(response).status).toBe(200);
         const document = (yield* body(defined(response))) as {
           readonly data: ReadonlyArray<{

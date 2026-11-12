@@ -16,7 +16,7 @@
  *    resource) is never the façade's. A request is its business iff its
  *    method is `GET`, its `Accept` names `application/vnd.api+json`, and its
  *    path — under {@link Options.baseUrl} — matches one of those route
- *    templates segment for segment. Anything else yields `undefined` and
+ *    templates segment for segment. Anything else yields `None` and
  *    the caller composes what comes next.
  * 2. **Parse.** The URL becomes a `Query.Read` through the one grammar
  *    (`JsonApiQuery.parseRead`). A URL the grammar rejects is answered with
@@ -121,6 +121,7 @@ import type {
 import type { ClientEngine, ClientView, MutationState } from "@thomasfosterau/legation/internal";
 import { Coverage, Subset } from "@thomasfosterau/legation/internal";
 import * as Convention from "./Convention.js";
+import type * as DocumentWriter from "./DocumentWriter.js";
 import * as FacadeWrites from "./FacadeWrites.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as MutationStatus from "./MutationStatus.js";
@@ -164,21 +165,21 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
   ) => Effect.Effect<Coverage.Verdict>;
   /**
    * The replica's CVR cookie, for `x-legation-served-at` — the store's
-   * `getCookie`, read only when a response is synthesised. Absent, or
-   * failing, the header is empty.
+   * `getCookie`, read only when a response is synthesised. Absent, answering
+   * `None`, or failing, the header is empty.
    */
-  readonly cookie?: Effect.Effect<string | undefined, unknown>;
+  readonly cookie?: Effect.Effect<Option.Option<string>, unknown>;
   /**
    * A subscription's total as the last pull reported it (#210), for
    * `meta.total` on a collection read a **windowed** subscription covers:
    * `host.engine.totalOf` in a worker, `client.totalOf` over a Client. A read
    * an unwindowed subscription covers is counted from the replica and needs
-   * none. Absent, or answering `undefined`, a read only a windowed subscription
+   * none. Absent, or answering `None`, a read only a windowed subscription
    * covers has no honest total, so it is treated as uncovered: forwarded online,
    * the `503` offline document otherwise. A listing is never served without
    * its total, or with the window's row count in place of it.
    */
-  readonly totalOf?: ((subset: Subset.Subset) => Effect.Effect<number | undefined>) | undefined;
+  readonly totalOf?: (subset: Subset.Subset) => Effect.Effect<Option.Option<number>>;
   /**
    * The resource declarations linkage follows — those the api's endpoints
    * are declared with, so the replica writes the relationships the server
@@ -204,7 +205,7 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
   ) => Effect.Effect<ClientEngine.MutationHandle, MutatorError | StoreError>;
   /**
    * The intent mapping: a decoded write to the mutation the engine journals,
-   * or `undefined` when it is not interceptable. Default: the graph-derived
+   * or `None` when it is not interceptable. Default: the graph-derived
    * CRUD mutations (`CrudMutation`, `FacadeWrites.graphIntentOf`), which the
    * engine's registry must then carry (`CrudMutation.entries(nodes)`), with a
    * server handler under each name.
@@ -254,13 +255,13 @@ export interface FetchHandler {
    * The façade's answer: a document (200), the codec's 400 for a URL the
    * grammar rejects, the 503 `offline` document for an uncovered request
    * while offline, a `202` write receipt for a write it journals (offline,
-   * or on `Prefer: respond-async`) — or `undefined` when the request is not
+   * or on `Prefer: respond-async`) — or `None` when the request is not
    * the façade's business, is uncovered and online, or is a write to
    * forward, for the caller to forward unchanged. A write's body is read
    * from a clone, so the request itself can still be forwarded. A store
    * failure while reading the replica is a defect, as `Query.run` treats it.
    */
-  readonly handle: (request: Request) => Effect.Effect<Response | undefined>;
+  readonly handle: (request: Request) => Effect.Effect<Option.Option<Response>>;
   /**
    * What a worker answers when the forward of a request {@link matches} held
    * for rejected at the transport, the other half of ADR-0029 §4's
@@ -300,7 +301,7 @@ export const offlineDocument: RestHandlers.ErrorDocument = {
 const respondWith = (
   status: number,
   body: unknown,
-  cookie: string | undefined,
+  cookie: Option.Option<string>,
   headers: Readonly<Record<string, string>> = {}
 ): Response =>
   new Response(JSON.stringify(body), {
@@ -309,7 +310,7 @@ const respondWith = (
       ...headers,
       "content-type": MEDIA_TYPE,
       "cache-control": "no-store",
-      [servedAtHeader]: cookie ?? "",
+      [servedAtHeader]: Option.getOrElse(cookie, () => ""),
     },
   });
 
@@ -331,7 +332,7 @@ const errorObject = (refusal: {
   readonly code: string;
   readonly title: string;
   readonly detail: string;
-  readonly pointer?: string;
+  readonly pointer: Option.Option<string>;
 }): RestHandlers.ErrorDocument["errors"][number] => {
   const error = {
     status: String(refusal.status),
@@ -339,7 +340,10 @@ const errorObject = (refusal: {
     title: refusal.title,
     detail: refusal.detail,
   };
-  return refusal.pointer === undefined ? error : { ...error, source: { pointer: refusal.pointer } };
+  return Option.match(refusal.pointer, {
+    onNone: () => error,
+    onSome: (pointer) => ({ ...error, source: { pointer } }),
+  });
 };
 
 /** The 503 `offline` document with a second error object saying why the write was not journaled. */
@@ -359,20 +363,28 @@ const unjournaledDocument = (
   failure: Unjournaled
 ): readonly [status: number, document: RestHandlers.ErrorDocument] =>
   Match.valueTags(failure, {
-    Refused: ({ refusal }): readonly [number, RestHandlers.ErrorDocument] =>
-      refusal.status === 503
-        ? [503, offlineWith(refusal)]
-        : [refusal.status, { errors: [errorObject(refusal)] }],
+    Refused: ({ refusal }): readonly [number, RestHandlers.ErrorDocument] => {
+      const reason = { ...refusal, pointer: Option.some(refusal.pointer) };
+      return refusal.status === 503
+        ? [503, offlineWith(reason)]
+        : [refusal.status, { errors: [errorObject(reason)] }];
+    },
     NotJournalable: ({ detail }): readonly [number, RestHandlers.ErrorDocument] => [
       503,
-      offlineWith({ status: 503, code: "not_journalable", title: "Not journalable", detail }),
+      offlineWith({
+        status: 503,
+        code: "not_journalable",
+        title: "Not journalable",
+        detail,
+        pointer: Option.none(),
+      }),
     ],
     Unmapped: (): readonly [number, RestHandlers.ErrorDocument] => [503, offlineDocument],
   });
 
 /** The 503 response of an uncovered request while offline, marked with the cookie when known. */
 export const offlineResponse = (cookie?: string): Response =>
-  respondWith(503, offlineDocument, cookie);
+  respondWith(503, offlineDocument, Option.fromUndefinedOr(cookie));
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
@@ -398,10 +410,12 @@ const routesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
 ): ReadonlyArray<Route> => {
   return [...Convention.reflectResources(api).values()].flatMap((resource) => {
     if (!nodes.nodes.has(resource.type)) return [];
-    const list =
-      resource.list === undefined ? [] : [routeOf(resource.type, resource.list.path, false)];
-    const one =
-      resource.getOne === undefined ? [] : [routeOf(resource.type, resource.getOne.path, true)];
+    const list = Option.toArray(
+      Option.map(resource.list, (endpoint) => routeOf(resource.type, endpoint.path, false))
+    );
+    const one = Option.toArray(
+      Option.map(resource.getOne, (endpoint) => routeOf(resource.type, endpoint.path, true))
+    );
     return list.concat(one);
   });
 };
@@ -421,23 +435,29 @@ const writeMethods = { create: "POST", update: "PATCH", delete: "DELETE" } as co
 const writeRoutesOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
   nodes: Node.NodeRegistry,
-  writes: CrudMutation.Writes | undefined
+  writes: Option.Option<CrudMutation.Writes>
 ): ReadonlyArray<WriteRoute> =>
   Arr.flatMap([...Convention.reflectResources(api).values()], (resource) => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) return [];
     return Arr.filterMap(["create", "update", "delete"] as const, (operation) => {
-      const endpoint = resource[operation];
       const method = writeMethods[operation];
-      const allowed = writes === undefined || (writes[resource.type] ?? []).includes(operation);
-      return endpoint === undefined || endpoint.method.toUpperCase() !== method || !allowed
-        ? Result.failVoid
-        : Result.succeed({
-            ...routeOf(resource.type, endpoint.path, operation !== "create"),
-            operation,
-            node,
-            method,
-          });
+      const allowed = Option.match(writes, {
+        onNone: () => true,
+        onSome: (allow) => (allow[resource.type] ?? []).includes(operation),
+      });
+      return Option.match(resource[operation], {
+        onNone: () => Result.failVoid,
+        onSome: (endpoint) =>
+          endpoint.method.toUpperCase() !== method || !allowed
+            ? Result.failVoid
+            : Result.succeed({
+                ...routeOf(resource.type, endpoint.path, operation !== "create"),
+                operation,
+                node,
+                method,
+              }),
+      });
     });
   });
 
@@ -449,45 +469,52 @@ const matchesTemplate = (route: Route, segments: ReadonlyArray<string>): boolean
 
 /** Where the api is served: an origin to require, and the path in front of the routes. */
 interface Base {
-  readonly origin?: string;
+  readonly origin: Option.Option<string>;
   readonly path: string;
 }
 
 const baseOf = (baseUrl: string): Base => {
-  if (baseUrl === "" || baseUrl.startsWith("/")) return { path: baseUrl.replace(/\/+$/, "") };
+  if (baseUrl === "" || baseUrl.startsWith("/")) {
+    return { origin: Option.none(), path: baseUrl.replace(/\/+$/, "") };
+  }
   const url = new URL(baseUrl);
-  return { origin: url.origin, path: url.pathname.replace(/\/+$/, "") };
+  return { origin: Option.some(url.origin), path: url.pathname.replace(/\/+$/, "") };
 };
 
 /**
- * The request path relative to the base, or `undefined` when it lies
+ * The request path relative to the base, or `None` when it lies
  * elsewhere. A trailing slash is left to the server: the route templates
  * carry none, and whether `/products/` is `/products` is its ruling.
  */
-const pathUnder = (base: Base, url: URL): string | undefined => {
-  if (base.origin !== undefined && url.origin !== base.origin) return undefined;
-  if (!url.pathname.startsWith(base.path) || url.pathname.endsWith("/")) return undefined;
+const pathUnder = (base: Base, url: URL): Option.Option<string> => {
+  if (Option.exists(base.origin, (origin) => url.origin !== origin)) return Option.none();
+  if (!url.pathname.startsWith(base.path) || url.pathname.endsWith("/")) return Option.none();
   const rest = url.pathname.slice(base.path.length);
-  return rest.startsWith("/") ? rest : undefined;
+  return rest.startsWith("/") ? Option.some(rest) : Option.none();
 };
 
 // ─── Requests ────────────────────────────────────────────────────────────────
 
 /** Whether an `Accept` header names the JSON:API media type (parameters aside). */
-const acceptsJsonApi = (header: string | null): boolean =>
-  header !== null &&
-  header
-    .split(",")
-    .some((part) => (part.trim().split(";")[0] ?? "").trim().toLowerCase() === MEDIA_TYPE);
+const acceptsJsonApi = (header: Option.Option<string>): boolean =>
+  Option.exists(header, (accept) =>
+    accept
+      .split(",")
+      .some((part) => (part.trim().split(";")[0] ?? "").trim().toLowerCase() === MEDIA_TYPE)
+  );
+
+/** A request header, `None` when the request does not carry it. */
+const headerOf = (request: Request, name: string): Option.Option<string> =>
+  Option.fromNullOr(request.headers.get(name));
 
 /**
  * Whether a `Content-Type` is the JSON:API media type without the atomic
  * extension: an `ext` parameter naming atomic marks the operations endpoint,
  * never a façade write (ADR-0030 §5).
  */
-const sendsJsonApi = (header: string | null): boolean => {
-  if (header === null) return false;
-  const [type = "", ...parameters] = header.split(";");
+const sendsJsonApi = (header: Option.Option<string>): boolean => {
+  if (Option.isNone(header)) return false;
+  const [type = "", ...parameters] = header.value.split(";");
   if (type.trim().toLowerCase() !== MEDIA_TYPE) return false;
   return !parameters.some((parameter) => {
     const [name = "", value = ""] = parameter.split("=");
@@ -523,7 +550,7 @@ const respond = (response: Response): Outcome => ({ _tag: "Respond", response })
  * names something the graph does not); anything else is the codec's 400,
  * which the server returns identically.
  */
-const queryFailure = (error: QueryError, cookie: string | undefined): Outcome =>
+const queryFailure = (error: QueryError, cookie: Option.Option<string>): Outcome =>
   error.parameter === "include" ||
   (error.parameter === undefined && !Schema.isSchemaError(error.cause))
     ? forward
@@ -541,16 +568,26 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 ): FetchHandler => {
   const { nodes, view, coverageOf } = options;
   const routes = routesOf(options.api, nodes);
-  const mutate = options.mutate;
-  const writeRoutes = mutate === undefined ? [] : writeRoutesOf(options.api, nodes, options.writes);
+  const mutate = Option.fromUndefinedOr(options.mutate);
+  const writeRoutes = Option.isNone(mutate)
+    ? []
+    : writeRoutesOf(options.api, nodes, Option.fromUndefinedOr(options.writes));
   const intentOf = options.intentOf ?? FacadeWrites.graphIntentOf(nodes);
   const base = baseOf(options.baseUrl ?? "");
   const online = options.online ?? navigatorOnline;
+  const prefixOption = Option.fromUndefinedOr(options.prefix);
+  const totalOf = Option.fromUndefinedOr(options.totalOf);
+  const pull = Option.fromUndefinedOr(options.pull);
   /** The cookie at the time of an answer; read only when a response is synthesised. */
-  const cookie: Effect.Effect<string | undefined> =
-    options.cookie === undefined
-      ? Effect.succeed(undefined)
-      : Effect.catch(options.cookie, () => Effect.succeed(undefined));
+  const cookie: Effect.Effect<Option.Option<string>> = Option.match(
+    Option.fromUndefinedOr(options.cookie),
+    {
+      onNone: () => Effect.succeedNone,
+      onSome: (read) => Effect.catch(read, () => Effect.succeedNone),
+    }
+  );
+  /** The link prefix of a route's documents: the `prefix` option, else the route's own. */
+  const prefixFor = (route: Route): string => Option.getOrElse(prefixOption, () => route.prefix);
   // One writer per link prefix the routes imply (one, for an api mounted once).
   const writers = new Map<string, ReplicaDocuments.ReplicaDocuments>();
   /** The writer for a link prefix: one per prefix, built when a route first needs it. */
@@ -560,43 +597,48 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     const made = ReplicaDocuments.make({
       nodes,
       prefix,
-      ...(options.resources === undefined ? {} : { resources: options.resources }),
+      ...Option.match(Option.fromUndefinedOr(options.resources), {
+        onNone: () => ({}),
+        onSome: (resources) => ({ resources }),
+      }),
     });
     writers.set(prefix, made);
     return made;
   };
 
   routes.forEach((route) => {
-    writerFor(options.prefix ?? route.prefix);
+    writerFor(prefixFor(route));
   });
 
-  const candidateOf = (request: Request): Candidate | undefined => {
-    if (request.method !== "GET" || !acceptsJsonApi(request.headers.get("accept"))) {
-      return undefined;
+  const candidateOf = (request: Request): Option.Option<Candidate> => {
+    if (request.method !== "GET" || !acceptsJsonApi(headerOf(request, "accept"))) {
+      return Option.none();
     }
     const url = new URL(request.url);
-    const path = pathUnder(base, url);
-    if (path === undefined) return undefined;
-    const segments = Convention.segmentsOf(path);
-    const route = routes.find((candidate) => matchesTemplate(candidate, segments));
-    return route === undefined ? undefined : { route, url };
+    return Option.flatMap(pathUnder(base, url), (path) => {
+      const segments = Convention.segmentsOf(path);
+      return Option.map(
+        Arr.findFirst(routes, (candidate) => matchesTemplate(candidate, segments)),
+        (route) => ({ route, url })
+      );
+    });
   };
 
   /**
    * Rules 1 to 4 for every read the request needs, judged over the request's
-   * root rows: the verdict of the first (the request's own read), or `undefined`
+   * root rows: the verdict of the first (the request's own read), or `None`
    * when any is uncovered and the request is not the façade's to answer.
    */
   const covered = (
     reads: ReadonlyArray<Query.Read>,
     snapshot: Coverage.Snapshot
-  ): Effect.Effect<Extract<Coverage.Verdict, { _tag: "Covered" }> | undefined> =>
+  ): Effect.Effect<Option.Option<Extract<Coverage.Verdict, { _tag: "Covered" }>>> =>
     Effect.forEach(reads, (read) => coverageOf(read, { snapshot }), { concurrency: 1 }).pipe(
       Effect.map((verdicts) => {
         const first = verdicts[0];
         return first?._tag === "Covered" && verdicts.every((verdict) => verdict._tag === "Covered")
-          ? first
-          : undefined;
+          ? Option.some(first)
+          : Option.none();
       })
     );
 
@@ -604,21 +646,24 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
    * A covered collection read's total (#210): counted from the replica when
    * the covering subscription is unwindowed (every matching row is there, so
    * the request's filter over them is exact), else the windowed subscription's
-   * pulled total (`totalOf`); `undefined` when neither is known.
+   * pulled total (`totalOf`); `None` when neither is known.
    */
   const totalFor = (
     verdict: Extract<Coverage.Verdict, { _tag: "Covered" }>,
     root: Subset.Subset,
     read: ReadonlyArray<ClientEngine.LocalRow>
-  ): Effect.Effect<number | undefined> =>
+  ): Effect.Effect<Option.Option<number>> =>
     Coverage.isWindowed(verdict.by.root)
-      ? (options.totalOf?.(root) ?? Effect.succeed(undefined))
+      ? Option.match(totalOf, {
+          onNone: () => Effect.succeedNone,
+          onSome: (pulled) => pulled(root),
+        })
       : // An unwindowed request's rows are its whole filter: count the rows already read (#426).
         !Coverage.isWindowed(root)
-        ? Effect.succeed(read.length)
+        ? Effect.succeedSome(read.length)
         : view.query(Subset.unwindowed(root)).pipe(
-            Effect.map((rows): number | undefined => rows.length),
-            Effect.orElseSucceed(() => undefined)
+            Effect.map((rows) => Option.some(rows.length)),
+            Effect.orElseSucceed(() => Option.none<number>())
           );
 
   /** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
@@ -640,7 +685,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   const uncovered: Effect.Effect<never, Outcome> = Effect.suspend(() =>
     online()
       ? Effect.fail(forward)
-      : Effect.flatMap(cookie, (served) => Effect.fail(respond(offlineResponse(served))))
+      : Effect.flatMap(cookie, (served) =>
+          Effect.fail(respond(offlineResponse(Option.getOrUndefined(served))))
+        )
   );
 
   /**
@@ -654,43 +701,46 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     Effect.gen(function* () {
       const rows = yield* view.query(root).pipe(Effect.catch(() => uncovered));
       const verdict = yield* covered(needed, { subset: root, rows });
-      if (verdict === undefined) return yield* uncovered;
-      if (!listing) return { rows, meta: undefined };
-      const total = yield* totalFor(verdict, root, rows);
-      return total === undefined ? yield* uncovered : { rows, meta: { total } };
+      if (Option.isNone(verdict)) return yield* uncovered;
+      if (!listing) return { rows, meta: Option.none<DocumentWriter.CollectionMeta>() };
+      const total = yield* totalFor(verdict.value, root, rows);
+      return Option.isNone(total)
+        ? yield* uncovered
+        : { rows, meta: Option.some({ total: total.value }) };
     });
 
   const answer = ({ route, url }: Candidate) =>
     Effect.gen(function* () {
-      const docs = writers.get(options.prefix ?? route.prefix);
+      const docs = writers.get(prefixFor(route));
       // Every route's prefix has a writer (built above); an unknown one is the server's to answer.
       if (docs === undefined) return yield* Effect.fail(forward);
       const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
       const root = yield* Query.tryPlan(nodes, parsed.read).pipe(Effect.mapError(() => forward));
-      const { rows, meta } = yield* coveredRows(needed, root.root, parsed.id === undefined);
+      const { rows, meta } = yield* coveredRows(needed, root.root, Option.isNone(parsed.id));
       const replica = pinned(view, root.root, rows);
-      const write: Effect.Effect<ReplicaDocuments.Document, QueryError> =
-        parsed.id === undefined
-          ? docs.collection(replica, parsed, meta)
-          : docs.data(replica, parsed);
+      const write: Effect.Effect<ReplicaDocuments.Document, QueryError> = Option.isNone(parsed.id)
+        ? docs.collection(replica, parsed, Option.getOrUndefined(meta))
+        : docs.data(replica, parsed);
       const document = yield* write.pipe(Effect.catch(rejected));
       // No such row in a faithful replica: the 404 is the endpoint's own.
-      if (parsed.id !== undefined && document.data === null) return yield* Effect.fail(forward);
+      if (Option.isSome(parsed.id) && document.data === null) return yield* Effect.fail(forward);
       return respondWith(200, document, yield* cookie);
     });
 
-  const readHandle = (request: Request): Effect.Effect<Response | undefined> => {
-    const candidate = candidateOf(request);
-    if (candidate === undefined) return Effect.succeed(undefined);
-    return answer(candidate).pipe(
-      Effect.catchTags({
-        Forward: () => Effect.succeed(undefined),
-        Respond: (outcome) => Effect.succeed(outcome.response),
-      })
-    );
-  };
+  const readHandle = (request: Request): Effect.Effect<Option.Option<Response>> =>
+    Option.match(candidateOf(request), {
+      onNone: () => Effect.succeedNone,
+      onSome: (candidate) =>
+        answer(candidate).pipe(
+          Effect.asSome,
+          Effect.catchTags({
+            Forward: () => Effect.succeedNone,
+            Respond: (outcome) => Effect.succeedSome(outcome.response),
+          })
+        ),
+    });
 
   // ─── Writes (ADR-0030) ─────────────────────────────────────────────────────
 
@@ -700,33 +750,37 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     readonly target: FacadeWrites.Target;
   }
 
-  const writeCandidateOf = (request: Request): WriteCandidate | undefined => {
+  const writeCandidateOf = (request: Request): Option.Option<WriteCandidate> => {
     const method = request.method.toUpperCase();
-    if (!acceptsJsonApi(request.headers.get("accept"))) return undefined;
-    if (method !== "DELETE" && !sendsJsonApi(request.headers.get("content-type"))) {
-      return undefined;
+    if (!acceptsJsonApi(headerOf(request, "accept"))) return Option.none();
+    if (method !== "DELETE" && !sendsJsonApi(headerOf(request, "content-type"))) {
+      return Option.none();
     }
-    const path = pathUnder(base, new URL(request.url));
-    if (path === undefined) return undefined;
-    const segments = Convention.segmentsOf(path);
-    const route = writeRoutes.find(
-      (candidate) => candidate.method === method && matchesTemplate(candidate, segments)
-    );
-    if (route === undefined) return undefined;
-    const target: FacadeWrites.Target =
-      route.operation === "create"
-        ? { operation: "create", type: route.type }
-        : {
-            operation: route.operation,
-            type: route.type,
-            id: decodeURIComponent(segments.at(-1) ?? ""),
-          };
-    return { route, target };
+    return Option.flatMap(pathUnder(base, new URL(request.url)), (path) => {
+      const segments = Convention.segmentsOf(path);
+      return Option.map(
+        Arr.findFirst(
+          writeRoutes,
+          (candidate) => candidate.method === method && matchesTemplate(candidate, segments)
+        ),
+        (route): WriteCandidate => ({
+          route,
+          target:
+            route.operation === "create"
+              ? { operation: "create", type: route.type }
+              : {
+                  operation: route.operation,
+                  type: route.type,
+                  id: decodeURIComponent(segments.at(-1) ?? ""),
+                },
+        })
+      );
+    });
   };
 
   /** The mutation status URL of a journaled mutation: beside the api it belongs to (ADR-0030 §2). */
   const statusUrl = (route: Route, mutationId: number): string =>
-    `${base.origin ?? ""}${base.path}${route.prefix}/_legation/mutations/${mutationId}`;
+    `${Option.getOrElse(base.origin, () => "")}${base.path}${route.prefix}/_legation/mutations/${mutationId}`;
 
   /**
    * The receipt's `data`: the resource read back through the one writer
@@ -734,7 +788,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
    * row (a patch of a row it never pulled) — the request's own members.
    */
   const receiptData = ({ route }: WriteCandidate, write: Write): Effect.Effect<unknown> => {
-    const prefix = options.prefix ?? route.prefix;
+    const prefix = prefixFor(route);
     const docs = writerFor(prefix);
     const sent = {
       type: write.type,
@@ -752,8 +806,8 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   };
 
   /**
-   * Journal a write and answer its `202` receipt, or fail with `undefined`
-   * when it cannot be journaled (the caller forwards it online, or answers
+   * Journal a write and answer its `202` receipt, or fail with the reason
+   * it cannot be journaled (the caller forwards it online, or answers
    * offline). The body is read from a clone.
    */
   const journal = (
@@ -769,16 +823,18 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
         body
       ).pipe(Effect.mapError((refusal): Unjournaled => ({ _tag: "Refused", refusal })));
       const intent = intentOf(write);
-      if (intent === undefined || mutate === undefined) {
+      if (Option.isNone(intent) || Option.isNone(mutate)) {
         return yield* Effect.fail<Unjournaled>({ _tag: "Unmapped" });
       }
-      const handle = yield* mutate(intent.mutator, intent.args).pipe(
-        Effect.mapError((error): Unjournaled =>
-          P.isTagged(error, "MutatorError")
-            ? { _tag: "NotJournalable", detail: error.message }
-            : { _tag: "Unmapped" }
-        )
-      );
+      const handle = yield* mutate
+        .value(intent.value.mutator, intent.value.args)
+        .pipe(
+          Effect.mapError((error): Unjournaled =>
+            P.isTagged(error, "MutatorError")
+              ? { _tag: "NotJournalable", detail: error.message }
+              : { _tag: "Unmapped" }
+          )
+        );
       const location = statusUrl(candidate.route, handle.mutationId);
       const meta = {
         legation: { status: "pending", mutationId: handle.mutationId, mutation: location },
@@ -793,7 +849,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       return respondWith(202, document, yield* cookie, headers);
     });
 
-  const offlineNow: Effect.Effect<Response> = Effect.map(cookie, offlineResponse);
+  const offlineNow: Effect.Effect<Response> = Effect.map(cookie, (served) =>
+    offlineResponse(Option.getOrUndefined(served))
+  );
 
   /** The offline answer to a write it could not journal: ADR-0030 §3's error documents. */
   const unjournaled = (failure: Unjournaled): Effect.Effect<Response> =>
@@ -806,46 +864,53 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   const writeHandle = (
     request: Request,
     candidate: WriteCandidate
-  ): Effect.Effect<Response | undefined> => {
+  ): Effect.Effect<Option.Option<Response>> => {
     const preferences = FacadeWrites.preferencesOf(request.headers);
     const reachable = online();
-    if (preferences.strict) return reachable ? Effect.succeed(undefined) : offlineNow;
-    if (reachable && !preferences.respondAsync) return Effect.succeed(undefined);
+    const passOn = Effect.succeedNone;
+    if (preferences.strict) return reachable ? passOn : Effect.asSome(offlineNow);
+    if (reachable && !preferences.respondAsync) return passOn;
     return journal(request, candidate, preferences).pipe(
-      Effect.catch((failure) => (reachable ? Effect.succeed(undefined) : unjournaled(failure)))
+      Effect.asSome,
+      Effect.catch((failure) => (reachable ? passOn : Effect.asSome(unjournaled(failure))))
     );
   };
 
   // ─── The mutation status URL (ADR-0030 §2) ─────────────────────────────────
 
-  const mutationStates = options.mutationStates;
+  const mutationStates = Option.fromUndefinedOr(options.mutationStates);
   const maxWait = Duration.fromInputUnsafe(options.maxWait ?? MutationStatus.defaultMaxWait);
   /** Every prefix the api's reflected routes sit under: the status route sits beside each. */
   const prefixes = Arr.dedupe(Arr.map([...routes, ...writeRoutes], (route) => route.prefix));
 
-  /** A status request: the route prefix it names and the id segment, or `undefined`. */
-  const statusCandidateOf = (
-    request: Request
-  ): { readonly prefix: string; readonly id: string } | undefined => {
-    if (mutationStates === undefined || request.method !== "GET") return undefined;
-    if (!acceptsJsonApi(request.headers.get("accept"))) return undefined;
-    const path = pathUnder(base, new URL(request.url));
-    if (path === undefined) return undefined;
-    const segments = Convention.segmentsOf(path);
-    const [id = "", mutations = "", legation = ""] = segments.toReversed();
-    if (legation !== MutationStatus.segment || mutations !== "mutations") return undefined;
-    const prefix = segments.slice(0, -3);
-    const joined = Arr.isReadonlyArrayEmpty(prefix) ? "" : `/${prefix.join("/")}`;
-    return prefixes.includes(joined) ? { prefix: joined, id: decodeURIComponent(id) } : undefined;
+  /** A status request, with the map it is answered from: the route prefix it names and the id segment. */
+  interface StatusCandidate {
+    readonly prefix: string;
+    readonly id: string;
+    readonly states: Stream.Stream<MutationState.MutationStateMap>;
+  }
+
+  /** A status request, or `None` when the request is not one. */
+  const statusCandidateOf = (request: Request): Option.Option<StatusCandidate> => {
+    if (Option.isNone(mutationStates) || request.method !== "GET") return Option.none();
+    if (!acceptsJsonApi(headerOf(request, "accept"))) return Option.none();
+    const states = mutationStates.value;
+    return Option.flatMap(pathUnder(base, new URL(request.url)), (path) => {
+      const segments = Convention.segmentsOf(path);
+      const [id = "", mutations = "", legation = ""] = segments.toReversed();
+      if (legation !== MutationStatus.segment || mutations !== "mutations") return Option.none();
+      const prefix = segments.slice(0, -3);
+      const joined = Arr.isReadonlyArrayEmpty(prefix) ? "" : `/${prefix.join("/")}`;
+      return prefixes.includes(joined)
+        ? Option.some({ prefix: joined, id: decodeURIComponent(id), states })
+        : Option.none();
+    });
   };
 
-  const statusHandle = (
-    request: Request,
-    states: Stream.Stream<MutationState.MutationStateMap>,
-    candidate: { readonly prefix: string; readonly id: string }
-  ): Effect.Effect<Response> =>
+  const statusHandle = (request: Request, candidate: StatusCandidate): Effect.Effect<Response> =>
     Effect.gen(function* () {
-      const links = `${base.origin ?? ""}${base.path}${candidate.prefix}`;
+      const { states } = candidate;
+      const links = `${Option.getOrElse(base.origin, () => "")}${base.path}${candidate.prefix}`;
       const mutationId = MutationStatus.parseId(candidate.id);
       if (Option.isNone(mutationId)) {
         return respondWith(404, MutationStatus.unknownDocument(candidate.id), yield* cookie);
@@ -853,53 +918,59 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
       const now = yield* MutationStatus.current(states, mutationId.value);
       const asked = FacadeWrites.preferencesOf(request.headers).wait;
       const wait =
-        asked === undefined || Option.isNone(now) || now.value.phase !== "pending"
-          ? undefined
-          : Duration.min(Duration.seconds(asked), maxWait);
-      const state =
-        wait === undefined ? now : yield* MutationStatus.settled(states, mutationId.value, wait);
+        Option.isNone(asked) || Option.isNone(now) || now.value.phase !== "pending"
+          ? Option.none<Duration.Duration>()
+          : Option.some(Duration.min(Duration.seconds(asked.value), maxWait));
+      const state = Option.isNone(wait)
+        ? now
+        : yield* MutationStatus.settled(states, mutationId.value, wait.value);
       const served = yield* cookie;
       if (Option.isNone(state)) {
         return respondWith(404, MutationStatus.unknownDocument(candidate.id), served);
       }
       const document = MutationStatus.document(nodes, links, state.value);
-      return wait === undefined
-        ? respondWith(200, document, served)
-        : respondWith(200, document, served, {
-            "preference-applied": `wait=${Math.floor(Duration.toSeconds(wait))}`,
-          });
+      return Option.match(wait, {
+        onNone: () => respondWith(200, document, served),
+        onSome: (held) =>
+          respondWith(200, document, served, {
+            "preference-applied": `wait=${Math.floor(Duration.toSeconds(held))}`,
+          }),
+      });
     });
 
-  const handle: FetchHandler["handle"] = (request) => {
-    const status = statusCandidateOf(request);
-    if (status !== undefined && mutationStates !== undefined) {
-      return statusHandle(request, mutationStates, status);
-    }
-    const write = writeCandidateOf(request);
-    return write === undefined ? readHandle(request) : writeHandle(request, write);
-  };
+  const handle: FetchHandler["handle"] = (request) =>
+    Option.match(statusCandidateOf(request), {
+      onSome: (status) => Effect.asSome(statusHandle(request, status)),
+      onNone: () =>
+        Option.match(writeCandidateOf(request), {
+          onNone: () => readHandle(request),
+          onSome: (write) => writeHandle(request, write),
+        }),
+    });
 
-  const offline: FetchHandler["offline"] = (request) => {
-    const write = writeCandidateOf(request);
-    if (write === undefined) return offlineNow;
-    const preferences = FacadeWrites.preferencesOf(request.headers);
-    if (preferences.strict) return offlineNow;
-    return journal(request, write, preferences).pipe(Effect.catch(unjournaled));
-  };
+  const offline: FetchHandler["offline"] = (request) =>
+    Option.match(writeCandidateOf(request), {
+      onNone: () => offlineNow,
+      onSome: (write) => {
+        const preferences = FacadeWrites.preferencesOf(request.headers);
+        if (preferences.strict) return offlineNow;
+        return journal(request, write, preferences).pipe(Effect.catch(unjournaled));
+      },
+    });
 
   const forwarded: FetchHandler["forwarded"] = (request, response) =>
-    options.pull !== undefined &&
+    Option.isSome(pull) &&
     response.status >= 200 &&
     response.status < 300 &&
-    writeCandidateOf(request) !== undefined
-      ? Effect.ignore(options.pull)
+    Option.isSome(writeCandidateOf(request))
+      ? Effect.ignore(pull.value)
       : Effect.void;
 
   return {
     matches: (request) =>
-      candidateOf(request) !== undefined ||
-      writeCandidateOf(request) !== undefined ||
-      statusCandidateOf(request) !== undefined,
+      Option.isSome(candidateOf(request)) ||
+      Option.isSome(writeCandidateOf(request)) ||
+      Option.isSome(statusCandidateOf(request)),
     handle,
     offline,
     forwarded,

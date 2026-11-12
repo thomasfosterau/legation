@@ -12,6 +12,7 @@
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -164,7 +165,7 @@ const bytes = (document: unknown) => JSON.stringify(document);
 const localTotal = (url: string) =>
   Effect.gen(function* () {
     const parsed = yield* JsonApiQuery.parseRead(nodes, url);
-    if (parsed.id !== undefined) return undefined;
+    if (Option.isSome(parsed.id)) return undefined;
     const root = Query.plan(nodes, parsed.read).root;
     return { total: (yield* view.query(Subset.unwindowed(root))).length };
   });
@@ -398,7 +399,10 @@ describe("ReplicaDocuments over the replica", () => {
   it("treats a declaration the graph cannot serve as a definition-time defect", () => {
     const Secret = Resource.make("secrets", { attributes: { name: Schema.String } });
     expect(() =>
-      ReplicaDocuments.make({ nodes, resources: new Map([["secrets", Secret as Resource.Any]]) })
+      ReplicaDocuments.make({
+        nodes,
+        resources: new Map([["secrets", Secret as Resource.Any]]),
+      })
     ).toThrow(/no node "secrets"/);
     const Mislinked = Resource.make("categories", {
       attributes: { name: Schema.String },
@@ -420,8 +424,20 @@ describe("ReplicaDocuments over the replica", () => {
         const failures = [
           yield* Effect.flip(docs.toCover({ collection: "reviews" })),
           yield* Effect.flip(docs.fromUrl(view, "/reviews?sort=-createdAt")),
-          yield* Effect.flip(docs.collection(view, { read: { collection: "reviews" } })),
-          yield* Effect.flip(docs.data(view, { read: { collection: "reviews" }, id: "r-1" })),
+          yield* Effect.flip(
+            docs.collection(view, {
+              read: { collection: "reviews" },
+              fields: Option.none(),
+              id: Option.none(),
+            })
+          ),
+          yield* Effect.flip(
+            docs.data(view, {
+              read: { collection: "reviews" },
+              fields: Option.none(),
+              id: Option.some("r-1"),
+            })
+          ),
         ];
         Arr.forEach(failures, (failure) => {
           expect(failure).toBeInstanceOf(QueryError);

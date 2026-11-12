@@ -457,7 +457,8 @@ describe("JsonApiQuery.parseRead", () => {
         first: 12,
         after: "p-9",
       },
-      fields: { products: ["name"], variants: ["sku"] },
+      fields: Option.some({ products: ["name"], variants: ["sku"] }),
+      id: Option.none(),
     });
     // The read compiles: the plan is what the engine runs.
     expect(Query.plan(nodes, parsed.read).root.limit).toBe(12);
@@ -477,6 +478,8 @@ describe("JsonApiQuery.parseRead", () => {
     ).toEqual(Predicate.or(Predicate.eq("name", "a"), Predicate.lt("priceCents", 5)));
     expect(parse("http://shop.test/jsonapi/categories")).toEqual({
       read: { collection: "categories" },
+      fields: Option.none(),
+      id: Option.none(),
     });
     expect(
       Effect.runSync(
@@ -497,10 +500,11 @@ describe("JsonApiQuery.parseRead", () => {
         include: { variants: true },
         first: 1,
       },
-      id: "p-1",
+      fields: Option.none(),
+      id: Option.some("p-1"),
     });
     // A listing addresses no row, even one filtered to a single id.
-    expect(parse("/api/products?filter[id]=p-1")).not.toHaveProperty("id");
+    expect(parse("/api/products?filter[id]=p-1").id).toEqual(Option.none());
     expect(parseFailure("/products/p-1?sort=name")).toMatchObject({ parameter: "sort" });
     expect(parseFailure("/nothing/here").message).toMatch(/No collection/);
   });
@@ -678,7 +682,7 @@ describe("JsonApiQuery.parseRead", () => {
     const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
     const repeated = read("/products?fields[products]=name&fields[products]=description");
     expect(repeated).toEqual(read("/products?fields[products]=name,description"));
-    expect(repeated.fields).toEqual({ products: ["name", "description"] });
+    expect(repeated.fields).toEqual(Option.some({ products: ["name", "description"] }));
   });
 
   it("still rejects a repeated key at a single-valued position, naming the parameter", () => {
@@ -750,7 +754,7 @@ describe("JsonApiQuery.canonical", () => {
     const fields = { variants: ["sku"], products: ["name"] };
     const url = JsonApiQuery.canonical(nodes, read, fields);
     expect(url).toBe("/products?include=variants&fields[products]=name&fields[variants]=sku");
-    expect(parse(url)).toEqual({ read, fields });
+    expect(parse(url)).toEqual({ read, fields: Option.some(fields), id: Option.none() });
     // A type the read cannot carry is refused, not dropped: the same error
     // parseRead gives for `fields[orders]=id`.
     expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(QueryError);

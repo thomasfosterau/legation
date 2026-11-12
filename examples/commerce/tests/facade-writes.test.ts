@@ -148,7 +148,7 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { facade, engine, serverReview, phaseOf } = yield* makeWorld;
-        const response = yield* facade.handle(postReview("r-off-1", 5));
+        const response = Option.getOrUndefined(yield* facade.handle(postReview("r-off-1", 5)));
         expect(response?.status).toBe(202);
         const receipt = yield* json(response!);
         expect(receipt.meta.legation.status).toBe("pending");
@@ -162,7 +162,7 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
           relationships: { product: { data: { type: "products", id: "p-01" } } },
         });
         // A covered read shows it before the server has ruled.
-        const listed = yield* facade.handle(reviewsOfP01);
+        const listed = Option.getOrUndefined(yield* facade.handle(reviewsOfP01));
         expect(listed?.status).toBe(200);
         const ids = ((yield* json(listed!)).data as ReadonlyArray<{ id: string }>).map((r) => r.id);
         expect(ids[0]).toBe("r-off-1");
@@ -181,7 +181,7 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { facade, engine, serverReview, phaseOf } = yield* makeWorld;
-        const response = yield* facade.handle(postReview("r-off-2", 7));
+        const response = Option.getOrUndefined(yield* facade.handle(postReview("r-off-2", 7)));
         expect(response?.status).toBe(202);
         const { mutationId } = (yield* json(response!)).meta.legation;
         yield* engine.push;
@@ -191,18 +191,18 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
           Option.some({ phase: "rejected", reason: "rating out of range" })
         );
         // The receipt's `Location` is where a plain-fetch caller reads the ruling (ADR-0030 §2).
-        const status = yield* facade.handle(
+        const status = Option.getOrUndefined(yield* facade.handle(
           new Request(`http://commerce.test${response!.headers.get("location")}`, {
             headers: { accept: MEDIA },
           })
-        );
+        ));
         expect(status?.status).toBe(200);
         expect((yield* json(status!)).data.attributes).toMatchObject({
           phase: "rejected",
           mutator: "reviews/create",
           reason: "rating out of range",
         });
-        const listed = yield* facade.handle(reviewsOfP01);
+        const listed = Option.getOrUndefined(yield* facade.handle(reviewsOfP01));
         const ids = ((yield* json(listed!)).data as ReadonlyArray<{ id: string }>).map((r) => r.id);
         expect(ids).not.toContain("r-off-2");
       })
@@ -251,14 +251,14 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
       Effect.gen(function* () {
         const { facade, engine, sql, phaseOf } = yield* makeWorld;
         const line = () => sql`SELECT userId, variantId, qty FROM cartItems WHERE id = 'ci-off-1'`;
-        const added = yield* facade.handle(postCartLine("ci-off-1", "v-01a", 2));
+        const added = Option.getOrUndefined(yield* facade.handle(postCartLine("ci-off-1", "v-01a", 2)));
         expect(added?.status).toBe(202);
         const addId = (yield* json(added!)).meta.legation.mutationId;
         yield* engine.push;
         expect(yield* line()).toEqual([{ userId: USER, variantId: "v-01a", qty: 2 }]);
         expect(yield* phaseOf(addId)).toEqual(Option.some({ phase: "acknowledged", reason: undefined }));
 
-        const removed = yield* facade.handle(deleteCartLine("ci-off-1"));
+        const removed = Option.getOrUndefined(yield* facade.handle(deleteCartLine("ci-off-1")));
         expect(removed?.status).toBe(202);
         const removeId = (yield* json(removed!)).meta.legation.mutationId;
         yield* engine.push;
@@ -275,7 +275,7 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
       Effect.gen(function* () {
         const { facade, engine, sql, phaseOf } = yield* makeWorld;
         // v-03b is out of stock: `cart/add`'s rule, under the derived name.
-        const response = yield* facade.handle(postCartLine("ci-off-2", "v-03b", 1));
+        const response = Option.getOrUndefined(yield* facade.handle(postCartLine("ci-off-2", "v-03b", 1)));
         const { mutationId } = (yield* json(response!)).meta.legation;
         yield* engine.push;
         expect(yield* sql`SELECT id FROM cartItems WHERE id = 'ci-off-2'`).toEqual([]);
@@ -292,7 +292,7 @@ describe("the commerce façade's writes (ADR-0030, #510)", () => {
         const { facade, engine, sql, phaseOf } = yield* makeWorld;
         yield* sql`DELETE FROM cartItems WHERE userId = ${USER}`;
         yield* sql`INSERT INTO cartItems (id, userId, variantId, qty) VALUES ('ci-o', ${USER}, 'v-02a', 2)`;
-        const response = yield* facade.handle(postOrder("o-off-1"));
+        const response = Option.getOrUndefined(yield* facade.handle(postOrder("o-off-1")));
         expect(response?.status).toBe(202);
         const { mutationId } = (yield* json(response!)).meta.legation;
         yield* engine.push;

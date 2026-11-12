@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
@@ -115,26 +116,36 @@ const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray
 
 describe("Convention.classify", () => {
   it("classifies conventional JSON:API routes", () => {
-    expect(Convention.classify("GET", "/todos")).toEqual({ type: "todos", operation: "list" });
-    expect(Convention.classify("GET", "/todos/:id")).toEqual({
-      type: "todos",
-      operation: "getOne",
-    });
-    expect(Convention.classify("POST", "/todos")).toEqual({ type: "todos", operation: "create" });
-    expect(Convention.classify("PATCH", "/api/todos/:id")).toEqual({
-      type: "todos",
-      operation: "update",
-    });
-    expect(Convention.classify("DELETE", "/todos/:id")).toEqual({
-      type: "todos",
-      operation: "delete",
-    });
+    expect(Convention.classify("GET", "/todos")).toEqual(
+      Option.some({ type: "todos", operation: "list" })
+    );
+    expect(Convention.classify("GET", "/todos/:id")).toEqual(
+      Option.some({
+        type: "todos",
+        operation: "getOne",
+      })
+    );
+    expect(Convention.classify("POST", "/todos")).toEqual(
+      Option.some({ type: "todos", operation: "create" })
+    );
+    expect(Convention.classify("PATCH", "/api/todos/:id")).toEqual(
+      Option.some({
+        type: "todos",
+        operation: "update",
+      })
+    );
+    expect(Convention.classify("DELETE", "/todos/:id")).toEqual(
+      Option.some({
+        type: "todos",
+        operation: "delete",
+      })
+    );
   });
 
   it("ignores non-CRUD shapes", () => {
-    expect(Convention.classify("POST", "/todos/:id")).toBeUndefined();
-    expect(Convention.classify("GET", "/todos/:id/comments")).toBeUndefined();
-    expect(Convention.classify("OPTIONS", "/todos")).toBeUndefined();
+    expect(Convention.classify("POST", "/todos/:id")).toEqual(Option.none());
+    expect(Convention.classify("GET", "/todos/:id/comments")).toEqual(Option.none());
+    expect(Convention.classify("OPTIONS", "/todos")).toEqual(Option.none());
   });
 });
 

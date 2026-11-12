@@ -128,7 +128,7 @@ import {
   resourceToRow,
   type RelationshipRef,
 } from "./CollectionLoader.js";
-import type { ResourceMap } from "./Convention.js";
+import type { EndpointRef, Operation, ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 import * as Ledger from "./Ledger.js";
@@ -162,7 +162,7 @@ export interface JsonApiBackendConfig {
    * so an app can push its own named intents through this backend as long
    * as each is one create/update/delete of one resource.
    */
-  readonly writes?: ReadonlyMap<string, (args: unknown) => Write> | undefined;
+  readonly writes?: ReadonlyMap<string, (args: unknown) => Write>;
   /**
    * The server's JSON:API Atomic Operations endpoint (`POST {path}`), when it
    * has one. With it set, `applyMutations` pushes a whole batch as one
@@ -170,23 +170,23 @@ export interface JsonApiBackendConfig {
    * its own request. `JsonApiSync` fills this in from the reflected api
    * (`Convention.reflectAtomic`).
    */
-  readonly atomic?: { readonly path: string } | undefined;
+  readonly atomic?: { readonly path: string };
   /** Subset → JSON:API query string. Defaults to the exact filter-grammar encoder. */
-  readonly query?: QueryEncoder | undefined;
+  readonly query?: QueryEncoder;
   /**
    * Relationship names to compound-load per collection (`?include=...`). When a
    * listing pulls in related resources, they are harvested so an auto-subscribed
    * `id IN (...)` subset over those collections is served from the same response
    * — no extra round trip. See `Relationships.related`.
    */
-  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
   /**
    * Where each client group's ledger (its acknowledged mutation ids and
    * remembered rejections) is kept across restarts (#468). Unset, the ledger
    * lives in this instance's memory (`Ledger.memory`), so a restart forgets it.
    * `Ledger.keyValue` over a durable Effect `KeyValueStore` keeps it.
    */
-  readonly ledger?: Ledger.LedgerStore | undefined;
+  readonly ledger?: Ledger.LedgerStore;
 }
 
 /** A mutation as the sync server pushes it to a backend. */
@@ -226,24 +226,24 @@ const appendQuery = (query: string, extra: string): string =>
 
 /**
  * The set of ids a subset pins via an `id IN (...)` / `id = ...` filter, or
- * `undefined` if it isn't id-pinned. Used to recognize auto-subscribed
+ * `None` if it isn't id-pinned. Used to recognize auto-subscribed
  * relationship subsets that the include fast-path can serve from cache.
  */
-const pinnedIds = (predicate: Predicate.Predicate): ReadonlySet<string> | undefined =>
+const pinnedIds = (predicate: Predicate.Predicate): Option.Option<ReadonlySet<string>> =>
   Match.value(predicate).pipe(
-    Match.withReturnType<ReadonlySet<string> | undefined>(),
+    Match.withReturnType<Option.Option<ReadonlySet<string>>>(),
     Match.tag("In", (node) =>
-      node.field === "id" ? new Set(node.values.map((value) => String(value))) : undefined
+      node.field === "id"
+        ? Option.some(new Set(node.values.map((value) => String(value))))
+        : Option.none()
     ),
     Match.tag("Compare", (node) =>
-      node.op === "eq" && node.field === "id" ? new Set([String(node.value)]) : undefined
+      node.op === "eq" && node.field === "id"
+        ? Option.some(new Set([String(node.value)]))
+        : Option.none()
     ),
-    Match.tag("And", (node) =>
-      Option.getOrUndefined(
-        Arr.findFirst(node.predicates, (inner) => Option.fromUndefinedOr(pinnedIds(inner)))
-      )
-    ),
-    Match.orElse(() => undefined)
+    Match.tag("And", (node) => Arr.findFirst(node.predicates, pinnedIds)),
+    Match.orElse(() => Option.none())
   );
 
 /** What an applied write leaves in its row: the value it wrote, or a delete. */
@@ -294,8 +294,8 @@ interface WriteAccumulator {
 }
 
 /** The row entry for (collection, id), if this push has entered the row. */
-const entryOf = (acc: WriteAccumulator, collection: string, id: string): RowEntry | undefined =>
-  acc.rows.get(collection)?.get(id);
+const entryOf = (acc: WriteAccumulator, collection: string, id: string): Option.Option<RowEntry> =>
+  Option.fromUndefinedOr(acc.rows.get(collection)?.get(id));
 
 /** Enter a row under (collection, id) (mutates `acc`). */
 const setEntry = (acc: WriteAccumulator, collection: string, id: string, entry: RowEntry): void => {
@@ -332,12 +332,12 @@ const oldsOf = (acc: WriteAccumulator): Map<string, Map<string, unknown>> => {
 const recordApplied = (
   acc: WriteAccumulator,
   write: Write,
-  document: JsonApiRow | undefined
+  document: Option.Option<JsonApiRow>
 ): void => {
-  const entry = entryOf(acc, write.type, write.id) ?? {
-    before: Option.none<JsonApiRow>(),
-    current: Option.none<JsonApiRow>(),
-  };
+  const entry = Option.getOrElse(entryOf(acc, write.type, write.id), (): RowEntry => ({
+    before: Option.none(),
+    current: Option.none(),
+  }));
   setEntry(acc, write.type, write.id, entry);
   entry.current =
     write.operation === "delete"
@@ -402,9 +402,11 @@ const mergeWrite = (read: JsonApiRow, write: Write): JsonApiRow => ({
 const rowAfter = (
   write: Write,
   current: Option.Option<JsonApiRow>,
-  document: JsonApiRow | undefined
+  document: Option.Option<JsonApiRow>
 ): JsonApiRow =>
-  document ?? (Option.isSome(current) ? mergeWrite(current.value, write) : writtenValue(write));
+  Option.getOrElse(document, () =>
+    Option.isSome(current) ? mergeWrite(current.value, write) : writtenValue(write)
+  );
 
 /** Express a derived CRUD mutator's decoded args as one JSON:API write. */
 const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, BackendError> =>
@@ -471,15 +473,15 @@ const operationOf = (write: Write): Record<string, unknown> =>
 /**
  * The index of the operation an error's `source.pointer` names — the
  * operation itself (`Atomic.operationPointer(i)`) or a member below it — or
- * `undefined` when the pointer names none of the `count` operations sent.
+ * `None` when the pointer names none of the `count` operations sent.
  */
-const operationIndex = (pointer: string, count: number): number | undefined => {
+const operationIndex = (pointer: string, count: number): Option.Option<number> => {
   const match = /^\/atomic:operations\/(\d+)(?:\/|$)/.exec(pointer);
-  if (match === null) return undefined;
+  if (match === null) return Option.none();
   const index = Number(match[1]);
   return index < count && Atomic.operationPointer(index) === `/atomic:operations/${index}`
-    ? index
-    : undefined;
+    ? Option.some(index)
+    : Option.none();
 };
 
 /** The per-operation rejections an error document carries, by operation index. */
@@ -501,8 +503,8 @@ const rejectionsOf = (
     const pointer = error?.source?.pointer;
     if (!P.isString(pointer)) return;
     const index = operationIndex(pointer, count);
-    if (index === undefined || byIndex.has(index)) return;
-    byIndex.set(index, error.detail ?? error.title ?? fallbackReason);
+    if (Option.isNone(index) || byIndex.has(index.value)) return;
+    byIndex.set(index.value, error.detail ?? error.title ?? fallbackReason);
   });
   return [...byIndex].map(([index, reason]) => ({ index, reason }));
 };
@@ -514,10 +516,11 @@ interface BatchEntry {
 }
 
 /** The row an `atomic:results` entry carries, if it returned a resource. */
-const resultRow = (result: unknown): JsonApiRow | undefined => {
+const resultRow = (result: unknown): Option.Option<JsonApiRow> => {
   const data = P.isObjectOrArray(result) ? (result as { data?: unknown }).data : undefined;
-  const resource = Schema.decodeUnknownOption(ResourceObject)(data);
-  return Option.isSome(resource) ? toRow(resourceToRow(resource.value).value) : undefined;
+  return Option.map(Schema.decodeUnknownOption(ResourceObject)(data), (resource) =>
+    toRow(resourceToRow(resource).value)
+  );
 };
 
 /** One atomic request's outcome: everything applied, or some operations named as rejected. */
@@ -537,7 +540,7 @@ type AtomicOutcome =
  * resend reads it then (`readRefusedCreates`).
  */
 const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
-  if (entryOf(acc, write.type, write.id) === undefined)
+  if (Option.isNone(entryOf(acc, write.type, write.id)))
     setEntry(acc, write.type, write.id, { before: Option.none(), current: Option.none() });
 };
 
@@ -569,20 +572,30 @@ const ledgerOf = (group: Group): Ledger.GroupLedger => ({
   ),
 });
 
-/** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 /** A listing's own `meta.total` (#210), when it reports a non-negative integer. */
-const reportedTotal = (document: JsonApiDocument): number | undefined => {
+const reportedTotal = (document: JsonApiDocument): Option.Option<number> => {
   const total = P.hasProperty(document.meta, "total") ? document.meta.total : undefined;
-  return P.isNumber(total) && Number.isInteger(total) && total >= 0 ? total : undefined;
+  return P.isNumber(total) && Number.isInteger(total) && total >= 0
+    ? Option.some(total)
+    : Option.none();
 };
 
+/** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
   config: JsonApiBackendConfig
 ): Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
+    /** A resource's endpoint for a CRUD role; `None` when it has no such resource or role. */
+    const endpointOf = (type: string, operation: Operation): Option.Option<EndpointRef> =>
+      Option.flatMap(
+        Option.fromUndefinedOr(config.resources.get(type)),
+        (endpoints) => endpoints[operation]
+      );
     const encoder = config.query ?? defaultEncoder;
     const includes = config.includes ?? {};
+    const writes = Option.fromUndefinedOr(config.writes);
+    const atomicEndpoint = Option.fromUndefinedOr(config.atomic);
     // collection → id → the latest value this backend listed or wrote (warms getRows).
     const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
     // collection → ids known complete in cache via a compound `included` harvest.
@@ -615,7 +628,7 @@ export const make = (
       Effect.scoped(client.execute(request)).pipe(
         Effect.mapError(backendError("JSON:API write failed")),
         Effect.flatMap(
-          (response): Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected> => {
+          (response): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> => {
             if (response.status >= 200 && response.status < 300)
               return response.json.pipe(
                 Effect.orElseSucceed(() => undefined),
@@ -634,16 +647,15 @@ export const make = (
      * with no such route cannot be written by update or delete, so the write
      * fails with BackendError before anything is sent.
      */
-    const getOneFor = (type: string): Effect.Effect<{ readonly path: string }, BackendError> => {
-      const getOne = config.resources.get(type)?.getOne;
-      return getOne === undefined
-        ? Effect.fail(
+    const getOneFor = (type: string): Effect.Effect<{ readonly path: string }, BackendError> =>
+      Effect.fromOption(endpointOf(type, "getOne")).pipe(
+        Effect.mapError(
+          () =>
             new BackendError({
               message: `"${type}" has no getOne route, so its updates and deletes cannot read the row before writing it`,
             })
-          )
-        : Effect.succeed(getOne);
-    };
+        )
+      );
 
     /**
      * Read a row before the push writes it: the value the server holds now. Every
@@ -689,7 +701,7 @@ export const make = (
      * atomic path's batch (`enterBatchCreate`).
      */
     const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
-      if (write.operation === "create" || entryOf(acc, write.type, write.id) !== undefined)
+      if (write.operation === "create" || Option.isSome(entryOf(acc, write.type, write.id)))
         return Effect.void;
       return readBefore(write.type, write.id).pipe(
         Effect.map((before) =>
@@ -744,7 +756,7 @@ export const make = (
               entry.write.id === id
           );
           const entry = entryOf(acc, type, id);
-          if (!laterWrite || (entry !== undefined && Option.isSome(entry.before)))
+          if (!laterWrite || Option.exists(entry, (known) => Option.isSome(known.before)))
             return Effect.void;
           return readBefore(type, id).pipe(
             Effect.map((row) =>
@@ -770,7 +782,7 @@ export const make = (
      * applied, so `getRows` never serves a value the push has superseded.
      */
     const cacheApplied = (acc: WriteAccumulator, write: Write) => {
-      const current = entryOf(acc, write.type, write.id)?.current ?? Option.none<JsonApiRow>();
+      const current = Option.flatMap(entryOf(acc, write.type, write.id), (entry) => entry.current);
       return Ref.update(cache, (rows) => {
         const next = new Map(rows);
         const map = new Map(next.get(write.type) ?? []);
@@ -812,7 +824,7 @@ export const make = (
     const countedFrom = (
       values: ReadonlyArray<JsonApiRow>,
       subset: Subset.Subset,
-      reported?: number
+      reported: Option.Option<number>
     ): Backend.CountedEntries => {
       const { rows, total } = Subset.applyCounted(
         values.map((value) => ({ id: value.id, value })),
@@ -820,7 +832,7 @@ export const make = (
       );
       return {
         entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
-        total: reported ?? total,
+        total: Option.getOrElse(reported, () => total),
       };
     };
 
@@ -830,8 +842,8 @@ export const make = (
       subset: Subset.Subset
     ): Effect.Effect<Backend.CountedEntries, BackendError> =>
       Effect.gen(function* () {
-        const list = config.resources.get(subset.collection)?.list;
-        if (list === undefined) return NO_ROWS;
+        const list = endpointOf(subset.collection, "list");
+        if (Option.isNone(list)) return NO_ROWS;
         // Correlated Exists is a relational join this REST backend can't resolve;
         // fail closed rather than silently skip the filter (denormalize, or use a
         // backend that resolves Exists).
@@ -844,13 +856,14 @@ export const make = (
         // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
         // were all delivered by a prior compound `included` harvest is served
         // from cache — the related rows arrived with their parent, no round trip.
-        const ids = pinnedIds(subset.where);
-        if (ids !== undefined) {
+        const pinned = pinnedIds(subset.where);
+        if (Option.isSome(pinned)) {
+          const ids = pinned.value;
           const complete = (yield* Ref.get(includedIds)).get(subset.collection);
           if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
             const cached = (yield* Ref.get(cache)).get(subset.collection);
             if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
-              return countedFrom([...cached.values()], subset);
+              return countedFrom([...cached.values()], subset, Option.none());
             }
           }
         }
@@ -867,7 +880,7 @@ export const make = (
           encoded.value,
           includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
         );
-        const url = urlFor(config.baseUrl, list.path) + query;
+        const url = urlFor(config.baseUrl, list.value.path) + query;
         const response = yield* getJson(url).pipe(
           Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
         );
@@ -893,15 +906,15 @@ export const make = (
     const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
       Effect.gen(function* () {
         const cached = (yield* Ref.get(cache)).get(collection);
-        const getOne = config.resources.get(collection)?.getOne;
+        const getOne = endpointOf(collection, "getOne");
         const found = yield* Effect.forEach(
           ids,
           (id) =>
             Effect.gen(function* () {
               const hit = cached?.get(id);
               if (hit !== undefined) return [{ id, version: versionOf(hit), value: hit }];
-              if (getOne === undefined) return [];
-              const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
+              if (Option.isNone(getOne)) return [];
+              const response = yield* getJson(urlFor(config.baseUrl, getOne.value.path, id)).pipe(
                 Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
               );
               // A 404 is an absent row: omitted, as the contract requires.
@@ -923,9 +936,11 @@ export const make = (
     const writeFor = (mutation: PushedMutation): Effect.Effect<Write, BackendError> =>
       Effect.gen(function* () {
         const definition = config.mutators.get(mutation.mutator);
-        const custom = config.writes?.get(mutation.mutator);
+        const custom = Option.flatMap(writes, (byName) =>
+          Option.fromUndefinedOr(byName.get(mutation.mutator))
+        );
         const operation = config.operations.get(mutation.mutator);
-        if (definition === undefined || (custom === undefined && operation === undefined))
+        if (definition === undefined || (Option.isNone(custom) && operation === undefined))
           return yield* UnknownMutator.make(mutation.mutator);
         const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
           Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
@@ -933,9 +948,10 @@ export const make = (
         // A `writes` function that refuses its args (it throws, as
         // `FacadeWrites.writesOf` does for args naming another type) fails as
         // args that do not decode do, never as a defect.
-        if (custom !== undefined) {
+        if (Option.isSome(custom)) {
+          const express = custom.value;
           return yield* Effect.try({
-            try: () => custom(args),
+            try: () => express(args),
             catch: backendError(`Invalid args for mutator "${mutation.mutator}"`),
           });
         }
@@ -947,58 +963,55 @@ export const make = (
     // server answered a create or update with, if it sent one.
     const applyOne = (
       write: Write
-    ): Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected> =>
-      Effect.gen(function* () {
-        const resource = config.resources.get(write.type);
-        return yield* Match.value(write.operation).pipe(
-          Match.withReturnType<
-            Effect.Effect<JsonApiRow | undefined, BackendError | MutationRejected>
-          >(),
-          Match.when("create", () => {
-            const ref = resource?.create;
-            if (ref === undefined)
-              return Effect.fail(
-                new BackendError({ message: `No create endpoint for "${write.type}"` })
-              );
-            return sendWrite(
-              HttpClientRequest.post(urlFor(config.baseUrl, ref.path)).pipe(
-                HttpClientRequest.setHeaders(jsonApiHeaders),
-                HttpClientRequest.bodyJsonUnsafe(
-                  writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
-                )
-              )
+    ): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> =>
+      Match.value(write.operation).pipe(
+        Match.withReturnType<
+          Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected>
+        >(),
+        Match.when("create", () => {
+          const endpoint = endpointOf(write.type, "create");
+          if (Option.isNone(endpoint))
+            return Effect.fail(
+              new BackendError({ message: `No create endpoint for "${write.type}"` })
             );
-          }),
-          Match.when("update", () => {
-            const ref = resource?.update;
-            if (ref === undefined)
-              return Effect.fail(
-                new BackendError({ message: `No update endpoint for "${write.type}"` })
-              );
-            return sendWrite(
-              HttpClientRequest.patch(urlFor(config.baseUrl, ref.path, write.id)).pipe(
-                HttpClientRequest.setHeaders(jsonApiHeaders),
-                HttpClientRequest.bodyJsonUnsafe(
-                  writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
-                )
+          return sendWrite(
+            HttpClientRequest.post(urlFor(config.baseUrl, endpoint.value.path)).pipe(
+              HttpClientRequest.setHeaders(jsonApiHeaders),
+              HttpClientRequest.bodyJsonUnsafe(
+                writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
               )
+            )
+          );
+        }),
+        Match.when("update", () => {
+          const endpoint = endpointOf(write.type, "update");
+          if (Option.isNone(endpoint))
+            return Effect.fail(
+              new BackendError({ message: `No update endpoint for "${write.type}"` })
             );
-          }),
-          Match.when("delete", () => {
-            const ref = resource?.delete;
-            if (ref === undefined)
-              return Effect.fail(
-                new BackendError({ message: `No delete endpoint for "${write.type}"` })
-              );
-            return sendWrite(
-              HttpClientRequest.make("DELETE")(urlFor(config.baseUrl, ref.path, write.id)).pipe(
-                HttpClientRequest.setHeaders(jsonApiHeaders)
+          return sendWrite(
+            HttpClientRequest.patch(urlFor(config.baseUrl, endpoint.value.path, write.id)).pipe(
+              HttpClientRequest.setHeaders(jsonApiHeaders),
+              HttpClientRequest.bodyJsonUnsafe(
+                writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
               )
-            ).pipe(Effect.as(undefined));
-          }),
-          Match.exhaustive
-        );
-      });
+            )
+          );
+        }),
+        Match.when("delete", () => {
+          const endpoint = endpointOf(write.type, "delete");
+          if (Option.isNone(endpoint))
+            return Effect.fail(
+              new BackendError({ message: `No delete endpoint for "${write.type}"` })
+            );
+          return sendWrite(
+            HttpClientRequest.make("DELETE")(
+              urlFor(config.baseUrl, endpoint.value.path, write.id)
+            ).pipe(HttpClientRequest.setHeaders(jsonApiHeaders))
+          ).pipe(Effect.as(Option.none()));
+        }),
+        Match.exhaustive
+      );
 
     /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */
     const fillGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
@@ -1409,9 +1422,9 @@ export const make = (
       Effect.gen(function* () {
         // The rejections this push has moved past are forgotten first (#355, #366).
         yield* forgetRejections(context, mutations);
-        return config.atomic === undefined
+        return Option.isNone(atomicEndpoint)
           ? yield* applyEach(context, mutations)
-          : yield* applyAtomic(context, mutations, config.atomic);
+          : yield* applyAtomic(context, mutations, atomicEndpoint.value);
       });
 
     return Backend.Backend.of({

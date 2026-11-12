@@ -14,6 +14,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Collection, Mutator } from "@thomasfosterau/legation";
 import type { RelationshipRef, ResourceValue } from "./CollectionLoader.js";
@@ -135,7 +136,7 @@ export const derive = (resources: ResourceMap): Derived => {
     const type = resource.type;
     collections.push(collectionFor(type));
 
-    if (resource.create !== undefined) {
+    if (Option.isSome(resource.create)) {
       add(type, "create", CreateArgs, (args, writer) =>
         writer.put(
           type,
@@ -150,13 +151,16 @@ export const derive = (resources: ResourceMap): Derived => {
       );
     }
 
-    if (resource.update !== undefined) {
+    if (Option.isSome(resource.update)) {
       add(type, "update", UpdateArgs, (args, writer) =>
         Effect.gen(function* () {
-          const current = (yield* writer.get(type, args.id)) as JsonApiRow | undefined;
+          const current = Option.map(
+            Option.fromUndefinedOr(yield* writer.get(type, args.id)),
+            (row) => row as JsonApiRow
+          );
           // Flat rows: overlay the new attributes, keep id + relationships.
           yield* writer.put(type, args.id, {
-            ...(current ?? { id: args.id, relationships: {} }),
+            ...Option.getOrElse(current, (): JsonApiRow => ({ id: args.id, relationships: {} })),
             ...args.attributes,
             id: args.id,
           });
@@ -164,7 +168,7 @@ export const derive = (resources: ResourceMap): Derived => {
       );
     }
 
-    if (resource.delete !== undefined) {
+    if (Option.isSome(resource.delete)) {
       add(type, "delete", DeleteArgs, (args, writer) => writer.del(type, args.id));
     }
   });
