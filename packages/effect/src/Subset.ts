@@ -109,8 +109,8 @@ export interface TypedPredicate<A> {
   lte<K extends keyof A & string>(field: K, value: A[K]): Predicate.Predicate;
   in<K extends keyof A & string>(field: K, values: ReadonlyArray<A[K]>): Predicate.Predicate;
   notIn<K extends keyof A & string>(field: K, values: ReadonlyArray<A[K]>): Predicate.Predicate;
-  isNull<K extends keyof A & string>(field: K): Predicate.Predicate;
-  isNotNull<K extends keyof A & string>(field: K): Predicate.Predicate;
+  isNull(field: keyof A & string): Predicate.Predicate;
+  isNotNull(field: keyof A & string): Predicate.Predicate;
   and(...predicates: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate;
   or(...predicates: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate;
   not(predicate: Predicate.Predicate): Predicate.Predicate;

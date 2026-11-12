@@ -212,6 +212,7 @@ export default defineConfig({
       "effecttsgo/catch-to-ignore": "error",
       "effect/avoid-process-env": "error",
       "effecttsgo/run-effect-inside-effect": "error",
+      "typescript/no-unnecessary-type-parameters": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
