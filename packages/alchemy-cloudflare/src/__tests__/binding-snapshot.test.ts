@@ -165,7 +165,7 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
 
   const route = routeSync({
     rooms,
-    roomIdOf: (request) => Effect.succeed(sessionOf(request.headers.cookie) ?? "anonymous"),
+    roomIdOf: (request) => Effect.succeedSome(sessionOf(request.headers.cookie) ?? "anonymous"),
   });
 
   return {
