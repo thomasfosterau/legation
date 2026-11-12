@@ -17,13 +17,6 @@ export interface PackageConfigOptions {
    * mapped to its source file, relative to the package directory.
    */
   readonly entries: Readonly<Record<string, string>>;
-  /**
-   * Emit one `dist/` module per source module instead of merging modules the
-   * entries share into one chunk, so a consumer's bundler can drop what it
-   * doesn't reach (`sideEffects: false`). On for the core and the browser
-   * adapters, whose Cache API HTTP cache must bundle alone (#678).
-   */
-  readonly unbundle?: boolean;
 }
 
 /**
@@ -46,10 +39,7 @@ const cacheInputs = [
  * (`packages/browser/src/__tests__/bundle-size.ts`), so what they measure is
  * what `vp pack` emits.
  */
-export const packOptions = (
-  entries: PackageConfigOptions["entries"],
-  unbundle = false
-): PackUserConfig => ({
+export const packOptions = (entries: PackageConfigOptions["entries"]): PackUserConfig => ({
   entry: { ...entries },
   format: "esm",
   // The core runs identically in browsers, workers, edge runtimes and
@@ -66,17 +56,17 @@ export const packOptions = (
   sourcemap: true,
   outDir: "dist",
   clean: true,
-  // With `unbundle`, one output module per source module (the `dist/` tree
-  // mirrors `src/`) instead of a merged shared chunk: with `sideEffects:
-  // false` a consumer's bundler drops every module it doesn't reach, which it
-  // can't do inside one chunk. A merged chunk tied the error classes to the
-  // whole MemoryBackend graph, so the Cache API HTTP cache alone bundled
-  // PubSub, Metric and HashMap (#678).
-  unbundle,
+  // One output module per source module (the `dist/` tree mirrors `src/`)
+  // instead of a merged shared chunk: with `sideEffects: false` a consumer's
+  // bundler drops every module it doesn't reach, which it can't do inside one
+  // chunk. A merged chunk tied the error classes to the whole MemoryBackend
+  // graph, so the Cache API HTTP cache alone bundled PubSub, Metric and
+  // HashMap (#678).
+  unbundle: true,
 });
 
 /** A package's whole Vite+ configuration: its `build` task and {@link packOptions}. */
-export const packageConfig = ({ entries, unbundle }: PackageConfigOptions) =>
+export const packageConfig = ({ entries }: PackageConfigOptions) =>
   defineConfig({
     run: {
       tasks: {
@@ -91,5 +81,5 @@ export const packageConfig = ({ entries, unbundle }: PackageConfigOptions) =>
         },
       },
     },
-    pack: packOptions(entries, unbundle),
+    pack: packOptions(entries),
   });
