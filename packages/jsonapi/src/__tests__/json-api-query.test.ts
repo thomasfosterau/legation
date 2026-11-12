@@ -511,6 +511,18 @@ describe("JsonApiQuery.parseRead", () => {
     expect(parseFailure("/nothing/here").message).toMatch(/No collection/);
   });
 
+  it("decodes filter[id] through the resource id's Filter.able operators (#590)", () => {
+    expect(parse("/products?filter[id]=p-1").read.where).toEqual(Predicate.eq("id", "p-1"));
+    expect(parse("/products?filter[id][in]=p-1,p-2").read.where).toEqual(
+      Predicate.isIn("id", ["p-1", "p-2"])
+    );
+    // The id stays a string on the wire, never coerced to a number.
+    expect(parse("/products?filter[id]=12").read.where).toEqual(Predicate.eq("id", "12"));
+    expect(parseFailure("/products?filter[id][gt]=p-1")).toMatchObject({
+      parameter: "filter[id][gt]",
+    });
+  });
+
   it("escapes a row id through the grammar: commas and backslashes stay one literal", () => {
     expect(parse("/products/a,b").read.where).toEqual(Predicate.eq("id", "a,b"));
     expect(parse("/products/a%2Cb").read.where).toEqual(Predicate.eq("id", "a,b"));
