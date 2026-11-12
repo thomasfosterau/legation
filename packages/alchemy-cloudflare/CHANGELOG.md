@@ -1,5 +1,13 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [1760b99]
+- Updated dependencies [cec6dba]
+  - @thomasfosterau/legation@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-alchemy-cloudflare",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cloudflare deployment of the legation sync engine on Alchemy's Effect-native Cloudflare provider: per-user Durable Object rooms, topic-sharded fan-out Durable Objects, D1 backend executor",
   "keywords": [
     "alchemy",

@@ -1,5 +1,18 @@
 # @thomasfosterau/legation-browser
 
+## 0.2.0
+
+### Minor Changes
+
+- 1760b99: `ServiceWorkerHost.start` / `run` serve the introspection request kinds (#136) whenever the engine's `ClientStore` is in the context, so a tab reads the worker's engine with `Introspection.fromMirror(mirror)`, and take `requests`: further host-request handlers to serve, such as `Devtools.hostRequests(engine, store)`.
+
+### Patch Changes
+
+- cec6dba: Internal: the remaining `switch` statements are exhaustive `Match`es (#497), so an input outside a case union now throws instead of silently yielding `undefined`, which no typed or decoded input reaches. The per-row evaluators (`Predicate.evaluate`, `Incremental`, `Aggregate`) keep their `switch` for speed. `Coverage.structuralKey` is now declared as a typed `const`, which shifts its emitted declaration; its type is unchanged.
+- Updated dependencies [1760b99]
+- Updated dependencies [cec6dba]
+  - @thomasfosterau/legation@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes
