@@ -149,10 +149,15 @@ const indexedDbLayer = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB: self.indexedDB, IDBKeyRange })
 );
 
-/** Post a message to every client page this worker controls. */
+/**
+ * Post a message to every client page of this worker's origin, controlled or
+ * not: on a first visit the tab that boots the engine is not controlled yet
+ * (the worker claims it on activation), and it must still hear the engine's
+ * first pull (#146).
+ */
 const toClients = (message: unknown) =>
   self.clients
-    .matchAll()
+    .matchAll({ includeUncontrolled: true })
     .then((clients) => clients.forEach((client) => client.postMessage(message)))
     .catch(() => undefined);
 

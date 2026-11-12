@@ -63,13 +63,15 @@ export default defineConfig({
   // lint without: with type-aware lint on, `vp check --fix` would apply the
   // autofixes of type-aware rules (even ones at `warn`) to staged files at
   // commit time, so the commit would differ from the tree that was verified.
-  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone.
+  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone; the
+  // example apps' `.svelte` files are outside lint's patterns, so a commit
+  // touching only those must not fail on "no files found".
   staged: {
     "*.{js,mjs,ts,json,md,yml,yaml}": [
       "vp check --fix --no-lint",
       "vp check --no-fmt --no-error-on-unmatched-pattern",
     ],
-    "*.svelte": "vp lint",
+    "*.svelte": "vp lint --no-error-on-unmatched-pattern",
   },
   // Oxfmt, the formatter of record. The options keep the style the
   // repository was written in under Prettier, so the migration reformatted
@@ -389,6 +391,7 @@ export default defineConfig({
             "packages/alchemy-cloudflare/src/__tests__/**",
             "packages/auth/src/__tests__/**",
             "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
           ],
         },
       },
@@ -432,7 +435,10 @@ export default defineConfig({
             "./vitest.global-setup.ts",
             "./examples/commerce/tests/support/global-setup.ts",
           ],
-          include: ["examples/commerce/tests/facade-browser.test.ts"],
+          include: [
+            "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
+          ],
           server: {
             deps: {
               // The test's `beforeAll` imports the app's built server
