@@ -398,11 +398,13 @@ export default defineConfig({
         // The effect-auth bridge's suite, apart for the same reason: its
         // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
         // requires), so CI's "Tests (effect floor)" runs it at that floor.
+        // The audience example (#221) composes effect-auth with the engine
+        // and the façade, so its tests share the floor and the project.
         extends: true,
         test: {
           name: "auth",
           environment: "node",
-          include: ["packages/auth/src/**/*.test.ts"],
+          include: ["packages/auth/src/**/*.test.ts", "examples/audience/tests/**/*.test.ts"],
         },
       },
       {

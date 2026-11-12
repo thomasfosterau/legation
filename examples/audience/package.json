@@ -1,0 +1,24 @@
+{
+  "name": "legation-audience",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A headless app proving effect-auth, effect-jsonapi and legation compose: an effect-auth session resolved by legation-auth, an effect-auth read policy (public / followers / private, an owner, a moderator role) compiled into every subscription's auth filter, the CVR-diffed replica, and the JSON:API façade over it, asserted on replica contents.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vp test run --root ../.. --project auth examples/audience"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-auth": "catalog:",
+    "@thomasfosterau/effect-jsonapi": "catalog:",
+    "@thomasfosterau/legation": "workspace:*",
+    "@thomasfosterau/legation-auth": "workspace:*",
+    "@thomasfosterau/legation-jsonapi": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
