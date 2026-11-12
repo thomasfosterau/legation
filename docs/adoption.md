@@ -183,6 +183,18 @@ rows to the next user on a shared device.
   (`Client.quarantines`). Going from anonymous to signed in keeps the warm
   replica: it is the one benign transition.
 
+**With effect-auth.** [`examples/audience`](../examples/audience) is the
+whole chain for a signed-in app on effect-auth, headless and in one
+process: `@thomasfosterau/legation-auth`'s `Resolver` turns the session
+cookie into `SyncContext.identity` on both carriers (the sync protocol and
+the derived REST handlers), `ReadScopes` compiles an effect-auth policy set
+(owner, `public | followers | private`, a followers named set, a moderator
+role) into each subscription's auth filter, and `SignOut.onSessionChange`
+resets the replica when the session changes. Its tests assert on replica
+contents: per-viewer replicas, a property test against effect-auth's own
+per-row decision, façade/REST byte parity for a signed-in viewer, sign-out
+on a shared device, and offline staying bounded.
+
 ## Reads that are never covered
 
 Some reads will stay on the network whatever is subscribed, so plan for a
