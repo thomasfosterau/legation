@@ -82,7 +82,7 @@ export class LegationRoom extends Cloudflare.DurableObject<LegationRoom, Room.Ro
   "LegationRoom"
 ) {}
 
-export const LegationShardLive = LegationShard.make(FanoutShard.make());
+export const LegationShardLive = LegationShard.make(FanoutShard.make);
 
 export const LegationRoomLive = LegationRoom.make(
   Effect.gen(function* () {

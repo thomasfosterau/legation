@@ -23,7 +23,7 @@
  *   FanoutShard.ShardObject
  * >()("LegationShard") {}
  *
- * export const LegationShardLive = LegationShard.make(FanoutShard.make());
+ * export const LegationShardLive = LegationShard.make(FanoutShard.make);
  * ```
  */
 
@@ -78,21 +78,21 @@ export const leases = {
  * The shard's Durable Object implementation, for `LegationShard.make(...)`:
  * its state is resolved at init, its leases read and written per call.
  */
-// oxlint-disable-next-line effecttsgo/lazy-effect -- published constructor: apps call `FanoutShard.make()` (README, `alchemy-classes.test.ts`); a value would break that API
-export const make = (): Effect.Effect<
+export const make: Effect.Effect<
   Effect.Effect<ShardObject>,
   never,
   Workers.DurableObjectState
-> =>
-  Effect.gen(function* () {
-    const state = yield* Workers.DurableObjectState;
-    // oxlint-disable-next-line effecttsgo/return-effect-in-gen -- Alchemy's two-phase Durable Object contract: init returns the per-instance Effect, which the provider runs per instance
-    return Effect.succeed({
+> = Effect.map(
+  Workers.DurableObjectState,
+  // Alchemy's two-phase Durable Object contract: init resolves the state, and
+  // its result is the per-instance Effect the provider runs for each instance.
+  (state): Effect.Effect<ShardObject> =>
+    Effect.succeed({
       register: (roomId, ttlMillis) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>
           leases.register(state.storage, roomId, ttlMillis, now)
         ),
       publish: () =>
         Effect.flatMap(Clock.currentTimeMillis, (now) => leases.live(state.storage, now)),
-    });
-  });
+    })
+);

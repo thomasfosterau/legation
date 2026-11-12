@@ -1,5 +1,5 @@
 ---
-"@thomasfosterau/legation-alchemy-cloudflare": patch
+"@thomasfosterau/legation-alchemy-cloudflare": minor
 ---
 
-`Room.RoomObject`'s `webSocketMessage` and `webSocketClose` now declare the parameters Alchemy's Durable Object bridge passes them (the socket and the message, or the socket and the close code, reason and `wasClean` flag), matching the provider's `DurableObjectShape`. The room still ignores them; nothing changes at runtime.
+**Breaking:** `FanoutShard.make` is now an Effect value, not a function: write `LegationShard.make(FanoutShard.make)` instead of `FanoutShard.make()`. `Room.RoomObject`'s `webSocketMessage` and `webSocketClose` now declare the parameters Alchemy's Durable Object handler signature passes; nothing changes at runtime.

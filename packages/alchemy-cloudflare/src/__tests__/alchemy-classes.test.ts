@@ -25,7 +25,7 @@ const nodes = Node.registry([Node.make("products", { attributes: { name: Schema.
 
 describe("Alchemy Durable Object classes", () => {
   it("take the shard and room implementations", () => {
-    const shardLive = LegationShard.make(FanoutShard.make());
+    const shardLive = LegationShard.make(FanoutShard.make);
     const roomLive = LegationRoom.make(
       Room.make({
         nodes,

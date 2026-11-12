@@ -106,7 +106,7 @@ describe("FanoutShard", () => {
     Effect.gen(function* () {
       const shard = yield* construct(
         "reviews",
-        FanoutShard.make(),
+        FanoutShard.make,
         fakeBinding<Workers.DurableObject>({})
       );
       yield* shard.run(shard.object.register("room-a", 60_000));
@@ -387,7 +387,7 @@ describe("rooms + shards, end to end", () => {
               let shard = shardInstances.get(name);
               if (shard === undefined) {
                 shard = Effect.runPromise(
-                  construct(name, FanoutShard.make(), noSelf).pipe(
+                  construct(name, FanoutShard.make, noSelf).pipe(
                     Effect.map((built): Instance<FanoutShard.ShardObject> => ({
                       ...built,
                       object: {
