@@ -79,7 +79,7 @@ catalog:
   # 0.2.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
   # legation-auth does not use its JSON:API surface.
   "@thomasfosterau/effect-auth": 0.2.0
-  "@thomasfosterau/effect-svelte": ^0.6.1
+  "@thomasfosterau/effect-svelte": ^0.6.2
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
