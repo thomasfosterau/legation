@@ -190,6 +190,7 @@ export default defineConfig({
       // fails the gate while their category is still at `warn`.
       "typescript/no-misused-spread": "error",
       "unicorn/no-array-reverse": "error",
+      "oxc/no-map-spread": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers

@@ -346,12 +346,9 @@ export const buildChangeHints = (
     const oldValues = [...ids].flatMap((id) =>
       oldMap?.has(id) === true ? [{ id, value: oldMap.get(id) }] : []
     );
-    return {
-      collection,
-      ids: [...ids],
-      values,
-      ...(Arr.isReadonlyArrayEmpty(oldValues) ? {} : { oldValues }),
-    };
+    return Arr.isReadonlyArrayEmpty(oldValues)
+      ? { collection, ids: [...ids], values }
+      : { collection, ids: [...ids], values, oldValues };
   });
 
 // ─── The transactional combinator (#177) ────────────────────────────────────
