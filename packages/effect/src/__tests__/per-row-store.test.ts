@@ -7,7 +7,7 @@
  * validation, and the journal high-water policy. The existing
  * `keyvalue-client-store` suite stays as-is.
  */
-import { expect, layer } from "@effect/vitest";
+import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
@@ -52,10 +52,9 @@ const countingStore = () => {
   return { store, sets, data };
 };
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "ClientStore per-row layout (#47)",
-  (it) => {
-    it.effect("round-trips rows, journal, counters, and cookie, and rehydrates", () =>
+describe("ClientStore per-row layout (#47)", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("round-trips rows, journal, counters, and cookie, and rehydrates", () =>
       Effect.gen(function* () {
         const first = yield* ClientStoreModule.makeKeyValue();
         yield* first.putRow("todos", { id: "1", version: 1, value: { title: "persisted" } });
@@ -84,8 +83,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect((yield* third.listRows("todos")).map((r) => r.id)).toEqual(["3"]);
       })
     );
+  });
 
-    it.effect("applyRowOps honours a Clear before the surviving ops", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("applyRowOps honours a Clear before the surviving ops", () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeKeyValue();
         yield* store.putRow("todos", { id: "old", version: 1, value: {} });
@@ -96,8 +97,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect((yield* store.listRows("todos")).map((r) => r.id)).toEqual(["fresh"]);
       })
     );
+  });
 
-    it.effect("migrates a populated legacy (layout 1) blob store on first open", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("migrates a populated legacy (layout 1) blob store on first open", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         // Pre-populate the legacy whole-blob layout directly (no `__layout` key).
@@ -133,8 +136,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(yield* kv.get("legation/row/todos/1")).toBeDefined();
       })
     );
+  });
 
-    it.effect("appendMutation and acknowledge never rewrite mutation bodies", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("appendMutation and acknowledge never rewrite mutation bodies", () =>
       Effect.gen(function* () {
         const { store, sets } = countingStore();
         yield* Effect.gen(function* () {
@@ -153,8 +158,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
     );
+  });
 
-    it.effect("compactPending (#117) rewrites only the bodies it renumbers (#249)", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("compactPending (#117) rewrites only the bodies it renumbers (#249)", () =>
       Effect.gen(function* () {
         const { store, sets } = countingStore();
         yield* Effect.gen(function* () {
@@ -180,8 +187,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
     );
+  });
 
-    it.effect("a K-op patch writes ~K row values, independent of collection size", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a K-op patch writes ~K row values, independent of collection size", () =>
       Effect.gen(function* () {
         const { store, sets } = countingStore();
         yield* Effect.gen(function* () {
@@ -214,8 +223,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
     );
+  });
 
-    it.effect("a corrupt persisted row fails as a StoreError, not a silent cast", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a corrupt persisted row fails as a StoreError, not a silent cast", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         const store = yield* ClientStoreModule.makeKeyValue();
@@ -229,8 +240,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(getError._tag).toBe("StoreError");
       })
     );
+  });
 
-    it.effect("journal high-water refuses the append rather than dropping the intent", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("journal high-water refuses the append rather than dropping the intent", () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 2 });
         yield* store.appendMutation(mutation(1));
@@ -242,8 +255,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(yield* store.pendingMutations).toHaveLength(2);
       })
     );
+  });
 
-    it.effect("journal high-water surfaces through the engine's mutate", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("journal high-water surfaces through the engine's mutate", () =>
       Effect.gen(function* () {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
@@ -287,5 +302,5 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(error._tag).toBe("StoreError");
       })
     );
-  }
-);
+  });
+});

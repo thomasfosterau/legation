@@ -18,7 +18,7 @@
  * - Discarding a quarantine is an explicit call; no reset and no boot does it.
  * - Anonymous → signed in keeps the warm replica: the one permitted upgrade.
  */
-import { describeWrapped, expect, layer } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -120,175 +120,192 @@ describeWrapped("Identity.transitionOf", (it) => {
   });
 });
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })("the store's boot check", (it) => {
-  it.effect("stamps the identity and leaves a matching replica alone", () =>
-    Effect.gen(function* () {
-      const first = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      yield* first.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
-      yield* first.setCookie("cookie-alice");
-      expect(yield* first.getIdentity).toBe(ALICE);
+describe("the store's boot check", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("stamps the identity and leaves a matching replica alone", () =>
+      Effect.gen(function* () {
+        const first = yield* ClientStore.makeKeyValue({ identity: ALICE });
+        yield* first.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
+        yield* first.setCookie("cookie-alice");
+        expect(yield* first.getIdentity).toBe(ALICE);
 
-      // A reload under the same identity: nothing moves.
-      const again = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      expect(yield* again.listRows("secrets")).toHaveLength(1);
-      expect(yield* again.getCookie).toBe("cookie-alice");
-    })
-  );
+        // A reload under the same identity: nothing moves.
+        const again = yield* ClientStore.makeKeyValue({ identity: ALICE });
+        expect(yield* again.listRows("secrets")).toHaveLength(1);
+        expect(yield* again.getCookie).toBe("cookie-alice");
+      })
+    );
+  });
 
-  it.effect(
-    "a mismatch drops rows and cookie, and quarantines the journal under the old identity",
-    () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a mismatch drops rows and cookie, and quarantines the journal under the old identity",
+      () =>
+        Effect.gen(function* () {
+          const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          yield* alice.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
+          yield* alice.setCookie("cookie-alice");
+          yield* alice.appendMutation({
+            clientId: "c1",
+            mutationId: yield* alice.nextMutationId("c1"),
+            mutator: "secret/set",
+            args: { id: "s2", body: "alice's draft" },
+            createdAt: 0,
+          });
+
+          const bob = yield* ClientStore.makeKeyValue({ identity: BOB });
+          expect(yield* bob.getIdentity).toBe(BOB);
+          expect(yield* bob.listRows("secrets")).toEqual([]);
+          expect(yield* bob.getCookie).toBeUndefined();
+          // Not discarded — parked under the fingerprint it was authored under,
+          // and out of the keyspace `push` reads.
+          expect(yield* bob.pendingMutations).toEqual([]);
+          expect(yield* bob.quarantines).toEqual([ALICE]);
+          expect(yield* bob.quarantinedMutations(ALICE)).toHaveLength(1);
+        })
+    );
+  });
+
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("an unstamped replica resets when the boundary is first turned on", () =>
+      Effect.gen(function* () {
+        // A store written by a build with no identity boundary: rows that could
+        // belong to anyone.
+        const legacy = yield* ClientStore.makeKeyValue();
+        yield* legacy.putRow("secrets", { id: "s1", version: 1, value: { body: "unknown owner" } });
+        yield* legacy.setCookie("cookie-legacy");
+        expect(yield* legacy.getIdentity).toBeUndefined();
+
+        const scoped = yield* ClientStore.makeKeyValue({ identity: ALICE });
+        expect(yield* scoped.listRows("secrets")).toEqual([]);
+        expect(yield* scoped.getCookie).toBeUndefined();
+        expect(yield* scoped.getIdentity).toBe(ALICE);
+      })
+    );
+  });
+
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "re-signing in releases that identity's own quarantine back into the journal",
+      () =>
+        Effect.gen(function* () {
+          const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          yield* alice.appendMutation({
+            clientId: "c1",
+            mutationId: 1,
+            mutator: "secret/set",
+            args: { id: "s2", body: "alice's draft" },
+            createdAt: 0,
+          });
+
+          const bob = yield* ClientStore.makeKeyValue({ identity: BOB });
+          expect(yield* bob.pendingMutations).toEqual([]);
+
+          const aliceAgain = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          expect(yield* aliceAgain.pendingMutations).toHaveLength(1);
+          expect(yield* aliceAgain.quarantines).toEqual([]);
+        })
+    );
+  });
+
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("no boot ever discards a quarantine", () =>
       Effect.gen(function* () {
         const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        yield* alice.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
-        yield* alice.setCookie("cookie-alice");
         yield* alice.appendMutation({
           clientId: "c1",
-          mutationId: yield* alice.nextMutationId("c1"),
+          mutationId: 1,
           mutator: "secret/set",
           args: { id: "s2", body: "alice's draft" },
           createdAt: 0,
         });
+        yield* ClientStore.makeKeyValue({ identity: BOB });
 
-        const bob = yield* ClientStore.makeKeyValue({ identity: BOB });
-        expect(yield* bob.getIdentity).toBe(BOB);
-        expect(yield* bob.listRows("secrets")).toEqual([]);
-        expect(yield* bob.getCookie).toBeUndefined();
-        // Not discarded — parked under the fingerprint it was authored under,
-        // and out of the keyspace `push` reads.
-        expect(yield* bob.pendingMutations).toEqual([]);
-        expect(yield* bob.quarantines).toEqual([ALICE]);
-        expect(yield* bob.quarantinedMutations(ALICE)).toHaveLength(1);
+        // Boot after boot after boot: A's intents are still there.
+        yield* ClientStore.makeKeyValue({ identity: BOB });
+        yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+        const last = yield* ClientStore.makeKeyValue({ identity: BOB });
+        expect(yield* last.quarantinedMutations(ALICE)).toHaveLength(1);
+
+        // Only an explicit discard destroys them.
+        yield* last.discardQuarantine(ALICE);
+        expect(yield* last.quarantines).toEqual([]);
+        expect(yield* last.quarantinedMutations(ALICE)).toEqual([]);
       })
-  );
+    );
+  });
 
-  it.effect("an unstamped replica resets when the boundary is first turned on", () =>
-    Effect.gen(function* () {
-      // A store written by a build with no identity boundary: rows that could
-      // belong to anyone.
-      const legacy = yield* ClientStore.makeKeyValue();
-      yield* legacy.putRow("secrets", { id: "s1", version: 1, value: { body: "unknown owner" } });
-      yield* legacy.setCookie("cookie-legacy");
-      expect(yield* legacy.getIdentity).toBeUndefined();
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("anonymous → signed in keeps the warm replica and its journal", () =>
+      Effect.gen(function* () {
+        const anon = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+        yield* anon.putRow("secrets", { id: "s1", version: 1, value: { body: "public row" } });
+        yield* anon.setCookie("cookie-anon");
+        yield* anon.appendMutation({
+          clientId: "c1",
+          mutationId: 1,
+          mutator: "secret/set",
+          args: { id: "s2", body: "written before signing in" },
+          createdAt: 0,
+        });
 
-      const scoped = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      expect(yield* scoped.listRows("secrets")).toEqual([]);
-      expect(yield* scoped.getCookie).toBeUndefined();
-      expect(yield* scoped.getIdentity).toBe(ALICE);
-    })
-  );
-
-  it.effect("re-signing in releases that identity's own quarantine back into the journal", () =>
-    Effect.gen(function* () {
-      const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      yield* alice.appendMutation({
-        clientId: "c1",
-        mutationId: 1,
-        mutator: "secret/set",
-        args: { id: "s2", body: "alice's draft" },
-        createdAt: 0,
-      });
-
-      const bob = yield* ClientStore.makeKeyValue({ identity: BOB });
-      expect(yield* bob.pendingMutations).toEqual([]);
-
-      const aliceAgain = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      expect(yield* aliceAgain.pendingMutations).toHaveLength(1);
-      expect(yield* aliceAgain.quarantines).toEqual([]);
-    })
-  );
-
-  it.effect("no boot ever discards a quarantine", () =>
-    Effect.gen(function* () {
-      const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      yield* alice.appendMutation({
-        clientId: "c1",
-        mutationId: 1,
-        mutator: "secret/set",
-        args: { id: "s2", body: "alice's draft" },
-        createdAt: 0,
-      });
-      yield* ClientStore.makeKeyValue({ identity: BOB });
-
-      // Boot after boot after boot: A's intents are still there.
-      yield* ClientStore.makeKeyValue({ identity: BOB });
-      yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-      const last = yield* ClientStore.makeKeyValue({ identity: BOB });
-      expect(yield* last.quarantinedMutations(ALICE)).toHaveLength(1);
-
-      // Only an explicit discard destroys them.
-      yield* last.discardQuarantine(ALICE);
-      expect(yield* last.quarantines).toEqual([]);
-      expect(yield* last.quarantinedMutations(ALICE)).toEqual([]);
-    })
-  );
-
-  it.effect("anonymous → signed in keeps the warm replica and its journal", () =>
-    Effect.gen(function* () {
-      const anon = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-      yield* anon.putRow("secrets", { id: "s1", version: 1, value: { body: "public row" } });
-      yield* anon.setCookie("cookie-anon");
-      yield* anon.appendMutation({
-        clientId: "c1",
-        mutationId: 1,
-        mutator: "secret/set",
-        args: { id: "s2", body: "written before signing in" },
-        createdAt: 0,
-      });
-
-      const signedIn = yield* ClientStore.makeKeyValue({ identity: ALICE });
-      expect(yield* signedIn.getIdentity).toBe(ALICE);
-      expect(yield* signedIn.listRows("secrets")).toHaveLength(1);
-      expect(yield* signedIn.getCookie).toBe("cookie-anon");
-      expect(yield* signedIn.pendingMutations).toHaveLength(1);
-      expect(yield* signedIn.quarantines).toEqual([]);
-    })
-  );
+        const signedIn = yield* ClientStore.makeKeyValue({ identity: ALICE });
+        expect(yield* signedIn.getIdentity).toBe(ALICE);
+        expect(yield* signedIn.listRows("secrets")).toHaveLength(1);
+        expect(yield* signedIn.getCookie).toBe("cookie-anon");
+        expect(yield* signedIn.pendingMutations).toHaveLength(1);
+        expect(yield* signedIn.quarantines).toEqual([]);
+      })
+    );
+  });
 });
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "switching identities on a shared device",
-  (it) => {
-    it.effect("B's live queries never observe A's rows — in the session and after a reload", () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { transport } = yield* recordingTransport;
+describe("switching identities on a shared device", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "B's live queries never observe A's rows — in the session and after a reload",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { transport } = yield* recordingTransport;
 
-          // A syncs a private row legitimately.
-          const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
-          const alice = yield* engineOver(aliceStore, transport);
-          yield* alice.subscribe(allSecrets);
-          yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
-          yield* alice.push;
-          yield* alice.pull;
-          expect(bodies(yield* alice.query(allSecrets))).toEqual(["alice's private row"]);
+            // A syncs a private row legitimately.
+            const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
+            const alice = yield* engineOver(aliceStore, transport);
+            yield* alice.subscribe(allSecrets);
+            yield* alice.mutate("secret/set", { id: "s1", body: "alice's private row" });
+            yield* alice.push;
+            yield* alice.pull;
+            expect(bodies(yield* alice.query(allSecrets))).toEqual(["alice's private row"]);
 
-          // B signs in on the same device, in the same session.
-          const client = Client.fromView(nodes, ClientView.fromEngine(alice));
-          yield* client.subscribe({ collection: "secrets" });
-          const outcome = yield* client.reset(BOB);
-          expect(outcome.transition).toBe("Reset");
+            // B signs in on the same device, in the same session.
+            const client = Client.fromView(nodes, ClientView.fromEngine(alice));
+            yield* client.subscribe({ collection: "secrets" });
+            const outcome = yield* client.reset(BOB);
+            expect(outcome.transition).toBe("Reset");
 
-          const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
-          expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
-          // The superseded identity's subscriptions went with its rows: a
-          // ledger entry left behind would claim B's reads are covered by a
-          // window A registered.
-          expect(yield* client.subscriptions).toEqual([]);
-          expect(yield* alice.activeSubscriptions).toEqual([]);
+            const observed = yield* Stream.runHead(client.observe({ collection: "secrets" }));
+            expect(Option.getOrElse(observed, () => ["never emitted"])).toEqual([]);
+            // The superseded identity's subscriptions went with its rows: a
+            // ledger entry left behind would claim B's reads are covered by a
+            // window A registered.
+            expect(yield* client.subscriptions).toEqual([]);
+            expect(yield* alice.activeSubscriptions).toEqual([]);
 
-          // ...and after a reload: a fresh store + engine over the same
-          // durable storage, which is where "the replica is the freshest thing
-          // on the device" would otherwise bite.
-          const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
-          const bob = yield* engineOver(bobStore, transport);
-          expect(yield* bob.query(allSecrets)).toEqual([]);
-          expect(yield* bobStore.listRows("secrets")).toEqual([]);
-        })
-      )
+            // ...and after a reload: a fresh store + engine over the same
+            // durable storage, which is where "the replica is the freshest thing
+            // on the device" would otherwise bite.
+            const bobStore = yield* ClientStore.makeKeyValue({ identity: BOB });
+            const bob = yield* engineOver(bobStore, transport);
+            expect(yield* bob.query(allSecrets)).toEqual([]);
+            expect(yield* bobStore.listRows("secrets")).toEqual([]);
+          })
+        )
     );
+  });
 
-    it.effect("A's quarantined journal entries are never pushed under B's session", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("A's quarantined journal entries are never pushed under B's session", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { transport, pushes } = yield* recordingTransport;
@@ -323,8 +340,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         })
       )
     );
+  });
 
-    it.effect("A signing back in makes A's quarantined entries pushable again", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("A signing back in makes A's quarantined entries pushable again", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { transport, pushes } = yield* recordingTransport;
@@ -354,8 +373,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         })
       )
     );
+  });
 
-    it.effect("a reset never discards a quarantine; only discardQuarantine does", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a reset never discards a quarantine; only discardQuarantine does", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { transport } = yield* recordingTransport;
@@ -377,8 +398,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         })
       )
     );
+  });
 
-    it.effect("anonymous → signed in keeps the warm replica, subscriptions and all", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("anonymous → signed in keeps the warm replica, subscriptions and all", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { transport } = yield* recordingTransport;
@@ -406,8 +429,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         })
       )
     );
+  });
 
-    it.effect("Client.make adopts the identity before the replica can answer a read", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("Client.make adopts the identity before the replica can answer a read", () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { transport } = yield* recordingTransport;
@@ -445,21 +470,25 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         })
       )
     );
+  });
 
-    it.effect("a connected Client says the host owns the replica rather than faking a reset", () =>
-      Effect.gen(function* () {
-        // A view with no identity boundary stands in for a mirror, which holds
-        // no durable state of its own.
-        const engine = yield* engineOver(
-          yield* ClientStore.makeMemory,
-          (yield* recordingTransport).transport
-        );
-        const { identityBoundary: _omitted, ...mirrorLike } = ClientView.fromEngine(engine);
-        const client = Client.fromView(nodes, mirrorLike);
-        const error = yield* Effect.flip(client.reset(BOB));
-        expect(error._tag).toBe("StoreError");
-        expect(error.message).toContain("hosted elsewhere");
-      })
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a connected Client says the host owns the replica rather than faking a reset",
+      () =>
+        Effect.gen(function* () {
+          // A view with no identity boundary stands in for a mirror, which holds
+          // no durable state of its own.
+          const engine = yield* engineOver(
+            yield* ClientStore.makeMemory,
+            (yield* recordingTransport).transport
+          );
+          const { identityBoundary: _omitted, ...mirrorLike } = ClientView.fromEngine(engine);
+          const client = Client.fromView(nodes, mirrorLike);
+          const error = yield* Effect.flip(client.reset(BOB));
+          expect(error._tag).toBe("StoreError");
+          expect(error.message).toContain("hosted elsewhere");
+        })
     );
-  }
-);
+  });
+});

@@ -64,7 +64,7 @@ class Logs extends Context.Service<
 }
 
 describe("BackgroundSync without Background Sync (#213)", () => {
-  layer(Logs.layer, { buildPerTest: true })((scoped) => {
+  layer(Logs.layer)((scoped) => {
     scoped.effect("registration degrades quietly wherever the API is missing or refused", () =>
       Effect.gen(function* () {
         const logs = yield* Logs;
@@ -93,7 +93,7 @@ describe("BackgroundSync without Background Sync (#213)", () => {
     );
   });
 
-  layer(Logs.layer, { buildPerTest: true, excludeTestServices: true })((live) => {
+  layer(Logs.layer, { excludeTestServices: true })((live) => {
     live.effect(
       "with no SyncManager, the journal still flushes on the next connectivity signal",
       () =>

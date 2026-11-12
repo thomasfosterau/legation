@@ -3,7 +3,7 @@
  * full RpcClient/RpcServer machinery via RpcTest (typed routing, streaming
  * pokes, error mapping), with the byte-level carrier skipped.
  */
-import { expect, layer } from "@effect/vitest";
+import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -72,86 +72,96 @@ const makeEngine = (name: string) =>
 
 const allTodos = Subset.make({ collection: "todos" });
 
-layer(serverLayer, { buildPerTest: true })("RpcTransport", (it) => {
-  it.effect("syncs end to end over the RPC machinery", () =>
-    Effect.gen(function* () {
-      const { engine, store } = yield* makeEngine("a");
-      yield* engine.subscribe(allTodos);
+describe("RpcTransport", () => {
+  layer(serverLayer)((scoped) => {
+    scoped.effect("syncs end to end over the RPC machinery", () =>
+      Effect.gen(function* () {
+        const { engine, store } = yield* makeEngine("a");
+        yield* engine.subscribe(allTodos);
 
-      yield* engine.mutate("todo/set", { id: "1", title: "over rpc", isDone: false });
-      yield* engine.push;
-      yield* engine.pull;
+        yield* engine.mutate("todo/set", { id: "1", title: "over rpc", isDone: false });
+        yield* engine.push;
+        yield* engine.pull;
 
-      expect(yield* store.pendingMutations).toEqual([]);
-      const confirmed = yield* store.listRows("todos");
-      expect(confirmed.map((row) => (row.value as Todo).title)).toEqual(["over rpc"]);
-    })
-  );
+        expect(yield* store.pendingMutations).toEqual([]);
+        const confirmed = yield* store.listRows("todos");
+        expect(confirmed.map((row) => (row.value as Todo).title)).toEqual(["over rpc"]);
+      })
+    );
+  });
 
-  it.effect("streams pokes to subscribed client groups after a push", () =>
-    Effect.gen(function* () {
-      const a = yield* makeEngine("a");
-      const b = yield* makeEngine("b");
-      yield* b.engine.subscribe(allTodos);
-      // Registering the subscription server-side happens on pull.
-      yield* b.engine.pull;
+  layer(serverLayer)((scoped) => {
+    scoped.effect("streams pokes to subscribed client groups after a push", () =>
+      Effect.gen(function* () {
+        const a = yield* makeEngine("a");
+        const b = yield* makeEngine("b");
+        yield* b.engine.subscribe(allTodos);
+        // Registering the subscription server-side happens on pull.
+        yield* b.engine.pull;
 
-      const firstPoke = yield* Stream.runHead(Stream.take(b.transport.pokes, 1)).pipe(
-        Effect.forkChild
-      );
-      yield* a.engine.mutate("todo/set", { id: "1", title: "poke me", isDone: false });
-      yield* a.engine.push;
+        const firstPoke = yield* Stream.runHead(Stream.take(b.transport.pokes, 1)).pipe(
+          Effect.forkChild
+        );
+        yield* a.engine.mutate("todo/set", { id: "1", title: "poke me", isDone: false });
+        yield* a.engine.push;
 
-      expect((yield* Fiber.join(firstPoke))._tag).toBe("Some");
-      yield* b.engine.pull;
-      const seen = yield* b.engine.query(allTodos);
-      expect(seen.map((row) => (row.value as Todo).title)).toEqual(["poke me"]);
-    })
-  );
+        expect((yield* Fiber.join(firstPoke))._tag).toBe("Some");
+        yield* b.engine.pull;
+        const seen = yield* b.engine.query(allTodos);
+        expect(seen.map((row) => (row.value as Todo).title)).toEqual(["poke me"]);
+      })
+    );
+  });
 
-  it.effect("maps server refusals back to TransportError", () =>
-    Effect.gen(function* () {
-      const { engine } = yield* makeEngine("a");
-      yield* engine.subscribe(Subset.make({ collection: "secrets" }));
-      const failure = yield* Effect.flip(engine.pull);
-      expect(failure._tag).toBe("TransportError");
-      expect(failure.message).toContain("secrets");
-    })
-  );
+  layer(serverLayer)((scoped) => {
+    scoped.effect("maps server refusals back to TransportError", () =>
+      Effect.gen(function* () {
+        const { engine } = yield* makeEngine("a");
+        yield* engine.subscribe(Subset.make({ collection: "secrets" }));
+        const failure = yield* Effect.flip(engine.pull);
+        expect(failure._tag).toBe("TransportError");
+        expect(failure.message).toContain("secrets");
+      })
+    );
+  });
 
-  it.effect("presents each call's headers to the IdentityResolver as its credentials", () =>
-    Effect.gen(function* () {
-      const seen = yield* Ref.make<ReadonlyArray<Option.Option<string>>>([]);
-      const resolver: Authorization.IdentityResolver = {
-        resolve: ({ credentials }) =>
-          Ref.update(seen, (all) => [...all, credentials.header("Authorization")]),
-      };
-      // `Layer.fresh`: the suite's memo map already holds `serverLayer`; this test needs its own copy
-      // wired to its resolver.
-      const served = yield* Layer.build(
-        Layer.fresh(
-          serverLayer.pipe(Layer.provide(Layer.succeed(Authorization.IdentityResolver)(resolver)))
-        )
-      );
-      yield* Effect.gen(function* () {
-        const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
-        const withKey = RpcClient.withHeaders({ authorization: "Bearer api-key-1" });
-        yield* client.push({ clientGroupId: "group-a", mutations: [] }).pipe(withKey, Effect.orDie);
-        yield* client
-          .pull({ clientGroupId: "group-a", subscriptions: [allTodos] })
-          .pipe(withKey, Effect.orDie);
-        yield* client.read({ clientGroupId: "group-a", subsets: [allTodos] }).pipe(Effect.orDie);
-      }).pipe(Effect.provideContext(served));
-      expect(yield* Ref.get(seen)).toEqual([
-        Option.some("Bearer api-key-1"),
-        Option.some("Bearer api-key-1"),
-        Option.none(),
-      ]);
-    })
-  );
+  layer(serverLayer)((scoped) => {
+    scoped.effect("presents each call's headers to the IdentityResolver as its credentials", () =>
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<Option.Option<string>>>([]);
+        const resolver: Authorization.IdentityResolver = {
+          resolve: ({ credentials }) =>
+            Ref.update(seen, (all) => [...all, credentials.header("Authorization")]),
+        };
+        // `Layer.fresh`: the suite's memo map already holds `serverLayer`; this test needs its own copy
+        // wired to its resolver.
+        const served = yield* Layer.build(
+          Layer.fresh(
+            serverLayer.pipe(Layer.provide(Layer.succeed(Authorization.IdentityResolver)(resolver)))
+          )
+        );
+        yield* Effect.gen(function* () {
+          const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
+          const withKey = RpcClient.withHeaders({ authorization: "Bearer api-key-1" });
+          yield* client
+            .push({ clientGroupId: "group-a", mutations: [] })
+            .pipe(withKey, Effect.orDie);
+          yield* client
+            .pull({ clientGroupId: "group-a", subscriptions: [allTodos] })
+            .pipe(withKey, Effect.orDie);
+          yield* client.read({ clientGroupId: "group-a", subsets: [allTodos] }).pipe(Effect.orDie);
+        }).pipe(Effect.provideContext(served));
+        expect(yield* Ref.get(seen)).toEqual([
+          Option.some("Bearer api-key-1"),
+          Option.some("Bearer api-key-1"),
+          Option.none(),
+        ]);
+      })
+    );
+  });
 
-  it.effect("an uncovered Client.query falls through over withFallback's RPC leg (#632)", () =>
-    Effect.scoped(
+  layer(serverLayer)((scoped) => {
+    scoped.effect("an uncovered Client.query falls through over withFallback's RPC leg (#632)", () =>
       Effect.gen(function* () {
         const writer = yield* makeEngine("writer");
         yield* writer.engine.mutate("todo/set", { id: "1", title: "on the server", isDone: false });
@@ -176,23 +186,23 @@ layer(serverLayer, { buildPerTest: true })("RpcTransport", (it) => {
           { id: "1", title: "on the server", isDone: false },
         ]);
       })
-    ).pipe(Effect.provide(serverLayer))
-  );
+    );
 
-  it.effect("fromOrigin builds the WebSocket transport with an HTTP fallback", () =>
-    Effect.gen(function* () {
-      // Nothing listens on the discard port: the build succeeds and the status is
-      // not yet "disconnected", since no call has failed.
-      const transport = yield* RpcTransport.fromOrigin({
-        origin: "http://127.0.0.1:9",
-        clientGroupId: "group-origin",
-        httpPath: "/rpc",
-        wsPath: "/rpc-ws",
-        fallback: { restoreAfter: "1 second", primaryTimeout: "1 second" },
-      });
-      expect(["connecting", "connected"]).toContain(yield* transport.status);
-      // Both carriers are RPC clients with `read`, so the fallthrough tier survives (#632).
-      expect(transport.read).toBeDefined();
-    }).pipe(Effect.scoped)
-  );
+    scoped.effect("fromOrigin builds the WebSocket transport with an HTTP fallback", () =>
+      Effect.gen(function* () {
+        // Nothing listens on the discard port: the build succeeds and the status is
+        // not yet "disconnected", since no call has failed.
+        const transport = yield* RpcTransport.fromOrigin({
+          origin: "http://127.0.0.1:9",
+          clientGroupId: "group-origin",
+          httpPath: "/rpc",
+          wsPath: "/rpc-ws",
+          fallback: { restoreAfter: "1 second", primaryTimeout: "1 second" },
+        });
+        expect(["connecting", "connected"]).toContain(yield* transport.status);
+        // Both carriers are RPC clients with `read`, so the fallthrough tier survives (#632).
+        expect(transport.read).toBeDefined();
+      }).pipe(Effect.scoped)
+    );
+  });
 });
