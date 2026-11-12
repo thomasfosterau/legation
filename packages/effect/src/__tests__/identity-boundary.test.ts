@@ -176,10 +176,10 @@ describe("the store's boot check", () => {
         yield* legacy.setCookie("cookie-legacy");
         expect(yield* legacy.getIdentity).toBeUndefined();
 
-        const scoped = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        expect(yield* scoped.listRows("secrets")).toEqual([]);
-        expect(yield* scoped.getCookie).toBeUndefined();
-        expect(yield* scoped.getIdentity).toBe(ALICE);
+        const unscoped = yield* ClientStore.makeKeyValue({ identity: ALICE });
+        expect(yield* unscoped.listRows("secrets")).toEqual([]);
+        expect(yield* unscoped.getCookie).toBeUndefined();
+        expect(yield* unscoped.getIdentity).toBe(ALICE);
       })
     );
   });
