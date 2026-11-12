@@ -48,13 +48,16 @@ const makeServer = Effect.gen(function* () {
   );
 });
 
-const counts = Effect.all({
-  pulls: Metric.value(Telemetry.pullsTotal),
-  pushes: Metric.value(Telemetry.pushesTotal),
-  mutations: Metric.value(Telemetry.mutationsPushedTotal),
-  serverPulls: Metric.value(Telemetry.serverPullsTotal),
-  patchOps: Metric.value(Telemetry.patchOps),
-});
+const counts = Effect.all(
+  {
+    pulls: Metric.value(Telemetry.pullsTotal),
+    pushes: Metric.value(Telemetry.pushesTotal),
+    mutations: Metric.value(Telemetry.mutationsPushedTotal),
+    serverPulls: Metric.value(Telemetry.serverPullsTotal),
+    patchOps: Metric.value(Telemetry.patchOps),
+  },
+  { concurrency: 1 }
+);
 
 describe("Telemetry", () => {
   it.effect("records client + server pull/push metrics", () =>

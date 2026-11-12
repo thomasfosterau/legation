@@ -569,10 +569,13 @@ export const fromView = (
       Effect.flatMap((requested) =>
         Ref.get(ledger).pipe(
           Effect.flatMap((interests) =>
-            Effect.forEach(interests.values(), (interest) =>
-              view
-                .pulled(keyOf(interest))
-                .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled })))
+            Effect.forEach(
+              interests.values(),
+              (interest) =>
+                view
+                  .pulled(keyOf(interest))
+                  .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled }))),
+              { concurrency: 1 }
             )
           ),
           Effect.map((entries) => Coverage.verdictOf(entries, requested))

@@ -1323,7 +1323,7 @@ const appendFour = (store: ClientStore) =>
   Effect.forEach(
     [mutation("c1", 1), mutation("c1", 2), mutation("c1", 3), mutation("c2", 1)],
     (m) => store.appendMutation(m),
-    { discard: true }
+    { concurrency: 1, discard: true }
   );
 
 const batchMembersScenario = (store: ClientStore) =>

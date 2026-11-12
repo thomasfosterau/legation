@@ -932,7 +932,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             Effect.forEach(
               events,
               (event) => (event._tag === "PullCompleted" ? announce : Effect.void),
-              { discard: true }
+              { concurrency: 1, discard: true }
             )
           )
         )
@@ -957,7 +957,10 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     yield* channel.post({ _tag: "HostReady" }).pipe(Effect.ignore);
 
     return {
-      registrations: Effect.all({ entries: Ref.get(active), pulled: marks.registrations }).pipe(
+      registrations: Effect.all(
+        { entries: Ref.get(active), pulled: marks.registrations },
+        { concurrency: 1 }
+      ).pipe(
         Effect.map(({ entries, pulled }) => {
           const summaries = new Map(pulled.map((entry) => [entry.key, entry.pulled]));
           return [...entries].flatMap(([key, entry]) => {

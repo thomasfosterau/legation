@@ -477,13 +477,13 @@ export const resolveExists = <E, R>(
     case "Exists":
       return resolve(predicate).pipe(Effect.map((values) => isIn(predicate.localField, values)));
     case "And":
-      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve)).pipe(
-        Effect.map((predicates) => and(...predicates))
-      );
+      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve), {
+        concurrency: 1,
+      }).pipe(Effect.map((predicates) => and(...predicates)));
     case "Or":
-      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve)).pipe(
-        Effect.map((predicates) => or(...predicates))
-      );
+      return Effect.forEach(predicate.predicates, (p) => resolveExists(p, resolve), {
+        concurrency: 1,
+      }).pipe(Effect.map((predicates) => or(...predicates)));
     case "Not":
       return resolveExists(predicate.predicate, resolve).pipe(Effect.map(not));
     case "True":

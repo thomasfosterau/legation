@@ -179,7 +179,9 @@ export const makePokeHub: Effect.Effect<
   // One finalizer shuts every group's hub down when the scope closes.
   yield* Effect.addFinalizer(() =>
     Ref.get(hubs).pipe(
-      Effect.flatMap((map) => Effect.forEach([...map.values()], (hub) => PubSub.shutdown(hub))),
+      Effect.flatMap((map) =>
+        Effect.forEach([...map.values()], (hub) => PubSub.shutdown(hub), { concurrency: 1 })
+      ),
       Effect.asVoid
     )
   );

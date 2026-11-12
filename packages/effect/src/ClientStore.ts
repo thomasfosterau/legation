@@ -497,6 +497,7 @@ export const freezePending = (store: ClientStore): Effect.Effect<void, StoreErro
       if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
     }
     yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
+      concurrency: 1,
       discard: true,
     });
   });
@@ -576,6 +577,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
     }
     return Effect.forEach(highest, ([clientId, id]) => raiseCounter(clientId, id), {
+      concurrency: 1,
       discard: true,
     });
   };

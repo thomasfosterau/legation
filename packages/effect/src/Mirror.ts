@@ -135,6 +135,7 @@ const failPending = <A>(
   Ref.getAndSet(ref, new Map()).pipe(
     Effect.flatMap((requests) =>
       Effect.forEach(requests.values(), (deferred) => Deferred.fail(deferred, hostUnavailable), {
+        concurrency: 1,
         discard: true,
       })
     )
@@ -463,7 +464,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               failPending(pendingForms),
               failHostRequests("Mirror: closed while the request was in flight"),
             ],
-            { discard: true }
+            { concurrency: 1, discard: true }
           )
         )
       )
@@ -592,8 +593,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                 // caller is told).
                 return Ref.get(interests).pipe(
                   Effect.flatMap((map) =>
-                    Effect.forEach(map.values(), (interest) =>
-                      channel.post(interest.subscribe).pipe(Effect.ignore)
+                    Effect.forEach(
+                      map.values(),
+                      (interest) => channel.post(interest.subscribe).pipe(Effect.ignore),
+                      { concurrency: 1 }
                     )
                   ),
                   Effect.andThen(Ref.getAndSet(seenHostReady, true)),
@@ -609,7 +612,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
                               "Mirror: the engine host restarted while the request was in flight"
                             ),
                           ],
-                          { discard: true }
+                          { concurrency: 1, discard: true }
                         )
                       : Effect.void
                   ),

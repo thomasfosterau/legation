@@ -112,7 +112,7 @@ const seedReviews = (
   Effect.forEach(
     entries,
     ([id, at]) => client.mutate("review/set", { id, body: id, createdAt: at, productId }),
-    { discard: true }
+    { concurrency: 1, discard: true }
   );
 
 describe("per-parent windowed subsets", () => {

@@ -782,16 +782,19 @@ describe("JsonApiQuery.canonical", () => {
   it("round-trips: parseRead(canonical(read)) is the read, over generated reads", () => {
     const coverage = FilterCorpus.emptyCoverage();
     const generated = Effect.runSync(
-      Effect.all({
-        predicates: FilterCorpus.generatePredicate(
-          FilterCorpus.corpusColumns,
-          undefined,
-          coverage,
-          3
-        ).pipe(Effect.replicateEffect(150)),
-        orderBys: FilterCorpus.generateOrderBy().pipe(Effect.replicateEffect(150)),
-        firsts: Random.nextIntBetween(0, 50).pipe(Effect.replicateEffect(150)),
-      }).pipe(Random.withSeed(161))
+      Effect.all(
+        {
+          predicates: FilterCorpus.generatePredicate(
+            FilterCorpus.corpusColumns,
+            undefined,
+            coverage,
+            3
+          ).pipe(Effect.replicateEffect(150)),
+          orderBys: FilterCorpus.generateOrderBy().pipe(Effect.replicateEffect(150)),
+          firsts: Random.nextIntBetween(0, 50).pipe(Effect.replicateEffect(150)),
+        },
+        { concurrency: 1 }
+      ).pipe(Random.withSeed(161))
     );
     const reads: Array<Query.Read> = [];
     Arr.forEach(generated.predicates.entries(), ([index, where]) => {

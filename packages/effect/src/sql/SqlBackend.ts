@@ -872,16 +872,19 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             })
         ),
         Effect.flatMap((rows) =>
-          Effect.forEach(rows, (row) =>
-            decodeRejections(row.rejections, mutationsTable).pipe(
-              Effect.map(
-                (rejections) =>
-                  [
-                    String(row.client_id),
-                    { last: Number(row.last_mutation_id), rejections },
-                  ] as const
-              )
-            )
+          Effect.forEach(
+            rows,
+            (row) =>
+              decodeRejections(row.rejections, mutationsTable).pipe(
+                Effect.map(
+                  (rejections) =>
+                    [
+                      String(row.client_id),
+                      { last: Number(row.last_mutation_id), rejections },
+                    ] as const
+                )
+              ),
+            { concurrency: 1 }
           )
         ),
         Effect.map((entries) => new Map(entries))
@@ -1185,7 +1188,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       Effect.all(
         {
           lastMutationIds: readLastIds(context.clientGroupId),
-          hints: Effect.forEach(applied.flat(), enrichHint),
+          hints: Effect.forEach(applied.flat(), enrichHint, { concurrency: 1 }),
         },
         { concurrency: 1 }
       ),

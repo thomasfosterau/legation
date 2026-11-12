@@ -111,7 +111,9 @@ describe("backpressure — poke hub", () => {
       yield* sleepReal(30); // let the subscription establish (pull pending)
       // Storm: 50 pokes in a tick. The first is taken (in-flight), the rest
       // slide over one another — one survivor remains queued.
-      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}));
+      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}), {
+        concurrency: 1,
+      });
       yield* sleepReal(30);
       expect((yield* Ref.get(received)).length).toBe(1); // one in-flight, rest queued to one
       yield* Deferred.succeed(release, undefined);
@@ -124,7 +126,9 @@ describe("backpressure — poke hub", () => {
   it.live("a late subscriber sees only the latest poke (replay 1)", () =>
     Effect.gen(function* () {
       const hub = yield* makePokeHub;
-      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}));
+      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}), {
+        concurrency: 1,
+      });
       // Late subscriber: replay 1 delivers the most recent poke, not all 50.
       const got = yield* hub.subscribe("group-a").pipe(Stream.take(1), Stream.runCollect);
       expect(got.length).toBe(1);
@@ -139,8 +143,10 @@ describe("backpressure — invalidation bus", () => {
       // Hold a subscription open but never take: publishes past capacity drop.
       yield* bus.subscribe;
       const before = (yield* Metric.value(Telemetry.hintsDroppedTotal)).count;
-      yield* Effect.forEach(Array.from({ length: 20 }), (_, i) =>
-        bus.publish([{ collection: "todos", ids: [`r${i}`] }])
+      yield* Effect.forEach(
+        Array.from({ length: 20 }),
+        (_, i) => bus.publish([{ collection: "todos", ids: [`r${i}`] }]),
+        { concurrency: 1 }
       );
       const after = (yield* Metric.value(Telemetry.hintsDroppedTotal)).count;
       expect(after).toBeGreaterThan(before);
@@ -179,8 +185,10 @@ describe("backpressure — engine change hub", () => {
 
       const before = (yield* Metric.value(Telemetry.changeCollapsesTotal)).count;
       // Storm: far more changes than the bound of 4 → the hub drops the surplus.
-      yield* Effect.forEach(Array.from({ length: 30 }), (_, i) =>
-        engine.mutate("todo/set", { id: `s${i}` })
+      yield* Effect.forEach(
+        Array.from({ length: 30 }),
+        (_, i) => engine.mutate("todo/set", { id: `s${i}` }),
+        { concurrency: 1 }
       );
       yield* Deferred.succeed(release, undefined);
       // A change after the drain reveals the seq gap → collapse to a Rebuild.

@@ -156,14 +156,12 @@ const switchingView = (
           yield* Effect.forEach(
             subsets.values(),
             (subset) => view.subscribe(subset).pipe(Effect.ignore),
-            {
-              discard: true,
-            }
+            { concurrency: 1, discard: true }
           );
           yield* Effect.forEach(
             named.values(),
             (entry) => view.subscribeQuery(entry.name, entry.args).pipe(Effect.ignore),
-            { discard: true }
+            { concurrency: 1, discard: true }
           );
         })
       ).pipe(Effect.ignore)

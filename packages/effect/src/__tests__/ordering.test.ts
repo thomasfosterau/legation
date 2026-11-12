@@ -67,7 +67,7 @@ const SEED = 20260903;
 
 /** `TRIALS` random string pairs, deterministic for `SEED`. */
 const randomPairs: ReadonlyArray<readonly [string, string]> = Effect.runSync(
-  Effect.all([randomString, randomString])
+  Effect.all([randomString, randomString], { concurrency: 1 })
     .pipe(Effect.replicateEffect(TRIALS))
     .pipe(Random.withSeed(SEED))
 );

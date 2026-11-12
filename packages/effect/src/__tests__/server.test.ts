@@ -246,7 +246,7 @@ describe("Server", () => {
         // nothing but a poke can make the reader pull.
         yield* reader.transport.setStatus("connected");
         yield* advanceUntil(
-          Effect.all([Ref.get(writer.pulls), Ref.get(reader.pulls)]),
+          Effect.all([Ref.get(writer.pulls), Ref.get(reader.pulls)], { concurrency: 1 }),
           ([writerPulls, readerPulls]) => writerPulls >= 1 && readerPulls >= 1
         );
         expect(yield* Ref.get(writer.pushes)).toBe(0);

@@ -334,7 +334,8 @@ export const generateRows = (
   }
   return Effect.forEach(
     Array.from({ length: count }, (_, index) => index),
-    (index) => generateRow(plan, index)
+    (index) => generateRow(plan, index),
+    { concurrency: 1 }
   );
 };
 
@@ -516,11 +517,14 @@ export const generateOrderBy = (
   Effect.gen(function* () {
     const count = Math.min(columns.length, 1 + (yield* int(2)));
     const shuffled = yield* Random.shuffle(columns);
-    return yield* Effect.forEach(shuffled.slice(0, count), (column) =>
-      Effect.map(Random.nextBoolean, (asc): Subset.OrderBy => ({
-        field: column.name,
-        direction: asc ? "asc" : "desc",
-      }))
+    return yield* Effect.forEach(
+      shuffled.slice(0, count),
+      (column) =>
+        Effect.map(Random.nextBoolean, (asc): Subset.OrderBy => ({
+          field: column.name,
+          direction: asc ? "asc" : "desc",
+        })),
+      { concurrency: 1 }
     );
   });
 

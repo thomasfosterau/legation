@@ -179,11 +179,14 @@ describe("ServerIntrospection (#45)", () => {
   );
 });
 
-const metricSnapshot = Effect.all({
-  pushMutations: Metric.value(Telemetry.pushMutations),
-  pullPatchOps: Metric.value(Telemetry.pullPatchOps),
-  rebase: Metric.value(Telemetry.rebaseDurationMs),
-});
+const metricSnapshot = Effect.all(
+  {
+    pushMutations: Metric.value(Telemetry.pushMutations),
+    pullPatchOps: Metric.value(Telemetry.pullPatchOps),
+    rebase: Metric.value(Telemetry.rebaseDurationMs),
+  },
+  { concurrency: 1 }
+);
 
 describe("Introspection metrics (#45)", () => {
   it.effect("the new legation_* metrics move on a push/pull cycle", () =>
