@@ -34,6 +34,7 @@ import * as Hash from "./Hash.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
+import * as WireFlags from "./internal/WireFlags.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -578,8 +579,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
           windows: Schema.Array(
             Schema.Struct({
               subset: Subset.Subset,
-              // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- `pulled` is a wire field of the mirror protocol (and mirrors `Coverage.Window.pulled`); renaming it breaks the protocol.
-              pulled: Schema.Boolean,
+              ...WireFlags.Pulled.fields,
             })
           ),
         }),

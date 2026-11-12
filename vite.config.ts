@@ -129,17 +129,18 @@ export default defineConfig({
       // the key), `x?: Option.Option<T>` only where "no value" is itself an
       // answer, and an absent return or result field is an `Option`. Optional
       // parameters stay `x?: T`; wire shapes keep their native optionals.
-      // legation-jsonapi is converted (its can't-applies carry a reasoned
-      // disable); the other packages still have sites.
+      // legation-jsonapi is converted (its can't-applies are file-scoped
+      // overrides below); the other packages still have sites.
       "effect/prefer-option-over-null": "warn",
       // `unknown` is the honest type at the boundaries this engine sits on:
       // a row value before its collection's schema decodes it, a mutator's
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out is at `error` (#562): a site that
-      // returns an untyped row value (`Predicate.fieldValue`) carries its own
-      // scoped disable with that reason. The derived combinators (`Incremental`,
+      // The same boundary on the way out is at `error` (#562): the one site
+      // that returns an untyped row value (`Predicate.fieldValue`) lives in a
+      // module of its own with a file-scoped override below. The derived
+      // combinators (`Incremental`,
       // `Derive`) are typed by their row, so they return the caller's types.
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
@@ -217,6 +218,102 @@ export default defineConfig({
       "typescript/no-unnecessary-type-parameters": "error",
     },
     overrides: [
+      // ---- Genuine can't-applies (#562) ------------------------------------
+      // No inline disable comments: a site a rule cannot apply to lives in a
+      // small private module named for the reason, and the rule is off for
+      // that module alone. Each module's header repeats the reason.
+      //
+      // The measured tag dispatches stay `switch` statements: a hoisted
+      // `Match` measured slower on each path (ns per call, median, node).
+      // Per row: `addNumber` (`Aggregate.addToBucket`'s fold) `Match.type`
+      // 4.3x, a Record table 1.8x (#667); `removeNumber`, its mirror, not
+      // measured apart; `deltaFromChanges` `Match.type` 2.2x, `typeTags` 2.1x,
+      // a table 1.2x (#667); `holds` `Match.when` ~7x, a table ~5x (#667).
+      // Per emission or state (#562): `foldNumeric` `typeTags` 1.21x on a
+      // 10-row `compute` (133 -> 160 ns); `emptyBucket` `typeTags` 1.47x on
+      // an empty `initState` (44 -> 65 ns); `bucketValue` `Match.type` 2.3x on
+      // `stateValue` (10 -> 23 ns) and +13% per emission over 10k groups,
+      // `typeTags` 4.2x and +52%.
+      {
+        files: ["packages/effect/src/internal/RowDispatch.ts"],
+        rules: {
+          "effect/prefer-match-over-switch": "off",
+        },
+      },
+      // Boolean fields a published wire names: `hydrated` (the `hydrate`
+      // host-request kind's answer, ADR-0021 amendment §6; wire schemas stay
+      // literal, so no `Schema.encodeKeys` rename) and `pulled` (a mirror
+      // protocol coverage window, posted as its decoded value with no schema
+      // encode, so the schema's type is the wire).
+      {
+        files: ["packages/effect/src/internal/WireFlags.ts"],
+        rules: {
+          "effect/require-is-prefix-for-boolean-schema-field": "off",
+        },
+      },
+      // `Node.make`'s `Edges` default: `{}` is the only object type whose
+      // `keyof` is `never` (`Record<string, never>` makes it `string`), and
+      // `Record<never, Edge>` is the same `{}` under another spelling. The
+      // `Edges extends Record<string, Edge>` bound rules out the hazard the
+      // rule names.
+      {
+        files: ["packages/effect/src/internal/NoEdges.ts"],
+        rules: {
+          "effect/avoid-object-type": "off",
+        },
+      },
+      // A node's row codec asserted service-free for `Collection.make`.
+      // `AnyNode` could state it, but `NodeBridge` builds nodes from
+      // effect-jsonapi's open `Resource.Any`, so a bridged node is not
+      // service-free by its type; the fix is upstream (#695).
+      {
+        files: ["packages/effect/src/internal/NodeRowCodec.ts"],
+        rules: {
+          "effect/avoid-any": "off",
+          "effect/no-chained-type-assertions": "off",
+        },
+      },
+      // `Predicate.fieldValue`: a field of an encoded row value, which nothing
+      // decodes on read (ADR-0014); evaluation compares it as a raw literal
+      // (ADR-0028). Typed rows are #696.
+      {
+        files: ["packages/effect/src/internal/EncodedField.ts"],
+        rules: {
+          "effect/no-unknown-returns": "off",
+        },
+      },
+      // `FanoutShard.ShardObject.publish` is a Durable Object RPC method:
+      // Alchemy's stub turns every member access into a call, so the broker
+      // can only call `publish()`, and the shard, named by its topic, has no
+      // argument to take.
+      {
+        files: ["packages/alchemy-cloudflare/src/internal/ShardRpc.ts"],
+        rules: {
+          "effecttsgo/lazy-effect": "off",
+        },
+      },
+      // legation-jsonapi's `null`s:
+      // - `StoredLinkage`: a row value's linkage as stored. The engine never
+      //   decodes a stored row on read (ADR-0014), so the type is the stored
+      //   JSON, whose empty to-one is `null`.
+      // - `JsonApiWire`: JSON:API wire shapes serialised as is, an empty
+      //   to-one linkage `data: null` and a single-resource read that matched
+      //   nothing `data: null` (effect-jsonapi's `Handlers.data`).
+      // - `ResolvedRelation`: follows the core's `Related.RelatedValue`
+      //   (`null` empty, `undefined` not in the mirror), which the core's
+      //   join compares by reference and the mirror protocol carries raw. It
+      //   becomes an `Option` with the core's `Related` (Option-everywhere,
+      //   owner decision on #562), the wire unchanged.
+      {
+        files: [
+          "packages/jsonapi/src/internal/StoredLinkage.ts",
+          "packages/jsonapi/src/internal/JsonApiWire.ts",
+          "packages/jsonapi/src/internal/ResolvedRelation.ts",
+        ],
+        rules: {
+          "effect/prefer-option-over-null": "off",
+        },
+      },
       // A benchmark's console output is its product: it prints the numbers
       // it measured, outside any Effect runtime.
       {

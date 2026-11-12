@@ -89,6 +89,7 @@ import type * as Node from "./Node.js";
 import { Mutation } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
+import * as WireFlags from "./internal/WireFlags.js";
 import { ClientTransport, layerInMemory, ServerHandler } from "./Transport.js";
 
 /**
@@ -335,8 +336,7 @@ export type HydrateDeclined = typeof HydrateDeclined.Type;
  * the snapshot.
  */
 export const HydrateOutcome = Schema.Struct({
-  // oxlint-disable-next-line effect/require-is-prefix-for-boolean-schema-field -- the `hydrate` kind's published wire contract (ADR-0021 amendment §6) names this field `hydrated`.
-  hydrated: Schema.Boolean,
+  ...WireFlags.Hydrated.fields,
   reason: Schema.optional(HydrateDeclined),
 });
 

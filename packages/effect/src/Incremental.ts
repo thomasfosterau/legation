@@ -39,6 +39,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
+import * as RowDispatch from "./internal/RowDispatch.js";
 import * as Predicate from "./Predicate.js";
 import type { RowChange } from "./RowChange.js";
 import * as Subset from "./Subset.js";
@@ -130,38 +131,10 @@ export const applyDelta = <A>(result: Map<string, Row<A>>, delta: Delta<A>): voi
  * information a page-diff's `previous` snapshot would have given for free.
  * `move` carries no value change, so it contributes nothing to the delta.
  */
-export const deltaFromChanges = <A>(
+export const deltaFromChanges: <A>(
   known: Map<string, Row<A>>,
   batch: ReadonlyArray<RowChange<Row<A>>>
-): Delta<A> => {
-  const added: Array<Row<A>> = [];
-  const removed: Array<Row<A>> = [];
-  for (const change of batch) {
-    // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.type tag chain measured ~2.2x, Match.typeTags ~2.1x and a Record table ~1.2x slower than this switch (#497)
-    switch (change._tag) {
-      case "reset":
-        for (const row of known.values()) removed.push(row);
-        known.clear();
-        break;
-      case "enter":
-        added.push(change.row);
-        known.set(change.row.id, change.row);
-        break;
-      case "update":
-        removed.push(change.previous);
-        added.push(change.row);
-        known.set(change.row.id, change.row);
-        break;
-      case "exit":
-        removed.push(change.previous);
-        known.delete(change.id);
-        break;
-      case "move":
-        break;
-    }
-  }
-  return { added, removed };
-};
+) => Delta<A> = RowDispatch.deltaFromChanges;
 
 /** Materialize a result map to a page in a deterministic (id-ascending, code-point) order. */
 export const pageOf = <A>(result: ReadonlyMap<string, Row<A>>): ReadonlyArray<Row<A>> =>

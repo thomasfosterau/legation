@@ -25,6 +25,8 @@ import * as HashMap from "effect/HashMap";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import { fieldValue } from "./internal/EncodedField.js";
+import * as RowDispatch from "./internal/RowDispatch.js";
 import * as Schema from "effect/Schema";
 
 /**
@@ -307,36 +309,11 @@ const numericOrder = (left: number, right: number): number =>
  * `1`) from {@link compareLiterals}: the per-operator table of ADR-0028
  * section 3 in one place, shared by `evaluate` and `CollectionIndex`.
  */
-export const holds = (op: Comparison, ordered: number): boolean => {
-  // oxlint-disable-next-line effect/prefer-match-over-switch -- per-row hot path: a hoisted Match.when chain measured ~7x slower and a Record table ~5x slower than this switch (#497)
-  switch (op) {
-    case "eq":
-      return ordered === 0;
-    case "ne":
-      return ordered !== 0;
-    case "gt":
-      return ordered > 0;
-    case "gte":
-      return ordered >= 0;
-    case "lt":
-      return ordered < 0;
-    case "lte":
-      return ordered <= 0;
-  }
-};
+export const holds: (op: Comparison, ordered: number) => boolean = RowDispatch.holds;
 
 // ─── Evaluation ──────────────────────────────────────────────────────────────
 
-/**
- * Top-level field access on a row value: `undefined` for a non-object row or
- * an absent field, `null` for an explicit null. Evaluation treats the two
- * alike (ADR-0028 rule (b): absent ≡ NULL); accelerated evaluators
- * (`CollectionIndex.ts`) read fields with exactly this function so they bucket
- * the same way `evaluate` does.
- */
-// oxlint-disable-next-line effect/no-unknown-returns -- a field of a row value before its collection's schema decodes it; evaluation compares it as a raw literal (ADR-0028).
-export const fieldValue = (row: unknown, field: string): unknown =>
-  P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
+export { fieldValue };
 
 /** Whether a field value is NULL for evaluation: an explicit `null` or absent. */
 export const isNullish = (value: unknown): value is null | undefined =>

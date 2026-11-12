@@ -66,6 +66,7 @@ import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation";
 import type { Related } from "@thomasfosterau/legation/internal";
+import type * as JsonApiWire from "./internal/JsonApiWire.js";
 import * as JsonApiQuery from "./JsonApiQuery.js";
 import * as Schema from "effect/Schema";
 
@@ -86,8 +87,7 @@ export interface Identifier {
  * edges; links for a paginated edge, with its rows' linkage when resolved.
  */
 export type RelationshipValue =
-  // oxlint-disable-next-line effect/prefer-option-over-null -- wire shape: JSON:API resource linkage spells an empty to-one `data: null`, and this value is serialised as is.
-  | { readonly data: Identifier | ReadonlyArray<Identifier> | null }
+  | JsonApiWire.Linkage<Identifier>
   | {
       readonly links: { readonly self: string; readonly related: string };
       readonly data?: ReadonlyArray<Identifier>;
@@ -123,8 +123,7 @@ export type CollectionDocument = Handlers.DocumentValue<
 >;
 
 /** A single-resource document: `{ data: resource | null, included?, links }`, with `included` exactly when the read has an `include`. */
-// oxlint-disable-next-line effect/prefer-option-over-null -- wire shape: JSON:API answers a single-resource read that matched nothing with `data: null` (effect-jsonapi's `Handlers.data`), serialised as is.
-export type DataDocument = Handlers.DocumentValue<ResourceValue | null, ResourceValue>;
+export type DataDocument = JsonApiWire.SingleResourceDocument<ResourceValue>;
 
 /** Edge rows by collection, then row id, then edge name (see {@link Input.linkage}). */
 export type Linkage = ReadonlyMap<
