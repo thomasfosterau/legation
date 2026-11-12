@@ -1295,7 +1295,7 @@ export const make = (
     // (#260), rather than loading the whole journal to take its length.
     const sampleJournalDepth: Effect.Effect<void> = store.pendingCount.pipe(
       Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
-      Effect.catch(() => Effect.void)
+      Effect.ignore
     );
     // Time an effect and record its wall-clock duration (ms) as the rebase
     // histogram — wraps the actual overlay replay (cache misses only).

@@ -210,6 +210,7 @@ export default defineConfig({
       "effecttsgo/return-effect-in-gen": "error",
       "effecttsgo/catch-to-or-else-succeed": "error",
       "effecttsgo/lazy-effect": "error",
+      "effecttsgo/catch-to-ignore": "error",
     },
     overrides: [
       // A benchmark's console output is its product: it prints the numbers
