@@ -33,7 +33,7 @@ catalog:
   # The Effect dev pin: `effect` and every `@effect/*` runtime package move
   # together, at one exact version (CONTRIBUTING.md "Effect version
   # upgrades"). The published floor is `catalogs.peers` below, never this.
-  # CI's "Tests (effect floor)" job rewrites exactly these entries to the
+  # CI's `floor` job ("ci:floor (…)") rewrites exactly these entries to the
   # floor (`@effect/tsgo` and `@effect/language-service` excepted).
   effect: 4.1.4
   "@effect/platform-browser": 4.1.4
