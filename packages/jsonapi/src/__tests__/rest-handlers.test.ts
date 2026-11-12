@@ -13,6 +13,8 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -31,6 +33,7 @@ import {
 } from "@thomasfosterau/effect-jsonapi";
 import {
   Authorization,
+  AuthorizationError,
   type Backend,
   Edge,
   MemoryBackend,
@@ -255,7 +258,22 @@ const seeds: ReadonlyArray<Seed> = [
   { collection: "contracts", id: "k-1", value: { id: "k-1", sellerId: "s-1", terms: "net 30" } },
 ];
 
-const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
+/** How the world's handlers find a request's identity: a hand-written `context`, or a resolver. */
+type IdentitySeam =
+  | Pick<RestHandlers.ContextOptions, "context">
+  | Pick<RestHandlers.IdentityOptions, "identity" | "clientGroupId">;
+
+/** The identity seam: a header the app trusts (a test stand-in for a verified session). */
+const byHeader: IdentitySeam = {
+  context: (request) => {
+    const user = request.headers["x-user"];
+    return Effect.succeed(
+      P.isString(user) ? { clientGroupId: "http", identity: user } : { clientGroupId: "http" }
+    );
+  },
+};
+
+const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: IdentitySeam = byHeader) =>
   Effect.gen(function* () {
     const memory = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
@@ -290,12 +308,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       nodes,
       backend,
       policy,
-      // The identity seam: a header the app trusts (a test stand-in for a verified session).
-      context: (request) =>
-        Effect.succeed({
-          clientGroupId: "http",
-          ...(P.isString(request.headers["x-user"]) ? { identity: request.headers["x-user"] } : {}),
-        }),
+      ...seam,
       prefix: "/api",
     });
     const groups = Layer.mergeAll(
@@ -323,13 +336,14 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
       ({ dispose }) => Effect.promise(dispose)
     );
-    const getDocument = (path: string, user?: string) =>
+    const getDocument = (path: string, user?: string, headers?: Record<string, string>) =>
       Effect.promise(async () => {
         const response = await handler(
           new Request(`http://shop.test${path}`, {
             headers: {
               accept: "application/vnd.api+json",
               ...(user === undefined ? {} : { "x-user": user }),
+              ...headers,
             },
           })
         );
@@ -671,6 +685,84 @@ describe("RestHandlers over the read path", () => {
         expect(() => rest.list(Miskinded)).toThrow(
           /"contracts".*"one" but the node edge is "many"/
         );
+      })
+    )
+  );
+});
+
+/** A resolver that verifies a `session=<user>` cookie and records every request it sees. */
+const cookieResolver = (
+  seen: Ref.Ref<ReadonlyArray<Authorization.IdentityRequest>>
+): Authorization.IdentityResolver => ({
+  resolve: (request: Authorization.IdentityRequest) =>
+    Ref.update(seen, (requests) => [...requests, request]).pipe(
+      Effect.as(
+        Option.getOrUndefined(
+          Option.flatMap(request.credentials.header("cookie"), (cookie) =>
+            Option.fromNullishOr(/(?:^|; )session=([^;]+)/.exec(cookie)?.[1])
+          )
+        )
+      )
+    ),
+});
+
+describe("RestHandlers identity through the IdentityResolver (#645)", () => {
+  it.effect("presents the request's cookie to the resolver, under the client group http", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<Authorization.IdentityRequest>>([]);
+        const { getDocument } = yield* makeWorld(fullPolicy, { identity: cookieResolver(seen) });
+        const signedIn = yield* getDocument("/api/cartItems", undefined, {
+          cookie: "theme=dark; session=u1",
+        });
+        expect(signedIn.status).toBe(200);
+        expect(ids(signedIn.body.data)).toEqual(["ci-1"]);
+        const [request] = yield* Ref.get(seen);
+        expect(request?.clientGroupId).toBe("http");
+        expect(request?.credentials.header("Cookie")).toEqual(
+          Option.some("theme=dark; session=u1")
+        );
+        // No cookie: the resolver sees no credentials and the policy's empty allow-set answers.
+        const anonymous = yield* getDocument("/api/cartItems");
+        expect(anonymous.status).toBe(200);
+        expect(anonymous.body.data).toEqual([]);
+        expect((yield* Ref.get(seen))[1]?.credentials.header("cookie")).toEqual(Option.none());
+      })
+    )
+  );
+
+  it.effect("names the configured client group and fails a refusing resolver with a 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<Authorization.IdentityRequest>>([]);
+        const named = yield* makeWorld(fullPolicy, {
+          identity: cookieResolver(seen),
+          clientGroupId: "rest",
+        });
+        yield* named.getDocument("/api/cartItems", undefined, { cookie: "session=u2" });
+        expect((yield* Ref.get(seen)).map((request) => request.clientGroupId)).toEqual(["rest"]);
+
+        const refusing = yield* makeWorld(fullPolicy, {
+          identity: {
+            resolve: () => Effect.fail(new AuthorizationError({ message: "session revoked" })),
+          },
+        });
+        const refused = yield* refusing.getDocument("/api/cartItems");
+        expect(refused.status).toBe(403);
+        expect(refused.body.errors[0].detail).toBe("session revoked");
+      })
+    )
+  );
+
+  it.effect("leaves every request anonymous without a resolver", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { getDocument } = yield* makeWorld(fullPolicy, {});
+        const { status, body } = yield* getDocument("/api/cartItems", "u1", {
+          cookie: "session=u1",
+        });
+        expect(status).toBe(200);
+        expect(body.data).toEqual([]);
       })
     )
   );

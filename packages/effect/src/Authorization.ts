@@ -428,3 +428,27 @@ export interface IdentityResolver {
 export const IdentityResolver = Context.Service<IdentityResolver>(
   "@thomasfosterau/legation/IdentityResolver"
 );
+
+/**
+ * The `SyncContext` a request runs under: the client group it names and the
+ * identity `resolver` resolves from its credentials (ADR-0035). With no
+ * resolver the identity stays `undefined` (anonymous). The credentials go to
+ * the resolver and nowhere else: the context carries the group and the
+ * resolved identity only. A failing resolver fails with its
+ * `AuthorizationError`.
+ *
+ * Every carrier builds its context this way: the sync server for each push,
+ * pull and read, and an HTTP handler outside the sync protocol (the JSON:API
+ * tier's `RestHandlers`) from its own request's headers.
+ */
+export const resolveContext = (
+  resolver: Option.Option<IdentityResolver>,
+  request: IdentityRequest
+): Effect.Effect<SyncContext, AuthorizationError> =>
+  Option.match(resolver, {
+    onNone: () => Effect.succeed({ clientGroupId: request.clientGroupId }),
+    onSome: (identityResolver) =>
+      identityResolver
+        .resolve(request)
+        .pipe(Effect.map((identity) => ({ clientGroupId: request.clientGroupId, identity }))),
+  });

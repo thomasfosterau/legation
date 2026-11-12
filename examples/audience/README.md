@@ -71,8 +71,6 @@ its tests against the packages' built `dist/`.
 The app aims to write nothing between the libraries. What it still writes by
 hand, each marked in the source, is a gap a library should close:
 
-- `server.ts` `restContext`: the derived REST handlers take a hand-written
-  `context` instead of the `IdentityResolver` the sync carrier runs.
 - `policy.ts` `following`: a named set read off a backend collection.
 - `device.ts` `jarTransport`: an in-process transport whose credentials follow
   the session (and whose network can go down).

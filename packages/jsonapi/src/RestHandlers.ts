@@ -64,7 +64,7 @@ import {
   type Resource,
 } from "@thomasfosterau/effect-jsonapi";
 import {
-  type Authorization,
+  Authorization,
   AuthorizationError,
   type Backend,
   BackendError,
@@ -79,29 +79,66 @@ import * as Linkage from "./Linkage.js";
 
 // ─── Options ─────────────────────────────────────────────────────────────────
 
-/** What the derived handlers run over: the graph, the read path's seams, and the request's identity. */
-export interface Options {
+/** What every form of {@link Options} carries: the graph, the read path's seams and the mount path. */
+export interface BaseOptions {
   /** The node graph the URLs are parsed against and the rows are written by. */
   readonly nodes: Node.NodeRegistry;
   /** The storage contract the read evaluates through. */
   readonly backend: Backend.Backend;
   /** The deny-by-default auth policy, with the filterable declarations (#154). */
   readonly policy: Authorization.AuthPolicy;
-  /**
-   * The identity seam: an HTTP request to the `SyncContext` the auth filters
-   * see — the HTTP analogue of `IdentityResolver`, which resolves the sync
-   * protocol's requests from their credentials and client group. Derive `identity` from the verified session (a forwarded header
-   * the app trusts, a session token); never from anything a browser can
-   * forge. `clientGroupId` names the carrier (`"http"`) or the session.
-   */
-  readonly context: (
-    request: HttpServerRequest
-  ) => Effect.Effect<Backend.SyncContext, AuthorizationError>;
   /** The interception seam around reads (`onRead`); absent means passthrough. */
   readonly middleware?: Authorization.SyncMiddleware;
   /** The api's mount path, prepended to every link (`/jsonapi`); default `""`. */
   readonly prefix?: string;
 }
+
+/**
+ * Options that resolve each request's identity through the sync tier's
+ * `IdentityResolver` (ADR-0035): the request's headers become its
+ * `Authorization.RequestCredentials` and the resolver is called with them, so
+ * the REST and sync carriers see one identity for one session cookie.
+ */
+export interface IdentityOptions extends BaseOptions {
+  /**
+   * The identity resolver, the one the sync server runs. Absent: every request
+   * is anonymous (`SyncContext.identity` undefined), as on a sync server with
+   * no resolver.
+   */
+  readonly identity?: Authorization.IdentityResolver;
+  /** The client group the resolver and the auth filters see; default `"http"`. */
+  readonly clientGroupId?: string;
+  /** Excluded: the context is built from `identity`. */
+  readonly context?: never;
+}
+
+/**
+ * Options that build each request's `SyncContext` by hand, for an identity the
+ * `IdentityResolver` cannot see (a header a trusted proxy sets, a client group
+ * read off the request).
+ */
+export interface ContextOptions extends BaseOptions {
+  /**
+   * The request's `SyncContext`. Derive `identity` from the verified session;
+   * never from anything a browser can forge. `clientGroupId` names the
+   * carrier (`"http"`) or the session.
+   */
+  readonly context: (
+    request: HttpServerRequest
+  ) => Effect.Effect<Backend.SyncContext, AuthorizationError>;
+  /** Excluded: `context` resolves the identity itself. */
+  readonly identity?: never;
+  /** Excluded: `context` names the client group itself. */
+  readonly clientGroupId?: never;
+}
+
+/**
+ * What the derived handlers run over: the graph, the read path's seams, and
+ * how a request's identity is found — through an `IdentityResolver`
+ * ({@link IdentityOptions}) or a hand-written `context` ({@link ContextOptions}),
+ * never both.
+ */
+export type Options = IdentityOptions | ContextOptions;
 
 /** The handler input a `list` endpoint gives (the rest of the request is not needed). */
 export interface ListInput {
@@ -236,6 +273,24 @@ const respondToFailures = <A, E>(
 // ─── The handlers ────────────────────────────────────────────────────────────
 
 /**
+ * How a request becomes its `SyncContext`: the app's own `context`, or the
+ * request's headers through the identity resolver (ADR-0035), as every sync
+ * carrier presents them.
+ */
+const requestContext = (
+  options: Options
+): ((request: HttpServerRequest) => Effect.Effect<Backend.SyncContext, AuthorizationError>) => {
+  if (options.context !== undefined) return options.context;
+  const resolver = Option.fromUndefinedOr(options.identity);
+  const clientGroupId = options.clientGroupId ?? "http";
+  return (request) =>
+    Authorization.resolveContext(resolver, {
+      clientGroupId,
+      credentials: Authorization.credentialsFromHeaders(request.headers),
+    });
+};
+
+/**
  * Bind the derived handlers to a graph and a read path. The node of a
  * resource is looked up by its `type` when the handler is built and the
  * resource's relationships are checked against the node's edges then, so a
@@ -244,6 +299,7 @@ const respondToFailures = <A, E>(
  */
 export const make = (options: Options): RestHandlers => {
   const { nodes, backend, policy } = options;
+  const contextOf = requestContext(options);
   const prefix = Option.fromUndefinedOr(options.prefix);
   const deps: SyncServer.ReadDeps = {
     backend,
@@ -305,7 +361,7 @@ export const make = (options: Options): RestHandlers => {
     return ({ request }: ListInput) =>
       respondToFailures<CollectionDocumentOf<R>, never>(
         Effect.gen(function* () {
-          const context = yield* options.context(request);
+          const context = yield* contextOf(request);
           const { read, fields } = yield* JsonApiQuery.parseParams(
             nodes,
             node.type,
@@ -334,7 +390,7 @@ export const make = (options: Options): RestHandlers => {
     return ({ params, request }: GetInput) =>
       respondToFailures<DataDocumentOf<R>, E>(
         Effect.gen(function* () {
-          const context = yield* options.context(request);
+          const context = yield* contextOf(request);
           const single = yield* JsonApiQuery.singleRowParams(
             node.type,
             params.id,
