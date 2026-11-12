@@ -96,7 +96,7 @@ hand:
 ```ts
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { Authorization } from "@thomasfosterau/legation";
+import { Authorization, Predicate } from "@thomasfosterau/legation";
 import { ReadScopes } from "@thomasfosterau/legation-auth";
 
 const authPolicy = Result.gen(function* () {
@@ -114,7 +114,15 @@ const authPolicy = Result.gen(function* () {
     {
       posts: {
         ...posts,
-        sets: { following: followingIds }, // Authorization.NamedSet
+        // The users the principal follows: `followeeId` of its `follows` rows.
+        sets: {
+          following: ReadScopes.userSet(backend, {
+            source: "follows",
+            where: (userId) => Predicate.eq("followerId", userId),
+            member: "followeeId",
+            maxAge: "1 hour",
+          }),
+        },
         compile: ReadScopes.compiler({
           policies: () => Effect.succeed(policies),
           request: ReadScopes.principalRequest({ action: "read" }),
@@ -149,6 +157,12 @@ const authPolicy = Result.gen(function* () {
   an API key carries no user record and gets no role. The anonymous
   principal's slice never holds a user: no resolver is asked who `User::""`
   is. A resolver that fails narrows the filter to `Deny`.
+- **Named sets from the backend.** `ReadScopes.userSet(backend, { source,
+  where, member, maxAge })` is `Authorization.namedSet` keyed on
+  `Principal.userId`: its members are the distinct `member` values of the
+  `source` rows `where(userId)` selects. The anonymous principal (and an
+  identity this package's resolver did not produce) has the empty set without
+  a read; a backend failure binds the set to nothing.
 - **Checked when built.** Every attribute of the binding and every set fact's
   attribute must map to a row field, the map names nothing the binding lacks,
   and every set a set fact names has a `NamedSet`. A gap is a

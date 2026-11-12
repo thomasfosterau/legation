@@ -731,3 +731,28 @@ export const policy = (
         : Authorization.policy(filters, { collections: options.collections });
     }
   );
+
+// ─── Named sets ──────────────────────────────────────────────────────────────
+
+/** Options for {@link userSet}: `Authorization.NamedSetOptions` with `where` over the principal's user id. */
+export interface UserSetOptions extends Omit<Authorization.NamedSetOptions, "where"> {
+  /** The rows of `source` whose `member` field is in the set of the signed-in user `userId`. */
+  readonly where: (userId: string) => Predicate.Predicate;
+}
+
+/**
+ * A named set read off a backend collection for the request's principal
+ * (`Authorization.namedSet` keyed on `Principal.userId`): the users a viewer
+ * follows, the teams they belong to. The anonymous principal, and any identity
+ * this package's resolver did not produce, has the empty set, read from
+ * nothing; a `BackendError` is an `AuthorizationError` naming the source,
+ * which binds the set to nothing.
+ */
+export const userSet = (
+  backend: Backend.Backend,
+  options: UserSetOptions
+): Authorization.NamedSet =>
+  Authorization.namedSet(backend, {
+    ...options,
+    where: (context) => Option.map(Principal.userId(Principal.fromContext(context)), options.where),
+  });

@@ -31,13 +31,14 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Str from "effect/String";
 import { AuthorizationError } from "./Errors.js";
-import type { SyncContext } from "./Backend.js";
+import type { Backend, SyncContext } from "./Backend.js";
 import * as Collection from "./Collection.js";
 import * as FilterPolicy from "./FilterPolicy.js";
 import type { Predicate } from "./Predicate.js";
 import * as Predicates from "./Predicate.js";
 import type { PullRequest, PushRequest, ReadRequest } from "./Protocol.js";
 import type { Subset } from "./Subset.js";
+import * as Subsets from "./Subset.js";
 
 /**
  * A named, session-resolved set an auth filter's predicate refers to by name
@@ -66,6 +67,81 @@ export interface NamedSet {
    */
   readonly maxAge: Duration.Input;
 }
+
+/** Options for {@link namedSet}: where the members live and which rows they come from. */
+export interface NamedSetOptions {
+  /**
+   * The collection the members are read from. A committed write to it marks
+   * the set stale for every session that resolved it ({@link NamedSet.source}).
+   */
+  readonly source: string;
+  /**
+   * The rows of `source` whose `member` field is in the set, for the request's
+   * identity. `None` is the empty set without a read: the viewer has no
+   * members (an anonymous viewer, say).
+   */
+  readonly where: (context: SyncContext) => Option.Option<Predicate>;
+  /**
+   * The field of each matching row that is a member. A row whose field is
+   * absent, `null` or not a scalar (text, number, boolean) contributes nothing.
+   */
+  readonly member: string;
+  /** How long a resolution is served before the set is resolved again ({@link NamedSet.maxAge}). */
+  readonly maxAge: Duration.Input;
+}
+
+/** A row's field as a set member: text, a number or a boolean; anything else is none. */
+const memberOf =
+  (field: string) =>
+  ({ value }: { readonly value: unknown }): Option.Option<Predicates.Literal> => {
+    if (!P.hasProperty(value, field)) return Option.none();
+    const member = value[field];
+    return P.isString(member) || P.isNumber(member) || P.isBoolean(member)
+      ? Option.some(member)
+      : Option.none();
+  };
+
+/**
+ * A {@link NamedSet} whose members are read through the backend: the distinct
+ * `member` values of the `source` rows `where` selects for the request (the
+ * relationship-scoped set of ADR-0015's #205 amendment: the users a viewer
+ * follows, the tenants they belong to). The read is server-authored, so no
+ * auth filter applies to it.
+ *
+ * `where` returning `None` binds the empty set without touching the backend.
+ * A `BackendError` becomes an `AuthorizationError` naming `source`, which
+ * binds the set to nothing: an unresolvable set narrows, never widens.
+ */
+export const namedSet = (backend: Backend, options: NamedSetOptions): NamedSet => {
+  const { source } = options;
+  const toMember = memberOf(options.member);
+  return {
+    source,
+    maxAge: options.maxAge,
+    resolve: (context) =>
+      Option.match(options.where(context), {
+        onNone: () => Effect.succeed([]),
+        onSome: (where) =>
+          backend.evaluate(context, Subsets.make({ collection: source, where })).pipe(
+            Effect.flatMap((entries) =>
+              backend.getRows(
+                context,
+                source,
+                Arr.map(entries, (entry) => entry.id)
+              )
+            ),
+            Effect.map((rows) => Arr.dedupe(Arr.getSomes(Arr.map(rows, toMember)))),
+            Effect.mapError(
+              (error) =>
+                new AuthorizationError({
+                  message: `named set over "${source}": ${error.message}`,
+                  collection: source,
+                })
+            )
+          ),
+      }),
+  };
+};
 
 /**
  * What an auth filter decides for a request (ADR-0015's #205 amendment, the

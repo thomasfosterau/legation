@@ -20,6 +20,7 @@ import {
   Authorization,
   AuthorizationError,
   Backend,
+  BackendError,
   MemoryBackend,
   Mutator,
   Predicate,
@@ -704,5 +705,87 @@ describe("ReadScopes behind SyncServer", () => {
       expect(mentions(after, "user-bob")).toBe(false);
       expect(Arr.length(yield* Ref.get(scopes))).toBeGreaterThanOrEqual(2);
     }).pipe(Effect.scoped)
+  );
+});
+
+const putFollow = Mutator.make(
+  "follow/put",
+  Schema.Struct({ id: Schema.String, followerId: Schema.String, followeeId: Schema.String })
+);
+
+/** A backend holding alice → bob and bob → carol, counting its evaluations. */
+const followsBackend = Effect.fn("followsBackend")(function* () {
+  const memory = yield* MemoryBackend.make(
+    MemoryBackend.validatedHandlers([
+      MemoryBackend.handler(putFollow, (args, writer) => writer.put("follows", args.id, args)),
+    ])
+  );
+  yield* memory.applyMutations(
+    { clientGroupId: "seed" },
+    [
+      { id: "a-b", followerId: "user-alice", followeeId: "user-bob" },
+      { id: "b-c", followerId: "user-bob", followeeId: "user-carol" },
+    ].map((args, index) => ({
+      clientId: "seed",
+      mutationId: index + 1,
+      mutator: "follow/put",
+      args,
+      createdAt: 0,
+    }))
+  );
+  const evaluations = yield* Ref.make(0);
+  const backend: Backend.Backend = {
+    ...memory,
+    evaluate: (context, subset) =>
+      Ref.update(evaluations, (count) => count + 1).pipe(
+        Effect.andThen(memory.evaluate(context, subset))
+      ),
+  };
+  return { backend, evaluations };
+});
+
+const followingIn = (backend: Backend.Backend) =>
+  ReadScopes.userSet(backend, {
+    source: "follows",
+    where: (userId) => Predicate.eq("followerId", userId),
+    member: "followeeId",
+    maxAge: "1 hour",
+  });
+
+describe("ReadScopes.userSet: a named set keyed on the principal's user (#647)", () => {
+  it.effect("reads the members for the principal's user", () =>
+    Effect.gen(function* () {
+      const { backend } = yield* followsBackend();
+      const set = followingIn(backend);
+      expect(set.source).toBe("follows");
+      expect(yield* set.resolve(contextOf(principalOf("user-alice")))).toEqual(["user-bob"]);
+      expect(yield* set.resolve(contextOf(principalOf("user-bob")))).toEqual(["user-carol"]);
+    })
+  );
+
+  it.effect("is empty for the anonymous principal and a foreign identity, without a read", () =>
+    Effect.gen(function* () {
+      const { backend, evaluations } = yield* followsBackend();
+      const set = followingIn(backend);
+      expect(yield* set.resolve(contextOf(Principal.anonymous))).toEqual([]);
+      expect(yield* set.resolve({ clientGroupId: "g", identity: "user-alice" })).toEqual([]);
+      expect(yield* set.resolve({ clientGroupId: "g" })).toEqual([]);
+      expect(yield* Ref.get(evaluations)).toBe(0);
+    })
+  );
+
+  it.effect("fails a backend failure as an AuthorizationError naming the source", () =>
+    Effect.gen(function* () {
+      const { backend } = yield* followsBackend();
+      const broken: Backend.Backend = {
+        ...backend,
+        evaluate: () => Effect.fail(new BackendError({ message: "store unavailable" })),
+      };
+      const error = yield* Effect.flip(
+        followingIn(broken).resolve(contextOf(principalOf("user-alice")))
+      );
+      assert.instanceOf(error, AuthorizationError);
+      expect(error.collection).toBe("follows");
+    })
   );
 });
