@@ -47,6 +47,7 @@ import {
   authorize,
   checkFilterable,
   passthroughMiddleware,
+  resolveContext,
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import * as Hash from "./Hash.js";
@@ -452,17 +453,10 @@ export const makeWithIntrospectionWith = (
       clientGroupId: string,
       options?: HandleOptions
     ): Effect.Effect<SyncContext, AuthorizationError> =>
-      identityOption._tag === "None"
-        ? Effect.succeed({ clientGroupId })
-        : identityOption.value
-            .resolve({
-              clientGroupId,
-              credentials: Option.getOrElse(
-                options?.credentials ?? Option.none(),
-                () => noCredentials
-              ),
-            })
-            .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
+      resolveContext(identityOption, {
+        clientGroupId,
+        credentials: Option.getOrElse(options?.credentials ?? Option.none(), () => noCredentials),
+      });
 
     const pokeHub = yield* makePokeHub;
     // Each session's named-set resolutions (#205), by client group, then by the
