@@ -6,7 +6,7 @@ JSON:API loaders, derived sync and the replica-served façade. Read the root [AG
 
 - The JSON:API wire types, schemas and query encoding come from `@thomasfosterau/effect-jsonapi` (ADR-0016); never re-implement them here. Imports from the workspace: `@thomasfosterau/legation` only.
 - In the engine's model a JSON:API `type` is a collection, a resource `id` a row id, a resource a row value (ADR-0008).
-- **Peers:** `@thomasfosterau/effect-jsonapi ^0.22.0` (the app passes its own resources, documents and errors in, so there must be one copy) and `effect ^4.1.0` (`catalogs.jsonapi-peers`), because effect-jsonapi 0.22.x peers `effect ^4.1.0`. This package's `effect` floor is 4.1.0; its tests are their own Vitest project (`jsonapi`), kept out of the core floor job (4.0.0). No floor job runs that project yet; it runs at the pin in Quality Gates. Moving effect-jsonapi's minor moves the dev catalog entry and `catalogs.jsonapi-peers` together, with a `minor` changeset.
+- **Peers:** `@thomasfosterau/effect-jsonapi ^0.22.0` (the app passes its own resources, documents and errors in, so there must be one copy) and `effect ^4.1.0` (`catalogs.jsonapi-peers`), because effect-jsonapi 0.22.x peers `effect ^4.1.0`. This package's `effect` floor is 4.1.0; its tests are their own Vitest project (`jsonapi`) so CI's "Tests (effect floor, jsonapi)" runs them at it. Moving effect-jsonapi's minor moves the dev catalog entry and `catalogs.jsonapi-peers` together, with a `minor` changeset.
 
 ## Invariants
 
@@ -17,4 +17,4 @@ JSON:API loaders, derived sync and the replica-served façade. Read the root [AG
 
 ## Tests
 
-`src/__tests__/` (Vitest project `jsonapi`, with its own `effect` floor). The commerce example's tests (`examples/commerce/tests`) exercise the façade end to end: in the `jsonapi` project, and in Chromium in `commerce-browser`.
+`src/__tests__/` (Vitest project `jsonapi`, with its own `effect` floor). The commerce example's tests (`examples/commerce/tests`) exercise the façade end to end: in the `jsonapi` project, and in Chromium in `commerce-browser`, both at this package's floor.
