@@ -985,6 +985,20 @@ export interface ClientEngine {
    */
   readonly pullCounts: Effect.Effect<PullCounts>;
   /**
+   * Run `body` with pulls held: under the pull lock (#412), so no pull is in
+   * flight while it runs and none starts until it ends, given the pull
+   * counters as they stand. It is how a direct store write that must not race
+   * a pull is serialised against the engine's pulls (`Hydration.hydrateUnpulled`,
+   * #146): `counts.started` is `0` exactly when no pull has begun since the
+   * engine was built.
+   *
+   * `body` must not await {@link pull}, or anything that waits on one: the lock
+   * is not re-entrant, so that call would wait for `body` forever.
+   */
+  readonly withPullsHeld: <A, E, R>(
+    body: (counts: PullCounts) => Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>;
+  /**
    * A subset's **total** as the last applied pull reported it (#210): how many
    * rows the server's subset matches under its auth filter, whatever the
    * window, so a windowed subscription's total is the collection's and not the
@@ -2677,6 +2691,9 @@ export const make = (
       { concurrency: 1 }
     );
 
+    const withPullsHeld: ClientEngine["withPullsHeld"] = (body) =>
+      Semaphore.withPermit(pullLock, Effect.flatMap(pullCounts, body));
+
     const subscribeSubset = (subset: Subset.Subset): Effect.Effect<void> =>
       Ref.update(subscriptions, (current) =>
         current.some((s) => Subset.hash(s) === Subset.hash(subset)) ? current : [...current, subset]
@@ -3680,6 +3697,7 @@ export const make = (
       push,
       pull,
       pullCounts,
+      withPullsHeld,
       totalOf,
       dropIfPending,
       reset,

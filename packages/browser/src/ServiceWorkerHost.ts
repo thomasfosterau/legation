@@ -46,6 +46,7 @@ import {
   EngineHost,
   type HostRequest,
 } from "@thomasfosterau/legation/internal";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
@@ -96,6 +97,14 @@ export interface ServiceWorkerHostOptions {
    * devtools can drive this engine.
    */
   readonly requests?: ReadonlyArray<HostRequest.Handler>;
+  /**
+   * How long a cold host holds its engine's pulls for a tab's server-rendered
+   * snapshot (#146), forwarded to {@link EngineHost.run}: a worker started
+   * over an empty store waits up to this long for the first `hydrate` request
+   * before its sync loop's first pull, so the snapshot wins. Needs the
+   * engine's `ClientStore` in context; unset, nothing is held.
+   */
+  readonly hydrationWindow?: Duration.Input | undefined;
 }
 
 /** The default channel name; Mirror setups should use the same one. */
@@ -144,6 +153,7 @@ export const start = (
       engine,
       ...Option.match(store, { onNone: () => ({}), onSome: (value) => ({ store: value }) }),
       requests: options.requests ?? [],
+      hydrationWindow: options.hydrationWindow,
       ...(registry === undefined ? {} : { registry }),
       ...(nodes === undefined ? {} : { nodes }),
       ...(urls === undefined ? {} : { urls }),

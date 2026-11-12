@@ -64,6 +64,12 @@ export interface StartedHost extends ServiceWorkerHost.Host {
  */
 export type PageSignal =
   | { readonly type: "legation:pull-landed"; readonly cookie: string | undefined }
+  /**
+   * A pull the server answered (#146): the cookie the request carried, and
+   * whether the answer was a reset (a `Clear`). After a snapshot hydration the
+   * first one carries the snapshot's cookie and is no reset.
+   */
+  | { readonly type: "legation:pull-answered"; readonly cookie: string | undefined; readonly reset: boolean }
   | { readonly type: "legation:mutation-journaled"; readonly mutationId: number }
   | { readonly type: "legation:push-completed"; readonly mutations: number };
 
@@ -87,6 +93,7 @@ export interface HostOptions {
 const transportLayer = (options: {
   readonly clientGroupId: string;
   readonly syncOrigin: string;
+  readonly onSignal?: ((signal: PageSignal) => void) | undefined;
 }): Layer.Layer<Transport.ClientTransport> =>
   Layer.effect(Transport.ClientTransport)(
     Effect.gen(function* () {
@@ -94,7 +101,27 @@ const transportLayer = (options: {
         clientGroupId: options.clientGroupId,
         origin: options.syncOrigin,
       });
-      return yield* BrowserConnectivity.withBrowserConnectivity(transport);
+      const connected = yield* BrowserConnectivity.withBrowserConnectivity(transport);
+      const { onSignal } = options;
+      if (onSignal === undefined) return connected;
+      // Each answered pull, as `legation:pull-answered`: what the request
+      // carried is the evidence that a hydrated replica continues the
+      // snapshot's CVR conversation rather than starting over (#146).
+      return {
+        ...connected,
+        pull: (request) =>
+          connected.pull(request).pipe(
+            Effect.tap((response) =>
+              Effect.sync(() =>
+                onSignal({
+                  type: "legation:pull-answered",
+                  cookie: request.cookie,
+                  reset: response.patch.some((op) => op._tag === "Clear"),
+                })
+              )
+            )
+          ),
+      } satisfies Transport.ClientTransport;
     })
   );
 
@@ -193,6 +220,11 @@ export const runHost = (options: HostOptions): Effect.Effect<never> =>
       registry,
       nodes,
       urls: JsonApiQuery.urlReads(nodes),
+      // A first visit boots this worker from a tab holding the page's SSR
+      // snapshot (#146): over an empty replica, hold the first pull until the
+      // tab's offer arrives, so the snapshot wins and the first pull continues
+      // from its cookie. A returning visitor's replica is never held.
+      hydrationWindow: "3 seconds",
     });
     options.onStart?.({ ...host, cookie: store.getCookie });
     return yield* Effect.never;

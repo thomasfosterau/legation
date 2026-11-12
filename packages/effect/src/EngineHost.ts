@@ -61,6 +61,7 @@ import type * as ClientStore from "./ClientStore.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, TransportError } from "./Errors.js";
 import * as HostRequest from "./HostRequest.js";
+import * as Hydration from "./Hydration.js";
 import * as Introspection from "./Introspection.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
@@ -117,11 +118,26 @@ export interface EngineHostOptions {
    * The engine's store. Given it, the host serves the introspection request
    * kinds (`Introspection.requests`, #136) over `Introspection.make(engine,
    * store)`, so a tab's devtools can read this engine through
-   * `Introspection.fromMirror`. Opt-in because the host is otherwise handed
-   * only the engine, and the journal, cookie and collections are the
+   * `Introspection.fromMirror`, and the `hydrate` kind
+   * (`Hydration.requests.hydrate`, #146), so a tab holding a server-rendered
+   * snapshot hands it to this store through the empty-store gate
+   * (`Hydration.hydrateUnpulled`). Opt-in because the host is otherwise
+   * handed only the engine, and the journal, cookie and collections are the
    * store's reads.
    */
   readonly store?: ClientStore.ClientStore;
+  /**
+   * How long a cold host holds its engine's pulls for a tab's snapshot (#146):
+   * when the host starts over an empty store whose engine has not pulled, no
+   * pull (the sync loop's connect pull, a registration's) starts until the
+   * first `hydrate` request is answered or this elapses
+   * (`Hydration.makeGate`'s `hold`). Without it the engine's first pull
+   * usually beats the snapshot across the mirror, and the snapshot is
+   * answered `AlreadyPulling`. A store that is not empty is never held. Needs
+   * `store`; unset, nothing is held. A second or so is enough for a tab that
+   * boots the host and offers its snapshot at once.
+   */
+  readonly hydrationWindow?: Duration.Input | undefined;
   /**
    * The host-request handlers this host serves (`HostRequest.handler`,
    * `HostRequest.streamHandler`), beside the introspection kinds `store`
@@ -207,14 +223,27 @@ const formKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestI
 /** The key a mirror's host request is held under while it runs: its mirror and requestId. */
 const hostRequestKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestId}`;
 
-/** The request kinds a host serves: the introspection kinds given a store, then `requests`. */
-const requestRegistryOf = (options: EngineHostOptions): HostRequest.Registry =>
-  HostRequest.registry([
-    ...(options.store === undefined
-      ? []
-      : Introspection.handlers(Introspection.make(options.engine, options.store))),
-    ...(options.requests ?? []),
-  ]);
+/**
+ * The request kinds a host serves: given a store, the introspection kinds and
+ * `hydrate` (through a gate holding the pulls for `hydrationWindow`), then
+ * `requests`.
+ */
+const requestRegistryOf = (
+  options: EngineHostOptions
+): Effect.Effect<HostRequest.Registry, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const { store } = options;
+    const served =
+      store === undefined
+        ? []
+        : [
+            ...Introspection.handlers(Introspection.make(options.engine, store)),
+            Hydration.handler(
+              yield* Hydration.makeGate(options.engine, store, { hold: options.hydrationWindow })
+            ),
+          ];
+    return HostRequest.registry([...served, ...(options.requests ?? [])]);
+  });
 
 /** A `Mutate` or `Read`: what its replies are addressed by. */
 interface Request {
@@ -699,7 +728,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // requestId, each on a fiber of its own so a long or streaming handler never
     // holds up the message loop. A cancel interrupts one; a mirror that leaves
     // (or is swept) has every request it holds interrupted.
-    const requestRegistry = requestRegistryOf(options);
+    const requestRegistry = yield* requestRegistryOf(options);
     const hostRequests = yield* Ref.make(HashMap.empty<string, Fiber.Fiber<void>>());
     const takeHostRequests = (select: (key: string) => boolean) =>
       Ref.modify(
