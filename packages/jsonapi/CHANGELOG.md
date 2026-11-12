@@ -1,5 +1,19 @@
 # @thomasfosterau/legation-jsonapi
 
+## 0.3.0
+
+### Minor Changes
+
+- e3321de: BREAKING: requires `@thomasfosterau/effect-jsonapi` `^0.21.0` (was `^0.17.0`). A filterable `id` is now declared on `Resource.make`'s `id` option with `Filter.able`, never as an attribute (effect-jsonapi reserves the name), so `filter[id]` decodes through the resource id's declared operators. Servers built on effect-jsonapi 0.18 or later refuse client-generated ids by default; since `JsonApiBackend` always sends one on create, give `Endpoint.create` and `Endpoint.operations` a `payload` that accepts `data.id` (see the README's "Atomic operations").
+- 66d0f7a: `NodeBridge` stores a to-one relationship's edge under the relationship's declared storage key, `Relationship.one(ref, { key })` / `Relationship.optional(ref, { key })` (effect-jsonapi 0.20), before falling back to the `` `${name}Id` `` convention. The `via` option still wins over both. A resource that already declares `key` and relied on the convention now bridges to the declared field.
+
+### Patch Changes
+
+- cec6dba: Internal: the remaining `switch` statements are exhaustive `Match`es (#497), so an input outside a case union now throws instead of silently yielding `undefined`, which no typed or decoded input reaches. The per-row evaluators (`Predicate.evaluate`, `Incremental`, `Aggregate`) keep their `switch` for speed. `Coverage.structuralKey` is now declared as a typed `const`, which shifts its emitted declaration; its type is unchanged.
+- Updated dependencies [1760b99]
+- Updated dependencies [cec6dba]
+  - @thomasfosterau/legation@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
