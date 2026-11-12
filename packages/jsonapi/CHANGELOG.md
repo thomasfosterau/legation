@@ -1,5 +1,23 @@
 # @thomasfosterau/legation-jsonapi
 
+## 0.5.0
+
+### Minor Changes
+
+- eb7f20c: **Breaking:** `@thomasfosterau/effect-jsonapi` is now a **peer** (`^0.22.0`), no longer a regular dependency (`^0.21.0`), and the `effect` peer is raised to `^4.1.0` (was `^4.0.0`), because effect-jsonapi 0.22 peers `effect ^4.1.0`. The resources, documents and errors an app builds with effect-jsonapi are passed into this package, so there must be one copy of it: a regular dependency kept a second, 0.21 copy beside the app's own. Migration: install `@thomasfosterau/effect-jsonapi@^0.22.0` (and `effect@^4.1.0`) in the app, and migrate the app's own effect-jsonapi code with its 0.22.0 notes.
+
+  This package's own signatures are unchanged. What it takes from effect-jsonapi follows 0.22: `NodeBridge` reads a relationship descriptor's storage `key` and paginated `order` as the `Option`s effect-jsonapi 0.22 declares them (an undeclared key still defaults to `<name>Id`), and `RestHandlers`' 400 / 403 error documents read `ApiError`'s `Option` titles. The wire output is unchanged.
+
+### Patch Changes
+
+- 2478811: Name the failures of the promises these packages await. A rejected KV delete, cache purge or forwarded invalidation (`EdgeInvalidation`), a rejected Background Sync registration lookup or registration (`BackgroundSync`) and an unreadable write-request body (`JsonApiFacade`) now carry a module-private tagged error with the rejection as its `cause`, where they were the generic `UnknownError`. Behaviour is unchanged; only the error a log line shows differs.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes

@@ -1,5 +1,25 @@
 # @thomasfosterau/legation
 
+## 0.5.0
+
+### Minor Changes
+
+- f1f0092: Per-request backends (#681). `Backend.perRequest(acquire)` builds a `Backend` whose store is acquired in a request's `Scope` and released when it closes, for a store whose connection is valid only within the current invocation (Hyperdrive) or must not be shared across requests; the services `acquire` needs beside its `Scope` are captured where the returned effect runs. `Backend.forRequest(backend)` is the backend one request runs against: one acquisition for a per-request backend, the backend itself otherwise. The sync server (`Server.make`, `SyncServer.make*`), `SyncServer.readSubsets`, `SyncServer.readTotal` and `Authorization.namedSet` now run each push, pull and read against one `forRequest` acquisition, so a push's `applyMutations` transaction, mutation-id claims included, stays on the connection that acquisition holds (Backend guarantee 1), while the server's CVRs, bus and named-set cache stay per server. Called directly, a per-request backend acquires once per call.
+- 584ea1c: The incremental operator algebra on `./internal` is typed by its row (#562). **Breaking for adapter authors**, at the type level and in one runtime shape.
+
+  - **`Incremental`**: `Row<A>`, `Delta<A>`, `Operator<A, B>`, `Group<A>`, `OrderedWindow<A>` and `JoinOperator<L, R, C>` carry their value types. `makeFilter<A>` returns `Operator<A, A>`, `makeMap<A, B>(f: (value: A) => B)` returns `Operator<A, B>`, `makeGroupBy<A>` returns `Operator<A, Group<A>>`, and the `*FromScratch` references follow. `JoinOptions<L, R, K, C>` types `leftKey: (value: L) => K` and `rightKey: (value: R) => K` with one shared key type `K` (so the two sides' keys are checked against each other) and `combine?: JoinCombine<L, R, C>`. `makeJoin` and `joinFromScratch` are overloaded: with a `combine` (`CombinedJoinOptions`) the joined value is its `C`; without one it is the new `Joined<L, R>` (`{ left, right }`).
+  - **`Derive`**: `Source<A, E>` (was `Source<E>`), `Row<A>` and `DerivedResult<A, E>` take the row type. `map<A, B, E>(source: Source<A, E>, f: (value: A) => B): Source<B, E>` (and `select`), `filter`, `distinct` and `orderedWindow` keep `A`, `groupBy` yields `Source<Group<A>, E>`, and `join` yields `Source<C, E | F>` or `Source<Joined<L, R>, E | F>` as above. `observed` yields `Source<unknown, ClientViewError>`: its rows are the store's untyped `LocalRow`s.
+  - **`LiveView`**: `LiveView<A>`, `PositionedRow<A>` and the new `ValueRow<A>` carry the row value type, through `make`, `makeIndexed`, `put`, `del`, `result` and `retarget`. Both default to `unknown`, so existing `LiveView.LiveView` annotations are unchanged.
+  - **Runtime change: a left join's unmatched right is now an `Option`.** `combine` receives `right: Option.Option<R>` (was `R | null`), and the default joined value's `right` is `Option.Option<R>` (`Option.none()` when unmatched, was `null`).
+
+  Migrating: replace `Derive.Source<E>` with `Derive.Source<A, E>` (`Source<unknown, E>` for untyped rows), `Incremental.Row`/`Delta`/`Operator` with their parameterised forms, and drop the `as` casts in projections, predicates and key functions, which now receive the source's row type. In a left join, read the right side as an `Option` (`Option.match(right, { onNone, onSome })`, `Option.map`, `Option.getOrNull`) instead of testing it for `null`.
+
+- 87e83f9: `Subset.TypedPredicate`'s (on `@thomasfosterau/legation/internal`) `isNull` and `isNotNull` take `field: keyof A & string` instead of an unused type parameter `K`. Calls are unchanged; only a call that passed the type argument explicitly (`isNull<"x">("x")`) needs it dropped.
+
+### Patch Changes
+
+- 515a427: `PgExecutor.make` accepts a driver's own client as well as the `SqlClient` service (#687). It now takes `PgExecutor.Client`, the two members it uses (`Pick<SqlClient, "unsafe" | "withTransaction">`), so an `@effect/sql-pg` `PgClient` (a `db.$client`, say) type-checks on effect 4.1.3 and later, where a driver's client extends `SqlClient`'s `Base` without the `SqlClient` type id, as well as on 4.0.0 – 4.1.2.
+
 ## 0.4.0
 
 ### Minor Changes
