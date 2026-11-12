@@ -1,5 +1,12 @@
 # @thomasfosterau/legation-browser
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [a7d5a09]
+  - @thomasfosterau/legation@0.6.0
+
 ## 0.3.1
 
 ### Patch Changes

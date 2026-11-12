@@ -1,5 +1,12 @@
 # @thomasfosterau/legation-svelte
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [a7d5a09]
+  - @thomasfosterau/legation@0.6.0
+
 ## 0.2.1
 
 ### Patch Changes
