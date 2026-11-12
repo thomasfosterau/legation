@@ -1,5 +1,38 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.2.0
+
+### Minor Changes
+
+- 85b11f6: Anonymous readers can be sharded over rooms (#679). `Worker.routeSync` takes `anonymousRoomOf`, which routes a caller `roomIdOf` left anonymous to a shared room named under the reserved `Worker.anonymousRoomPrefix` (`Option.none()` keeps the 401), so an anonymous caller never reaches a user's room; a `roomIdOf` id inside that namespace is refused with a 500. `Worker.shardByClientGroup({ shards, cookie? })` spreads anonymous callers over `shards` rooms by a stable hash of their client-group cookie. Without `anonymousRoomOf`, anonymous callers still get a 401.
+- da296dc: Out-of-band hints for the Cloudflare rooms (#679). `DurableFanoutBroker.publishOutOfBand({ shards, rooms, nodes, timeout? })` lets a cron or queue Worker that writes rows without a mutation poke every room leased on the write's topics, with each shard and room call bounded and fire-and-forget as in a room's own publish. `Room.make` takes a `hints` option, a `HintSource` the room runs on its bus; its doc comment and the README say that a polling source keeps the room from hibernating. `RoomObject` now extends `DurableFanoutBroker.PokeSurface`. In `@thomasfosterau/legation/internal`, `FanoutTopics.topicsForHints` derives the topics of a batch of change hints, the derivation `FanoutBus` publishes with.
+- ea344a3: `Room.make`'s `backend` and `hints` run with the room instance's `Scope` (#679), so a backend can hold a resource for the instance's life, such as a PostgreSQL pool built with `Layer.build(PgClient.layer(...))`. The README and the `backend` doc comment say what that lifetime is against hibernation and eviction, and that a Hyperdrive client must not be held across requests (#506).
+- 82eb11e: The room (`Room.make`) presents each push, pull and read request's headers to its `identity` resolver as `Authorization.RequestCredentials` (ADR-0035, #219), so a resolver can verify the session cookie or API key the request carried. A resolver now has the core's new signature, `({ clientGroupId, credentials }) => …`.
+- 0a725be: **Breaking:** `FanoutShard.make` is now an Effect value, not a function: write `LegationShard.make(FanoutShard.make)` instead of `FanoutShard.make()`. `Room.RoomObject`'s `webSocketMessage` and `webSocketClose` now declare the parameters Alchemy's Durable Object handler signature passes; nothing changes at runtime.
+
+### Patch Changes
+
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.1.2
 
 ### Patch Changes

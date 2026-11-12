@@ -1,5 +1,31 @@
 # @thomasfosterau/legation-devtools
 
+## 0.2.1
+
+### Patch Changes
+
+- 6b520e3: `Devtools.OfflineControl`'s doc comment names the in-memory loopback's `Transport.makeInMemory(...).setOnline` as a second way to build the offline control, beside `Transport.simulateOffline`.
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes
