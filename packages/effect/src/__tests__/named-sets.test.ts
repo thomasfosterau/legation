@@ -270,6 +270,29 @@ describe("session-resolved read scopes (#205)", () => {
     })
   );
 
+  it.effect("never serves a set's members from before a push, on the very next pull (#652)", () =>
+    Effect.gen(function* () {
+      // No scheduler turn between the write and the pull: the push itself marks
+      // the session's set stale before it answers, so the pull that follows binds
+      // the set again instead of the cached members.
+      const { pull, write } = yield* setup;
+      yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
+      const following = yield* pull("group-alice");
+      expect(putIds(following)).toEqual(["alice-private", "bob-followers", "pub"]);
+
+      // The unfollow (the follow row moves to another follower).
+      yield* write(put("follows", { id: "f1", follower: "carol", followee: "bob" }));
+      const unfollowed = yield* pull("group-alice", following.cookie);
+      expect(unfollowed.patch[0]?._tag).toBe("Clear");
+      expect(putIds(unfollowed)).toEqual(["alice-private", "pub"]);
+
+      // And the follow back, gained on the very next pull too.
+      yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
+      const refollowed = yield* pull("group-alice", unfollowed.cookie);
+      expect(putIds(refollowed)).toEqual(["alice-private", "bob-followers", "pub"]);
+    })
+  );
+
   it.effect("diffs as usual while the set stays the same", () =>
     Effect.gen(function* () {
       const { pull } = yield* setup;
