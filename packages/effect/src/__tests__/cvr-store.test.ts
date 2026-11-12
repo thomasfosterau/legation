@@ -4,7 +4,7 @@
  * store give a client cross-instance pull continuity (a cookie minted by
  * instance A is recognized by instance B, so no reset).
  */
-import { expect, layer } from "@effect/vitest";
+import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import { KeyValueStore } from "effect/persistence";
@@ -21,45 +21,48 @@ import type { ServerHandler } from "../Transport.js";
 import type { PatchOp } from "../Protocol.js";
 import { defined } from "./defined.js";
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })("Cvr.makeKeyValueStore", (it) => {
-  it.effect("round-trips a CVR through shared storage", () =>
-    Effect.gen(function* () {
-      const writer = yield* Cvr.makeKeyValueStore();
-      const cvr: Cvr.Cvr = {
-        rows: new Map<string, Map<string, string | number>>([
-          ["todos", new Map([["1", 7]])],
-          ["notes", new Map([["n1", "v-abc"]])],
-        ]),
-      };
-      yield* writer.set("cookie-1", cvr);
+describe("Cvr.makeKeyValueStore", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("round-trips a CVR through shared storage", () =>
+      Effect.gen(function* () {
+        const writer = yield* Cvr.makeKeyValueStore();
+        const cvr: Cvr.Cvr = {
+          rows: new Map<string, Map<string, string | number>>([
+            ["todos", new Map([["1", 7]])],
+            ["notes", new Map([["n1", "v-abc"]])],
+          ]),
+        };
+        yield* writer.set("cookie-1", cvr);
 
-      // A second store instance over the same KVS sees it (cross-instance).
-      const reader = yield* Cvr.makeKeyValueStore();
-      const read = yield* reader.get("cookie-1");
-      expect(read).toBeDefined();
-      expect(defined(read).rows.get("todos")?.get("1")).toBe(7);
-      expect(defined(read).rows.get("notes")?.get("n1")).toBe("v-abc");
+        // A second store instance over the same KVS sees it (cross-instance).
+        const reader = yield* Cvr.makeKeyValueStore();
+        const read = yield* reader.get("cookie-1");
+        expect(read).toBeDefined();
+        expect(defined(read).rows.get("todos")?.get("1")).toBe(7);
+        expect(defined(read).rows.get("notes")?.get("n1")).toBe("v-abc");
 
-      yield* writer.remove("cookie-1");
-      expect(yield* reader.get("cookie-1")).toBeUndefined();
-    })
-  );
+        yield* writer.remove("cookie-1");
+        expect(yield* reader.get("cookie-1")).toBeUndefined();
+      })
+    );
+  });
 
-  it.effect("an unknown cookie reads back as undefined (safe reset)", () =>
-    Effect.gen(function* () {
-      const store = yield* Cvr.makeKeyValueStore();
-      expect(yield* store.get("never-written")).toBeUndefined();
-    })
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("an unknown cookie reads back as undefined (safe reset)", () =>
+      Effect.gen(function* () {
+        const store = yield* Cvr.makeKeyValueStore();
+        expect(yield* store.get("never-written")).toBeUndefined();
+      })
+    );
+  });
 });
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const allTodos = Subset.make({ collection: "todos" });
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "shared CVR store across instances",
-  (it) => {
-    it.effect("a cookie minted by instance A is recognized by instance B", () =>
+describe("shared CVR store across instances", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a cookie minted by instance A is recognized by instance B", () =>
       Effect.gen(function* () {
         // One backend and one CVR store, shared by two SyncServer instances.
         const backend = yield* MemoryBackend.make(
@@ -109,5 +112,5 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(second.patch).toEqual([]);
       })
     );
-  }
-);
+  });
+});

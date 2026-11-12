@@ -9,7 +9,7 @@
  * backend's `writes` seam; the server's rules make `reject` a 422 pointing at
  * the operation and `fail` a server fault (500).
  */
-import { describeWrapped, expect, layer } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -692,18 +692,19 @@ const restartPush = () => [
   },
 ];
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "JsonApiBackend ledger store (#468), atomic mode",
-  (it) => {
-    it.effect("satisfies verifyBackendContract over a durable ledger store", () =>
+describe("JsonApiBackend ledger store (#468), atomic mode", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
         const { backend } = yield* makeBackend(undefined, noProbe, { ledger });
         yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
       })
     );
+  });
 
-    it.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
         const server: Store = new Map();
@@ -726,15 +727,14 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
       })
     );
-  }
-);
+  });
+});
 
 // ─── Ledger store failures and the forgetting bound (#468) ───────────────────
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "JsonApiBackend ledger store failures (#468), atomic mode",
-  (it) => {
-    it.effect(
+describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
       "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
       () =>
         Effect.gen(function* () {
@@ -769,8 +769,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
           expect(yield* backend.rejections(restartContext)).toEqual(rejected);
         })
     );
+  });
 
-    it.effect("a ledger read that fails is a BackendError and fills no cache", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("a ledger read that fails is a BackendError and fills no cache", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         const durable = Ledger.keyValue(kv);
@@ -791,8 +793,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(yield* backend.rejections(restartContext)).toHaveLength(1);
       })
     );
+  });
 
-    it.effect("the forgetting bound persists across a restart", () =>
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("the forgetting bound persists across a restart", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         const ledger = Ledger.keyValue(kv);
@@ -839,8 +843,10 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
         expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
       })
     );
+  });
 
-    it.effect(
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
       "restarts over the same durable store with the first group's ledger, and runs the contract in a fresh group",
       () =>
         Effect.gen(function* () {
@@ -871,8 +877,8 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
           });
         })
     );
-  }
-);
+  });
+});
 
 // ─── The contract across a restart in the same client group (#477, #483) ───
 
@@ -917,19 +923,22 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
   });
 
-layer(KeyValueStore.layerMemory, { buildPerTest: true })(
-  "JsonApiBackend restarted on the same ledger in the same group (#477, #483), atomic mode",
-  (it) => {
-    it.effect("runs the full contract over a backend restarted on the same durable ledger", () =>
-      Effect.gen(function* () {
-        const run = yield* restartInSameGroup((ledger) => ledger);
-        expect(run.restartedLedger).toEqual(run.acknowledged);
-        expect(run.restartedRejected).toEqual(run.rejected);
-        expect(Exit.isSuccess(run.outcome)).toBe(true);
-      })
+describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), atomic mode", () => {
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "runs the full contract over a backend restarted on the same durable ledger",
+      () =>
+        Effect.gen(function* () {
+          const run = yield* restartInSameGroup((ledger) => ledger);
+          expect(run.restartedLedger).toEqual(run.acknowledged);
+          expect(run.restartedRejected).toEqual(run.rejected);
+          expect(Exit.isSuccess(run.outcome)).toBe(true);
+        })
     );
+  });
 
-    it.effect(
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
       "fails a backend that forgets its ledger on restart through the restored-ledger rule",
       () =>
         Effect.gen(function* () {
@@ -944,5 +953,5 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true })(
           expect(violation?.message).toContain("the backend forgot its ledger on restart");
         })
     );
-  }
-);
+  });
+});

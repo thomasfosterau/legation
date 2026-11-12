@@ -4,7 +4,7 @@
  * awaited-outcome shape; `layer` derives the view from the in-context engine
  * so one runtime exposes both.
  */
-import { expect, layer } from "@effect/vitest";
+import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -69,21 +69,22 @@ const viewLayer = ClientView.layer.pipe(Layer.provideMerge(engineLayer));
 
 const allTodos = Subset.make({ collection: "todos" });
 
-layer(viewLayer, { buildPerTest: true })("ClientView.fromEngine / layer", (it) => {
-  it.effect("delegates reads and optimistic writes to the engine", () =>
-    Effect.gen(function* () {
-      const view = yield* ClientView.ClientView;
-      yield* view.mutate("todo/set", { id: "1", title: "seed" });
-      expect((yield* view.query(allTodos)).map((row) => row.id)).toEqual(["1"]);
-    })
-  );
+describe("ClientView.fromEngine / layer", () => {
+  layer(viewLayer)((scoped) => {
+    scoped.effect("delegates reads and optimistic writes to the engine", () =>
+      Effect.gen(function* () {
+        const view = yield* ClientView.ClientView;
+        yield* view.mutate("todo/set", { id: "1", title: "seed" });
+        expect((yield* view.query(allTodos)).map((row) => row.id)).toEqual(["1"]);
+      })
+    );
+  });
 });
 
 // Live clock (`excludeTestServices`): `eventually` polls on real timers.
-layer(viewLayer, { buildPerTest: true, excludeTestServices: true })(
-  "ClientView.fromEngine / layer, live",
-  (it) => {
-    it.effect("mutateWithAck resolves with the backend's authoritative outcome", () =>
+describe("ClientView.fromEngine / layer, live", () => {
+  layer(viewLayer, { excludeTestServices: true })((scoped) => {
+    scoped.effect("mutateWithAck resolves with the backend's authoritative outcome", () =>
       Effect.gen(function* () {
         const view = yield* ClientView.ClientView;
         const engine = yield* ClientEngineModule.ClientEngine;
@@ -107,8 +108,8 @@ layer(viewLayer, { buildPerTest: true, excludeTestServices: true })(
         expect(yield* Fiber.join(rejected)).toEqual({ _tag: "rejected", reason: "not allowed" });
       })
     );
-  }
-);
+  });
+});
 
 const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
   Effect.gen(function* () {

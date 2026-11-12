@@ -676,10 +676,9 @@ describeWrapped("BackgroundSync (#213)", (it) => {
 });
 
 // A live clock (`excludeTestServices`): the flushes below race the host's real timers.
-layer(KeyValueStore.layerMemory, { buildPerTest: true, excludeTestServices: true })(
-  "BackgroundSync identity boundary (#212)",
-  (it) => {
-    it.effect("a sync event does not push a quarantined journal", () =>
+describe("BackgroundSync identity boundary (#212)", () => {
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect("a sync event does not push a quarantined journal", () =>
       Effect.gen(function* () {
         const self = fakeScope();
         // Bob is who the app says is signed in now.
@@ -701,70 +700,77 @@ layer(KeyValueStore.layerMemory, { buildPerTest: true, excludeTestServices: true
         expect(yield* engine.quarantinedMutations(ALICE)).toHaveLength(1);
       }).pipe(Effect.scoped)
     );
+  });
 
-    it.effect("a replica stamped for someone other than the current identity is not flushed", () =>
-      Effect.gen(function* () {
-        // The tab closed before the app called `reset`: the store is still
-        // stamped for Alice, but Bob is who the app now says is signed in.
-        const current = yield* Ref.make<Identity.Fingerprint | undefined>(BOB);
-        const self = fakeScope();
-        const listener = listenOn(self, { identity: Ref.get(current) });
-        const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const { engine, pushes } = yield* makeEngine(store);
-        yield* listener.serve(engine);
-        yield* engine.mutate("todo/set", { id: "1", title: "alice's unsynced write" });
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect(
+      "a replica stamped for someone other than the current identity is not flushed",
+      () =>
+        Effect.gen(function* () {
+          // The tab closed before the app called `reset`: the store is still
+          // stamped for Alice, but Bob is who the app now says is signed in.
+          const current = yield* Ref.make<Identity.Fingerprint | undefined>(BOB);
+          const self = fakeScope();
+          const listener = listenOn(self, { identity: Ref.get(current) });
+          const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const { engine, pushes } = yield* makeEngine(store);
+          yield* listener.serve(engine);
+          yield* engine.mutate("todo/set", { id: "1", title: "alice's unsynced write" });
 
-        const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
-        expect(yield* store.pendingMutations).toHaveLength(1);
+          const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
+          expect(yield* store.pendingMutations).toHaveLength(1);
 
-        // "Cannot tell who is signed in" skips too.
-        yield* Ref.set(current, undefined);
-        const unknown = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(unknown).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
+          // "Cannot tell who is signed in" skips too.
+          yield* Ref.set(current, undefined);
+          const unknown = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(unknown).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
 
-        // Alice is signed in again: her journal is hers to push.
-        yield* Ref.set(current, ALICE);
-        const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(flushed).toEqual({ ok: true, value: "Flushed" });
-        expect(yield* Ref.get(pushes)).toHaveLength(1);
-        expect(yield* store.pendingMutations).toEqual([]);
-      }).pipe(Effect.scoped)
+          // Alice is signed in again: her journal is hers to push.
+          yield* Ref.set(current, ALICE);
+          const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(flushed).toEqual({ ok: true, value: "Flushed" });
+          expect(yield* Ref.get(pushes)).toHaveLength(1);
+          expect(yield* store.pendingMutations).toEqual([]);
+        }).pipe(Effect.scoped)
     );
+  });
 
-    it.effect("an anonymous replica is not flushed under a sign-in, and is under anonymous", () =>
-      Effect.gen(function* () {
-        // Anonymous → signed in is the one benign transition, but a
-        // context with no UI does not apply it: the page boot does.
-        const current = yield* Ref.make<Identity.Fingerprint | undefined>(ALICE);
-        const self = fakeScope();
-        const listener = listenOn(self, { identity: Ref.get(current) });
-        const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-        const { engine, pushes } = yield* makeEngine(store);
-        yield* listener.serve(engine);
-        yield* engine.mutate("todo/set", { id: "1", title: "an anonymous write" });
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect(
+      "an anonymous replica is not flushed under a sign-in, and is under anonymous",
+      () =>
+        Effect.gen(function* () {
+          // Anonymous → signed in is the one benign transition, but a
+          // context with no UI does not apply it: the page boot does.
+          const current = yield* Ref.make<Identity.Fingerprint | undefined>(ALICE);
+          const self = fakeScope();
+          const listener = listenOn(self, { identity: Ref.get(current) });
+          const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+          const { engine, pushes } = yield* makeEngine(store);
+          yield* listener.serve(engine);
+          yield* engine.mutate("todo/set", { id: "1", title: "an anonymous write" });
 
-        const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
-        expect(yield* store.pendingMutations).toHaveLength(1);
+          const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
+          expect(yield* store.pendingMutations).toHaveLength(1);
 
-        yield* Ref.set(current, Identity.anonymous);
-        const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(flushed).toEqual({ ok: true, value: "Flushed" });
-        expect(yield* Ref.get(pushes)).toHaveLength(1);
-      }).pipe(Effect.scoped)
+          yield* Ref.set(current, Identity.anonymous);
+          const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(flushed).toEqual({ ok: true, value: "Flushed" });
+          expect(yield* Ref.get(pushes)).toHaveLength(1);
+        }).pipe(Effect.scoped)
     );
-  }
-);
+  });
+});
 
 // A live clock (`excludeTestServices`): the flush races the host's real timers.
-layer(Logs.layer, { buildPerTest: true, excludeTestServices: true })(
-  "BackgroundSync store failure logging",
-  (live) => {
-    live.effect("a store failure rejects the event and is logged at Warn", () =>
+describe("BackgroundSync store failure logging", () => {
+  layer(Logs.layer, { excludeTestServices: true })((scoped) => {
+    scoped.effect("a store failure rejects the event and is logged at Warn", () =>
       Effect.gen(function* () {
         const logs = yield* Logs;
         const self = fakeScope();
@@ -792,5 +798,5 @@ layer(Logs.layer, { buildPerTest: true, excludeTestServices: true })(
         expect(logs.loud[0]).toMatch(/^Warn: .*store/);
       }).pipe(Effect.scoped)
     );
-  }
-);
+  });
+});
