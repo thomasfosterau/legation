@@ -46,14 +46,25 @@ import {
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Cvr, HintSource } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  Defined,
+  HintSource,
+} from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import * as FanoutShard from "../FanoutShard.js";
 import * as Room from "../Room.js";
 import { routes } from "../RoomProtocol.js";
-import { routeSync } from "../Worker.js";
+import {
+  anonymousRoomPrefix,
+  type RouterConfig,
+  routeSync,
+  shardByClientGroup,
+} from "../Worker.js";
 import { defined } from "./defined.js";
 import {
   construct,
@@ -226,6 +237,112 @@ describe("routeSync", () => {
     const response = defined(Option.getOrUndefined(await route(`/sync${routes.pull}?user=u-1`)));
     expect(await response.json()).toEqual({ room: "u-1", path: `/sync${routes.pull}?user=u-1` });
   });
+
+  /** Route `path` with `cookie` (if any) through `anonymousRoomOf`: the room addressed, or the status. */
+  const routeAnonymous = (
+    path: string,
+    cookie: Option.Option<string>,
+    anonymousRoomOf?: RouterConfig["anonymousRoomOf"]
+  ) =>
+    routeSync({
+      rooms: stubRooms,
+      roomIdOf,
+      ...Defined.fields({ anonymousRoomOf }),
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(
+            `https://app.example.com${path}`,
+            Option.match(cookie, {
+              onNone: () => ({}),
+              onSome: (value) => ({ headers: { cookie: value } }),
+            })
+          )
+        )
+      ),
+      Effect.orDie,
+      Effect.map((routed) => HttpServerResponse.toWeb(defined(Option.getOrUndefined(routed)))),
+      Effect.flatMap((response): Effect.Effect<string | number> =>
+        response.ok
+          ? awaitPromise(() => response.json()).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ room: Schema.String }))),
+              Effect.map(({ room }) => room),
+              Effect.orDie
+            )
+          : Effect.succeed(response.status)
+      )
+    );
+  const anonymousShards = shardByClientGroup({ shards: 4 });
+
+  it.effect("spreads anonymous callers over the anonymous rooms by their client-group cookie", () =>
+    Effect.gen(function* () {
+      const groups = Arr.makeBy(64, (n) => `group-${n}`);
+      const rooms = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      // Every room is one of the four anonymous shards, and all four are used.
+      expect(Arr.dedupe(rooms).toSorted()).toEqual(
+        Arr.makeBy(4, (n) => `${anonymousRoomPrefix}${n}`)
+      );
+      // Deterministic: a group lands in the same room on every request, its socket included.
+      const again = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.socket}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      expect(again).toEqual(rooms);
+    })
+  );
+
+  it.effect(
+    "leaves identified callers in their own room and refuses an unroutable anonymous one",
+    () =>
+      Effect.gen(function* () {
+        const cookie = Option.some("legation-client-group=group-1");
+        expect(yield* routeAnonymous(`/sync${routes.pull}?user=u-1`, cookie, anonymousShards)).toBe(
+          "u-1"
+        );
+        // No client-group cookie: nothing to shard by, so a 401.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, Option.none(), anonymousShards)).toBe(
+          401
+        );
+        // No anonymous routing: every anonymous caller gets a 401, cookie or not.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, cookie)).toBe(401);
+        // A custom cookie name.
+        expect(
+          yield* routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some("visitor=v-1"),
+            shardByClientGroup({ shards: 1, cookie: "visitor" })
+          )
+        ).toBe(`${anonymousRoomPrefix}0`);
+      })
+  );
+
+  it.effect("refuses an identified room id inside the anonymous namespace", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* routeAnonymous(
+          `/sync${routes.pull}?user=${encodeURIComponent(`${anonymousRoomPrefix}0`)}`,
+          Option.some("legation-client-group=group-1"),
+          anonymousShards
+        )
+      ).toBe(500);
+    })
+  );
 
   it("honours a custom base path", async () => {
     const routed = await route(`/legation${routes.push}?user=u-2`, "/legation");

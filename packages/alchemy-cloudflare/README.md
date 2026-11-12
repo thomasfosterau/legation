@@ -27,7 +27,8 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
   distributed cleanup.
 - **`Worker` (`routeSync`)** — the stateless entry, for an Alchemy Worker's
   `fetch`. It claims only the sync base path (default `/sync`), resolves the
-  caller's identity to their room, forwards the request to the room's stub
+  caller's identity to their room (or, opted in, an anonymous caller to a shared
+  anonymous room), forwards the request to the room's stub
   (WebSocket upgrades included), and answers `Option.none()` for everything
   else, so it composes inside any existing handler.
 - **`D1Executor`** — a `SqlBackend` executor over the `QueryDatabaseClient` of
@@ -123,6 +124,30 @@ the room's per-instance phase, where the object's state and Alchemy's
 `RuntimeContext` are available, so a backend over D1 (or any other binding)
 is built there. A request reaches the room with its base path intact, and the
 room answers by the path's last segment (`/sync/push` is the `push` route).
+
+### Anonymous readers
+
+`roomIdOf` answering `undefined` is a 401. To serve public collections to
+anonymous readers, give `routeSync` an `anonymousRoomOf`: it names the shared
+room an anonymous caller uses, under the reserved `Worker.anonymousRoomPrefix`,
+so an anonymous caller never reaches a user's room (and a `roomIdOf` id with
+that prefix is refused with a 500). `Worker.shardByClientGroup` spreads them
+over a fixed number of rooms by their client-group cookie, so one Durable
+Object is not their ceiling:
+
+```ts
+Worker.routeSync({
+  rooms,
+  roomIdOf: resolveSession,
+  anonymousRoomOf: Worker.shardByClientGroup({ shards: 16 }),
+});
+```
+
+A group always lands in the same room, so its CVRs stay there. A caller with
+no `legation-client-group` cookie (the SvelteKit adapter's `clientGroupId`
+sets it) gets a 401. Changing `shards` moves most groups, whose next pull is
+then a reset. The room's policy sees these callers as anonymous, so it must
+allow only the public collections to the anonymous identity.
 
 The room presents each push, pull and read request's headers to `identity` as
 its `Authorization.RequestCredentials` (ADR-0035), so a resolver can verify the
