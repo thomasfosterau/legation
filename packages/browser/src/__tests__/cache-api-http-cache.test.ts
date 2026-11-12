@@ -7,6 +7,7 @@
 import type { HttpCache } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
 import { defined } from "./defined.js";
 
@@ -50,7 +51,7 @@ describe("CacheApiHttpCache store", () => {
       const hit = yield* store.match(request);
       expect(hit).toBeDefined();
       expect(hit?.meta.tags).toEqual(["todos"]);
-      expect(yield* Effect.promise(() => defined(hit).response.json())).toEqual([{ id: "1" }]);
+      expect(yield* awaitPromise(() => defined(hit).response.json())).toEqual([{ id: "1" }]);
     })
   );
 
@@ -102,11 +103,11 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       const request = new Request("https://api.test/todos");
 
       const first = yield* handler(request);
-      expect(yield* Effect.promise(() => first.response.text())).toBe("network-1");
+      expect(yield* awaitPromise(() => first.response.text())).toBe("network-1");
       expect(first.revalidate).toBeUndefined();
 
       const second = yield* handler(request);
-      expect(yield* Effect.promise(() => second.response.text())).toBe("network-1");
+      expect(yield* awaitPromise(() => second.response.text())).toBe("network-1");
       expect(network.calls()).toBe(1);
     })
   );
@@ -124,14 +125,14 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       yield* handler(request);
 
       const stale = yield* handler(request);
-      expect(yield* Effect.promise(() => stale.response.text())).toBe("network-1");
+      expect(yield* awaitPromise(() => stale.response.text())).toBe("network-1");
       expect(stale.revalidate).toBeDefined();
       yield* defined(stale.revalidate);
       expect(network.calls()).toBe(2);
 
       // The background refresh replaced the stored copy.
       const refreshed = yield* handler(request);
-      expect(yield* Effect.promise(() => refreshed.response.text())).toBe("network-2");
+      expect(yield* awaitPromise(() => refreshed.response.text())).toBe("network-2");
     })
   );
 
@@ -147,7 +148,7 @@ describe("fetchHandler (stale-while-revalidate)", () => {
       yield* handler(request);
 
       const reloaded = yield* handler(request);
-      expect(yield* Effect.promise(() => reloaded.response.text())).toBe("network-2");
+      expect(yield* awaitPromise(() => reloaded.response.text())).toBe("network-2");
       expect(reloaded.revalidate).toBeUndefined();
       expect(network.calls()).toBe(2);
     })

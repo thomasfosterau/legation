@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -168,7 +169,9 @@ const makeInProcessClient = (store: Store) =>
         const id = Option.map(Option.fromUndefinedOr(rawId), decodeURIComponent);
         const isWrite = request.method === "POST" || request.method === "PATCH";
         const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const body = isWrite ? Option.some(yield* Effect.promise(() => web.json())) : Option.none();
+        const body = isWrite
+          ? Option.some(yield* awaitPromise(() => web.json()).pipe(Effect.orDie))
+          : Option.none();
         const served = serve(store, { method: request.method, type, id, body });
         const response =
           request.method === "GET" || request.method === "DELETE"
