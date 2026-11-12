@@ -559,6 +559,23 @@ export const makeWithIntrospectionWith = (
           return [groups, HashSet.isEmpty(groups) ? all : next];
         }
       );
+    // Record writes to these collections (#205, #652): count them, so a named set
+    // whose resolution overlapped a write is cached as stale, and mark every
+    // cached set over one of them stale. Returns the client groups that held
+    // one, which the fan-out pokes. A push records its own writes before it
+    // answers, so a pull it races can never bind a set's members from before
+    // the write; the fan-out records them again from the hints (idempotent),
+    // which is how another server's writes reach this one.
+    const recordWrites = (sources: HashSet.HashSet<string>) =>
+      Ref.update(sourceWrites, (counts) =>
+        HashSet.reduce(sources, counts, (next, collection) =>
+          HashMap.set(
+            next,
+            collection,
+            Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
+          )
+        )
+      ).pipe(Effect.andThen(staleSets(sources)));
     // Active subscriptions per client group, for fan-out matching.
     const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
     // Each group's last-synced view (collection → id → version), for matching a
@@ -598,17 +615,7 @@ export const makeWithIntrospectionWith = (
               const cvrs = yield* Ref.get(activeCvrs);
               // A write to a named set's source may move the set (#205): those
               // sessions are poked whatever their windows hold.
-              const sources = HashSet.fromIterable(touched);
-              yield* Ref.update(sourceWrites, (counts) =>
-                HashSet.reduce(sources, counts, (next, collection) =>
-                  HashMap.set(
-                    next,
-                    collection,
-                    Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
-                  )
-                )
-              );
-              const scoped = yield* staleSets(sources);
+              const scoped = yield* recordWrites(HashSet.fromIterable(touched));
               yield* Effect.forEach(
                 groups,
                 ([clientGroupId, subsets]) =>
@@ -664,7 +671,13 @@ export const makeWithIntrospectionWith = (
             const result = yield* Effect.uninterruptible(
               backend
                 .applyMutations(context, checked.mutations)
-                .pipe(Effect.tap((applied) => bus.publish(applied.hints)))
+                .pipe(
+                  Effect.tap((applied) =>
+                    recordWrites(
+                      HashSet.fromIterable(applied.hints.map((hint) => hint.collection))
+                    ).pipe(Effect.andThen(bus.publish(applied.hints)))
+                  )
+                )
             );
             return {
               lastMutationIds: result.lastMutationIds,
