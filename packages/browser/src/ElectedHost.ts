@@ -33,6 +33,7 @@ import {
   type HostRequest,
   Mirror,
   MirrorProtocol,
+  Related,
   Subscriptions,
   Subset,
 } from "@thomasfosterau/legation/internal";
@@ -219,6 +220,12 @@ const switchingView = (
         }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
       queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
       pulled: (key) => withCurrent((view) => view.pulled(key)),
+      // A switch of tier moves every summary, so it is a change of its own.
+      pulledChanges: SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) =>
+          Stream.concat(Stream.succeed(undefined), view.pulledChanges ?? Stream.empty)
+        )
+      ),
       observeNamed: (name, args) =>
         SubscriptionRef.changes(viewRef).pipe(
           Stream.switchMap((view) => view.observeNamed(name, args))
@@ -230,6 +237,12 @@ const switchingView = (
               Stream.unwrap(view.related(registry, collectionName, subset, edges))
             )
           )
+        ),
+      queryRelated: (registry, collectionName, subset, edges) =>
+        withCurrent((view) =>
+          view.queryRelated === undefined
+            ? Related.query(view, registry, collectionName, subset, edges)
+            : view.queryRelated(registry, collectionName, subset, edges)
         ),
       // A held edge registration has no stream to redo the switch for it:
       // re-pin on every view this switches to (the current one first —

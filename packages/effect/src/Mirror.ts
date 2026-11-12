@@ -38,6 +38,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -221,6 +222,8 @@ export interface Mirror {
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
   /** The host's pulled summary of the registration under `key` (#426); see {@link ClientView.ClientView.pulled}. */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
+  /** Emits as the host's pulled summaries arrive (#653); see {@link ClientView.ClientView.pulledChanges}. */
+  readonly pulledChanges: Stream.Stream<void>;
   /**
    * Row-level deltas of a subset's live window (#115) — see
    * {@link ClientEngine.ClientEngine.observeChanges}. The mirror has no
@@ -261,6 +264,13 @@ export interface Mirror {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  /** The host's current rows of a held relational read (#653); see {@link ClientView.ClientView.queryRelated}. */
+  readonly queryRelated: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<Related.EdgeSelect>
+  ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>;
   /**
    * Hold a relational registration with the host for the scope's lifetime
    * without reading its resolved rows — an explicit pin's edge windows
@@ -388,7 +398,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // shape differs from `LocalRow`.
     const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     // The host's pulled summaries of its registrations (#426); see `PulledRegistrations`.
-    const pulledKeys = yield* Ref.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
+    const pulledKeys = yield* SubscriptionRef.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -646,7 +656,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)))
       ),
       Match.tag("PulledRegistrations", (message) =>
-        Ref.set(
+        SubscriptionRef.set(
           pulledKeys,
           new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
         )
@@ -1029,7 +1039,10 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
       pulled: (key: string) =>
-        Ref.get(pulledKeys).pipe(Effect.map((map) => map.get(key) ?? Coverage.NOT_PULLED)),
+        SubscriptionRef.get(pulledKeys).pipe(
+          Effect.map((map) => map.get(key) ?? Coverage.NOT_PULLED)
+        ),
+      pulledChanges: SubscriptionRef.changes(pulledKeys).pipe(Stream.as(undefined)),
       // Observing auto-registers with the host for the stream's lifetime:
       // the mirror only carries keys someone subscribed, so a live read IS a
       // subscription intent (refcounted; an explicit `subscribe` still pins a
@@ -1079,6 +1092,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         holdRelated(collectionName, subset, edgeInputs).pipe(
           Effect.map((key) => observeKey(key, readRelated(key)))
         ),
+      queryRelated: (_registry, collectionName, subset, edges) =>
+        readRelated(MirrorProtocol.relatedKey(collectionName, subset, edges)),
       pinEdges: (_registry, collectionName, subset, edgeInputs) =>
         Effect.asVoid(holdRelated(collectionName, subset, edgeInputs)),
     };
