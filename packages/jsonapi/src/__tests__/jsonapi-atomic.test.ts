@@ -27,6 +27,7 @@ import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 // A conventional JSON:API surface for `todos`, plus an atomic operations
 // endpoint declared with a plain HttpApiEndpoint: what makes it atomic is its
@@ -202,7 +203,7 @@ const makeBackend = (server: ReturnType<typeof makeServer>) =>
     mutators: registry.mutators,
     operations,
     atomic: { path: "/operations" },
-  }).pipe(Effect.provide(server.layer));
+  }).pipe(withLayer(server.layer));
 
 const context: Backend.SyncContext = { clientGroupId: "group-1" };
 const mutation = (mutationId: number, mutator: string, args: unknown) => ({
@@ -560,7 +561,7 @@ const makeModeBackend = (mode: HintMode, server: ReturnType<typeof makeServer>) 
     mutators: registry.mutators,
     operations,
     ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
-  }).pipe(Effect.provide(server.layer));
+  }).pipe(withLayer(server.layer));
 
 for (const mode of ["atomic", "per-resource"] as const) {
   describe(`JsonApiBackend change hints across mutations, ${mode} path`, () => {
@@ -1216,7 +1217,7 @@ describe("JsonApiBackend checks getOne for the whole push before its first write
             mutators: inspected.registry.mutators,
             operations: inspected.operations,
             ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
-          }).pipe(Effect.provide(server.layer));
+          }).pipe(withLayer(server.layer));
 
           const failure = yield* Effect.flip(
             backend.applyMutations(context, [
@@ -1256,7 +1257,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
           mutators: inspected.registry.mutators,
           operations: inspected.operations,
           ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
-        }).pipe(Effect.provide(server.layer));
+        }).pipe(withLayer(server.layer));
 
         const failure = yield* Effect.flip(
           backend.applyMutations(context, [
@@ -1283,7 +1284,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
         resources: inspected.resources,
         mutators: inspected.registry.mutators,
         operations: inspected.operations,
-      }).pipe(Effect.provide(server.layer));
+      }).pipe(withLayer(server.layer));
       const result = yield* backend.applyMutations(context, [
         mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "x" } }),
       ]);
@@ -1414,7 +1415,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     Effect.gen(function* () {
       const server = makeStatefulServer();
       const titles = yield* createAndSync.pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -1433,7 +1434,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     Effect.gen(function* () {
       const server = makeStatefulServer();
       const titles = yield* createAndSync.pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -1492,7 +1493,7 @@ const makeRejectingBackend = (mode: HintMode, server: ReturnType<typeof rejectin
     mutators: registry.mutators,
     operations,
     ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
-  }).pipe(Effect.provide(server.layer));
+  }).pipe(withLayer(server.layer));
 
 const createFour = mutation(4, "todos/create", {
   type: "todos",

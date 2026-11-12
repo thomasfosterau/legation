@@ -8,7 +8,6 @@ import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
@@ -36,6 +35,7 @@ import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { withLayer } from "./with-layer.js";
 
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
@@ -87,15 +87,9 @@ const corpus = Node.make("corpus", {
 
 const nodes = Node.registry([categories, products, variants, reviews, corpus]);
 
-const parse = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
-const parseFailure = (url: string): QueryError => {
-  const exit = Effect.runSyncExit(JsonApiQuery.parseRead(nodes, url));
-  if (Exit.isSuccess(exit)) throw new TestFailure({ message: `expected ${url} to be rejected` });
-  const failure = Exit.isFailure(exit) ? exit.cause.reasons[0] : undefined;
-  if (failure?._tag !== "Fail")
-    throw new TestFailure({ message: `expected a failure, got ${String(exit.cause)}` });
-  return failure.error;
-};
+const parse = (url: string) => JsonApiQuery.parseRead(nodes, url);
+/** The `QueryError` a rejected URL fails with; a URL that parses fails the test. */
+const parseFailure = (url: string) => parse(url).pipe(Effect.flip);
 
 // ─── Filter AST ⇄ Predicate ──────────────────────────────────────────────────
 
@@ -161,26 +155,30 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
     );
   });
 
-  it("fromFilterAst ∘ toFilterAst is the identity over the generated corpus", () => {
-    const coverage = FilterCorpus.emptyCoverage();
-    const predicates = Effect.runSync(
-      FilterCorpus.generatePredicate(FilterCorpus.corpusColumns, undefined, coverage, 3).pipe(
-        Effect.replicateEffect(300),
-        Random.withSeed(161)
+  it.effect("fromFilterAst ∘ toFilterAst is the identity over the generated corpus", () =>
+    Effect.gen(function* () {
+      const coverage = FilterCorpus.emptyCoverage();
+      const predicates = yield* FilterCorpus.generatePredicate(
+        FilterCorpus.corpusColumns,
+        undefined,
+        coverage,
+        3
       )
-    );
-    let representable = 0;
-    Arr.forEach(predicates, (predicate) => {
-      const ast = JsonApiQuery.toFilterAst(predicate);
-      // Only an empty list has no grammar form; the corpus never emits
-      // null literals or Exists.
-      expect(Option.isSome(ast) || hasEmptyList(predicate)).toBe(true);
-      if (Option.isNone(ast)) return;
-      representable++;
-      expect(JsonApiQuery.fromFilterAst(ast.value)).toEqual(Result.succeed(predicate));
-    });
-    expect(representable).toBeGreaterThan(200);
-  });
+        .pipe(Effect.replicateEffect(300))
+        .pipe(Random.withSeed(161));
+      let representable = 0;
+      Arr.forEach(predicates, (predicate) => {
+        const ast = JsonApiQuery.toFilterAst(predicate);
+        // Only an empty list has no grammar form; the corpus never emits
+        // null literals or Exists.
+        expect(Option.isSome(ast) || hasEmptyList(predicate)).toBe(true);
+        if (Option.isNone(ast)) return;
+        representable++;
+        expect(JsonApiQuery.fromFilterAst(ast.value)).toEqual(Result.succeed(predicate));
+      });
+      expect(representable).toBeGreaterThan(200);
+    })
+  );
 
   /**
    * The trap issue #218 names: `FilterCorpus.generatePredicate` (the corpus
@@ -200,46 +198,55 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
    * produces — and therefore the rows the façade or a derived REST handler
    * would select — is the same.
    */
-  it("the Date encode step is exact over a generated corpus, and agrees with the wire text a Date-declaring resource would send (#218)", () => {
-    // `reviews` (declared above) filters `createdAt` at kind "instant":
-    // `resourcesOf`'s synthetic resource decodes that filter literal as a
-    // checked string, never a `Date` (`literalSchema("instant")`). This
-    // second resource is what an app would actually write for the same
-    // column — the attribute's true, richer decoded type.
-    const ReviewsWithDate = Resource.make("reviews", {
-      attributes: {
-        createdAt: Resource.attribute(Schema.DateFromString, { filter: ["gt", "lt", "isnull"] }),
-      },
-    });
-    const dateFilterCodec = UrlQuery.Filter(ReviewsWithDate);
+  it.effect(
+    "the Date encode step is exact over a generated corpus, and agrees with the wire text a Date-declaring resource would send (#218)",
+    () =>
+      Effect.gen(function* () {
+        // `reviews` (declared above) filters `createdAt` at kind "instant":
+        // `resourcesOf`'s synthetic resource decodes that filter literal as a
+        // checked string, never a `Date` (`literalSchema("instant")`). This
+        // second resource is what an app would actually write for the same
+        // column — the attribute's true, richer decoded type.
+        const ReviewsWithDate = Resource.make("reviews", {
+          attributes: {
+            createdAt: Resource.attribute(Schema.DateFromString, {
+              filter: ["gt", "lt", "isnull"],
+            }),
+          },
+        });
+        const dateFilterCodec = UrlQuery.Filter(ReviewsWithDate);
 
-    const randomDate = Random.nextIntBetween(0, 4_102_444_800_000).pipe(
-      Effect.map((ms) => DateTime.toDateUtc(DateTime.makeUnsafe(ms)))
-    );
-    const dates = Effect.runSync(
-      randomDate.pipe(Effect.replicateEffect(200), Random.withSeed(218))
-    );
+        const randomDate = Random.nextIntBetween(0, 4_102_444_800_000).pipe(
+          Effect.map((ms) => DateTime.toDateUtc(DateTime.makeUnsafe(ms)))
+        );
+        const dates = yield* randomDate.pipe(Effect.replicateEffect(200), Random.withSeed(218));
 
-    Arr.forEach(dates, (date) => {
-      const ast = Filter.gt("createdAt", date);
+        yield* Effect.forEach(
+          dates,
+          (date) =>
+            Effect.gen(function* () {
+              const ast = Filter.gt("createdAt", date);
 
-      // The encode step itself: exact, not merely "does not throw".
-      const decoded = JsonApiQuery.fromFilterAst(ast);
-      assert(Result.isSuccess(decoded));
-      const predicate = decoded.success;
-      expect(predicate).toEqual(Predicate.gt("createdAt", date.toISOString()));
+              // The encode step itself: exact, not merely "does not throw".
+              const decoded = JsonApiQuery.fromFilterAst(ast);
+              assert(Result.isSuccess(decoded));
+              const predicate = decoded.success;
+              expect(predicate).toEqual(Predicate.gt("createdAt", date.toISOString()));
 
-      // What a resource that actually declares `createdAt` as a `Date`
-      // would put on the wire for this filter …
-      const wire = Schema.encodeSync(dateFilterCodec)(ast);
-      // … decoded back through the façade's own query codec (the
-      // node-derived, string-typed one `parseRead` always uses). If the
-      // encode step ever diverged from ADR-0028 rule (e)'s fixed format,
-      // this is where a façade read and a REST read would part ways.
-      const url = `/reviews?${new URLSearchParams(wire).toString()}`;
-      expect(parse(url).read.where).toEqual(predicate);
-    });
-  });
+              // What a resource that actually declares `createdAt` as a `Date`
+              // would put on the wire for this filter …
+              const wire = yield* Schema.encodeEffect(dateFilterCodec)(ast);
+              // … decoded back through the façade's own query codec (the
+              // node-derived, string-typed one `parseRead` always uses). If the
+              // encode step ever diverged from ADR-0028 rule (e)'s fixed format,
+              // this is where a façade read and a REST read would part ways.
+              const url = `/reviews?${new URLSearchParams(wire).toString()}`;
+              expect((yield* parse(url)).read.where).toEqual(predicate);
+            }),
+          { concurrency: 1, discard: true }
+        );
+      })
+  );
 });
 
 const hasEmptyList = (predicate: Predicate.Predicate): boolean =>
@@ -281,74 +288,95 @@ describe("JsonApiQuery.foldConstants", () => {
 // ─── The exact encoder ───────────────────────────────────────────────────────
 
 const encode = (where: Predicate.Predicate, orderBy: ReadonlyArray<Subset.OrderBy> = []) =>
-  Effect.runSync(
-    JsonApiQuery.defaultEncoder.encode(Subset.make({ collection: "t", where, orderBy }))
-  );
+  JsonApiQuery.defaultEncoder.encode(Subset.make({ collection: "t", where, orderBy }));
 
 describe("JsonApiQuery.defaultEncoder", () => {
-  it("encodes eq / in conjuncts and sort in the grammar's canonical form", () => {
-    expect(
-      encode(Predicate.and(Predicate.eq("status", "open"), Predicate.isIn("priority", [2, 1])), [
-        { field: "created", direction: "desc" },
-      ])
-    ).toEqual(Option.some("?filter[priority]=1%2C2&filter[status]=open&sort=-created"));
-  });
+  it.effect("encodes eq / in conjuncts and sort in the grammar's canonical form", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* encode(
+          Predicate.and(Predicate.eq("status", "open"), Predicate.isIn("priority", [2, 1])),
+          [{ field: "created", direction: "desc" }]
+        )
+      ).toEqual(Option.some("?filter[priority]=1%2C2&filter[status]=open&sort=-created"));
+    })
+  );
 
-  it("encodes every operator exactly instead of dropping it", () => {
-    expect(encode(Predicate.gt("age", 18))).toEqual(Option.some("?filter[age][gt]=18"));
-    expect(encode(Predicate.ne("age", 18))).toEqual(Option.some("?filter[age][ne]=18"));
-    expect(encode(Predicate.notIn("age", [3, 1]))).toEqual(Option.some("?filter[age][nin]=1%2C3"));
-    expect(encode(Predicate.isNull("age"))).toEqual(Option.some("?filter[age][isnull]=true"));
-    expect(encode(Predicate.isNotNull("age"))).toEqual(Option.some("?filter[age][isnull]=false"));
-    expect(encode(Predicate.eq("age", null))).toEqual(Option.some("?filter[age][isnull]=true"));
-    // A one-id list keeps the operator so it decodes back as `in`.
-    expect(encode(Predicate.isIn("id", ["p1"]))).toEqual(Option.some("?filter[id][in]=p1"));
-    expect(encode(Predicate.eq("name", "a,b"))).toEqual(Option.some("?filter[name]=a%5C%2Cb"));
-    expect(encode(Predicate.or(Predicate.eq("a", 1), Predicate.eq("b", 2)))).toEqual(
-      Option.some(
-        "?filter[g0][group][conjunction]=OR" +
-          "&filter[c0][condition][path]=a&filter[c0][condition][operator]=eq&filter[c0][condition][value]=1&filter[c0][condition][memberOf]=g0" +
-          "&filter[c1][condition][path]=b&filter[c1][condition][operator]=eq&filter[c1][condition][value]=2&filter[c1][condition][memberOf]=g0"
-      )
-    );
-    expect(encode(Predicate.not(Predicate.eq("a", 1)))).toEqual(
-      Option.some(
-        "?filter[g0][group][conjunction]=NOT" +
-          "&filter[c0][condition][path]=a&filter[c0][condition][operator]=eq&filter[c0][condition][value]=1&filter[c0][condition][memberOf]=g0"
-      )
-    );
-    // A conjunct it understands rides beside the operator forms.
-    expect(encode(Predicate.and(Predicate.eq("status", "open"), Predicate.gt("age", 18)))).toEqual(
-      Option.some("?filter[age][gt]=18&filter[status]=open")
-    );
-  });
+  it.effect("encodes every operator exactly instead of dropping it", () =>
+    Effect.gen(function* () {
+      expect(yield* encode(Predicate.gt("age", 18))).toEqual(Option.some("?filter[age][gt]=18"));
+      expect(yield* encode(Predicate.ne("age", 18))).toEqual(Option.some("?filter[age][ne]=18"));
+      expect(yield* encode(Predicate.notIn("age", [3, 1]))).toEqual(
+        Option.some("?filter[age][nin]=1%2C3")
+      );
+      expect(yield* encode(Predicate.isNull("age"))).toEqual(
+        Option.some("?filter[age][isnull]=true")
+      );
+      expect(yield* encode(Predicate.isNotNull("age"))).toEqual(
+        Option.some("?filter[age][isnull]=false")
+      );
+      expect(yield* encode(Predicate.eq("age", null))).toEqual(
+        Option.some("?filter[age][isnull]=true")
+      );
+      // A one-id list keeps the operator so it decodes back as `in`.
+      expect(yield* encode(Predicate.isIn("id", ["p1"]))).toEqual(
+        Option.some("?filter[id][in]=p1")
+      );
+      expect(yield* encode(Predicate.eq("name", "a,b"))).toEqual(
+        Option.some("?filter[name]=a%5C%2Cb")
+      );
+      expect(yield* encode(Predicate.or(Predicate.eq("a", 1), Predicate.eq("b", 2)))).toEqual(
+        Option.some(
+          "?filter[g0][group][conjunction]=OR" +
+            "&filter[c0][condition][path]=a&filter[c0][condition][operator]=eq&filter[c0][condition][value]=1&filter[c0][condition][memberOf]=g0" +
+            "&filter[c1][condition][path]=b&filter[c1][condition][operator]=eq&filter[c1][condition][value]=2&filter[c1][condition][memberOf]=g0"
+        )
+      );
+      expect(yield* encode(Predicate.not(Predicate.eq("a", 1)))).toEqual(
+        Option.some(
+          "?filter[g0][group][conjunction]=NOT" +
+            "&filter[c0][condition][path]=a&filter[c0][condition][operator]=eq&filter[c0][condition][value]=1&filter[c0][condition][memberOf]=g0"
+        )
+      );
+      // A conjunct it understands rides beside the operator forms.
+      expect(
+        yield* encode(Predicate.and(Predicate.eq("status", "open"), Predicate.gt("age", 18)))
+      ).toEqual(Option.some("?filter[age][gt]=18&filter[status]=open"));
+    })
+  );
 
-  it("folds constants: the whole collection is no filter, an empty allow-set is no request", () => {
-    expect(encode(Predicate.always)).toEqual(Option.some(""));
-    expect(encode(Predicate.and(Predicate.eq("a", 1), Predicate.notIn("b", [])))).toEqual(
-      Option.some("?filter[a]=1")
-    );
-    expect(encode(Predicate.isIn("id", []))).toEqual(Option.none());
-    expect(encode(Predicate.and(Predicate.eq("a", 1), Predicate.isIn("b", [])))).toEqual(
-      Option.none()
-    );
-  });
+  it.effect(
+    "folds constants: the whole collection is no filter, an empty allow-set is no request",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* encode(Predicate.always)).toEqual(Option.some(""));
+        expect(
+          yield* encode(Predicate.and(Predicate.eq("a", 1), Predicate.notIn("b", [])))
+        ).toEqual(Option.some("?filter[a]=1"));
+        expect(yield* encode(Predicate.isIn("id", []))).toEqual(Option.none());
+        expect(yield* encode(Predicate.and(Predicate.eq("a", 1), Predicate.isIn("b", [])))).toEqual(
+          Option.none()
+        );
+      })
+  );
 
-  it("fails closed on a predicate with no URL form", () => {
-    const failure = (where: Predicate.Predicate) =>
-      Effect.runSync(
+  it.effect("fails closed on a predicate with no URL form", () =>
+    Effect.gen(function* () {
+      const failure = (where: Predicate.Predicate) =>
         JsonApiQuery.defaultEncoder
           .encode(Subset.make({ collection: "t", where }))
-          .pipe(Effect.flip)
-      );
-    expect(
-      failure(Predicate.exists({ collection: "r", localField: "id", foreignField: "tId" }))
-    ).toBeInstanceOf(QueryError);
-    expect(failure(Predicate.compare("gt", "a", null))).toBeInstanceOf(QueryError);
-    expect(failure(Predicate.and(Predicate.eq("a", 1), Predicate.eq("a", "x")))).toMatchObject({
-      parameter: "filter[a]",
-    });
-  });
+          .pipe(Effect.flip);
+      expect(
+        yield* failure(Predicate.exists({ collection: "r", localField: "id", foreignField: "tId" }))
+      ).toBeInstanceOf(QueryError);
+      expect(yield* failure(Predicate.compare("gt", "a", null))).toBeInstanceOf(QueryError);
+      expect(
+        yield* failure(Predicate.and(Predicate.eq("a", 1), Predicate.eq("a", "x")))
+      ).toMatchObject({
+        parameter: "filter[a]",
+      });
+    })
+  );
 
   it("builds the whole query string in canonical family order", () => {
     expect(
@@ -431,7 +459,7 @@ describe("server-side narrowing", () => {
       // the empty allow-set never became a request.
       expect(server.requests).toEqual(["/todos?filter[status]=open"]);
     }).pipe(
-      Effect.provide(
+      withLayer(
         JsonApiSync.layer(api, {
           baseUrl: "http://api.test",
           clientId: "c1",
@@ -446,256 +474,334 @@ describe("server-side narrowing", () => {
 // ─── URL → Query.Read ────────────────────────────────────────────────────────
 
 describe("JsonApiQuery.parseRead", () => {
-  it("maps every query family onto the read, with fields[] beside it", () => {
-    const parsed = parse(
-      "/api/products?include=variants,category&fields[products]=name&fields[variants]=sku" +
-        "&filter[categoryId]=c-1&filter[priceCents][gt]=10&sort=-name,id&page[limit]=12&page[after]=p-9"
-    );
-    expect(parsed).toEqual({
-      read: {
-        collection: "products",
-        where: Predicate.and(Predicate.eq("categoryId", "c-1"), Predicate.gt("priceCents", 10)),
-        include: { variants: true, category: true },
-        order: ["-name", "id"],
-        first: 12,
-        after: "p-9",
-      },
-      fields: Option.some({ products: ["name"], variants: ["sku"] }),
-      id: Option.none(),
-    });
-    // The read compiles: the plan is what the engine runs.
-    expect(Query.plan(nodes, parsed.read).root.limit).toBe(12);
-  });
+  it.effect("maps every query family onto the read, with fields[] beside it", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parse(
+        "/api/products?include=variants,category&fields[products]=name&fields[variants]=sku" +
+          "&filter[categoryId]=c-1&filter[priceCents][gt]=10&sort=-name,id&page[limit]=12&page[after]=p-9"
+      );
+      expect(parsed).toEqual({
+        read: {
+          collection: "products",
+          where: Predicate.and(Predicate.eq("categoryId", "c-1"), Predicate.gt("priceCents", 10)),
+          include: { variants: true, category: true },
+          order: ["-name", "id"],
+          first: 12,
+          after: "p-9",
+        },
+        fields: Option.some({ products: ["name"], variants: ["sku"] }),
+        id: Option.none(),
+      });
+      // The read compiles: the plan is what the engine runs.
+      expect(Query.plan(nodes, parsed.read).root.limit).toBe(12);
+    })
+  );
 
-  it("accepts the repeated include key, the group form, and a bare listing", () => {
-    expect(parse("/products?include=variants&include=category").read.include).toEqual({
-      variants: true,
-      category: true,
-    });
-    expect(
-      parse(
-        "/products?filter[g0][group][conjunction]=OR" +
-          "&filter[c0][condition][path]=name&filter[c0][condition][operator]=eq&filter[c0][condition][value]=a&filter[c0][condition][memberOf]=g0" +
-          "&filter[c1][condition][path]=priceCents&filter[c1][condition][operator]=lt&filter[c1][condition][value]=5&filter[c1][condition][memberOf]=g0"
-      ).read.where
-    ).toEqual(Predicate.or(Predicate.eq("name", "a"), Predicate.lt("priceCents", 5)));
-    expect(parse("http://shop.test/jsonapi/categories")).toEqual({
-      read: { collection: "categories" },
-      fields: Option.none(),
-      id: Option.none(),
-    });
-    expect(
-      Effect.runSync(
-        JsonApiQuery.parseParams(
+  it.effect("accepts the repeated include key, the group form, and a bare listing", () =>
+    Effect.gen(function* () {
+      expect((yield* parse("/products?include=variants&include=category")).read.include).toEqual({
+        variants: true,
+        category: true,
+      });
+      expect(
+        (yield* parse(
+          "/products?filter[g0][group][conjunction]=OR" +
+            "&filter[c0][condition][path]=name&filter[c0][condition][operator]=eq&filter[c0][condition][value]=a&filter[c0][condition][memberOf]=g0" +
+            "&filter[c1][condition][path]=priceCents&filter[c1][condition][operator]=lt&filter[c1][condition][value]=5&filter[c1][condition][memberOf]=g0"
+        )).read.where
+      ).toEqual(Predicate.or(Predicate.eq("name", "a"), Predicate.lt("priceCents", 5)));
+      expect(yield* parse("http://shop.test/jsonapi/categories")).toEqual({
+        read: { collection: "categories" },
+        fields: Option.none(),
+        id: Option.none(),
+      });
+      expect(
+        (yield* JsonApiQuery.parseParams(
           nodes,
           "reviews",
           new URLSearchParams("filter[createdAt][isnull]=true")
-        )
-      ).read.where
-    ).toEqual(Predicate.isNull("createdAt"));
-  });
+        )).read.where
+      ).toEqual(Predicate.isNull("createdAt"));
+    })
+  );
 
-  it("reads a single resource as filter[id], first 1, and names the id it addressed", () => {
-    expect(parse("/api/products/p-1?include=variants")).toEqual({
-      read: {
+  it.effect("reads a single resource as filter[id], first 1, and names the id it addressed", () =>
+    Effect.gen(function* () {
+      expect(yield* parse("/api/products/p-1?include=variants")).toEqual({
+        read: {
+          collection: "products",
+          where: Predicate.eq("id", "p-1"),
+          include: { variants: true },
+          first: 1,
+        },
+        fields: Option.none(),
+        id: Option.some("p-1"),
+      });
+      // A listing addresses no row, even one filtered to a single id.
+      expect((yield* parse("/api/products?filter[id]=p-1")).id).toEqual(Option.none());
+      expect(yield* parseFailure("/products/p-1?sort=name")).toMatchObject({ parameter: "sort" });
+      expect((yield* parseFailure("/nothing/here")).message).toMatch(/No collection/);
+    })
+  );
+
+  it.effect("decodes filter[id] through the resource id's Filter.able operators (#590)", () =>
+    Effect.gen(function* () {
+      expect((yield* parse("/products?filter[id]=p-1")).read.where).toEqual(
+        Predicate.eq("id", "p-1")
+      );
+      expect((yield* parse("/products?filter[id][in]=p-1,p-2")).read.where).toEqual(
+        Predicate.isIn("id", ["p-1", "p-2"])
+      );
+      // The id stays a string on the wire, never coerced to a number.
+      expect((yield* parse("/products?filter[id]=12")).read.where).toEqual(
+        Predicate.eq("id", "12")
+      );
+      expect(yield* parseFailure("/products?filter[id][gt]=p-1")).toMatchObject({
+        parameter: "filter[id][gt]",
+      });
+    })
+  );
+
+  it.effect("escapes a row id through the grammar: commas and backslashes stay one literal", () =>
+    Effect.gen(function* () {
+      expect((yield* parse("/products/a,b")).read.where).toEqual(Predicate.eq("id", "a,b"));
+      expect((yield* parse("/products/a%2Cb")).read.where).toEqual(Predicate.eq("id", "a,b"));
+      expect((yield* parse("/products/a%5Cb")).read.where).toEqual(Predicate.eq("id", "a\\b"));
+      // The canonical string of such a read decodes back to it.
+      const read: Query.Read = {
         collection: "products",
-        where: Predicate.eq("id", "p-1"),
-        include: { variants: true },
+        where: Predicate.eq("id", "a,b\\c"),
         first: 1,
-      },
-      fields: Option.none(),
-      id: Option.some("p-1"),
-    });
-    // A listing addresses no row, even one filtered to a single id.
-    expect(parse("/api/products?filter[id]=p-1").id).toEqual(Option.none());
-    expect(parseFailure("/products/p-1?sort=name")).toMatchObject({ parameter: "sort" });
-    expect(parseFailure("/nothing/here").message).toMatch(/No collection/);
-  });
+      };
+      expect((yield* parse(JsonApiQuery.canonical(nodes, read))).read).toEqual(read);
+    })
+  );
 
-  it("decodes filter[id] through the resource id's Filter.able operators (#590)", () => {
-    expect(parse("/products?filter[id]=p-1").read.where).toEqual(Predicate.eq("id", "p-1"));
-    expect(parse("/products?filter[id][in]=p-1,p-2").read.where).toEqual(
-      Predicate.isIn("id", ["p-1", "p-2"])
-    );
-    // The id stays a string on the wire, never coerced to a number.
-    expect(parse("/products?filter[id]=12").read.where).toEqual(Predicate.eq("id", "12"));
-    expect(parseFailure("/products?filter[id][gt]=p-1")).toMatchObject({
-      parameter: "filter[id][gt]",
-    });
-  });
+  it.effect("a malformed id segment is a QueryError naming the parameter, not a defect", () =>
+    Effect.gen(function* () {
+      expect(yield* parseFailure("/products/100%")).toMatchObject({
+        parameter: "id",
+        query: "products",
+      });
+      expect((yield* parseFailure("/products/100%")).message).toMatch(/percent-encoded/);
+    })
+  );
 
-  it("escapes a row id through the grammar: commas and backslashes stay one literal", () => {
-    expect(parse("/products/a,b").read.where).toEqual(Predicate.eq("id", "a,b"));
-    expect(parse("/products/a%2Cb").read.where).toEqual(Predicate.eq("id", "a,b"));
-    expect(parse("/products/a%5Cb").read.where).toEqual(Predicate.eq("id", "a\\b"));
-    // The canonical string of such a read decodes back to it.
-    const read: Query.Read = {
-      collection: "products",
-      where: Predicate.eq("id", "a,b\\c"),
-      first: 1,
-    };
-    expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
-  });
+  it.effect("reads /{type}/{id} over /{type} and rejects nested resource paths", () =>
+    Effect.gen(function* () {
+      // An id that happens to name a node is still an id.
+      expect((yield* parse("/products/categories")).read).toEqual({
+        collection: "products",
+        where: Predicate.eq("id", "categories"),
+        first: 1,
+      });
+      // The spec's related-resource and relationship URLs are not reads here.
+      yield* Effect.forEach(
+        [
+          "/products/p-1/variants",
+          "/products/p-1/relationships/variants",
+          "/api/products/p-1/variants?include=product",
+        ],
+        (url) =>
+          Effect.gen(function* () {
+            const failure = yield* parseFailure(url);
+            expect(failure).toBeInstanceOf(QueryError);
+            expect(failure.message).toMatch(/Nested resource path/);
+          }),
+        { concurrency: 1, discard: true }
+      );
+    })
+  );
 
-  it("a malformed id segment is a QueryError naming the parameter, not a defect", () => {
-    expect(parseFailure("/products/100%")).toMatchObject({ parameter: "id", query: "products" });
-    expect(parseFailure("/products/100%").message).toMatch(/percent-encoded/);
-  });
+  it.effect("includes a paginated edge like any other; only its window has no URL form", () =>
+    Effect.gen(function* () {
+      // ADR-0029's worked example.
+      expect((yield* parse("/products?include=variants,reviews")).read.include).toEqual({
+        variants: true,
+        reviews: true,
+      });
+      const read: Query.Read = {
+        collection: "products",
+        include: { reviews: true, variants: true },
+      };
+      expect(JsonApiQuery.canonical(nodes, read)).toBe("/products?include=reviews%2Cvariants");
+      expect((yield* parse(JsonApiQuery.canonical(nodes, read))).read).toEqual(read);
+      expect(() =>
+        JsonApiQuery.canonical(nodes, {
+          collection: "products",
+          include: { reviews: { first: 5 } },
+        })
+      ).toThrow(/no URL form/);
+      expect(yield* parseFailure("/products?fields[reviews]=nope")).toMatchObject({
+        parameter: "fields[reviews]",
+      });
+    })
+  );
 
-  it("reads /{type}/{id} over /{type} and rejects nested resource paths", () => {
-    // An id that happens to name a node is still an id.
-    expect(parse("/products/categories").read).toEqual({
-      collection: "products",
-      where: Predicate.eq("id", "categories"),
-      first: 1,
-    });
-    // The spec's related-resource and relationship URLs are not reads here.
-    Arr.forEach(
-      [
-        "/products/p-1/variants",
-        "/products/p-1/relationships/variants",
-        "/api/products/p-1/variants?include=product",
-      ],
-      (url) => {
-        const failure = parseFailure(url);
+  it.effect(
+    "parses page[offset] alongside page[limit] (#209): every listing in the audited apps pages by it",
+    () =>
+      Effect.gen(function* () {
+        expect((yield* parse("/products?page[offset]=20&page[limit]=5")).read).toEqual({
+          collection: "products",
+          offset: 20,
+          first: 5,
+        });
+        // offset: 0 is a real, distinct value from "no offset" — the first
+        // page of the offset idiom, not the cursor idiom's absence of a page.
+        expect((yield* parse("/products?page[offset]=0&page[limit]=5")).read).toEqual({
+          collection: "products",
+          offset: 0,
+          first: 5,
+        });
+        // offset alone (no limit) reads as "every row past offset".
+        expect((yield* parse("/products?page[offset]=20")).read).toEqual({
+          collection: "products",
+          offset: 20,
+        });
+        expect(
+          Query.plan(nodes, (yield* parse("/products?page[offset]=20&page[limit]=5")).read).root
+            .limit
+        ).toBe(25);
+        expect(
+          Query.plan(nodes, (yield* parse("/products?page[offset]=20&page[limit]=5")).read).root
+            .cursor
+        ).toBeUndefined();
+      })
+  );
+
+  it.effect(
+    "rejects page[offset] and page[after] together: different pagination idioms, one per request",
+    () =>
+      Effect.gen(function* () {
+        const failure = yield* parseFailure("/products?page[offset]=10&page[after]=p-9");
         expect(failure).toBeInstanceOf(QueryError);
-        expect(failure.message).toMatch(/Nested resource path/);
-      }
-    );
-  });
+        expect(failure.parameter).toBe("page[offset]");
+        expect(failure.message).toMatch(/different pagination idioms/);
+      })
+  );
 
-  it("includes a paginated edge like any other; only its window has no URL form", () => {
-    // ADR-0029's worked example.
-    expect(parse("/products?include=variants,reviews").read.include).toEqual({
-      variants: true,
-      reviews: true,
-    });
-    const read: Query.Read = { collection: "products", include: { reviews: true, variants: true } };
-    expect(JsonApiQuery.canonical(nodes, read)).toBe("/products?include=reviews%2Cvariants");
-    expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
-    expect(() =>
-      JsonApiQuery.canonical(nodes, { collection: "products", include: { reviews: { first: 5 } } })
-    ).toThrow(/no URL form/);
-    expect(parseFailure("/products?fields[reviews]=nope")).toMatchObject({
-      parameter: "fields[reviews]",
-    });
-  });
+  it.effect("rejects a negative page[offset], naming the parameter", () =>
+    Effect.gen(function* () {
+      expect(yield* parseFailure("/products?page[offset]=-1")).toMatchObject({
+        parameter: "page[offset]",
+      });
+      expect(yield* parseFailure("/products?page[offset]=abc")).toMatchObject({
+        parameter: "page[offset]",
+      });
+    })
+  );
 
-  it("parses page[offset] alongside page[limit] (#209): every listing in the audited apps pages by it", () => {
-    expect(parse("/products?page[offset]=20&page[limit]=5").read).toEqual({
-      collection: "products",
-      offset: 20,
-      first: 5,
-    });
-    // offset: 0 is a real, distinct value from "no offset" — the first
-    // page of the offset idiom, not the cursor idiom's absence of a page.
-    expect(parse("/products?page[offset]=0&page[limit]=5").read).toEqual({
-      collection: "products",
-      offset: 0,
-      first: 5,
-    });
-    // offset alone (no limit) reads as "every row past offset".
-    expect(parse("/products?page[offset]=20").read).toEqual({ collection: "products", offset: 20 });
-    expect(
-      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.limit
-    ).toBe(25);
-    expect(
-      Query.plan(nodes, parse("/products?page[offset]=20&page[limit]=5").read).root.cursor
-    ).toBeUndefined();
-  });
+  it.effect("rejects nested include paths (D1) and undeclared edges, naming the parameter", () =>
+    Effect.gen(function* () {
+      const nested = yield* parseFailure("/products?include=variants.product");
+      expect(nested).toBeInstanceOf(QueryError);
+      expect(nested.parameter).toBe("include");
+      expect(nested.message).toMatch(/nested include path "variants.product"/);
+      expect(yield* parseFailure("/products?include=nope")).toMatchObject({ parameter: "include" });
+      // A node without edges takes no include at all.
+      expect(yield* parseFailure("/categories?include=products")).toMatchObject({
+        parameter: "include",
+      });
+    })
+  );
 
-  it("rejects page[offset] and page[after] together: different pagination idioms, one per request", () => {
-    const failure = parseFailure("/products?page[offset]=10&page[after]=p-9");
-    expect(failure).toBeInstanceOf(QueryError);
-    expect(failure.parameter).toBe("page[offset]");
-    expect(failure.message).toMatch(/different pagination idioms/);
-  });
+  it.effect(
+    "rejects undeclared fields, operators, literals, sorts and pages, naming the parameter",
+    () =>
+      Effect.gen(function* () {
+        const parameters = (yield* Effect.forEach(
+          [
+            "/products?filter[description]=x",
+            "/products?filter[name][gt]=x",
+            "/products?filter[priceCents]=abc",
+            "/variants?filter[stock]=1.5",
+            "/variants?filter[stock][gt]=99999999999",
+            "/reviews?filter[createdAt][gt]=2026-01-01",
+            "/products?filter=x",
+            "/products?fields[products]=nope",
+            "/products?fields[orders]=id",
+            "/products?sort=description",
+            "/products?page[limit]=0",
+            "/products?page[limit]=abc",
+          ],
+          (url) => parseFailure(url),
+          { concurrency: 1 }
+        )).map((failure) => failure.parameter);
+        expect(parameters).toEqual([
+          "filter[description]",
+          "filter[name][gt]",
+          "filter[priceCents]",
+          "filter[stock]",
+          "filter[stock][gt]",
+          "filter[createdAt][gt]",
+          "filter",
+          "fields[products]",
+          "fields[orders]",
+          "sort",
+          "page[limit]",
+          "page[limit]",
+        ]);
+        expect((yield* parseFailure("/products?filter[name][gt]=x")).message).toMatch(
+          /products.*filter\[name\]\[gt\]/
+        );
+      })
+  );
 
-  it("rejects a negative page[offset], naming the parameter", () => {
-    expect(parseFailure("/products?page[offset]=-1")).toMatchObject({ parameter: "page[offset]" });
-    expect(parseFailure("/products?page[offset]=abc")).toMatchObject({ parameter: "page[offset]" });
-  });
+  it.effect(
+    "reads a repeated shorthand filter key as the comma list it spells (effect-jsonapi >= 0.15)",
+    () =>
+      Effect.gen(function* () {
+        // effect-jsonapi#102 made every list-valued position accept the
+        // repeated-key spelling, so `filter[name]=a&filter[name]=b` is no longer
+        // a 400: it decodes exactly as `filter[name]=a,b` does.
+        const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
+        const repeated = yield* read("/products?filter[name]=a&filter[name]=b");
+        expect(repeated).toEqual(yield* read("/products?filter[name]=a,b"));
+        expect(repeated.read.where).toMatchObject({
+          _tag: "In",
+          field: "name",
+          values: ["a", "b"],
+        });
+      })
+  );
 
-  it("rejects nested include paths (D1) and undeclared edges, naming the parameter", () => {
-    const nested = parseFailure("/products?include=variants.product");
-    expect(nested).toBeInstanceOf(QueryError);
-    expect(nested.parameter).toBe("include");
-    expect(nested.message).toMatch(/nested include path "variants.product"/);
-    expect(parseFailure("/products?include=nope")).toMatchObject({ parameter: "include" });
-    // A node without edges takes no include at all.
-    expect(parseFailure("/categories?include=products")).toMatchObject({ parameter: "include" });
-  });
+  it.effect("reads a repeated sort key as the comma list it spells (effect-jsonapi >= 0.15)", () =>
+    Effect.gen(function* () {
+      const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
+      const repeated = yield* read("/products?sort=-name&sort=id");
+      expect(repeated).toEqual(yield* read("/products?sort=-name,id"));
+      expect(repeated.read.order).toEqual(["-name", "id"]);
+      // The mixed spelling decodes to the same plan too.
+      expect(yield* read("/products?sort=-name&sort=id,priceCents")).toEqual(
+        yield* read("/products?sort=-name,id,priceCents")
+      );
+    })
+  );
 
-  it("rejects undeclared fields, operators, literals, sorts and pages, naming the parameter", () => {
-    const parameters = [
-      "/products?filter[description]=x",
-      "/products?filter[name][gt]=x",
-      "/products?filter[priceCents]=abc",
-      "/variants?filter[stock]=1.5",
-      "/variants?filter[stock][gt]=99999999999",
-      "/reviews?filter[createdAt][gt]=2026-01-01",
-      "/products?filter=x",
-      "/products?fields[products]=nope",
-      "/products?fields[orders]=id",
-      "/products?sort=description",
-      "/products?page[limit]=0",
-      "/products?page[limit]=abc",
-    ].map((url) => parseFailure(url).parameter);
-    expect(parameters).toEqual([
-      "filter[description]",
-      "filter[name][gt]",
-      "filter[priceCents]",
-      "filter[stock]",
-      "filter[stock][gt]",
-      "filter[createdAt][gt]",
-      "filter",
-      "fields[products]",
-      "fields[orders]",
-      "sort",
-      "page[limit]",
-      "page[limit]",
-    ]);
-    expect(parseFailure("/products?filter[name][gt]=x").message).toMatch(
-      /products.*filter\[name\]\[gt\]/
-    );
-  });
+  it.effect(
+    "reads a repeated fields[products] key as the comma list it spells (effect-jsonapi >= 0.15)",
+    () =>
+      Effect.gen(function* () {
+        const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
+        const repeated = yield* read(
+          "/products?fields[products]=name&fields[products]=description"
+        );
+        expect(repeated).toEqual(yield* read("/products?fields[products]=name,description"));
+        expect(repeated.fields).toEqual(Option.some({ products: ["name", "description"] }));
+      })
+  );
 
-  it("reads a repeated shorthand filter key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
-    // effect-jsonapi#102 made every list-valued position accept the
-    // repeated-key spelling, so `filter[name]=a&filter[name]=b` is no longer
-    // a 400: it decodes exactly as `filter[name]=a,b` does.
-    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
-    const repeated = read("/products?filter[name]=a&filter[name]=b");
-    expect(repeated).toEqual(read("/products?filter[name]=a,b"));
-    expect(repeated.read.where).toMatchObject({ _tag: "In", field: "name", values: ["a", "b"] });
-  });
-
-  it("reads a repeated sort key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
-    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
-    const repeated = read("/products?sort=-name&sort=id");
-    expect(repeated).toEqual(read("/products?sort=-name,id"));
-    expect(repeated.read.order).toEqual(["-name", "id"]);
-    // The mixed spelling decodes to the same plan too.
-    expect(read("/products?sort=-name&sort=id,priceCents")).toEqual(
-      read("/products?sort=-name,id,priceCents")
-    );
-  });
-
-  it("reads a repeated fields[products] key as the comma list it spells (effect-jsonapi >= 0.15)", () => {
-    const read = (url: string) => Effect.runSync(JsonApiQuery.parseRead(nodes, url));
-    const repeated = read("/products?fields[products]=name&fields[products]=description");
-    expect(repeated).toEqual(read("/products?fields[products]=name,description"));
-    expect(repeated.fields).toEqual(Option.some({ products: ["name", "description"] }));
-  });
-
-  it("still rejects a repeated key at a single-valued position, naming the parameter", () => {
-    expect(parseFailure("/products?page[limit]=1&page[limit]=2")).toMatchObject({
-      parameter: "page[limit]",
-    });
-    expect(
-      parseFailure("/products?filter[priceCents][gt]=1&filter[priceCents][gt]=2")
-    ).toMatchObject({ parameter: "filter[priceCents][gt]" });
-  });
+  it.effect("still rejects a repeated key at a single-valued position, naming the parameter", () =>
+    Effect.gen(function* () {
+      expect(yield* parseFailure("/products?page[limit]=1&page[limit]=2")).toMatchObject({
+        parameter: "page[limit]",
+      });
+      expect(
+        yield* parseFailure("/products?filter[priceCents][gt]=1&filter[priceCents][gt]=2")
+      ).toMatchObject({ parameter: "filter[priceCents][gt]" });
+    })
+  );
 });
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────
@@ -738,36 +844,42 @@ describe("JsonApiQuery.canonical", () => {
     ).toBe("/products?filter[g0][group][conjunction]=OR");
   });
 
-  it("emits page[offset] from the read, not the inflated fetch window (#209)", () => {
-    const read: Query.Read = { collection: "products", order: ["id"], offset: 20, first: 5 };
-    const url = JsonApiQuery.canonical(nodes, read);
-    // The compiled window over-fetches (limit 25) to slice locally; the
-    // canonical URL must still say what the caller asked for, offset 20
-    // limit 5 — never the inflated limit.
-    expect(url).toBe("/products?sort=id&page[limit]=5&page[offset]=20");
-    expect(parse(url).read).toEqual(read);
-    // offset alone (no first) round-trips with no page[limit].
-    const offsetOnly: Query.Read = { collection: "products", offset: 20 };
-    expect(JsonApiQuery.canonical(nodes, offsetOnly)).toBe("/products?page[offset]=20");
-    expect(parse(JsonApiQuery.canonical(nodes, offsetOnly)).read).toEqual(offsetOnly);
-  });
+  it.effect("emits page[offset] from the read, not the inflated fetch window (#209)", () =>
+    Effect.gen(function* () {
+      const read: Query.Read = { collection: "products", order: ["id"], offset: 20, first: 5 };
+      const url = JsonApiQuery.canonical(nodes, read);
+      // The compiled window over-fetches (limit 25) to slice locally; the
+      // canonical URL must still say what the caller asked for, offset 20
+      // limit 5 — never the inflated limit.
+      expect(url).toBe("/products?sort=id&page[limit]=5&page[offset]=20");
+      expect((yield* parse(url)).read).toEqual(read);
+      // offset alone (no first) round-trips with no page[limit].
+      const offsetOnly: Query.Read = { collection: "products", offset: 20 };
+      expect(JsonApiQuery.canonical(nodes, offsetOnly)).toBe("/products?page[offset]=20");
+      expect((yield* parse(JsonApiQuery.canonical(nodes, offsetOnly))).read).toEqual(offsetOnly);
+    })
+  );
 
-  it("applies the projection rule parseRead applies, so fields[] round-trips or fails on both sides", () => {
-    const read: Query.Read = { collection: "products", include: { variants: true } };
-    const fields = { variants: ["sku"], products: ["name"] };
-    const url = JsonApiQuery.canonical(nodes, read, fields);
-    expect(url).toBe("/products?include=variants&fields[products]=name&fields[variants]=sku");
-    expect(parse(url)).toEqual({ read, fields: Option.some(fields), id: Option.none() });
-    // A type the read cannot carry is refused, not dropped: the same error
-    // parseRead gives for `fields[orders]=id`.
-    expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(QueryError);
-    expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(
-      /fields\[orders\]/
-    );
-    expect(parseFailure("/products?include=variants&fields[orders]=id")).toMatchObject({
-      parameter: "fields[orders]",
-    });
-  });
+  it.effect(
+    "applies the projection rule parseRead applies, so fields[] round-trips or fails on both sides",
+    () =>
+      Effect.gen(function* () {
+        const read: Query.Read = { collection: "products", include: { variants: true } };
+        const fields = { variants: ["sku"], products: ["name"] };
+        const url = JsonApiQuery.canonical(nodes, read, fields);
+        expect(url).toBe("/products?include=variants&fields[products]=name&fields[variants]=sku");
+        expect(yield* parse(url)).toEqual({ read, fields: Option.some(fields), id: Option.none() });
+        // A type the read cannot carry is refused, not dropped: the same error
+        // parseRead gives for `fields[orders]=id`.
+        expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(QueryError);
+        expect(() => JsonApiQuery.canonical(nodes, read, { orders: ["id"] })).toThrow(
+          /fields\[orders\]/
+        );
+        expect(yield* parseFailure("/products?include=variants&fields[orders]=id")).toMatchObject({
+          parameter: "fields[orders]",
+        });
+      })
+  );
 
   it("refuses what the plan or the grammar refuses", () => {
     expect(() => JsonApiQuery.canonical(nodes, { collection: "nope" })).toThrow(QueryError);
@@ -792,10 +904,10 @@ describe("JsonApiQuery.canonical", () => {
     ).toThrow(/no URL form/);
   });
 
-  it("round-trips: parseRead(canonical(read)) is the read, over generated reads", () => {
-    const coverage = FilterCorpus.emptyCoverage();
-    const generated = Effect.runSync(
-      Effect.all(
+  it.effect("round-trips: parseRead(canonical(read)) is the read, over generated reads", () =>
+    Effect.gen(function* () {
+      const coverage = FilterCorpus.emptyCoverage();
+      const generated = yield* Effect.all(
         {
           predicates: FilterCorpus.generatePredicate(
             FilterCorpus.corpusColumns,
@@ -807,48 +919,58 @@ describe("JsonApiQuery.canonical", () => {
           firsts: Random.nextIntBetween(0, 50).pipe(Effect.replicateEffect(150)),
         },
         { concurrency: 1 }
-      ).pipe(Random.withSeed(161))
-    );
-    const reads: Array<Query.Read> = [];
-    Arr.forEach(generated.predicates.entries(), ([index, where]) => {
-      const read: Query.Read = { collection: "corpus", where };
-      const first = generated.firsts[index];
-      reads.push({
-        ...read,
-        ...Defined.fields({
-          order: index % 3 === 0 ? undefined : orderTokens(defined(generated.orderBys[index])),
-        }),
-        ...Defined.fields({ first: first === 0 ? undefined : first }),
-        ...Defined.fields({ after: index % 4 === 0 ? `row-${index}` : undefined }),
+      ).pipe(Random.withSeed(161));
+      const reads: Array<Query.Read> = [];
+      Arr.forEach(generated.predicates.entries(), ([index, where]) => {
+        const read: Query.Read = { collection: "corpus", where };
+        const first = generated.firsts[index];
+        reads.push({
+          ...read,
+          ...Defined.fields({
+            order: index % 3 === 0 ? undefined : orderTokens(defined(generated.orderBys[index])),
+          }),
+          ...Defined.fields({ first: first === 0 ? undefined : first }),
+          ...Defined.fields({ after: index % 4 === 0 ? `row-${index}` : undefined }),
+        });
       });
-    });
-    reads.push(
-      {
-        collection: "products",
-        where: Predicate.and(Predicate.eq("categoryId", "c-1"), Predicate.gt("priceCents", 10)),
-        include: { category: true, variants: true },
-        order: ["-name"],
-        first: 12,
-        after: "p-9",
-      },
-      { collection: "products", where: Predicate.eq("id", "p-1"), first: 1 },
-      { collection: "categories", order: ["name"] }
-    );
-    Arr.forEach(reads, (read) => {
-      // The first pass puts the read in the grammar's normal form (member
-      // order, folded constants); from there the round trip is exact.
-      const url = JsonApiQuery.canonical(nodes, read);
-      const normal = parse(url).read;
-      expect(JsonApiQuery.canonical(nodes, normal)).toBe(url);
-      expect(parse(JsonApiQuery.canonical(nodes, normal)).read).toEqual(normal);
-      // The two reads compile to one plan.
-      expect(Query.plan(nodes, normal).root.collection).toBe(read.collection);
-    });
-    // The hand-written reads are already in normal form.
-    Arr.forEach(reads.slice(-3), (read) => {
-      expect(parse(JsonApiQuery.canonical(nodes, read)).read).toEqual(read);
-    });
-  });
+      reads.push(
+        {
+          collection: "products",
+          where: Predicate.and(Predicate.eq("categoryId", "c-1"), Predicate.gt("priceCents", 10)),
+          include: { category: true, variants: true },
+          order: ["-name"],
+          first: 12,
+          after: "p-9",
+        },
+        { collection: "products", where: Predicate.eq("id", "p-1"), first: 1 },
+        { collection: "categories", order: ["name"] }
+      );
+      yield* Effect.forEach(
+        reads,
+        (read) =>
+          Effect.gen(function* () {
+            // The first pass puts the read in the grammar's normal form (member
+            // order, folded constants); from there the round trip is exact.
+            const url = JsonApiQuery.canonical(nodes, read);
+            const normal = (yield* parse(url)).read;
+            expect(JsonApiQuery.canonical(nodes, normal)).toBe(url);
+            expect((yield* parse(JsonApiQuery.canonical(nodes, normal))).read).toEqual(normal);
+            // The two reads compile to one plan.
+            expect(Query.plan(nodes, normal).root.collection).toBe(read.collection);
+          }),
+        { concurrency: 1, discard: true }
+      );
+      // The hand-written reads are already in normal form.
+      yield* Effect.forEach(
+        reads.slice(-3),
+        (read) =>
+          Effect.gen(function* () {
+            expect((yield* parse(JsonApiQuery.canonical(nodes, read))).read).toEqual(read);
+          }),
+        { concurrency: 1, discard: true }
+      );
+    })
+  );
 });
 
 const orderTokens = (orderBy: ReadonlyArray<Subset.OrderBy>): ReadonlyArray<string> =>

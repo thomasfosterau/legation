@@ -196,43 +196,50 @@ describe("DocumentWriter.collection", () => {
     });
   });
 
-  it("fields[products]=name&include=variants: only name, full linkage to every included variant", () => {
-    const { read, fields } = Effect.runSync(
-      JsonApiQuery.parseRead(nodes, "/products?fields[products]=name&include=variants")
-    );
-    const document = DocumentWriter.collection({
-      nodes,
-      read,
-      rows: [row(desk, { variants: [v1, v2] }), row(lamp, { variants: [] })],
-      ...Option.match(fields, {
-        onNone: () => ({}),
-        onSome: (projection) => ({ fields: projection }),
-      }),
-    });
-    expect(document.data.map((resource) => resource.attributes)).toEqual([
-      { name: "Desk" },
-      { name: "Lamp" },
-    ]);
-    // Every included variant is referenced by a primary resource's linkage,
-    // and the included variants are full (no fields[variants]).
-    const linked = new Set(
-      document.data.flatMap((resource) => {
-        const linkage = defined(defined(resource.relationships)["variants"]) as {
-          data: ReadonlyArray<{ id: string }>;
-        };
-        return linkage.data.map((identifier) => identifier.id);
+  it.effect(
+    "fields[products]=name&include=variants: only name, full linkage to every included variant",
+    () =>
+      Effect.gen(function* () {
+        const { read, fields } = yield* JsonApiQuery.parseRead(
+          nodes,
+          "/products?fields[products]=name&include=variants"
+        );
+        const document = DocumentWriter.collection({
+          nodes,
+          read,
+          rows: [row(desk, { variants: [v1, v2] }), row(lamp, { variants: [] })],
+          ...Option.match(fields, {
+            onNone: () => ({}),
+            onSome: (projection) => ({ fields: projection }),
+          }),
+        });
+        expect(document.data.map((resource) => resource.attributes)).toEqual([
+          { name: "Desk" },
+          { name: "Lamp" },
+        ]);
+        // Every included variant is referenced by a primary resource's linkage,
+        // and the included variants are full (no fields[variants]).
+        const linked = new Set(
+          document.data.flatMap((resource) => {
+            const linkage = defined(defined(resource.relationships)["variants"]) as {
+              data: ReadonlyArray<{ id: string }>;
+            };
+            return linkage.data.map((identifier) => identifier.id);
+          })
+        );
+        expect(defined(document.included).map((resource) => resource.id)).toEqual(["v-1", "v-2"]);
+        expect(defined(document.included).every((resource) => linked.has(resource.id))).toBe(true);
+        expect(defined(document.included)[0]).toEqual({
+          type: "variants",
+          id: "v-1",
+          attributes: { sku: "DSK-1" },
+          relationships: { product: { data: { type: "products", id: "p-1" } } },
+        });
+        expect(document.links).toEqual({
+          self: "/products?include=variants&fields[products]=name",
+        });
       })
-    );
-    expect(defined(document.included).map((resource) => resource.id)).toEqual(["v-1", "v-2"]);
-    expect(defined(document.included).every((resource) => linked.has(resource.id))).toBe(true);
-    expect(defined(document.included)[0]).toEqual({
-      type: "variants",
-      id: "v-1",
-      attributes: { sku: "DSK-1" },
-      relationships: { product: { data: { type: "products", id: "p-1" } } },
-    });
-    expect(document.links).toEqual({ self: "/products?include=variants&fields[products]=name" });
-  });
+  );
 
   it("rejects a row set that violates full linkage instead of emitting it", () => {
     // The edge row is present, but the row's own key does not reference it:
@@ -333,55 +340,63 @@ describe("DocumentWriter.collection", () => {
     });
   });
 
-  it("offset links round-trip through the parser, never switching the caller to cursors (#209)", () => {
-    const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };
-    const page = DocumentWriter.collection({ nodes, read, rows: [row(desk), row(lamp)] });
-    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, defined(page.links).next as string));
-    expect(next.read).toEqual({ ...read, offset: 2 });
-    expect(next.read.after).toBeUndefined();
-  });
+  it.effect(
+    "offset links round-trip through the parser, never switching the caller to cursors (#209)",
+    () =>
+      Effect.gen(function* () {
+        const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };
+        const page = DocumentWriter.collection({ nodes, read, rows: [row(desk), row(lamp)] });
+        const next = yield* JsonApiQuery.parseRead(nodes, defined(page.links).next as string);
+        expect(next.read).toEqual({ ...read, offset: 2 });
+        expect(next.read.after).toBeUndefined();
+      })
+  );
 
-  it("links.next round-trips through the parser to the read advanced past the last row", () => {
-    const read: Query.Read = {
-      collection: "products",
-      where: { categoryId: "c-audio" },
-      include: { variants: true },
-      order: ["name"],
-      first: 2,
-    };
-    const fields = { products: ["name"] };
-    const page = DocumentWriter.collection({
-      nodes,
-      read,
-      rows: [row(desk, { variants: [v1] }), row(lamp, { variants: [] })],
-      fields,
-      prefix: "/api",
-    });
-    const next = Effect.runSync(JsonApiQuery.parseRead(nodes, defined(page.links).next as string));
-    // The same read, `after` at the last row — as `Subset.apply` continues it —
-    // with the projection still beside it; nothing else moved.
-    expect(next).toEqual({
-      read: { ...read, where: Predicate.eq("categoryId", "c-audio"), after: "p-2" },
-      fields: Option.some(fields),
-      id: Option.none(),
-    });
-    expect(JsonApiQuery.canonical(nodes, next.read, Option.getOrUndefined(next.fields))).toBe(
-      (defined(page.links).next as string).slice("/api".length)
-    );
-    // The advanced read's own document continues the chain from where it stood.
-    const second = DocumentWriter.collection({
-      nodes,
-      read: next.read,
-      rows: [row(lamp)],
-      ...Option.match(next.fields, {
-        onNone: () => ({}),
-        onSome: (projection) => ({ fields: projection }),
-      }),
-    });
-    expect(second.links).toEqual({
-      self: "/products?include=variants&fields[products]=name&filter[categoryId]=c-audio&sort=name&page[limit]=2&page[after]=p-2",
-    });
-  });
+  it.effect(
+    "links.next round-trips through the parser to the read advanced past the last row",
+    () =>
+      Effect.gen(function* () {
+        const read: Query.Read = {
+          collection: "products",
+          where: { categoryId: "c-audio" },
+          include: { variants: true },
+          order: ["name"],
+          first: 2,
+        };
+        const fields = { products: ["name"] };
+        const page = DocumentWriter.collection({
+          nodes,
+          read,
+          rows: [row(desk, { variants: [v1] }), row(lamp, { variants: [] })],
+          fields,
+          prefix: "/api",
+        });
+        const next = yield* JsonApiQuery.parseRead(nodes, defined(page.links).next as string);
+        // The same read, `after` at the last row — as `Subset.apply` continues it —
+        // with the projection still beside it; nothing else moved.
+        expect(next).toEqual({
+          read: { ...read, where: Predicate.eq("categoryId", "c-audio"), after: "p-2" },
+          fields: Option.some(fields),
+          id: Option.none(),
+        });
+        expect(JsonApiQuery.canonical(nodes, next.read, Option.getOrUndefined(next.fields))).toBe(
+          (defined(page.links).next as string).slice("/api".length)
+        );
+        // The advanced read's own document continues the chain from where it stood.
+        const second = DocumentWriter.collection({
+          nodes,
+          read: next.read,
+          rows: [row(lamp)],
+          ...Option.match(next.fields, {
+            onNone: () => ({}),
+            onSome: (projection) => ({ fields: projection }),
+          }),
+        });
+        expect(second.links).toEqual({
+          self: "/products?include=variants&fields[products]=name&filter[categoryId]=c-audio&sort=name&page[limit]=2&page[after]=p-2",
+        });
+      })
+  );
 
   it("prefixes every link with the api's mount path", () => {
     const document = DocumentWriter.collection({
