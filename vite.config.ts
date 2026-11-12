@@ -395,21 +395,35 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          // Materializes the example app's generated tsconfig on fresh clones.
-          globalSetup: ["./vitest.global-setup.ts"],
-          include: [
-            "packages/*/src/**/*.test.ts",
-            "examples/commerce/tests/**/*.test.ts",
-            "examples/realworld/tests/**/*.test.ts",
-          ],
+          include: ["packages/*/src/**/*.test.ts", "examples/realworld/tests/**/*.test.ts"],
           // The binding tests mount components and need the `svelte`
-          // project below; the /kit tests are plain node. The commerce
-          // browser test runs in `commerce-browser`, after its build.
+          // project below; the /kit tests are plain node. The packages with
+          // an `effect` floor of their own have projects of their own below.
           exclude: [
             "**/node_modules/**",
             "packages/svelte/src/__tests__/**",
             "packages/alchemy-cloudflare/src/__tests__/**",
             "packages/auth/src/__tests__/**",
+            "packages/jsonapi/src/__tests__/**",
+          ],
+        },
+      },
+      {
+        // legation-jsonapi's suite, apart for the same reason as the two
+        // below: its `effect` floor is `catalogs.jsonapi-peers` (4.1.0, which
+        // effect-jsonapi 0.22 requires), so the core floor job (4.0.0) must not
+        // select it. The commerce example drives the façade over
+        // effect-jsonapi, so its tests share the floor and the project (its
+        // browser tests run in `commerce-browser`, after its build).
+        extends: true,
+        test: {
+          name: "jsonapi",
+          environment: "node",
+          // Materializes the example app's generated tsconfig on fresh clones.
+          globalSetup: ["./vitest.global-setup.ts"],
+          include: ["packages/jsonapi/src/**/*.test.ts", "examples/commerce/tests/**/*.test.ts"],
+          exclude: [
+            "**/node_modules/**",
             "examples/commerce/tests/facade-browser.test.ts",
             "examples/commerce/tests/snapshot-browser.test.ts",
           ],
