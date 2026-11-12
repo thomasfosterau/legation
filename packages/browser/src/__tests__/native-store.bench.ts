@@ -31,10 +31,10 @@
  */
 import { describe, test } from "vite-plus/test";
 import * as Arr from "effect/Array";
-import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
 import type * as Ordering from "effect/Ordering";
@@ -195,13 +195,16 @@ const countingStore = () => {
   return { store, data, reset, summarise };
 };
 
-// This script is the edge: it runs each section's effects with no services of their own.
-const runPromise = Effect.runPromiseWith(Context.empty());
+// The script's own runtime, made once at module load: every section's effects run on it.
+const runtime = ManagedRuntime.make(Layer.empty);
 
 const withCounting = <A, E>(
   counting: ReturnType<typeof countingStore>,
   effect: Effect.Effect<A, E, KeyValueStore.KeyValueStore>
-) => runPromise(effect.pipe(Effect.provideService(KeyValueStore.KeyValueStore, counting.store)));
+) =>
+  runtime.runPromise(
+    effect.pipe(Effect.provideService(KeyValueStore.KeyValueStore, counting.store))
+  );
 
 // ─── A. KV ClientStore: cold load, write amplification, id-index growth ──────
 
@@ -413,7 +416,7 @@ const sectionC = async () => {
   const table: Array<Record<string, number | string>> = [];
   const row = (what: string, duration: Duration.Duration) =>
     table.push({ what, transactions: counted.count(), ms: ms(Duration.toMillis(duration)) });
-  await runPromise(
+  await runtime.runPromise(
     Effect.gen(function* () {
       const store = yield* ClientStore.ClientStore;
       counted.reset();

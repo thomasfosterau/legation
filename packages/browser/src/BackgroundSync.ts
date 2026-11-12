@@ -114,7 +114,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as Context from "effect/Context";
+import type * as Context from "effect/Context";
 
 /**
  * The tag the library registers and answers. Short on purpose: Chromium
@@ -482,9 +482,7 @@ export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
   const scope: Partial<SyncScope> = options.scope ?? globalThis;
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
-  const attached = Effect.runSyncWith(Context.empty())(
-    SubscriptionRef.make(Option.none<Attached>())
-  );
+  const attached = edge.runSync(SubscriptionRef.make(Option.none<Attached>()));
 
   // The first attached host, however long it takes to arrive (bounded).
   // `changes` emits the current value first and never ends, so the head
