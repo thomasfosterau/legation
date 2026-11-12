@@ -39,6 +39,7 @@ import { assets, immutable } from "$app/manifest";
 import { asset, type AssetPath } from "$app/paths";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientView, Coverage, type HttpCache } from "@thomasfosterau/legation/internal";
 import { CacheApiHttpCache } from "@thomasfosterau/legation-browser";
@@ -115,8 +116,9 @@ const network = (event: FetchEvent, candidate: Request | undefined): Promise<Res
 const respond = async (event: FetchEvent, candidate: Request | undefined): Promise<Response> => {
   const { request } = event;
   try {
-    const local = facade === undefined ? undefined : await Effect.runPromise(facade.handle(request));
-    if (local !== undefined) return local;
+    const local =
+      facade === undefined ? Option.none() : await Effect.runPromise(facade.handle(request));
+    if (Option.isSome(local)) return local.value;
     if (policy(request) !== undefined) return await Effect.runPromise(viaCache(event));
   } catch {
     // A failed façade or cache is never fatal: the network answers either way.

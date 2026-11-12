@@ -28,7 +28,8 @@
  * carries exactly the relationships the server writes (ADR-0029 §6;
  * `tests/replica-documents.test.ts` checks the bytes).
  */
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 import type { MutatorError, StoreError } from "@thomasfosterau/legation";
 import type { Resource } from "@thomasfosterau/effect-jsonapi";
@@ -77,6 +78,22 @@ export interface FacadeSource {
   readonly mutationStates?: Stream.Stream<MutationState.MutationStateMap>;
 }
 
-/** The façade over this app's api and declarations. */
-export const makeFacade = (source: FacadeSource): JsonApiFacade.FetchHandler =>
-  JsonApiFacade.fetchHandler({ nodes, api, resources, writes: facadeWrites, ...source });
+/**
+ * The façade over this app's api and declarations. The façade reads the cookie
+ * and a windowed pin's total as `Option`s, so the engine's
+ * `undefined`-returning reads are lifted here.
+ */
+export const makeFacade = ({ cookie, totalOf, ...source }: FacadeSource): JsonApiFacade.FetchHandler =>
+  JsonApiFacade.fetchHandler({
+    nodes,
+    api,
+    resources,
+    writes: facadeWrites,
+    ...source,
+    cookie: Effect.map(cookie, Option.fromUndefinedOr),
+    ...(totalOf === undefined
+      ? {}
+      : {
+          totalOf: (subset: Subset.Subset) => Effect.map(totalOf(subset), Option.fromUndefinedOr),
+        }),
+  });

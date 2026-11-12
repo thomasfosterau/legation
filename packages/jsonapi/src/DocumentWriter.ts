@@ -59,6 +59,7 @@
  */
 
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
@@ -77,6 +78,7 @@ export interface Identifier {
  * edges; links for a paginated edge, with its rows' linkage when resolved.
  */
 export type RelationshipValue =
+  // oxlint-disable-next-line effect/prefer-option-over-null -- wire shape: JSON:API resource linkage spells an empty to-one `data: null`, and this value is serialised as is.
   | { readonly data: Identifier | ReadonlyArray<Identifier> | null }
   | {
       readonly links: { readonly self: string; readonly related: string };
@@ -113,6 +115,7 @@ export type CollectionDocument = Handlers.DocumentValue<
 >;
 
 /** A single-resource document: `{ data: resource | null, included?, links }`, with `included` exactly when the read has an `include`. */
+// oxlint-disable-next-line effect/prefer-option-over-null -- wire shape: JSON:API answers a single-resource read that matched nothing with `data: null` (effect-jsonapi's `Handlers.data`), serialised as is.
 export type DataDocument = Handlers.DocumentValue<ResourceValue | null, ResourceValue>;
 
 /** Edge rows by collection, then row id, then edge name (see {@link Input.linkage}). */
@@ -146,9 +149,10 @@ export interface Input {
   readonly prefix?: string;
   /**
    * A collection document's `meta` (#210): the read's total. Written as given;
-   * absent, the document has no `meta`. A single-resource document ignores it.
+   * absent, the document has no `meta`. A single-resource document
+   * ignores it.
    */
-  readonly meta?: CollectionMeta | undefined;
+  readonly meta?: CollectionMeta;
 }
 
 // ─── Row helpers (shared with the linkage derivation) ────────────────────────
@@ -169,14 +173,16 @@ export const relatedValuesOf = (value: Related.RelatedValue): ReadonlyArray<unkn
 /** The per-document constants every row is written under. */
 interface Env {
   readonly nodes: Node.NodeRegistry;
-  readonly linkage: Linkage | undefined;
+  readonly linkage: Option.Option<Linkage>;
   readonly prefix: string;
+  readonly fields: Option.Option<JsonApiQuery.Projection>;
 }
 
 const envOf = (input: Input): Env => ({
   nodes: input.nodes,
-  linkage: input.linkage,
+  linkage: Option.fromUndefinedOr(input.linkage),
   prefix: input.prefix ?? "",
+  fields: Option.fromUndefinedOr(input.fields),
 });
 
 /** The node's declared attributes off the row value, in declaration order; absent ones are left out. */
@@ -200,13 +206,17 @@ const edgeRowsOf = (
   node: Node.AnyNode,
   row: Row,
   name: string
-): ReadonlyArray<unknown> | undefined => {
+): Option.Option<ReadonlyArray<unknown>> => {
   const related = row.related?.[name];
-  return Array.isArray(related) ? related : env.linkage?.get(node.type)?.get(row.id)?.[name];
+  return Array.isArray(related)
+    ? Option.some(related)
+    : Option.flatMap(env.linkage, (linkage) =>
+        Option.fromUndefinedOr(linkage.get(node.type)?.get(row.id)?.[name])
+      );
 };
 
 /**
- * The relationship object of one edge, or `undefined` when nothing is known
+ * The relationship object of one edge, or `None` when nothing is known
  * about it. This is where a row's linkage is read: a `one` edge's key off
  * its `via` field, a collection-valued edge's identifiers off its resolved
  * rows.
@@ -216,36 +226,36 @@ const relationshipOf = (
   node: Node.AnyNode,
   row: Row,
   name: string
-): RelationshipValue | undefined => {
+): Option.Option<RelationshipValue> => {
   const edge = node.edges[name];
-  if (edge === undefined) return undefined;
+  if (edge === undefined) return Option.none();
   if (edge.kind === "one") {
     const key = recordOf(row.value)[edge.via];
-    return {
+    return Option.some({
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
-    };
+    });
   }
-  const rows = edgeRowsOf(env, node, row, name);
-  const data =
-    rows === undefined
-      ? undefined
-      : { data: rows.map((value) => ({ type: edge.target, id: idOf(value) })) };
+  const data = Option.map(edgeRowsOf(env, node, row, name), (rows) => ({
+    data: rows.map((value) => ({ type: edge.target, id: idOf(value) })),
+  }));
   if (edge.kind === "many") return data;
-  return {
+  return Option.some({
     links: {
       self: `${env.prefix}${Handlers.relationshipLink(node.type, row.id, name)}`,
       related: `${env.prefix}${Handlers.relatedLink(node.type, row.id, name)}`,
     },
-    ...data,
-  };
+    ...Option.getOrElse(data, () => ({})),
+  });
 };
 
 /** The resource object of one row of a node. */
 const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
-  const relationships = R.filterMap(node.edges, (_, name) => {
-    const relationship = relationshipOf(env, node, row, name);
-    return relationship === undefined ? Result.failVoid : Result.succeed(relationship);
-  });
+  const relationships = R.filterMap(node.edges, (_, name) =>
+    Option.match(relationshipOf(env, node, row, name), {
+      onNone: () => Result.failVoid,
+      onSome: (relationship) => Result.succeed(relationship),
+    })
+  );
   return {
     type: node.type,
     id: row.id,
@@ -274,9 +284,9 @@ const includedOf = (
 /** The resource's attributes narrowed to its type's `fields[]` entry, when one is given. */
 const project = (
   resource: ResourceValue,
-  fields: JsonApiQuery.Projection | undefined
+  fields: Option.Option<JsonApiQuery.Projection>
 ): ResourceValue => {
-  const names = fields?.[resource.type];
+  const names = Option.getOrUndefined(fields)?.[resource.type];
   if (names === undefined) return resource;
   const attributes = R.filter(resource.attributes, (_, field) => names.includes(field));
   return { ...resource, attributes };
@@ -301,7 +311,7 @@ const nodeOf = (nodes: Node.NodeRegistry, read: Query.Read): Node.AnyNode => {
  */
 const assemble = (input: Input, node: Node.AnyNode) => {
   const env = envOf(input);
-  const data = input.rows.map((row) => project(resourceOf(env, node, row), input.fields));
+  const data = input.rows.map((row) => project(resourceOf(env, node, row), env.fields));
   const include = input.read.include;
   const included =
     include === undefined
@@ -309,13 +319,18 @@ const assemble = (input: Input, node: Node.AnyNode) => {
       : Object.keys(include)
           .toSorted(Predicate.compareText)
           .flatMap((name) => includedOf(env, node, input.rows, name))
-          .map((resource) => project(resource, input.fields));
+          .map((resource) => project(resource, env.fields));
   return { data, included };
 };
 
+/** A read's canonical string behind the prefix: the form every link takes. */
+const linkOf = (input: Input, read: Query.Read): string => {
+  const env = envOf(input);
+  return `${env.prefix}${JsonApiQuery.canonical(input.nodes, read, Option.getOrUndefined(env.fields))}`;
+};
+
 /** `links.self`: the read's canonical string behind the prefix. */
-const selfLink = (input: Input): string =>
-  `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, input.read, input.fields)}`;
+const selfLink = (input: Input): string => linkOf(input, input.read);
 
 /**
  * The read's resolved rows sliced to the page it actually asked for
@@ -344,14 +359,14 @@ const pageOf = (input: Input): ReadonlyArray<Related.RelatedRow> => {
  * versa) is never done — pagination links stay in the idiom the request
  * used (#209).
  */
-const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): string | undefined => {
+const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): Option.Option<string> => {
   const { first, offset } = input.read;
-  if (first === undefined || page.length < first) return undefined;
-  const link = (read: Query.Read): string =>
-    `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
-  if (offset !== undefined) return link({ ...input.read, offset: offset + first });
-  const last = page.at(-1);
-  return last === undefined ? undefined : link({ ...input.read, after: last.id });
+  if (first === undefined || page.length < first) return Option.none();
+  if (offset !== undefined)
+    return Option.some(linkOf(input, { ...input.read, offset: offset + first }));
+  return Option.map(Option.fromUndefinedOr(page.at(-1)), (last) =>
+    linkOf(input, { ...input.read, after: last.id })
+  );
 };
 
 /**
@@ -360,11 +375,10 @@ const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): string
  * cursor names no way back, and ADR-0029's model is unbounded-forward only
  * (#209 adds `prev` for the offset idiom alone).
  */
-const prevLink = (input: Input): string | undefined => {
+const prevLink = (input: Input): Option.Option<string> => {
   const { first, offset } = input.read;
-  if (offset === undefined || offset <= 0 || first === undefined) return undefined;
-  const read: Query.Read = { ...input.read, offset: Math.max(0, offset - first) };
-  return `${input.prefix ?? ""}${JsonApiQuery.canonical(input.nodes, read, input.fields)}`;
+  if (offset === undefined || offset <= 0 || first === undefined) return Option.none();
+  return Option.some(linkOf(input, { ...input.read, offset: Math.max(0, offset - first) }));
 };
 
 /**
@@ -384,13 +398,14 @@ export const collection = (input: Input): CollectionDocument => {
     ...(included === undefined ? {} : { included }),
     links: {
       self: selfLink(input),
-      ...(next === undefined ? {} : { next }),
-      ...(prev === undefined ? {} : { prev }),
+      ...Option.match(next, { onNone: () => ({}), onSome: (link) => ({ next: link }) }),
+      ...Option.match(prev, { onNone: () => ({}), onSome: (link) => ({ prev: link }) }),
     },
   };
-  return input.meta === undefined
-    ? Handlers.collection(data, options)
-    : Handlers.collection(data, { ...options, meta: input.meta });
+  return Option.match(Option.fromUndefinedOr(input.meta), {
+    onNone: () => Handlers.collection(data, options),
+    onSome: (meta) => Handlers.collection(data, { ...options, meta }),
+  });
 };
 
 /**

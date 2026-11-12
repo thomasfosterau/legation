@@ -52,6 +52,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -242,11 +243,15 @@ const respondToFailures = <A, E>(
  * 500.
  */
 export const make = (options: Options): RestHandlers => {
-  const { nodes, backend, policy, middleware, prefix } = options;
+  const { nodes, backend, policy } = options;
+  const prefix = Option.fromUndefinedOr(options.prefix);
   const deps: SyncServer.ReadDeps = {
     backend,
     authPolicy: policy,
-    ...(middleware && { middleware }),
+    ...Option.match(Option.fromUndefinedOr(options.middleware), {
+      onNone: () => ({}),
+      onSome: (middleware) => ({ middleware }),
+    }),
   };
 
   const nodeOf = (resource: Resource.Any): Node.AnyNode => {
@@ -281,14 +286,17 @@ export const make = (options: Options): RestHandlers => {
   const input = (
     read: Query.Read,
     resolved: Linkage.Resolved,
-    fields: JsonApiQuery.Projection | undefined
+    fields: Option.Option<JsonApiQuery.Projection>
   ): DocumentWriter.Input => ({
     nodes,
     read,
     rows: resolved.rows,
     linkage: resolved.linkage,
-    ...(fields === undefined ? {} : { fields }),
-    ...(prefix === undefined ? {} : { prefix }),
+    ...Option.match(fields, {
+      onNone: () => ({}),
+      onSome: (projection) => ({ fields: projection }),
+    }),
+    ...Option.match(prefix, { onNone: () => ({}), onSome: (mount) => ({ prefix: mount }) }),
   });
 
   const list = <R extends Resource.Any>(resource: R) => {

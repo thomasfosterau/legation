@@ -45,7 +45,7 @@ client-direct sync stack — journal, optimistic overlay, rebase, live queries �
 over the existing REST API.
 
 ```ts
-import { Duration, Effect, Layer } from "effect";
+import { Duration, Effect, Layer, Option } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { Predicate } from "@thomasfosterau/legation";
 import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
@@ -60,7 +60,8 @@ const sync = JsonApiSync.layer(api, {
   // for a reconnect, a poke-driven pull, or an explicit `push` — an
   // already-connected client would sit on unflushed writes. `pullInterval`
   // is the correctness backstop for when pokes don't arrive.
-  pullInterval: Duration.seconds(5),
+  // Absent, the interval is 5 seconds; `Option.none()` turns interval pulling off.
+  pullInterval: Option.some(Duration.seconds(5)),
   pushDebounce: Duration.millis(300),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
@@ -363,8 +364,8 @@ const { rows, included } = await Effect.runPromise(program);
 ```
 
 - `load(type, options?)` — `GET /{type}` → `{ rows, included }`.
-- `loadOne(type, id, options?)` — `GET /{type}/{id}` → a single row, or
-  `undefined` if absent.
+- `loadOne(type, id, options?)` — `GET /{type}/{id}` → `Option.some(row)`, or
+  `Option.none()` if the document has no primary data.
 - `documentToRows(document)` — map an already-parsed `JsonApiDocument` to its
   primary rows and its compound `included` rows.
 
@@ -438,7 +439,9 @@ projection for one job, not a general translation:
   the plan. A nested include path, an undeclared field or operator, a literal
   of the wrong kind, an unsortable field or a bad page fails with a
   `QueryError` whose `parameter` names the offending key — the 400's
-  `source.parameter`.
+  `source.parameter`. A `ParsedRead` is `{ read, fields, id }`: `fields` is
+  `Option.some(projection)` when the URL carried `fields[…]`, and `id` is
+  `Option.some(rowId)` for a `/{type}/{id}` path.
 - **`Query.Read` → canonical string** — `canonical(nodes, read)` compiles
   the read and encodes its plan through effect-jsonapi's canonical encoder:
   `/products?filter[categoryId]=c-audio&sort=id&page[limit]=12`. Two reads
@@ -590,7 +593,7 @@ because everything it needs is this package's plus the standard `Request` /
 `Response` globals (ADR-0006).
 
 ```ts
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { ClientView, Coverage } from "@thomasfosterau/legation/internal";
 import { ServiceWorkerHost } from "@thomasfosterau/legation-browser";
 import { JsonApiFacade, JsonApiQuery } from "@thomasfosterau/legation-jsonapi";
@@ -606,8 +609,10 @@ const facade = JsonApiFacade.fetchHandler({
   resources, // so linkage matches the derived REST handler's
   view,
   coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations), // the mirrors' pins
-  totalOf: host.engine.totalOf, // a windowed pin's pulled total, for `meta.total`
-  cookie: store.getCookie, // `x-legation-served-at`
+  // A windowed pin's pulled total, for `meta.total`, read as an `Option`.
+  totalOf: (subset) => Effect.map(host.engine.totalOf(subset), Option.fromUndefinedOr),
+  // `x-legation-served-at`: the store's cookie, read as an `Option`.
+  cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
 });
 
 self.addEventListener("fetch", (event) => {
@@ -615,7 +620,7 @@ self.addEventListener("fetch", (event) => {
   const candidate = facade.matches(event.request) ? event.request.clone() : undefined;
   event.respondWith(
     Effect.runPromise(facade.handle(event.request))
-      .then((local) => local ?? httpCacheThenNetwork(event.request))
+      .then((local) => Option.getOrElse(local, () => httpCacheThenNetwork(event.request)))
       .catch(() =>
         candidate ? Effect.runPromise(facade.offline(candidate)) : fetch(event.request)
       )
@@ -627,7 +632,7 @@ self.addEventListener("fetch", (event) => {
   `application/vnd.api+json` on one of the api's reflected `list` / `getOne`
   routes whose type is a node of the graph, under `baseUrl` (default: the
   page's own origin). Everything else — a server-only resource, another
-  path, a `POST`, a navigation — is `undefined`: not its business.
+  path, a `POST`, a navigation — is `Option.none()`: not its business.
 - **The parity assumption.** The api's read endpoints are declared with the
   graph's codec (`JsonApiQuery.querySchema` / `singleRowSchema`) and served
   by the derived handlers, so the server rules on a URL exactly as the
@@ -645,7 +650,7 @@ self.addEventListener("fetch", (event) => {
   identically — except an `include` the graph does not declare, which the
   server rules on. Uncovered and offline (`navigator.onLine === false`, or
   `online()`): the `503` `offline` error document of ADR-0029 §4.
-- **What it forwards** (`undefined`): an uncovered request while online, a
+- **What it forwards** (`Option.none()`): an uncovered request while online, a
   collection no bound resource declares, and a single-resource request whose
   row the replica does not hold — the 404 is the endpoint's own error class,
   which only the server can write. A forward that rejects at the transport

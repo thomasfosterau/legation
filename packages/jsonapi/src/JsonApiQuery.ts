@@ -571,8 +571,10 @@ export type Projection = Readonly<Record<string, ReadonlyArray<string>>>;
  */
 export interface ParsedRead {
   readonly read: Query.Read;
-  readonly fields?: Projection;
-  readonly id?: string;
+  /** The `fields[]` projection the URL carried; `None` when it carried none. */
+  readonly fields: Option.Option<Projection>;
+  /** The row id a `/{type}/{id}` path addressed; `None` for a listing. */
+  readonly id: Option.Option<string>;
 }
 
 /** The flat query record: `URLSearchParams` with repeated keys as arrays (as `UrlParams.toRecord` does). */
@@ -626,10 +628,14 @@ const nodeOf = (
 };
 
 /** The `include` tokens of the wire value: the comma form, the repeated key, or both. */
-const includeTokens = (value: string | ReadonlyArray<string> | undefined): ReadonlyArray<string> =>
-  value === undefined
-    ? []
-    : (P.isString(value) ? [value] : value).flatMap((item) => item.split(","));
+const includeTokens = (
+  value: Option.Option<string | ReadonlyArray<string>>
+): ReadonlyArray<string> =>
+  Option.match(value, {
+    onNone: () => [],
+    onSome: (present) =>
+      (P.isString(present) ? [present] : present).flatMap((item) => item.split(",")),
+  });
 
 /**
  * Check `include` before decoding: every path is one of the node's own
@@ -639,7 +645,7 @@ const includeTokens = (value: string | ReadonlyArray<string> | undefined): Reado
  */
 const checkInclude = (
   node: Node.AnyNode,
-  value: string | ReadonlyArray<string> | undefined
+  value: Option.Option<string | ReadonlyArray<string>>
 ): Effect.Effect<void, QueryError> =>
   failFirst(includeTokens(value), (token) =>
     token.includes(".")
@@ -680,18 +686,20 @@ const carriedTypes = (node: Node.AnyNode): ReadonlySet<string> =>
 
 /**
  * The rejection of a `fields[type]` projection the read cannot carry, or
- * `undefined` when it can. The codec silently drops such a type; a
+ * `None` when it can. The codec silently drops such a type; a
  * projection nobody can apply is a client mistake worth a 400, and the same
  * rule keeps {@link canonical} and {@link parseParams} in agreement.
  */
-const projectionError = (node: Node.AnyNode, type: string): QueryError | undefined => {
+const projectionError = (node: Node.AnyNode, type: string): Option.Option<QueryError> => {
   const types = carriedTypes(node);
   return types.has(type)
-    ? undefined
-    : invalid(
-        node.type,
-        `fields[${type}]`,
-        `"${type}" is not a type this read can carry (types: ${[...types].join(", ")})`
+    ? Option.none()
+    : Option.some(
+        invalid(
+          node.type,
+          `fields[${type}]`,
+          `"${type}" is not a type this read can carry (types: ${[...types].join(", ")})`
+        )
       );
 };
 
@@ -702,9 +710,7 @@ const checkFields = (
 ): Effect.Effect<void, QueryError> =>
   failFirst(Object.keys(record), (key) => {
     const match = /^fields\[(.*)\]$/.exec(key);
-    return Option.fromUndefinedOr(
-      match === null ? undefined : projectionError(node, match[1] ?? "")
-    );
+    return match === null ? Option.none() : projectionError(node, match[1] ?? "");
   });
 
 /**
@@ -728,10 +734,12 @@ const checkPage = (
     : Effect.void;
 
 /** The query-string parameter an issue path names: the flat key itself, or `family[member]` for the nested families. */
-const parameterOf = (path: ReadonlyArray<PathSegment> | undefined): string | undefined => {
-  const [head, second] = (path ?? []).map(keyOf);
-  if (!P.isString(head)) return undefined;
-  return (head === "fields" || head === "page") && P.isString(second) ? `${head}[${second}]` : head;
+const parameterOf = (path: Option.Option<ReadonlyArray<PathSegment>>): Option.Option<string> => {
+  const [head, second] = Option.getOrElse(path, () => []).map(keyOf);
+  if (!P.isString(head)) return Option.none();
+  return Option.some(
+    (head === "fields" || head === "page") && P.isString(second) ? `${head}[${second}]` : head
+  );
 };
 
 /** A codec rejection as a `QueryError` naming the parameter (the issue's path is the flat key). */
@@ -739,11 +747,11 @@ const decodeError =
   (collection: string) =>
   (error: Schema.SchemaError): QueryError => {
     const issue = SchemaIssue.makeFormatterStandardSchemaV1()(error.issue).issues[0];
-    const parameter = parameterOf(issue?.path);
+    const parameter = parameterOf(Option.fromUndefinedOr(issue?.path));
     return new QueryError({
-      message: `Invalid query for "${collection}"${parameter === undefined ? "" : ` (${parameter})`}: ${issue?.message ?? error.message}`,
+      message: `Invalid query for "${collection}"${Option.match(parameter, { onNone: () => "", onSome: (name) => ` (${name})` })}: ${issue?.message ?? error.message}`,
       query: collection,
-      parameter,
+      parameter: Option.getOrUndefined(parameter),
       cause: error,
     });
   };
@@ -765,11 +773,11 @@ const readOf = (
 ): Result.Result<Query.Read, QueryError> => {
   const whereResult =
     decoded.filter === undefined
-      ? Result.succeed<Predicate.Predicate | undefined>(undefined)
-      : fromFilterAst(decoded.filter);
+      ? Result.succeed(Option.none<Predicate.Predicate>())
+      : Result.map(fromFilterAst(decoded.filter), Option.some);
   return Result.map(whereResult, (where) => ({
     collection,
-    ...(where === undefined ? {} : { where }),
+    ...Option.match(where, { onNone: () => ({}), onSome: (predicate) => ({ where: predicate }) }),
     ...(decoded.include === undefined || Arr.isReadonlyArrayEmpty(decoded.include)
       ? {}
       : { include: Object.fromEntries(decoded.include.map((edge) => [edge, true as const])) }),
@@ -798,17 +806,14 @@ export const parseParams = (
   Effect.gen(function* () {
     const node = yield* nodeOf(nodes, collection);
     const record = recordOf(params);
-    yield* checkInclude(node, record["include"]);
+    yield* checkInclude(node, Option.fromUndefinedOr(record["include"]));
     yield* checkFields(node, record);
     yield* checkPage(node, record);
     const decoded = yield* Schema.decodeUnknownEffect(codecOf(nodes, node).schema)(record).pipe(
       Effect.mapError(decodeError(collection))
     );
     const read = yield* Effect.fromResult(readOf(collection, decoded));
-    return {
-      read,
-      ...(decoded.fields === undefined ? {} : { fields: decoded.fields }),
-    };
+    return { read, fields: Option.fromUndefinedOr(decoded.fields), id: Option.none() };
   });
 
 /** A path segment percent-decoded, or a `QueryError` naming `id` when it is malformed. */
@@ -830,23 +835,27 @@ const decodeId = (collection: string, segment: string): Effect.Effect<string, Qu
 const locate = (
   nodes: Node.NodeRegistry,
   url: URL
-): Effect.Effect<{ readonly collection: string; readonly id?: string }, QueryError> => {
+): Effect.Effect<
+  { readonly collection: string; readonly id: Option.Option<string> },
+  QueryError
+> => {
   const segments = url.pathname.split("/").filter((segment) => Str.isNonEmpty(segment));
   const last = segments.at(-1);
   const previous = segments.at(-2);
   if (previous !== undefined && last !== undefined && nodes.nodes.has(previous)) {
-    return Effect.map(decodeId(previous, last), (id) => ({ collection: previous, id }));
+    return Effect.map(decodeId(previous, last), (id) => ({
+      collection: previous,
+      id: Option.some(id),
+    }));
   }
-  const message = segments.slice(0, -2).some((segment) => nodes.nodes.has(segment))
-    ? `Nested resource path "${url.pathname}" is not a read; filter the related collection by its key instead`
-    : last !== undefined && nodes.nodes.has(last)
-      ? undefined
-      : `No collection on path "${url.pathname}"`;
-  return message === undefined && last !== undefined
-    ? Effect.succeed({ collection: last })
+  const nested = segments.slice(0, -2).some((segment) => nodes.nodes.has(segment));
+  return !nested && last !== undefined && nodes.nodes.has(last)
+    ? Effect.succeed({ collection: last, id: Option.none() })
     : Effect.fail(
         new QueryError({
-          message: message ?? `No collection on path "${url.pathname}"`,
+          message: nested
+            ? `Nested resource path "${url.pathname}" is not a read; filter the related collection by its key instead`
+            : `No collection on path "${url.pathname}"`,
           query: url.pathname,
         })
       );
@@ -897,12 +906,12 @@ export const parseRead = (
   Effect.gen(function* () {
     const parsed = P.isString(url) ? new URL(url, "http://localhost") : url;
     const located = yield* locate(nodes, parsed);
-    const params =
-      located.id === undefined
-        ? parsed.searchParams
-        : yield* singleRowParams(located.collection, located.id, parsed.searchParams);
+    const params = yield* Option.match(located.id, {
+      onNone: () => Effect.succeed(parsed.searchParams),
+      onSome: (id) => singleRowParams(located.collection, id, parsed.searchParams),
+    });
     const result = yield* parseParams(nodes, located.collection, params);
-    return located.id === undefined ? result : { ...result, id: located.id };
+    return { ...result, id: located.id };
   });
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────
@@ -936,7 +945,7 @@ const astOf = (collection: string, predicate: Predicate.Predicate): Filter.Node 
 const NORMAL_FORM_PASSES = 8;
 
 /**
- * The plan's root predicate as a filter AST in normal form; `undefined` for
+ * The plan's root predicate as a filter AST in normal form; `None` for
  * the whole collection. Two normalisations meet here: {@link foldConstants}
  * on the engine side (constants, singleton groups) and `Filter.normalise`
  * on the grammar side (member order, deduplication, literal-list order).
@@ -949,7 +958,7 @@ const filterOf = (
   collection: string,
   declaration: Filter.LiteralCodecs,
   where: Predicate.Predicate
-): Filter.Node | undefined => {
+): Option.Option<Filter.Node> => {
   const settle = (predicate: Predicate.Predicate, pass: number): Option.Option<Filter.Node> => {
     if (pass >= NORMAL_FORM_PASSES) return Option.some(astOf(collection, predicate));
     if (isTrue(predicate)) return Option.none();
@@ -966,7 +975,7 @@ const filterOf = (
     if (JSON.stringify(next) === JSON.stringify(predicate)) return Option.some(ast);
     return settle(next, pass + 1);
   };
-  return Option.getOrUndefined(settle(foldConstants(where), 0));
+  return settle(foldConstants(where), 0);
 };
 
 /**
@@ -979,7 +988,7 @@ const filterOf = (
 const decodedOf = (
   compiled: Query.Plan,
   declaration: Filter.LiteralCodecs,
-  fields: Projection | undefined,
+  fields: Option.Option<Projection>,
   read: Query.Read
 ): DecodedQuery => {
   const { root } = compiled;
@@ -994,8 +1003,11 @@ const decodedOf = (
       : { ...(read.first === undefined ? {} : { limit: read.first }), offset: read.offset };
   return {
     ...(Arr.isReadonlyArrayEmpty(include) ? {} : { include }),
-    ...(fields === undefined ? {} : { fields: projectionOf(fields) }),
-    ...(filter === undefined ? {} : { filter }),
+    ...Option.match(fields, {
+      onNone: () => ({}),
+      onSome: (projection) => ({ fields: projectionOf(projection) }),
+    }),
+    ...Option.match(filter, { onNone: () => ({}), onSome: (node) => ({ filter: node }) }),
     ...(Arr.isReadonlyArrayEmpty(root.orderBy) ? {} : { sort: root.orderBy }),
     ...(R.isEmptyReadonlyRecord<string, unknown>(page) ? {} : { page }),
   };
@@ -1033,12 +1045,14 @@ export const canonical = (
   }
   Object.keys(fields ?? {}).forEach((type) => {
     const error = projectionError(node, type);
-    if (error !== undefined) throw error;
+    if (Option.isSome(error)) throw error.value;
   });
   const encoded = Result.try({
     try: () => {
       const declaration = Resource.filterable(resourceIn(resourcesOf(nodes), node.type));
-      return codecOf(nodes, node).canonical(decodedOf(compiled, declaration, fields, read));
+      return codecOf(nodes, node).canonical(
+        decodedOf(compiled, declaration, Option.fromUndefinedOr(fields), read)
+      );
     },
     catch: (error) =>
       error instanceof QueryError

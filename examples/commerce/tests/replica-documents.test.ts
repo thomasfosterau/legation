@@ -22,6 +22,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
@@ -267,7 +268,11 @@ const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly
 const makeWorlds = Effect.gen(function* () {
   const rest = yield* makeRest;
   const replica = yield* makeReplica(rest.rows);
-  const docs = ReplicaDocuments.make({ nodes, resources, prefix: "/jsonapi" });
+  const docs = ReplicaDocuments.make({
+    nodes,
+    resources,
+    prefix: "/jsonapi",
+  });
   return { ...rest, ...replica, docs };
 });
 
@@ -287,7 +292,7 @@ const metaOver = (view: ClientView.Reader, read: Query.Read) =>
 const metaOfUrl = (view: ClientView.Reader, url: string) =>
   Effect.gen(function* () {
     const parsed = yield* JsonApiQuery.parseRead(nodes, url);
-    return parsed.id === undefined ? yield* metaOver(view, parsed.read) : undefined;
+    return Option.isNone(parsed.id) ? yield* metaOver(view, parsed.read) : undefined;
   });
 
 // ─── The reads the app declares ──────────────────────────────────────────────
@@ -311,7 +316,11 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
           const served = yield* fetch(url);
           expect(served.status, name).toBe(200);
           expect(served.body.data, name).not.toEqual([]);
-          const local = yield* docs.collection(view, { read }, yield* metaOver(view, read));
+          const local = yield* docs.collection(
+            view,
+            { read, fields: Option.none(), id: Option.none() },
+            yield* metaOver(view, read)
+          );
           expect(bytes(local), `${name}: ${url}`).toBe(bytes(served.body));
         }
       })
@@ -424,7 +433,7 @@ describe("the commerce façade against the derived REST handler (ADR-0029 §6)",
         for (const url of local) {
           const request = jsonApi(url);
           expect(facade.matches(request), url).toBe(true);
-          const response = yield* facade.handle(request);
+          const response = Option.getOrUndefined(yield* facade.handle(request));
           expect(response, url).toBeDefined();
           expect(response!.status, url).toBe(200);
           expect(response!.headers.get("cache-control"), url).toBe("no-store");
@@ -447,11 +456,11 @@ describe("the commerce façade against the derived REST handler (ADR-0029 §6)",
         for (const url of network) {
           const request = jsonApi(url);
           expect(facade.matches(request), url).toBe(true);
-          expect(yield* facade.handle(request), url).toBeUndefined();
+          expect(yield* facade.handle(request), url).toEqual(Option.none());
         }
         // Offline, the same uncovered URL is the 503 `offline` document.
         online.current = false;
-        expect((yield* facade.handle(jsonApi(narrowed)))!.status).toBe(503);
+        expect((Option.getOrUndefined(yield* facade.handle(jsonApi(narrowed))))!.status).toBe(503);
         // The page's own reads (the app shell, its assets) are never the façade's.
         expect(facade.matches(new Request("http://commerce.test/product/p-01"))).toBe(false);
         expect(facade.matches(new Request("http://commerce.test/sync"))).toBe(false);

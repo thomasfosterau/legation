@@ -165,7 +165,7 @@ const makeFixture = (
       api,
       view: client.view,
       coverageOf: client.coverageOf,
-      cookie: store.getCookie,
+      cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
       online: () => online.current,
       mutate: engine.mutateWithAck,
       pull: Effect.sync(() => void pulls.count++),
@@ -244,10 +244,12 @@ const body = (response: Response): Effect.Effect<any> =>
 
 /** The façade's own answer to a request; a forward (`undefined`) is a test failure. */
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
-  Effect.flatMap(handler.handle(request), (response) =>
-    response === undefined
-      ? Effect.die(`forwarded: ${request.method} ${request.url}`)
-      : Effect.succeed(response)
+  Effect.flatMap(
+    handler.handle(request),
+    Option.match({
+      onNone: () => Effect.die(`forwarded: ${request.method} ${request.url}`),
+      onSome: Effect.succeed,
+    })
   );
 
 /** Run `f` over each item in order. */
@@ -398,7 +400,7 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
           // with the clone it took before forwarding.
           const request = createNote();
           const clone = request.clone();
-          expect(yield* handler.handle(request)).toBeUndefined();
+          expect(yield* handler.handle(request)).toEqual(Option.none());
           yield* each([clone, patchNote(), deleteNote()], (candidate) =>
             Effect.flatMap(handler.offline(candidate), (response) =>
               Effect.map(body(response), (document) => expectReceipt(response, document))
@@ -438,7 +440,7 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
         yield* each([createNote(), createNoteWithoutId(), patchNote(), deleteNote()], (request) =>
           Effect.gen(function* () {
             expect(handler.matches(request)).toBe(true);
-            expect(yield* handler.handle(request)).toBeUndefined();
+            expect(yield* handler.handle(request)).toEqual(Option.none());
             yield* handler.forwarded(request, new Response(null, { status: 201 }));
           })
         );
@@ -461,11 +463,13 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
           const strict = { prefer: "handling=strict" };
           const strictWrites = () => [createNote(strict), patchNote(strict), deleteNote(strict)];
           yield* each(strictWrites(), (request) =>
-            Effect.map(handler.handle(request), (response) => expect(response).toBeUndefined())
+            Effect.map(handler.handle(request), (response) =>
+              expect(response).toEqual(Option.none())
+            )
           );
-          expect(
-            yield* handler.handle(createNoteWithoutId({ prefer: "respond-async" }))
-          ).toBeUndefined();
+          expect(yield* handler.handle(createNoteWithoutId({ prefer: "respond-async" }))).toEqual(
+            Option.none()
+          );
           // Offline, strict is refused rather than journaled (the 503 document is #512's to refine).
           online.current = false;
           yield* each(strictWrites(), (request) =>
@@ -499,7 +503,7 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
         yield* each(notCandidates, (request) =>
           Effect.map(handler.handle(request), (response) => {
             expect(handler.matches(request)).toBe(false);
-            expect(response).toBeUndefined();
+            expect(response).toEqual(Option.none());
           })
         );
       })
@@ -511,14 +515,14 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
       Effect.gen(function* () {
         const { handler, states } = yield* makeFixture({
           // An intent mapping naming a mutation the engine does not register.
-          intentOf: (w) => ({ mutator: `${w.type}/unknown`, args: {} }),
+          intentOf: (w) => Option.some({ mutator: `${w.type}/unknown`, args: {} }),
         });
         const prefer = { prefer: "respond-async" };
         const malformed = write("POST", "/jsonapi/notes", { data: [] }, prefer);
-        expect(yield* handler.handle(malformed)).toBeUndefined();
+        expect(yield* handler.handle(malformed)).toEqual(Option.none());
         // The body was read from a clone: the request can still be forwarded.
         expect(malformed.bodyUsed).toBe(false);
-        expect(yield* handler.handle(createNote(prefer))).toBeUndefined();
+        expect(yield* handler.handle(createNote(prefer))).toEqual(Option.none());
         expect(HashMap.size(yield* states)).toBe(0);
       })
     )
@@ -558,9 +562,10 @@ describe("JsonApiFacade writes: never a fabricated status", () => {
               const clone = request.clone();
               const handled = yield* handler.handle(request);
               const synthesised = yield* handler.offline(clone);
-              return handled === undefined
-                ? [synthesised.status]
-                : [handled.status, synthesised.status];
+              return Option.match(handled, {
+                onNone: () => [synthesised.status],
+                onSome: (response) => [response.status, synthesised.status],
+              });
             }),
           { concurrency: 1 }
         );

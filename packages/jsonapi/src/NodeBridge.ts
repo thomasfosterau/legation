@@ -117,22 +117,30 @@ export interface SyncAnnotations {
   readonly kinds?: Readonly<Record<string, FilterPolicy.LiteralKind>>;
 }
 
-/** {@link SyncAnnotations} as resource annotations, under the bridge's keys. */
+/**
+ * {@link SyncAnnotations} as resource annotations, under the bridge's keys:
+ * the record effect-jsonapi's `Resource.make` / `Resource.annotate` take, so
+ * an absent annotation is an absent key.
+ */
 export type SyncAnnotationRecord = {
-  readonly [InversesAnnotation]?: SyncAnnotations["inverses"];
-  readonly [KindsAnnotation]?: SyncAnnotations["kinds"];
+  readonly [InversesAnnotation]?: Readonly<Record<string, string>>;
+  readonly [KindsAnnotation]?: Readonly<Record<string, FilterPolicy.LiteralKind>>;
 };
 
 /**
  * The resource annotations that declare `sync`, to pass as (or merge into)
  * `Resource.make`'s `annotations` or `Resource.annotate`'s.
  */
-export const syncAnnotations = (sync: SyncAnnotations): SyncAnnotationRecord => {
-  let record: SyncAnnotationRecord = {};
-  if (sync.inverses !== undefined) record = { ...record, [InversesAnnotation]: sync.inverses };
-  if (sync.kinds !== undefined) record = { ...record, [KindsAnnotation]: sync.kinds };
-  return record;
-};
+export const syncAnnotations = (sync: SyncAnnotations): SyncAnnotationRecord => ({
+  ...Option.match(Option.fromUndefinedOr(sync.inverses), {
+    onNone: () => ({}),
+    onSome: (inverses) => ({ [InversesAnnotation]: inverses }),
+  }),
+  ...Option.match(Option.fromUndefinedOr(sync.kinds), {
+    onNone: () => ({}),
+    onSome: (kinds) => ({ [KindsAnnotation]: kinds }),
+  }),
+});
 
 const Inverses = Schema.Record(Schema.String, Schema.String);
 const Kinds = Schema.Record(
@@ -200,6 +208,27 @@ export interface FromResourceOptions {
   readonly sortable?: ReadonlyArray<string>;
 }
 
+/** {@link FromResourceOptions} with every absent member at its default: what the bridge reads. */
+interface BridgeOptions {
+  readonly via: Readonly<Record<string, string>>;
+  readonly edges: Readonly<Record<string, { readonly target: string; readonly via: string }>>;
+  readonly inverses: Readonly<Record<string, string>>;
+  readonly order: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly hintKeys: Option.Option<ReadonlyArray<string>>;
+  readonly filterable: Readonly<Record<string, FilterPolicy.FilterableInput>>;
+  readonly sortable: ReadonlyArray<string>;
+}
+
+const bridgeOptionsOf = (options: FromResourceOptions): BridgeOptions => ({
+  via: options.via ?? {},
+  edges: options.edges ?? {},
+  inverses: options.inverses ?? {},
+  order: options.order ?? {},
+  hintKeys: Option.fromUndefinedOr(options.hintKeys),
+  filterable: options.filterable ?? {},
+  sortable: options.sortable ?? [],
+});
+
 const fail = (resource: string, relationship: string, message: string): never => {
   throw new ResourceBridgeError({ resource, relationship, message });
 };
@@ -209,21 +238,18 @@ const fail = (resource: string, relationship: string, message: string): never =>
  * plus the option-declared extras. This is the map inverse discovery
  * scans, so declared and relationship-derived edges resolve identically.
  */
-const oneEdgesOf = (
-  resource: Resource.Any,
-  options: FromResourceOptions
-): Record<string, Edge.One> => {
+const oneEdgesOf = (resource: Resource.Any, options: BridgeOptions): Record<string, Edge.One> => {
   const related = R.filterMap(resource.relationships, (descriptor, name) =>
     descriptor.kind === "one" || descriptor.kind === "optional"
       ? Result.succeed(
           Edge.one(descriptor.ref().type, {
             // An explicit override wins, then the relationship's declared storage key (#553).
-            via: options.via?.[name] ?? descriptor.key ?? `${name}Id`,
+            via: options.via[name] ?? descriptor.key ?? `${name}Id`,
           })
         )
       : Result.failVoid
   );
-  const declared = R.map(options.edges ?? {}, (edge) => Edge.one(edge.target, { via: edge.via }));
+  const declared = R.map(options.edges, (edge) => Edge.one(edge.target, { via: edge.via }));
   return { ...related, ...declared };
 };
 
@@ -278,12 +304,12 @@ const collectionEdge = (
   resource: Resource.Any,
   name: string,
   descriptor: CollectionRelationship,
-  options: FromResourceOptions,
+  options: BridgeOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
 ): Edge.Edge => {
   const target = descriptor.ref();
   const inverse =
-    options.inverses?.[name] ??
+    options.inverses[name] ??
     Option.getOrUndefined(
       Option.flatMapNullishOr(
         annotationOf(resource, InversesAnnotation, Inverses),
@@ -292,7 +318,7 @@ const collectionEdge = (
     ) ??
     discoverInverse(resource.type, name, target.type, oneEdgesOfTarget(target));
   if (descriptor.kind === "many") return Edge.many(target.type, { inverse });
-  const order = options.order?.[name] ?? Option.getOrUndefined(declaredOrder(descriptor));
+  const order = options.order[name] ?? Option.getOrUndefined(declaredOrder(descriptor));
   if (order === undefined) {
     return fail(
       resource.type,
@@ -306,7 +332,7 @@ const collectionEdge = (
 /** The resource's edges: its one-edges plus every collection-valued relationship's. */
 const edgesOf = (
   resource: Resource.Any,
-  options: FromResourceOptions,
+  options: BridgeOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
 ): Record<string, Edge.Edge> => {
   const collections = R.filterMap(resource.relationships, (descriptor, name) =>
@@ -405,24 +431,27 @@ const withKinds = (
 const nodeOptionsOf = (
   resource: Resource.Any,
   edges: Record<string, Edge.Edge>,
-  options: FromResourceOptions
+  options: BridgeOptions
 ): {
   readonly hintKeys?: ReadonlyArray<string>;
   readonly filterable: Record<string, FilterPolicy.FilterableInput>;
   readonly sortable: ReadonlyArray<string>;
 } => ({
-  ...(options.hintKeys === undefined ? {} : { hintKeys: options.hintKeys }),
+  ...Option.match(options.hintKeys, {
+    onNone: () => ({}),
+    onSome: (hintKeys) => ({ hintKeys }),
+  }),
   filterable: {
     ...withKinds(resource, declaredFilterable(resource, edges)),
     ...options.filterable,
   },
-  sortable: [...Resource.sortable(resource), ...(options.sortable ?? [])],
+  sortable: [...Resource.sortable(resource), ...options.sortable],
 });
 
 /** Bridge one resource, resolving inverses through `oneEdgesOfTarget`. */
 const bridge = (
   resource: Resource.Any,
-  options: FromResourceOptions,
+  options: BridgeOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
 ): Node.AnyNode => {
   const edges = edgesOf(resource, options, oneEdgesOfTarget);
@@ -442,7 +471,8 @@ const bridge = (
 export const fromResource = (
   resource: Resource.Any,
   options: FromResourceOptions = {}
-): Node.AnyNode => bridge(resource, options, (target) => oneEdgesOf(target, {}));
+): Node.AnyNode =>
+  bridge(resource, bridgeOptionsOf(options), (target) => oneEdgesOf(target, bridgeOptionsOf({})));
 
 /**
  * Bridge a whole resource graph and close it as a validated
@@ -456,8 +486,8 @@ export const registry = (
 ): Node.NodeRegistry =>
   Node.registry(
     resources.map((resource) =>
-      bridge(resource, options[resource.type] ?? {}, (target) =>
-        oneEdgesOf(target, options[target.type] ?? {})
+      bridge(resource, bridgeOptionsOf(options[resource.type] ?? {}), (target) =>
+        oneEdgesOf(target, bridgeOptionsOf(options[target.type] ?? {}))
       )
     )
   );

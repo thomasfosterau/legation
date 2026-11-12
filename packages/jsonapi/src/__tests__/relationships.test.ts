@@ -58,7 +58,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   };
 
   const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
-    const data = (rel as { data?: unknown } | undefined)?.data;
+    const data = P.isObject(rel) ? (rel as { data?: unknown }).data : undefined;
     return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
       type: string;
       id: string;
@@ -157,11 +157,9 @@ const provide = <E>(
     Effect.scoped
   );
 
-/** A row's string attribute; `undefined` when the row or the attribute is absent, or the attribute is not a string. */
-const attr = (value: JsonApiRow | undefined, key: string): string | undefined => {
-  const field = value?.[key];
-  return P.isString(field) ? field : undefined;
-};
+/** A row's string attribute; `None` when the attribute is absent or not a string. */
+const attr = (value: JsonApiRow, key: string): Option.Option<string> =>
+  Option.liftPredicate(value[key], P.isString);
 
 describe("Relationships", () => {
   const issues = Subset.make({ collection: "issues" });
@@ -204,9 +202,12 @@ describe("Relationships", () => {
         const rows = yield* Relationships.query(engine, issues, ["author", "comments"]);
         expect(rows).toHaveLength(1);
         const issue = defined(rows[0]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         const comments = issue.related.comments as ReadonlyArray<JsonApiRow>;
-        expect(comments.map((c) => attr(c, "body"))).toEqual(["first", "second"]);
+        expect(comments.map((c) => attr(c, "body"))).toEqual([
+          Option.some("first"),
+          Option.some("second"),
+        ]);
       }),
       server
     );
@@ -224,7 +225,7 @@ describe("Relationships", () => {
         const initial = defined((first._tag === "Some" ? first.value : [])[0]);
         expect(
           (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
+        ).toEqual([Option.some("first"), Option.some("second")]);
 
         // Editing a referenced comment is reflected in the resolved join.
         yield* engine.mutate("comments/update", {
@@ -240,7 +241,7 @@ describe("Relationships", () => {
           (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
             attr(c, "body")
           )
-        ).toEqual(["edited", "second"]);
+        ).toEqual([Option.some("edited"), Option.some("second")]);
       }),
       server
     );
@@ -282,7 +283,7 @@ describe("Relationships", () => {
           yield* engine.pull;
           // The pulled (authoritative) join carries the edit...
           const settled = bodiesOf(yield* Relationships.query(engine, issues, ["comments"]));
-          expect(settled).toEqual(["edited", "second"]);
+          expect(settled).toEqual([Option.some("edited"), Option.some("second")]);
           // ...and the observer re-emits it. Its emissions can lag the pull
           // (and a push ack briefly re-emits the pre-edit join, #286), so wait
           // for the latest one to match rather than reading a snapshot.
@@ -291,8 +292,11 @@ describe("Relationships", () => {
           );
           assert(Option.isSome(latest));
           const emissions = latest.value;
-          expect(emissions[0]).toEqual(["first", "second"]);
-          expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);
+          expect(emissions[0]).toEqual([Option.some("first"), Option.some("second")]);
+          expect(emissions[emissions.length - 1]).toEqual([
+            Option.some("edited"),
+            Option.some("second"),
+          ]);
           expect(emissions.length).toBeGreaterThanOrEqual(2);
         }),
         server
@@ -310,10 +314,10 @@ describe("Relationships", () => {
         const head = yield* Stream.runHead(stream);
         const issue = defined((head._tag === "Some" ? head.value : [])[0]);
 
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
+        ).toEqual([Option.some("first"), Option.some("second")]);
         // The referenced collections were fetched narrowed to the linked ids,
         // in the grammar's canonical form (`in` over a list; a one-id list
         // takes the operator form so it decodes back as `in`, not `eq`).
@@ -335,8 +339,8 @@ describe("Relationships", () => {
 
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        ).toEqual([Option.some("first"), Option.some("second")]);
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
 
         // Parent listing carried `include`; the related collections were served
         // from the harvested compound document, never fetched on their own.

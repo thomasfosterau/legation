@@ -12,6 +12,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -240,13 +241,15 @@ const rejectionAt = (index: number, detail: string) =>
 
 describe("Convention.reflectAtomic", () => {
   it("recognises the operations endpoint by its payload, wherever it is routed", () => {
-    expect(Convention.reflectAtomic(api)).toEqual({
-      groupId: "operations",
-      name: "operations",
-      method: "POST",
-      path: "/operations",
-    });
-    expect(Convention.reflectAtomic(plainApi)).toBeUndefined();
+    expect(Convention.reflectAtomic(api)).toEqual(
+      Option.some({
+        groupId: "operations",
+        name: "operations",
+        method: "POST",
+        path: "/operations",
+      })
+    );
+    expect(Convention.reflectAtomic(plainApi)).toEqual(Option.none());
     const custom = plainApi.add(
       HttpApiGroup.make("batch").add(
         HttpApiEndpoint.post("batch", "/api/v2/batch", {
@@ -255,7 +258,9 @@ describe("Convention.reflectAtomic", () => {
         })
       )
     );
-    expect(Convention.reflectAtomic(custom)?.path).toBe("/api/v2/batch");
+    expect(Option.map(Convention.reflectAtomic(custom), ({ path }) => path)).toEqual(
+      Option.some("/api/v2/batch")
+    );
     // The document may be one arm of a union (or behind a suspension) and is still recognised.
     const unioned = plainApi.add(
       HttpApiGroup.make("batch").add(
@@ -268,7 +273,9 @@ describe("Convention.reflectAtomic", () => {
         })
       )
     );
-    expect(Convention.reflectAtomic(unioned)?.path).toBe("/batch");
+    expect(Option.map(Convention.reflectAtomic(unioned), ({ path }) => path)).toEqual(
+      Option.some("/batch")
+    );
     expect(Convention.reflectResources(unioned).has("batch")).toBe(false);
   });
 
@@ -282,8 +289,8 @@ describe("Convention.reflectAtomic", () => {
       "todos/update",
     ]);
     expect(inspected.operations.has("operations/create")).toBe(false);
-    expect(inspected.atomic?.path).toBe("/operations");
-    expect(JsonApiSync.inspect(plainApi).atomic).toBeUndefined();
+    expect(Option.map(inspected.atomic, ({ path }) => path)).toEqual(Option.some("/operations"));
+    expect(JsonApiSync.inspect(plainApi).atomic).toEqual(Option.none());
   });
 });
 
@@ -1579,7 +1586,7 @@ describe("JsonApiBackend getRows after its own writes (#395)", () => {
         ]);
 
         const [row] = yield* backend.getRows(context, "todos", ["1"]);
-        expect((row?.value as { title?: string } | undefined)?.title).toBe("second");
+        expect((defined(row).value as { title?: string }).title).toBe("second");
         // Only the listing and the read before the write reached the server.
         expect(readsOf(server, "/todos")).toHaveLength(1);
         expect(readsOf(server, "/todos/1")).toHaveLength(1);
@@ -1634,9 +1641,7 @@ const twoUpdates = [updateRowOne, updateRowTwo];
 
 /** The title `getRows` serves for each row, by id. */
 const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
-  Object.fromEntries(
-    rows.map((row) => [row.id, (row.value as { title?: string } | undefined)?.title])
-  );
+  Object.fromEntries(rows.map((row) => [row.id, (row.value as { title?: string }).title]));
 
 /**
  * The cache is updated only by writes the server applied (#395): a rejected or
