@@ -21,18 +21,22 @@ import { PreparedStatement, type QueryDatabaseClient } from "@alchemy.run/cloudf
 import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
+  type Backend,
   Client,
   ClientStore,
   Edge,
@@ -42,8 +46,9 @@ import {
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation/internal";
+import { ClientEngine, ClientView, Cvr, HintSource } from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
+import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import * as FanoutShard from "../FanoutShard.js";
 import * as Room from "../Room.js";
@@ -362,7 +367,42 @@ const makeRooms = (config: Room.RoomConfig) => {
     }
     return instance;
   };
-  return { room, pokes };
+  return { room, pokes, namespace };
+};
+
+/** A shard namespace of real `FanoutShard` instances, built on first address, recording each answered call. */
+const makeShards = () => {
+  const calls = makeCalls<ShardCall>();
+  const instances = new Map<string, Promise<Instance<FanoutShard.ShardObject>>>();
+  const noSelf = fakeBinding<Workers.DurableObject>({});
+  const shardNamed = (name: string) => {
+    let shard = instances.get(name);
+    if (shard === undefined) {
+      shard = Effect.runPromise(
+        construct(name, FanoutShard.make, noSelf).pipe(
+          Effect.map((built): Instance<FanoutShard.ShardObject> => ({
+            ...built,
+            object: {
+              register: (roomId, ttlMillis) =>
+                Effect.tap(built.object.register(roomId, ttlMillis), () =>
+                  Effect.sync(() => calls.record({ shard: name, method: "register", roomId }))
+                ),
+              publish: () =>
+                Effect.tap(built.object.publish(), () =>
+                  Effect.sync(() => calls.record({ shard: name, method: "publish" }))
+                ),
+            },
+          }))
+        )
+      );
+      instances.set(name, shard);
+    }
+    return shard;
+  };
+  const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
+    awaitPromise(() => shardNamed(name)).pipe(Effect.orDie)
+  );
+  return { shards, calls };
 };
 
 describe("rooms + shards, end to end", () => {
@@ -381,38 +421,7 @@ describe("rooms + shards, end to end", () => {
             const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(scope)));
             const backend = await Effect.runPromise(backendOf().pipe(Scope.provide(scope)));
 
-            const shardCalls = makeCalls<ShardCall>();
-            const shardInstances = new Map<string, Promise<Instance<FanoutShard.ShardObject>>>();
-            const noSelf = fakeBinding<Workers.DurableObject>({});
-            const shardNamed = (name: string) => {
-              let shard = shardInstances.get(name);
-              if (shard === undefined) {
-                shard = Effect.runPromise(
-                  construct(name, FanoutShard.make, noSelf).pipe(
-                    Effect.map((built): Instance<FanoutShard.ShardObject> => ({
-                      ...built,
-                      object: {
-                        register: (roomId, ttlMillis) =>
-                          Effect.tap(built.object.register(roomId, ttlMillis), () =>
-                            Effect.sync(() =>
-                              shardCalls.record({ shard: name, method: "register", roomId })
-                            )
-                          ),
-                        publish: () =>
-                          Effect.tap(built.object.publish(), () =>
-                            Effect.sync(() => shardCalls.record({ shard: name, method: "publish" }))
-                          ),
-                      },
-                    }))
-                  )
-                );
-                shardInstances.set(name, shard);
-              }
-              return shard;
-            };
-            const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
-              awaitPromise(() => shardNamed(name)).pipe(Effect.orDie)
-            );
+            const { shards, calls: shardCalls } = makeShards();
             const { room, pokes } = makeRooms({
               nodes,
               backend: Effect.succeed(backend),
@@ -847,5 +856,167 @@ describe("Room HTTP routes", () => {
       ).toBe(200);
       expect(seen).toEqual([session, session, Option.none()]);
     }).pipe(Effect.scoped)
+  );
+});
+
+/**
+ * Observe p-1's reviews through `reader`, returning once the window is subscribed; the deferred
+ * it answers completes with the first emission holding `rows` rows.
+ */
+const observeP1 = (reader: ClientEngine.ClientEngine, rows: number) =>
+  Effect.gen(function* () {
+    const subscribed = yield* Deferred.make<void>();
+    const converged = yield* Deferred.make<ReadonlyArray<unknown>>();
+    const client = Client.fromView(nodes, ClientView.fromEngine(reader));
+    yield* Effect.forkScoped(
+      Stream.runForEach(
+        client.observe({ collection: "reviews", where: { productId: "p-1" } }),
+        (latest) =>
+          Deferred.succeed(subscribed, undefined).pipe(
+            Effect.andThen(
+              latest.length === rows ? Deferred.succeed(converged, latest) : Effect.void
+            )
+          )
+      ).pipe(Effect.ignore)
+    );
+    yield* Deferred.await(subscribed);
+    return converged;
+  });
+
+/** One p-1 review, as a cron job writes it straight to the backend: no room sees the write. */
+const review = { id: "r-oob", body: "out of band", createdAt: "2026-01-01", productId: "p-1" };
+
+describe("out-of-band writes", () => {
+  it.live(
+    "publishOutOfBand pokes the room leased on the write's topic, and its client pulls the new row",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.Scope;
+        // The room's heartbeat beats only when the test advances this clock; the shards stamp
+        // leases on the real clock with a 30 minute TTL, which no run outlives.
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = makeShards();
+        const { room, pokes, namespace } = makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+        });
+        const roomA = yield* awaitPromise(() => room("room-a"));
+        const socket = makeSocket();
+        roomA.sockets.push(socket);
+        const reader = yield* awaitPromise(() =>
+          makeClient(roomA, scope, "client-a", "group-a", {
+            pullInterval: "10 minutes",
+            pushDebounce: "10 millis",
+          })
+        );
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* awaitPromise(() =>
+          calls.next(
+            (call) =>
+              call.shard === "reviews/productId=p-1" &&
+              call.method === "register" &&
+              call.roomId === "room-a"
+          )
+        );
+
+        // The cron job writes straight to the backend, then publishes the write's hint.
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cron" }, [
+            { clientId: "cron", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        expect(socket.sent).toEqual([]);
+        const publish = DurableFanoutBroker.publishOutOfBand({ shards, rooms: namespace, nodes });
+        yield* publish([
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]).pipe(
+          Effect.provideService(RuntimeContext, runtimeContext),
+          // The harness runs a stub's call on its caller's fiber, so the shard reads the lease
+          // against the writer's clock: the room's, as on Cloudflare both are wall time.
+          Effect.provideService(Clock.Clock, clock)
+        );
+
+        yield* awaitPromise(() =>
+          pokes.next(
+            (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
+          )
+        );
+        expect(socket.sent.length).toBeGreaterThan(0);
+        // The client honours the poke and pulls the row the cron job wrote.
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
+
+  it.live(
+    "a room's hints source publishes like a push, poking the rooms leased on its topics",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.Scope;
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = makeShards();
+        // A HintSource fed by this queue, as a CDC listener would be. Every room runs it, and
+        // whichever room takes a batch publishes it.
+        const feed = yield* Queue.unbounded<ReadonlyArray<Backend.ChangeHint>>();
+        const { room } = makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+          hints: Effect.succeed(HintSource.fromStream(Stream.fromQueue(feed))),
+        });
+        const roomA = yield* awaitPromise(() => room("room-a"));
+        yield* awaitPromise(() => room("room-cdc"));
+        // Room A's socket signals its first poke frame: over RPC when room-cdc published, or
+        // delivered locally when room A took the batch itself.
+        const framed = yield* Deferred.make<void>();
+        roomA.sockets.push({
+          sent: [],
+          send(data) {
+            this.sent.push(data);
+            Deferred.doneUnsafe(framed, Exit.void);
+          },
+        });
+        const reader = yield* awaitPromise(() =>
+          makeClient(roomA, scope, "client-a", "group-a", {
+            pullInterval: "10 minutes",
+            pushDebounce: "10 millis",
+          })
+        );
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* awaitPromise(() =>
+          calls.next((call) => call.method === "register" && call.roomId === "room-a")
+        );
+
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cdc" }, [
+            { clientId: "cdc", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        yield* Queue.offer(feed, [
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]);
+        yield* Deferred.await(framed);
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
   );
 });

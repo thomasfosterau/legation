@@ -142,6 +142,34 @@ identity: Effect.succeed({
 Only the resolver sees the headers; auth filters and mutators see the identity
 it returns on `SyncContext.identity`.
 
+## Writes that bypass the rooms
+
+A cron or queue Worker that writes rows itself, with no mutation, publishes
+the write's `ChangeHint`s with `DurableFanoutBroker.publishOutOfBand`, and
+every room leased on the derived topics is poked, as after a push:
+
+```ts
+const publish = DurableFanoutBroker.publishOutOfBand({
+  shards: yield * LegationShard,
+  rooms: yield * LegationRoom,
+  nodes,
+});
+// after the write commits
+yield * publish([{ collection: "results", ids, values }]);
+```
+
+Pass the written rows as `values` (and the previous ones as `oldValues` for a
+row that moved or was deleted): a hint without values derives only the
+collection's coarse topic, so a room whose window leased a fine topic (an
+equality on an edge or hint key) waits for its next interval pull. Each call is
+bounded by `timeout` (default 5 seconds) and fire-and-forget.
+
+`Room.make` also takes `hints`, a `HintSource` the room runs on its bus. A
+polling source (`PollingHintSource`) keeps the room awake: its timer stops the
+room hibernating, so it is billed between requests, it polls only while the
+instance is in memory, and every awake room polls and publishes the same
+change. Prefer publishing from the writer.
+
 ## What Alchemy does not cover
 
 - **Interactive transactions on D1.** The provider's client has `batch()`
