@@ -60,7 +60,7 @@ catalog:
   # on any other component version, failing `pnpm install` itself. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  "@effect/tsgo": 0.67.7
+  "@effect/tsgo": 0.68.0
   "@electric-sql/pglite": ^0.5.16
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
@@ -113,7 +113,7 @@ catalog:
   # 7.0.2005, vitest 5.1.0). `vitest` and
   # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
   # its aliased core package. They move together with `@effect/tsgo` (above).
-  vite-plus: 1.5.1
+  vite-plus: 1.6.0
   vite: npm:@voidzero-dev/vite-plus-core@1.5.1
   vitest: 5.1.0
 
