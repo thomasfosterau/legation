@@ -23,7 +23,7 @@ catalog:
   # legation-alchemy-cloudflare builds on the provider's Effect-native services
   # (ADR-0034). 2.0.0-beta.85 is the release the apps pin; it requires
   # `effect ^4.1.0`, hence `catalogs.alchemy-peers` below.
-  alchemy: 2.0.0-beta.85
+  alchemy: 2.0.0-beta.87
   "@alchemy.run/cloudflare": 2.0.0-beta.85
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
@@ -143,7 +143,7 @@ catalogs:
   # the apps deploy with.
   alchemy-peers:
     effect: ^4.1.0
-    alchemy: 2.0.0-beta.85
+    alchemy: 2.0.0-beta.87
     "@alchemy.run/cloudflare": 2.0.0-beta.85
   # legation-auth alone: `@thomasfosterau/effect-auth` 0.4.x peers
   # `effect ^4.1.0`, so its `effect` floor is 4.1.0. effect-auth is a peer
