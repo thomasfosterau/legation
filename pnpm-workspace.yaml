@@ -16,7 +16,7 @@ catalog:
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
   # The workerd types `@alchemy.run/cloudflare`'s declarations import.
-  "@cloudflare/workers-types": ^5.20261115.1
+  "@cloudflare/workers-types": ^5.20261118.1
   # The Effect dev pin: `effect` and every `@effect/*` runtime package at one
   # version. `vp run ci:floor` (scripts/effect-floor.mjs) rewrites these
   # entries to a published floor.
