@@ -28,6 +28,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -328,6 +329,15 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // one (a genuine restart, whose old in-memory bookkeeping is gone).
     const seenHostReady = yield* Ref.make(false);
     /** Add one unit of interest; posts Subscribe when it is the first. */
+    // The keys whose rows have reached this mirror since it last took an
+    // interest in them (#672). A host broadcasts its pulled summaries to every
+    // mirror, so a mirror can hold a key's mark before the host has sent it
+    // that key's rows: a key that has none here is not pulled, whatever its
+    // mark says. Cleared when the interest begins or ends, and on a host
+    // restart, so rows left from an earlier hold never count.
+    const received = yield* Ref.make(HashSet.empty<string>());
+    const forgetReceived = (key: string) => Ref.update(received, HashSet.remove(key));
+    const noteReceived = (key: string) => Ref.update(received, HashSet.add(key));
     const acquireInterest = (
       key: string,
       messages: {
@@ -349,7 +359,12 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         return [current === undefined, next] as const;
       }).pipe(
         Effect.flatMap((first) =>
-          first ? channel.post(messages.subscribe).pipe(Effect.ignore) : Effect.void
+          first
+            ? forgetReceived(key).pipe(
+                Effect.andThen(channel.post(messages.subscribe)),
+                Effect.ignore
+              )
+            : Effect.void
         )
       );
     /** Drop one unit of interest; posts Unsubscribe when it was the last. */
@@ -371,7 +386,9 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         return [undefined, next] as const;
       }).pipe(
         Effect.flatMap((unsubscribe) =>
-          unsubscribe === undefined ? Effect.void : channel.post(unsubscribe).pipe(Effect.ignore)
+          unsubscribe === undefined
+            ? Effect.void
+            : forgetReceived(key).pipe(Effect.andThen(channel.post(unsubscribe)), Effect.ignore)
         )
       );
     // Registers one unit of observer interest in `key` for as long as
@@ -596,7 +613,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       // that up from the durable store regardless of what this
       // caller is told).
       Match.tag("HostReady", () =>
-        Ref.get(interests).pipe(
+        Ref.set(received, HashSet.empty<string>()).pipe(
+          Effect.andThen(Ref.get(interests)),
           Effect.flatMap((map) =>
             Effect.forEach(
               map.values(),
@@ -630,7 +648,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             message.key,
             message.rows.map((row) => ({ id: row.id, value: row.value }))
           )
-        ).pipe(Effect.andThen(publishKey(message.key)))
+        ).pipe(Effect.andThen(noteReceived(message.key)), Effect.andThen(publishKey(message.key)))
       ),
       Match.tag("RelatedUpdate", (message) =>
         Ref.update(relatedRows, (map) =>
@@ -642,7 +660,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               related: row.related as Record<string, Related.RelatedValue>,
             }))
           )
-        ).pipe(Effect.andThen(publishKey(message.key)))
+        ).pipe(Effect.andThen(noteReceived(message.key)), Effect.andThen(publishKey(message.key)))
       ),
       Match.tag("MutationStatesUpdate", (message) =>
         Ref.set(
@@ -1038,9 +1056,17 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
+      // A key's mark counts only once its rows are here (#672); see `received`.
       pulled: (key: string) =>
-        SubscriptionRef.get(pulledKeys).pipe(
-          Effect.map((map) => map.get(key) ?? Coverage.NOT_PULLED)
+        Effect.all(
+          { marks: SubscriptionRef.get(pulledKeys), rowsHere: Ref.get(received) },
+          { concurrency: 1 }
+        ).pipe(
+          Effect.map(({ marks, rowsHere }) =>
+            HashSet.has(rowsHere, key)
+              ? (marks.get(key) ?? Coverage.NOT_PULLED)
+              : Coverage.NOT_PULLED
+          )
         ),
       pulledChanges: SubscriptionRef.changes(pulledKeys).pipe(Stream.as(undefined)),
       // Observing auto-registers with the host for the stream's lifetime:
