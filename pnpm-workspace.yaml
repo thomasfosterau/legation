@@ -25,6 +25,9 @@ catalog:
   # `effect ^4.1.4`, hence `catalogs.alchemy-peers` below.
   alchemy: 2.0.0-beta.87
   "@alchemy.run/cloudflare": 2.0.0-beta.87
+  # The repository's own GitHub configuration (`stacks/github.ts`), on the
+  # same release train.
+  "@alchemy.run/github": 2.0.0-beta.87
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
   # Dev only: the declarations of `@alchemy.run/cloudflare` import the workerd
