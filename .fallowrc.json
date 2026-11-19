@@ -22,6 +22,7 @@
     "packages/devtools/svelte.config.js",
     "scripts/*.mjs"
   ],
+  "supportEntry": ["stacks/*.ts"],
   "publicPackages": ["@thomasfosterau/legation", "@thomasfosterau/legation-*"],
   "ignorePatterns": ["**/dist/**", "coverage/**", "examples/**", ".claude/skills/**"],
   "ignoreDependencies": [

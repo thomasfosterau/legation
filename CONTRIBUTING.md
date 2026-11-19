@@ -34,6 +34,7 @@ Two workspace mechanics:
 - `vp run bench` — the `*.bench.ts` benchmarks (not a gate).
 - `vp exec fallow audit --base origin/trunk` — the fallow gate (see "Fallow local gate" in [AGENTS.md](AGENTS.md#fallow-local-gate)). `vp exec fallow dead-code`, `vp exec fallow dupes` and `vp exec fallow health` run the individual analyses.
 - `pnpm changeset` — add a changeset.
+- `vp run github:plan` / `vp run github:deploy` — the repository's GitHub settings (`stacks/github.ts`: merge methods, the `release` environment, labels, the `Trunk` ruleset). Owner-run: they need an admin-scoped `GITHUB_TOKEN` and the Cloudflare credentials of Alchemy's state store. Change a setting there, not in the UI.
 
 Invoke everything through `vp` (`vp exec` instead of `npx`; `vp run <task>` instead of a bare `pnpm` script). The sanctioned non-`vp` invocations: `pnpm install`, `pnpm changeset`, `pnpm audit`, `pnpm exec playwright-core install chromium`, and `pnpm run version` / `pnpm run release` on the release path. Single-check variants are in [Running individual checks](#running-individual-checks).
 

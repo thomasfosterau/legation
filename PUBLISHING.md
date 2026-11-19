@@ -29,3 +29,5 @@ Releases are automated with [Changesets](https://github.com/changesets/changeset
 
 4. **Protect the `release` environment.** **Settings → Environments → `release`** → enable **Required reviewers** (yourself) and restrict deployment to the `trunk` branch, so publishing pauses for manual approval.
 5. **Protect `trunk`.** Require pull requests and passing CI before merge, and disallow direct pushes, so a release can only be triggered by merging the reviewed version PR.
+
+Steps 4 and 5 are declared in [`stacks/github.ts`](stacks/github.ts), with the rest of the repository's GitHub settings: `vp run github:plan` shows any drift from it and `vp run github:deploy` applies it (owner-run: it needs an admin-scoped `GITHUB_TOKEN` and the Cloudflare credentials of Alchemy's state store).

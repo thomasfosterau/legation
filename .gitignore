@@ -152,3 +152,4 @@ fallow.sarif
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 .vitest/
+.alchemy
