@@ -27,7 +27,7 @@
     "svelte",
     "!svelte/tsconfig.json",
     "README.md",
-    "LICENSE",
+    "LICENSE.md",
     "CHANGELOG.md"
   ],
   "type": "module",

@@ -33,7 +33,7 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE",
+    "LICENSE.md",
     "CHANGELOG.md"
   ],
   "type": "module",
