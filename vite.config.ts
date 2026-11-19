@@ -561,7 +561,7 @@ export default defineConfig({
       },
       {
         // The Alchemy adapter's suite, apart because it has its own `effect`
-        // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
+        // floor (`catalogs.alchemy-peers`, 4.1.4, which Alchemy requires):
         // `vp run ci:floor` runs it at that floor and every other
         // project at the core's.
         extends: true,

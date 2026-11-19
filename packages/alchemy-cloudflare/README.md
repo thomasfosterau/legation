@@ -52,11 +52,11 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
 
 ```sh
 npm install @thomasfosterau/legation-alchemy-cloudflare @thomasfosterau/legation effect \
-  alchemy@2.0.0-beta.85 @alchemy.run/cloudflare@2.0.0-beta.85
+  alchemy@2.0.0-beta.87 @alchemy.run/cloudflare@2.0.0-beta.87
 npm install --save-dev @cloudflare/workers-types
 ```
 
-`alchemy` and `@alchemy.run/cloudflare` are peers at exactly 2.0.0-beta.85 (each
+`alchemy` and `@alchemy.run/cloudflare` are peers at exactly 2.0.0-beta.87 (each
 `@alchemy.run/*` release pins `alchemy` exactly). `@cloudflare/workers-types` is
 not a peer of this package: the provider's own declarations import it, so a
 Worker project type-checks with it installed.
@@ -232,10 +232,9 @@ Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
 
 ## Effect version
 
-Peers `effect ^4.1.0`, the floor Alchemy requires (`alchemy` and
-`@alchemy.run/cloudflare` 2.0.0-beta.85 peer `effect ^4.1.0`). Tested against
-`4.1.2` (the version CI pins) and `4.1.0` (the floor; checked by hand,
-not in CI, before 1.0); install one copy of `effect` in your app
+Peers `effect ^4.1.4`, the floor Alchemy requires (`alchemy` and
+`@alchemy.run/cloudflare` 2.0.0-beta.87 peer `effect ^4.1.4`). Tested against
+`4.1.4`, which is both the version CI pins and the floor; install one copy of `effect` in your app
 (ADR-0003). The rest of legation peers `effect ^4.0.0`.
 
 ## SSR from a separate Worker

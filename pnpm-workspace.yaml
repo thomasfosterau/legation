@@ -21,10 +21,10 @@ catalog:
   # Alchemy's Cloudflare provider and the engine it runs on, one release train
   # at exact versions (each `@alchemy.run/*` package pins `alchemy` exactly).
   # legation-alchemy-cloudflare builds on the provider's Effect-native services
-  # (ADR-0034). 2.0.0-beta.85 is the release the apps pin; it requires
-  # `effect ^4.1.0`, hence `catalogs.alchemy-peers` below.
-  alchemy: 2.0.0-beta.85
-  "@alchemy.run/cloudflare": 2.0.0-beta.85
+  # (ADR-0034). 2.0.0-beta.87 is the release the apps pin; it requires
+  # `effect ^4.1.4`, hence `catalogs.alchemy-peers` below.
+  alchemy: 2.0.0-beta.87
+  "@alchemy.run/cloudflare": 2.0.0-beta.87
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
   # Dev only: the declarations of `@alchemy.run/cloudflare` import the workerd
@@ -137,14 +137,14 @@ catalogs:
     svelte: ">=5.40"
     "@sveltejs/kit": ^2.0.0 || ^3.0.0
   # legation-alchemy-cloudflare alone: `alchemy` and `@alchemy.run/cloudflare`
-  # 2.0.0-beta.85 peer `effect ^4.1.0` (they import Effect 4.1's modules), so
-  # its `effect` floor is 4.1.0. The Alchemy peers are exact: each
-  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.85 is the release
+  # 2.0.0-beta.87 peer `effect ^4.1.4` (they import Effect 4.1's modules), so
+  # its `effect` floor is 4.1.4. The Alchemy peers are exact: each
+  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.87 is the release
   # the apps deploy with.
   alchemy-peers:
-    effect: ^4.1.0
-    alchemy: 2.0.0-beta.85
-    "@alchemy.run/cloudflare": 2.0.0-beta.85
+    effect: ^4.1.4
+    alchemy: 2.0.0-beta.87
+    "@alchemy.run/cloudflare": 2.0.0-beta.87
   # legation-auth alone: `@thomasfosterau/effect-auth` 0.5.x peers
   # `effect ^4.1.0`, so its `effect` floor is 4.1.0. effect-auth is a peer
   # (the app configures its services, so there must be one copy).
