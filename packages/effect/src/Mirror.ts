@@ -63,10 +63,11 @@ export interface MirrorOptions {
    */
   readonly changeHubCapacity?: number;
   /**
-   * How long {@link Mirror.request} waits for the host's answer before failing
-   * with a `HostRequestError` of reason `"Unanswered"` — what a host that
-   * predates the host-request envelope (it drops the request as foreign
-   * traffic) looks like from here. Defaults to 10 seconds.
+   * How long {@link Mirror.request} waits for the host's answer, and
+   * {@link Mirror.stream} for the host's first reply, before failing with a
+   * `HostRequestError` of reason `"Unanswered"` — what a host that predates
+   * the host-request envelope (it drops the request as foreign traffic) looks
+   * like from here. Defaults to 10 seconds.
    */
   readonly requestTimeout?: Duration.Input;
 }
@@ -164,9 +165,10 @@ export interface Mirror {
    * stops early or is interrupted sends `HostRequestCancel`, and the host
    * interrupts its handler. A host restart (`HostReady`) or this mirror
    * closing fails it with `Unanswered`; it is not replayed, so a caller that
-   * wants to keep following re-requests. No reply timeout applies, since a
-   * stream may rightly stay quiet: a host that predates the envelope leaves
-   * it silent.
+   * wants to keep following re-requests. The host's first reply (its
+   * `Started`, #628) is due within `requestTimeout`, or the stream fails with
+   * `Unanswered`, as against a host that predates the envelope; after it no
+   * timeout applies, since a stream may rightly stay quiet.
    */
   readonly stream: HostRequest.Requester["stream"];
   /** Validate args locally, forward to the host journal, await the ack. */
@@ -553,7 +555,9 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         const request = HashMap.get(map, requestId);
         return [
           request,
-          P.isTagged(outcome, "Item") ? map : HashMap.remove(map, requestId),
+          P.isTagged(outcome, "Item") || P.isTagged(outcome, "Started")
+            ? map
+            : HashMap.remove(map, requestId),
         ] as const;
       }).pipe(
         Effect.flatMap(
@@ -972,10 +976,33 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             closeHostRequest(requestId)
           ).pipe(
             Effect.map(({ replies }) =>
-              Stream.fromQueue(replies).pipe(
-                // An `Item` keeps the stream open; anything else is its last
-                // reply. `End` closes it, and a `Failure` (or a `Value` from a
-                // host that answered it as single-reply) is handled as a reply.
+              // The first reply is due within `requestTimeout` (#628): a host
+              // sends `Started` once it accepts the request, and one that
+              // predates `Started` sends its first `Item`, `End` or `Failure`,
+              // so any reply acknowledges it. After that the stream waits as
+              // long as the host is quiet: a quiet stream is a healthy one.
+              Stream.unwrap(
+                Queue.take(replies).pipe(
+                  Effect.timeoutOrElse({
+                    duration: requestTimeout,
+                    orElse: () =>
+                      Effect.fail(
+                        HostRequest.unanswered(
+                          kind.name,
+                          "Mirror: the engine host did not accept the stream; it may predate host requests"
+                        )
+                      ),
+                  }),
+                  Effect.map((first) =>
+                    Stream.concat(Stream.make(first), Stream.fromQueue(replies))
+                  )
+                )
+              ).pipe(
+                // `Started` and `Item` keep the stream open; anything else is
+                // its last reply. `End` closes it, and a `Failure` (or a
+                // `Value` from a host that answered it as single-reply) is
+                // handled as a reply.
+                Stream.filter((outcome) => !P.isTagged(outcome, "Started")),
                 Stream.takeUntil((outcome) => !P.isTagged(outcome, "Item")),
                 Stream.filter((outcome) => !P.isTagged(outcome, "End")),
                 Stream.mapEffect((outcome) => HostRequest.replyValue(kind, outcome))

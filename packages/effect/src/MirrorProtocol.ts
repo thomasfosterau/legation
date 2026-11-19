@@ -484,12 +484,17 @@ export type HostFailureReason = "UnknownKind" | "InvalidRequest" | "Failed";
 
 /**
  * What one `HostResponse` carries: a single-reply kind's `Value` (which ends
- * the request), a streaming kind's `Item` (more follow) or `End`, or a
- * `Failure` (which ends the request). `value` is in the kind's encoded
- * response form.
+ * the request), a streaming kind's `Started` (the host accepted it, #628),
+ * `Item` (more follow) or `End`, or a `Failure` (which ends the request).
+ * `value` is in the kind's encoded response form.
+ *
+ * `Started` is additive: a host that predates it never sends it, so a mirror
+ * takes any reply as the acknowledgement, and a mirror that predates it
+ * drops the reply as one it cannot decode.
  */
 export type HostResponseOutcome =
   | { readonly _tag: "Value"; readonly value: unknown }
+  | { readonly _tag: "Started" }
   | { readonly _tag: "Item"; readonly value: unknown }
   | { readonly _tag: "End" }
   | {
@@ -501,6 +506,7 @@ export type HostResponseOutcome =
 /** Wire codec for {@link HostResponseOutcome}. */
 export const HostResponseOutcome: Schema.Codec<HostResponseOutcome> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("Value"), value: Schema.Unknown }),
+  Schema.Struct({ _tag: Schema.tag("Started") }),
   Schema.Struct({ _tag: Schema.tag("Item"), value: Schema.Unknown }),
   Schema.Struct({ _tag: Schema.tag("End") }),
   Schema.Struct({
