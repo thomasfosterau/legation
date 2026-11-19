@@ -72,7 +72,7 @@ jobs:
     permissions:
       contents: read
     env:
-      # `vp dlx` honours `minimumReleaseAge`: keep this at a release ≥8 hours old.
+      # `vp dlx` honours `minimumReleaseAge`: keep this at a release ≥24 hours old.
       DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
     steps:
       - uses: actions/checkout@v7.0.1

@@ -2,7 +2,7 @@
 rules:
   dependabot-cooldown:
     config:
-      # Longer than pnpm's 8-hour `minimumReleaseAge`.
+      # Matches pnpm's 24-hour `minimumReleaseAge`.
       days: 1
   unpinned-uses:
     config:

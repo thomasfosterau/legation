@@ -12,4 +12,4 @@ Of particular interest: anything that lets a client read rows outside its author
 - The checked tarball is the published tarball (`scripts/publish.mjs`).
 - Privileged jobs install with `--frozen-lockfile --ignore-scripts`; elsewhere, dependency build scripts are opt-in (`allowBuilds`).
 - Workflows default to `permissions: {}`, check out without persisted credentials, and pin actions by tag, locked to commits in `.github/workflows/actions.lock`.
-- pnpm holds new versions for 8 hours (`minimumReleaseAge`); Dependabot waits a day; CI runs `pnpm audit --audit-level high`.
+- pnpm holds new versions for 24 hours (`minimumReleaseAge`), and Dependabot waits a day; CI runs `pnpm audit --audit-level high`.

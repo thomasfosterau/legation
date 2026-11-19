@@ -122,7 +122,7 @@ peerDependencyRules:
     vite: "*"
     vitest: "*"
 
-# Hold new versions for 8 hours (minutes); first-party releases are exempt.
-minimumReleaseAge: 480
+# Hold new versions for 24 hours (minutes); first-party releases are exempt.
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - "@thomasfosterau/*"
