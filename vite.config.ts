@@ -60,13 +60,8 @@ const alias = {
 const cacheInputs = [{ auto: true }, "!node_modules/**", "!coverage/**", "pnpm-lock.yaml"];
 
 export default defineConfig({
-  // Staged-file checks run by `vp staged` (pre-commit). Format with fixes,
-  // lint without: with type-aware lint on, `vp check --fix` would apply the
-  // autofixes of type-aware rules (even ones at `warn`) to staged files at
-  // commit time, so the commit would differ from the tree that was verified.
-  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone; the
-  // example apps' `.svelte` files are outside lint's patterns, so a commit
-  // touching only those must not fail on "no files found".
+  // Format with fixes, lint without, so a type-aware autofix never lands
+  // unverified. Oxfmt can't format `.svelte`.
   staged: {
     "*.{js,mjs,ts,json,md,yml,yaml}": [
       "vp check --fix --no-lint",
@@ -74,10 +69,6 @@ export default defineConfig({
     ],
     "*.svelte": "vp lint --no-error-on-unmatched-pattern",
   },
-  // Oxfmt, the formatter of record. The options keep the style the
-  // repository was written in under Prettier, so the migration reformatted
-  // nothing. The example apps, the vendored skills and ADR-0012/0013's
-  // native ports are not formatted.
   fmt: {
     printWidth: 100,
     trailingComma: "es5",
@@ -123,40 +114,20 @@ export default defineConfig({
       "effect/casting-awareness": "warn",
 
       // ---- Effect preset: rules this workspace's conventions cut across ----
-      // `prefer-option-over-null` goes to `error` once every surface is
-      // converted (owner decision): an option-bag member is
-      // `readonly x?: T` (no `| undefined`: a caller holding `undefined` omits
-      // the key), `x?: Option.Option<T>` only where "no value" is itself an
-      // answer, and an absent return or result field is an `Option`. Optional
-      // parameters stay `x?: T`; wire shapes keep their native optionals.
-      // legation-jsonapi is converted (its can't-applies are file-scoped
-      // overrides below); the other packages still have sites.
+      // Goes to `error` once every package is converted (legation-jsonapi is).
       "effect/prefer-option-over-null": "warn",
       // `unknown` is the honest type at the boundaries this engine sits on:
       // a row value before its collection's schema decodes it, a mutator's
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out is at `error`: the one site
-      // that returns an untyped row value (`Predicate.fieldValue`) lives in a
-      // module of its own with a file-scoped override below. The derived
-      // combinators (`Incremental`,
-      // `Derive`) are typed by their row, so they return the caller's types.
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      // At 0 sites: narrow through `effect/Predicate` (`P.isString`),
-      // which measured no slower than a `typeof` switch on the per-row
-      // `Predicate.compareLiterals` path.
       "effect/no-runtime-typeof": "error",
 
       // ---- Effect preset: ported-code allowances ---------------------------
-      // The engine predates the Effect oxlint preset. The rules below sit at
-      // `warn` with the count left when it was adopted, so the code stays
-      // committable while each site stays reported; a new site is a defect,
-      // not headroom. Once a rule's count reaches zero its line is deleted,
-      // so it is back at the preset's `error`. The remaining sites are listed
-      // in #497 (see AGENTS.md "Effect"). Counts re-measured under
-      // `@enfect/oxlint` 0.9.0.
+      // At `warn` with the count left when the preset was adopted: a new site
+      // is a defect. Delete a line once its count reaches zero.
       "effect/avoid-native-object-helpers": "warn", // 689 sites
       "effect/require-safety-comment-for-type-assertion": "warn", // 621 sites
       "effect/imperative-loops": "warn", // 366 sites
@@ -167,13 +138,7 @@ export default defineConfig({
       "effect/no-known-value-widening": "warn", // 98 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
-      // Turned on in #561. Each rule below is relaxed for a stated reason; a
-      // `warn` carries the count it was adopted with, and a new site is a
-      // defect.
-      // Effect 4 marks much of its HTTP surface `@stability unstable`; the
-      // native `tsc` gate already demotes this to a suggestion
-      // (tsconfig.base.json) for the same reason: it fires on every such
-      // import and drowns real signal.
+      // Effect 4 marks much of its HTTP surface `@stability unstable`.
       "effecttsgo/unstable-api-usage": "off",
       // `unknown` in an error channel: the engine host's bridge effects and
       // the façade's write paths carry a caught failure as `unknown` (the
@@ -189,14 +154,10 @@ export default defineConfig({
       // value may be absent. The rule fires on exactly that spelling.
       "typescript/no-redundant-type-constituents": "off",
 
-      // ---- paid down: at error -------------------------------------
-      // Rules whose last sites #562 fixed, pinned at `error` so a new site
-      // fails the gate while their category is still at `warn`.
+      // ---- At `error` while their category is still at `warn` -------------
       "typescript/no-misused-spread": "error",
       "unicorn/no-array-reverse": "error",
       "oxc/no-map-spread": "error",
-      // Tests run effects through `@effect/vitest` (`it.effect`, `it.live`, `layer(...)`), and the
-      // shipped edges that run an effect do it with explicit services (`Effect.runForkWith`).
       "effecttsgo/strict-effect-provide": "error",
       "unicorn/prefer-array-find": "error",
       "typescript/no-unnecessary-boolean-literal-compare": "error",
@@ -218,22 +179,11 @@ export default defineConfig({
       "typescript/no-unnecessary-type-parameters": "error",
     },
     overrides: [
-      // ---- Genuine can't-applies ------------------------------------
-      // No inline disable comments: a site a rule cannot apply to lives in a
-      // small private module named for the reason, and the rule is off for
-      // that module alone. Each module's header repeats the reason.
+      // ---- Genuine can't-applies ------------------------------------------
+      // No inline disables: each site lives in a small private module whose
+      // header gives the reason, and the rule is off for that module alone.
       //
-      // The measured tag dispatches stay `switch` statements: a hoisted
-      // `Match` measured slower on each path (ns per call, median, node).
-      // Per row: `addNumber` (`Aggregate.addToBucket`'s fold) `Match.type`
-      // 4.3x, a Record table 1.8x; `removeNumber`, its mirror, not
-      // measured apart; `deltaFromChanges` `Match.type` 2.2x, `typeTags` 2.1x,
-      // a table 1.2x; `holds` `Match.when` ~7x, a table ~5x.
-      // Per emission or state: `foldNumeric` `typeTags` 1.21x on a
-      // 10-row `compute` (133 -> 160 ns); `emptyBucket` `typeTags` 1.47x on
-      // an empty `initState` (44 -> 65 ns); `bucketValue` `Match.type` 2.3x on
-      // `stateValue` (10 -> 23 ns) and +13% per emission over 10k groups,
-      // `typeTags` 4.2x and +52%.
+      // Hot-path tag dispatches: `Match` measured 1.2x–7x slower per call.
       {
         files: ["packages/effect/src/internal/RowDispatch.ts"],
         rules: {
@@ -275,7 +225,7 @@ export default defineConfig({
       },
       // `Predicate.fieldValue`: a field of an encoded row value, which nothing
       // decodes on read (ADR-0014); evaluation compares it as a raw literal
-      // (ADR-0028). Typed rows are #696.
+      // (ADR-0028).
       {
         files: ["packages/effect/src/internal/EncodedField.ts"],
         rules: {
@@ -301,9 +251,7 @@ export default defineConfig({
       //   nothing `data: null` (effect-jsonapi's `Handlers.data`).
       // - `ResolvedRelation`: follows the core's `Related.RelatedValue`
       //   (`null` empty, `undefined` not in the mirror), which the core's
-      //   join compares by reference and the mirror protocol carries raw. It
-      //   becomes an `Option` with the core's `Related` (Option-everywhere,
-      //   owner decision on #562), the wire unchanged.
+      //   join compares by reference and the mirror protocol carries raw.
       {
         files: [
           "packages/jsonapi/src/internal/StoredLinkage.ts",
@@ -491,8 +439,7 @@ export default defineConfig({
         command: "vp test bench --run --reporter=verbose",
         cache: false,
       },
-      // What CI runs (.github/workflows/ci.yml, on Node.js lts and latest):
-      // AGENTS.md "Verification", in its order. The PostgreSQL overlap test
+      // What CI runs (.github/workflows/ci.yml). The PostgreSQL overlap test
       // reads `DATABASE_URL` (the workflow's service sets it; it skips when
       // unset), and `fallow audit` reads the coverage map `test:coverage`
       // writes, against `origin/trunk` (fetch it first).

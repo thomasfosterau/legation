@@ -121,7 +121,7 @@ const withCounted = <A>(
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
 describePostgres("PgExecutor round trips", () => {
-  // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
+  // `it.live`: the PostgreSQL client and its pool run on real I/O (docs/CONTRIBUTING.md).
   it.live("evaluate costs one statement per subset, whatever its predicate", () =>
     withCounted(databaseUrl ?? "", (backend, counts) =>
       Effect.gen(function* () {

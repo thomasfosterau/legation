@@ -778,7 +778,7 @@ const awaitPeerRecording = (
 ): BackendContract.PeerSettle => awaitPeerOn(sql, Ref.set(returnedOnLock, true));
 
 describePostgres("SqlBackend on PostgreSQL: verifyBackendContract", () => {
-  // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
+  // `it.live`: the PostgreSQL client and its pool run on real I/O (docs/CONTRIBUTING.md).
   it.live(
     "passes verifyBackendContract at SERIALIZABLE, rule 11 included, and sees the overlap refused with 40001",
     () =>

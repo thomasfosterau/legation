@@ -1,189 +1,48 @@
 # legation
 
-A modular sync engine built on [Effect](https://effect.website): mutation-log writes with server-authoritative rebase, CVR-tracked state patches downstream, typed collections with live queries, offline-first clients, and a customisable transport seam — designed to integrate natively with Effect's RPC, HttpApi, reactivity, and persistence modules.
+A modular sync engine built on [Effect](https://effect.website): named mutations replayed by server-authoritative rebase, CVR-tracked row patches downstream, typed collections with live queries, offline-first clients and a customisable transport.
 
-## Status
-
-Pre-1.0: APIs will change. Targets Effect v4 (peer `effect ^4.0.0`, `^4.1.0` for legation-alchemy-cloudflare and legation-auth; ADR-0003), ESM only.
-
-## Architecture
-
-```
-        tab (UI)                    service worker host            your backend
-┌──────────────────────┐      ┌──────────────────────────┐      ┌──────────────────┐
-│ in-memory mirror     │      │ ClientEngine             │      │ named mutators   │
-│ live queries         │◀────▶│  journal (pending        │ push │ (authoritative)  │
-│ optimistic overlay   │ b'cast│   mutations)            │─────▶│ + your storage   │
-├──────────────────────┤      │  ClientStore (IndexedDB) │      ├──────────────────┤
-│ plain fetch()        │      │  pull(cookie) → patch    │◀─────│ SyncServer       │
-│ GET /jsonapi/…       │◀────▶│  rebase = replay pending │ patch│  auth filters    │
-└──────────────────────┘ fetch│ JSON:API façade (covered │      │  CVR diffing     │
-                              │  → replica, else network)│      │  invalidation bus│
-                              └──────────────────────────┘      │  (sync room /    │
-                                       ▲      ▲                 │   Durable Object)│
-                              ┌────────┴──────┴────────┐        └──────────────────┘
-                              │ Transport (customisable │◀──poke─┘
-                              │ seam; RPC default)      │
-                              └─────────────────────────┘
-```
-
-- **Writes are intents**: named, schema-validated mutators run optimistically on the client and authoritatively on your backend; conflicts resolve by replay (rebase), not merge strategies.
-- **Reads are subscriptions**: collection subsets `(collection, predicate, orderBy, limit/cursor)`, narrowed by deny-by-default auth filters; the server tracks per-client view records (CVRs) and ships minimal row patches.
-- **Three fronts, one engine**: a tab reads through a `Client` (an owned engine or a mirror over the worker's), or through plain `fetch()` of a JSON:API URL, which the worker's **façade** answers from the replica when an explicit subscription covers it and forwards unchanged otherwise ([ADR-0029](docs/adr/0029-replica-served-jsonapi-facade.md)).
-- **Pull is the correctness path**: periodic HTTP-only sync is fully correct; pokes and streaming are latency optimizations.
-- **Bring your own backend**: implement two operations (apply mutations transactionally, evaluate a subset); the library owns CVR bookkeeping, diffing, auth, and fan-out.
-
-See [CONTEXT.md](CONTEXT.md) for the vocabulary and [docs/adr/](docs/adr/) for the decisions. Coming from TanStack Query / SwiftData / SWR / Apollo? [docs/comparisons/coming-from-tanstack-query.md](docs/comparisons/coming-from-tanstack-query.md) maps their concepts onto this model. Adopting legation in an app that already has a JSON:API, SSR loads and a service worker? [docs/adoption.md](docs/adoption.md) gives the phase order, the two traps to check first, the reads that always stay on the network, and which existing caches to retire or keep.
-
-### Browser topology: service worker vs. elected main-thread host
-
-The diagram above is the **recommended** topology: the engine lives in the
-per-origin service-worker singleton, so there's no leader election — the
-platform provides the singleton, and closed-tab pending mutations survive in
-the service worker's journal ([ADR-0010](docs/adr/0010-service-worker-hosted-client-engine.md)).
-
-Apps that can't run a service worker (some embedded webviews, or a dev
-environment where it's inconvenient) run the same host composition on a
-tab's main thread instead, with `@thomasfosterau/legation-browser`'s `ElectedHost.run`
-electing exactly one tab per browser profile via the Web Locks API
-(`navigator.locks`) — held for that tab's whole lifetime, no voluntary
-step-down. Every other tab mirrors it over the same `BroadcastChannel`; when
-the elected tab closes or crashes, the browser grants the lock to the next
-tab, which boots the engine against the SAME durable store (journal, rows,
-cookie), resuming the CVR conversation rather than starting over. `run`
-hands back one `Client` that keeps working across that promotion (the
-underlying view swaps itself) and a `role: Stream<"host" | "mirror">` purely
-for observability. Environments without `navigator.locks` get a documented
-fallback (this module logs a warning and becomes host immediately — correct
-for a single tab only), not a polyfill.
-
-## Packages
-
-Package boundaries are drawn by dependency footprint ([ADR-0006](docs/adr/0006-dependency-based-package-boundaries.md), [ADR-0033](docs/adr/0033-owner-libraries-count-runtimes-do-not.md)): the owner's own libraries count as dependencies, runtime platforms do not. Each package's directory holds its README (the API reference) and an `AGENTS.md` with its boundary and invariants.
-
-| Package                                                                      | Entries                                                                                                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/legation`](packages/effect)                                | `.` (app surface), `./internal` (engine seams for adapter authors, ADR-0022), `./sql` (ADR-0033). Peer: `effect` only | The engine: collections, predicates, mutators, journal, client engine with rebase, protocol, transport seam (RPC default), BYO backend contract + verification suite, the SQL reference backend on `@thomasfosterau/legation/sql` (`Subset`→`WHERE` for SQLite/Postgres, `SqlBackend`, `PgExecutor`, `PollingHintSource`), CVR bookkeeping, auth, invalidation bus, sync rooms, durable client store, HTTP cache interfaces |
-| [`@thomasfosterau/legation-browser`](packages/browser)                       | `.`, `./http-cache`                                                                                                   | Browser adapters: service-worker engine host, `navigator.locks`-elected main-thread host fallback, IndexedDB client store, tab mirrors over BroadcastChannel, Cache API HTTP cache with stale-while-revalidate                                                                                                                                                                                                              |
-| [`@thomasfosterau/legation-jsonapi`](packages/jsonapi)                       | `.`                                                                                                                   | JSON:API v1.1 over `@thomasfosterau/effect-jsonapi`: collection loaders that map documents into engine collection rows (a `type` is a collection, a resource a row), derived sync and REST handlers, and the replica-served façade                                                                                                                                                                                          |
-| [`@thomasfosterau/legation-alchemy-cloudflare`](packages/alchemy-cloudflare) | `.`. Peers: `alchemy` and `@alchemy.run/cloudflare` (exact 2.0.0-beta.87), `effect ^4.1.4` (ADR-0034)                 | Cloudflare deployment on Alchemy's Cloudflare provider: Durable-Object-hosted rooms, topic fan-out shards, D1 executor and the edge transport                                                                                                                                                                                                                                                                               |
-| [`@thomasfosterau/legation-auth`](packages/auth) (private, unpublished)      | `.`, `./client`. Peers: `@thomasfosterau/effect-auth ^0.5.2`, `effect ^4.1.0`                                         | effect-auth for the sync tier: an identity resolver over the session and API-key planes that fails closed to anonymous, effect-auth read scopes as auth filters (exact or narrowed to `Deny`, never widened), and the sign-out reset of the durable replica on `/client`                                                                                                                                                    |
-| [`@thomasfosterau/legation-svelte`](packages/svelte)                         | `.`, `./kit`                                                                                                          | Svelte bindings: `setClientRuntime` + the hooks (`useQuery` / `useConnection` / `useAggregate` / `useMutation` / `useUndo`) on one entry point, with the SvelteKit surface — client-group cookie, SSR snapshot `load`, snapshot-hydrated boot — on `/kit`                                                                                                                                                                   |
-| [`@thomasfosterau/legation-devtools`](packages/devtools)                     | `.`, `./svelte` (ships raw `.svelte` source)                                                                          | Headless devtools core (journal, subsets, forced push/pull, simulated offline) plus a Svelte panel on `/svelte`                                                                                                                                                                                                                                                                                                             |
+> [!CAUTION]
+> Experimental and pre-1.0, largely written with Claude Code. The API may change between minor versions. ESM only; targets Effect v4.
 
 ## Install
 
 ```sh
-npm install @thomasfosterau/legation effect
+pnpm add @thomasfosterau/legation effect
 ```
 
-Add the adapter packages your runtime needs (each package README lists its peers). `effect` is a peer: install one copy in your app.
+Add the adapter packages your runtime needs; each package README lists its peers. `effect` is a peer: install one copy.
 
-## Quick start (in-process)
-
-The whole pipeline in one process, on the app-facing surface only: a `Server` over the reference in-memory backend, and a `Client` connected to it by a loopback transport. The [examples](examples) are the full-size versions.
+## Usage
 
 ```ts
-import { Effect, Schema } from "effect";
-import {
-  Authorization,
-  Client,
-  MemoryBackend,
-  Mutation,
-  Node,
-  Server,
-  Transport,
-  type Query,
-} from "@thomasfosterau/legation";
-
-// 1. The shared vocabulary: a one-node graph, a named mutation, a read.
-const Todo = Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean });
-const { id: _id, ...attributes } = Todo.fields;
-const nodes = Node.registry([Node.make("todos", { attributes, filterable: { done: ["eq"] } })]);
-
-const setTodo = Mutation.make("todo/set", Todo);
-const mutations = Mutation.registry([
-  // Runs optimistically on the client, and again on every rebase.
-  { mutator: setTodo, local: (todo, writer) => writer.put("todos", todo.id, todo) },
-]);
-
-const open = { collection: "todos", where: { done: false } } as const satisfies Query.Read;
-
-const program = Effect.gen(function* () {
-  // 2. Server: one per backend. The reference in-memory backend runs the
-  //    authoritative handler; read auth is deny-by-default per collection.
-  const backend = yield* MemoryBackend.make(
-    MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(setTodo, (todo, writer) => writer.put("todos", todo.id, todo)),
-    ])
-  );
-  const server = yield* Server.make({
-    backend,
-    auth: {
-      policy: Authorization.policy(
-        { todos: Authorization.allowAll },
-        { collections: nodes.collections }
-      ),
-    },
-  });
-
-  // 3. Client: one per thread, here over an in-process loopback transport.
-  const { client } = yield* Client.make({
-    nodes,
-    mutations,
-    clientGroupId: "g1",
-    transport: yield* Transport.makeInMemory(server.handler, "g1"),
-  });
-  yield* client.subscribe(open); // pin the read so the replica holds it
-  yield* client.mutate("todo/set", { id: "1", title: "ship it", done: false });
-  return yield* client.query(open);
-});
-
-Effect.runPromise(Effect.scoped(program)).then(console.log);
+const { client } = yield * Client.make({ nodes, mutations, clientGroupId, transport });
+yield * client.subscribe(openTodos); // pin a read so the replica holds it
+yield * client.mutate("todo/set", { id: "1", title: "ship it", done: false });
+const rows = yield * client.query(openTodos);
 ```
 
-## Examples
+A complete in-process example (server, client and loopback transport) is in [docs/overview.md](docs/overview.md#quick-start-in-process).
 
-Every example is on ADR-0022's vocabulary — a `Node`/`Edge` graph, declarative
-`Query.Read`s, `Mutation`s, one `Client` per thread, one `Server` per backend.
-Four are **SvelteKit** apps read through the [`@thomasfosterau/legation-svelte`](packages/svelte)
-rune hooks: three client-only demos that run the **real library server
-pipeline in the page** (`Server.make` over a `MemoryBackend`) against a durable
-`localStorage` client store, and the full-stack deployment, with a real server
-process and the engine in a service worker. The fifth, `audience`, is headless:
-server, client and façade in one process, proving the authorization chain in
-its tests.
+## Packages
 
-| App                     | Example                           | Exercises                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Todo**                | [`todo`](examples/todo)           | One node: optimistic writes, live views + a live aggregate, undo/redo, durable journal + true offline, poke-driven convergence. The filter is a route param                                                                                                                                                                                                                                                                          |
-| **RealWorld** (Conduit) | [`realworld`](examples/realworld) | Five nodes; author/favourite/follow joins resolved by `include`d edges, server-side write authorization via identity. A route per Conduit screen                                                                                                                                                                                                                                                                                     |
-| **Northwind** (admin)   | [`northwind`](examples/northwind) | Seven nodes; every join is an `include`d edge, read-merge mutations, search/filter/pagination, reactive per-row reads. A route per screen                                                                                                                                                                                                                                                                                            |
-| **Commerce**            | [`commerce`](examples/commerce)   | The full deployment: SSR + hydration with CVR continuation over [`@thomasfosterau/legation-svelte/kit`](packages/svelte), a service-worker-hosted engine, a real sync server, WebSockets with HTTP fallback, a no-JS baseline, and the JSON:API **façade** (ADR-0029): plain `fetch()` of a catalog URL answered from the worker's replica, proven in a Chromium test that goes offline                                              |
-| **Audience** (headless) | [`audience`](examples/audience)   | effect-auth, effect-jsonapi and legation composed: an effect-auth session resolved by [`@thomasfosterau/legation-auth`](packages/auth), a `public / followers / private` policy with an owner, a followers named set and a moderator role compiled into every subscription's auth filter, the sign-out reset, and the façade; tests assert on replica contents, including a property test against effect-auth's own per-row decision |
+| Package                                                                      | What it is                                                                                                                   |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/legation`](packages/effect)                                | The engine: collections, mutations, client, server, backend contract; `./internal` (adapter seams) and `./sql` (SQL backend) |
+| [`@thomasfosterau/legation-browser`](packages/browser)                       | Service-worker host, elected tab host, IndexedDB store, tab mirrors, Cache API HTTP cache                                    |
+| [`@thomasfosterau/legation-jsonapi`](packages/jsonapi)                       | JSON:API loaders, derived sync and REST handlers, the replica-served façade                                                  |
+| [`@thomasfosterau/legation-alchemy-cloudflare`](packages/alchemy-cloudflare) | Cloudflare deployment on Alchemy: Durable Object rooms, fan-out, D1                                                          |
+| [`@thomasfosterau/legation-auth`](packages/auth) (unpublished)               | effect-auth identities and read scopes for the sync tier                                                                     |
+| [`@thomasfosterau/legation-svelte`](packages/svelte)                         | Svelte 5 hooks and the SvelteKit surface (`./kit`)                                                                           |
+| [`@thomasfosterau/legation-devtools`](packages/devtools)                     | Headless devtools core and a Svelte panel                                                                                    |
 
-The first three are SvelteKit **SPAs** — the engine, its store, and the demo
-backend are browser-only, so they turn SSR off in the root layout and build
-through `adapter-static` with a fallback page. `commerce` is the one that
-renders on the server. `commerce`, `realworld` and `audience` have tests, run as
-part of `vp run test` — including a browser test of the commerce façade that
-needs Chromium (`pnpm exec playwright-core install chromium`; it fails, never
-skips, without it).
+## Docs
 
-## Development
-
-A pnpm 11 + [Vite+](https://viteplus.dev) workspace on Node 22 or later:
-
-```sh
-corepack enable && pnpm install
-vp check                 # format + lint
-vp run build             # every package's dist/
-vp run check             # the type gate
-vp run test              # every test suite
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the commands and the pull-request rules, [AGENTS.md](AGENTS.md) for the conventions and the full gate list, [PUBLISHING.md](PUBLISHING.md) for the release pipeline and [SECURITY.md](SECURITY.md) for reporting a vulnerability.
+- [docs/overview.md](docs/overview.md): architecture, the quick start and the example apps.
+- [CONTEXT.md](CONTEXT.md): the glossary. [docs/adr/](docs/adr/): design decisions.
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md): workflow, toolchain and gates.
+- [docs/PUBLISHING.md](docs/PUBLISHING.md), [docs/SECURITY.md](docs/SECURITY.md).
 
 ## License
 
-MIT
+[MIT](LICENSE.md)

@@ -250,7 +250,7 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (#352, #360)", () 
   const url = databaseUrl ?? "";
 
   // `it.live`, not `it.effect`: the copy's lock wait is observed by polling a
-  // real server, so the test runs on the real clock (CONTRIBUTING, "Tests").
+  // real server, so the test runs on the real clock (docs/CONTRIBUTING.md).
   it.live(
     "a copy of a mutation in flight blocks on the first call's ledger row, is refused as a serialization failure, then skips on retry; the handler applies once",
     () =>

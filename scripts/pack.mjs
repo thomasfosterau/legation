@@ -13,9 +13,8 @@
  *   `package.json`;
  * - every `workspace:` dependency on another `@thomasfosterau/legation-*`
  *   package was rewritten against that package's current version;
- * - no `effect` / `@effect/*` peer is an exact version (ADR-0003: the
- *   published floor is an open range, see CONTRIBUTING.md "Effect version
- *   upgrades");
+ * - no `effect` / `@effect/*` peer is an exact version (the published
+ *   floor is an open range, ADR-0003);
  * - every target under a `svelte` export condition is in the tarball, and a
  *   package that ships Svelte modules has one (publint checks only the
  *   JavaScript targets under a custom condition);

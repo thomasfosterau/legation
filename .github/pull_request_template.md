@@ -1,15 +1,15 @@
 ## Summary
 
-Describe what changed and why. If this closes an issue, add `Closes #N` so it auto-closes on merge to `trunk`.
+What changed and why. Add `Closes #N` if this closes an issue.
 
 ## Verification
 
-Run the gates in [AGENTS.md](https://github.com/thomasfosterau/legation/blob/trunk/AGENTS.md#verification) and list each command with its final pass/fail. If a gate could not run, say which and why.
+The gates in [docs/CONTRIBUTING.md](https://github.com/thomasfosterau/legation/blob/trunk/docs/CONTRIBUTING.md#before-pushing), each with its result. Say which couldn't run and why.
 
 ## Changeset
 
-Name the changeset(s) under `.changeset/`, or say why none is needed (see [CONTRIBUTING.md](https://github.com/thomasfosterau/legation/blob/trunk/CONTRIBUTING.md#branches-and-pull-requests)).
+The changeset(s) under `.changeset/`, or why none is needed.
 
 ## Notes
 
-Anything reviewers should pay special attention to: exported signatures (`.` vs `./internal`), peer ranges, wire or storage formats, ADRs this contradicts.
+Anything reviewers should check closely: `.` vs `./internal` exports, peer ranges, wire or storage formats, ADRs this contradicts.
