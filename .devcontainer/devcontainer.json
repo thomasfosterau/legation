@@ -4,9 +4,7 @@
   "image": "ghcr.io/voidzero-dev/vite-plus:1.6.0",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
-    "ghcr.io/devcontainer-community/devcontainer-features/jq:1": {}
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
   },
   "postCreateCommand": "vp install --frozen-lockfile",
   "customizations": {
